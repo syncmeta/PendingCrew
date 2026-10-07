@@ -72,6 +72,8 @@ pub struct MemState {
     pub revoked: Vec<String>,
     /// 设了就让 `render_wake` 报错（模拟 M3a `build_batch` 遇到坏账本 fail-loud）。
     pub render_error: Option<String>,
+    /// 同上，只对这些 session（session → 原因）。
+    pub render_error_for: BTreeMap<String, String>,
     /// `render_wake` 被调了几次（量「出错不原地紧循环重试」）。
     pub renders: usize,
 }
@@ -552,7 +554,11 @@ impl Port for MemPort {
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
         let mut st = self.lock();
         st.renders += 1;
-        if let Some(e) = &st.render_error {
+        if let Some(e) = st
+            .render_error
+            .as_ref()
+            .or(st.render_error_for.get(session))
+        {
             anyhow::bail!("{e}");
         }
         let deferred: Vec<i64> = batch

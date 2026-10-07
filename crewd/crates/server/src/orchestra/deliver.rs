@@ -31,6 +31,15 @@ fn message_origin(msg: &MsgFacts, target: &str) -> String {
     breaker::origin_of(WakeKind::Message, Some(&msg.sender), target)
 }
 
+/// 渲染并裁好的一批（[`Core::render_fitted`]）。
+struct Fitted {
+    wakes: Vec<QueuedWake>,
+    /// 落在窗口外的（M3a R6）：状态不动，但这批没投进去时一起记一次失败（`Inflight::deferred`）。
+    deferred: Vec<QueuedWake>,
+    text: String,
+    cursor_targets: Vec<(String, i64)>,
+}
+
 fn restart_row(r: &SessionRow) -> RestartRow {
     RestartRow {
         session: r.id.clone(),
@@ -124,6 +133,8 @@ impl<P: Port> Core<P> {
                 .collect();
             self.breaker.on_post(poster, &woke, now);
         }
+        // 先全部入队、再逐个试投（评审 (3)）：一个目标投递出错不能让后面的目标连唤醒都没有。
+        let mut fresh = Vec::new();
         for t in targets {
             let w = NewWake {
                 session: t.session.clone(),
@@ -135,10 +146,20 @@ impl<P: Port> Core<P> {
                 origin: message_origin(msg, &t.session),
             };
             if self.port.enqueue(w).await? {
-                self.try_deliver(&t.session).await?;
+                fresh.push(t.session);
             }
         }
+        self.deliver_each(&fresh).await;
         Ok(())
+    }
+
+    /// 逐个试投；一个出错只记日志（唤醒留在 pending，下一次定时拍 / idle 边沿再试），不连累后面的。
+    async fn deliver_each(&mut self, sessions: &[String]) {
+        for s in sessions {
+            if let Err(e) = self.try_deliver(s).await {
+                eprintln!("crewd: 编排：给 {s} 投递失败（留在队列里）：{e:#}");
+            }
+        }
     }
 
     /// 能投就投（裁定 7、8）。返回这次有没有投出 / 拉起。
@@ -294,7 +315,8 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
-    /// 环路熔断（§22.7 Q5）：每个来源问一次；被挡的那几条留在 pending。
+    /// 环路熔断（§22.7 Q5）：每个来源问一次；被挡的那几条留在 pending。这里只**判**、不计数：计数在投进去了之后
+    /// （`on_delivery` 的 `Delivered`，评审 (2)）——渲染失败、投递失败、只有积压的批都不算一次唤醒。
     async fn admit(
         &mut self,
         session: &str,
@@ -309,7 +331,7 @@ impl<P: Port> Core<P> {
             if pass.contains_key(o) {
                 continue;
             }
-            let ok = match self.breaker.admit(session, o, now) {
+            let ok = match self.breaker.judge(session, o, now) {
                 Verdict::Pass => true,
                 Verdict::Held(_) => false,
                 Verdict::Tripped(latch) => {
@@ -396,23 +418,35 @@ impl<P: Port> Core<P> {
     /// 它们仍是 pending，下一批带上，绝不 settle / dropped。超过 8KB 就从尾部减**非消息**的唤醒（减下的留在 pending）；
     /// 消息项的 8KB 只是建议值：它是一个群「游标之后、最旧的至多 `UNREAD_CAP` 条」的连续窗口，减一条消息行改变不了
     /// 窗口（会被重新算进来），也不能截一半（游标要推到窗口末尾），所以只剩消息项时照原样投。
-    /// 返回 (这批真正投出去的唤醒, 正文, 投递成功后各群游标推到哪)。
+    /// 返回这批真正投出去的唤醒、窗口外的唤醒、正文、投递成功后各群游标推到哪（[`Fitted`]）。
     /// 渲染出错（M3a `build_batch` 遇到坏账本 fail-loud）原样往上抛：唤醒留在 pending，**不在这里重试**——
     /// 下一次定时拍 / idle 边沿再试（不紧循环）。
     async fn render_fitted(
         &self,
         session: &str,
         mut batch: Vec<QueuedWake>,
-    ) -> anyhow::Result<(Vec<QueuedWake>, String, Vec<(String, i64)>)> {
+    ) -> anyhow::Result<Fitted> {
         loop {
             let r = self.port.render_wake(session, &batch).await?;
+            let deferred: Vec<QueuedWake> = batch
+                .iter()
+                .filter(|w| r.deferred.contains(&w.id))
+                .cloned()
+                .collect();
             batch.retain(|w| !r.dropped.contains(&w.id) && !r.deferred.contains(&w.id));
             let trim = batch.iter().rposition(|w| w.kind != WakeKind::Message);
             match trim {
                 Some(i) if r.text.len() > self.cfg.batch.max_bytes && batch.len() > 1 => {
                     batch.remove(i);
                 }
-                _ => return Ok((batch, r.text, r.cursor_targets)),
+                _ => {
+                    return Ok(Fitted {
+                        wakes: batch,
+                        deferred,
+                        text: r.text,
+                        cursor_targets: r.cursor_targets,
+                    });
+                }
             }
         }
     }
@@ -433,7 +467,12 @@ impl<P: Port> Core<P> {
             });
             return Ok(true);
         }
-        let (batch, text, cursor_targets) = self.render_fitted(session, speak).await?;
+        let Fitted {
+            wakes: batch,
+            deferred,
+            text,
+            cursor_targets,
+        } = self.render_fitted(session, speak).await?;
         // 只有积压（M3a R6：窗口里全是比被叫消息更旧的未读，被叫的那几行 deferred）：`batch` 空而 `cursor_targets`
         // 非空——照样投，投完游标前进，下一批就轮到被叫的那几条。两样都空才是真没东西可投。
         if batch.is_empty() && cursor_targets.is_empty() {
@@ -462,6 +501,7 @@ impl<P: Port> Core<P> {
             delivery: None,
             wakes: batch,
             cursor_targets,
+            deferred,
         });
         l.writes.push_back(Write::Deliver { text, extras });
         self.pump_writes(session).await?;
@@ -516,7 +556,12 @@ impl<P: Port> Core<P> {
             self.launch(row, exec, interrupted, vec![], vec![]).await?;
             return Ok(true);
         }
-        let (batch, text, cursor_targets) = self.render_fitted(session, speak).await?;
+        let Fitted {
+            wakes: batch,
+            deferred,
+            text,
+            cursor_targets,
+        } = self.render_fitted(session, speak).await?;
         if batch.is_empty() && cursor_targets.is_empty() {
             return Ok(false);
         }
@@ -524,7 +569,7 @@ impl<P: Port> Core<P> {
             Some(note) => format!("{note}\n\n{text}"),
             None => text,
         };
-        self.launch(row, exec, Some(text), batch, cursor_targets)
+        self.launch_carrying(row, exec, Some(text), batch, deferred, cursor_targets)
             .await?;
         Ok(true)
     }
@@ -550,6 +595,13 @@ impl<P: Port> Core<P> {
         let inf = l.inflight.take().expect("上面查过");
         if matches!(outcome, DeliveryOutcome::Delivered) {
             l.worked = true;
+            // 环路熔断只数投进去了的（评审 (2)）：一次投递、每个来源记一次（同一批里同一来源的几条合并成一次唤醒）。
+            // 窗口外的（deferred）没投进去，不记；只有积压的批没有唤醒，什么都不记。
+            let origins: std::collections::BTreeSet<&str> =
+                inf.wakes.iter().map(|w| w.origin.as_str()).collect();
+            for o in origins {
+                self.breaker.record(session, o, now);
+            }
             if !inf.wakes.is_empty() {
                 self.port
                     .settle(&ids(&inf.wakes), Settle::Delivered, now)
@@ -564,7 +616,7 @@ impl<P: Port> Core<P> {
                 session: session.into(),
             });
         } else {
-            self.fail_batch(session, inf.wakes, &format!("{outcome:?}"))
+            self.fail_batch(session, inf.carried(), &format!("{outcome:?}"))
                 .await?;
         }
         Ok(())
@@ -572,8 +624,17 @@ impl<P: Port> Core<P> {
 
     /// idle 边沿（取代 `CrewSessionRunner.swift:490-541 runBecameIdle`）：①到期唤醒合并投递，投了就结束；
     /// ②`IdleHook`（M4b 的停下即检查）；③到此为止（机长 60s 检查点、continue_work、Todo sweep 都不再有）。
+    /// IdleHook 只在「队列空了」时问（评审 (4)(5)）：正在被停掉 / crewd 叫停 / 已经没在跑的不是 idle 边沿
+    /// （驱动层 abandon 发的 `Working(false)`）；四轮上限用完、还有 pending 的也不问。
     pub(crate) async fn on_idle(&mut self, session: &str) -> anyhow::Result<()> {
         if self.try_deliver(session).await? {
+            return Ok(());
+        }
+        let idle = self
+            .live
+            .get(session)
+            .is_some_and(|l| !l.stopping && !l.halting);
+        if !idle || !self.port.pending(session).await?.is_empty() {
             return Ok(());
         }
         let now = self.now();
@@ -649,9 +710,8 @@ impl<P: Port> Core<P> {
             };
             self.port.enqueue(w).await?;
         }
-        for r in &ordered {
-            self.try_deliver(&r.session).await?;
-        }
+        let sessions: Vec<String> = ordered.into_iter().map(|r| r.session).collect();
+        self.deliver_each(&sessions).await;
         Ok(())
     }
 
@@ -723,6 +783,7 @@ impl<P: Port> Core<P> {
                 text::render(lang, "captain.changed.old", &[("name", &name)]),
             ));
         }
+        let mut told = Vec::new();
         for (s, note) in tell {
             let w = NewWake {
                 session: s.clone(),
@@ -734,8 +795,10 @@ impl<P: Port> Core<P> {
                 origin: breaker::SYSTEM.into(),
             };
             self.port.enqueue(w).await.map_err(ControlError::internal)?;
-            self.try_deliver(&s).await.map_err(ControlError::internal)?;
+            told.push(s);
         }
+        // 换机长本身已成；附言都已入队，投不出去的留在队列里下次再试（评审 (3)）。
+        self.deliver_each(&told).await;
         Ok(())
     }
 
@@ -1692,5 +1755,283 @@ mod tests {
         );
         assert_eq!(rig.exec.launches("cap")[0].initial, None, "无附言的恢复");
         assert!(rig.core.held.is_empty());
+    }
+
+    // —— Task 8 评审修复（控制者裁定 (1)–(7)）
+
+    fn crashed() -> SessionEvent {
+        SessionEvent::Exited(ExitInfo {
+            status: ExitStatusKind::Code(1),
+            stopped_by_user: false,
+            hit_limit: false,
+        })
+    }
+
+    /// 让第一条唤醒（id 1）落在窗口外、窗口里只有更旧的积压：之后的批都是「只有积压」的（M3a R6）。
+    fn defer_first_wake_behind_a_backlog(rig: &Rig, session: &str) {
+        let mut st = rig.port.lock();
+        st.defer.insert(1);
+        st.backlog.insert(session.into(), vec![(LOBBY.into(), 0)]);
+    }
+
+    /// 裁定 (1)：只有积压的拉起，起来就死——带着的 deferred 唤醒照样记一次失败（退避），三次后放弃、告警一次；
+    /// 不能因为「批里没有唤醒」就不记账、被退出时的重扫无限拉起。
+    #[tokio::test]
+    async fn a_backlog_only_launch_that_crashes_every_time_is_bounded_and_alerts_once() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        assert_eq!(rig.exec.launches("w1").len(), 1, "只有积压也拉起");
+        for _ in 0..10 {
+            if rig.live("w1").is_some() {
+                rig.emit("w1", crashed()).await;
+            }
+            rig.tick(3 * MIN).await;
+        }
+        assert_eq!(rig.exec.launches("w1").len(), queue::MAX_ATTEMPTS as usize);
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        assert_eq!(rig.port.posts().len(), 1, "{:?}", rig.port.posts());
+    }
+
+    /// 裁定 (1)：在跑的 session，只有积压的那次投递没投进去——deferred 唤醒退避、三次后放弃并告警一次，
+    /// 不是每个定时拍重投一次。
+    #[tokio::test]
+    async fn a_failing_backlog_only_send_backs_off_and_gives_up_with_one_alert() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        assert_eq!(rig.exec.sent("w1").len(), 1);
+        fail_last(&mut rig, "w1").await;
+        let w = rig.port.wakes_of("w1")[0].clone();
+        assert_eq!((w.state, w.attempts), (WakeState::Pending, 1));
+        rig.tick(SEC).await;
+        assert_eq!(rig.exec.sent("w1").len(), 1, "退避没到不重投");
+        rig.tick(30 * SEC).await;
+        fail_last(&mut rig, "w1").await;
+        rig.tick(2 * MIN).await;
+        fail_last(&mut rig, "w1").await;
+        rig.tick(10 * MIN).await;
+        assert_eq!(rig.exec.sent("w1").len(), queue::MAX_ATTEMPTS as usize);
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        assert_eq!(rig.port.posts().len(), 1, "{:?}", rig.port.posts());
+    }
+
+    /// 裁定 (2)：熔断只数**投进去了**的唤醒。渲染一直失败（什么都没投）重试再多次也不熔断。
+    #[tokio::test]
+    async fn a_persistent_render_error_never_trips_the_breaker() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.port.lock().render_error = Some("合成：坏账本".into());
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        for _ in 0..(LOOP_LIMITS.edge_max + 4) {
+            rig.tick(30 * SEC).await;
+        }
+        assert!(rig.port.lock().renders > LOOP_LIMITS.edge_max);
+        assert!(rig.port.lock().latches.is_empty());
+        assert!(rig.port.posts().is_empty(), "{:?}", rig.port.posts());
+    }
+
+    /// 裁定 (2)：一条被一批批「只有积压」的投递带着走的 deferred 唤醒，不会每批都被记一次。
+    #[tokio::test]
+    async fn a_wake_carried_across_backlog_only_batches_is_not_counted_each_time() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        defer_first_wake_behind_a_backlog(&rig, "w1");
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        let rounds = LOOP_LIMITS.edge_max + 4;
+        for _ in 0..rounds {
+            rig.ack("w1").await;
+            rig.emit("w1", SessionEvent::Working(true)).await;
+            rig.emit("w1", SessionEvent::Working(false)).await;
+        }
+        assert_eq!(rig.exec.sent("w1").len(), rounds + 1);
+        assert!(rig.port.lock().latches.is_empty());
+    }
+
+    /// 裁定 (3)：一条 @ 两个人，其中一个投递出错——另一个照样入队、照样投到。
+    #[tokio::test]
+    async fn one_targets_delivery_error_does_not_starve_the_others() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1", "w2"], &["w1", "w2"]).await;
+        rig.port
+            .lock()
+            .render_error_for
+            .insert("w1".into(), "合成：坏账本".into());
+        let both = vec![Mention::Session("w1".into()), Mention::Session("w2".into())];
+        rig.post(LOBBY, Rig::sender("cap"), both, "合成派活甲")
+            .await;
+        assert_eq!(rig.exec.sent("w2"), ["合成派活甲"]);
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Pending);
+    }
+
+    /// 裁定 (3)：换机长时新机长那条投不出去，原机长照样被告知，命令本身成功（唤醒都已入队）。
+    #[tokio::test]
+    async fn set_captain_tells_the_old_captain_even_if_the_new_ones_delivery_fails() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["cap", "w1"]).await;
+        rig.port
+            .lock()
+            .render_error_for
+            .insert("w1".into(), "合成：坏账本".into());
+        rig.cmd(|reply| Cmd::SetCaptain {
+            crew: "c1".into(),
+            session: "w1".into(),
+            reply,
+        })
+        .await
+        .unwrap();
+        assert_eq!(rig.exec.sent("cap").len(), 1);
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Pending);
+    }
+
+    /// 裁定 (3)：答了「恢复」，排在前面的那个拉起出错，后面的照样拉起。
+    #[tokio::test]
+    async fn a_failing_resume_does_not_stop_the_rest_of_the_list() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &[]).await;
+        rig.port.lock().sessions.get_mut("cap").unwrap().was_working = true;
+        rig.port
+            .lock()
+            .render_error_for
+            .insert("cap".into(), "合成：坏账本".into());
+        rig.core.held.insert("w1".into());
+        rig.core.held.insert("cap".into());
+        rig.core.restart_prompt = Some(1);
+        rig.port.lock().restart_answers.insert(1, true);
+        rig.core.handle(Input::Collab(CollabFact::Lagged)).await;
+        rig.settle().await;
+        assert_eq!(rig.exec.launches("w1").len(), 1);
+        assert!(rig.exec.launches("cap").is_empty());
+    }
+
+    /// 每次都给一条新的停下即检查（M4b 的形状：只要 idle 就想叫它一次）；数被调了几次。
+    #[derive(Default)]
+    struct AlwaysCheck(std::sync::atomic::AtomicUsize);
+    impl IdleHook for AlwaysCheck {
+        fn on_idle<'a>(&'a self, session: &'a str, now: Ms) -> BoxFut<'a, Option<NewWake>> {
+            let n = self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Some(NewWake {
+                    session: session.into(),
+                    kind: WakeKind::StopCheck,
+                    source: source::system(&format!("sc-{n}")),
+                    priority: Priority::System,
+                    not_before: now,
+                    note: Some("合成停下即检查".into()),
+                    origin: breaker::SYSTEM.into(),
+                })
+            })
+        }
+    }
+
+    /// 裁定 (4)：人停掉时驱动层 abandon 发的 `Working(false)` 不是 idle 边沿——不问 IdleHook，
+    /// 不然它入队的唤醒会在退出后的重扫里把刚停掉的 session 拉起来。
+    #[tokio::test]
+    async fn a_human_stop_does_not_run_the_idle_hook() {
+        let hook = Arc::new(AlwaysCheck::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.cmd(|reply| Cmd::Stop {
+            session: "w1".into(),
+            reply,
+        })
+        .await
+        .unwrap();
+        rig.tick(MIN).await;
+        assert_eq!(hook.0.load(Ordering::SeqCst), 0);
+        assert_eq!(rig.exec.launches("w1").len(), 1, "停掉的没被拉起来");
+    }
+
+    /// 裁定 (5)：`try_deliver` 四轮上限用完、队列里还有 pending 的唤醒时，IdleHook 不跑（它只管「队列空了」）。
+    #[tokio::test]
+    async fn the_idle_hook_waits_while_wakes_remain_after_the_round_cap() {
+        let hook = Arc::new(AlwaysCheck::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        let mut last = 0;
+        for i in 0..41 {
+            last = rig
+                .post(
+                    LOBBY,
+                    Rig::sender("cap"),
+                    at("w1"),
+                    &format!("合成派活 {i}"),
+                )
+                .await
+                .seq;
+        }
+        // 忙时 hook 已把它们全注入了：每轮只能把 10 条记 delivered，四轮后还剩一条。
+        rig.port.advance("w1", LOBBY, last).await.unwrap();
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert!(!rig.port.pending("w1").await.unwrap().is_empty());
+        assert_eq!(
+            hook.0.load(Ordering::SeqCst),
+            0,
+            "还有 pending 就不问 IdleHook"
+        );
+        assert!(rig.exec.sent("w1").is_empty());
+    }
+
+    /// 裁定 (6)：正在被人停掉的 session，写队列不再往下写（退出时由 `on_exited` 统一结算）。
+    #[tokio::test]
+    async fn a_stopping_session_gets_no_more_writes() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        let (tx, _stopped) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "w1".into(),
+                reply: tx,
+            }))
+            .await;
+        let (tx, reply) = tokio::sync::oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "w1".into(),
+                input: "继续".into(),
+                reply: tx,
+            }))
+            .await;
+        rig.settle().await;
+        assert!(rig.exec.sent("w1").is_empty(), "{:?}", rig.exec.sent("w1"));
+        assert_eq!(
+            reply.await.unwrap(),
+            Err(ControlError::NotRunning("w1".into()))
+        );
+    }
+
+    /// 裁定 (7)：idle 边沿上的投递出错，`session.changed`（不再干活）照样发出去。
+    #[tokio::test]
+    async fn the_idle_edge_is_published_even_when_its_delivery_fails() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.port.lock().render_error = Some("合成：坏账本".into());
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
+            .await;
+        rig.port.lock().events.clear();
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        let events = rig.port.lock().events.clone();
+        assert!(
+            events.iter().any(|e| matches!(e,
+                OrchestraEvent::SessionChanged(v) if v.session_id == "w1" && !v.working)),
+            "{events:?}"
+        );
     }
 }

@@ -42,6 +42,13 @@ use super::port::*;
 
 /// 这次投递回执能不能结算 inflight 的那批：只有终局、且不是 `Abandoned`（那是驱动层停掉 / 退出时的 abandon，
 /// 该批由 `on_exited` 按三种情况结算，见模块文档的绑定规则）。
+/// 会话事件里顺带的投递出错：记日志、不打断这个事件本身的处理（评审 (7)：`session.changed` 照样要发）。
+fn log_err(r: anyhow::Result<()>) {
+    if let Err(e) = r {
+        eprintln!("crewd: 编排：{e:#}");
+    }
+}
+
 pub(crate) fn delivery_settles_inflight(outcome: &DeliveryOutcome) -> bool {
     outcome.is_final() && !matches!(outcome, DeliveryOutcome::Abandoned(_))
 }
@@ -246,6 +253,18 @@ pub struct Inflight {
     pub wakes: Vec<QueuedWake>,
     /// 投递成功后各群游标推到哪（`Rendered::cursor_targets`）；**不是**排队行里最大的 seq。
     pub cursor_targets: Vec<(String, i64)>,
+    /// 这批渲染时落在窗口外的唤醒（M3a R6 `deferred`）：状态不动、仍是 pending；但这批**没投进去**时它们记一次
+    /// 失败（退避、有限次后放弃 + 告警，Task 8 评审 (1)）——只有积压的批没有别的唤醒可记账，不记就会无限重投。
+    pub deferred: Vec<QueuedWake>,
+}
+
+impl Inflight {
+    /// 这批没投进去时要记一次失败的全部唤醒：随批的 + 窗口外的。
+    pub fn carried(self) -> Vec<QueuedWake> {
+        let mut v = self.wakes;
+        v.extend(self.deferred);
+        v
+    }
 }
 
 pub struct Live {
@@ -293,6 +312,8 @@ pub struct Starting {
     pub wakes: Vec<QueuedWake>,
     /// 开场正文送达后各群游标推到哪（同 `Inflight::cursor_targets`；只有积压时 `wakes` 可以为空而它非空）。
     pub cursor_targets: Vec<(String, i64)>,
+    /// 同 `Inflight::deferred`。
+    pub deferred: Vec<QueuedWake>,
     pub stop_requested: bool,
 }
 
@@ -781,7 +802,8 @@ impl<P: Port> Core<P> {
             let Some(l) = self.live.get_mut(session) else {
                 return Ok(());
             };
-            if l.writing {
+            // 正在被停掉的不再往里写（评审 (6)）：排着的投递 / nudge 由退出时的 `on_exited` 统一结算。
+            if l.writing || l.stopping || l.halting {
                 return Ok(());
             }
             let Some(job) = l.writes.pop_front() else {
@@ -835,7 +857,7 @@ impl<P: Port> Core<P> {
                         }
                     }
                     Err(e) => {
-                        let wakes = l.inflight.take().map(|f| f.wakes).unwrap_or_default();
+                        let wakes = l.inflight.take().map(Inflight::carried).unwrap_or_default();
                         self.fail_batch(session, wakes, &e.to_string()).await?;
                     }
                 },
@@ -865,6 +887,20 @@ impl<P: Port> Core<P> {
         exec: Arc<dyn Executor>,
         text: Option<String>,
         wakes: Vec<QueuedWake>,
+        cursor_targets: Vec<(String, i64)>,
+    ) -> anyhow::Result<()> {
+        self.launch_carrying(row, exec, text, wakes, vec![], cursor_targets)
+            .await
+    }
+
+    /// 同 [`launch`](Self::launch)，另带这批渲染时窗口外的唤醒（`Inflight::deferred`）。
+    pub(crate) async fn launch_carrying(
+        &mut self,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        text: Option<String>,
+        wakes: Vec<QueuedWake>,
+        deferred: Vec<QueuedWake>,
         cursor_targets: Vec<(String, i64)>,
     ) -> anyhow::Result<()> {
         // 一个 session 一个进程（裁定 6）：所有拉起路径都经过这里，所以在这里挡，不只靠调用方先查。
@@ -905,6 +941,7 @@ impl<P: Port> Core<P> {
                 row,
                 wakes,
                 cursor_targets,
+                deferred,
                 stop_requested: false,
             },
         );
@@ -983,6 +1020,7 @@ impl<P: Port> Core<P> {
                         delivery: Some(BRIEF_DELIVERY_ID),
                         wakes: st.wakes.clone(),
                         cursor_targets: st.cursor_targets.clone(),
+                        deferred: st.deferred.clone(),
                     });
                 self.live.insert(
                     session.to_string(),
@@ -1019,7 +1057,9 @@ impl<P: Port> Core<P> {
             Err(e) => {
                 // 先记恢复失败（告警一次），再按失败处理带着的唤醒：放弃时就不会再告第二次（裁定 9 / C2）。
                 self.launch_failed(&st.row, &e).await?;
-                self.fail_batch(session, st.wakes, &e).await?;
+                let mut carried = st.wakes;
+                carried.extend(st.deferred);
+                self.fail_batch(session, carried, &e).await?;
             }
         }
         self.publish_live(session).await;
@@ -1178,7 +1218,7 @@ impl<P: Port> Core<P> {
                 }
                 self.port.patch_session(session, patch).await?;
                 if !on {
-                    self.on_idle(session).await?;
+                    log_err(self.on_idle(session).await);
                 }
             }
             SessionEvent::Decision(DecisionEvent::Appeared(d)) => {
@@ -1188,10 +1228,10 @@ impl<P: Port> Core<P> {
             SessionEvent::Decision(DecisionEvent::Cleared) => {
                 l.decision = None;
                 self.decisions.remove(session);
-                self.try_deliver(session).await?;
+                log_err(self.try_deliver(session).await.map(|_| ()));
             }
             SessionEvent::Delivery { id, outcome, .. } => {
-                self.on_delivery(session, id, outcome).await?
+                log_err(self.on_delivery(session, id, outcome).await)
             }
             // M2c 合进 main 后 `SessionEvent` 多了这四个（main@e66be68 起；claude 执行器不发它们，codex 发）。M3c 只接了
             // claude，先不处理；接 codex 执行器时：`TurnEnded` → `crewd_collab::turn_trace::on_turn_end`（M3b）、
@@ -1209,7 +1249,7 @@ impl<P: Port> Core<P> {
                     self.schedule_quota(session).await?;
                 }
                 if cleared {
-                    self.try_deliver(session).await?;
+                    log_err(self.try_deliver(session).await.map(|_| ()));
                 }
             }
             SessionEvent::ResumeRefused { id, said } => {
@@ -1270,24 +1310,30 @@ impl<P: Port> Core<P> {
         // 还没投进去的唤醒（绑定规则：只在这里结算，见模块文档）：人停的 → 跟 pending 的一样丢掉（裁定 10）；
         // crewd 自己叫停的（停机）或撞额度退出 → 原样退回 pending（裁定 17 至少一次；额度唤醒另挂）；
         // 进程自己没了 → 一次失败的投递，退避、有限次后放弃（控制者裁定 C2）。
+        // 窗口外的（`deferred`）一直是 pending：人停时 `stop` 已把它们和别的 pending 一起丢了，crewd 停 / 撞额度时
+        // 原样留着；只有「自己没了」要连它们一起记一次失败（只有积压的批，评审 (1)）。
         if let Some(inf) = l.inflight
-            && !inf.wakes.is_empty()
+            && !(inf.wakes.is_empty() && inf.deferred.is_empty())
         {
             if l.stopping {
                 let s = Settle::Dropped {
                     error: "stopped".into(),
                 };
-                self.port.settle(&ids(&inf.wakes), s, now).await?;
+                if !inf.wakes.is_empty() {
+                    self.port.settle(&ids(&inf.wakes), s, now).await?;
+                }
             } else if l.halting || stopped_by_user || hit_limit {
-                self.port
-                    .settle(&ids(&inf.wakes), Settle::Requeue, now)
-                    .await?;
+                if !inf.wakes.is_empty() {
+                    self.port
+                        .settle(&ids(&inf.wakes), Settle::Requeue, now)
+                        .await?;
+                }
             } else {
                 let why = match &info {
                     Some(i) => format!("{:?}", i.status),
                     None => "event stream ended without an exit status".to_string(),
                 };
-                self.fail_batch(session, inf.wakes, &why).await?;
+                self.fail_batch(session, inf.carried(), &why).await?;
             }
         }
         self.publish_live(session).await;
