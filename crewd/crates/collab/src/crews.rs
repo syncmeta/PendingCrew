@@ -101,8 +101,8 @@ pub fn is_home(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 人类群归属（N1 裁定 5）：自己是 home → 自己；否则往上走，遇到的 home 里 created_at 最早的（再按 id）。
+/// 每个祖先几次直查（O(祖先数)，不读全部机组）；不存在的机组由 `is_home` → `is_org_root` 报 NotFound。
 pub fn home_of(conn: &Connection, id: &str) -> Result<String> {
-    get(conn, id)?;
     if is_home(conn, id)? {
         return Ok(id.to_string());
     }
@@ -1542,5 +1542,19 @@ mod tests {
         ok(&mut s, |tx| update(tx, "chief", hide(false)));
         let x = ok(&mut s, |tx| update(tx, "crew-x", hide(true)));
         assert!(x.hidden_at.is_some());
+    }
+
+    /// `home_of` 不再先 `get`（那会把全部机组连同父子边读一遍）：不存在的机组仍是 NotFound（由 `is_org_root` 报）。
+    #[test]
+    fn home_of_an_unknown_crew_is_not_found() {
+        let s = store();
+        assert!(matches!(
+            home_of(s.conn(), "nope").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
+        assert!(matches!(
+            is_home(s.conn(), "nope").unwrap_err(),
+            CollabError::NotFound(_)
+        ));
     }
 }
