@@ -18,7 +18,7 @@ use crate::agent::catalog::NUDGE_KEYS;
 use crate::agent::port::{self, CrewView, MemberRef, PortError, PostSender, Reason, StartReq};
 use crate::agent::{Identity, Role};
 
-fn not_found_crew(cx: &Ctx<'_>, id: &str) -> CallResult {
+pub(super) fn not_found_crew(cx: &Ctx<'_>, id: &str) -> CallResult {
     use crewd_collab::refusal::{Code, Refusal};
     cx.fail(PortError::NotFound(Reason::Rule(
         Refusal::new(Code::CrewNotFound).arg("crew", id),
@@ -26,7 +26,7 @@ fn not_found_crew(cx: &Ctx<'_>, id: &str) -> CallResult {
 }
 
 /// The crew a call acts on: the `crew` argument (number or id), else my own crew.
-async fn target_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
+pub(super) async fn target_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
     match arg.map(str::trim).filter(|a| !a.is_empty()) {
         Some(a) => crew_arg(cx, a).await,
         None => port::crew(cx.st, &cx.me.crew_id)
@@ -42,7 +42,7 @@ async fn target_crew(cx: &Ctx<'_>, arg: Option<&str>) -> Step<CrewView> {
 /// Deliberately not "not found" (unlike T13's unreadable channel, which answers like a missing
 /// one): `directory` already lists every crew and session number, so naming the crew hides
 /// nothing.
-fn not_your_crew(cx: &Ctx<'_>, crew: &CrewView) -> CallResult {
+pub(super) fn not_your_crew(cx: &Ctx<'_>, crew: &CrewView) -> CallResult {
     let name = cx.name(&crew.title);
     match crew.number {
         Some(n) => cx.err(
@@ -54,7 +54,7 @@ fn not_your_crew(cx: &Ctx<'_>, crew: &CrewView) -> CallResult {
 }
 
 /// The target-crew rule: I act as the captain of `crew` (collab's rule, C2).
-async fn require_captain_of(cx: &Ctx<'_>, crew: &CrewView) -> Step<()> {
+pub(super) async fn require_captain_of(cx: &Ctx<'_>, crew: &CrewView) -> Step<()> {
     if port::acts_as_captain_of(cx.st, &cx.me.session_id, &crew.id)
         .await
         .map_err(|e| cx.fail(e))?
@@ -99,7 +99,7 @@ async fn session_in_reach(cx: &Ctx<'_>, arg: &str) -> Step<Identity> {
     Ok(who)
 }
 
-fn trimmed(s: Option<String>) -> Option<String> {
+pub(super) fn trimmed(s: Option<String>) -> Option<String> {
     s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 

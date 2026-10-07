@@ -202,19 +202,22 @@ Model alias such as opus / sonnet.
 Reasoning effort level.
 
 ## rename_crew
-(Captain) Give the crew a short label like "auth refactor". Do it once you know what the crew is doing.
+Give the crew a short label like "auth refactor". Do it once you know what the crew is doing. crew omitted = this crew; another crew only if you act as its captain.
 
 ## rename_crew.name
 A few-word label, no punctuation.
 
+## rename_crew.crew
+Optional: which crew (number or id); omitted = this crew.
+
 ## change_workdir
-(Captain) Change the crew's working directory. Call without confirm for a preview, then with confirm: true. Only your crew and your child crews.
+Change crews' working directory. Call without confirm for a preview, then with confirm: true. You may change a crew you act as captain of (the management crew's captain: any crew) and the crews below yours. Removed crews are left alone.
 
 ## change_workdir.new_path
 Absolute path of an existing directory.
 
 ## change_workdir.crew
-Which crew (name, id or number); omitted = your crew.
+Optional: which crew (number or id); omitted = this crew.
 
 ## change_workdir.include_children
 Also change child crews; default true.
@@ -223,19 +226,22 @@ Also change child crews; default true.
 true = apply; omitted = preview only.
 
 ## set_crew_status
-(Captain) One sentence on how the whole crew is doing, shown on the crew's sidebar row. Over 200 characters is refused.
+One sentence on how the whole crew is doing, shown on the crew's sidebar row. Over 200 characters is refused; an empty string clears it. crew omitted = this crew.
 
 ## set_crew_status.text
 One-sentence status.
 
-## read_delegation_policy
-(Captain) Read the crew's delegation policy.
+## set_crew_status.crew
+Optional: which crew (number or id); omitted = this crew.
 
-## update_delegation_policy
-(Captain) Replace the crew's delegation policy with the full new text.
+## delegation_policy
+The crew's delegation policy: without text = read it; with text = replace it with that text. crew omitted = this crew.
 
-## update_delegation_policy.text
-The full new text.
+## delegation_policy.text
+Optional: the full new text (replaces the old one); omitted = read only.
+
+## delegation_policy.crew
+Optional: which crew (number or id); omitted = this crew.
 
 ## start_session
 (Captain) Start a worker for a clear coding task. crew omitted = this crew; another crew only if you act as its captain (the management crew's captain counts as the captain of every crew).
@@ -787,3 +793,48 @@ Started {new} ({id}), but the captain role was not handed over: {detail}. It is 
 
 ## r.not_your_crew_unnumbered
 "{crew}" is not yours: you are not its captain. It has no number, so post(to:) cannot reach it; to get something done there, say so in your crew's lobby or ask the human.
+## r.renamed
+"{old}" is now called "{name}" in the sidebar and the directory. Carry on with your work.
+
+## r.status_too_long
+The status has {count} characters, over the {max} limit: cut it to one sentence and call again.
+
+## r.status_set
+Status of "{crew}" updated: {text}
+Update it again when things change.
+
+## r.status_cleared
+Status of "{crew}" cleared. Write a new one with set_crew_status when there is news.
+
+## r.policy
+Delegation policy of "{crew}":
+{text}
+To change it, delegation_policy(text: the full new text).
+
+## r.policy_empty
+"{crew}" has no delegation policy yet. To set one, delegation_policy(text: the full text).
+
+## r.policy_blank
+text is empty. To read, leave text out; to change, give the full new text and call again.
+
+## r.policy_updated
+The delegation policy of "{crew}" was replaced. To check it, call delegation_policy() to read it.
+
+## r.workdir_missing
+{path} is not the absolute path of an existing directory: make sure it exists, use an absolute path and call again.
+
+## r.workdir_none
+(none)
+
+## r.workdir_line
+- "{crew}" now: {old}
+
+## r.workdir_preview
+Preview (nothing changed yet): the working directory of these {count} crews would become {path}:
+{crews}
+If that is right, call again with confirm: true and the same other arguments.
+
+## r.workdir_done
+The working directory of these {count} crews is now {path} (the old one shown on the right):
+{crews}
+Sessions started from now on work there; running processes keep their directory: stop and start one again to move it.

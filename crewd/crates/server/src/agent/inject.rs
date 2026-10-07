@@ -51,7 +51,6 @@ const PASSIVE_CREW_TOOLS: &[&str] = &[
     "channel_listen",
     // Pure reads.
     "get_quota",
-    "read_delegation_policy",
     "inspect_session",
     "list_sessions",
 ];
@@ -627,7 +626,6 @@ mod tests {
             "directory",
             "channel_listen",
             "get_quota",
-            "read_delegation_policy",
             "inspect_session",
             "list_sessions",
         ];

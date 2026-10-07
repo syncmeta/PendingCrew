@@ -207,7 +207,10 @@ pub const CATALOG: &[ToolSpec] = &[
         "set_session_profile",
         &[p("model", Str, false), p("effort", Str, false)],
     ),
-    cap("rename_crew", &[p("name", Str, true)]),
+    cap(
+        "rename_crew",
+        &[p("name", Str, true), p("crew", Str, false)],
+    ),
     cap(
         "change_workdir",
         &[
@@ -217,9 +220,14 @@ pub const CATALOG: &[ToolSpec] = &[
             p("confirm", Bool, false),
         ],
     ),
-    cap("set_crew_status", &[p("text", Str, true)]),
-    cap("read_delegation_policy", &[]),
-    cap("update_delegation_policy", &[p("text", Str, true)]),
+    cap(
+        "set_crew_status",
+        &[p("text", Str, true), p("crew", Str, false)],
+    ),
+    cap(
+        "delegation_policy",
+        &[p("text", Str, false), p("crew", Str, false)],
+    ),
     cap(
         "start_session",
         &[
@@ -302,6 +310,8 @@ pub const REMOVED: &[(&str, &str)] = &[
     ("create_and_handoff_captain", "handoff_captain(runner:)"),
     ("report_to_parent", "post(to:)"),
     ("message_child_crew", "post(to:)"),
+    ("read_delegation_policy", "delegation_policy"),
+    ("update_delegation_policy", "delegation_policy(text:)"),
 ];
 
 /// What replaces a removed tool (`None`: not a removed name, or gone without a successor).
@@ -407,6 +417,8 @@ mod tests {
         "channel_unlisten",
         "handoff_captain_to_session",
         "create_and_handoff_captain",
+        "read_delegation_policy",
+        "update_delegation_policy",
     ];
 
     fn who(role: Role) -> Identity {
@@ -434,7 +446,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 33);
+        assert_eq!(CATALOG.len(), 32);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -468,7 +480,7 @@ mod tests {
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
         assert_eq!(worker.len(), 17);
-        assert_eq!(captain.len(), 33);
+        assert_eq!(captain.len(), 32);
     }
 
     #[test]

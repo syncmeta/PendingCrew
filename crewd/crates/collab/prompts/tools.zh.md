@@ -202,19 +202,22 @@ RFC 3339 时刻，必须带上你指的时区偏移（如北京时间 2026-10-08
 推理强度档位。
 
 ## rename_crew
-（机长）给机组起个短标签名，例如「鉴权重构」。搞清楚机组在做什么再起，起一次就够。
+给机组起个短标签名，例如「鉴权重构」。搞清楚机组在做什么再起，起一次就够。crew 不填 = 本机组；别的机组只有你按机长算的才行。
 
 ## rename_crew.name
 几个字的短标签，不带标点和前后缀。
 
+## rename_crew.crew
+可选：改哪个机组（号码或 id）；不填 = 本机组。
+
 ## change_workdir
-（机长）改机组的工作目录。先不带 confirm 看预览，再 confirm: true 执行。只能改自己和自己名下的子机组。
+改机组的工作目录。先不带 confirm 看预览，再 confirm: true 执行。能改的：你按机长算的机组（总机组的机长：任何机组），以及本机组下面的子机组。已移除的机组不动。
 
 ## change_workdir.new_path
 新目录的绝对路径，必须已存在。
 
 ## change_workdir.crew
-改哪个机组（名字、id 或号码）；不填 = 本机组。
+可选：改哪个机组（号码或 id）；不填 = 本机组。
 
 ## change_workdir.include_children
 连子机组一起改，默认 true。
@@ -223,19 +226,22 @@ RFC 3339 时刻，必须带上你指的时区偏移（如北京时间 2026-10-08
 true = 真执行；不填 = 只看预览。
 
 ## set_crew_status
-（机长）一句话说清整个机组现在怎么样，显示在侧栏这个机组那一行。超过 200 字不收。
+一句话说清整个机组现在怎么样，显示在侧栏这个机组那一行。超过 200 字不收；给空串 = 清掉。crew 不填 = 本机组。
 
 ## set_crew_status.text
 一句话状态。
 
-## read_delegation_policy
-（机长）读本机组的派活原则。
+## set_crew_status.crew
+可选：哪个机组（号码或 id）；不填 = 本机组。
 
-## update_delegation_policy
-（机长）改本机组的派活原则：提交完整的新正文。
+## delegation_policy
+机组的派活原则：不给 text = 读；给 text = 用它整个替换。crew 不填 = 本机组。
 
-## update_delegation_policy.text
-完整的新正文。
+## delegation_policy.text
+可选：完整的新正文（替换旧的）；不给 = 只读。
+
+## delegation_policy.crew
+可选：哪个机组（号码或 id）；不填 = 本机组。
 
 ## start_session
 （机长）起一个 worker 去干一件明确的编码任务。crew 不填 = 本机组；别的机组只有你按机长算的才行（总机组的机长在每个机组都按机长算）。
@@ -787,3 +793,48 @@ to_session 和 runner 给且只给一个：交给现有 session 用 to_session�
 
 ## r.not_your_crew_unnumbered
 「{crew}」不归你管：你不是它的机长。它没有号，没法 post(to:) 找它；要它做什么，就在本机组大厅说明，或用 ask 问人。
+## r.renamed
+「{old}」已改名为「{name}」，侧栏和通讯录用新名字。接着做手上的事。
+
+## r.status_too_long
+状态有 {count} 个字，超过 {max} 字的上限：压成一句再调一次。
+
+## r.status_set
+「{crew}」的状态已更新：{text}
+情况有变再更新它。
+
+## r.status_cleared
+「{crew}」的状态已清掉。有新情况时再用 set_crew_status 写一句。
+
+## r.policy
+「{crew}」的派活原则：
+{text}
+要改就 delegation_policy(text: 完整的新正文)。
+
+## r.policy_empty
+「{crew}」还没有派活原则。要定一份就 delegation_policy(text: 完整正文)。
+
+## r.policy_blank
+text 是空的。只读就别给 text；要改就给完整的新正文，再调一次。
+
+## r.policy_updated
+「{crew}」的派活原则已整个替换。要核对就 delegation_policy() 读一遍。
+
+## r.workdir_missing
+{path} 不是已存在的目录的绝对路径：先确认目录在、用绝对路径，再调一次。
+
+## r.workdir_none
+（没有）
+
+## r.workdir_line
+- 「{crew}」现在：{old}
+
+## r.workdir_preview
+预览（还没改）：下面 {count} 个机组的工作目录会改成 {path}：
+{crews}
+没问题就带上 confirm: true、其余参数不变再调一次。
+
+## r.workdir_done
+已把下面 {count} 个机组的工作目录改成 {path}（右边是原来的）：
+{crews}
+之后起的 session 在新目录里工作；正在跑的进程不换目录，要它用新目录就停掉再起。

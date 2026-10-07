@@ -3,6 +3,7 @@
 pub mod asks;
 pub mod captain;
 pub mod channels;
+pub mod crews;
 pub mod messaging;
 
 use serde::de::DeserializeOwned;
@@ -176,7 +177,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "nudge_session" => captain::nudge_session(&cx, args).await,
         "list_sessions" => captain::list_sessions(&cx, args).await,
         "handoff_captain" => captain::handoff_captain(&cx, args).await,
-        // T15b adds the crew attribute and structure tools.
+        "rename_crew" => crews::rename_crew(&cx, args).await,
+        "set_crew_status" => crews::set_crew_status(&cx, args).await,
+        "delegation_policy" => crews::delegation_policy(&cx, args).await,
+        "change_workdir" => crews::change_workdir(&cx, args).await,
         _ => cx.err("r.no_handler", &[("name", tool)]),
     }
 }

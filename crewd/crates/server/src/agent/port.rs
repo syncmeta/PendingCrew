@@ -254,6 +254,8 @@ pub struct CrewView {
     pub captain: Option<String>,
     pub captain_executor: Option<String>,
     pub policy: Option<String>,
+    /// Removed by the human (`crew.remove`, collab's archive): frozen, refused by every write.
+    pub removed: bool,
 }
 
 fn crew_view(conn: &Connection, id: &str) -> crewd_collab::Result<CrewView> {
@@ -267,6 +269,7 @@ fn crew_view(conn: &Connection, id: &str) -> crewd_collab::Result<CrewView> {
             serde_json::Value::String(s) => s,
             other => other.to_string(),
         }),
+        removed: c.removed_at.is_some(),
         id: c.id,
         title: c.title,
         number: c.number,
@@ -482,6 +485,29 @@ pub async fn update_crew(st: &AppState, id: &str, p: CrewPatch) -> PortResult<()
             },
         )
         .map(|_| ())
+    })
+    .await
+}
+
+/// Set the working directory of several crews in one transaction (`change_workdir`): all or none.
+/// collab's `crews::update` refuses an empty path or a removed crew.
+pub async fn set_working_directory(
+    st: &AppState,
+    crews: Vec<String>,
+    path: String,
+) -> PortResult<()> {
+    write(st, move |tx| {
+        for id in &crews {
+            crewd_collab::crews::update(
+                tx,
+                id,
+                crewd_collab::crews::CrewPatch {
+                    working_directory: Some(path.clone()),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
     })
     .await
 }
