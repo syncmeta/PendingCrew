@@ -234,7 +234,7 @@ pub struct MessageReceiptsParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptStateView {
-    /// 排着（没轮到、被挡着）。
+    /// 排着（没轮到、被挡着；也包括随在途那一批拿走、但这一批不送的窗口外行）。
     Queued,
     /// 正在送（已拿走，等回执）。
     Delivering,
@@ -254,7 +254,8 @@ pub enum ReceiptStateView {
 pub struct Receipt {
     pub session_id: String,
     pub state: ReceiptStateView,
-    /// 送到之后它此刻在干活（「处理中」）。
+    /// 目标此刻在干活（不论这一行走到哪）。`state = delivered` 且 `working` = 「处理中」；排着的行带 `working`
+    /// 只说明它在忙别的。
     pub working: bool,
     pub attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

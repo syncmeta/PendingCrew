@@ -72,8 +72,9 @@ pub struct TargetSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReceiptRow {
     pub session: String,
+    /// 在途那一批的窗口外行（随批拿走、不在正文里）报成 `Pending`（还排着）。
     pub state: WakeState,
-    /// 送到了、而它此刻在干活（「处理中」）。
+    /// 目标此刻在干活（不论这一行走到哪；`Delivered` + 在干活 = 「处理中」）。
     pub working: bool,
     pub attempts: u32,
     pub last_error: Option<String>,
@@ -1144,19 +1145,31 @@ impl<P: Port> Core<P> {
     }
 
     /// `message.receipts`（S54）：这条消息给每个 session 入队的唤醒，各自走到哪了；送到了的再看它此刻在不在干活。
+    /// 随在途那一批一起拿走、但不在正文里的行（R6 / S45 的窗口外行，C24）对客户端是「还排着」：它们这一批不会送到，
+    /// 送到时放回 pending（修复轮 M2）。`working` = 目标此刻在干活（不论这一行走到哪）。
     pub(crate) async fn receipts(&self, message_id: &str) -> anyhow::Result<Vec<ReceiptRow>> {
+        let riders = |session: &str| -> Vec<i64> {
+            let batch = match (self.live.get(session), self.starting.get(session)) {
+                (Some(l), _) => l.inflight.as_ref().map(|f| &f.batch),
+                (None, Some(st)) => Some(&st.batch),
+                (None, None) => None,
+            };
+            batch.map_or_else(Vec::new, |b| b.riders.iter().map(|w| w.id).collect())
+        };
         Ok(self
             .port
             .wakes_for_message(message_id)
             .await?
             .into_iter()
-            .map(|w| ReceiptRow {
-                working: w.state == WakeState::Delivered
-                    && self.live.get(&w.session).is_some_and(|l| l.working),
-                session: w.session,
-                state: w.state,
-                attempts: w.attempts,
-                last_error: w.last_error,
+            .map(|w| {
+                let rider = w.state == WakeState::Inflight && riders(&w.session).contains(&w.id);
+                ReceiptRow {
+                    working: self.live.get(&w.session).is_some_and(|l| l.working),
+                    state: if rider { WakeState::Pending } else { w.state },
+                    session: w.session,
+                    attempts: w.attempts,
+                    last_error: w.last_error,
+                }
             })
             .collect())
     }
@@ -3228,10 +3241,10 @@ mod tests {
         assert_eq!(
             receipts(&mut rig, id).await,
             [
-                ("w1".to_string(), WakeState::Pending, false),
-                ("w2".to_string(), WakeState::Pending, false)
+                ("w1".to_string(), WakeState::Pending, true),
+                ("w2".to_string(), WakeState::Pending, true)
             ],
-            "两个都排着（忙）"
+            "两个都排着（都在忙别的）"
         );
         rig.emit("w1", SessionEvent::Working(false)).await;
         assert_eq!(receipts(&mut rig, id).await[0].1, WakeState::Inflight);
@@ -3246,9 +3259,9 @@ mod tests {
             receipts(&mut rig, id).await,
             [
                 ("w1".to_string(), WakeState::Delivered, true),
-                ("w2".to_string(), WakeState::Pending, false)
+                ("w2".to_string(), WakeState::Pending, true)
             ],
-            "w1 处理中；w2 还排着、它的「在干活」不算这条消息的"
+            "w1 处理中；w2 还排着（它在忙别的：`working` = 目标此刻在干活，修复轮 M2）"
         );
         assert!(receipts(&mut rig, "c1/lobby#9").await.is_empty());
     }
@@ -3321,5 +3334,42 @@ mod tests {
         rig.emit("w1", SessionEvent::Working(false)).await;
         assert_eq!(rig.exec.lock().cleared_quota, ["w1"], "停下：先清再投");
         assert_eq!(rig.exec.sent("w1").len(), 1);
+    }
+
+    /// 修复轮 M2：在途那一批的窗口外行（随批拿走，库里是 inflight）在回执里是「还排着」，正文里那条才是「正在送」。
+    #[tokio::test]
+    async fn a_rider_of_the_batch_in_flight_reads_as_queued() {
+        let mut rig = Rig::new().await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
+            .await;
+        rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成乙")
+            .await;
+        let second = rig
+            .port
+            .wakes_of("w1")
+            .into_iter()
+            .find(|w| w.source == "msg:c1/lobby#2")
+            .unwrap()
+            .id;
+        rig.port.lock().defer.insert(second);
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        let row = rig
+            .port
+            .wakes_of("w1")
+            .into_iter()
+            .find(|w| w.id == second)
+            .unwrap();
+        assert_eq!(row.state, WakeState::Inflight, "随批拿走了");
+        assert_eq!(
+            receipts(&mut rig, "c1/lobby#1").await[0].1,
+            WakeState::Inflight
+        );
+        assert_eq!(
+            receipts(&mut rig, "c1/lobby#2").await,
+            [("w1".to_string(), WakeState::Pending, false)],
+            "窗口外的随批行：还排着"
+        );
     }
 }
