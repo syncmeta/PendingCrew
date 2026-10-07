@@ -988,3 +988,34 @@ async fn crew_delete_without_a_snapshot_deletes_nothing() {
     let got = c.call(3, "crew.get", json!({"crewId":made})).await;
     assert_eq!(got["crew"]["id"], made, "{got}");
 }
+
+/// 复审 M7：socket 绑不上（这里路径上是个目录）时 serve 报错退出，但退出前照样收尾：Ticker 停下（启动时
+/// 那次备份已经拍完）、库关干净（WAL 截断），之后才放锁。
+#[tokio::test]
+async fn a_failed_bind_still_stops_the_ticker_and_closes_the_db_before_unlocking() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().to_path_buf();
+    seed(&dir);
+    std::fs::create_dir(dir.join("crewd.sock")).unwrap();
+    // 外面一条连接写一行、一直开着：WAL 里有东西，而且库线程不是最后一个关的。
+    let other = rusqlite::Connection::open(dir.join("crewd.db")).unwrap();
+    other
+        .execute("INSERT INTO meta(key,value) VALUES('probe','x')", [])
+        .unwrap();
+    assert!(std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len() > 0);
+    let r = crewd_server::serve(dir.clone(), std::future::pending()).await;
+    assert!(r.is_err(), "绑不上必须报错");
+    assert_eq!(
+        std::fs::metadata(dir.join("crewd.db-wal")).unwrap().len(),
+        0,
+        "返回前库已收尾"
+    );
+    assert_eq!(
+        crewd_store::backup::list_auto(&dir.join("backups"))
+            .unwrap()
+            .len(),
+        1,
+        "返回前 Ticker 已停（启动那次备份已拍完）"
+    );
+    crewd_server::lock_data_dir(&dir).expect("锁已释放");
+}

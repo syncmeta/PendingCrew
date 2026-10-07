@@ -187,7 +187,15 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
         crewd_store::backup::Policy::default(),
     )?;
     let state = Arc::new(AppState::new(db));
-    let listener = UnixListener::bind(&sock)?;
+    let listener = match UnixListener::bind(&sock) {
+        Ok(l) => l,
+        Err(e) => {
+            // 绑不上也要按次序收尾再放锁（复审 M7）。
+            close_storage(backups, state.db.clone()).await?;
+            drop(lock);
+            return Err(e.into());
+        }
+    };
 
     tokio::pin!(shutdown);
     loop {
@@ -216,13 +224,19 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     }
     let _ = std::fs::remove_file(&sock);
     // 放锁之前关库：已入队的写跑完，optimize + WAL 截断，库线程 join（N4 / S16）。
-    let db = state.db.clone();
+    close_storage(backups, state.db.clone()).await?;
+    drop(lock);
+    Ok(())
+}
+
+/// 放锁之前的存储收尾：先停 Ticker（等正在拍的那次做完），再关库（已入队的写跑完，optimize + WAL 截断，
+/// 库线程 join）。N4 / S16。
+async fn close_storage(backups: crewd_store::backup::Ticker, db: Db) -> anyhow::Result<()> {
     tokio::task::spawn_blocking(move || {
         backups.stop();
         db.shutdown()
     })
     .await?;
-    drop(lock);
     Ok(())
 }
 
