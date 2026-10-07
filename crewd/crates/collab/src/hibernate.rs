@@ -64,13 +64,15 @@ impl Hibernated {
     }
 }
 
-/// 读不出来（不是这个形状）= `Invalid`：不猜、不当没有。
+/// 读不出来（不是这个形状）= 库里的坏数据 `Store(Invalid)`：不猜、不当没有。
 pub fn get(conn: &Connection) -> Result<Option<Record>> {
     match crewd_store::meta_get(conn, KEY)? {
         None => Ok(None),
-        Some(v) => serde_json::from_str(&v)
-            .map(Some)
-            .map_err(|e| CollabError::Invalid(format!("meta.hibernate 读不出来：{e}"))),
+        Some(v) => serde_json::from_str(&v).map(Some).map_err(|e| {
+            CollabError::Store(crewd_store::StoreError::Invalid(format!(
+                "meta.hibernate does not parse: {e}"
+            )))
+        }),
     }
 }
 
@@ -126,6 +128,9 @@ mod tests {
     fn a_record_that_does_not_parse_is_an_error_not_nothing() {
         let s = store();
         crewd_store::meta_set(s.conn(), KEY, "{不是").unwrap();
-        assert!(matches!(get(s.conn()), Err(CollabError::Invalid(_))));
+        assert!(matches!(
+            get(s.conn()),
+            Err(CollabError::Store(crewd_store::StoreError::Invalid(_)))
+        ));
     }
 }

@@ -247,6 +247,9 @@ meta.locale 存的是 {value}，只认 zh / en；改成 zh 或 en
 ## settings.bad_max_live
 meta.maxLiveSessions 存的是 {value}，不是正整数；改成正整数，或清掉它
 
+## settings.bad_hibernate_deadline
+meta.hibernate.deadlineSecs 存的是 {value}，不是非负整数（秒）；改成非负整数，或清掉它回到默认值
+
 ## settings.max_live_min
 上限必须 ≥ 1；不设上限请传 null
 

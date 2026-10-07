@@ -113,6 +113,7 @@ refusal_codes! {
     SettingsBadLocale = "settings.bad_locale" ["value"],
     SettingsBadMaxLive = "settings.bad_max_live" ["value"],
     SettingsMaxLiveMin = "settings.max_live_min" [],
+    SettingsBadHibernateDeadline = "settings.bad_hibernate_deadline" ["value"],
     // todo
     TodoResponseEmpty = "todo.response_empty" [],
     TodoNotFound = "todo.not_found" ["number"],

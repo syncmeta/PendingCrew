@@ -1863,7 +1863,7 @@ mod tests {
             WakeKind::Message,
             wakes::source::message("m-1"),
         );
-        ok(&mut s, |tx| wakes::mark_inflight(tx, &[inflight]));
+        ok(&mut s, |tx| wakes::claim(tx, &[inflight]).map(|_| ()));
         let e = err(&mut s, |tx| archive(tx, "crew-x"));
         match &e {
             CollabError::Conflict(r) => {
@@ -1902,7 +1902,7 @@ mod tests {
             WakeKind::Message,
             wakes::source::message("m-1"),
         );
-        ok(&mut s, |tx| wakes::mark_inflight(tx, &[requeued]));
+        ok(&mut s, |tx| wakes::claim(tx, &[requeued]).map(|_| ()));
         ok(&mut s, |tx| wakes::requeue(tx, &[requeued]));
         let delivered = enqueue_id(
             &mut s,

@@ -247,6 +247,9 @@ meta.locale holds {value}, but only zh and en are accepted. Set it to zh or en.
 ## settings.bad_max_live
 meta.maxLiveSessions holds {value}, which is not a positive integer. Set a positive integer, or clear it.
 
+## settings.bad_hibernate_deadline
+meta.hibernate.deadlineSecs holds {value}, which is not a non-negative whole number of seconds. Set a non-negative integer, or clear it to use the default.
+
 ## settings.max_live_min
 The limit must be at least 1. To remove the limit, pass null.
 

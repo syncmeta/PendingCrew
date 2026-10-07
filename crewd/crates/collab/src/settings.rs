@@ -55,7 +55,9 @@ pub fn hibernate_deadline_secs(conn: &Connection) -> Result<Option<u32>> {
     match crewd_store::meta_get(conn, HIBERNATE_DEADLINE_KEY)? {
         None => Ok(None),
         Some(v) => v.parse::<u32>().map(Some).map_err(|_| {
-            CollabError::Invalid(format!("meta.hibernate.deadlineSecs = {v:?} 不是非负整数"))
+            CollabError::Invalid(
+                Refusal::new(Code::SettingsBadHibernateDeadline).arg("value", v.clone()),
+            )
         }),
     }
 }
@@ -109,10 +111,12 @@ mod tests {
         ok(&mut s, |tx| set_hibernate_deadline_secs(tx, None));
         assert_eq!(hibernate_deadline_secs(s.conn()).unwrap(), None);
         crewd_store::meta_set(s.conn(), "hibernate.deadlineSecs", "-1").unwrap();
-        assert!(matches!(
-            hibernate_deadline_secs(s.conn()),
-            Err(CollabError::Invalid(_))
-        ));
+        match hibernate_deadline_secs(s.conn()) {
+            Err(CollabError::Invalid(r)) => {
+                assert_eq!(r.code, Code::SettingsBadHibernateDeadline);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
