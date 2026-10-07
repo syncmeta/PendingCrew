@@ -1687,6 +1687,19 @@ mod tests {
             children(s.conn(), "chief").unwrap(),
             [n.id.as_str(), "crew-a", "crew-x"]
         );
+        // 混合：提到一部分归档的（crew-x，按给的次序放在前面）、没提到的（n、m）保持原来的相对次序接在后面。
+        let m = ok(&mut s, |tx| create(tx, new_crew("又一个")));
+        ok(&mut s, |tx| archive(tx, &m.id));
+        assert_eq!(
+            children(s.conn(), "chief").unwrap(),
+            [n.id.as_str(), "crew-a", "crew-x", m.id.as_str()]
+        );
+        let got = ok(&mut s, |tx| {
+            reorder(tx, "chief", &["crew-x".into(), "crew-a".into()])
+        });
+        let want = ["crew-x", "crew-a", n.id.as_str(), m.id.as_str()];
+        assert_eq!(children(s.conn(), "chief").unwrap(), want);
+        assert_eq!(got.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), want);
     }
 
     fn wake_req(
