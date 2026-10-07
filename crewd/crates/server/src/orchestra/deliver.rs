@@ -382,8 +382,8 @@ impl<P: Port> Core<P> {
 
     /// 额度类 health 在身、在跑的此刻别的都不挡、额度唤醒到点了 → 先清 health 再投（§22.4）。
     fn clear_quota_if_due(&mut self, session: &str, f: &TargetFacts) {
-        let ready = !(f.inflight || f.working || f.decision || f.stopping);
-        if !(ready && f.quota_due && f.health == Some(HealthBlock::Quota)) {
+        // 在跑的此刻能不能写只看 `explain::live_blocker`（唯一的 readiness 规则，不在这里另抄一份）。
+        if !(f.health == Some(HealthBlock::Quota) && explain::live_blocker(f).is_none()) {
             return;
         }
         if let Some(l) = self.live.get_mut(session) {

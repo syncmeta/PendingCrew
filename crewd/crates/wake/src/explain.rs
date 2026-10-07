@@ -158,6 +158,32 @@ impl Blocker {
     }
 }
 
+/// 在跑的目标此刻能不能往里写（readiness 的唯一定义）：没在跑的 = `None`（交给拉起闸那一段）。额度类 health 在身时，
+/// 额度唤醒到点就不挡（调用方先清 health 再投）。`why_not_woken` 与 Core 的「先清额度 health」都只用它。
+pub fn live_blocker(t: &TargetFacts) -> Option<Blocker> {
+    if !t.running {
+        return None;
+    }
+    if t.inflight {
+        return Some(Blocker::Inflight);
+    }
+    if t.working {
+        return Some(Blocker::Working);
+    }
+    if t.decision {
+        return Some(Blocker::Decision);
+    }
+    if t.stopping {
+        return Some(Blocker::Stopping);
+    }
+    match t.health {
+        Some(HealthBlock::Quota) if !t.quota_due => Some(Blocker::Quota),
+        Some(HealthBlock::Auth) => Some(Blocker::AuthRequired),
+        Some(HealthBlock::LaunchFailed) => Some(Blocker::LaunchFailed),
+        _ => None,
+    }
+}
+
 /// 这一条唤醒此刻为什么没被叫醒；`None` = 它此刻就会出去（或被当作已注入直接记 delivered）。
 /// `top_due` = 这个目标到期、没被熔断挡着的唤醒里最高的一档；`held` = 熔断里挡着它的那一条（调用方查 `LoopBreaker::held`）。
 pub fn why_not_woken(
@@ -178,25 +204,8 @@ pub fn why_not_woken(
             until: w.not_before,
         });
     }
-    if t.running {
-        if t.inflight {
-            return Some(Blocker::Inflight);
-        }
-        if t.working {
-            return Some(Blocker::Working);
-        }
-        if t.decision {
-            return Some(Blocker::Decision);
-        }
-        if t.stopping {
-            return Some(Blocker::Stopping);
-        }
-        match t.health {
-            Some(HealthBlock::Quota) if !t.quota_due => return Some(Blocker::Quota),
-            Some(HealthBlock::Auth) => return Some(Blocker::AuthRequired),
-            Some(HealthBlock::LaunchFailed) => return Some(Blocker::LaunchFailed),
-            _ => {}
-        }
+    if let Some(b) = live_blocker(t) {
+        return Some(b);
     }
     if let Some(l) = held {
         return Some(Blocker::Held {
@@ -389,6 +398,27 @@ mod tests {
             ..running()
         };
         assert_eq!(why(&due(Priority::Human), &t), Some(Blocker::LaunchFailed));
+    }
+
+    #[test]
+    fn live_blocker_is_the_readiness_rule_on_its_own() {
+        assert_eq!(live_blocker(&running()), None);
+        assert_eq!(live_blocker(&stopped()), None, "没在跑的不归它管");
+        let quota = TargetFacts {
+            health: Some(HealthBlock::Quota),
+            ..running()
+        };
+        assert_eq!(live_blocker(&quota), Some(Blocker::Quota));
+        let due = TargetFacts {
+            quota_due: true,
+            ..quota.clone()
+        };
+        assert_eq!(live_blocker(&due), None, "额度唤醒到点：先清 health 再投");
+        let busy = TargetFacts {
+            working: true,
+            ..due
+        };
+        assert_eq!(live_blocker(&busy), Some(Blocker::Working));
     }
 
     #[test]
