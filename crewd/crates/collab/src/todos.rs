@@ -5,22 +5,29 @@ use crate::{CollabError, Result, Tx, sessions};
 use crewd_proto::TodoResponse;
 use rusqlite::{OptionalExtension, params};
 
+/// 一次回应：追加的那条，和被回应的条目原文（同一事务里读的，回执照它回显，S73）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Responded {
+    pub todo_text: String,
+    pub response: TodoResponse,
+}
+
 /// `session` 所在机组的 Agent Todo `#number` 追加回应。删掉的、不存在的 → NotFound；空回应 → Invalid。
-pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Result<TodoResponse> {
+pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Result<Responded> {
     let text = text.trim();
     if text.is_empty() {
         return Err(CollabError::Invalid(Refusal::new(Code::TodoResponseEmpty)));
     }
     let s = sessions::get(tx.conn(), session)?;
-    let todo: Option<String> = tx
+    let todo: Option<(String, String)> = tx
         .conn()
         .query_row(
-            "SELECT id FROM todos WHERE crew_id=?1 AND ledger='agent' AND number=?2 AND deleted_at IS NULL",
+            "SELECT id, text FROM todos WHERE crew_id=?1 AND ledger='agent' AND number=?2 AND deleted_at IS NULL",
             params![s.crew_id, number],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    let Some(todo) = todo else {
+    let Some((todo, todo_text)) = todo else {
         return Err(CollabError::NotFound(
             Refusal::new(Code::TodoNotFound).arg("number", number.to_string()),
         ));
@@ -48,7 +55,10 @@ pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Resul
         "UPDATE todos SET updated_at=?2 WHERE id=?1",
         params![todo, r.created_at],
     )?;
-    Ok(r)
+    Ok(Responded {
+        todo_text,
+        response: r,
+    })
 }
 
 #[cfg(test)]
@@ -65,7 +75,12 @@ mod tests {
                 [],
             )
             .unwrap();
-        ok(&mut s, |tx| respond(tx, "w-a1", 1, "认领，今天做"));
+        let first = ok(&mut s, |tx| respond(tx, "w-a1", 1, "认领，今天做"));
+        assert_eq!(
+            first.todo_text, "示例：补文档",
+            "the item answered, read in the same tx"
+        );
+        assert_eq!(first.response.text, "认领，今天做");
         ok(&mut s, |tx| respond(tx, "cap-a", 1, "好"));
         assert_eq!(
             count(&s, "SELECT COUNT(*) FROM todo_responses WHERE todo_id='t1'"),
