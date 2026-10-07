@@ -76,13 +76,33 @@ pub enum InputDraft {
 /// 输入框下沿（横线、下角）的起笔字符。
 pub const LOWER_EDGE_CHARS: [char; 9] = ['─', '━', '═', '╰', '└', '╚', '╯', '┘', '╝'];
 
-/// 一个格子算不算「占位样式」：claude 的占位提示是暗淡（SGR 2）或灰色前景。
+/// 灰阶 256 色里算「中灰」的那一段（xterm 232..=255 是 24 级灰，232 最暗、255 最亮）：232..=250。
+pub const PLACEHOLDER_GREY_INDEXED: std::ops::RangeInclusive<u8> = 232..=250;
+
+/// truecolor 里算「中灰」的：三个分量彼此相差不超过 [`PLACEHOLDER_GREY_TOLERANCE`]，且都在这个范围里（太暗的看不见、
+/// 太亮的就是正文的白）。
+pub const PLACEHOLDER_GREY_RGB: std::ops::RangeInclusive<u8> = 96..=200;
+
+/// 「灰」= r、g、b 两两之差不超过这么多。
+pub const PLACEHOLDER_GREY_TOLERANCE: u8 = 16;
+
+/// 一个格子算不算「占位样式」：claude 的占位提示是暗淡（SGR 2）或灰色前景。灰色认这几种（T10d fix R2）：命名的
+/// 亮黑 / 暗前景、256 色的 8 号与中灰阶（[`PLACEHOLDER_GREY_INDEXED`]）、truecolor 的中灰（[`PLACEHOLDER_GREY_RGB`]）。
+/// crewd 给子进程的是 `TERM=xterm-256color`、不设 `COLORTERM`，claude 多半走 256 色；truecolor 也认，免得它自己判出
+/// 真彩时漏掉。
 fn placeholder_styled(cell: &Cell) -> bool {
     cell.flags.contains(Flags::DIM)
-        || matches!(
-            cell.fg,
-            Color::Named(NamedColor::BrightBlack | NamedColor::DimForeground) | Color::Indexed(8)
-        )
+        || match cell.fg {
+            Color::Named(NamedColor::BrightBlack | NamedColor::DimForeground) => true,
+            Color::Indexed(i) => i == 8 || PLACEHOLDER_GREY_INDEXED.contains(&i),
+            Color::Spec(rgb) => {
+                let (lo, hi) = (rgb.r.min(rgb.g).min(rgb.b), rgb.r.max(rgb.g).max(rgb.b));
+                hi - lo <= PLACEHOLDER_GREY_TOLERANCE
+                    && PLACEHOLDER_GREY_RGB.contains(&lo)
+                    && PLACEHOLDER_GREY_RGB.contains(&hi)
+            }
+            _ => false,
+        }
 }
 
 /// 一个格子带不带任何样式（整屏一个都没有 = 终端没颜色，样式这条判据用不上）。
@@ -300,6 +320,31 @@ mod tests {
         assert_eq!(draft(&cursor), InputDraft::Empty);
         let blank = format!("{RULE}\r\n❯ \x1b[7m \x1b[27m\r\n{RULE}{STATUS}");
         assert_eq!(draft(&blank), InputDraft::Empty);
+    }
+
+    /// T10d fix R2：256 色中灰阶与 truecolor 中灰也是占位提示；太亮的灰（正文的白）、有色的不是。
+    #[test]
+    fn mid_grey_256_and_truecolor_placeholders_are_an_empty_box() {
+        for sgr in [
+            "38;5;246",
+            "38;5;232",
+            "38;5;250",
+            "38;2;153;153;153",
+            "38;2;100;110;105",
+        ] {
+            let s = format!("{RULE}\r\n❯ \x1b[{sgr}mTry \"x\"\x1b[39m\r\n{RULE}{STATUS}");
+            assert_eq!(draft(&s), InputDraft::Empty, "{sgr}");
+        }
+        for sgr in [
+            "38;5;251",
+            "38;5;33",
+            "38;2;220;220;220",
+            "38;2;153;120;153",
+            "38;2;60;60;60",
+        ] {
+            let s = format!("{RULE}\r\n❯ \x1b[{sgr}mTry \"x\"\x1b[39m\r\n{RULE}{STATUS}");
+            assert_eq!(draft(&s), InputDraft::Text("Try \"x\"".into()), "{sgr}");
+        }
     }
 
     #[test]
