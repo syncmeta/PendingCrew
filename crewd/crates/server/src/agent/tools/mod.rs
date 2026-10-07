@@ -1,14 +1,19 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
+pub mod messaging;
+
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::AppState;
 use crate::agent::catalog::{self, Scope};
-use crate::agent::port::{self, PortError};
+use crate::agent::port::{
+    self, ChannelView, CrewView, MsgRef, PortError, PostReq, PostSender, Posted,
+};
 use crate::agent::text::{self, Locale};
 use crate::agent::{Identity, Role};
 use crewd_proto::agent::CallResult;
+use crewd_proto::{Mention, Message};
 
 pub struct Ctx<'a> {
     pub st: &'a AppState,
@@ -139,10 +144,151 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
             cx.err("r.not_on_management", &[("name", tool)])
         };
     }
-    // Task 12 replaces the two lines below with `match tool { ... _ => cx.err("r.no_handler", ...) }`,
-    // and Tasks 12-15 add the group branches.
-    let _ = args;
-    cx.err("r.no_handler", &[("name", tool)])
+    match tool {
+        "post" => messaging::post(&cx, args).await,
+        "read_channel" => messaging::read_channel(&cx, args).await,
+        "search" => messaging::search(&cx, args).await,
+        "list_channels" => messaging::list_channels(&cx, args).await,
+        // Tasks 13-15 add the other groups.
+        _ => cx.err("r.no_handler", &[("name", tool)]),
+    }
+}
+
+/// A message reference in tool arguments: a number (`128`), `"128"` / `"#128"`, or a message id.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+pub enum RefArg {
+    Num(i64),
+    Str(String),
+}
+
+/// `128` / `"128"` / `"#128"` -> a sequence number; anything else is a message id.
+pub fn msg_ref(r: &RefArg) -> MsgRef {
+    match r {
+        RefArg::Num(n) => MsgRef::Seq(*n),
+        RefArg::Str(s) => {
+            let t = s.trim().trim_start_matches('#');
+            t.parse::<i64>()
+                .map(MsgRef::Seq)
+                .unwrap_or_else(|_| MsgRef::Id(s.trim().to_string()))
+        }
+    }
+}
+
+/// How a message reference is written back in a receipt.
+pub fn ref_text(r: &RefArg) -> String {
+    match r {
+        RefArg::Num(n) => format!("#{n}"),
+        RefArg::Str(s) => s.clone(),
+    }
+}
+
+/// At most this many channels are offered when a channel argument does not resolve.
+const CHOICES_CAP: usize = 20;
+
+/// A list of channels to choose from (`r.channel_choice` lines): the ones I am in or listen to
+/// first, at most `CHOICES_CAP`.
+pub async fn channel_choices(cx: &Ctx<'_>, pool: &[&ChannelView]) -> String {
+    let mut pool: Vec<&ChannelView> = pool.to_vec();
+    pool.sort_by_key(|c| !(c.has_session(&cx.me.session_id) || c.listening));
+    let mut lines = Vec::new();
+    for c in pool.into_iter().take(CHOICES_CAP) {
+        let label = channel_label(cx, c).await;
+        lines.push(cx.r("r.channel_choice", &[("id", &c.id), ("name", &label)]));
+    }
+    lines.join("\n")
+}
+
+/// A channel argument: the id of a channel I can read (B15 rules + my listens), else the unique
+/// name among them. A miss or an ambiguity lists the choices (members first, capped) and points
+/// to `list_channels`. A channel I cannot read is "not found", same as one that does not exist.
+pub async fn resolve_channel(cx: &Ctx<'_>, arg: &str) -> Result<ChannelView, CallResult> {
+    let arg = arg.trim();
+    let all = port::readable_views(cx.st, cx.me)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    if let Some(c) = all.iter().find(|c| c.id == arg) {
+        return Ok(c.clone());
+    }
+    let named: Vec<&ChannelView> = all
+        .iter()
+        .filter(|c| !c.name.is_empty() && c.name == arg)
+        .collect();
+    if let [one] = named.as_slice() {
+        return Ok((*one).clone());
+    }
+    let (key, pool) = if named.is_empty() {
+        ("r.no_channel", all.iter().collect::<Vec<_>>())
+    } else {
+        ("r.ambiguous_channel", named)
+    };
+    let choices = channel_choices(cx, &pool).await;
+    Err(cx.err(key, &[("arg", arg), ("choices", &choices)]))
+}
+
+/// A crew argument: number, id or exact title (`port::resolve_crew`); a removed crew by number is
+/// refused with collab's `directory.crew_removed`, an unknown one with `crew.not_found`.
+pub async fn crew_arg(cx: &Ctx<'_>, arg: &str) -> Result<CrewView, CallResult> {
+    use crewd_collab::refusal::{Code, Refusal};
+    match port::resolve_crew(cx.st, arg.trim()).await {
+        Ok(Some(c)) => Ok(c),
+        Ok(None) => Err(cx.fail(PortError::NotFound(port::Reason::Rule(
+            Refusal::new(Code::CrewNotFound).arg("crew", arg.trim()),
+        )))),
+        Err(e) => Err(cx.fail(e)),
+    }
+}
+
+/// One message as the agent reads it: `#seq time sender: text` (+ attachment paths). The sender
+/// label is the injection surface's (`port::sender_label`, B6).
+pub async fn render_line(cx: &Ctx<'_>, m: &Message) -> Result<String, CallResult> {
+    let who = port::sender_label(cx.st, m, cx.loc)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    let mut line = cx.r(
+        "r.line",
+        &[
+            ("seq", &m.seq.to_string()),
+            ("time", &m.created_at),
+            ("who", &who),
+            ("text", &m.text),
+        ],
+    );
+    for a in &m.attachments {
+        line.push_str(&cx.r("r.line_attachment", &[("path", &a.path)]));
+    }
+    Ok(line)
+}
+
+/// Post one message as `sender`; a post in my own name also notes "this turn called someone"
+/// (the stored mentions, so a reply's automatic @ counts too).
+pub async fn post_as(
+    cx: &Ctx<'_>,
+    channel: &str,
+    text: String,
+    mentions: Vec<Mention>,
+    in_reply_to: Option<String>,
+    category: Option<String>,
+    sender: PostSender,
+) -> Result<Posted, PortError> {
+    let by_me = matches!(&sender, PostSender::Session(s) if *s == cx.me.session_id);
+    let p = port::post(
+        cx.st,
+        PostReq {
+            channel_id: channel.to_string(),
+            sender,
+            text,
+            mentions,
+            in_reply_to,
+            category,
+            attachments: vec![], // M3a: message.post takes no attachments yet.
+        },
+    )
+    .await?;
+    if by_me {
+        crate::agent::turn::note_post(cx.st, cx.me, &p.message.mentions).await;
+    }
+    Ok(p)
 }
 
 #[cfg(test)]

@@ -393,7 +393,7 @@ mod tests {
                 assert!(!md.contains(gone), "{:?}: 还有 {gone}", c.locale);
             }
             for must in [
-                "human_watching",
+                "list_channels",
                 "channel_listen",
                 "read_channel",
                 "channel_create",

@@ -29,12 +29,17 @@ impl Fixture {
     }
 
     pub async fn with_config(config: AgentConfig) -> Self {
+        Self::with_runtime(AgentRuntime::new(config)).await
+    }
+
+    /// A fixture with a prepared runtime (e.g. a post gate on a clock the test moves).
+    pub async fn with_runtime(runtime: AgentRuntime) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let control = Arc::new(FakeSessionControl::default());
         let store = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
         let db = crewd_store::Db::spawn(store).unwrap();
         let mut state = AppState::new(db).with_sessions(control.clone());
-        state.agent = AgentRuntime::new(config);
+        state.agent = runtime;
         let mut f = Self {
             state: Arc::new(state),
             crew: String::new(),

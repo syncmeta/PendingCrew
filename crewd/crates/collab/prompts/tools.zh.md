@@ -6,21 +6,25 @@
 
 ## post
 把关键节点发到群里：开始、完成、卡住、交接、重要发现。终端里的过程（读了什么、跑了什么）别往群里倒。
-不填 channel：给了 reply_to 就发到那条所在的群，否则发本机组大厅。
-@ 的规则：@ 只决定叫醒谁——@session / @captain 叫醒被点到的 agent，@human 是标给人看；@ 不收窄可见范围，群里的成员照样都看得见这条消息。人类没有注视的群里 @人类，标记会亮，但人可能很久才看到——急事发你的 home（顶层机组）的人类群，或用 ask。
-单条正文最多 256 KiB。
+发到哪必须说清，没有默认：channel = 发到一个群；to = 按通讯录号码私聊一个人（跨机组也用它）；只给 reply_to = 发到那条消息所在的群。三者都不给会报错并列出你的群。
+@ 的规则：@ 只决定叫醒谁——不 @ 谁就不叫醒任何人（私聊例外：对方总会被叫醒）；@session / @captain 叫醒被点到的 agent，@human 是标给人看；@ 不收窄可见范围，读得到这个群的人照样都看得见。人类没有注视的群里 @人类，标记会亮，但人可能很久才看到——急事发你的 home（顶层机组）的人类群，或用 ask。
+发得太快、同一句话重复发、频繁 @人类 会被挡下（回执说明怎么办）：把进度并成一条再发。
+回执会写明这条会叫醒谁。单条正文最多 256 KiB。
 
 ## post.channel
-群 id，或你所在的群里唯一的群名。不填见工具说明。
+群 id，或你读得到的群里唯一的群名。与 to 二选一。
+
+## post.to
+私聊一个人：通讯录号码——7-3（7 号机组的 3 号分机）、7（7 号机组此刻的机长）、0（总机组的机长）；directory 查号。同一对人只有一个私聊，已有就接着用。与 channel、reply_to 都不能同时给。
 
 ## post.message
 发一条时用它。与 messages 二选一。
 
 ## post.messages
-一次发几条（最多 6 条），每条一个气泡、各带自己的 category。任何一条不合法就整批不发，错误会指名第几条。
+一次发几条（最多 6 条），每条一个气泡、各带自己的 category。任何一条不合法就整批不发，错误会指名第几条。mentions、reply_to 只挂在第一条上。
 
 ## post.mentions
-要叫醒谁：{kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"}。不填 = 不点名，群里所有人照样看得见。被 @ 的 session 必须是这个群的成员；@captain 也要求机长是这个群的成员，机组没有机长时 @captain 会报错。
+要叫醒谁：{kind:"session", target_id:"<session id 或通讯录号码>"} / {kind:"captain"} / {kind:"human"}。不填 = 不叫醒任何人，读得到这个群的人照样看得见。被 @ 的 session 必须是这个群的成员；@captain 也要求机长是这个群的成员，机组没有机长时 @captain 会报错。
 
 ## post.reply_to
 你在回复哪一条：消息序号（如 #128 或 128）或消息 id。只能回复同一个群里的消息。会自动 @ 原发送者（他还在群里时）：群里所有成员照样看得见，只是把他叫醒；回复自己的消息、回复系统消息都不会加 @。
@@ -33,7 +37,7 @@
 分页读一个群的消息（旧在前）。读到最新一条时，这个群对你就算已读，之后不会再注入这些消息——只对你在其中、或你收听的群有效（读别的群不改已读位置）。每条前面的 #序号 可以填进 reply_to。
 
 ## read_channel.channel
-群 id 或群名；不填 = 本机组大厅。本机组的群都能读，不必是成员。
+群 id 或群名；不填 = 本机组大厅。读得到的群：本机组名下的群（含本机组成员之间的私聊——没有私有群）、你的 home 人类群、你在其中或收听的群；总机组的 session 读得到全组织的群。
 
 ## read_channel.limit
 条数，1–200，默认 50。
@@ -42,13 +46,16 @@
 只看这一条之前的（消息序号或 id）。不填 = 最新一页。
 
 ## search
-在你所在的群和你收听的群里搜消息。整个查询词（去掉首尾空白）当作一个整体，做不区分大小写的子串匹配（只折叠 ASCII 字母的大小写），不是按词拆开再求交；按时间倒序。
+在你读得到的群里搜消息（本机组名下的群、你的 home 人类群、你在其中或收听的群，已归档的也算；总机组的 session 搜全组织）。整个查询词（去掉首尾空白）当作一个整体，做不区分大小写的子串匹配（只折叠 ASCII 字母的大小写），不是按词拆开再求交；按时间倒序。
 
 ## search.query
 要搜的文字：去掉首尾空白后整体当一个子串匹配（ASCII 不区分大小写）。
 
 ## search.channel
 只搜这一个群（群 id 或群名）。
+
+## search.crew
+只搜这个机组名下你读得到的群（机组号、id 或名字）。
 
 ## search.after
 只要这个时刻之后的（ISO8601，含边界）。
@@ -60,10 +67,13 @@
 条数上限，1–200，默认 50。
 
 ## list_channels
-列出你所在的群（大厅、你加入的群、你收听的群）和本机组的其它群：id、名字、用途、群主、成员、人类是否在注视。
+列出群：第一行是你的 home 人类群（找人、要人拍板发这里），然后是你在其中或收听的群、本机组的其它群、人类在注视的群。每行：id · 名字 · 类型 · 用途 · 群主 · 人数 · 状态（你在群里 / 你在收听 / 人类在注视 / 已归档 / 你是群主）。
 
-## human_watching
-人类现在在哪儿：他标了「我在注视」的群，加上你的 home（顶层机组）的人类群。要人拍板、要人看见，发到这些群；不在其中的群里 @人类，他可能很久才看到。
+## list_channels.crew
+只列这个机组名下你读得到的群（机组号、id 或名字）。
+
+## list_channels.include_archived
+true = 连已归档的群一起列；默认不列。
 
 ## channel_create
 建一个群（话题群或两人私聊）。要和谁就某件事协作、要单独讨论一个话题，就用它——不要为此开子机组。你是群主，自动在群里。群有名字和用途，例如「发版」「scroll bug 排查」。群名不能与人类（人类 / Human）或 crewd 的系统标签重名，重名会被拒绝。
@@ -430,4 +440,147 @@ claude 或 codex，必须明确选。
 已解散的私聊
 
 ## r.dm_generic
+私聊
+
+## r.post_one_of
+message 与 messages 二选一，且用 messages 时把 category 写在每一条里。
+
+## r.post_count
+messages 要 1–6 条，你给了 {count} 条。多的拆成两次发，或合并成一条。
+
+## r.post_empty
+第 {index} 条是空的。补上内容或删掉这一条再发。
+
+## r.bad_category
+第 {index} 条的 category「{value}」不认识，可选：{choices}。
+
+## r.bad_mention
+mention 写法不对（kind = {kind}）：kind 只能是 session / captain / human，session 必须带 target_id（session id 或通讯录号码）。
+
+## r.no_message
+找不到消息 {ref}（或它所在的群你读不到）。序号见 read_channel / search 每行开头的 #。
+
+## r.reply_other_channel
+#{seq} 不在你指定的群里；回复要发在原消息所在的群，去掉 channel 即可。
+
+## r.post_partial
+前面的已发出（{sent}），第 {index} / {total} 条没发出去：{detail}。别整批重发，只补没发的。
+
+## r.post_no_target
+没说发到哪：给 channel（群 id 或群名）、to（通讯录号码，如 7-3 / 7 / 0，发私聊）或 reply_to（回复哪一条）。你所在的群：
+{choices}
+其它群用 list_channels 查，号码用 directory 查。
+
+## r.post_target_conflict
+发到哪只能说一次：to 是私聊，不能和 channel 或 reply_to 一起给。去掉多余的那个再发。
+
+## r.post_to_self
+{address} 就是你自己。要找别人，先用 directory 查号码。
+
+## r.posted
+已发到{channel}：{seqs}。
+
+## r.posted_dm
+已私聊 {peer}（{address}）：{seqs}。{new}
+
+## r.dm_opened
+这是新开的私聊（{id}），之后接着在这里聊，或再用 to 都行。
+
+## r.posted_wakes
+会叫醒：{names}。
+
+## r.posted_wakes_none
+这条没 @ 任何人，不会叫醒谁；要谁回应就 @ 谁。
+
+## r.posted_wakes_dm
+私聊里对方总会被叫醒，不用 @。
+
+## r.posted_not_member
+你不是{channel}的成员：别人的回复叫不醒你；要听回复就 channel_listen 它。
+
+## r.post_throttled
+发得太快，这次没发出去：把要说的并成一条，{retry_secs} 秒后再发。
+
+## r.post_duplicate
+和你刚发的 #{seq} 一模一样，没再发。要补充就写新的内容，或 reply_to #{seq}。
+
+## r.human_mention_throttled
+最近 30 分钟里你 @人类 太多次了，这次没发出去。要人拍板用 ask；其它情况去掉 @human 再发。
+
+## r.human_not_watching
+人类现在没有注视{channel}：@人类 的标记已经亮了，但可能很久才被看到。急事或要拍板的事发你的 home 人类群 {home}（{home_id}，list_channels 第一行），或用 ask。
+
+## r.channel_choice
+- {id} {name}
+
+## r.no_channel
+找不到群「{arg}」（或你读不到它）。你能用的群（最多列 20 个，你在其中的在前）：
+{choices}
+全部的群用 list_channels 查。
+
+## r.ambiguous_channel
+有不止一个群叫「{arg}」，请用 id：
+{choices}
+
+## r.line
+#{seq} {time} {who}：{text}
+
+## r.line_attachment
+ ［附件 {path}］
+
+## r.read_empty
+{channel}里还没有消息。
+
+## r.read_header
+{channel}（{id}）的 {count} 条消息，旧在前：
+
+## r.read_more
+更早的还有：before 填 {before} 继续往前翻。
+
+## r.search_none
+没搜到「{query}」。换个更短的词，或用 crew / channel 换个范围。
+
+## r.search_hit
+［{channel}］{line}
+
+## r.list_header
+群（id · 名字 · 类型 · 用途 · 群主 · 人数 · 状态）：
+
+## r.list_line
+- {id} · {name} · {kind} · {purpose} · 群主 {owner} · {count} 人 · {flags}
+
+## r.list_more
+还有 {count} 个群没列出；用 crew 只看某个机组的群。
+
+## r.flag_home_human
+你的 home 人类群（找人发这里）
+
+## r.flag_member
+你在群里
+
+## r.flag_listening
+你在收听
+
+## r.flag_watched
+人类在注视
+
+## r.flag_archived
+已归档
+
+## r.flag_owner
+你是群主
+
+## r.owner_none
+（无）
+
+## r.kind_lobby
+大厅
+
+## r.kind_human
+人类群
+
+## r.kind_topic
+话题群
+
+## r.kind_dm
 私聊

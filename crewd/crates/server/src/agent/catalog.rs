@@ -110,6 +110,7 @@ pub const CATALOG: &[ToolSpec] = &[
         "post",
         &[
             p("channel", Str, false),
+            p("to", Str, false),
             p("message", Str, false),
             p("messages", Messages, false),
             p("mentions", Mentions, false),
@@ -130,13 +131,16 @@ pub const CATALOG: &[ToolSpec] = &[
         &[
             p("query", Str, true),
             p("channel", Str, false),
+            p("crew", Str, false),
             p("after", Str, false),
             p("before", Str, false),
             int("limit", 1, 200),
         ],
     ),
-    all("list_channels", &[]),
-    all("human_watching", &[]),
+    all(
+        "list_channels",
+        &[p("crew", Str, false), p("include_archived", Bool, false)],
+    ),
     all(
         "channel_create",
         &[
@@ -288,6 +292,8 @@ pub const REMOVED: &[&str] = &[
     "withdraw_human_todo",
     "listen",
     "answer_decision",
+    // -> list_channels (S70; T15b turns this list into (name, replacement) pairs).
+    "human_watching",
 ];
 
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
@@ -399,7 +405,7 @@ mod tests {
         for gone in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 40);
+        assert_eq!(CATALOG.len(), 39);
     }
 
     #[test]
@@ -409,8 +415,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 21);
-        assert_eq!(captain.len(), 40);
+        assert_eq!(worker.len(), 20);
+        assert_eq!(captain.len(), 39);
     }
 
     #[test]
@@ -445,7 +451,7 @@ mod tests {
         );
         let ask = input_schema(find("ask").unwrap(), Locale::Zh);
         assert_eq!(ask["required"], serde_json::json!(["question"]));
-        let none = input_schema(find("list_channels").unwrap(), Locale::Zh);
+        let none = input_schema(find("get_quota").unwrap(), Locale::Zh);
         assert_eq!(none["properties"], serde_json::json!({}));
     }
 

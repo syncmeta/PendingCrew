@@ -842,6 +842,37 @@ pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<S
     .await
 }
 
+/// `readable_channels` 的视图（`listening` 按此刻的收听行填上）：工具层按名字找群、列群都从这里取。
+pub async fn readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
+    let s = me.session_id.clone();
+    read(st, move |conn| {
+        let listening = crewd_collab::listens::channels_of(conn, &s, now_ms())?;
+        let mut ids = crewd_collab::channels::readable_channels(conn, &s)?;
+        for id in &listening {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids.iter()
+            .map(|id| {
+                let mut v = channel_view(conn, id)?;
+                v.listening = listening.contains(id);
+                Ok(v)
+            })
+            .collect()
+    })
+    .await
+}
+
+/// 这个 session 此刻算数的收听（`listens::channels_of`：没过期、没归档、读得到）。
+pub async fn listening_to(st: &AppState, session: &str) -> PortResult<Vec<String>> {
+    let s = session.to_string();
+    read(st, move |conn| {
+        crewd_collab::listens::channels_of(conn, &s, now_ms())
+    })
+    .await
+}
+
 /// `messages_raw` 的 agent 视角：群必须读得到（读不到 = `NotFound`，不区分「没有」和「看不见」）。旧在前。
 /// @ 不藏消息（§24.2），读得到的群里每条都给。
 pub async fn messages_as(
@@ -1037,6 +1068,22 @@ pub async fn directory(st: &AppState, query: Option<String>) -> PortResult<Vec<D
                 })
             })
             .collect()
+    })
+    .await
+}
+
+/// 收件人 → session id（C3）：通讯录地址走 collab `directory::resolve`（`"0"` = 总机组机长，`"N"` / `"N-1"` = N 号机组
+/// **此刻**的机长，`"N-E"` = 分机；拒绝原样带码回来：`directory.bad_address` / `no_such_crew` / `crew_removed` /
+/// `no_such_extension`、`crew.no_captain`）。不像地址（不全是数字和 `-`）而又恰好是一个 session 的 id 时，就是那个 session——
+/// 工具里每个 session 参数都同时收地址和 id。
+pub async fn resolve_address(st: &AppState, arg: &str) -> PortResult<String> {
+    let arg = arg.trim().to_string();
+    read(st, move |conn| {
+        let address_like = arg.bytes().all(|b| b.is_ascii_digit() || b == b'-');
+        if !address_like && opt(crewd_collab::sessions::get(conn, &arg))?.is_some() {
+            return Ok(arg);
+        }
+        crewd_collab::directory::resolve(conn, &arg)
     })
     .await
 }

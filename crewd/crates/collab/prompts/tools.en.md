@@ -6,21 +6,25 @@ Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must hav
 
 ## post
 Post key moments to a channel: started, done, blocked, handing off, important findings. Keep terminal detail (what you read or ran) out of channels.
-Without channel: if reply_to is given the post goes to that message's channel, otherwise to your crew's lobby.
-Mentions only decide who is woken: @session / @captain wake the named agents, @human flags the message for the human; a mention never narrows visibility — every channel member still sees the message. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in your home (top-level crew) human channel or use ask.
-A message body is at most 256 KiB.
+Say where it goes; there is no default: channel = post in a channel; to = a dm with one session by its directory number (also across crews); reply_to alone = the channel of that message. With none of the three you get an error listing your channels.
+Mentions only decide who is woken: mention no one and no one is woken (except in a dm: the other side is always woken); @session / @captain wake the named agents, @human flags the message for the human; a mention never narrows visibility — everyone who can read the channel still sees the message. @human in a channel the human is not watching lights the badge but may be seen much later — for anything urgent post in your home (top-level crew) human channel or use ask.
+Posting too fast, repeating the same text, or @human too often is held back (the receipt says what to do): merge your updates into one message.
+The receipt says whom the post wakes. A message body is at most 256 KiB.
 
 ## post.channel
-Channel id, or a channel name that is unique among channels you are in. See the tool text when omitted.
+Channel id, or a channel name that is unique among the channels you can read. Not together with to.
+
+## post.to
+A dm with one session by its directory number: 7-3 (crew 7, extension 3), 7 (crew 7's current captain), 0 (the management crew's captain); look numbers up with directory. A pair has one dm, reused when it exists. Not together with channel or reply_to.
 
 ## post.message
 Use for a single message. Mutually exclusive with messages.
 
 ## post.messages
-Several messages at once (at most 6), one bubble each with its own category. If any item is invalid nothing is posted and the error names the item.
+Several messages at once (at most 6), one bubble each with its own category. If any item is invalid nothing is posted and the error names the item. mentions and reply_to apply to the first message only.
 
 ## post.mentions
-Who to wake: {kind:"session", target_id:"<session id>"} / {kind:"captain"} / {kind:"human"}. Omit to name no one; everyone in the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
+Who to wake: {kind:"session", target_id:"<session id or directory number>"} / {kind:"captain"} / {kind:"human"}. Omit to wake no one; everyone who can read the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
 
 ## post.reply_to
 The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically (while they are still in the channel): all channel members still see it, the sender is woken; replying to your own message or to a system message adds no mention.
@@ -33,7 +37,7 @@ What this is: progress / done / blocked / question / finding / handoff / ack / n
 Read a channel page by page (oldest first). Reading up to the newest message marks the channel read for you, so those messages are not injected again — only for channels you are in or listen to (reading other channels does not move your read position). The #number before each message can go into reply_to.
 
 ## read_channel.channel
-Channel id or name; omitted = your crew's lobby. Any channel of your crew is readable, membership not required.
+Channel id or name; omitted = your crew's lobby. Readable: your crew's channels (dms between its members included — there are no private channels), your home human channel, channels you are in or listen to; management crew sessions read the whole organisation.
 
 ## read_channel.limit
 Number of messages, 1–200, default 50.
@@ -42,13 +46,16 @@ Number of messages, 1–200, default 50.
 Only messages before this one (number or id). Omitted = newest page.
 
 ## search
-Search messages in channels you are in or listening to. The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
+Search messages in the channels you can read (your crew's channels, your home human channel, channels you are in or listen to, archived ones included; management crew sessions search the whole organisation). The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
 
 ## search.query
 The text to find: trimmed, then matched as one substring (ASCII case-insensitive).
 
 ## search.channel
 Search only this channel (id or name).
+
+## search.crew
+Search only that crew's channels you can read (crew number, id or name).
 
 ## search.after
 Only at or after this time (ISO8601).
@@ -60,10 +67,13 @@ Only strictly before this time (ISO8601, exclusive: created_at < before).
 Maximum results, 1–200, default 50.
 
 ## list_channels
-List channels you are in (lobby, joined channels, channels you listen to) and the other channels of your crew: id, name, purpose, owner, members, whether the human is watching.
+List channels: first your home human channel (post there to reach the human or get a decision), then channels you are in or listen to, the other channels of your crew, and channels the human is watching. Each row: id · name · type · purpose · owner · members · state (member / listening / human watching / archived / you own it).
 
-## human_watching
-Where the human is now: channels marked "watching", plus your home (top-level crew) human channel. Post there when you need the human to see or decide; @human elsewhere may be seen much later.
+## list_channels.crew
+List only that crew's channels you can read (crew number, id or name).
+
+## list_channels.include_archived
+true = include archived channels; they are left out by default.
 
 ## channel_create
 Create a channel (topic channel or two-person dm). Use it whenever you need to collaborate with someone on something or discuss a topic separately — do not create a child crew for that. You become the owner and a member. Give it a name and a purpose, e.g. "release", "scroll bug". A name equal to the human labels (人类 / Human) or to crewd's own system labels is rejected.
@@ -431,3 +441,146 @@ dissolved direct message
 
 ## r.dm_generic
 direct message
+
+## r.post_one_of
+Give either message or messages, not both; with messages put category inside each item.
+
+## r.post_count
+messages needs 1–6 items, you gave {count}. Split them over two posts, or merge them into one.
+
+## r.post_empty
+Item {index} is empty. Fill it in or drop it, then post again.
+
+## r.bad_category
+Item {index} has an unknown category "{value}"; choose from: {choices}.
+
+## r.bad_mention
+Invalid mention (kind = {kind}): kind must be session / captain / human, and session needs target_id (a session id or directory number).
+
+## r.no_message
+Message {ref} not found (or its channel is not readable for you). Numbers are the # at the start of each read_channel / search line.
+
+## r.reply_other_channel
+#{seq} is not in the channel you named; replies go to the original message's channel — just drop channel.
+
+## r.post_partial
+The first ones were posted ({sent}); item {index} of {total} was not: {detail}. Do not resend the batch, only the missing ones.
+
+## r.post_no_target
+Say where this goes: channel (a channel id or name), to (a directory number such as 7-3 / 7 / 0, for a dm) or reply_to (the message you answer). Channels you are in:
+{choices}
+Find other channels with list_channels and numbers with directory.
+
+## r.post_target_conflict
+Name one destination only: to is a dm and cannot go with channel or reply_to. Drop the extra one and post again.
+
+## r.post_to_self
+{address} is you. To reach someone else, look their number up with directory first.
+
+## r.posted
+Posted to {channel}: {seqs}.
+
+## r.posted_dm
+Sent to {peer} ({address}) in a dm: {seqs}. {new}
+
+## r.dm_opened
+This dm is new ({id}); keep talking there, or use to again.
+
+## r.posted_wakes
+Wakes: {names}.
+
+## r.posted_wakes_none
+This mentions no one, so it wakes no one; @ whoever needs to respond.
+
+## r.posted_wakes_dm
+In a dm the other side is always woken; no @ needed.
+
+## r.posted_not_member
+You are not a member of {channel}: replies will not wake you; channel_listen it to hear them.
+
+## r.post_throttled
+Posting too fast, so this was not posted: merge your update into one message and post it again in {retry_secs} s.
+
+## r.post_duplicate
+Same text as your #{seq}, so it was not posted again. Write what is new, or reply_to #{seq}.
+
+## r.human_mention_throttled
+Too many @human from you in the last 30 minutes, so this was not posted. For a decision use ask; otherwise post without @human.
+
+## r.human_not_watching
+The human is not watching {channel}: the @human badge is lit but may be seen much later. For urgent things or decisions post in your home human channel {home} ({home_id}, the first line of list_channels), or use ask.
+
+## r.channel_choice
+- {id} {name}
+
+## r.no_channel
+No channel "{arg}" (or you cannot read it). Channels you can use (at most 20, yours first):
+{choices}
+See all of them with list_channels.
+
+## r.ambiguous_channel
+More than one channel is called "{arg}"; use the id:
+{choices}
+
+## r.line
+#{seq} {time} {who}: {text}
+
+## r.line_attachment
+ [attachment {path}]
+
+## r.read_empty
+{channel} has no messages yet.
+
+## r.read_header
+{count} messages in {channel} ({id}), oldest first:
+
+## r.read_more
+There are older ones: pass before = {before} to page back.
+
+## r.search_none
+Nothing found for "{query}". Try a shorter phrase, or another scope with crew / channel.
+
+## r.search_hit
+[{channel}] {line}
+
+## r.list_header
+Channels (id · name · type · purpose · owner · members · state):
+
+## r.list_line
+- {id} · {name} · {kind} · {purpose} · owner {owner} · {count} members · {flags}
+
+## r.list_more
+{count} more channels are not listed; narrow it down with crew.
+
+## r.flag_home_human
+your home human channel (post here to reach the human)
+
+## r.flag_member
+you are a member
+
+## r.flag_listening
+you are listening
+
+## r.flag_watched
+human is watching
+
+## r.flag_archived
+archived
+
+## r.flag_owner
+you own it
+
+## r.owner_none
+(none)
+
+## r.kind_lobby
+lobby
+
+## r.kind_human
+human channel
+
+## r.kind_topic
+topic
+
+## r.kind_dm
+dm
