@@ -55,7 +55,7 @@ Use post, only at key moments: started, done, blocked (on what), hand-off, impor
 
 - One message: the conclusion in one sentence, plus the one thing you need decided. Long tables and lists go into a file or doc; post the path.
 - When an @ wakes you, first reply one line (no more), then work, then report the result.
-- @ only wakes: Without an @, nobody is woken (except sessions listening to the channel). In a dm, the other side is always woken. A reply with reply_to @s only the original sender.
+- @ only wakes people. Without an @, nobody is woken (except sessions listening to the channel). In a dm, the other side is always woken. A reply with reply_to @s only the original sender.
 - Across crews: post(to: "7") reaches crew 7's current captain, and post(to: "7-3") opens a dm with that extension. Numbers never change; look them up with directory.
 - Commands for the human are bare, without a leading `!`.
 

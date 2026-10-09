@@ -7,7 +7,7 @@ Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must hav
 ## post
 Post key moments to a channel: started, done, blocked, handing off, important findings. Write the conclusion in one sentence plus the one thing you need decided; long tables and lists go into a file, post the path. Keep terminal detail (what you read or ran) out of channels.
 Say where it goes; there is no default: channel = post in a channel; to = a dm with one session by its directory number (also across crews); reply_to alone = the channel of that message. With none of the three you get an error listing your channels.
-@ only wakes: no @ wakes nobody (except in a dm: the other side is always woken); @session / @captain wake the named agents; @human flags the message for the human, only for a question or a decision, never for progress. Whoever you @, everyone who can read the channel sees the message. @human in a channel the human is not watching may be seen much later: for anything urgent post in your home (top-level crew) human channel, and use ask for a decision.
+@ only wakes people. Without an @, nobody is woken (except sessions listening to the channel). In a dm, the other side is always woken. @session / @captain wake the named agents; @human flags the message for the human. Use @human only to ask a question (use ask when the human needs to decide), never to report progress. Whoever you @, everyone who can read the channel sees the message. @human in a channel the human is not watching may be seen much later: for anything urgent post in your home (top-level crew) human channel, and use ask for a decision.
 Posting too fast, repeating the same text, or @human too often is held back (the receipt says what to do): merge your updates into one message.
 The receipt says whom the post wakes. A message body is at most 256 KiB.
 
@@ -24,7 +24,7 @@ Use for a single message. Mutually exclusive with messages.
 Several messages at once (at most 6), one bubble each with its own category. If any item is invalid nothing is posted and the error names the item. mentions and reply_to apply to the first message only.
 
 ## post.mentions
-Who to wake: {kind:"session", target_id:"<session id or directory number>"} / {kind:"captain"} / {kind:"human"}. Omit to wake no one; everyone who can read the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
+Who to wake: {kind:"session", target_id:"<session id or directory number>"} / {kind:"captain"} / {kind:"human"}. Without an @, nobody is woken (except sessions listening to the channel). In a dm, the other side is still woken. Everyone who can read the channel still sees it. A mentioned session must be a member of the channel; @captain likewise requires the captain to be a member, and @captain in a crew without a captain is an error.
 
 ## post.reply_to
 The message you are replying to: its number (#128 or 128) or its id. Same channel only. The original sender is mentioned automatically (while still in the channel): all channel members still see it, the sender is woken; replying to your own message or to a system message adds no mention.
@@ -85,7 +85,7 @@ Short channel name.
 One sentence: what the channel is for.
 
 ## channel_create.members
-Members to add right away (optional; channel_invite later works too): session ids, directory numbers (like 7-3; 7 = crew 7's captain right now), or human. Leave yourself out.
+Members to add right away (optional; channel_invite later works too): session ids, directory numbers (like 7-3; 7 = crew 7's current captain), or human. Leave yourself out.
 
 ## channel_invite
 Add members to a channel, when others should follow or discuss the matter too. Usually you must be a member yourself; the lobby and a dm cannot take invites.
@@ -130,13 +130,13 @@ Channel id or name.
 How long (minutes, 1–480). Omitted = until you stop it with off=true.
 
 ## channel_listen.senders
-Only these senders: human, captain (whoever is captain when the message is posted; follows captain changes), session ids or directory numbers (a number is resolved to its session now, e.g. 7-1 = crew 7's captain right now, and does not follow later changes). This only filters whose messages wake you; everything in the channel is still injected. Omitted = everyone.
+Only these senders: human; captain (whoever holds that role when posting, so this follows captain changes); or a session id or directory number (resolved once—for example, 7-1 resolves to crew 7's current captain and does not follow later changes). This affects only whose messages wake you; all messages in the channel are still injected. Omitted = everyone.
 
 ## channel_listen.off
 true = stop listening to this channel (not together with minutes or senders). Not listening already is not an error.
 
 ## directory
-Look up the directory, to find someone or talk across crews: every crew and session on this machine has a short number — crews are integers (7), members are extensions (7-3), 7-1 is crew 7's captain right now, and 0 is the management crew (0 = its captain right now). Each row: number, name, crew or parent path, session id. Numbers go straight into post's to (a dm, across crews too) and into member arguments of the tools. Channels are listed by list_channels; the human has no number: post what the human must see in your home human channel, and use ask for a decision.
+Use the directory to find someone or talk across crews. Every crew and session on this machine has a short number: crews are integers (7), members are extensions (7-3), 7-1 is crew 7's current captain, and 0 is the management crew (0 = its current captain). Each row: number, name, crew or parent path, session id. Numbers go straight into post's to (a dm, across crews too) and into member arguments of the tools. Channels are listed by list_channels; the human has no number: post what the human must see in your home human channel, and use ask for a decision.
 
 ## directory.query
 Filter by number prefix, name or org path; omitted = everything.
@@ -459,7 +459,7 @@ This dm is new ({id}); keep talking there, or use to again.
 Wakes: {names}.
 
 ## r.posted_wakes_none
-This mentions no one, so it wakes no one; @ whoever needs to respond.
+Without an @, nobody is woken (except sessions listening to the channel). @ whoever needs to respond.
 
 ## r.posted_wakes_dm
 In a dm the other side is always woken; no @ needed.
