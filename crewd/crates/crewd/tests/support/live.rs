@@ -13,7 +13,7 @@ use crewd_exec::launch::{
 };
 use crewd_server::agent::testkit::Fixture;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 pub fn authorized() {
@@ -68,7 +68,7 @@ impl Trace {
             }
             Some("result") => {
                 self.results.push(v.clone());
-                if v["is_error"] == true {
+                if v["is_error"] != false {
                     return Err(format!("CLI result failure: {}", v["subtype"]));
                 }
                 if v["permission_denials"]
@@ -88,6 +88,14 @@ impl Trace {
     pub fn no_search_before_first_crew_call(&self) -> Result<(), String> {
         if self.init.is_none() || self.results.is_empty() {
             return Err("incomplete structured trace".into());
+        }
+        if self.results.iter().any(|r| {
+            r["is_error"] != false
+                || r["permission_denials"]
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty())
+        }) {
+            return Err("no successful complete terminal proof".into());
         }
         for (id, _) in &self.calls {
             if !self.tool_results.iter().any(|r| r["tool_use_id"] == *id) {
@@ -122,6 +130,62 @@ impl Trace {
     }
 }
 
+/// Signal only this owned Child, then bound reaping. kill_on_drop + Tokio's background reaper
+/// are the final fallback if the OS fails to acknowledge even SIGKILL within the reap deadline.
+async fn cancel_and_reap(child: &mut Child) -> Result<std::process::ExitStatus, String> {
+    let signal = child.start_kill();
+    match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(status)) => Ok(status),
+        Ok(Err(e)) => Err(format!("child reap failed: {e}; kill: {signal:?}")),
+        Err(_) => Err(format!("child reap deadline; kill: {signal:?}")),
+    }
+}
+
+/// Version preflight has its own short deadline, including output capture and process exit.
+async fn version_output(
+    command: &mut Command,
+    limit: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("configured piped stdout")
+        .take(4097);
+    let capture = async {
+        let mut bytes = Vec::new();
+        stdout
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 4096 {
+            return Err("version output exceeded 4096 bytes".into());
+        }
+        let status = child.wait().await.map_err(|e| e.to_string())?;
+        Ok(std::process::Output {
+            status,
+            stdout: bytes,
+            stderr: Vec::new(),
+        })
+    };
+    let result = tokio::time::timeout(limit, capture)
+        .await
+        .map_err(|_| "version preflight deadline".to_string())
+        .and_then(|v| v);
+    if result.is_err() {
+        cancel_and_reap(&mut child)
+            .await
+            .map_err(|e| format!("{}; {e}", result.as_ref().unwrap_err()))?;
+    }
+    result
+}
+
 pub struct Claude {
     child: Child,
     input: Option<ChildStdin>,
@@ -132,6 +196,9 @@ pub struct Claude {
     _files: LaunchFiles,
     pub trace: Trace,
     started: Instant,
+    prompt_limit: Duration,
+    completed: bool,
+    stopped: bool,
     pub version: String,
     pub install_type: &'static str,
 }
@@ -170,14 +237,9 @@ impl Claude {
             "unknown"
         };
         let env = build_env_from_process(&paths.child_path, &Default::default());
-        let version_out = Command::new(&program)
-            .arg("--version")
-            .env_clear()
-            .envs(&env)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut version_command = Command::new(&program);
+        version_command.arg("--version").env_clear().envs(&env);
+        let version_out = version_output(&mut version_command, Duration::from_secs(5)).await?;
         if !version_out.status.success() {
             return Err("Claude --version failed".into());
         }
@@ -259,12 +321,38 @@ impl Claude {
             _files: files,
             trace: Trace::default(),
             started: Instant::now(),
+            prompt_limit: Duration::from_secs(240),
+            completed: false,
+            stopped: false,
             version,
             install_type,
         })
     }
 
     pub async fn prompt(&mut self, text: &str) -> Result<Value, String> {
+        if self.stopped {
+            return Err("owned child stopped; no additional prompt permitted".into());
+        }
+        // Reset for every turn: an earlier success must not make a later error graceful.
+        self.completed = false;
+        let until = tokio::time::Instant::now() + self.prompt_limit;
+        let result = tokio::time::timeout_at(until, self.capture_prompt(text))
+            .await
+            .map_err(|_| "authorized prompt deadline".to_string())
+            .and_then(|v| v);
+        if result.is_ok() {
+            self.completed = true;
+        } else {
+            self.stopped = true;
+            self.input.take();
+            if let Err(e) = self.child.start_kill() {
+                eprintln!("LIVE immediate cancellation: {e}");
+            }
+        }
+        result
+    }
+
+    async fn capture_prompt(&mut self, text: &str) -> Result<Value, String> {
         let message = json!({"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": null});
         self.input
             .as_mut()
@@ -272,11 +360,11 @@ impl Claude {
             .write_all(format!("{message}\n").as_bytes())
             .await
             .map_err(|e| e.to_string())?;
-        let until = tokio::time::Instant::now() + Duration::from_secs(240);
         loop {
-            let line = tokio::time::timeout_at(until, self.lines.next_line())
+            let line = self
+                .lines
+                .next_line()
                 .await
-                .map_err(|_| "authorized prompt hit 240s deadline")?
                 .map_err(|e| e.to_string())?
                 .ok_or("Claude exited before a result; see test-owned stderr")?;
             writeln!(self.log, "{line}").map_err(|e| e.to_string())?;
@@ -293,12 +381,17 @@ impl Claude {
     /// exact Child is signalled; helpers receive EOF when their test-owned parent closes.
     pub async fn finish(mut self) -> Trace {
         self.input.take();
-        if tokio::time::timeout(Duration::from_secs(15), self.child.wait())
-            .await
-            .is_err()
-        {
-            let _ = self.child.kill().await;
-            let _ = self.child.wait().await;
+        let graceful = self.completed && !self.stopped;
+        let exited = if graceful {
+            matches!(
+                tokio::time::timeout(Duration::from_secs(15), self.child.wait()).await,
+                Ok(Ok(_))
+            )
+        } else {
+            false
+        };
+        if !exited && let Err(e) = cancel_and_reap(&mut self.child).await {
+            eprintln!("LIVE cleanup failed: {e}");
         }
         eprintln!(
             "LIVE finished: wall_ms={}, version={}, install={}, calls={:?}, results={}",
@@ -315,7 +408,7 @@ impl Claude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn completed(names: &[&str]) -> Trace {
+    pub(super) fn completed(names: &[&str]) -> Trace {
         let mut t = Trace::default();
         t.observe(&json!({"type": "system", "subtype": "init", "tools": ["ToolSearch", "mcp__crew__post"]})).unwrap();
         for (i, name) in names.iter().enumerate() {
@@ -353,5 +446,230 @@ mod tests {
         ] {
             assert!(Trace::default().observe(&v).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    fn root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap()
+            .join(".superpowers/sdd/2026-10-06-crewd-m3b-agent-surface/scratch-t16-fix1")
+    }
+    fn dir() -> tempfile::TempDir {
+        std::fs::create_dir_all(root()).unwrap();
+        tempfile::tempdir_in(root()).unwrap()
+    }
+    fn shell(script: &str, marker: &std::path::Path) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script, "synthetic-only"]).arg(marker);
+        command
+    }
+    fn synthetic(script: &str, marker: &std::path::Path) -> Claude {
+        let workdir = dir();
+        let runtime = dir();
+        let (_, files) = prepare_claude(
+            &ClaudeSpec::default(),
+            AgentSessionArg::New(new_agent_session_id()),
+            runtime.path(),
+        )
+        .unwrap();
+        let mut child = shell(script, marker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take();
+        let lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        Claude {
+            child,
+            input,
+            lines,
+            log: std::fs::File::create(workdir.path().join("stream.log")).unwrap(),
+            _workdir: workdir,
+            _runtime: runtime,
+            _files: files,
+            trace: Trace::default(),
+            started: Instant::now(),
+            prompt_limit: Duration::from_secs(1),
+            completed: false,
+            stopped: false,
+            version: "synthetic-only".into(),
+            install_type: "synthetic-only",
+        }
+    }
+    async fn no_late_work(mut cli: Claude, marker: &std::path::Path) {
+        // Deliberately defer finish: prompt's Err itself must cancel, not borrow cleanup's signal.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let exited_before_finish = cli.child.try_wait().unwrap().is_some();
+        cli.finish().await;
+        assert!(
+            exited_before_finish,
+            "error did not stop the owned child before finish"
+        );
+        assert!(
+            !marker.exists(),
+            "owned child did delayed work after stop: {:?}",
+            std::fs::read_to_string(marker)
+        );
+    }
+
+    #[tokio::test]
+    async fn api_retry_stop_prevents_post_error_child_work() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-work");
+        let mut cli = synthetic(
+            "IFS= read -r line; printf '%s\n' '{\"type\":\"system\",\"subtype\":\"api_retry\"}'; /bin/sleep 0.3; printf late > \"$1\"",
+            &marker,
+        );
+        let result = cli.prompt("synthetic-only").await;
+        assert!(result.unwrap_err().starts_with("stop at"));
+        no_late_work(cli, &marker).await;
+    }
+    #[tokio::test]
+    async fn prompt_timeout_stops_before_delayed_work() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-work");
+        let mut cli = synthetic(
+            "IFS= read -r line; /bin/sleep 0.3; printf late > \"$1\"",
+            &marker,
+        );
+        cli.prompt_limit = Duration::from_millis(50);
+        assert!(
+            cli.prompt("synthetic-only")
+                .await
+                .unwrap_err()
+                .contains("deadline")
+        );
+        no_late_work(cli, &marker).await;
+    }
+    #[tokio::test]
+    async fn stdin_backpressure_is_inside_prompt_deadline() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-work");
+        let mut cli = synthetic("/bin/sleep 0.3; printf late > \"$1\"", &marker);
+        cli.prompt_limit = Duration::from_millis(50);
+        let error = cli.prompt(&"x".repeat(1_000_000)).await.unwrap_err();
+        cli.finish().await;
+        assert!(
+            error.contains("deadline"),
+            "stdin write escaped prompt deadline: {error}"
+        );
+        assert!(!marker.exists());
+    }
+    #[tokio::test]
+    async fn malformed_and_denied_output_stop_the_owned_child() {
+        for event in [
+            "not JSON",
+            "{\"type\":\"system\",\"subtype\":\"permission_denied\"}",
+            "{\"type\":\"result\",\"is_error\":true,\"subtype\":\"synthetic_error\"}",
+        ] {
+            let evidence = dir();
+            let marker = evidence.path().join("late-work");
+            let script = format!(
+                "IFS= read -r line; printf '%s\\n' '{event}'; /bin/sleep 0.3; printf late > \"$1\""
+            );
+            let mut cli = synthetic(&script, &marker);
+            assert!(cli.prompt("synthetic-only").await.is_err());
+            no_late_work(cli, &marker).await;
+        }
+    }
+    #[tokio::test]
+    async fn successful_terminal_uses_graceful_eof_cleanup() {
+        let evidence = dir();
+        let marker = evidence.path().join("graceful-work");
+        let mut cli = synthetic(
+            "IFS= read -r line; printf '%s\n' '{\"type\":\"result\",\"is_error\":false,\"permission_denials\":[]}'; while IFS= read -r line; do :; done; /bin/sleep 0.1; printf graceful > \"$1\"",
+            &marker,
+        );
+        assert!(cli.prompt("synthetic-only").await.is_ok());
+        cli.finish().await;
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "graceful");
+    }
+    #[tokio::test]
+    async fn failure_after_success_is_not_graceful() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-work");
+        let mut cli = synthetic(
+            "IFS= read -r line; printf '%s\n' '{\"type\":\"result\",\"is_error\":false,\"permission_denials\":[]}'; IFS= read -r line; printf '%s\n' '{\"type\":\"system\",\"subtype\":\"api_retry\"}'; /bin/sleep 0.3; printf late > \"$1\"",
+            &marker,
+        );
+        assert!(cli.prompt("first synthetic").await.is_ok());
+        assert!(
+            cli.prompt("second synthetic")
+                .await
+                .unwrap_err()
+                .starts_with("stop at")
+        );
+        no_late_work(cli, &marker).await;
+    }
+    #[tokio::test]
+    async fn stop_refuses_any_additional_prompt() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-work");
+        let mut cli = synthetic(
+            "IFS= read -r line; printf '%s\n' '{\"type\":\"system\",\"subtype\":\"api_retry\"}'; /bin/sleep 0.3; printf late > \"$1\"",
+            &marker,
+        );
+        assert!(cli.prompt("synthetic-only").await.is_err());
+        let error = cli.prompt("must never be sent").await.unwrap_err();
+        cli.finish().await;
+        assert!(
+            error.contains("stopped"),
+            "missing irreversible stop: {error}"
+        );
+        assert!(!marker.exists());
+    }
+    #[tokio::test]
+    async fn version_preflight_deadline_stops_hanging_program() {
+        let evidence = dir();
+        let marker = evidence.path().join("late-version-work");
+        let mut command = shell(
+            "printf started > \"$1.started\"; /bin/sleep 0.3; printf late > \"$1\"; printf 'synthetic version'",
+            &marker,
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            version_output(&mut command, Duration::from_millis(50)),
+        )
+        .await
+        .expect("preflight lacked a bounded result");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            marker.with_extension("started").exists(),
+            "synthetic preflight never started"
+        );
+        assert!(result.unwrap_err().contains("preflight deadline"));
+        assert!(
+            !marker.exists(),
+            "preflight continued work after its deadline"
+        );
+    }
+    #[tokio::test]
+    async fn version_preflight_collects_successful_output() {
+        let evidence = dir();
+        let marker = evidence.path().join("unused");
+        let mut command = shell("printf 'synthetic version'", &marker);
+        let output = version_output(&mut command, Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"synthetic version");
+    }
+    #[test]
+    fn structured_trace_rejects_failed_terminal_proof() {
+        let mut trace = super::tests::completed(&["mcp__crew__post"]);
+        assert!(
+            trace
+                .observe(&json!({"type":"result","is_error":true,"subtype":"synthetic_error"}))
+                .is_err()
+        );
+        assert!(trace.no_search_before_first_crew_call().is_err());
     }
 }
