@@ -19,6 +19,32 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 拒绝码：规则拒绝的 `RpcError` 带 `data.refusal`（稳定码，如 `channel.archived`、`crew.management_not_in_tree`），`message` 只是中文缺省，客户端按码本地化、不解析 `message`。码的全集是 `crates/collab/src/refusal.rs` 的 `Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每码一节、两种语言占位符一致、每句说下一步怎么办，测试钉住）；collab 源码里不写给人 / agent 看的句子。`work.*` 的拒绝与参数解析错误暂时没有码
 - 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
 
+## agent 面（M3b）
+
+```sh
+crewd mcp --data-dir D --session S --token-file F
+crewd hook <post-tool-use|stop|session-start> --data-dir D --session S --token-file F
+```
+
+- `D` 必须是这次会话所属的 serve 数据目录；身份只有 `S` 和 token，角色 / 机组 / 显示名由 serve 每次现查。启动方 `TokenTable::mint` → `CommsSpec.token` → `prepare_claude` 写 `<launch dir>/agent-token`（0600，目录 0700，随 `LaunchFiles` 清理）。token 本体不进 argv / mcp.json / settings.json。
+- helper 是哑管道：MCP 每次 `tools/list` / `tools/call` 都转 `agent.tools` / `agent.call`。worker / admin 17 个工具，captain 28 个；总机组无工具特例。换角色 → `agent.tools_changed` → MCP `notifications/tools/list_changed`；调用权限也现查，不依赖客户端是否刷新。
+- 生成的 settings 注册 **PostToolUse、PostToolUseFailure、Stop、SessionStart**，**没有 PreToolUse / 应用审批闸**。失败的工具执行走同一个 post-tool-use helper，并输出正确的 hookEventName。SessionStart 精确 matcher 为 `resume|compact|clear|fork`，不含 `startup`：hook → RPC → `worldview::render_live` 现取事实；不重灌习惯 / 工具指南。live 刷新限 10,000 字符，超长名字 / 谱系先预算截断；未读注入缺省限 9,000 字符。
+- hook 显式 timeout 15s；helper 总期限 5s（stdin + token 读取 + socket/attach/RPC）。失败 / 坏 JSON / 未知事件 / 解析错误 / panic 都是 stderr 诊断、stdout 空、exit 0，不阻塞 session。Stop 只在还没叫到人的问句上以该 session 身份代发，按 prompt 去重。
+- `mcp.json` 的 crew server `alwaysLoad:true`；产品生成的 settings `permissions.deny:["AskUserQuestion"]`，人类决定用非阻塞的 `ask`。不会禁用 ToolSearch。固定配置 `spinnerTipsEnabled:false`、`prefersReducedMotion:true`、`feedbackSurveyRate:0`、`autoUpdatesChannel:"stable"`，env `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` / `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`；只作用于生成的启动配置，不改用户 / harness 设置。**stable 是更新渠道，不是版本锁；Homebrew 忽略该字段。** 子进程还透传 SSH_AUTH_SOCK 和 HTTP(S)_PROXY / NO_PROXY（含小写）。
+- 文字唯一来源 `crates/collab/prompts/{tools,world-model}.{zh,en}.md`；改工具行为同一拍改两种语言。`tools.*.md` 的 `instructions` 经 attach 进入 MCP initialize。当前 catalog / schemas / descriptions / annotations 的两种语言快照在 `crates/server/src/agent/surface.{zh,en}.json`，漂移测试必须红；审阅变更后才用 `CREWD_BLESS=1 cargo test -p crewd-server agent::surface::tests::surface_golden_snapshots -- --exact` 更新。稳定 FNV-1a/64 指纹附在 `serverInfo.version` 的 `+` 后、attach 时记 stderr；它只标识变更，不是安全凭据。旧工具名回执指出替代调用。
+- 确定性接线验收 `cargo test -p crewd --test agent_e2e`：真合成 serve + 真 helper，读生成的两份配置照其命令执行，不起真实 Claude。完整入口仍是 `scripts/check.sh`。
+
+**真 Claude 两道闸（会用额度，必须获得明确授权；永不进 check.sh）**：
+
+```sh
+CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test live_agent -- --ignored --nocapture --exact real_claude_uses_crewd_mcp_and_receives_injection
+CREWD_LIVE_CLAUDE=1 cargo test -p crewd --test agent_eval -- --ignored --nocapture --exact real_claude_agent_eval_seed
+```
+
+smoke 两条短 prompt；eval 三个短场景（被 @ 问题、需要人拍板、完成）。单个测试各用一个合成 serve + 一个真实 CLI process；每 prompt 最多 8 个 agentic turns / 240s，CLI 估算预算每 process 2 美元，不重试。为独立观测完整 tool-use 顺序走 print-mode stream-json，并以匹配 tool_result 和终态 result 确认覆盖，不拿 hook 的零 ToolSearch 计数当证明；不读 `~/.claude` transcripts，也不录终端 fixture。只收测试进程 stdout/stderr 到本 worktree 的忽略任务目录；权限 / 登录 / API 失败立即停，清理只用该 Child。
+
+**2026-10-09 交付快照（代码基准 `b5bfd9b`）**：macOS 三次 check.sh 均 1382 passed / 0 failed / 8 ignored。授权 smoke 跑一次，native Claude 2.1.295、初始化成功（17 个 crew 工具 upfront，ToolSearch 可用，AskUserQuestion 不在 init）；随后 `Not logged in · Please run /login`，API 耗时 / tokens / cost 均零，没有工具执行。post / 暗号返回 / 首次 crew 前无 ToolSearch / PostToolUseFailure / live role refresh **未验证**；不重试，第二条 prompt 和三个 eval seeds 未发送。完整结果及跨分支集成 hold 见 spec §27。
+
 ## 备份与恢复
 
 `crewd.db` 是聊天记录的唯一一份，只在这台机器上。
@@ -38,5 +64,5 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 `.github/workflows/crewd.yml`（与 Xcode 那条 `ci.yml` 分开）：push main 必跑，PR 在动了 `crewd/**` 或该 workflow 时跑，也可手动触发。macOS（`macos-26`）与 Linux（`ubuntu-latest`）各一份，**都跑同一个** `scripts/check.sh`（`CREWD_TEST_RUNNER=nextest`）：`cargo fmt --check`、`clippy --all-targets -D warnings`、`cargo nextest run --profile ci`、`cargo test --doc`。工具链只认 `rust-toolchain.toml`，nextest 版本钉在 workflow 的 `NEXTEST_VERSION`。
 
 - **抖动即红**：`.config/nextest.toml` 的 `ci` 档 `retries = 2` + `flaky-result = "fail"`——重试只为把抖动标出来（报告里 `FLAKY`、JUnit 里 `<flakyFailure>`、job 摘要里列名），不是吞掉。JUnit 作为 artifact 上传。
-- **从不在 CI 跑 `--ignored`**。被跳过的 6 个（nextest 报「6 tests skipped」）：4 个是要真东西的活测试——`crewd-exec` 的 `live_claude::real_claude_starts_up_to_the_input_box`、`live_codex::live_codex_handshakes_and_opens_a_thread_without_a_turn`、`live_codex::live_codex_turn_sees_the_untrusted_whiteboard_context`（要真 claude / codex 与账号），`crewd-jev` 的 `key::tests::keychain_roundtrip`（要真钥匙串，且仅 macOS）；另 2 个是 `crewd-store` 的量级基准 `fsync_cost::commit_cost_with_and_without_fullfsync`、`check_cost::check_and_snapshot_cost_at_real_scale`（手动跑，读数记进 N4 报告）。本机手动跑法见各测试的 `#[ignore]` 原因。
+- **从不在 CI 跑 `--ignored`**。忽略项包括真 Claude/Codex、真钥匙串、存储量级基准和上面的 agent smoke/eval；各自双闸 / 人工跑法见 `#[ignore]` 原因与对应章节。数量不是固定基线，读取当次 test/nextest 汇总；这里只说明运行政策。
 - **Linux 不排除任何可移植测试**：钥匙串（`security-framework`）与 `registry.rs` 里 macOS 的进程查询都有 `cfg(not(target_os = "macos"))` 的对应实现，Linux 上整套非 ignore 测试在容器里实测全过过一次（N0 当时 952 个；此后没在 Linux 重跑。N1 合 main 前（N1b-2）macOS 上 `scripts/check.sh` 跑 1113 个：1110 个测试 + 3 个 doctest，另 6 个 ignored；`registry::tests::reaper_kills_a_live_orphan_group_but_not_a_reused_pid` 在 Linux 上被 nextest 标 LEAK——测试故意留孤儿进程组，不影响通过）。Linux 这份的价值是抓「无意间依赖 macOS」的假设；产品的权威平台仍是 macOS 那份。
