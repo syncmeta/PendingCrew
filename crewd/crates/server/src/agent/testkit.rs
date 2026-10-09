@@ -321,6 +321,10 @@ impl Fixture {
             .collect()
     }
 
+    pub fn set_quota(&self, report: crate::control::QuotaReport) {
+        self.control.set_quota(report);
+    }
+
     /// The fake's next call (any method) fails with `e`.
     pub fn fail_next(&self, e: crate::control::ControlError) {
         self.control.fail_next(e);

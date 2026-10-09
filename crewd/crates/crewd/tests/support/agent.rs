@@ -13,10 +13,21 @@ pub struct Launch {
     pub _files: LaunchFiles,
     pub mcp: Value,
     pub settings: Value,
+    pub world: Option<String>,
 }
 
 pub fn launch(f: &Fixture, session: &str, runtime: &Path) -> Launch {
+    launch_with_world(f, session, runtime, None)
+}
+
+pub fn launch_with_world(
+    f: &Fixture,
+    session: &str,
+    runtime: &Path,
+    world: Option<String>,
+) -> Launch {
     let spec = ClaudeSpec {
+        system_prompt: world,
         comms: Some(CommsSpec {
             helper: env!("CARGO_BIN_EXE_crewd").into(),
             data_dir: f.data_dir().into(),
@@ -37,6 +48,9 @@ pub fn launch(f: &Fixture, session: &str, runtime: &Path) -> Launch {
         _files: files,
         mcp: read(args.mcp_config_file.unwrap()),
         settings: read(args.settings_file.unwrap()),
+        world: args
+            .system_prompt_file
+            .map(|p| std::fs::read_to_string(p).unwrap()),
     }
 }
 

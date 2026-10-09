@@ -170,3 +170,9 @@ Detected subscription tiers: Claude Code: {claude}; Codex: {codex}. Tiers only i
 
 ## unknown
 (unknown)
+
+## quota.unavailable
+(quota source unavailable)
+
+## quota.failed
+(quota source failed)

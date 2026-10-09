@@ -405,15 +405,55 @@ pub async fn locale(st: &AppState) -> PortResult<Locale> {
     read(st, crewd_collab::settings::locale).await
 }
 
+/// Joint launch/SessionStart contract: DB identity/role/locale + the existing typed control quota.
+/// M3c launch callers must use this context, not the DB-only context_for. Provider feeding remains
+/// M3c-owned; empty/missing tiers, unsupported source and failed read are distinct outcomes.
+pub async fn world_context(
+    st: &AppState,
+    session: &str,
+) -> PortResult<crewd_collab::worldview::WorldCtx> {
+    use crewd_collab::worldview::QuotaTier;
+    let session = session.to_string();
+    let mut ctx = read(st, move |conn| {
+        let loc = crewd_collab::settings::locale(conn)?;
+        crewd_collab::worldview::context_for(conn, &session, loc)
+    })
+    .await?;
+    let tiers = match tokio::time::timeout(std::time::Duration::from_secs(1), st.sessions.quota())
+        .await
+    {
+        Ok(Ok(report)) => {
+            let tier = |executor: &str| {
+                report
+                    .lines
+                    .iter()
+                    .filter(|l| l.executor == executor)
+                    .filter_map(|l| l.plan.as_deref())
+                    .find(|p| !p.trim().is_empty())
+                    .map(|p| QuotaTier::Known(p.to_owned()))
+                    .unwrap_or(QuotaTier::Unknown)
+            };
+            (tier("claude"), tier("codex"))
+        }
+        Ok(Err(ControlError::Unsupported(_))) => (QuotaTier::Unavailable, QuotaTier::Unavailable),
+        Ok(Err(e)) => {
+            eprintln!("crewd: world quota source failed: {e}");
+            (QuotaTier::Failed, QuotaTier::Failed)
+        }
+        Err(_) => {
+            eprintln!("crewd: world quota source deadline");
+            (QuotaTier::Failed, QuotaTier::Failed)
+        }
+    };
+    (ctx.quota_claude, ctx.quota_codex) = tiers;
+    Ok(ctx)
+}
+
 /// Re-read world facts at the moment SessionStart fires, never the launch-time copy.
 pub async fn live_world(st: &AppState, session: &str) -> PortResult<String> {
-    let session = session.to_string();
-    read(st, move |conn| {
-        let loc = crewd_collab::settings::locale(conn)?;
-        let ctx = crewd_collab::worldview::context_for(conn, &session, loc)?;
-        Ok(crewd_collab::worldview::render_live(&ctx))
-    })
-    .await
+    Ok(crewd_collab::worldview::render_live(
+        &world_context(st, session).await?,
+    ))
 }
 
 pub fn verify_token(st: &AppState, session: &str, token: &str) -> bool {

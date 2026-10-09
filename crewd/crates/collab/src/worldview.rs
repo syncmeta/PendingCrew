@@ -59,6 +59,15 @@ pub struct CrewName {
     pub number: Option<i64>,
 }
 
+/// Typed quota-source outcome, not an absolute remaining balance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaTier {
+    Known(String),
+    Unknown,
+    Unavailable,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldCtx {
     pub locale: Locale,
@@ -82,9 +91,9 @@ pub struct WorldCtx {
     pub home_human_channel_id: String,
     /// 它所在的机组是总机组（管理机组）。
     pub management_crew: bool,
-    /// 订阅档位描述；`context_for` 填 None，M3c 起会话前从 `SessionControl::quota` 填。
-    pub quota_claude: Option<String>,
-    pub quota_codex: Option<String>,
+    /// DB-only context cannot know live tiers; the server's shared world_context fills both.
+    pub quota_claude: QuotaTier,
+    pub quota_codex: QuotaTier,
 }
 
 pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<WorldCtx> {
@@ -129,8 +138,8 @@ pub fn context_for(conn: &Connection, session: &str, locale: Locale) -> Result<W
         extension,
         home_human_channel_id: home_human,
         management_crew: crew.management,
-        quota_claude: None,
-        quota_codex: None,
+        quota_claude: QuotaTier::Unavailable,
+        quota_codex: QuotaTier::Unavailable,
     })
 }
 
@@ -217,11 +226,17 @@ fn blocks(ctx: &WorldCtx) -> Blocks {
         ]
         .join("\n")
     };
+    let tier = |value: &QuotaTier| match value {
+        QuotaTier::Known(plan) => safe_name(plan),
+        QuotaTier::Unknown => unknown.to_string(),
+        QuotaTier::Unavailable => f.get("quota.unavailable").to_string(),
+        QuotaTier::Failed => f.get("quota.failed").to_string(),
+    };
     let quota = fill(
         f.get("quota"),
         &[
-            ("claude", ctx.quota_claude.as_deref().unwrap_or(unknown)),
-            ("codex", ctx.quota_codex.as_deref().unwrap_or(unknown)),
+            ("claude", &tier(&ctx.quota_claude)),
+            ("codex", &tier(&ctx.quota_codex)),
         ],
     );
     Blocks {
@@ -404,8 +419,8 @@ mod tests {
             extension: Some("7-3".into()),
             home_human_channel_id: "crew-home/human".into(),
             management_crew: management,
-            quota_claude: Some("Max".into()),
-            quota_codex: None,
+            quota_claude: QuotaTier::Known("Max".into()),
+            quota_codex: QuotaTier::Unknown,
         }
     }
 
@@ -684,8 +699,8 @@ mod tests {
         assert!(!c.management_crew);
         assert_eq!(
             (c.quota_claude.clone(), c.quota_codex.clone()),
-            (None, None),
-            "quota 由 M3c 填"
+            (QuotaTier::Unavailable, QuotaTier::Unavailable),
+            "DB context has no live quota source"
         );
         assert!(!render(&c).is_empty());
         assert!(render(&c).contains("post(to: \"1\")"), "向上汇报填上级的号");

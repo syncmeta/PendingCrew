@@ -25,11 +25,19 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
         let instructions = m.init["result"]["instructions"]
             .as_str()
             .expect("MCP instructions");
-        assert!(!instructions.is_empty() && instructions.lines().count() <= 3);
+        assert_eq!(
+            instructions,
+            worldview::tools_file(Locale::Zh).get("instructions")
+        );
+        assert!(instructions.lines().count() <= 3);
         let version = m.init["result"]["serverInfo"]["version"].as_str().unwrap();
-        assert!(
-            version.contains('+'),
-            "surface hash must reach initialize: {version}"
+        assert_eq!(
+            version,
+            format!(
+                "{}+{}",
+                env!("CARGO_PKG_VERSION"),
+                crewd_server::agent::surface::hash(Locale::Zh)
+            )
         );
     }
     let wt = wm.tools().await;
@@ -200,14 +208,7 @@ async fn session_start_on_resume_returns_live_facts() {
             "{ctx}"
         );
         assert!(ctx.chars().count() <= 10_000);
-        let session = f.worker.clone();
-        let world = f
-            .state
-            .db
-            .call(move |s| worldview::context_for(s.conn(), &session, Locale::Zh))
-            .await
-            .unwrap()
-            .unwrap();
+        let world = port::world_context(&f.state, &f.worker).await.unwrap();
         assert_eq!(world.role, Role::Captain);
         assert_eq!(ctx, worldview::render_live(&world));
     }
@@ -337,4 +338,131 @@ async fn removed_tool_name_suggests_its_replacement() {
     let (text, err) = m.call("synthetic-unknown", json!({})).await;
     assert!(err && text.contains("synthetic-unknown"));
     m.close().await;
+}
+
+fn synthetic_quota(
+    claude: Option<&str>,
+    codex: Option<&str>,
+) -> crewd_server::control::QuotaReport {
+    use crewd_server::control::{QuotaLine, QuotaReport};
+    QuotaReport {
+        lines: vec![
+            QuotaLine {
+                executor: "codex".into(),
+                plan: codex.map(str::to_owned),
+                limited_until: Some("2026-10-10T00:00:00Z".into()),
+                detail: Some("synthetic-only".into()),
+            },
+            QuotaLine {
+                executor: "claude".into(),
+                plan: claude.map(str::to_owned),
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+#[tokio::test]
+async fn session_start_reads_typed_live_quota_after_launch() {
+    for locale in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        f.state
+            .collab(move |tx| crewd_collab::settings::set_locale(tx, locale))
+            .await
+            .unwrap();
+        f.set_quota(synthetic_quota(
+            Some("synthetic-Max100"),
+            Some("synthetic-Plus"),
+        ));
+        let launch_ctx = port::world_context(&f.state, &f.worker).await.unwrap();
+        let rt = tempfile::tempdir().unwrap();
+        let w = support::launch_with_world(
+            &f,
+            &f.worker,
+            rt.path(),
+            Some(worldview::render(&launch_ctx)),
+        );
+        let launch_world = w.world.as_ref().unwrap();
+        assert!(
+            launch_world.contains("synthetic-Max100") && launch_world.contains("synthetic-Plus"),
+            "launch dropped known typed quota: {launch_world}"
+        );
+        f.spawn_socket().await;
+        // Same typed contract, changed after launch; not a launch-copy replay.
+        f.set_quota(synthetic_quota(
+            Some("synthetic-Max200"),
+            Some("synthetic-Pro"),
+        ));
+        for source in ["resume", "compact", "clear", "fork"] {
+            let out = fire(
+                &w.settings,
+                "SessionStart",
+                json!({"hook_event_name":"SessionStart", "source":source}),
+            )
+            .await
+            .unwrap();
+            let ctx = out["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap();
+            assert!(
+                ctx.contains("synthetic-Max200") && ctx.contains("synthetic-Pro"),
+                "live quota wiring missing: {ctx}"
+            );
+            assert!(!ctx.contains("synthetic-Max100") && !ctx.contains("synthetic-Plus"));
+            assert!(ctx.contains(&f.worker) && ctx.chars().count() <= 10_000);
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_start_quota_unknown_unavailable_and_failed_are_distinct() {
+    use crewd_server::control::{ControlError, FakeMethod};
+    for locale in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        f.state
+            .collab(move |tx| crewd_collab::settings::set_locale(tx, locale))
+            .await
+            .unwrap();
+        f.spawn_socket().await;
+        let rt = tempfile::tempdir().unwrap();
+        let w = launch(&f, &f.worker, rt.path());
+        for (error, key) in [
+            (None, "unknown"),
+            (
+                Some(ControlError::Unsupported("synthetic source missing".into())),
+                "quota.unavailable",
+            ),
+            (
+                Some(ControlError::Failed("synthetic-private-error".into())),
+                "quota.failed",
+            ),
+        ] {
+            f.set_quota(synthetic_quota(None, None));
+            if let Some(e) = error {
+                f.fail_method(FakeMethod::Quota, e);
+            }
+            let out = fire(
+                &w.settings,
+                "SessionStart",
+                json!({"hook_event_name":"SessionStart", "source":"resume"}),
+            )
+            .await
+            .expect("quota error must not hide role/identity refresh");
+            let ctx = out["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap();
+            let text = worldview::world_file(locale);
+            let status = text.get(key);
+            let expected_quota = crewd_collab::prompts::fill(
+                text.get("quota"),
+                &[("claude", status), ("codex", status)],
+            );
+            assert!(
+                ctx.contains(&expected_quota),
+                "quota state {key} not observable in quota block: {ctx}"
+            );
+            assert!(ctx.contains(&f.worker));
+            assert!(!ctx.contains("synthetic-private-error"));
+        }
+    }
 }

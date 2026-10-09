@@ -168,3 +168,9 @@ role.*、ask*、management 不写工具名（工具表按角色给，这里只�
 
 ## unknown
 （未知）
+
+## quota.unavailable
+（额度来源未接）
+
+## quota.failed
+（额度来源读取失败）

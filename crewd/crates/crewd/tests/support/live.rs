@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use crewd_collab::{Locale, worldview};
+use crewd_collab::worldview;
 use crewd_exec::env::{AgentPaths, build_env_from_process};
 use crewd_exec::launch::{
     AgentSessionArg, ClaudeSpec, CommsSpec, LaunchFiles, new_agent_session_id, prepare_claude,
@@ -246,13 +246,8 @@ impl Claude {
         let version = String::from_utf8_lossy(&version_out.stdout)
             .trim()
             .to_string();
-        let worker = f.worker.clone();
-        let world = f
-            .state
-            .db
-            .call(move |s| worldview::context_for(s.conn(), &worker, Locale::Zh))
+        let world = crewd_server::agent::port::world_context(&f.state, &f.worker)
             .await
-            .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
         let spec = ClaudeSpec {
             workdir: workdir.path().into(),

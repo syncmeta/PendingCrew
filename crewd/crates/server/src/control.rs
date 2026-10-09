@@ -175,6 +175,7 @@ impl FakeCall {
 pub struct FakeSessionControl {
     calls: Mutex<Vec<FakeCall>>,
     live: Mutex<std::collections::HashMap<String, SessionLive>>,
+    quota: Mutex<QuotaReport>,
     fail_next: Mutex<Option<ControlError>>,
     fail_method: Mutex<Option<(FakeMethod, ControlError)>>,
 }
@@ -185,6 +186,9 @@ impl FakeSessionControl {
     }
     pub fn set_live(&self, l: SessionLive) {
         self.live.lock().unwrap().insert(l.session_id.clone(), l);
+    }
+    pub fn set_quota(&self, report: QuotaReport) {
+        *self.quota.lock().unwrap() = report;
     }
     /// 下一次调用（任何方法）返回这个错误。
     pub fn fail_next(&self, e: ControlError) {
@@ -280,7 +284,7 @@ impl SessionControl for FakeSessionControl {
         self.record(FakeCall::Handoff(crew, to), ())
     }
     fn quota(&self) -> BoxFuture<'_, Result<QuotaReport, ControlError>> {
-        self.record(FakeCall::Quota, QuotaReport::default())
+        self.record(FakeCall::Quota, self.quota.lock().unwrap().clone())
     }
     fn live(&self, id: String) -> BoxFuture<'_, Result<SessionLive, ControlError>> {
         let l = self
