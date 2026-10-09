@@ -19,6 +19,8 @@ pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Resul
         return Err(CollabError::Invalid(Refusal::new(Code::TodoResponseEmpty)));
     }
     let s = sessions::get(tx.conn(), session)?;
+    // Current session ownership and frozen state are read in this write transaction.
+    crate::crews::refuse_archived(tx.conn(), &s.crew_id)?;
     let todo: Option<(String, String)> = tx
         .conn()
         .query_row(
@@ -65,6 +67,42 @@ pub fn respond(tx: &mut Tx<'_>, session: &str, number: i64, text: &str) -> Resul
 mod tests {
     use super::*;
     use crate::testkit::{count, err, ok, store};
+
+    #[test]
+    fn freeze_in_write_transaction_is_seen_and_failed_response_rolls_back() {
+        let mut s = store();
+        s.conn().execute("INSERT INTO todos(id,crew_id,ledger,number,text,status,created_at) VALUES('frozen-t','crew-a','agent',1,'synthetic','pending','t')", []).unwrap();
+        let failure = err(&mut s, |tx| {
+            // Same connection/transaction: no refresh or tool-layer cached identity can help.
+            tx.conn().execute(
+                "UPDATE crews SET archived_at='synthetic-freeze' WHERE id='crew-a'",
+                [],
+            )?;
+            respond(tx, "w-a1", 1, "must not persist")
+        });
+        assert!(matches!(failure, CollabError::Conflict(r) if r.code == Code::CrewRemoved));
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM todo_responses WHERE todo_id='frozen-t'"
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM todos WHERE id='frozen-t' AND updated_at IS NOT NULL"
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &s,
+                "SELECT COUNT(*) FROM crews WHERE id='crew-a' AND archived_at IS NOT NULL"
+            ),
+            0
+        );
+    }
 
     #[test]
     fn respond_appends_in_order_without_touching_status() {
