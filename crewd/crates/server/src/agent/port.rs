@@ -593,7 +593,8 @@ pub async fn detach_parent(
 ) -> PortResult<ReleaseEffect> {
     let (p, c) = (parent.to_string(), child.to_string());
     write(st, move |tx| {
-        let before = crewd_collab::crews::parents(tx.conn(), &c)?;
+        // Same canonical store edge order as the Crew returned by collab release.
+        let before = crewd_collab::crews::get(tx.conn(), &c)?.parent_ids;
         let after = crewd_collab::crews::release(tx, &c, &p, to.as_deref())?;
         Ok(if before == after.parent_ids {
             ReleaseEffect::Unchanged

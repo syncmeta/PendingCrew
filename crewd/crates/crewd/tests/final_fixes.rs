@@ -852,3 +852,115 @@ async fn release_new_destination_appends_without_reordering_existing_children() 
         );
     }
 }
+
+#[tokio::test]
+async fn residual_multiple_parent_noop_uses_canonical_edges() {
+    let mut failures = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let second = f.add_crew("second parent", None).await;
+        let (from, other) = if f.crew > second {
+            (f.crew.clone(), second)
+        } else {
+            (second, f.crew.clone())
+        };
+        let (early, late) = (from.clone(), other.clone());
+        f.state
+            .db
+            .call(move |s| {
+                s.conn().execute(
+                    "UPDATE crews SET created_at='2026-01-01T00:00:00.000Z' WHERE id=?1",
+                    [early],
+                )?;
+                s.conn().execute(
+                    "UPDATE crews SET created_at='2026-01-02T00:00:00.000Z' WHERE id=?1",
+                    [late],
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        f.add_crew("from first", Some(&from)).await;
+        let child = f.add_crew("multi child", Some(&from)).await;
+        f.add_crew("from last", Some(&from)).await;
+        f.add_crew("other first", Some(&other)).await;
+        f.rpc("crew.adopt", json!({"crewId":child,"parentId":other}))
+            .await;
+        f.add_crew("other last", Some(&other)).await;
+        let (c, p, q) = (child.clone(), from.clone(), other.clone());
+        let before = f
+            .state
+            .db
+            .call(move |s| {
+                Ok::<_, crewd_collab::CollabError>((
+                    crewd_collab::crews::parents(s.conn(), &c)?,
+                    crewd_collab::crews::get(s.conn(), &c)?.parent_ids,
+                    crewd_collab::crews::children(s.conn(), &p)?,
+                    crewd_collab::crews::children(s.conn(), &q)?,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            before.0, before.1,
+            "raw store and chronological orders must really differ"
+        );
+        assert_eq!(before.0, [from.clone(), other.clone()]);
+        assert_eq!(before.2[1], child);
+        assert_eq!(before.3[1], child);
+        let management = f.management_crew().await;
+        f.add_session(
+            &management,
+            "s-management",
+            crewd_server::agent::Role::Captain,
+            "synthetic boss",
+        )
+        .await;
+        let result = run(
+            &f.state,
+            "s-management",
+            "crew_structure",
+            json!({"action":"release","crew":from,"target":child,"to":from}),
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.text);
+        let (c, p, q) = (child.clone(), from.clone(), other.clone());
+        let after = f
+            .state
+            .db
+            .call(move |s| {
+                Ok::<_, crewd_collab::CollabError>((
+                    crewd_collab::crews::parents(s.conn(), &c)?,
+                    crewd_collab::crews::get(s.conn(), &c)?.parent_ids,
+                    crewd_collab::crews::children(s.conn(), &p)?,
+                    crewd_collab::crews::children(s.conn(), &q)?,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "true edges and both manual child orders must stay unchanged"
+        );
+        let title = port::crew(&f.state, &from).await.unwrap().unwrap().title;
+        let expected = text::r(
+            l,
+            "r.released_same_parent",
+            &[("child", "multi child"), ("from", &text::name(&title))],
+        );
+        eprintln!(
+            "locale={l:?} different-order fixture verified; unchanged edges/order verified; receipt={}",
+            result.text
+        );
+        if result.text != expected {
+            failures.push((l, result.text));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "same-parent graph no-op must not claim detachment: {failures:?}"
+    );
+}
