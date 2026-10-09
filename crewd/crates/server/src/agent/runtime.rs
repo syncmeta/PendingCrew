@@ -116,6 +116,8 @@ pub struct AgentRuntime {
     /// duplicate record): two calls of one session cannot both pass the duplicate check. Separate
     /// from `locks` (the injection lock), so a post never waits for a hook or the other way round.
     post_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    #[cfg(any(test, feature = "testkit"))]
+    pub(crate) hook_log: Mutex<Vec<crate::agent::testkit::HookObservation>>,
 }
 
 impl AgentRuntime {

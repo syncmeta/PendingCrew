@@ -1064,12 +1064,17 @@ mod tests {
             let new = catalog::replacement(gone)
                 .unwrap_or_else(|| panic!("{gone} names its replacement in REMOVED"));
             let r = run(&f, &f.worker, gone, json!({})).await;
+            let hint = text::r(
+                Locale::Zh,
+                "r.tool_removed",
+                &[("name", gone), ("replacement", new)],
+            );
             assert_eq!(
                 r.text,
                 text::r(
                     Locale::Zh,
-                    "r.tool_removed",
-                    &[("name", gone), ("replacement", new)]
+                    "r.unknown_tool",
+                    &[("name", gone), ("hint", &hint)]
                 )
             );
             assert!(r.is_error);

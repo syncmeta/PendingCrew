@@ -405,6 +405,17 @@ pub async fn locale(st: &AppState) -> PortResult<Locale> {
     read(st, crewd_collab::settings::locale).await
 }
 
+/// Re-read world facts at the moment SessionStart fires, never the launch-time copy.
+pub async fn live_world(st: &AppState, session: &str) -> PortResult<String> {
+    let session = session.to_string();
+    read(st, move |conn| {
+        let loc = crewd_collab::settings::locale(conn)?;
+        let ctx = crewd_collab::worldview::context_for(conn, &session, loc)?;
+        Ok(crewd_collab::worldview::render_live(&ctx))
+    })
+    .await
+}
+
 pub fn verify_token(st: &AppState, session: &str, token: &str) -> bool {
     st.tokens.verify(session, token)
 }

@@ -55,8 +55,18 @@ mod tests {
     #[test]
     fn r_fills_placeholders() {
         // r.unknown_tool 是 Task 3 就有的节：「没有 {name} 这个工具。」
-        let s = r(Locale::Zh, "r.unknown_tool", &[("name", "nope")]);
-        assert!(s.contains("nope") && !s.contains("{name}"), "{s}");
+        let s = r(
+            Locale::Zh,
+            "r.unknown_tool",
+            &[("name", "nope"), ("hint", "synthetic replacement")],
+        );
+        assert!(
+            s.contains("nope")
+                && s.contains("synthetic replacement")
+                && !s.contains("{hint}")
+                && !s.contains("{name}"),
+            "{s}"
+        );
     }
 
     #[test]

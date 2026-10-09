@@ -37,6 +37,10 @@ pub struct AttachResult {
     pub role: crate::Role,
     pub crew_id: String,
     pub label: String,
+    /// MCP initialize instructions from the active locale's tools md.
+    pub instructions: String,
+    /// Stable public surface fingerprint, appended to MCP serverInfo.version.
+    pub surface_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -99,15 +103,17 @@ impl CallResult {
 pub enum HookKind {
     PostToolUse,
     Stop,
+    SessionStart,
 }
 
 impl HookKind {
-    pub const ALL: [HookKind; 2] = [Self::PostToolUse, Self::Stop];
+    pub const ALL: [HookKind; 3] = [Self::PostToolUse, Self::Stop, Self::SessionStart];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PostToolUse => "post-tool-use",
             Self::Stop => "stop",
+            Self::SessionStart => "session-start",
         }
     }
 
@@ -186,6 +192,7 @@ mod tests {
         for (k, s) in [
             (HookKind::PostToolUse, "post-tool-use"),
             (HookKind::Stop, "stop"),
+            (HookKind::SessionStart, "session-start"),
         ] {
             assert_eq!(serde_json::to_value(k).unwrap(), json!(s));
             assert_eq!(k.as_str(), s);

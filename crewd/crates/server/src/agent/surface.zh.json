@@ -1,0 +1,1529 @@
+{
+  "captain": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "把关键节点发到群里：开始、完成、卡住、交接、重要发现。写法：一句结论，加一件要对方定的事；长表格、长清单写进文件，群里给路径。终端里的过程（读了什么、跑了什么）别往群里倒。\n发到哪必须说清，没有默认：channel = 发到一个群；to = 按通讯录号码私聊一个人（跨机组也用它）；只给 reply_to = 发到那条消息所在的群。三者都不给会报错并列出你的群。\n@ 只负责叫醒：没有 @ 时，不叫醒任何人（收听这个群的除外）。私聊里对方总会被叫醒。@session / @captain 叫醒被点到的 agent；@human 是给人看的标记，只用来提问（需要拍板仍用 ask），不用来报进度。不管 @ 了谁，读得到这个群的人都看得见。人没在注视的群里 @human，可能很久才被看到：急事发你的 home（顶层机组）的人类群，要拍板用 ask。\n发得太快、同一句话重复发、频繁 @human 会被挡下（回执说明怎么办）：把进度并成一条再发。\n回执会写明这条会叫醒谁。单条正文最多 256 KiB。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "description": "这条是什么：progress 推进 / done 完成 / blocked 卡住 / question 要问 / finding 发现 / handoff 交接 / ack 收到 / note 其它。",
+            "enum": [
+              "progress",
+              "done",
+              "blocked",
+              "question",
+              "finding",
+              "handoff",
+              "ack",
+              "note"
+            ],
+            "type": "string"
+          },
+          "channel": {
+            "description": "群 id，或你读得到的群里唯一的群名。与 to 二选一。",
+            "type": "string"
+          },
+          "mentions": {
+            "description": "要叫醒谁：{kind:\"session\", target_id:\"<session id 或通讯录号码>\"} / {kind:\"captain\"} / {kind:\"human\"}。没有 @ 时，不叫醒任何人（收听这个群的除外）。私聊里对方仍会被叫醒。读得到这个群的人照样看得见。被 @ 的 session 必须是这个群的成员；@captain 也要求机长是这个群的成员，机组没有机长时 @captain 会报错。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "session",
+                    "captain",
+                    "human"
+                  ],
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "message": {
+            "description": "发一条时用它。与 messages 二选一。",
+            "type": "string"
+          },
+          "messages": {
+            "description": "一次发几条（最多 6 条），每条一个气泡、各带自己的 category。任何一条不合法就整批不发，错误会指名第几条。mentions、reply_to 只挂在第一条上。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "category": {
+                  "enum": [
+                    "progress",
+                    "done",
+                    "blocked",
+                    "question",
+                    "finding",
+                    "handoff",
+                    "ack",
+                    "note"
+                  ],
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
+          "reply_to": {
+            "description": "你在回复哪一条：消息序号（如 #128 或 128）或消息 id。只能回复同一个群里的消息。会自动 @ 原发言者（对方还在群里时）：群里所有成员照样看得见，只是把对方叫醒；回复自己的消息、回复系统消息都不会加 @。",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "to": {
+            "description": "私聊一个人：通讯录号码——7-3（7 号机组的 3 号分机）、7（7 号机组此刻的机长）、0（总机组的机长）；directory 查号。同一对人只有一个私聊，已有就接着用。人类没有私聊（to 填 human 会指给你 home 人类群）：找人发 home 人类群，要拍板用 ask。与 channel、reply_to 都不能同时给。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "post"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页读一个群的消息（旧在前）。要看更早的消息、或你不在其中的群时用。读到最新一条时，这个群对你就算已读，之后不会再注入这些消息——只对你在其中、或你收听的群有效（读别的群不改已读位置）。每条前面的 #序号 可以填进 reply_to。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "只看这一条之前的（消息序号或 id）。不填 = 最新一页。",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "channel": {
+            "description": "群 id 或群名；不填 = 本机组大厅。读得到的群：本机组名下的群（含本机组成员之间的私聊——没有私有群）、你的 home 人类群、你在其中或收听的群；总机组的 session 读得到全组织的群。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "条数，1–200，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "read_channel"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "在你读得到的群里搜消息，找以前说过的某件事时用（本机组名下的群、你的 home 人类群、你在其中或收听的群，已归档的也算；总机组的 session 搜全组织）。整个查询词（去掉首尾空白）当作一个整体，做不区分大小写的子串匹配（只折叠 ASCII 字母的大小写），不是按词拆开再求交；按时间倒序。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "只要这个时刻之后的（ISO8601，含边界）。",
+            "type": "string"
+          },
+          "before": {
+            "description": "只要严格早于这个时刻的（ISO8601，不含边界：created_at < before）。",
+            "type": "string"
+          },
+          "channel": {
+            "description": "只搜这一个群（群 id 或群名）。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "只搜这个机组名下你读得到的群（机组号、id 或名字）。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "条数上限，1–200，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "要搜的文字：去掉首尾空白后整体当一个子串匹配（ASCII 不区分大小写）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "列出群，找群 id、看人在注视哪些群时用：第一行是你的 home 人类群（人必须看到的发这里），然后是你在其中或收听的群、本机组的其它群、人在注视的群。每行：id · 名字 · 类型 · 用途 · 群主 · 人数 · 状态（你在群里 / 你在收听 / 人类在注视 / 已归档 / 你是群主）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "只列这个机组名下你读得到的群（机组号、id 或名字）。",
+            "type": "string"
+          },
+          "include_archived": {
+            "description": "true = 连已归档的群一起列；默认不列。",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_channels"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "建一个话题群。要和谁就某件事协作、要单独讨论一个话题，就用它——不要为此开子机组。你是群主，自动在群里。群有名字和用途，例如「发版」「scroll bug 排查」。群名不能与人类（人类 / Human）或 crewd 的系统标签重名，重名会被拒绝。私聊不用建：post(to:) 直接发，还没有就自动开。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "members": {
+            "description": "一起拉进来的成员（可不填，之后再用 channel_invite）：session id、通讯录号码（如 7-3；7 = 7 号机组此刻的机长），或 human（人类）。不用填你自己。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "群名，短。",
+            "type": "string"
+          },
+          "purpose": {
+            "description": "这个群是干什么的，一句话。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "channel_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "把人拉进一个群，要别人一起看、一起商量这件事时用。一般要你自己是这个群的成员；大厅和私聊不接受邀请。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "members": {
+            "description": "session id、通讯录号码（如 7-3），或 human。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "channel",
+          "members"
+        ],
+        "type": "object"
+      },
+      "name": "channel_invite"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "退出一个群，这个群的事跟你无关了时用。大厅退不了；私聊退不了（不要的话归档它）；话题群的群主要先用 channel_owner 转给别人才能退。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_leave"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "归档一个群，群里的事办完了时用（消息保留，不能再发言；人可以解档）。只有群主、该群所属机组的机长或人能归档；大厅和人类群不能归档。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "群主的转让。群主相当于这个群的机长：人在群里说话没点名时，通常叫醒群主，群主得接住：自己答，或转给对的人。三种用法：给 to = 群主请对方接手（会以你的名义在群里 @ 对方，对方调 channel_owner(channel=…) 接受后才生效）；不给 to = 接受转给你的群主；给 to 且 force=true = 该群所属机组的机长（总机组的机长也算）不等对方接受，直接换群主。新群主必须是群成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "force": {
+            "description": "机长用，要同时给 to：true = 不等对方接受，直接转。",
+            "type": "boolean"
+          },
+          "to": {
+            "description": "新群主：session id 或通讯录号码（如 7-3）。不填 = 接受转给你的群主。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_owner"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "收听一个群：这个群有新消息时也叫醒你（不用被 @）。在等某个群的动静时用；收听期间正常结束回合等着，别轮询 read_channel。只能收听你读得到的群。不再需要时 channel_listen(channel=…, off=true)。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "minutes": {
+            "description": "听多久（分钟，1–480）。不填 = 一直听，直到用 off=true 停掉。",
+            "maximum": 480,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "off": {
+            "description": "true = 停止收听这个群（不能和 minutes、senders 一起给）。本来就没在收听也不报错。",
+            "type": "boolean"
+          },
+          "senders": {
+            "description": "只听这些人：human、captain（发言时是机长的那位，换了机长就跟着换）、session id 或通讯录号码（号码按此刻解析成那个 session，如 7-1 = 7 号机组此刻的机长，之后换机长不跟着换）。这只决定谁的消息会叫醒你；群里的消息照样都会注入给你。不填 = 所有人。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_listen"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查通讯录，要找人、跨机组说话时用：本机每个机组、每个 session 都有短号码——机组是整数（7），成员是分机（7-3），7-1 指 7 号机组此刻的机长，0 是总机组（填 0 = 它此刻的机长）。每行：号码、名字、所在机组或上级路径、session id。号码可以直接填进 post 的 to（私聊，跨机组也用它）和各工具的成员参数。列群用 list_channels；人不编号：人必须看到的发 home 人类群，要拍板用 ask。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "按号码前缀、名字或组织路径过滤；不填 = 全表。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "directory"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "要人拍板时用：向人提一个问题（worker 也用它，不是往人类群里发一句）。不阻塞：问题记成一条待确认（H 号），发进你的 home（顶层机组；总机组是它自己）的人类群并 @人；你立刻拿到回执，去干别的或收工。人回答时系统直接叫醒你，并把 resume_note 原样念回给你。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fallback": {
+            "description": "到点没人答时你打算怎么办（「就按 A 做」）。和 fallback_after_minutes 一起给。",
+            "type": "string"
+          },
+          "fallback_after_minutes": {
+            "description": "可选：等这么多分钟没人答，就叫醒你按 fallback 办。只用于可撤回的事。",
+            "type": "number"
+          },
+          "question": {
+            "description": "要人拍板的那件事。把选项和你的倾向写出来——「A / B，我倾向 A，因为 …」。",
+            "type": "string"
+          },
+          "resume_note": {
+            "description": "答复回来后你要接着做什么（做到哪一步、下一步是什么）。半路上问的问题一定要写。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
+      "name": "ask"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "撤回一条还没人答的问（那件事已经不成立了）。你自己提的能撤；机长能撤本机组的任何一条（总机组的机长在每个机组都算机长）。还卡着工作项的问撤不了。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ask": {
+            "description": "H 号，如 H3。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "这条问记在哪个机组的账上（号码或 id）；不填 = 你自己的机组。",
+            "type": "string"
+          },
+          "reason": {
+            "description": "为什么不成立了，一句话说清变了什么。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ask",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "withdraw_ask"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "回应你所在机组的 Agent Todo（人派给机组的活）的某一条：认领时、有进展时、做完时各回一次。追加式，不改状态。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "description": "条目编号 #N 里的 N。",
+            "type": "integer"
+          },
+          "response": {
+            "description": "回应内容，一两句。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "response"
+        ],
+        "type": "object"
+      },
+      "name": "respond_todo"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查本机 claude / codex 的订阅额度：各窗口已用百分比与重置时刻。开长活前看一眼。没有剩余 token 的绝对量，别编。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_quota"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "定时叫醒自己：到点把 note 送回给你。额度将尽时的标准动作：收尾到可交接 → 约在重置后几分钟 → 停手。醒来时只有 note 和群消息可依靠，note 要自足。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after_minutes": {
+            "description": "多少分钟后（1–1440）。与 at 二选一。",
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "at": {
+            "description": "RFC 3339 时刻，必须带上你指的时区偏移（如北京时间 2026-10-08T09:00:00+08:00；Z 表示 UTC），必须在未来、7 天以内。与 after_minutes 二选一。",
+            "type": "string"
+          },
+          "note": {
+            "description": "醒来该干什么、上下文在哪。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "schedule_wakeup"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "切你自己的模型或推理强度。不是当场生效：这里改的是这个 session 的设置，下一次启动（重启或续跑）时才生效，当前这一回合不变。最贵的档位只在普通档位确实不行时才用。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "effort": {
+            "description": "推理强度档位。",
+            "type": "string"
+          },
+          "model": {
+            "description": "模型别名，如 opus / sonnet。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "set_session_profile"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "给机组起个短标签名，例如「鉴权重构」。搞清楚机组在做什么再起，起一次就够。crew 不填 = 本机组；别的机组只有你按机长算的才行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "可选：改哪个机组（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "name": {
+            "description": "几个字的短标签，不带标点和前后缀。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_crew"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "改机组的工作目录。先不带 confirm 看预览，再 confirm: true 执行。能改的：你按机长算的机组（总机组的机长：任何机组），以及本机组下面的子机组。已移除的机组不动。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "description": "true = 真执行；不填 = 只看预览。",
+            "type": "boolean"
+          },
+          "crew": {
+            "description": "可选：改哪个机组（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "include_children": {
+            "description": "连子机组一起改，默认 true。",
+            "type": "boolean"
+          },
+          "new_path": {
+            "description": "新目录的绝对路径，必须已存在。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_path"
+        ],
+        "type": "object"
+      },
+      "name": "change_workdir"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "一句话说清整个机组现在怎么样，显示在侧栏这个机组那一行；情况有变时更新。超过 200 字不收；给空串 = 清掉。crew 不填 = 本机组。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "可选：哪个机组（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "text": {
+            "description": "一句话状态。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "set_crew_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "机组的派活原则：派活前读一遍；原则要改时整个替换。不给 text = 读；给 text = 用它整个替换。crew 不填 = 本机组。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "可选：哪个机组（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "text": {
+            "description": "可选：完整的新正文（替换旧的）；不给 = 只读。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "delegation_policy"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "起一个 worker 去干一件明确的编码任务。crew 不填 = 本机组；别的机组只有你按机长算的才行（总机组的机长在每个机组都按机长算）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "brief": {
+            "description": "要它干的事，写清目标与完成标准。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "可选：在哪个机组起（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "effort": {
+            "description": "可选推理强度。",
+            "type": "string"
+          },
+          "isolation": {
+            "description": "必填。false = 用机组共享目录；true = 为它新建独立 git worktree。按并行冲突、改动范围、任务之间的关系逐次判断；创建失败会直接报错，不会偷偷退回共享目录。",
+            "type": "boolean"
+          },
+          "model": {
+            "description": "可选模型。",
+            "type": "string"
+          },
+          "runner": {
+            "description": "claude 或 codex；不填 = 机组默认。",
+            "enum": [
+              "claude",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "≤18 个字、不带项目名的任务概括，作群里的显示名；不填就取 brief 第一行的前 18 个字。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "brief",
+          "isolation"
+        ],
+        "type": "object"
+      },
+      "name": "start_session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "停掉一个 session 的进程：原因先以你的名义写进它所在机组的大厅，再停；不可撤销。只想打断它这一轮，用 nudge_session 发 esc。不能停你自己。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "停的原因，会公开写进大厅。",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "目标 session：id 或通讯录号（如 7-3）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "stop_session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "看某个 session 的现场：状态 + 终端最近的输出（codex 是记录尾部）。@ 不应时先看它卡在哪。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "description": "目标 session：id 或通讯录号（如 7-3）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "name": "inspect_session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "打断某个 session 当前这一轮：只收按键 esc / interrupt。要告诉它什么，用 post(to: …) 发给它，它被唤醒时会读到。发出后不保证生效：过几秒 inspect_session 看效果。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "description": "esc 或 interrupt，都是打断它当前这一轮。",
+            "enum": [
+              "esc",
+              "interrupt"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "目标 session：id 或通讯录号（如 7-3）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "nudge_session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "列出一个机组的 session（id、号、名字、角色、状态），派活前、或要找某个 session 时用。crew 不填 = 本机组。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "可选：机组号码或 id；不填 = 本机组。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_sessions"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "交出一个机组的机长位置：to_session 交给一个现有 session（必须属于那个机组），或 runner 新起一个 session 接任，两者只给一个。crew 不填 = 本机组；也可以是你的直系子机组，或任何你按机长算的机组。原机长留在机组里当 worker。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "可选：哪个机组的机长位置（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "effort": {
+            "description": "可选：新机长的推理强度（只配 runner 用）。",
+            "type": "string"
+          },
+          "model": {
+            "description": "可选：新机长的模型（只配 runner 用）。",
+            "type": "string"
+          },
+          "opening_brief": {
+            "description": "可选：新机长的第一件事（只配 runner 用）。",
+            "type": "string"
+          },
+          "runner": {
+            "description": "新起一个 session 接任：claude 或 codex。",
+            "enum": [
+              "claude",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "可选：新机长的显示名，≤18 个字；不填 = 机长（只配 runner 用）。",
+            "type": "string"
+          },
+          "to_session": {
+            "description": "接任者：一个现有 session 的 id 或通讯录号，必须属于那个机组。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "handoff_captain"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "调整机组在组织树里的位置。action 五选一：create_child（在 crew 下新建子机组：继承工作目录、自动起它的机长，brief 是那位机长的第一件事）；create_parent（在 crew 头上新建上级机组并起它的机长）；adopt（把 target 挂到 crew 名下）；adopt_parent（把 crew 挂到 target 名下）；release（把 crew 的直系子机组 target 摘出，可用 to 改挂到别处；没有别的上级了就成为顶层机组）。新建或挂过来的机组排在同级末尾。移除、恢复、永久删除和排序是人的事，这里没有。子机组只表达组织结构——一个长期存在、有自己机长的部门或团队；围绕某个话题或某件事协作，用 channel_create 建群，不要开子机组。crew 不填 = 本机组；别的机组只有你按机长算的才行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "create_child / create_parent / adopt / adopt_parent / release 之一。",
+            "enum": [
+              "create_child",
+              "create_parent",
+              "adopt",
+              "adopt_parent",
+              "release"
+            ],
+            "type": "string"
+          },
+          "brief": {
+            "description": "create_child 必填：子机组的机长要做的第一件事，写清目标与完成标准。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "可选：被操作的机组（号码或 id）；不填 = 本机组。",
+            "type": "string"
+          },
+          "runner": {
+            "description": "可选，只配 create_child：子机组的机长用 claude 还是 codex；不填 = 默认。",
+            "enum": [
+              "claude",
+              "codex"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "adopt / adopt_parent / release 必填：另一个机组（号码或 id）。adopt / adopt_parent 的 target 和 release 的 to 只能是你按机长算的机组，或这种机组的直系子机组；把别的分支下的机组挂过来、挂过去是组织层面的调整，找总机组的机长（post(to: \"0\")）或人来做。",
+            "type": "string"
+          },
+          "title": {
+            "description": "可选，配 create_child / create_parent：新机组的短标签名；不填就按模板起。",
+            "type": "string"
+          },
+          "to": {
+            "description": "可选，只配 release：把 target 改挂到哪个机组（同 target 的范围：你按机长算的机组，或它的直系子机组）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "crew_structure"
+    }
+  ],
+  "instructions": "crew 工具是你和机组、人类说话的方式。\n关键节点用 post 发到群里；需要人拍板用 ask，然后继续做不依赖答案的事，不阻塞等待。",
+  "worker": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "把关键节点发到群里：开始、完成、卡住、交接、重要发现。写法：一句结论，加一件要对方定的事；长表格、长清单写进文件，群里给路径。终端里的过程（读了什么、跑了什么）别往群里倒。\n发到哪必须说清，没有默认：channel = 发到一个群；to = 按通讯录号码私聊一个人（跨机组也用它）；只给 reply_to = 发到那条消息所在的群。三者都不给会报错并列出你的群。\n@ 只负责叫醒：没有 @ 时，不叫醒任何人（收听这个群的除外）。私聊里对方总会被叫醒。@session / @captain 叫醒被点到的 agent；@human 是给人看的标记，只用来提问（需要拍板仍用 ask），不用来报进度。不管 @ 了谁，读得到这个群的人都看得见。人没在注视的群里 @human，可能很久才被看到：急事发你的 home（顶层机组）的人类群，要拍板用 ask。\n发得太快、同一句话重复发、频繁 @human 会被挡下（回执说明怎么办）：把进度并成一条再发。\n回执会写明这条会叫醒谁。单条正文最多 256 KiB。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "description": "这条是什么：progress 推进 / done 完成 / blocked 卡住 / question 要问 / finding 发现 / handoff 交接 / ack 收到 / note 其它。",
+            "enum": [
+              "progress",
+              "done",
+              "blocked",
+              "question",
+              "finding",
+              "handoff",
+              "ack",
+              "note"
+            ],
+            "type": "string"
+          },
+          "channel": {
+            "description": "群 id，或你读得到的群里唯一的群名。与 to 二选一。",
+            "type": "string"
+          },
+          "mentions": {
+            "description": "要叫醒谁：{kind:\"session\", target_id:\"<session id 或通讯录号码>\"} / {kind:\"captain\"} / {kind:\"human\"}。没有 @ 时，不叫醒任何人（收听这个群的除外）。私聊里对方仍会被叫醒。读得到这个群的人照样看得见。被 @ 的 session 必须是这个群的成员；@captain 也要求机长是这个群的成员，机组没有机长时 @captain 会报错。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "session",
+                    "captain",
+                    "human"
+                  ],
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "message": {
+            "description": "发一条时用它。与 messages 二选一。",
+            "type": "string"
+          },
+          "messages": {
+            "description": "一次发几条（最多 6 条），每条一个气泡、各带自己的 category。任何一条不合法就整批不发，错误会指名第几条。mentions、reply_to 只挂在第一条上。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "category": {
+                  "enum": [
+                    "progress",
+                    "done",
+                    "blocked",
+                    "question",
+                    "finding",
+                    "handoff",
+                    "ack",
+                    "note"
+                  ],
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
+          "reply_to": {
+            "description": "你在回复哪一条：消息序号（如 #128 或 128）或消息 id。只能回复同一个群里的消息。会自动 @ 原发言者（对方还在群里时）：群里所有成员照样看得见，只是把对方叫醒；回复自己的消息、回复系统消息都不会加 @。",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "to": {
+            "description": "私聊一个人：通讯录号码——7-3（7 号机组的 3 号分机）、7（7 号机组此刻的机长）、0（总机组的机长）；directory 查号。同一对人只有一个私聊，已有就接着用。人类没有私聊（to 填 human 会指给你 home 人类群）：找人发 home 人类群，要拍板用 ask。与 channel、reply_to 都不能同时给。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "post"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页读一个群的消息（旧在前）。要看更早的消息、或你不在其中的群时用。读到最新一条时，这个群对你就算已读，之后不会再注入这些消息——只对你在其中、或你收听的群有效（读别的群不改已读位置）。每条前面的 #序号 可以填进 reply_to。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "只看这一条之前的（消息序号或 id）。不填 = 最新一页。",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "channel": {
+            "description": "群 id 或群名；不填 = 本机组大厅。读得到的群：本机组名下的群（含本机组成员之间的私聊——没有私有群）、你的 home 人类群、你在其中或收听的群；总机组的 session 读得到全组织的群。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "条数，1–200，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "read_channel"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "在你读得到的群里搜消息，找以前说过的某件事时用（本机组名下的群、你的 home 人类群、你在其中或收听的群，已归档的也算；总机组的 session 搜全组织）。整个查询词（去掉首尾空白）当作一个整体，做不区分大小写的子串匹配（只折叠 ASCII 字母的大小写），不是按词拆开再求交；按时间倒序。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "只要这个时刻之后的（ISO8601，含边界）。",
+            "type": "string"
+          },
+          "before": {
+            "description": "只要严格早于这个时刻的（ISO8601，不含边界：created_at < before）。",
+            "type": "string"
+          },
+          "channel": {
+            "description": "只搜这一个群（群 id 或群名）。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "只搜这个机组名下你读得到的群（机组号、id 或名字）。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "条数上限，1–200，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "要搜的文字：去掉首尾空白后整体当一个子串匹配（ASCII 不区分大小写）。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "列出群，找群 id、看人在注视哪些群时用：第一行是你的 home 人类群（人必须看到的发这里），然后是你在其中或收听的群、本机组的其它群、人在注视的群。每行：id · 名字 · 类型 · 用途 · 群主 · 人数 · 状态（你在群里 / 你在收听 / 人类在注视 / 已归档 / 你是群主）。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew": {
+            "description": "只列这个机组名下你读得到的群（机组号、id 或名字）。",
+            "type": "string"
+          },
+          "include_archived": {
+            "description": "true = 连已归档的群一起列；默认不列。",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_channels"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "建一个话题群。要和谁就某件事协作、要单独讨论一个话题，就用它——不要为此开子机组。你是群主，自动在群里。群有名字和用途，例如「发版」「scroll bug 排查」。群名不能与人类（人类 / Human）或 crewd 的系统标签重名，重名会被拒绝。私聊不用建：post(to:) 直接发，还没有就自动开。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "members": {
+            "description": "一起拉进来的成员（可不填，之后再用 channel_invite）：session id、通讯录号码（如 7-3；7 = 7 号机组此刻的机长），或 human（人类）。不用填你自己。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "群名，短。",
+            "type": "string"
+          },
+          "purpose": {
+            "description": "这个群是干什么的，一句话。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "channel_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "把人拉进一个群，要别人一起看、一起商量这件事时用。一般要你自己是这个群的成员；大厅和私聊不接受邀请。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "members": {
+            "description": "session id、通讯录号码（如 7-3），或 human。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "channel",
+          "members"
+        ],
+        "type": "object"
+      },
+      "name": "channel_invite"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "退出一个群，这个群的事跟你无关了时用。大厅退不了；私聊退不了（不要的话归档它）；话题群的群主要先用 channel_owner 转给别人才能退。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_leave"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "归档一个群，群里的事办完了时用（消息保留，不能再发言；人可以解档）。只有群主、该群所属机组的机长或人能归档；大厅和人类群不能归档。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "群主的转让。群主相当于这个群的机长：人在群里说话没点名时，通常叫醒群主，群主得接住：自己答，或转给对的人。三种用法：给 to = 群主请对方接手（会以你的名义在群里 @ 对方，对方调 channel_owner(channel=…) 接受后才生效）；不给 to = 接受转给你的群主；给 to 且 force=true = 该群所属机组的机长（总机组的机长也算）不等对方接受，直接换群主。新群主必须是群成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "force": {
+            "description": "机长用，要同时给 to：true = 不等对方接受，直接转。",
+            "type": "boolean"
+          },
+          "to": {
+            "description": "新群主：session id 或通讯录号码（如 7-3）。不填 = 接受转给你的群主。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_owner"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "收听一个群：这个群有新消息时也叫醒你（不用被 @）。在等某个群的动静时用；收听期间正常结束回合等着，别轮询 read_channel。只能收听你读得到的群。不再需要时 channel_listen(channel=…, off=true)。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "群 id 或群名。",
+            "type": "string"
+          },
+          "minutes": {
+            "description": "听多久（分钟，1–480）。不填 = 一直听，直到用 off=true 停掉。",
+            "maximum": 480,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "off": {
+            "description": "true = 停止收听这个群（不能和 minutes、senders 一起给）。本来就没在收听也不报错。",
+            "type": "boolean"
+          },
+          "senders": {
+            "description": "只听这些人：human、captain（发言时是机长的那位，换了机长就跟着换）、session id 或通讯录号码（号码按此刻解析成那个 session，如 7-1 = 7 号机组此刻的机长，之后换机长不跟着换）。这只决定谁的消息会叫醒你；群里的消息照样都会注入给你。不填 = 所有人。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_listen"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查通讯录，要找人、跨机组说话时用：本机每个机组、每个 session 都有短号码——机组是整数（7），成员是分机（7-3），7-1 指 7 号机组此刻的机长，0 是总机组（填 0 = 它此刻的机长）。每行：号码、名字、所在机组或上级路径、session id。号码可以直接填进 post 的 to（私聊，跨机组也用它）和各工具的成员参数。列群用 list_channels；人不编号：人必须看到的发 home 人类群，要拍板用 ask。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "按号码前缀、名字或组织路径过滤；不填 = 全表。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "directory"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "要人拍板时用：向人提一个问题（worker 也用它，不是往人类群里发一句）。不阻塞：问题记成一条待确认（H 号），发进你的 home（顶层机组；总机组是它自己）的人类群并 @人；你立刻拿到回执，去干别的或收工。人回答时系统直接叫醒你，并把 resume_note 原样念回给你。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fallback": {
+            "description": "到点没人答时你打算怎么办（「就按 A 做」）。和 fallback_after_minutes 一起给。",
+            "type": "string"
+          },
+          "fallback_after_minutes": {
+            "description": "可选：等这么多分钟没人答，就叫醒你按 fallback 办。只用于可撤回的事。",
+            "type": "number"
+          },
+          "question": {
+            "description": "要人拍板的那件事。把选项和你的倾向写出来——「A / B，我倾向 A，因为 …」。",
+            "type": "string"
+          },
+          "resume_note": {
+            "description": "答复回来后你要接着做什么（做到哪一步、下一步是什么）。半路上问的问题一定要写。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
+      "name": "ask"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "撤回一条还没人答的问（那件事已经不成立了）。你自己提的能撤；机长能撤本机组的任何一条（总机组的机长在每个机组都算机长）。还卡着工作项的问撤不了。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ask": {
+            "description": "H 号，如 H3。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "这条问记在哪个机组的账上（号码或 id）；不填 = 你自己的机组。",
+            "type": "string"
+          },
+          "reason": {
+            "description": "为什么不成立了，一句话说清变了什么。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ask",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "withdraw_ask"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "回应你所在机组的 Agent Todo（人派给机组的活）的某一条：认领时、有进展时、做完时各回一次。追加式，不改状态。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "description": "条目编号 #N 里的 N。",
+            "type": "integer"
+          },
+          "response": {
+            "description": "回应内容，一两句。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "response"
+        ],
+        "type": "object"
+      },
+      "name": "respond_todo"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查本机 claude / codex 的订阅额度：各窗口已用百分比与重置时刻。开长活前看一眼。没有剩余 token 的绝对量，别编。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_quota"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "定时叫醒自己：到点把 note 送回给你。额度将尽时的标准动作：收尾到可交接 → 约在重置后几分钟 → 停手。醒来时只有 note 和群消息可依靠，note 要自足。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after_minutes": {
+            "description": "多少分钟后（1–1440）。与 at 二选一。",
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "at": {
+            "description": "RFC 3339 时刻，必须带上你指的时区偏移（如北京时间 2026-10-08T09:00:00+08:00；Z 表示 UTC），必须在未来、7 天以内。与 after_minutes 二选一。",
+            "type": "string"
+          },
+          "note": {
+            "description": "醒来该干什么、上下文在哪。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "schedule_wakeup"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "切你自己的模型或推理强度。不是当场生效：这里改的是这个 session 的设置，下一次启动（重启或续跑）时才生效，当前这一回合不变。最贵的档位只在普通档位确实不行时才用。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "effort": {
+            "description": "推理强度档位。",
+            "type": "string"
+          },
+          "model": {
+            "description": "模型别名，如 opus / sonnet。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "set_session_profile"
+    }
+  ]
+}

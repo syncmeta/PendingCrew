@@ -285,26 +285,36 @@ pub fn render(ctx: &WorldCtx) -> String {
 pub fn render_live(ctx: &WorldCtx) -> String {
     let f = file(ctx.locale);
     let b = blocks(ctx);
-    let extension = ctx
-        .extension
-        .clone()
-        .unwrap_or_else(|| f.get("unknown").to_string());
+    let extension = ctx.extension.as_deref().unwrap_or_else(|| f.get("unknown"));
+    // Display text/lineage must not crowd identity and role out of Claude's 10k hook limit.
+    // No changes to the full launch worldview: this budget is specific to live refreshes.
+    let short = |s: &str| s.chars().take(256).collect::<String>();
+    let block = |s: &str| s.chars().take(1_000).collect::<String>();
     let facts = fill(
         f.get("live.body"),
         &[
-            ("roleBlock", &b.role),
-            ("captainBlock", &b.captain),
-            ("lineageBlock", &b.lineage),
-            ("quotaBlock", &b.quota),
-            ("sessionId", &ctx.session_id),
-            ("extension", &extension),
-            ("crewId", &ctx.crew_id),
-            ("humanChannelId", &ctx.home_human_channel_id),
-            ("crewTitle", &or_unknown(f, &safe_name(&ctx.crew_title))),
-            ("label", &or_unknown(f, &safe_name(&ctx.label))),
+            ("roleBlock", &block(&b.role)),
+            ("captainBlock", &block(&b.captain)),
+            (
+                "lineageBlock",
+                &b.lineage.chars().take(4_000).collect::<String>(),
+            ),
+            ("quotaBlock", &block(&b.quota)),
+            ("sessionId", &short(&ctx.session_id)),
+            ("extension", &short(extension)),
+            ("crewId", &short(&ctx.crew_id)),
+            ("humanChannelId", &short(&ctx.home_human_channel_id)),
+            (
+                "crewTitle",
+                &short(&or_unknown(f, &safe_name(&ctx.crew_title))),
+            ),
+            ("label", &short(&or_unknown(f, &safe_name(&ctx.label)))),
         ],
     );
     format!("{}\n\n{facts}", f.get("live.header"))
+        .chars()
+        .take(10_000)
+        .collect()
 }
 
 #[cfg(test)]

@@ -97,10 +97,13 @@ async fn route(
             tx.clone(),
         ));
         conn.session = Some(me.session_id.clone());
+        let loc = port::locale(state).await.unwrap_or_default();
         return to_value(AttachResult {
             role: me.role,
             crew_id: me.crew_id,
             label: me.label,
+            instructions: crate::agent::text::get(loc, "instructions").into(),
+            surface_hash: crate::agent::surface::hash(loc),
         });
     }
     let Some(session) = conn.session.clone() else {
@@ -123,7 +126,10 @@ async fn route(
         methods::HOOK => {
             let p: HookParams = parse_params(req.params)?;
             let me = current(state, &session).await?;
-            to_value(hook(state, &me, p.event, p.payload).await)
+            let result = hook(state, &me, p.event, p.payload.clone()).await;
+            #[cfg(any(test, feature = "testkit"))]
+            crate::agent::testkit::record_hook(state, &me.session_id, p.event, &p.payload, &result);
+            to_value(result)
         }
         other => Err(RpcError::new(
             RpcError::METHOD_NOT_FOUND,
@@ -136,6 +142,15 @@ async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Va
     match event {
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
         HookKind::Stop => crate::agent::turn::stop(state, me, &payload).await,
+        HookKind::SessionStart => match port::live_world(state, &me.session_id).await {
+            Ok(context) => HookResult { stdout: Some(serde_json::json!({
+                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": context },
+            }).to_string()) },
+            Err(e) => {
+                eprintln!("crewd: session-start for {}: {e}", me.session_id);
+                HookResult { stdout: None }
+            }
+        },
     }
 }
 
@@ -256,7 +271,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             a,
-            json!({"role": "worker", "crewId": f.crew, "label": "示例 worker"})
+            json!({"role": "worker", "crewId": f.crew, "label": "示例 worker",
+                "instructions": text::get(Locale::Zh, "instructions"),
+                "surfaceHash": crate::agent::surface::hash(Locale::Zh)})
         );
         assert_eq!(
             w.call(methods::TOOLS, json!(null))
@@ -298,7 +315,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             r["text"],
-            text::r(Locale::Zh, "r.unknown_tool", &[("name", "plan_add")])
+            text::r(
+                Locale::Zh,
+                "r.unknown_tool",
+                &[("name", "plan_add"), ("hint", "")]
+            )
         );
     }
 

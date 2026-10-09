@@ -6,6 +6,7 @@ pub mod inject;
 pub mod port;
 pub mod rpc;
 pub mod runtime;
+pub mod surface;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod text;

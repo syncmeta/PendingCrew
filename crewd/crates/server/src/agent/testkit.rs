@@ -14,6 +14,42 @@ use crate::agent::runtime::{AgentConfig, AgentRuntime};
 use crate::agent::{Identity, Role};
 use crate::control::FakeSessionControl;
 
+/// Test-owned completed hook calls. Not a production log, not a Claude transcript reader.
+#[derive(Clone, Debug)]
+pub struct HookObservation {
+    pub session: String,
+    pub event: String,
+    pub tool_name: Option<String>,
+    pub context_chars: usize,
+}
+
+pub(crate) fn record_hook(
+    st: &AppState,
+    session: &str,
+    kind: crewd_proto::agent::HookKind,
+    payload: &serde_json::Value,
+    result: &crewd_proto::agent::HookResult,
+) {
+    let parsed = result
+        .stdout
+        .as_ref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let context_chars = parsed
+        .as_ref()
+        .and_then(|v| v["hookSpecificOutput"]["additionalContext"].as_str())
+        .map_or(0, |s| s.chars().count());
+    let row = HookObservation {
+        session: session.into(),
+        event: payload["hook_event_name"]
+            .as_str()
+            .unwrap_or(kind.as_str())
+            .into(),
+        tool_name: payload["tool_name"].as_str().map(str::to_owned),
+        context_chars,
+    };
+    st.agent.hook_log.lock().unwrap().push(row);
+}
+
 pub struct Fixture {
     pub state: Arc<AppState>,
     pub crew: String,
@@ -24,6 +60,18 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    pub fn hook_observations(&self, session: &str) -> Vec<HookObservation> {
+        self.state
+            .agent
+            .hook_log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.session == session)
+            .cloned()
+            .collect()
+    }
+
     pub async fn new() -> Self {
         Self::with_config(AgentConfig::default()).await
     }

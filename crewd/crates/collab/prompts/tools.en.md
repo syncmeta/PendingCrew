@@ -4,6 +4,10 @@ Section names: <tool> = tool description; <tool>.<param> = parameter text; r.* =
 Placeholders {name} are filled by code (M3a's prompts::fill). zh and en must have exactly the same section names (tested).
 -->
 
+## instructions
+Crew tools are how you talk to your crew and the human.
+Post key moments with post; use ask when you need a human decision, then keep working without blocking.
+
 ## post
 Post key moments to a channel: started, done, blocked, handing off, important findings. Write the conclusion in one sentence plus the one thing you need decided; long tables and lists go into a file, post the path. Keep terminal detail (what you read or ran) out of channels.
 Say where it goes; there is no default: channel = post in a channel; to = a dm with one session by its directory number (also across crews); reply_to alone = the channel of that message. With none of the three you get an error listing your channels.
@@ -346,7 +350,7 @@ Required for create_child: the child crew captain's first task, with goal and do
 Optional, create_child only: claude or codex for the child crew's captain; omitted = default.
 
 ## r.unknown_tool
-There is no tool named {name}. Check your tool list and use one that does the job.
+There is no tool named {name}. {hint}Check your tool list and use one that does the job.
 
 ## r.tool_removed
 The tool {name} is gone: {replacement} does its job now. Call that instead.

@@ -182,10 +182,16 @@ pub enum HookEvent {
     /// the same `crewd hook post-tool-use` command.
     PostToolUseFailure,
     Stop,
+    SessionStart,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 3] = [Self::PostToolUse, Self::PostToolUseFailure, Self::Stop];
+    pub const ALL: [HookEvent; 4] = [
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
+        Self::Stop,
+        Self::SessionStart,
+    ];
 
     /// claude settings.json 里的事件名。
     pub fn settings_key(self) -> &'static str {
@@ -193,6 +199,7 @@ impl HookEvent {
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
             Self::Stop => "Stop",
+            Self::SessionStart => "SessionStart",
         }
     }
 
@@ -202,6 +209,7 @@ impl HookEvent {
         match self {
             Self::PostToolUse | Self::PostToolUseFailure => "post-tool-use",
             Self::Stop => "stop",
+            Self::SessionStart => "session-start",
         }
     }
 
@@ -304,12 +312,28 @@ pub fn prepare_claude(
             text.as_bytes(),
         )?);
     }
-    let mut settings = serde_json::Map::new();
+    // Product-local pins, verified against the official settings/env reference (2026-10-09).
+    // stable selects a release channel; it is not a version lock (Homebrew ignores it).
+    let mut settings = json!({
+        "permissions": {"deny": ["AskUserQuestion"]},
+        "spinnerTipsEnabled": false,
+        "prefersReducedMotion": true,
+        "feedbackSurveyRate": 0,
+        "autoUpdatesChannel": "stable",
+        "env": {
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+            "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+        },
+    })
+    .as_object()
+    .unwrap()
+    .clone();
     if let Some(comms) = &spec.comms {
         let token_file = write_token_file(files.dir(), &comms.token)?;
         let helper = HelperCommands(comms);
         let mcp = json!({"mcpServers": {"crew": {
             "type": "stdio",
+            "alwaysLoad": true,
             "command": comms.helper.display().to_string(),
             "args": helper.mcp_args(&token_file),
         }}});
@@ -318,6 +342,9 @@ pub fn prepare_claude(
             let mut hooks = serde_json::Map::new();
             for e in HookEvent::ALL {
                 let mut entry = serde_json::Map::new();
+                if e == HookEvent::SessionStart {
+                    entry.insert("matcher".into(), json!("resume|compact|clear|fork"));
+                }
                 entry.insert(
                     "hooks".to_string(),
                     json!([{
@@ -525,6 +552,7 @@ mod tests {
                 .unwrap();
         let crew = &mcp["mcpServers"]["crew"];
         assert_eq!(crew["type"], "stdio");
+        assert_eq!(crew["alwaysLoad"], true);
         assert_eq!(crew["command"], "/opt/crew d/crewd");
         assert_eq!(
             crew["args"],
@@ -600,7 +628,10 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort();
-        assert_eq!(keys, ["PostToolUse", "PostToolUseFailure", "Stop"]);
+        assert_eq!(
+            keys,
+            ["PostToolUse", "PostToolUseFailure", "SessionStart", "Stop"]
+        );
     }
 
     #[test]
@@ -615,8 +646,42 @@ mod tests {
         let (args, files) =
             prepare_claude(&spec, AgentSessionArg::New("u-6".into()), rt.path()).unwrap();
         assert!(args.mcp_config_file.is_some());
-        assert_eq!(args.settings_file, None);
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
+        assert!(settings.get("hooks").is_none());
         assert!(files.dir().join(TOKEN_FILE).exists(), "MCP 也要 token");
+    }
+
+    #[test]
+    fn product_settings_pin_documented_ui_env_and_nonblocking_questions() {
+        for comms in [None, Some(comms())] {
+            let rt = tempfile::tempdir().unwrap();
+            let spec = ClaudeSpec {
+                comms,
+                ..ClaudeSpec::default()
+            };
+            let (args, _files) =
+                prepare_claude(&spec, AgentSessionArg::New("pins".into()), rt.path()).unwrap();
+            let settings: Value =
+                serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(settings["permissions"]["deny"], json!(["AskUserQuestion"]));
+            assert_eq!(settings["spinnerTipsEnabled"], false);
+            assert_eq!(settings["prefersReducedMotion"], true);
+            assert_eq!(settings["feedbackSurveyRate"], 0);
+            assert_eq!(settings["autoUpdatesChannel"], "stable");
+            assert_eq!(settings["env"]["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"], "1");
+            assert_eq!(settings["env"]["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"], "1");
+            assert!(settings["hooks"].get("PreToolUse").is_none());
+            assert!(
+                settings["permissions"]["deny"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|x| x != "ToolSearch")
+            );
+            assert!(settings["env"].get("ENABLE_TOOL_SEARCH").is_none());
+        }
     }
 
     #[test]
@@ -650,7 +715,7 @@ mod tests {
         assert_eq!(args.model.as_deref(), Some("opus"));
         let settings: Value =
             serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
-        assert_eq!(settings, json!({"fastMode": true}));
+        assert_eq!(settings["fastMode"], true);
 
         let spec = ClaudeSpec {
             model: Some("claude-opus-5".into()),

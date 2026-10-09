@@ -65,7 +65,7 @@ impl FakeServe {
                                 let p = &req["params"];
                                 let reply = match req["method"].as_str().unwrap() {
                                     "agent.attach" if p["sessionId"] == SESSION && p["token"] == TOKEN =>
-                                        json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例"}}),
+                                        json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例", "instructions": "Synthetic crew tools", "surfaceHash": "synthetic"}}),
                                     "agent.attach" => json!({"id": id, "error": {"code": -32602, "message": "invalid session or token"}}),
                                     _ if mode == Mode::Hang => continue,
                                     "agent.hook" if mode == Mode::DropOnHook => break,
@@ -456,7 +456,7 @@ async fn events_that_arrive_before_the_attach_answer_are_kept() {
             let frames = match req["method"].as_str().unwrap() {
                 "agent.attach" => vec![
                     json!({"event": "agent.tools_changed", "data": {"role": "captain"}}),
-                    json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例"}}),
+                    json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例", "instructions": "Synthetic crew tools", "surfaceHash": "synthetic"}}),
                 ],
                 "agent.tools" => vec![json!({"id": id, "result": []})],
                 m => vec![json!({"id": id, "error": {"code": -32601, "message": m}})],
@@ -676,7 +676,7 @@ fn scripted_serve(dir: &Path, reply: fn(&str, &Value, Value) -> Option<Value>) {
             let id = req["id"].clone();
             let v = match req["method"].as_str().unwrap() {
                 "agent.attach" => {
-                    json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例"}})
+                    json!({"id": id, "result": {"role": "worker", "crewId": "crew-a", "label": "示例", "instructions": "Synthetic crew tools", "surfaceHash": "synthetic"}})
                 }
                 m => match reply(m, &req["params"], id) {
                     Some(v) => v,

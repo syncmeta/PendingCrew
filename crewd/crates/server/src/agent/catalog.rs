@@ -775,7 +775,9 @@ mod tests {
     fn md_has_no_orphan_tool_or_param_sections() {
         for loc in [Locale::Zh, Locale::En] {
             for h in crate::agent::text::section_names(loc) {
-                if ["r.", "trace.", "inject."].iter().any(|p| h.starts_with(p)) {
+                if h == "instructions"
+                    || ["r.", "trace.", "inject."].iter().any(|p| h.starts_with(p))
+                {
                     continue;
                 }
                 let (tool, param) = match h.split_once('.') {

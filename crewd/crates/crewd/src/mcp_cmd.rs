@@ -48,6 +48,8 @@ fn call_failure_text(e: &CallError) -> String {
 #[derive(Clone)]
 struct Bridge {
     client: Arc<AgentClient>,
+    instructions: String,
+    version: String,
 }
 
 fn to_tool(d: ToolDef) -> Tool {
@@ -76,7 +78,8 @@ impl ServerHandler for Bridge {
                 .enable_tool_list_changed()
                 .build(),
         )
-        .with_server_info(Implementation::new("crewd", env!("CARGO_PKG_VERSION")))
+        .with_server_info(Implementation::new("crewd", &self.version))
+        .with_instructions(&self.instructions)
     }
 
     async fn list_tools(
@@ -124,12 +127,18 @@ impl ServerHandler for Bridge {
 pub async fn run(data_dir: &Path, args: McpArgs) -> anyhow::Result<()> {
     let (client, who) = AgentClient::connect(data_dir, &args.session, &args.token_file).await?;
     eprintln!(
-        "crewd mcp: attached {} ({:?}) in {}",
-        args.session, who.role, who.crew_id
+        "crewd mcp: attached {} ({:?}) in {} surface {}",
+        args.session, who.role, who.crew_id, who.surface_hash
     );
     let client = Arc::new(client);
     let mut events = client.take_events().expect("events taken once");
-    let service = Bridge { client }.serve(rmcp::transport::stdio()).await?;
+    let service = Bridge {
+        client,
+        instructions: who.instructions,
+        version: format!("{}+{}", env!("CARGO_PKG_VERSION"), who.surface_hash),
+    }
+    .serve(rmcp::transport::stdio())
+    .await?;
     let peer = service.peer().clone();
     tokio::spawn(async move {
         while let Some(e) = events.recv().await {

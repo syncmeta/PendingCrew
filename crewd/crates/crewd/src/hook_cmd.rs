@@ -16,7 +16,7 @@ const QUICK: Duration = Duration::from_secs(5);
 
 #[derive(clap::Args, Clone)]
 pub struct HookArgs {
-    /// post-tool-use | stop（别的事件名一律静默忽略）
+    /// post-tool-use | stop | session-start（别的事件名一律静默忽略）
     event: String,
     #[arg(long)]
     session: String,

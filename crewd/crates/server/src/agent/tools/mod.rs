@@ -143,10 +143,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     };
     let Some(spec) = catalog::find(tool) else {
         // A session started before an upgrade may still call an old name: say what replaced it.
-        return match catalog::replacement(tool) {
-            Some(new) => cx.err("r.tool_removed", &[("name", tool), ("replacement", new)]),
-            None => cx.err("r.unknown_tool", &[("name", tool)]),
-        };
+        let hint = catalog::replacement(tool)
+            .map(|new| cx.r("r.tool_removed", &[("name", tool), ("replacement", new)]))
+            .unwrap_or_default();
+        return cx.err("r.unknown_tool", &[("name", tool), ("hint", &hint)]);
     };
     // One gate (`catalog::visible`, the same rule the tool list uses): the role, re-read on
     // every call. The management crew has no special case (S68).

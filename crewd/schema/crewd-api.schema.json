@@ -188,18 +188,28 @@
         "crewId": {
           "type": "string"
         },
+        "instructions": {
+          "description": "MCP initialize instructions from the active locale's tools md.",
+          "type": "string"
+        },
         "label": {
           "type": "string"
         },
         "role": {
           "$ref": "#/$defs/Role",
           "description": "M3a 的 `crewd_proto::Role`（线上 \"captain\" / \"worker\"）。"
+        },
+        "surfaceHash": {
+          "description": "Stable public surface fingerprint, appended to MCP serverInfo.version.",
+          "type": "string"
         }
       },
       "required": [
         "role",
         "crewId",
-        "label"
+        "label",
+        "instructions",
+        "surfaceHash"
       ],
       "type": "object"
     },
@@ -1199,7 +1209,8 @@
     "HookKind": {
       "enum": [
         "post-tool-use",
-        "stop"
+        "stop",
+        "session-start"
       ],
       "type": "string"
     },
