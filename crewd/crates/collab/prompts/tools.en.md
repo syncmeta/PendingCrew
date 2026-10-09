@@ -786,7 +786,13 @@ Not stopped: {detail}. The reason could not be posted to the lobby, so nothing w
 The lobby already says "Stopping {target}", but the stop failed: {detail}. Nothing was stopped; inspect_session to see its state, then retry or correct the notice in the lobby.
 
 ## r.handoff_started_not_handed
-Started {new} ({id}), but the captain role was not handed over: {detail}. It is running as a worker; do not start another one: retry with handoff_captain(to_session: "{id}"), or stop_session it if it is not wanted.
+Started {new} ({id}), but the captain role was not handed over: {detail}. It is running as a worker; do not start another one: retry with handoff_captain(crew: {crew_arg}, to_session: {session_arg}). {cleanup}
+
+## r.handoff_cleanup_self
+If it is not wanted, stop_session(session_id: {session_arg}, reason: "No longer needed").
+
+## r.handoff_cleanup_authority
+To stop session {session_arg}, ask its crew captain or the management captain, or use ask for the human to arrange cleanup. Your child-crew handoff reach does not let you stop its sessions.
 
 ## r.not_your_crew_unnumbered
 "{crew}" is not yours: you are not its captain. It has no number, so post(to:) cannot reach it; to get something done there, say so in your crew's lobby or ask the human.

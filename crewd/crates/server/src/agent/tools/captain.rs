@@ -410,15 +410,45 @@ async fn handoff_captain_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
             .await
             .map_err(|e| cx.fail(e))?;
         let new_name = cx.name(&title);
-        // Started but not handed over: it runs as a worker; say so, so it is not started twice.
-        port::handoff_captain(cx.st, &crew.id, &id)
-            .await
-            .map_err(|e| {
-                cx.err(
-                    "r.handoff_started_not_handed",
-                    &[("new", &new_name), ("id", &id), ("detail", &cx.detail(e))],
-                )
-            })?;
+        // Started but not handed over: retain the resolved target and only advertise cleanup
+        // this caller can perform. Direct-child handoff reach is not session-control authority.
+        if let Err(e) = port::handoff_captain(cx.st, &crew.id, &id).await {
+            let can_stop = match port::acts_as_captain_of(cx.st, &cx.me.session_id, &crew.id).await
+            {
+                Ok(can) => can,
+                Err(error) => {
+                    eprintln!("crewd: handoff cleanup authority unavailable: {error:?}");
+                    false
+                }
+            };
+            let session_arg = serde_json::to_string(&id).expect("string serialises");
+            let crew_arg = serde_json::to_string(
+                &crew
+                    .number
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| crew.id.clone()),
+            )
+            .expect("string serialises");
+            let cleanup = cx.r(
+                if can_stop {
+                    "r.handoff_cleanup_self"
+                } else {
+                    "r.handoff_cleanup_authority"
+                },
+                &[("session_arg", &session_arg)],
+            );
+            return Err(cx.err(
+                "r.handoff_started_not_handed",
+                &[
+                    ("new", &new_name),
+                    ("id", &id),
+                    ("detail", &cx.detail(e)),
+                    ("crew_arg", &crew_arg),
+                    ("session_arg", &session_arg),
+                    ("cleanup", &cleanup),
+                ],
+            ));
+        }
         (id, new_name)
     };
     let mut text = match &old {
@@ -1364,7 +1394,24 @@ mod tests {
             &r,
             true,
             "r.handoff_started_not_handed",
-            &[("new", "机长"), ("id", &id), ("detail", "示例：交接失败")],
+            &[
+                ("new", "机长"),
+                ("id", &id),
+                ("detail", "示例：交接失败"),
+                (
+                    "crew_arg",
+                    &serde_json::to_string(&number_of(&f, &f.crew).await).unwrap(),
+                ),
+                ("session_arg", &serde_json::to_string(&id).unwrap()),
+                (
+                    "cleanup",
+                    &text::r(
+                        Locale::Zh,
+                        "r.handoff_cleanup_self",
+                        &[("session_arg", &serde_json::to_string(&id).unwrap())],
+                    ),
+                ),
+            ],
         );
         assert_eq!(calls_of(&f, "Start(").len(), 1);
         assert_eq!(
