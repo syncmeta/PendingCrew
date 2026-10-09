@@ -894,5 +894,11 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 ## r.released
 「{child}」已从「{from}」下摘出；它还挂在别的上级下面。接着做手上的事。
 
+## r.released_same_parent
+「{child}」仍在「{from}」名下：来源和去处是同一个机组。什么都没变，次序也没动。接着做手上的事。
+
+## r.released_existing_parent
+「{child}」已从「{from}」下摘出。它原本已在「{to}」名下，仍保留原来的位置；没有新增或重排去处的父边。接着做手上的事。
+
 ## r.released_to
 「{child}」已从「{from}」下摘出，改挂到「{to}」名下、排在末尾。接着做手上的事。

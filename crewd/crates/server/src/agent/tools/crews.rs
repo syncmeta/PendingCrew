@@ -609,27 +609,20 @@ async fn release(
     target: &CrewView,
     to: Option<&CrewView>,
 ) -> Step<CallResult> {
-    // Whether it ends up top-level follows from the state before (its only parent was `crew`), so
-    // nothing is read after the change.
-    let top = target.parent_ids == [crew.id.clone()];
-    port::detach_parent(cx.st, &crew.id, &target.id, to.map(|t| t.id.clone()))
+    use port::ReleaseEffect;
+    let effect = port::detach_parent(cx.st, &crew.id, &target.id, to.map(|t| t.id.clone()))
         .await
         .map_err(|e| cx.fail(e))?;
     let (name, from) = (cx.name(&target.title), cx.name(&crew.title));
-    if let Some(to) = to {
-        return Ok(cx.ok(
-            "r.released_to",
-            &[
-                ("child", &name),
-                ("from", &from),
-                ("to", &cx.name(&to.title)),
-            ],
-        ));
-    }
-    Ok(cx.ok(
-        if top { "r.released_top" } else { "r.released" },
-        &[("child", &name), ("from", &from)],
-    ))
+    let key = match effect {
+        ReleaseEffect::Unchanged => "r.released_same_parent",
+        ReleaseEffect::ExistingParent => "r.released_existing_parent",
+        ReleaseEffect::NewParent => "r.released_to",
+        ReleaseEffect::TopLevel => "r.released_top",
+        ReleaseEffect::Detached => "r.released",
+    };
+    let to_name = to.map(|t| cx.name(&t.title)).unwrap_or_default();
+    Ok(cx.ok(key, &[("child", &name), ("from", &from), ("to", &to_name)]))
 }
 
 #[cfg(test)]

@@ -573,16 +573,41 @@ pub async fn attach_parent(st: &AppState, child: &str, parent: &str) -> PortResu
     .await
 }
 
-/// `child` 从 `parent` 下放出来（`crews::release`）；`to` = 改挂到哪个机组。谁能调同 `attach_parent`。
+/// Actual structural effect observed inside the same collab write transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseEffect {
+    Unchanged,
+    NewParent,
+    ExistingParent,
+    TopLevel,
+    Detached,
+}
+
+/// `child` is released by collab; compute the receipt effect from actual before/after edges,
+/// not the tool's stale preflight view. No sorting or authority policy is duplicated here.
 pub async fn detach_parent(
     st: &AppState,
     parent: &str,
     child: &str,
     to: Option<String>,
-) -> PortResult<()> {
+) -> PortResult<ReleaseEffect> {
     let (p, c) = (parent.to_string(), child.to_string());
     write(st, move |tx| {
-        crewd_collab::crews::release(tx, &c, &p, to.as_deref()).map(|_| ())
+        let before = crewd_collab::crews::parents(tx.conn(), &c)?;
+        let after = crewd_collab::crews::release(tx, &c, &p, to.as_deref())?;
+        Ok(if before == after.parent_ids {
+            ReleaseEffect::Unchanged
+        } else if let Some(to) = to {
+            if before.contains(&to) {
+                ReleaseEffect::ExistingParent
+            } else {
+                ReleaseEffect::NewParent
+            }
+        } else if after.parent_ids.is_empty() {
+            ReleaseEffect::TopLevel
+        } else {
+            ReleaseEffect::Detached
+        })
     })
     .await
 }

@@ -662,3 +662,193 @@ async fn parent_without_a_child_captain_gets_a_legal_human_context_route() {
         );
     }
 }
+
+#[tokio::test]
+async fn release_receipts_describe_actual_same_and_existing_parent_effects() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("child", Some(&f.crew)).await;
+        let sibling = f.add_crew("sibling", Some(&f.crew)).await;
+        let before = port::crew(&f.state, &f.crew)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":f.crew}),
+        )
+        .await;
+        assert!(!r.is_error);
+        assert_eq!(
+            port::crew(&f.state, &f.crew)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            before
+        );
+        let from = port::crew(&f.state, &f.crew).await.unwrap().unwrap().title;
+        let false_receipt = text::r(
+            l,
+            "r.released_to",
+            &[
+                ("child", "child"),
+                ("from", &text::name(&from)),
+                ("to", &text::name(&from)),
+            ],
+        );
+        assert_ne!(
+            r.text, false_receipt,
+            "same-parent no-op falsely claimed movement/append"
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_same_parent",
+                &[("child", "child"), ("from", &text::name(&from))]
+            )
+        );
+        f.rpc("crew.adopt", json!({"crewId":child,"parentId":sibling}))
+            .await;
+        f.add_crew("after-child", Some(&sibling)).await;
+        let dest_before = port::crew(&f.state, &sibling)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        assert_eq!(dest_before[0], child);
+        assert_eq!(dest_before.len(), 2);
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":sibling}),
+        )
+        .await;
+        assert!(!r.is_error);
+        assert_eq!(
+            port::crew(&f.state, &sibling)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            dest_before
+        );
+        assert!(
+            !port::crew(&f.state, &f.crew)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids
+                .contains(&child)
+        );
+        let false_receipt = text::r(
+            l,
+            "r.released_to",
+            &[
+                ("child", "child"),
+                ("from", &text::name(&from)),
+                ("to", "sibling"),
+            ],
+        );
+        assert_ne!(
+            r.text, false_receipt,
+            "existing-parent edge removal falsely claimed append"
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_existing_parent",
+                &[
+                    ("child", "child"),
+                    ("from", &text::name(&from)),
+                    ("to", "sibling")
+                ]
+            )
+        );
+        assert_eq!(
+            port::crew(&f.state, &child)
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_ids,
+            vec![sibling.clone()]
+        );
+    }
+}
+
+#[tokio::test]
+async fn release_new_destination_appends_without_reordering_existing_children() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("child", Some(&f.crew)).await;
+        let dest = f.add_crew("destination", Some(&f.crew)).await;
+        f.add_crew("first", Some(&dest)).await;
+        f.add_crew("second", Some(&dest)).await;
+        let mut expected = port::crew(&f.state, &dest)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":dest}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        expected.push(child.clone());
+        assert_eq!(
+            port::crew(&f.state, &dest)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            expected
+        );
+        assert_eq!(
+            port::crew(&f.state, &child)
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_ids,
+            vec![dest.clone()]
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_to",
+                &[
+                    ("child", "child"),
+                    ("from", "示例机组"),
+                    ("to", "destination")
+                ]
+            )
+        );
+        let repeat = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":dest}),
+        )
+        .await;
+        assert!(repeat.is_error, "a removed source edge is not a new move");
+        assert_eq!(
+            port::crew(&f.state, &dest)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            expected
+        );
+    }
+}

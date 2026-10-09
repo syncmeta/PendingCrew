@@ -894,5 +894,11 @@ Parent crew "{crew}" (number {number}) was created with "{child}" under it, but 
 ## r.released
 "{child}" was detached from "{from}"; it is still under another parent. Carry on with your work.
 
+## r.released_same_parent
+"{child}" stays under "{from}"; the source and destination are the same. Nothing changed, including its position. Carry on with your work.
+
+## r.released_existing_parent
+"{child}" was detached from "{from}". It was already under "{to}" and stays there in the same position; no destination edge was added or reordered. Carry on with your work.
+
 ## r.released_to
 "{child}" was moved from "{from}" to "{to}", at the end of its children. Carry on with your work.
