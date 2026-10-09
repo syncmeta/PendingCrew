@@ -22,7 +22,8 @@
 //! 收下的先后一个个写（[`Core::pump_writes`]）；回答（一串键）交给执行器的 `ExecHandle::answer`——键之间的间隔与
 //! 「每一下之前回读屏幕、框换了就停手」都在执行器里（T10d），编排层**不 sleep**——派生任务只等它的结果，结果以
 //! `Input::WriteDone` 回来，队列才往下走。没有派生任务抢锁，先后不靠运行时的调度。
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use super::notify::{Key, Kind, Notifier, WINDOW_MS};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +31,6 @@ use std::time::Duration;
 use crewd_collab::CollabError;
 use crewd_collab::refusal::{Code, Refusal};
 use crewd_collab::render::safe_name;
-use crewd_exec::driver::SendError;
 use crewd_exec::health::{Health, HealthKind};
 use crewd_exec::session::{
     AnswerOutcome, BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, HeldDraft, SessionEvent,
@@ -38,23 +38,17 @@ use crewd_exec::session::{
 use crewd_store::{StorageKind, StoreError};
 use crewd_term::{DecisionEvent, PendingDecision};
 use crewd_wake::breaker::{LoopBreaker, SYSTEM};
-use crewd_wake::notice::{
-    self, AnswerRefusal, DECISION_ESCALATE_MS, DecisionFacts, NoticeStage, NudgePlan,
-};
+use crewd_wake::notice::{self, AnswerRefusal, DecisionFacts, NudgePlan};
 use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::policy::{self, Gate, LaunchGate};
 use crewd_wake::queue::{self, ids};
 use crewd_wake::text;
-use crewd_wake::{
-    HOUR, Latch, LatchScope, MIN, Ms, NewWake, Priority, QueuedWake, WakeKind, source,
-};
+use crewd_wake::{HOUR, Latch, LatchScope, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::OrchestraConfig;
 use super::clock::Clock;
-use super::exec::{
-    AnswerSteps, Context, ExecHandle, ExecSendError, Executor, Executors, LaunchRequest,
-};
+use super::exec::{AnswerSteps, Context, ExecHandle, Executor, Executors, LaunchRequest};
 use super::hibernate::{HibernateReport, Hibernation};
 use super::hooks::Hooks;
 use super::port::*;
@@ -73,6 +67,9 @@ pub(crate) fn delivery_settles_inflight(outcome: &DeliveryOutcome) -> bool {
 /// 停掉一个会话时，写队列里还没轮到的 nudge / 回答当场回「没在跑」（复审 C）；排着的投递留在队列里，
 /// 那批随 `inflight` 由 `on_exited` 结算。
 fn refuse_queued_nudges(l: &mut Live, session: &str) {
+    if let Some((_, reply)) = l.nudge_pending.take() {
+        let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+    }
     let mut kept = VecDeque::new();
     for job in std::mem::take(&mut l.writes) {
         match job {
@@ -86,6 +83,29 @@ fn refuse_queued_nudges(l: &mut Live, session: &str) {
         }
     }
     l.writes = kept;
+}
+
+/// Nudge command eligibility (not wake readiness). Reused at admission and at the writer head.
+fn text_nudge_refusal(session: &str, l: &Live) -> Option<ControlError> {
+    if l.decision.is_some() {
+        Some(ControlError::Invalid(Refusal::new(
+            Code::OrchestraKeysHumanOnly,
+        )))
+    } else if let Some(draft) = &l.input_draft {
+        Some(ControlError::InputDraft {
+            session: session.into(),
+            text: match draft {
+                HeldDraft::Text(t) => Some(t.clone()),
+                HeldDraft::Unknown => None,
+            },
+        })
+    } else if l.working {
+        Some(ControlError::Invalid(Refusal::new(
+            Code::OrchestraNudgeBusy,
+        )))
+    } else {
+        None
+    }
 }
 
 /// 选屏上框 `d` 的第 `choice` 项（0 起）要按的键（[`notice::answer_plan`] + 键名换字节）。
@@ -226,12 +246,15 @@ pub enum Input {
     WorktreeReady {
         req: StartSession,
         reply: Reply<SessionRow>,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     },
     /// 事件流结束了、却没有 `Exited`（驱动任务崩了 / 被丢了）：当作一次没有退出状态的退出（预检 P3）。
     StreamEnded {
         session: String,
         generator: u64,
+    },
+    BinaryReplaced {
+        crew: String,
     },
     Tick,
     Cmd(Cmd),
@@ -307,7 +330,7 @@ pub enum ControlError {
     Unsupported(String),
     NoWorkdir(String),
     /// 建 worktree 失败（C8）：原因给人看；什么都没留下、没起、没退回共享目录。
-    Worktree(String),
+    Worktree(crate::orchestra::worktree::WorktreeError),
     /// `isolation: true` 但机组没有工作目录（C8：不退回共享目录）：`crew.no_workdir`（机组 id）。
     CrewNoWorkdir(String),
     /// 要起机长、但机组已有机长（M3a 的 `sessions::register` 对此回 `Conflict`）。换机长走 `crew.setCaptain` / handoff。
@@ -408,7 +431,7 @@ impl ControlError {
                 r(Code::SessionExecutorUnavailable).arg("executor", executor)
             }
             Self::NoWorkdir(s) => r(Code::SessionNoWorkdir).arg("session", s),
-            Self::Worktree(detail) => r(Code::SessionWorktreeFailed).arg("detail", detail),
+            Self::Worktree(error) => error.refusal(),
             Self::CrewNoWorkdir(crew) => r(Code::CrewNoWorkdir).arg("crew", crew),
             Self::CaptainTaken(crew) => r(Code::SessionCaptainExists).arg("crew", crew),
             Self::Invalid(refusal) | Self::Refused { refusal, .. } => refusal.clone(),
@@ -491,6 +514,9 @@ pub enum Cmd {
         fingerprint: String,
         choice: usize,
         reply: Reply<AnswerReport>,
+    },
+    Decisions {
+        reply: Reply<Vec<crewd_proto::orchestra::PendingDecisionView>>,
     },
     Handle {
         session: String,
@@ -577,6 +603,8 @@ pub struct Live {
     pub decision: Option<PendingDecision>,
     /// 执行器报的输入框草稿（`SessionEvent::InputDraft`，T10d）：有 = 它正挡着一笔投递，不再往里送（`input_draft`）。
     pub input_draft: Option<HeldDraft>,
+    pub input_draft_since_ms: Option<Ms>,
+    pub nudge_pending: Option<(u64, Reply<()>)>,
     pub inflight: Option<Inflight>,
     /// 人从客户端叫停的（不是停机）。
     pub stopping: bool,
@@ -591,37 +619,30 @@ pub struct Live {
     /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递、nudge 与回答按 actor 收下的先后排进来，
     /// 由 [`Core::pump_writes`] 一个个写；一次回答的整串键按完才轮到下一个，两次写不交错。
     pub writes: VecDeque<Write>,
-    /// 一次回答正在执行器里按（结果以 `Input::WriteDone` 回来，队列才往下走）。
+    /// Writer is occupied by an answer (WriteDone) or a text nudge awaiting its final Delivery.
     pub writing: bool,
 }
 
-/// 回答的回执往哪儿交：nudge 只要「按了」，[`Cmd::Answer`] 要回读的结果。
-pub enum AnswerReply {
-    Nudge(Reply<()>),
-    Answer(Reply<AnswerReport>),
-}
-
+pub struct AnswerReply(pub Reply<AnswerReport>);
 impl AnswerReply {
     pub(crate) fn send(self, r: Result<AnswerReport, ControlError>) {
-        match self {
-            Self::Nudge(tx) => {
-                let _ = tx.send(r.map(|_| ()));
-            }
-            Self::Answer(tx) => {
-                let _ = tx.send(r);
-            }
-        }
+        let _ = self.0.send(r);
     }
+}
+
+pub enum AnswerAction {
+    Terminal(AnswerSteps),
+    Choice(usize),
 }
 
 /// 写队列的一项（[`Live::writes`]）。
 pub enum Write {
-    /// 人 / agent 的文字 nudge：走 `send`（三拍提交）；收下就回执。
+    /// Agent text nudge: send normally, reply only on matching final Delivery.
     Nudge { text: String, reply: Reply<()> },
     /// 回答待决策框的一串键（`ExecHandle::answer`：执行器每一下之前回读屏幕，框不是 `expect` 就停手）。
     Answer {
         expect: String,
-        steps: AnswerSteps,
+        action: AnswerAction,
         reply: AnswerReply,
     },
     /// 一批唤醒的正文：轮到它时 `send`，编号记进 `Live::inflight`（收下时已占好位）。
@@ -643,7 +664,6 @@ pub struct Starting {
 pub struct Raised {
     pub at: Ms,
     pub fingerprint: String,
-    pub escalated: bool,
 }
 
 pub struct Core<P: Port> {
@@ -661,7 +681,10 @@ pub struct Core<P: Port> {
     pub(crate) captain_pending: BTreeSet<String>,
     pub(crate) next_generator: u64,
     pub(crate) gate: LaunchGate,
+    pub(crate) notifier: Notifier<P>,
     pub(crate) decisions: HashMap<String, Raised>,
+    pub(crate) seen_decisions: HashSet<(String, String)>,
+    pub(crate) quota_blocked: HashMap<String, HashSet<String>>,
     /// 重启后等人答「恢复」的 session（§22.7 Q1）：唤醒照常入队，但不被自动拉起（人 @ 它例外，C4）。
     pub(crate) held: BTreeSet<String>,
     /// `boot` 结束时队列里最大的唤醒 id：比它新的人类消息唤醒 = 询问开出之后人 @ 的（C4）。
@@ -737,6 +760,7 @@ impl<P: Port> Core<P> {
         let seed = cfg.jitter_seed.unwrap_or(clock.now().0 as u64);
         let jitter = queue::Jitter::new(seed, cfg.retry_jitter);
         Ok(Self {
+            notifier: Notifier::new(port.clone()),
             port,
             execs,
             hooks,
@@ -750,6 +774,8 @@ impl<P: Port> Core<P> {
             next_generator: 0,
             gate,
             decisions: HashMap::new(),
+            seen_decisions: HashSet::new(),
+            quota_blocked: HashMap::new(),
             held: BTreeSet::new(),
             held_watermark: 0,
             restart_prompt: None,
@@ -801,6 +827,15 @@ impl<P: Port> Core<P> {
                 Some(l) if l.generator == generator => self.on_exited(&session, None).await,
                 _ => Ok(()),
             },
+            Input::BinaryReplaced { crew } => {
+                self.notifier
+                    .raise(
+                        Key::new(Kind::BinaryReplaced, "machine"),
+                        &crew,
+                        text::get(self.lang(), "notice.binary_replaced").into(),
+                    )
+                    .await
+            }
             Input::Tick => self.on_tick().await,
             Input::Cmd(c) => {
                 self.on_cmd(c).await;
@@ -881,6 +916,28 @@ impl<P: Port> Core<P> {
                 if let Err(e) = self.answer(&session, &fingerprint, choice, reply).await {
                     eprintln!("crewd: 编排：{e:#}");
                 }
+            }
+            Cmd::Decisions { reply } => {
+                let mut rows: Vec<_> = self
+                    .live
+                    .iter()
+                    .filter_map(|(session, l)| {
+                        l.decision
+                            .as_ref()
+                            .map(|d| crewd_proto::orchestra::PendingDecisionView {
+                                session_id: session.clone(),
+                                crew_id: l.crew.clone(),
+                                title: l.name.clone(),
+                                decision: super::control::decision_view(d),
+                                since_ms: self
+                                    .decisions
+                                    .get(session)
+                                    .map_or(self.now().0, |r| r.at.0),
+                            })
+                    })
+                    .collect();
+                rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+                let _ = reply.send(Ok(rows));
             }
             Cmd::Handle { session, reply } => {
                 let _ = reply.send(self.live.get(&session).map(|l| l.handle.clone()));
@@ -1042,7 +1099,7 @@ impl<P: Port> Core<P> {
         &mut self,
         req: StartSession,
         reply: Reply<SessionRow>,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     ) {
         self.preparing = self.preparing.saturating_sub(1);
         if req.captain {
@@ -1223,57 +1280,27 @@ impl<P: Port> Core<P> {
             .filter(|l| !l.stopping && !l.halting && !l.hibernate_cut)
     }
 
-    /// nudge（`crewd_wake::notice::nudge_plan` 的契约 + T10d）：空的拒绝（绝不变成一个裸回车）。
-    /// - 文本走 `send`（三拍提交）。执行器已经报了草稿（[`Live::input_draft`]）就当场拒绝（`session.input_draft` /
-    ///   `session.input_draft_unknown`）。**没报过草稿时收下即回执**：回执的意思是「已排进会话」，不是「已敲进去」——
-    ///   执行器写正文之前还会再看一次输入框，那时有草稿就挡着（T10d 草稿闸），等人清掉再写（fix M4）。
-    /// - 按键只用来答屏上的待决策框，经执行器的安全按键（`ExecHandle::answer`，`expect` = 收下时的框，第一下还核收下时的
-    ///   高亮，fix M1）：数字按 [`notice::answer_plan`] 选第 N 项（没编号的框拒绝数字）；键名（`enter` / `esc` / `up` /
-    ///   `down`）原样按一下。屏上没有框 → `decision.none`。
-    /// - 打断：`interrupt`（fix M7，M3b 的 `nudge_session` 发它）与 `esc` 在屏上没有框时 = 打断这一轮
-    ///   （`ExecHandle::interrupt`）；没在干活 = `session.nothing_to_interrupt`（fix M6）。屏上有框时两者都是对那个框
-    ///   按一下 Esc（同上，经安全按键：框换了就不按）。
-    ///
-    /// 都排进这个会话的写队列（[`Live::writes`]），与投递按 actor 收下的先后写，不交错。
+    /// Agent command policy only; wake readiness remains explain::live_blocker.
+    /// Late drafts are still fenced by the executor immediately before writing/submitting.
     async fn nudge(&mut self, session: &str, input: &str, reply: Reply<()>) -> anyhow::Result<()> {
         let Some(l) = self.writable(session) else {
             let _ = reply.send(Err(ControlError::NotRunning(session.into())));
             return Ok(());
         };
         let Some(plan) = notice::nudge_plan(input) else {
-            // 不会替它按一个裸回车（那会选中当前高亮的那一项）。
-            let r = Refusal::new(Code::OrchestraNudgeEmpty);
-            let _ = reply.send(Err(ControlError::Invalid(r)));
+            let _ = reply.send(Err(ControlError::Invalid(Refusal::new(
+                Code::OrchestraNudgeEmpty,
+            ))));
             return Ok(());
         };
-        let token = input.trim();
-        let interrupt = token.eq_ignore_ascii_case("interrupt");
-        let plan = if interrupt {
-            NudgePlan::Keys(vec![vec![0x1b]])
-        } else {
-            plan
-        };
-        let keys = match plan {
-            NudgePlan::Text(text) => {
-                if let Some(draft) = &l.input_draft {
-                    let e = ControlError::InputDraft {
-                        session: session.into(),
-                        text: match draft {
-                            HeldDraft::Text(t) => Some(t.clone()),
-                            HeldDraft::Unknown => None,
-                        },
-                    };
-                    let _ = reply.send(Err(e));
-                    return Ok(());
-                }
-                l.writes.push_back(Write::Nudge { text, reply });
-                return self.pump_writes(session).await;
-            }
-            NudgePlan::Keys(keys) => keys,
-        };
-        let Some(d) = l.decision.clone() else {
-            if interrupt || token.eq_ignore_ascii_case("esc") {
-                // 屏上没有框：打断这一轮（claude 写一个 Esc；codex 发 turn/interrupt）；没在干活就没什么可打断的。
+        if plan == NudgePlan::HumanOnly || (plan == NudgePlan::Interrupt && l.decision.is_some()) {
+            let _ = reply.send(Err(ControlError::Invalid(Refusal::new(
+                Code::OrchestraKeysHumanOnly,
+            ))));
+            return Ok(());
+        }
+        match plan {
+            NudgePlan::Interrupt => {
                 let r = if l.working {
                     l.handle
                         .interrupt()
@@ -1282,39 +1309,18 @@ impl<P: Port> Core<P> {
                     Err(ControlError::NothingToInterrupt(session.into()))
                 };
                 let _ = reply.send(r);
-                return Ok(());
             }
-            let _ = reply.send(Err(ControlError::NoDecision(session.into())));
-            return Ok(());
-        };
-        let steps = if token.bytes().all(|b| b.is_ascii_digit()) {
-            if !d.numbered {
-                let r = Refusal::new(Code::OrchestraNudgeDigitsUnnumbered);
-                let _ = reply.send(Err(ControlError::Invalid(r)));
-                return Ok(());
-            }
-            // 第 N 项（1 起）= 下标 N-1；0 与超出的一样算超出。
-            let choice = token.parse::<usize>().unwrap_or(0).wrapping_sub(1);
-            match plan_steps(session, &d, choice) {
-                Ok(steps) => steps,
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                    return Ok(());
+            NudgePlan::Text(text) => {
+                if let Some(error) = text_nudge_refusal(session, l) {
+                    let _ = reply.send(Err(error));
+                } else {
+                    l.writes.push_back(Write::Nudge { text, reply });
+                    return self.pump_writes(session).await;
                 }
             }
-        } else {
-            // 键名：第一下按之前高亮还得在收下时那一项（被人挪了 = 框变了，fix M1）。
-            keys.into_iter()
-                .enumerate()
-                .map(|(i, k)| (k, if i == 0 { d.selected } else { None }))
-                .collect()
-        };
-        l.writes.push_back(Write::Answer {
-            expect: d.fingerprint(),
-            steps,
-            reply: AnswerReply::Nudge(reply),
-        });
-        self.pump_writes(session).await
+            NudgePlan::HumanOnly => unreachable!(),
+        }
+        Ok(())
     }
 
     /// 回答屏上的待决策框（[`Cmd::Answer`]，T10d）：在跑、框还是调用方看到的那个（否则当场 `DecisionChanged`，什么都不排）、
@@ -1341,18 +1347,29 @@ impl<P: Port> Core<P> {
             }));
             return Ok(());
         }
-        let steps = match plan_steps(session, &d, choice) {
-            Ok(steps) => steps,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return Ok(());
-            }
+        if choice >= d.options.len() {
+            let _ = reply.send(Err(ControlError::Invalid(
+                Refusal::new(Code::DecisionOutOfRange)
+                    .arg("session", session)
+                    .arg("options", d.options.len().to_string()),
+            )));
+            return Ok(());
+        }
+        let action = match d.kind {
+            crewd_term::DecisionKind::RunnerRequest { .. } => AnswerAction::Choice(choice),
+            crewd_term::DecisionKind::Terminal => match plan_steps(session, &d, choice) {
+                Ok(steps) => AnswerAction::Terminal(steps),
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return Ok(());
+                }
+            },
         };
         // 执行器核的是调用方看到的那个框（不是 actor 此刻记的）：两道检查各自独立成立。
         l.writes.push_back(Write::Answer {
             expect: fingerprint.to_string(),
-            steps,
-            reply: AnswerReply::Answer(reply),
+            action,
+            reply: AnswerReply(reply),
         });
         self.pump_writes(session).await
     }
@@ -1374,24 +1391,30 @@ impl<P: Port> Core<P> {
             };
             match job {
                 Write::Nudge { text, reply } => {
-                    let r = l
-                        .handle
-                        .send(text, &Context::new())
-                        .map(|_| ())
-                        .map_err(|e| match e {
-                            ExecSendError::Send(SendError::Closed) => {
-                                ControlError::NotRunning(session.into())
-                            }
-                            ExecSendError::Send(SendError::EmptyText) => {
-                                ControlError::Invalid(Refusal::new(Code::OrchestraNudgeEmpty))
-                            }
-                            other => ControlError::internal(other),
-                        });
-                    let _ = reply.send(r);
+                    if let Some(error) = text_nudge_refusal(session, l) {
+                        let _ = reply.send(Err(error));
+                        continue;
+                    }
+                    match l.handle.send(text, &Context::new()) {
+                        Ok(id) => {
+                            l.nudge_pending = Some((id, reply));
+                            l.writing = true;
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            let error = match e {
+                                super::exec::ExecSendError::Send(
+                                    crewd_exec::driver::SendError::Closed,
+                                ) => ControlError::NotRunning(session.into()),
+                                other => ControlError::internal(other),
+                            };
+                            let _ = reply.send(Err(error));
+                        }
+                    }
                 }
                 Write::Answer {
                     expect,
-                    steps,
+                    action,
                     reply,
                 } => {
                     l.writing = true;
@@ -1401,7 +1424,13 @@ impl<P: Port> Core<P> {
                     let session = session.to_string();
                     // 不 sleep：键之间的间隔与每一下之前的回读都在执行器里（T10d），这里只等结果。
                     tokio::spawn(async move {
-                        let r = match handle.answer(expect, steps).await {
+                        let outcome = match action {
+                            AnswerAction::Terminal(steps) => handle.answer(expect, steps).await,
+                            AnswerAction::Choice(choice) => {
+                                handle.answer_choice(expect, choice).await
+                            }
+                        };
+                        let r = match outcome {
                             Ok(AnswerOutcome::Answered { cleared, now }) => {
                                 Ok(AnswerReport { cleared, now })
                             }
@@ -1607,6 +1636,8 @@ impl<P: Port> Core<P> {
                         health: None,
                         decision: None,
                         input_draft: None,
+                        input_draft_since_ms: None,
+                        nudge_pending: None,
                         inflight,
                         stopping: st.stop_requested,
                         halting: st.halt_requested && !st.stop_requested,
@@ -1666,20 +1697,15 @@ impl<P: Port> Core<P> {
         row: &SessionRow,
         detail: &str,
     ) -> anyhow::Result<()> {
-        let already = self
-            .port
-            .session(&row.id)
-            .await?
-            .and_then(|r| r.resume_failed_at)
-            .is_some();
-        let patch = SessionPatch {
-            resume_failed_at: Some(Some(self.now())),
-            ..Default::default()
-        };
-        self.port.patch_session(&row.id, patch).await?;
-        if already {
-            return Ok(());
-        }
+        self.port
+            .patch_session(
+                &row.id,
+                SessionPatch {
+                    resume_failed_at: Some(Some(self.now())),
+                    ..Default::default()
+                },
+            )
+            .await?;
         let text = text::render(
             self.lang(),
             "resume.failed.group",
@@ -1688,26 +1714,14 @@ impl<P: Port> Core<P> {
                 ("detail", &safe_name(detail)),
             ],
         );
-        self.port
-            .post_system(self.alert_audience(&row.crew_id, row.captain), text)
+        self.notifier
+            .raise(Key::new(Kind::LaunchFailed, &row.id), &row.crew_id, text)
             .await
-    }
-
-    /// 告警发给谁：worker 的事 → 本机组大厅 @群主；机长自己的事 → 根机组人类群 @人（绝不 @ 自己）。
-    pub(crate) fn alert_audience(&self, crew: &str, is_captain: bool) -> Audience {
-        if is_captain {
-            Audience::HumanChannel { crew: crew.into() }
-        } else {
-            Audience::Lobby {
-                crew: crew.into(),
-                mention_owner: true,
-            }
-        }
     }
 
     /// 一批没送进去（终局失败）：**一次** [`Port::ack`]（C24，全有或全无）——每一行按库里的次数（claim 时记的，
     /// 不是这里手里那份）退避 30s / 2min 回 pending，第 `MAX_ATTEMPTS` 次放弃记 dropped（裁定 9）。
-    /// 放弃时告警一次（任何优先级，C19）；已记过「起不来」的 session 不再告（那条已经说了）。
+    /// Give-ups of every priority join the crew notification window (T10c).
     /// 控制者裁定 C2 让它在这里先落地（拉起后、投进去之前进程就没了 = 一次失败）；Task 8 的投递失败也走它。
     pub(crate) async fn fail_batch(&mut self, batch: Batch, error: &str) -> anyhow::Result<()> {
         if batch.ids().is_empty() {
@@ -1769,7 +1783,7 @@ impl<P: Port> Core<P> {
         Ok(true)
     }
 
-    /// 一个 session 的唤醒到上限放弃了：告警一次（任何优先级，C19）；已记过「起不来」的 session 不再告（那条已经说了）。
+    /// Give-ups of every priority join a ten-minute crew window; count each given-up wake once.
     pub(crate) async fn alert_gave_up(
         &mut self,
         session: &str,
@@ -1782,22 +1796,15 @@ impl<P: Port> Core<P> {
         let Some(row) = self.port.session(session).await? else {
             return Ok(());
         };
-        if row.resume_failed_at.is_some() {
-            return Ok(());
-        }
-        let attempts = queue::MAX_ATTEMPTS.to_string();
-        let msg = text::render(
-            self.lang(),
-            "delivery.failed.group",
-            &[
-                ("name", &safe_name(&row.name())),
-                ("attempts", &attempts),
-                ("error", &safe_name(error)),
-            ],
+        self.notifier.give_up(
+            &row.crew_id,
+            session,
+            &row.name(),
+            gave_up.len(),
+            error,
+            self.now(),
         );
-        self.port
-            .post_system(self.alert_audience(&row.crew_id, row.captain), msg)
-            .await
+        Ok(())
     }
 
     // —— 会话事件
@@ -1846,6 +1853,31 @@ impl<P: Port> Core<P> {
                     }
                 }
                 self.port.patch_session(session, patch).await?;
+                if on {
+                    let l = &self.live[session];
+                    let msg = text::render(
+                        self.lang(),
+                        "notice.recovered",
+                        &[("name", &safe_name(&l.name))],
+                    );
+                    let executor = l.executor.clone();
+                    let captain = l.captain;
+                    self.notifier
+                        .clear(&Key::new(Kind::LaunchFailed, session), msg.clone())
+                        .await?;
+                    self.notifier
+                        .clear(&Key::new(Kind::BriefUndelivered, session), msg.clone())
+                        .await?;
+                    if captain {
+                        let blocked = self.quota_blocked.entry(executor.clone()).or_default();
+                        blocked.remove(session);
+                        if blocked.is_empty() {
+                            self.notifier
+                                .clear(&Key::new(Kind::Quota, &executor), msg)
+                                .await?;
+                        }
+                    }
+                }
                 if !on {
                     log_err(self.on_idle(session).await);
                 }
@@ -1874,15 +1906,39 @@ impl<P: Port> Core<P> {
             // 清掉了就再试一次投递。
             SessionEvent::InputDraft(draft) => {
                 let cleared = draft.is_none() && l.input_draft.is_some();
+                if l.input_draft.is_none() && draft.is_some() {
+                    l.input_draft_since_ms = Some(now);
+                }
+                if draft.is_none() {
+                    l.input_draft_since_ms = None;
+                }
                 l.input_draft = draft;
                 if cleared {
+                    let msg = text::render(
+                        self.lang(),
+                        "notice.recovered",
+                        &[("name", &safe_name(&self.live[session].name))],
+                    );
+                    self.notifier
+                        .clear(&Key::new(Kind::InputDraft, session), msg)
+                        .await?;
                     log_err(self.try_deliver(session).await.map(|_| ()));
                 }
             }
             SessionEvent::Health(h) => {
                 let quota = h.as_ref().is_some_and(|h| h.kind.is_quota());
                 let cleared = h.is_none();
+                let brief = h
+                    .as_ref()
+                    .is_some_and(|h| h.kind == HealthKind::BriefUndelivered)
+                    && !l
+                        .health
+                        .as_ref()
+                        .is_some_and(|h| h.kind == HealthKind::BriefUndelivered);
                 l.health = h;
+                if brief {
+                    self.brief_undelivered(session).await?;
+                }
                 if quota {
                     self.schedule_quota(session).await?;
                 }
@@ -1906,6 +1962,21 @@ impl<P: Port> Core<P> {
             return Ok(());
         };
         // 还排在写队列里的 nudge / 回答：进程没了，回执「没在跑」（投递的那批随 `inflight` 在下面结算）。
+        if l.input_draft.is_some() {
+            let msg = text::render(
+                self.lang(),
+                "notice.recovered",
+                &[("name", &safe_name(&l.name))],
+            );
+            log_err(
+                self.notifier
+                    .clear(&Key::new(Kind::InputDraft, session), msg)
+                    .await,
+            );
+        }
+        if let Some((_, reply)) = l.nudge_pending.take() {
+            let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+        }
         for job in std::mem::take(&mut l.writes) {
             match job {
                 Write::Nudge { reply, .. } => {
@@ -2004,12 +2075,7 @@ impl<P: Port> Core<P> {
         let Some(l) = self.live.get(session) else {
             return Ok(());
         };
-        let (crew, captain, name, executor) = (
-            l.crew.clone(),
-            l.captain,
-            l.name.clone(),
-            l.executor.clone(),
-        );
+        let (crew, name, executor) = (l.crew.clone(), l.name.clone(), l.executor.clone());
         let lang = self.lang();
         let (id_s, said_s) = (safe_name(id), safe_name(said));
         let diag = match self
@@ -2032,7 +2098,10 @@ impl<P: Port> Core<P> {
         );
         self.port
             .post_system(
-                self.alert_audience(&crew, captain),
+                Audience::HumanChannel {
+                    crew: crew.clone(),
+                    mention_human: false,
+                },
                 format!("{group}\n{diag}"),
             )
             .await?;
@@ -2077,11 +2146,29 @@ impl<P: Port> Core<P> {
         name: &str,
         crew: &str,
     ) -> anyhow::Result<()> {
+        let captain = self.port.session(session).await?.is_some_and(|r| r.captain);
+        if captain {
+            self.quota_blocked
+                .entry(executor.into())
+                .or_default()
+                .insert(session.into());
+            let msg = text::render(
+                self.lang(),
+                "notice.quota.captain",
+                &[
+                    ("name", &safe_name(name)),
+                    ("executor", &safe_name(executor)),
+                ],
+            );
+            self.notifier
+                .raise(Key::new(Kind::Quota, executor), crew, msg)
+                .await?;
+        }
         if policy::quota_pending(&self.port.pending(session).await?) {
             return Ok(());
         }
         let now = self.now();
-        // 拿不到（含挂钩到期）= None → 45 分钟退避、群里照实说。
+        // 拿不到（含挂钩到期）= None → 45 分钟退避；worker 不发群消息。
         let reset = within(
             self.cfg.hook_timeout,
             "QuotaSource",
@@ -2101,29 +2188,34 @@ impl<P: Port> Core<P> {
             origin: SYSTEM.into(),
         })
         .await?;
-        let minutes = (plan.fire_at.since(now) + MIN - 1) / MIN;
-        let key = if plan.fallback {
-            "quota.fallback"
-        } else {
-            "quota.scheduled"
-        };
+        Ok(())
+    }
+
+    async fn brief_undelivered(&mut self, session: &str) -> anyhow::Result<()> {
+        let l = &self.live[session];
+        let (crew, name, captain) = (l.crew.clone(), l.name.clone(), l.captain);
         let msg = text::render(
-            lang,
-            key,
-            &[
-                ("name", &safe_name(name)),
-                ("minutes", &minutes.to_string()),
-            ],
+            self.lang(),
+            "brief.undelivered",
+            &[("name", &safe_name(&name))],
         );
-        self.port
-            .post_system(
-                Audience::Lobby {
-                    crew: crew.into(),
-                    mention_owner: false,
-                },
-                msg,
-            )
-            .await
+        if captain {
+            self.notifier
+                .raise(Key::new(Kind::BriefUndelivered, session), &crew, msg)
+                .await?;
+        } else if let Some(captain) = self.port.captain(&crew).await? {
+            self.enqueue(NewWake {
+                session: captain,
+                kind: WakeKind::System,
+                source: source::system(&format!("brief-undelivered:{session}:{}", self.now().0)),
+                priority: Priority::System,
+                not_before: self.now(),
+                note: Some(msg),
+                origin: SYSTEM.into(),
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     // —— 待决策（裁定 14）
@@ -2135,32 +2227,25 @@ impl<P: Port> Core<P> {
         now: Ms,
     ) -> anyhow::Result<()> {
         let fingerprint = d.fingerprint();
-        if self
+        let same = self
             .decisions
             .get(session)
-            .is_some_and(|r| r.fingerprint == fingerprint)
+            .is_some_and(|r| r.fingerprint == fingerprint);
+        if !same {
+            self.decisions.insert(
+                session.into(),
+                Raised {
+                    at: now,
+                    fingerprint: fingerprint.clone(),
+                },
+            );
+        }
+        if self
+            .seen_decisions
+            .contains(&(session.into(), fingerprint.clone()))
         {
             return Ok(());
         }
-        self.decisions.insert(
-            session.into(),
-            Raised {
-                at: now,
-                fingerprint,
-                escalated: false,
-            },
-        );
-        self.post_decision(session, d, NoticeStage::First, 0).await
-    }
-
-    /// 名字、session、屏幕上抓来的提示与选项都是外来文字：先过 `safe_name`（`crewd_wake::notice` 模块文档的约定）。
-    async fn post_decision(
-        &self,
-        session: &str,
-        d: &PendingDecision,
-        stage: NoticeStage,
-        waited_min: i64,
-    ) -> anyhow::Result<()> {
         let Some(l) = self.live.get(session) else {
             return Ok(());
         };
@@ -2169,54 +2254,53 @@ impl<P: Port> Core<P> {
             options: d.options.iter().map(|o| safe_name(o)).collect(),
             numbered: d.numbered,
         };
-        let n = notice::decision_notice(
+        let msg = notice::decision_notice(
             self.lang(),
-            stage,
             &safe_name(&l.name),
             &safe_name(session),
-            l.captain,
             &facts,
-            waited_min,
         );
-        let to = if n.to_human {
-            Audience::HumanChannel {
-                crew: l.crew.clone(),
-            }
-        } else {
-            Audience::Lobby {
-                crew: l.crew.clone(),
-                mention_owner: true,
-            }
-        };
-        self.port.post_system(to, n.text).await
+        self.port
+            .post_system(
+                Audience::HumanChannel {
+                    crew: l.crew.clone(),
+                    mention_human: true,
+                },
+                msg,
+            )
+            .await?;
+        self.seen_decisions.insert((session.into(), fingerprint));
+        Ok(())
     }
 
-    async fn escalate_decisions(&mut self) -> anyhow::Result<()> {
+    async fn notify_drafts(&mut self) -> anyhow::Result<()> {
         let now = self.now();
-        let due: Vec<String> = self
-            .decisions
+        let due: Vec<_> = self
+            .live
             .iter()
-            .filter(|(_, r)| !r.escalated && now.since(r.at) >= DECISION_ESCALATE_MS)
-            .map(|(s, _)| s.clone())
+            .filter(|(_, l)| {
+                l.input_draft_since_ms
+                    .is_some_and(|t| now.since(t) >= WINDOW_MS)
+            })
+            .map(|(s, l)| {
+                (
+                    s.clone(),
+                    l.crew.clone(),
+                    l.name.clone(),
+                    l.input_draft.clone(),
+                )
+            })
             .collect();
-        for s in due {
-            let Some(r) = self.decisions.get_mut(&s) else {
-                continue;
+        for (session, crew, name, draft) in due {
+            let key = if draft == Some(HeldDraft::Unknown) {
+                "session.input_draft_unknown"
+            } else {
+                "notice.input_draft"
             };
-            r.escalated = true;
-            let waited = now.since(r.at) / MIN;
-            let Some((d, captain)) = self
-                .live
-                .get(&s)
-                .and_then(|l| l.decision.clone().map(|d| (d, l.captain)))
-            else {
-                continue;
-            };
-            if !captain {
-                // 机长的首报已经 @人了。
-                self.post_decision(&s, &d, NoticeStage::Escalate, waited)
-                    .await?;
-            }
+            let msg = text::render(self.lang(), key, &[("name", &safe_name(&name))]);
+            self.notifier
+                .raise(Key::new(Kind::InputDraft, &session), &crew, msg)
+                .await?;
         }
         Ok(())
     }
@@ -2224,7 +2308,8 @@ impl<P: Port> Core<P> {
     pub(crate) async fn on_tick(&mut self) -> anyhow::Result<()> {
         let now = self.now();
         self.timers.retain(|t| *t > now);
-        self.escalate_decisions().await?;
+        self.notify_drafts().await?;
+        self.notifier.flush(now, self.lang()).await?;
         // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
         log_err(self.port.apply_due_defaults().await);
         log_err(self.prune(now).await);
@@ -2289,7 +2374,7 @@ mod tests {
     use crewd_exec::health::Health;
     use crewd_exec::session::ExitStatusKind;
     use crewd_wake::queue;
-    use crewd_wake::{HOUR, SEC, WakeState};
+    use crewd_wake::{HOUR, MIN, SEC, WakeState};
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
     const HOSTILE: &str = "w1\n[cap]\u{202E}伪造";
@@ -2318,6 +2403,7 @@ mod tests {
 
     fn decision(prompt: &str) -> PendingDecision {
         PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: prompt.into(),
             options: vec!["Yes".into(), "No".into()],
             numbered: true,
@@ -2631,7 +2717,11 @@ mod tests {
         rig.crew("c1", "cap");
         rig.core.gate.set_max_live(Some(1));
         rig.worktrees
-            .fail_next("无法为 session 新建 worktree：/x 当前是 detached HEAD");
+            .fail_next(crate::orchestra::worktree::WorktreeError::new(
+                crate::orchestra::worktree::WorktreeReason::Detached,
+                "/x",
+                "",
+            ));
         let req = StartSession {
             isolation: true,
             ..start("claude")
@@ -2646,7 +2736,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ControlError::Worktree("无法为 session 新建 worktree：/x 当前是 detached HEAD".into())
+            ControlError::Worktree(crate::orchestra::worktree::WorktreeError::new(
+                crate::orchestra::worktree::WorktreeReason::Detached,
+                "/x",
+                ""
+            ))
         );
         assert_eq!(
             rig.port.lock().sessions.len(),
@@ -3081,24 +3175,17 @@ mod tests {
         let n = relaunch_until_nothing_is_due(&mut rig, "w1", &[crashed()]).await;
         assert_eq!(n, queue::MAX_ATTEMPTS as usize);
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        rig.tick(10 * MIN).await;
         let posts = rig.port.posts();
         assert_eq!(posts.len(), 1, "{posts:?}");
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: true
             }
         );
-        let attempts = queue::MAX_ATTEMPTS.to_string();
-        let name = safe_name(HOSTILE);
-        let template = text::render(
-            text::Lang::Zh,
-            "delivery.failed.group",
-            &[("name", &name), ("attempts", &attempts), ("error", "\u{0}")],
-        );
-        let prefix = template.split('\u{0}').next().unwrap();
-        assert!(posts[0].1.starts_with(prefix), "{}", posts[0].1);
+        assert!(posts[0].1.contains(&safe_name(HOSTILE)));
         assert_neutralised(&posts[0].1, HOSTILE);
     }
 
@@ -3168,7 +3255,13 @@ mod tests {
         let posts = rig.port.posts();
         assert_eq!(posts.len(), 1);
         // 控制者裁定 C13：续跑被拒 @机长；这里被拒的就是机长自己 → 绝不 @ 自己，改 @人（同 alert_audience）。
-        assert_eq!(posts[0].0, Audience::HumanChannel { crew: "c1".into() });
+        assert_eq!(
+            posts[0].0,
+            Audience::HumanChannel {
+                crew: "c1".into(),
+                mention_human: false
+            }
+        );
         assert!(
             posts[0].1.contains(said) && posts[0].1.contains("/synthetic/p/old-1.jsonl"),
             "{}",
@@ -3216,9 +3309,9 @@ mod tests {
         let posts = rig.port.posts();
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: false
             }
         );
         assert_neutralised(&posts[0].1, HOSTILE);
@@ -3289,9 +3382,9 @@ mod tests {
         assert_eq!(posts.len(), 1, "已经记过就不再告警：{posts:?}");
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: true
             }
         );
         assert!(posts[0].1.contains("合成：claude 不在"));
@@ -3326,7 +3419,10 @@ mod tests {
         rig.run("cap").await;
         assert_eq!(
             rig.port.posts()[0].0,
-            Audience::HumanChannel { crew: "c1".into() }
+            Audience::HumanChannel {
+                crew: "c1".into(),
+                mention_human: true
+            }
         );
     }
 
@@ -3372,12 +3468,7 @@ mod tests {
             w[0].note.as_deref(),
             Some(text::get(text::Lang::Zh, "quota.wake"))
         );
-        let want = text::render(
-            text::Lang::Zh,
-            "quota.fallback",
-            &[("name", "w1"), ("minutes", "45")],
-        );
-        assert!(rig.port.posts().iter().any(|(_, t)| *t == want));
+        assert!(rig.port.posts().is_empty(), "worker quota is health only");
     }
 
     struct ResetIn30;
@@ -3402,21 +3493,91 @@ mod tests {
         let w = rig.port.wakes_of("w1");
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].not_before, T0.add(31 * MIN));
-        let name = safe_name(HOSTILE);
-        let want = text::render(
-            text::Lang::Zh,
-            "quota.scheduled",
-            &[("name", &name), ("minutes", "31")],
-        );
-        assert!(
-            rig.port.posts().iter().any(|(_, t)| *t == want),
-            "{:?}",
-            rig.port.posts()
-        );
+        assert!(rig.port.posts().is_empty(), "worker quota is health only");
     }
 
     #[tokio::test]
-    async fn worker_decision_goes_to_the_owner_once_then_escalates_to_the_human() {
+    async fn t10c_worker_box_is_human_only_once_without_escalation() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        for _ in 0..2 {
+            rig.emit(
+                "w1",
+                SessionEvent::Decision(DecisionEvent::Appeared(decision("Trust?"))),
+            )
+            .await;
+        }
+        rig.tick(6 * MIN).await;
+        assert_eq!(rig.port.posts().len(), 1, "no escalation");
+        assert_eq!(rig.port.lock().posted[0].0, "c1/human");
+        assert_eq!(rig.port.lock().posted_mentions, [vec!["human".to_string()]]);
+    }
+
+    #[tokio::test]
+    async fn t10c_agent_never_answers_a_box_or_sends_keys() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        rig.emit(
+            "cap",
+            SessionEvent::Decision(DecisionEvent::Appeared(decision("Trust?"))),
+        )
+        .await;
+        for input in ["1", "enter", "up", "down", "esc", "interrupt", "free text"] {
+            let r = nudge(&mut rig, "cap", input).await;
+            assert!(matches!(r, Err(ControlError::Invalid(_))), "{input}: {r:?}");
+        }
+        assert!(!rig.exec.lock().answers.contains_key("cap"));
+        assert!(rig.exec.sent("cap").is_empty());
+    }
+
+    #[tokio::test]
+    async fn t10c_text_nudge_waits_for_matching_final_delivery() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let (tx, mut rx) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Nudge {
+                session: "cap".into(),
+                input: "hello".into(),
+                reply: tx,
+            }))
+            .await;
+        assert!(
+            matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "queued is not delivered"
+        );
+        let id = rig.exec.last_send_id("cap");
+        rig.emit(
+            "cap",
+            SessionEvent::Delivery {
+                id: id + 1,
+                outcome: DeliveryOutcome::Delivered,
+                subject: crewd_exec::delivery::Subject::Steer,
+            },
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        rig.emit(
+            "cap",
+            SessionEvent::Delivery {
+                id,
+                outcome: DeliveryOutcome::Delivered,
+                subject: crewd_exec::delivery::Subject::Steer,
+            },
+        )
+        .await;
+        assert_eq!(rx.await.unwrap(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn worker_decision_goes_to_the_human_once_without_escalation() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         rig.worker("c1", "w1");
@@ -3432,19 +3593,15 @@ mod tests {
         assert_eq!(posts.len(), 1, "同一指纹不重发");
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: true
             }
         );
         rig.tick(4 * MIN).await;
         assert_eq!(rig.port.posts().len(), 1);
-        rig.tick(MIN).await;
-        let posts = rig.port.posts();
-        assert_eq!(posts.len(), 2);
-        assert_eq!(posts[1].0, Audience::HumanChannel { crew: "c1".into() });
-        rig.tick(10 * MIN).await;
-        assert_eq!(rig.port.posts().len(), 2, "只升级一次");
+        rig.tick(11 * MIN).await;
+        assert_eq!(rig.port.posts().len(), 1, "不升级");
     }
 
     /// C20：待决策通知里的名字、session、屏幕上抓来的提示与选项都是外来文字，逐个过 `safe_name`。
@@ -3456,6 +3613,7 @@ mod tests {
         rename(&rig, "w1", HOSTILE);
         rig.run("w1").await;
         let d = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: HOSTILE.into(),
             options: vec![HOSTILE.into(), "No".into()],
             numbered: true,
@@ -3465,7 +3623,7 @@ mod tests {
             .await;
         rig.tick(5 * MIN).await;
         let posts = rig.port.posts();
-        assert_eq!(posts.len(), 2);
+        assert_eq!(posts.len(), 1);
         for (_, text) in &posts {
             assert_neutralised(text, HOSTILE);
             assert!(
@@ -3488,17 +3646,22 @@ mod tests {
         rig.tick(6 * MIN).await;
         let posts = rig.port.posts();
         assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].0, Audience::HumanChannel { crew: "c1".into() });
+        assert_eq!(
+            posts[0].0,
+            Audience::HumanChannel {
+                crew: "c1".into(),
+                mention_human: true
+            }
+        );
     }
 
     async fn nudge(rig: &mut Rig, session: &str, input: &str) -> Result<(), ControlError> {
-        let (s, i) = (session.to_string(), input.to_string());
-        rig.cmd(|reply| Cmd::Nudge {
-            session: s,
-            input: i,
-            reply,
-        })
-        .await
+        let (cmd, rx) = nudge_cmd(session, input);
+        rig.core.handle(cmd).await;
+        if rig.live(session).is_some_and(|l| l.nudge_pending.is_some()) {
+            rig.ack(session).await;
+        }
+        rig.settle_until(rx).await
     }
 
     /// T10d：按键只用来答屏上的待决策框，经执行器的安全按键（`expect` = 收下时的框）。数字 = 选第 N 项（编号框上只按那个
@@ -3507,46 +3670,27 @@ mod tests {
     async fn key_nudges_answer_the_box_on_screen_through_the_executor() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
-        let err = nudge(&mut rig, "cap", "enter").await;
-        assert_eq!(err, Err(ControlError::NotRunning("cap".into())));
-        rig.run("cap").await;
         assert_eq!(
             nudge(&mut rig, "cap", "enter").await,
-            Err(ControlError::NoDecision("cap".into()))
+            Err(ControlError::NotRunning("cap".into()))
+        );
+        rig.run("cap").await;
+        assert_eq!(
+            nudge(&mut rig, "cap", "enter")
+                .await
+                .unwrap_err()
+                .refusal()
+                .unwrap()
+                .code,
+            Code::OrchestraKeysHumanOnly
         );
         assert_eq!(
             nudge(&mut rig, "cap", "esc").await,
-            Err(ControlError::NothingToInterrupt("cap".into())),
-            "空闲、没有框：没有可打断的（fix M6）"
+            Err(ControlError::NothingToInterrupt("cap".into()))
         );
         rig.emit("cap", SessionEvent::Working(true)).await;
         nudge(&mut rig, "cap", "esc").await.unwrap();
-        assert_eq!(rig.exec.lock().interrupts, ["cap"], "在干活：esc = 打断");
-        let d = decision("Trust?");
-        rig.emit(
-            "cap",
-            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
-        )
-        .await;
-        nudge(&mut rig, "cap", "enter").await.unwrap();
-        nudge(&mut rig, "cap", "2").await.unwrap();
-        {
-            let st = rig.exec.lock();
-            assert_eq!(
-                st.raws["cap"],
-                [b"\r".to_vec(), b"2".to_vec()],
-                "数字后不补回车"
-            );
-            assert_eq!(st.answers["cap"], [d.fingerprint(), d.fingerprint()]);
-            assert!(st.sends.is_empty(), "键不走 send");
-        }
-        let err = nudge(&mut rig, "cap", "3").await.unwrap_err();
-        assert_eq!(
-            err.refusal().unwrap().code,
-            Code::DecisionOutOfRange,
-            "只有两项"
-        );
-        assert_eq!(rig.exec.lock().raws["cap"].len(), 2, "超出的什么都没按");
+        assert_eq!(rig.exec.lock().interrupts, ["cap"]);
     }
 
     fn nudge_cmd(
@@ -3579,7 +3723,7 @@ mod tests {
         let first_box = decision("Trust?");
         rig.exec.emit(
             "w1",
-            SessionEvent::Decision(DecisionEvent::Appeared(first_box)),
+            SessionEvent::Decision(DecisionEvent::Appeared(first_box.clone())),
         );
         while rig.live("w1").is_some_and(|l| l.decision.is_none()) {
             let input = rig.rx.recv().await.expect("框要到");
@@ -3588,7 +3732,13 @@ mod tests {
         // 回答 1 在执行器里按着（挂住）：框答掉之后来的 @ 排在它后面。
         let (release, held) = oneshot::channel();
         rig.exec.lock().answer_hold.insert("w1".into(), held);
-        let (first, r1) = nudge_cmd("w1", "2");
+        let (tx, r1) = oneshot::channel();
+        let first = Input::Cmd(Cmd::Answer {
+            session: "w1".into(),
+            fingerprint: first_box.fingerprint(),
+            choice: 1,
+            reply: tx,
+        });
         rig.core.handle(first).await;
         // 等执行器真的接到回答 1（它当下就按，结果挂着）：之后框才被答掉。
         while !rig.exec.lock().answers.contains_key("w1") {
@@ -3630,10 +3780,18 @@ mod tests {
         rig.settle_until(r1).await.unwrap();
         let report = rig.settle_until(r2).await.unwrap();
         assert_eq!(report.now.map(|d| d.prompt), Some("Run it?".into()));
-        rig.settle_until(r3).await.unwrap();
+        assert_eq!(
+            rig.settle_until(r3)
+                .await
+                .unwrap_err()
+                .refusal()
+                .unwrap()
+                .code,
+            Code::OrchestraKeysHumanOnly
+        );
         assert_eq!(
             rig.exec.lock().writes["w1"],
-            ["answer:2", "send:合成派活甲", "answer:1", "send:继续"],
+            ["answer:2", "send:合成派活甲", "answer:1"],
             "按收下的先后、一次回答按完再下一个"
         );
     }
@@ -3660,6 +3818,7 @@ mod tests {
         rig.crew("c1", "cap");
         rig.run("cap").await;
         let d = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             numbered: false,
             ..decision("Trust?")
         };
@@ -3668,11 +3827,19 @@ mod tests {
         let err = nudge(&mut rig, "cap", "1").await.unwrap_err();
         assert_eq!(
             err,
-            ControlError::Invalid(Refusal::new(Code::OrchestraNudgeDigitsUnnumbered))
+            ControlError::Invalid(Refusal::new(Code::OrchestraKeysHumanOnly))
         );
         assert!(!rig.exec.lock().raws.contains_key("cap"));
-        nudge(&mut rig, "cap", "enter").await.unwrap();
-        assert_eq!(rig.exec.lock().raws["cap"], [b"\r".to_vec()]);
+        assert_eq!(
+            nudge(&mut rig, "cap", "enter")
+                .await
+                .unwrap_err()
+                .refusal()
+                .unwrap()
+                .code,
+            Code::OrchestraKeysHumanOnly
+        );
+        assert!(!rig.exec.lock().raws.contains_key("cap"));
     }
 
     #[tokio::test]
@@ -3761,6 +3928,7 @@ mod tests {
         rig.crew("c1", "cap");
         rig.run("cap").await;
         let at = |sel: usize| PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: "Pick".into(),
             options: vec!["a".into(), "b".into(), "c".into()],
             numbered: false,
@@ -3812,6 +3980,7 @@ mod tests {
         );
         // 看不出高亮（没编号）：交给人。
         let blind = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             selected: None,
             ..at(0)
         };
@@ -3887,7 +4056,7 @@ mod tests {
     }
 
     /// T10d fix M7：`interrupt`（M3b 的 `nudge_session` 发它）= 打断这一轮；没在干活 = `session.nothing_to_interrupt`；
-    /// 屏上有框时同 `esc`：经安全按键对那个框按一下 Esc。
+    /// 屏上有框时两者都拒绝；只有人类 answer 路径能回答框。
     #[tokio::test]
     async fn the_interrupt_token_interrupts_the_turn() {
         let mut rig = Rig::new().await;
@@ -3907,20 +4076,29 @@ mod tests {
             SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
         )
         .await;
-        nudge(&mut rig, "cap", "interrupt").await.unwrap();
+        assert_eq!(
+            nudge(&mut rig, "cap", "interrupt")
+                .await
+                .unwrap_err()
+                .refusal()
+                .unwrap()
+                .code,
+            Code::OrchestraKeysHumanOnly
+        );
         let st = rig.exec.lock();
         assert_eq!(st.interrupts, ["cap"], "有框：不是盲按的打断");
-        assert_eq!(st.raws["cap"], [b"\x1b".to_vec()]);
-        assert_eq!(st.answers["cap"], [d.fingerprint()]);
+        assert!(!st.raws.contains_key("cap"));
+        assert!(!st.answers.contains_key("cap"));
     }
 
-    /// T10d fix M1：键名 nudge 的第一下核收下时的高亮——高亮被人挪了（指纹不变）就停手、回 `DecisionChanged`。
+    /// T10d fix M1 via the human answer path: the first key checks the observed highlight——高亮被人挪了（指纹不变）就停手、回 `DecisionChanged`。
     #[tokio::test]
     async fn a_named_key_nudge_stops_when_the_highlight_moved() {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         rig.run("cap").await;
         let d = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             numbered: false,
             ..decision("Trust?")
         };
@@ -3930,11 +4108,14 @@ mod tests {
         )
         .await;
         let moved = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             selected: Some(1),
             ..d.clone()
         };
         rig.exec.lock().boxes.insert("cap".into(), moved.clone());
-        let err = nudge(&mut rig, "cap", "enter").await.unwrap_err();
+        let err = answer_cmd(&mut rig, "cap", &d.fingerprint(), 0)
+            .await
+            .unwrap_err();
         assert_eq!(
             err,
             ControlError::DecisionChanged {

@@ -867,7 +867,10 @@ async fn channel_ctx_fills_all_six_fields<W: World>() {
 async fn a_child_crews_human_notice_lands_in_its_homes_human_channel<W: World>() {
     let mut w = W::new().await;
     let home = w.human_channel("c-1").await;
-    let to = Audience::HumanChannel { crew: "c-2".into() };
+    let to = Audience::HumanChannel {
+        crew: "c-2".into(),
+        mention_human: true,
+    };
     w.port().post_system(to, "合成公告".into()).await.unwrap();
     assert_eq!(w.system_posts(&home).await, ["合成公告"]);
 }
@@ -1203,34 +1206,24 @@ async fn post_system_mentions_the_owner_only_when_asked<W: World>() {
     let mut w = W::new().await;
     let topic = w.topic("c-1", "w-1", &["w-2"]).await;
     let p = w.port();
-    let lobby = |mention_owner| Audience::Lobby {
-        crew: "c-1".into(),
-        mention_owner,
-    };
-    p.post_system(lobby(true), "合成甲".into()).await.unwrap();
-    p.post_system(lobby(false), "合成乙".into()).await.unwrap();
-    p.post_system(
-        Audience::Channel {
-            channel: topic.clone(),
-            mention_owner: true,
-        },
-        "合成丙".into(),
-    )
-    .await
-    .unwrap();
-    p.post_system(
-        Audience::HumanChannel { crew: "c-1".into() },
-        "合成丁".into(),
-    )
-    .await
-    .unwrap();
+    for mention_human in [true, false] {
+        p.post_system(
+            Audience::HumanChannel {
+                crew: "c-1".into(),
+                mention_human,
+            },
+            "synthetic".into(),
+        )
+        .await
+        .unwrap();
+    }
     let human = w.human_channel("c-1").await;
+    assert!(w.system_mentions("c-1/lobby").await.is_empty());
+    assert!(w.system_mentions(&topic).await.is_empty());
     assert_eq!(
-        w.system_mentions("c-1/lobby").await,
-        [vec!["cap-1".to_string()], vec![]]
+        w.system_mentions(&human).await,
+        [vec!["human".to_string()], vec![]]
     );
-    assert_eq!(w.system_mentions(&topic).await, [vec!["w-1".to_string()]]);
-    assert_eq!(w.system_mentions(&human).await, [vec!["human".to_string()]]);
 }
 
 /// `message()`：seq 全库唯一，群对不上 = 不是这条（两边一致）。

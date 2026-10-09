@@ -295,8 +295,6 @@ Executor {executor} is not available on this crewd. Use claude, or set that exec
 ## session.no_workdir
 Session {session} has no usable working directory (its worktree and the crew directory are missing or deleted). Set the crew's working directory and try again.
 
-## session.worktree_failed
-Could not create a git worktree for the session: {detail}. Fix that and try again, or start it with isolation=false in the crew directory.
 
 ## orchestra.not_running
 Session management is not running on this crewd (no agent executor configured). Restart it with crewd serve --claude <path> and try again.
@@ -307,8 +305,6 @@ crewd is shutting down or hibernating and will not start, resume or wake session
 ## orchestra.nudge_empty
 The nudge input is empty. crewd will not press a bare Enter for you (that would pick the highlighted option); say which keys or text to send.
 
-## orchestra.nudge_digits_unnumbered
-The options on this screen are not numbered, so digits do nothing. Send enter if the highlighted option is the one you want; otherwise leave it to the human.
 
 ## loop.edge_needs_from
 scope=edge needs from (the source that woke it: a session id or system). To release the session's own latch, use scope=session.
@@ -339,3 +335,45 @@ Someone typed into the terminal of session {session}, and it cannot be told whet
 
 ## session.nothing_to_interrupt
 Session {session} is not working and has no pending dialog on screen, so there is nothing to interrupt. Send it a message to give it work.
+
+## orchestra.keys_human_only
+Ask the human to answer in the client; agents cannot press decision keys.
+
+## orchestra.nudge_busy
+Text nudges require an idle session.
+
+## session.nudge_failed
+The nudge was not delivered ({outcome}): {detail}
+
+## session.worktree.dir_missing
+Directory does not exist: {path}. {detail}
+
+## session.worktree.not_repo
+Not a git repository: {path}. {detail}
+
+## session.worktree.detached_head
+Detached HEAD: {path}. {detail}
+
+## session.worktree.no_toplevel
+Cannot find the repository root: {path}. {detail}
+
+## session.worktree.mkdir
+Cannot create the worktree directory: {path}. {detail}
+
+## session.worktree.git_missing
+Cannot run git: {path}. {detail}
+
+## session.worktree.timeout
+Git timed out and was stopped: {path}. {detail}
+
+## session.worktree.pipes_held
+Git exited but its output pipes remained open; stopped at the deadline: {path}. {detail}
+
+## session.worktree.add_failed
+Git worktree add failed: {path}. {detail}
+
+## session.worktree.wait_failed
+Cannot wait for git: {path}. {detail}
+
+## session.worktree.task_failed
+The worktree task failed: {path}. {detail}

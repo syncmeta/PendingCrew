@@ -280,6 +280,33 @@ pub async fn call(
     params: Value,
 ) -> Result<Value, RpcError> {
     match method {
+        methods::SESSION_INSPECT => {
+            let p: crewd_proto::orchestra::SessionInspectParams = parse_params(params)?;
+            let (live, screen) = h
+                .inspect(&p.session_id, p.max_lines.unwrap_or(60).min(400) as usize)
+                .await
+                .map_err(rpc_err)?;
+            to_value(crewd_proto::orchestra::SessionInspection {
+                live: live_to_proto(&live),
+                screen,
+            })
+        }
+        methods::SESSION_ANSWER => {
+            let p: crewd_proto::orchestra::SessionAnswerParams = parse_params(params)?;
+            let r = h
+                .answer(&p.session_id, &p.fingerprint, p.choice as usize)
+                .await
+                .map_err(rpc_err)?;
+            to_value(crewd_proto::orchestra::SessionAnswerResult {
+                cleared: r.cleared,
+                decision: r.now.as_ref().map(decision_view),
+            })
+        }
+        methods::DECISION_LIST => {
+            parse_no_params(params)?;
+            to_value(h.decisions().await.map_err(rpc_err)?)
+        }
+
         methods::SESSION_START => {
             let p: SessionStartParams = parse_params(params)?;
             let req = StartSession {
@@ -427,9 +454,13 @@ mod tests {
             ),
             (ControlError::NoWorkdir(s()), -32009, "session.no_workdir"),
             (
-                ControlError::Worktree("合成原因".into()),
+                ControlError::Worktree(crate::orchestra::worktree::WorktreeError::new(
+                    crate::orchestra::worktree::WorktreeReason::AddFailed,
+                    "/synthetic",
+                    "synthetic stderr",
+                )),
                 -32009,
-                "session.worktree_failed",
+                "session.worktree.add_failed",
             ),
             (
                 ControlError::CaptainTaken("c-1".into()),
@@ -681,6 +712,7 @@ mod tests {
     use crate::orchestra::clock::ManualClock;
     use crate::orchestra::exec::Executors;
     use crate::orchestra::hooks::Hooks;
+    use crate::orchestra::port::Port;
     use crate::orchestra::testkit::{MemPort, StandIn, T0};
     use crate::orchestra::{Actor, OrchestraConfig, spawn};
     use crewd_proto::{Request, methods as all_methods};
@@ -711,6 +743,222 @@ mod tests {
     async fn rpc(h: &Handle, st: &AppState, m: &str, p: Value) -> Result<Value, RpcError> {
         assert!(handles(m), "{m}");
         call(h, st, m, p).await
+    }
+
+    #[tokio::test]
+    async fn t10c_decision_list_inspect_cas_and_terminal_answer_end_to_end() {
+        use crewd_exec::session::{HeldDraft, SessionEvent};
+        use crewd_term::{DecisionEvent, DecisionKind, PendingDecision};
+        let port = Arc::new(MemPort::new());
+        let (h, _a, x) = handle(port.clone()).await;
+        let st = state();
+        let row = port
+            .insert_session(super::super::port::NewSession {
+                crew_id: "c1".into(),
+                captain: false,
+                executor: "claude".into(),
+                brief: "synthetic".into(),
+                title: Some("Worker".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        h.resume(&row.id, Origin::Human).await.unwrap();
+        let d = PendingDecision {
+            kind: DecisionKind::Terminal,
+            prompt: "Trust?".into(),
+            options: vec!["Yes".into(), "No".into()],
+            numbered: true,
+            selected: Some(1),
+        };
+        x.emit(
+            &row.id,
+            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
+        );
+        let mut list = Value::Null;
+        for _ in 0..200 {
+            list = rpc(&h, &st, methods::DECISION_LIST, Value::Null)
+                .await
+                .unwrap();
+            if list.as_array().is_some_and(|a| a.len() == 1) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(list[0]["sessionId"], row.id);
+        assert_eq!(list[0]["crewId"], "c1");
+        assert_eq!(list[0]["title"], "Worker");
+        assert_eq!(list[0]["decision"]["fingerprint"], d.fingerprint());
+        assert_eq!(list[0]["decision"]["selected"], 1);
+        assert_eq!(list[0]["sinceMs"], T0.0);
+        let error = rpc(
+            &h,
+            &st,
+            methods::SESSION_ANSWER,
+            json!({"sessionId":row.id,"fingerprint":"stale","choice":0}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, -32009);
+        let data = error.data.unwrap();
+        assert_eq!(data.refusal, "decision.changed");
+        assert_eq!(*data.decision.unwrap(), decision_view(&d));
+        assert!(x.lock().answers.is_empty(), "stale choice wrote nothing");
+        for lines in [None, Some(999)] {
+            let mut params = json!({"sessionId":row.id});
+            if let Some(n) = lines {
+                params["maxLines"] = json!(n);
+            }
+            let inspect = rpc(&h, &st, methods::SESSION_INSPECT, params)
+                .await
+                .unwrap();
+            assert_eq!(inspect["screen"], "合成屏幕");
+            assert_eq!(
+                inspect["live"]["pendingDecision"]["fingerprint"],
+                d.fingerprint()
+            );
+        }
+        assert_eq!(
+            x.lock().screens,
+            [(row.id.clone(), 60), (row.id.clone(), 400)]
+        );
+        x.emit(&row.id, SessionEvent::InputDraft(Some(HeldDraft::Unknown)));
+        for _ in 0..200 {
+            if h.live(&row.id).await.unwrap().input_draft.is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let inspected = rpc(
+            &h,
+            &st,
+            methods::SESSION_INSPECT,
+            json!({"sessionId":row.id}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inspected["live"]["inputDraftUnknown"], true);
+        assert!(inspected["live"].get("inputDraft").is_none());
+        x.lock().box_script.insert(row.id.clone(), [None].into());
+        let result = rpc(
+            &h,
+            &st,
+            methods::SESSION_ANSWER,
+            json!({"sessionId":row.id,"fingerprint":d.fingerprint(),"choice":0}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, json!({"cleared":true}));
+        assert_eq!(
+            x.lock().raws[&row.id],
+            [b"1".to_vec()],
+            "RPC zero maps to terminal digit one"
+        );
+        for _ in 0..200 {
+            list = rpc(&h, &st, methods::DECISION_LIST, Value::Null)
+                .await
+                .unwrap();
+            if list == json!([]) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(list, json!([]));
+        assert!(
+            rpc(&h, &st, methods::DECISION_LIST, json!({"extra":1}))
+                .await
+                .is_err()
+        );
+        assert!(
+            rpc(
+                &h,
+                &st,
+                methods::SESSION_INSPECT,
+                json!({"sessionId":row.id,"extra":1})
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn t10c_runner_request_is_listed_and_structurally_answered_without_keys() {
+        use crewd_exec::session::SessionEvent;
+        use crewd_term::{DecisionEvent, DecisionKind, PendingDecision};
+        let port = Arc::new(MemPort::new());
+        let (h, _a, x) = handle(port.clone()).await;
+        let st = state();
+        let row = port
+            .insert_session(super::super::port::NewSession {
+                crew_id: "c1".into(),
+                captain: false,
+                executor: "claude".into(),
+                brief: "synthetic".into(),
+                title: Some("Runner".into()),
+                model: None,
+                effort: None,
+                worktree: None,
+            })
+            .await
+            .unwrap();
+        h.resume(&row.id, Origin::Human).await.unwrap();
+        let d = PendingDecision {
+            kind: DecisionKind::RunnerRequest {
+                request_id: "request-1".into(),
+            },
+            prompt: "item/commandExecution/requestApproval".into(),
+            options: vec!["accept".into(), "decline".into()],
+            numbered: false,
+            selected: None,
+        };
+        let d2 = PendingDecision {
+            kind: DecisionKind::RunnerRequest {
+                request_id: "request-2".into(),
+            },
+            ..d.clone()
+        };
+        assert_ne!(d.fingerprint(), d2.fingerprint());
+        x.emit(
+            &row.id,
+            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
+        );
+        let mut list = Value::Null;
+        for _ in 0..200 {
+            list = rpc(&h, &st, methods::DECISION_LIST, Value::Null)
+                .await
+                .unwrap();
+            if list.as_array().is_some_and(|a| a.len() == 1) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(list[0]["decision"]["kind"], "runner_request");
+        assert!(list[0]["decision"].get("selected").is_none());
+        let invalid = rpc(
+            &h,
+            &st,
+            methods::SESSION_ANSWER,
+            json!({"sessionId":row.id,"fingerprint":d.fingerprint(),"choice":2}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(invalid.data.unwrap().refusal, "decision.out_of_range");
+        let result = rpc(
+            &h,
+            &st,
+            methods::SESSION_ANSWER,
+            json!({"sessionId":row.id,"fingerprint":d.fingerprint(),"choice":1}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, json!({"cleared":true}));
+        assert_eq!(x.lock().choices[&row.id], [1]);
+        assert!(
+            x.lock().raws.is_empty() && x.lock().answers.is_empty(),
+            "not simulated keys"
+        );
     }
 
     #[test]
@@ -1117,6 +1365,7 @@ mod tests {
             v["capabilities"],
             json!([
                 "orchestra",
+                "session.answer",
                 "crewd.hibernate",
                 "wake.explain",
                 "message.receipts",

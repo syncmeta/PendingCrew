@@ -110,6 +110,9 @@ pub mod methods {
         crate::orchestra::methods::SESSION_STOP,
         crate::orchestra::methods::SESSION_RESUME,
         crate::orchestra::methods::SESSION_LIVE,
+        crate::orchestra::methods::SESSION_INSPECT,
+        crate::orchestra::methods::SESSION_ANSWER,
+        crate::orchestra::methods::DECISION_LIST,
         crate::orchestra::methods::CREW_SET_CAPTAIN,
         crate::orchestra::methods::WAKE_LIST,
         crate::orchestra::methods::LOOP_LIST,
@@ -171,7 +174,7 @@ pub struct RpcErrorData {
     pub refusal: String,
     /// `decision.changed`：此刻屏上的那个框（没有框了 = 不在）。客户端据它重新问人（M3c T10d）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision: Option<DecisionView>,
+    pub decision: Option<Box<DecisionView>>,
 }
 
 impl RpcError {
@@ -208,7 +211,7 @@ impl RpcError {
     /// 附上此刻屏上的框（`data.decision`；先 [`Self::with_refusal`]）。
     pub fn with_decision(mut self, decision: DecisionView) -> Self {
         if let Some(d) = self.data.as_mut() {
-            d.decision = Some(decision);
+            d.decision = Some(Box::new(decision));
         }
         self
     }
@@ -1090,6 +1093,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn t10c_decision_wire_defaults_terminal_and_preserves_zero_based_selected() {
+        let old: DecisionView = serde_json::from_value(
+            json!({"summary":"Trust?","options":["Yes","No"],"numbered":false}),
+        )
+        .unwrap();
+        assert_eq!(old.kind, DecisionKindView::Terminal);
+        assert_eq!(old.selected, None);
+        assert_eq!(old.fingerprint, "");
+        let runner = DecisionView {
+            fingerprint: "request:r1".into(),
+            selected: Some(0),
+            kind: DecisionKindView::RunnerRequest,
+            ..old
+        };
+        let wire = serde_json::to_value(&runner).unwrap();
+        assert_eq!(wire["kind"], "runner_request");
+        assert_eq!(wire["selected"], 0);
+        assert_eq!(
+            serde_json::from_value::<DecisionView>(wire).unwrap(),
+            runner
+        );
+        let zero: orchestra::SessionAnswerParams =
+            serde_json::from_value(json!({"sessionId":"s","fingerprint":"f","choice":0})).unwrap();
+        assert_eq!(zero.choice, 0);
+        assert!(
+            serde_json::from_value::<orchestra::SessionAnswerParams>(
+                json!({"sessionId":"s","fingerprint":"f","choice":-1})
+            )
+            .is_err()
+        );
+    }
+
     /// R11：契约与解析器一致。解析器收 `null` 的方法（无参 / 全可选参数），参数类型在契约里写成 `object | null`；
     /// 其余的不收 null。`restart.pending` 的结果可以是 null。
     #[test]
@@ -1105,6 +1141,7 @@ mod tests {
             methods::DIRECTORY_LIST,
             orchestra::methods::WAKE_LIST,
             orchestra::methods::LOOP_LIST,
+            orchestra::methods::DECISION_LIST,
             orchestra::methods::SETTINGS_GET,
             orchestra::methods::HIBERNATE,
         ];

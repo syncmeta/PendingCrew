@@ -983,8 +983,23 @@
       ],
       "type": "object"
     },
+    "DecisionKindView": {
+      "enum": [
+        "terminal",
+        "runner_request"
+      ],
+      "type": "string"
+    },
     "DecisionView": {
       "properties": {
+        "fingerprint": {
+          "default": "",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DecisionKindView",
+          "default": "terminal"
+        },
         "numbered": {
           "description": "选项带编号（按编号答）；false = 光标式菜单（绝不编造编号，§15）。",
           "type": "boolean"
@@ -994,6 +1009,15 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "selected": {
+          "description": "Zero-based option index, never a menu digit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "summary": {
           "type": "string"
@@ -1914,6 +1938,34 @@
         "null"
       ]
     },
+    "PendingDecisionView": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/DecisionView"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "sinceMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "crewId",
+        "title",
+        "decision",
+        "sinceMs"
+      ],
+      "type": "object"
+    },
     "ReadMarkParams": {
       "additionalProperties": false,
       "properties": {
@@ -2333,6 +2385,50 @@
       ],
       "type": "object"
     },
+    "SessionAnswerParams": {
+      "additionalProperties": false,
+      "properties": {
+        "choice": {
+          "description": "Zero-based index in decision.options; menu digits are executor output only.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "fingerprint",
+        "choice"
+      ],
+      "type": "object"
+    },
+    "SessionAnswerResult": {
+      "properties": {
+        "cleared": {
+          "type": "boolean"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "type": "object"
+    },
     "SessionGetParams": {
       "additionalProperties": false,
       "properties": {
@@ -2354,6 +2450,42 @@
       },
       "required": [
         "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionInspectParams": {
+      "additionalProperties": false,
+      "properties": {
+        "maxLines": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionInspection": {
+      "properties": {
+        "live": {
+          "$ref": "#/$defs/SessionLive"
+        },
+        "screen": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "live",
+        "screen"
       ],
       "type": "object"
     },
@@ -3227,6 +3359,17 @@
         "$ref": "#/$defs/HibernateResult"
       }
     },
+    "decision.list": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/PendingDecisionView"
+        },
+        "type": "array"
+      }
+    },
     "directory.list": {
       "params": {
         "$ref": "#/$defs/DirectoryListParams"
@@ -3337,12 +3480,28 @@
         ]
       }
     },
+    "session.answer": {
+      "params": {
+        "$ref": "#/$defs/SessionAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionAnswerResult"
+      }
+    },
     "session.get": {
       "params": {
         "$ref": "#/$defs/SessionGetParams"
       },
       "result": {
         "$ref": "#/$defs/Session"
+      }
+    },
+    "session.inspect": {
+      "params": {
+        "$ref": "#/$defs/SessionInspectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionInspection"
       }
     },
     "session.list": {

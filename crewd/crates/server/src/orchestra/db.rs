@@ -793,25 +793,12 @@ impl Port for DbPort {
 
     async fn post_system(&self, to: Audience, text: String) -> Result<()> {
         self.write(move |tx| {
-            let (channel, mention_human, mention_owner) = match to {
-                // 人类群归 home（顶层机组 / 总机组自己，§24.1 H2）。
-                Audience::HumanChannel { crew } => {
-                    let home = collab::crews::home_of(tx.conn(), &crew)?;
-                    (
-                        collab::channels::ensure_human_channel(tx, &home)?.id,
-                        true,
-                        false,
-                    )
-                }
-                Audience::Lobby {
-                    crew,
-                    mention_owner,
-                } => (crewd_store::channels::lobby_id(&crew), false, mention_owner),
-                Audience::Channel {
-                    channel,
-                    mention_owner,
-                } => (channel, false, mention_owner),
-            };
+            let Audience::HumanChannel {
+                crew,
+                mention_human,
+            } = to;
+            let home = collab::crews::home_of(tx.conn(), &crew)?;
+            let channel = collab::channels::ensure_human_channel(tx, &home)?.id;
             let mut mentions = Vec::new();
             if mention_human {
                 mentions.push(crewd_proto::Mention {
@@ -819,15 +806,7 @@ impl Port for DbPort {
                     target_id: None,
                 });
             }
-            if mention_owner
-                && let Some(MemberRef::Session { id }) =
-                    collab::channels::owner_of(tx.conn(), &channel)?
-            {
-                mentions.push(crewd_proto::Mention {
-                    kind: MentionKind::Session,
-                    target_id: Some(id),
-                });
-            }
+
             let post = collab::messages::NewPost {
                 channel_id: channel,
                 text,

@@ -123,6 +123,15 @@ pub trait ExecHandle: Send + Sync {
         expect: String,
         steps: AnswerSteps,
     ) -> BoxFut<'_, Result<AnswerOutcome, Closed>>;
+    /// Structured runner request: zero-based option index. Never fall back to keys.
+    /// M3d must bind this to the pending JSON-RPC request.
+    fn answer_choice(
+        &self,
+        _expect: String,
+        _choice: usize,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        Box::pin(async { Ok(AnswerOutcome::Unsupported) })
+    }
     fn stop(&self) -> Result<(), Closed>;
     fn clear_quota_health(&self) -> Result<(), Closed>;
     fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>>;

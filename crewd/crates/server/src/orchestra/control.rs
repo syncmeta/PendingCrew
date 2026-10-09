@@ -146,8 +146,7 @@ impl SessionControl for OrchestraControl {
         })
     }
 
-    /// T10c 收窄 nudge（交给人选的框不让 agent 代按）；这里原样转。文字 nudge 的 `Ok` = 已排进会话（执行器写之前再看
-    /// 一次输入框：有人的草稿就挡着，等人清掉再写，T10d fix M4），不是「已敲进去」。
+    /// T10c 收窄 nudge（交给人选的框不让 agent 代按）；这里原样转。文字 nudge 的 `Ok` 只在匹配的 Delivery::Delivered 后返回；排队不算成功。
     fn nudge(&self, session_id: String, text: String) -> BoxFuture<'_, Result<(), M3aError>> {
         Box::pin(async move {
             let r = self.h().await?.nudge(&session_id, text).await;
@@ -243,6 +242,14 @@ pub fn live_to_proto(v: &LiveView) -> SessionLive {
 /// 屏上的待决策框 → 线上的 `DecisionView`（`session.live` 与 `decision.changed` 的 `data.decision` 共用）。
 pub fn decision_view(d: &PendingDecision) -> DecisionView {
     DecisionView {
+        fingerprint: d.fingerprint(),
+        selected: d.selected.and_then(|i| u32::try_from(i).ok()),
+        kind: match d.kind {
+            crewd_term::DecisionKind::Terminal => crewd_proto::DecisionKindView::Terminal,
+            crewd_term::DecisionKind::RunnerRequest { .. } => {
+                crewd_proto::DecisionKindView::RunnerRequest
+            }
+        },
         summary: d.prompt.clone(),
         options: d.options.clone(),
         numbered: d.numbered,
@@ -262,6 +269,7 @@ mod tests {
             working: false,
             health: Some(Health::new(kind, "x")),
             pending_decision: Some(PendingDecision {
+                kind: crewd_term::DecisionKind::Terminal,
                 prompt: "Trust?".into(),
                 options: vec!["Yes".into()],
                 numbered: false,
@@ -326,7 +334,14 @@ mod tests {
             (refused(RefusedKind::Forbidden), M3aError::Invalid),
             (refused(RefusedKind::Conflict), M3aError::Invalid),
             (ControlError::AtCap { max: 2 }, M3aError::Failed),
-            (ControlError::Worktree("合成原因".into()), M3aError::Failed),
+            (
+                ControlError::Worktree(crate::orchestra::worktree::WorktreeError::new(
+                    crate::orchestra::worktree::WorktreeReason::AddFailed,
+                    "/synthetic",
+                    "synthetic stderr",
+                )),
+                M3aError::Failed,
+            ),
             (ControlError::CrewNoWorkdir("c-1".into()), M3aError::Failed),
             (ControlError::ShuttingDown, M3aError::Failed),
         ];

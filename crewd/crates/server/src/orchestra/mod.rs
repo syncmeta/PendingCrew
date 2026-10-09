@@ -10,10 +10,13 @@ pub mod exec;
 pub mod exec_claude;
 pub mod hibernate;
 pub mod hooks;
+mod notify;
 pub mod port;
 #[cfg(test)]
 mod port_contract;
 pub mod rpc;
+#[cfg(test)]
+mod t10c;
 #[cfg(test)]
 mod testkit;
 pub mod worktree;
@@ -301,6 +304,16 @@ impl Handle {
             reply,
         })
         .await
+    }
+
+    pub async fn decisions(
+        &self,
+    ) -> Result<Vec<crewd_proto::orchestra::PendingDecisionView>, ControlError> {
+        self.call(|reply| Cmd::Decisions { reply }).await
+    }
+    /// T11 binary watcher supplies a crew for home-human routing. No watcher is installed here.
+    pub fn binary_replaced(&self, crew: &str) {
+        let _ = self.tx.send(Input::BinaryReplaced { crew: crew.into() });
     }
 
     /// `wake.list`：唤醒行（新的在前，至多 `WAKE_LIST_LIMIT` 条）、每条 pending 为什么还没出去、每个目标的近况。

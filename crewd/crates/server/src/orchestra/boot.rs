@@ -1,7 +1,6 @@
 //! 重启恢复与停机（spec §22.4「重启恢复」；§22.7 Q1：问人，答「恢复」才错开拉起）。
 use std::collections::BTreeMap;
 
-use crewd_wake::notice::DECISION_ESCALATE_MS;
 use crewd_wake::policy;
 use crewd_wake::{Ms, QueuedWake};
 use tokio::sync::oneshot;
@@ -164,7 +163,7 @@ impl<P: Port> Core<P> {
         true
     }
 
-    /// 下一次定时拍：最早的「未来」not_before、退避 / 错开的时刻、待决策升级时刻，都没有就心跳。
+    /// 下一次定时拍：最早的「未来」not_before、退避 / 错开的时刻、草稿告警 / 通知聚合时刻，都没有就心跳。
     /// 已到期却投不了的（目标在忙）不算——那些由 idle 边沿接，不能让定时器空转。
     /// 未来的 not_before 来自缓存（`Core::due`），队列没变就不读库（评审 Fix 3）；缓存最多信一个心跳（9a 复审）。
     pub(crate) async fn next_deadline(&self) -> Ms {
@@ -189,8 +188,17 @@ impl<P: Port> Core<P> {
         if let Some(first) = self.timers.iter().next() {
             t = t.min((*first).max(now));
         }
-        for r in self.decisions.values().filter(|r| !r.escalated) {
-            t = t.min(r.at.add(DECISION_ESCALATE_MS).max(now));
+        if let Some(due) = self.notifier.next_deadline() {
+            t = t.min(due.max(now));
+        }
+        for (session, l) in &self.live {
+            if !self.notifier.is_raised(&super::notify::Key::new(
+                super::notify::Kind::InputDraft,
+                session,
+            )) && let Some(since) = l.input_draft_since_ms
+            {
+                t = t.min(since.add(super::notify::WINDOW_MS).max(now));
+            }
         }
         t
     }
@@ -369,20 +377,17 @@ mod tests {
                 assert_eq!(w.state, WakeState::Dropped, "到上限放弃");
             }
         }
+        rig.tick(10 * MIN).await;
         let posts = rig.port.posts();
         assert_eq!(posts.len(), 1, "只告警一次：{posts:?}");
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: true
             }
         );
-        assert!(
-            posts[0].1.contains(&queue::MAX_ATTEMPTS.to_string()),
-            "{}",
-            posts[0].1
-        );
+        assert!(posts[0].1.contains("w1 (1)"), "{}", posts[0].1);
     }
 
     #[tokio::test]

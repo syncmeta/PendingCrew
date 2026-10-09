@@ -295,8 +295,6 @@ session {session} 没在跑；先恢复它，或给它发消息让它被拉起
 ## session.no_workdir
 session {session} 没有可用的工作目录（它的 worktree 与机组目录都没有或已被删）；给机组设好工作目录再试
 
-## session.worktree_failed
-没能为 session 新建 git worktree：{detail}；修好之后再试，或用 isolation=false 在机组目录里起
 
 ## orchestra.not_running
 这台 crewd 没有启用会话管理（没配 agent 执行器）；用 crewd serve --claude <路径> 重新启动后再试
@@ -307,8 +305,6 @@ crewd 正在停机或休眠，不再起、恢复或叫醒 session；等它重新
 ## orchestra.nudge_empty
 nudge 的输入是空的；不会替它按一个裸回车（那会选中当前高亮的那一项），写明要按的键或要发的文字
 
-## orchestra.nudge_digits_unnumbered
-这一屏的选项没有编号，发数字无效；高亮在要选的那一项上就发 enter，否则交给人
 
 ## loop.edge_needs_from
 scope=edge 要给 from（叫醒它的来源：session id 或 system）；要解这个 session 的整体熔断，用 scope=session
@@ -339,3 +335,45 @@ session {session} 的终端里有人敲过字，此刻分不清它的输入框�
 
 ## session.nothing_to_interrupt
 session {session} 没在干活、屏上也没有待决策的框，没有可打断的；要它干活就给它发消息
+
+## orchestra.keys_human_only
+请交给人类在客户端回答；agent 不能替人按决策键。
+
+## orchestra.nudge_busy
+文字 nudge 只允许发给空闲会话。
+
+## session.nudge_failed
+nudge 未送达（{outcome}）：{detail}
+
+## session.worktree.dir_missing
+目录不存在: {path}. {detail}
+
+## session.worktree.not_repo
+不是 git 仓库: {path}. {detail}
+
+## session.worktree.detached_head
+当前是 detached HEAD: {path}. {detail}
+
+## session.worktree.no_toplevel
+查不到仓库根: {path}. {detail}
+
+## session.worktree.mkdir
+无法创建 worktree 目录: {path}. {detail}
+
+## session.worktree.git_missing
+无法运行 git: {path}. {detail}
+
+## session.worktree.timeout
+git 超时，已中止: {path}. {detail}
+
+## session.worktree.pipes_held
+git 已退出但输出管道一直被占用；到期限已中止: {path}. {detail}
+
+## session.worktree.add_failed
+git worktree add 失败: {path}. {detail}
+
+## session.worktree.wait_failed
+无法等待 git 结束: {path}. {detail}
+
+## session.worktree.task_failed
+新建 worktree 任务失败: {path}. {detail}

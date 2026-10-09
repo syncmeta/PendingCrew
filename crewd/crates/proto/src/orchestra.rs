@@ -12,6 +12,9 @@ pub mod methods {
     pub const SESSION_START: &str = "session.start";
     pub const SESSION_STOP: &str = "session.stop";
     pub const SESSION_RESUME: &str = "session.resume";
+    pub const SESSION_INSPECT: &str = "session.inspect";
+    pub const SESSION_ANSWER: &str = "session.answer";
+    pub const DECISION_LIST: &str = "decision.list";
     pub const SESSION_LIVE: &str = "session.live";
     pub const CREW_SET_CAPTAIN: &str = "crew.setCaptain";
     /// 排障：唤醒行 + 每条为什么还没出去 + 每个目标的近况。
@@ -33,6 +36,9 @@ pub mod methods {
         SESSION_STOP,
         SESSION_RESUME,
         SESSION_LIVE,
+        SESSION_INSPECT,
+        SESSION_ANSWER,
+        DECISION_LIST,
         CREW_SET_CAPTAIN,
         WAKE_LIST,
         LOOP_LIST,
@@ -47,6 +53,7 @@ pub mod methods {
 /// `system.hello` 的 `capabilities`：会话管理（编排）在跑时这个 crewd 开着的能力（U1）。没有编排 = 空。
 pub const CAPABILITIES: &[&str] = &[
     "orchestra",
+    "session.answer",
     "crewd.hibernate",
     "wake.explain",
     "message.receipts",
@@ -57,6 +64,48 @@ pub mod events {
     /// 某个 session 的唤醒行变了（`WakeChanged`）。主题 = `wake`。
     pub const WAKE_CHANGED: &str = "wake.changed";
     pub const TOPIC_WAKE: &str = "wake";
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionInspectParams {
+    pub session_id: String,
+    #[serde(default)]
+    pub max_lines: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionAnswerParams {
+    pub session_id: String,
+    pub fingerprint: String,
+    /// Zero-based index in decision.options; menu digits are executor output only.
+    pub choice: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInspection {
+    pub live: crate::SessionLive,
+    pub screen: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAnswerResult {
+    pub cleared: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<crate::DecisionView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDecisionView {
+    pub session_id: String,
+    pub crew_id: String,
+    pub title: String,
+    pub decision: crate::DecisionView,
+    pub since_ms: i64,
 }
 
 /// 三态：键不在 = `None`（不改）；`null` = `Some(None)`（清掉）；值 = `Some(Some(v))`（设成它）。
@@ -436,6 +485,21 @@ type Entries = Vec<(&'static str, serde_json::Value)>;
 pub(crate) fn schema_entries(g: &mut schemars::SchemaGenerator) -> (Entries, Entries) {
     use crate::{m, many, sub};
     let methods = vec![
+        (
+            methods::SESSION_INSPECT,
+            m(sub::<SessionInspectParams>(g), sub::<SessionInspection>(g)),
+        ),
+        (
+            methods::SESSION_ANSWER,
+            m(sub::<SessionAnswerParams>(g), sub::<SessionAnswerResult>(g)),
+        ),
+        (
+            methods::DECISION_LIST,
+            m(
+                sub::<crate::NoParams>(g),
+                many(sub::<PendingDecisionView>(g)),
+            ),
+        ),
         (
             methods::SESSION_START,
             m(sub::<SessionStartParams>(g), sub::<crate::Session>(g)),

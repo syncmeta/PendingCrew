@@ -204,18 +204,7 @@ pub struct Reclaimed {
 /// 系统消息发到哪、@ 谁。群主由 Port 按 M3a 的规则解析（大厅 / 人类群的群主 = 机组机长）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Audience {
-    /// 这个机组所属根机组的人类群，@人。
-    HumanChannel {
-        crew: String,
-    },
-    Lobby {
-        crew: String,
-        mention_owner: bool,
-    },
-    Channel {
-        channel: String,
-        mention_owner: bool,
-    },
+    HumanChannel { crew: String, mention_human: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

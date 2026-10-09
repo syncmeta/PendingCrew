@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crewd_server::orchestra::worktree::{GitWorktrees, Worktrees};
+use crewd_server::orchestra::worktree::{GitWorktrees, WorktreeReason, Worktrees};
 
 /// (成功?, stdout 去首尾空白, stderr)。清掉会把 git 指到别的仓库的环境变量；不读开发者的全局 hook / 签名配置。
 fn git(cwd: &Path, args: &[&str]) -> (bool, String, String) {
@@ -121,7 +121,7 @@ async fn refuses_non_repos_and_detached_head_and_never_falls_back() {
         .create(plain.path(), "x")
         .await
         .unwrap_err();
-    assert!(e.contains("不是 git 仓库"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::NotRepo);
     assert!(!plain.path().join(".pendingcrew").exists());
     let r = repo();
     let root = r.path().canonicalize().unwrap();
@@ -130,7 +130,7 @@ async fn refuses_non_repos_and_detached_head_and_never_falls_back() {
         .create(&root, "x")
         .await
         .unwrap_err();
-    assert!(e.contains("detached HEAD"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::Detached);
     assert!(!root.join(".pendingcrew").exists(), "失败不留半成品");
 }
 
@@ -171,7 +171,7 @@ async fn git_runs_with_terminal_prompts_disabled_and_no_stdin() {
         timeout: Duration::from_secs(10),
     };
     let e = wt.create(t.path(), "x").await.unwrap_err();
-    assert!(e.contains("不是 git 仓库"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::NotRepo);
     assert_eq!(
         std::fs::read_to_string(&seen).unwrap(),
         "0|ssh -oBatchMode=yes|"
@@ -193,7 +193,7 @@ async fn a_hung_git_is_killed_at_the_deadline() {
         "{:?}",
         started.elapsed()
     );
-    assert!(e.contains("超时"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::Timeout);
 }
 
 /// 到点杀的是整个进程组：git 起的 hook / 子进程（这里是后台的 `sleep`）也一起没了，不留下拿着管道的孤儿。
@@ -210,7 +210,7 @@ async fn the_deadline_kills_the_whole_process_group() {
         timeout: DEADLINE,
     };
     let e = wt.create(t.path(), "x").await.unwrap_err();
-    assert!(e.contains("超时"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::Timeout);
     let pid: i32 = std::fs::read_to_string(&pidfile)
         .unwrap()
         .trim()
@@ -246,7 +246,7 @@ async fn output_held_open_after_git_exits_is_bounded_by_the_deadline() {
         "{:?}",
         started.elapsed()
     );
-    assert!(e.contains("超时"), "{e}");
+    assert_eq!(e.reason, WorktreeReason::PipesHeld);
     let pid: i32 = std::fs::read_to_string(&pidfile)
         .unwrap()
         .trim()

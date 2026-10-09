@@ -489,7 +489,7 @@ impl<P: Port> Core<P> {
         target: &str,
         latch: &Latch,
         origin: &str,
-        w: &QueuedWake,
+        _w: &QueuedWake,
     ) -> anyhow::Result<()> {
         let lang = self.lang();
         let Some(row) = self.port.session(target).await? else {
@@ -526,26 +526,12 @@ impl<P: Port> Core<P> {
             .post_system(
                 Audience::HumanChannel {
                     crew: row.crew_id.clone(),
+                    mention_human: true,
                 },
                 human,
             )
             .await?;
-        let owner = text::render(
-            lang,
-            "loop.tripped.owner",
-            &[("target", &target_name), ("origin", &origin_name)],
-        );
-        let to = match (w.kind, &w.msg) {
-            (WakeKind::Message, Some(r)) => Audience::Channel {
-                channel: r.channel.clone(),
-                mention_owner: true,
-            },
-            _ => Audience::Lobby {
-                crew: row.crew_id,
-                mention_owner: true,
-            },
-        };
-        self.port.post_system(to, owner).await
+        Ok(())
     }
 
     /// 渲染。渲染不出来的（Port 已记 dropped）拿掉；窗口外的（`deferred`，M3a R6）从正文里拿掉、作为随批行
@@ -755,6 +741,34 @@ impl<P: Port> Core<P> {
         id: u64,
         outcome: DeliveryOutcome,
     ) -> anyhow::Result<()> {
+        if let Some(l) = self.live.get_mut(session)
+            && outcome.is_final()
+            && l.nudge_pending
+                .as_ref()
+                .is_some_and(|(pending, _)| *pending == id)
+        {
+            let (_, reply) = l.nudge_pending.take().expect("matched above");
+            l.writing = false;
+            let r = if outcome == DeliveryOutcome::Delivered {
+                Ok(())
+            } else {
+                let (kind, detail) = match &outcome {
+                    DeliveryOutcome::Undelivered(d) => ("Undelivered", d),
+                    DeliveryOutcome::Unsubmitted(d) => ("Unsubmitted", d),
+                    DeliveryOutcome::Abandoned(d) => ("Abandoned", d),
+                    _ => unreachable!("only final failures"),
+                };
+                Err(super::core::ControlError::Invalid(
+                    crewd_collab::refusal::Refusal::new(
+                        crewd_collab::refusal::Code::SessionNudgeFailed,
+                    )
+                    .arg("outcome", kind)
+                    .arg("detail", safe_name(detail)),
+                ))
+            };
+            let _ = reply.send(r);
+            return self.pump_writes(session).await;
+        }
         if let Some(l) = self.live.get_mut(session) {
             l.last_outcome = Some(outcome_name(&outcome));
         }
@@ -1202,6 +1216,7 @@ mod tests {
     /// 一个编号的合成待决策框（高亮在第一项）。
     fn synthetic_box() -> PendingDecision {
         PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: "合成框？".into(),
             options: vec!["Yes".into(), "No".into()],
             numbered: true,
@@ -1383,13 +1398,14 @@ mod tests {
         rig.tick(2 * MIN).await;
         fail_last(&mut rig, "w1").await;
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        rig.tick(10 * MIN).await;
         let posts = rig.port.posts();
         assert_eq!(posts.len(), 1, "{posts:?}");
         assert_eq!(
             posts[0].0,
-            Audience::Lobby {
+            Audience::HumanChannel {
                 crew: "c1".into(),
-                mention_owner: true
+                mention_human: true
             }
         );
     }
@@ -1472,6 +1488,7 @@ mod tests {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
         let d = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: "Trust?".into(),
             options: vec!["Yes".into()],
             numbered: true,
@@ -1527,19 +1544,14 @@ mod tests {
         );
         let posts = rig.port.posts();
         assert!(
-            posts
-                .iter()
-                .any(|(to, _)| *to == Audience::HumanChannel { crew: "c1".into() }),
+            posts.iter().any(|(to, _)| *to
+                == Audience::HumanChannel {
+                    crew: "c1".into(),
+                    mention_human: true
+                }),
             "告诉人"
         );
-        assert!(
-            posts.iter().any(|(to, _)| *to
-                == Audience::Channel {
-                    channel: LOBBY.into(),
-                    mention_owner: true
-                }),
-            "告诉群主"
-        );
+        assert_eq!(posts.len(), 1, "only human transition line");
         let before = rig.exec.sent("w1").len();
         rig.post(LOBBY, Sender::Human, at("w1"), "人来了").await;
         assert_eq!(rig.exec.sent("w1").len(), before + 1, "人的唤醒永不被挡");
@@ -1932,7 +1944,7 @@ mod tests {
         rename(&rig, "cap", HOSTILE);
         ping_pong_until_cut(&mut rig).await;
         let posts = rig.port.posts();
-        assert_eq!(posts.len(), 2, "{posts:?}");
+        assert_eq!(posts.len(), 1, "{posts:?}");
         let name = safe_name(HOSTILE);
         let count = (LOOP_LIMITS.edge_max + 1).to_string();
         let minutes = (LOOP_LIMITS.window_ms / MIN).to_string();
@@ -1946,13 +1958,7 @@ mod tests {
                 ("minutes", &minutes),
             ],
         );
-        let want_owner = text::render(
-            text::Lang::Zh,
-            "loop.tripped.owner",
-            &[("target", &name), ("origin", &name)],
-        );
         assert_eq!(posts[0].1, want_human);
-        assert_eq!(posts[1].1, want_owner);
         for (_, t) in &posts {
             assert_neutralised(t, HOSTILE);
         }
@@ -2014,13 +2020,7 @@ mod tests {
         let posts = rig.port.posts();
         let system = text::get(text::Lang::Zh, "origin.system");
         assert!(posts[0].1.contains(system), "{}", posts[0].1);
-        assert_eq!(
-            posts[1].0,
-            Audience::Lobby {
-                crew: "c1".into(),
-                mention_owner: true
-            }
-        );
+        assert_eq!(posts.len(), 1);
     }
 
     /// C19：放弃时告警对任何优先级都发（含没有 origin 的 system / timer 唤醒）。
@@ -2050,6 +2050,7 @@ mod tests {
         rig.tick(2 * MIN).await;
         fail_last(&mut rig, "w1").await;
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        rig.tick(10 * MIN).await;
         assert_eq!(rig.port.posts().len(), 1, "{:?}", rig.port.posts());
     }
 
@@ -2434,9 +2435,10 @@ mod tests {
         rig.exec.lock().answer_hold.insert("w1".into(), held);
         let (tx, _nudged) = tokio::sync::oneshot::channel();
         rig.core
-            .handle(Input::Cmd(Cmd::Nudge {
+            .handle(Input::Cmd(Cmd::Answer {
                 session: "w1".into(),
-                input: "1".into(),
+                fingerprint: synthetic_box().fingerprint(),
+                choice: 0,
                 reply: tx,
             }))
             .await;
@@ -2835,11 +2837,14 @@ mod tests {
         rig.exec.lock().answer_hold.insert("w1".into(), held);
         let (keys, _keys_done) = tokio::sync::oneshot::channel();
         rig.core
-            .handle(Input::Cmd(Cmd::Nudge {
+            .handle(Input::Cmd(Cmd::Answer {
                 session: "w1".into(),
-                input: "1".into(),
+                fingerprint: synthetic_box().fingerprint(),
+                choice: 0,
                 reply: keys,
             }))
+            .await;
+        rig.emit("w1", SessionEvent::Decision(DecisionEvent::Cleared))
             .await;
         let (queued, mut queued_reply) = tokio::sync::oneshot::channel();
         rig.core
@@ -2955,6 +2960,7 @@ mod tests {
         rig.port.lock().wakes[0].attempts = queue::MAX_ATTEMPTS;
         fail_last(&mut rig, "w1").await;
         assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Dropped);
+        rig.tick(10 * MIN).await;
         assert_eq!(rig.port.posts().len(), 1, "放弃告警一次");
     }
 
@@ -3078,6 +3084,7 @@ mod tests {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
         let d = PendingDecision {
+            kind: crewd_term::DecisionKind::Terminal,
             prompt: "合成框".into(),
             options: vec!["Yes".into()],
             numbered: true,

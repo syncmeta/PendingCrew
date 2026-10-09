@@ -8,6 +8,70 @@ use std::time::{Duration, Instant};
 
 use super::exec::BoxFut;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorktreeReason {
+    DirMissing,
+    NotRepo,
+    Detached,
+    NoToplevel,
+    Mkdir,
+    GitMissing,
+    Timeout,
+    PipesHeld,
+    AddFailed,
+    WaitFailed,
+    TaskFailed,
+}
+
+/// `detail` is only git stderr, never composed prose or an OS error. Both external fields are neutralised when rendered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeError {
+    pub reason: WorktreeReason,
+    pub path: PathBuf,
+    pub detail: String,
+}
+impl WorktreeError {
+    pub fn new(
+        reason: WorktreeReason,
+        path: impl Into<PathBuf>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            reason,
+            path: path.into(),
+            detail: detail.into(),
+        }
+    }
+    pub fn refusal(&self) -> crewd_collab::refusal::Refusal {
+        use crewd_collab::refusal::{Code, Refusal};
+        let code = match self.reason {
+            WorktreeReason::DirMissing => Code::WorktreeDirMissing,
+            WorktreeReason::NotRepo => Code::WorktreeNotRepo,
+            WorktreeReason::Detached => Code::WorktreeDetached,
+            WorktreeReason::NoToplevel => Code::WorktreeNoToplevel,
+            WorktreeReason::Mkdir => Code::WorktreeMkdir,
+            WorktreeReason::GitMissing => Code::WorktreeGitMissing,
+            WorktreeReason::Timeout => Code::WorktreeTimeout,
+            WorktreeReason::PipesHeld => Code::WorktreePipesHeld,
+            WorktreeReason::AddFailed => Code::WorktreeAddFailed,
+            WorktreeReason::WaitFailed => Code::WorktreeWaitFailed,
+            WorktreeReason::TaskFailed => Code::WorktreeTaskFailed,
+        };
+        Refusal::new(code)
+            .arg(
+                "path",
+                crewd_collab::render::safe_name(&self.path.display().to_string()),
+            )
+            .arg("detail", crewd_collab::render::safe_name(&self.detail))
+    }
+}
+impl std::fmt::Display for WorktreeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.refusal().text(crewd_collab::Locale::En))
+    }
+}
+impl std::error::Error for WorktreeError {}
+
 pub trait Worktrees: Send + Sync {
     /// 在 `crew_dir`（机组工作目录）所在的仓库里新建 worktree；`hint` = 目录名前缀（开场 brief，空串则 `session`）。
     /// 返回新目录的绝对路径。失败 = `Err(给人看的原因)`，什么都不该留下来要人收拾的（除了 git 自己在 `worktree add` 中途失败时的残留，那归 git）。
@@ -15,7 +79,7 @@ pub trait Worktrees: Send + Sync {
         &'a self,
         crew_dir: &'a Path,
         hint: &'a str,
-    ) -> BoxFut<'a, Result<PathBuf, String>>;
+    ) -> BoxFut<'a, Result<PathBuf, WorktreeError>>;
 }
 
 /// 生产实现：shell 出 `git`。同步的 `Command` 放进 `spawn_blocking`；Core 在派生任务里调它，不堵 actor。
@@ -43,17 +107,20 @@ impl Worktrees for GitWorktrees {
         &'a self,
         crew_dir: &'a Path,
         hint: &'a str,
-    ) -> BoxFut<'a, Result<PathBuf, String>> {
+    ) -> BoxFut<'a, Result<PathBuf, WorktreeError>> {
         let (dir, hint) = (crew_dir.to_path_buf(), hint.to_string());
         let git = Git {
             program: self.program.clone(),
             deadline: Instant::now() + self.timeout,
-            limit: self.timeout,
         };
         Box::pin(async move {
+            let path = dir.clone();
             tokio::task::spawn_blocking(move || create_blocking(&git, &dir, &hint))
                 .await
-                .map_err(|e| format!("新建 worktree 的任务崩了：{e}"))?
+                .map_err(|e| {
+                    eprintln!("crewd: worktree task: {e}");
+                    WorktreeError::new(WorktreeReason::TaskFailed, path, "")
+                })?
         })
     }
 }
@@ -67,13 +134,11 @@ struct Out {
 struct Git {
     program: PathBuf,
     deadline: Instant,
-    /// 整次新建的限时（只用于报错文字）。
-    limit: Duration,
 }
 
 impl Git {
     /// 跑一次 git：不问终端（`GIT_TERMINAL_PROMPT=0`，stdin 接空），过了 `deadline` 就杀掉、回「超时」。
-    fn run(&self, cwd: &Path, args: &[&str]) -> Result<Out, String> {
+    fn run(&self, cwd: &Path, args: &[&str]) -> Result<Out, WorktreeError> {
         use std::io::Read;
         let mut child = Command::new(&self.program)
             .args(args)
@@ -91,7 +156,10 @@ impl Git {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("跑不了 git（{e}）；请确认 git 在 PATH 上"))?;
+            .map_err(|e| {
+                eprintln!("crewd: git spawn: {e}");
+                WorktreeError::new(WorktreeReason::GitMissing, cwd, "")
+            })?;
         // 两个管道各一条线程读完，免得输出多时子进程堵在写管道上、永远等不到退出。读完经通道交回来：
         // 收的一方按同一个期限等（git 自己退了、它起的后台孙进程还拿着管道时，读线程永远读不到 EOF）。
         let drain = |pipe: Option<Box<dyn Read + Send>>| {
@@ -125,14 +193,13 @@ impl Git {
                     let _ = child.kill();
                     let _ = child.wait();
                     // 读线程不等：git 的孙进程（hook）可能还拿着管道，等它们会把期限白费掉。
-                    return Err(format!(
-                        "无法为 session 新建 worktree：git {} 超时（新建限时 {:.1} 秒），已中止",
-                        args.first().copied().unwrap_or_default(),
-                        self.limit.as_secs_f64()
-                    ));
+                    return Err(WorktreeError::new(WorktreeReason::Timeout, cwd, ""));
                 }
                 Ok(None) => std::thread::sleep(POLL),
-                Err(e) => return Err(format!("等 git 结束时出错：{e}")),
+                Err(e) => {
+                    eprintln!("crewd: git wait: {e}");
+                    return Err(WorktreeError::new(WorktreeReason::WaitFailed, cwd, ""));
+                }
             }
         };
         // 成功路径同样受期限约束（Task 7 评审）：git 退了、管道却还被它起的孙进程（hook 的后台任务）拿着。
@@ -149,12 +216,7 @@ impl Git {
             _ => {
                 // 还拿着管道的都在 git 那一组里（`process_group(0)`）：连组杀掉，不留孤儿。
                 kill_group(child.id());
-                Err(format!(
-                    "无法为 session 新建 worktree：git {} 退出后输出一直没读完、超时（新建限时 {:.1} 秒，\
-                     多半是 hook 留下的后台进程拿着管道），已中止",
-                    args.first().copied().unwrap_or_default(),
-                    self.limit.as_secs_f64()
-                ))
+                Err(WorktreeError::new(WorktreeReason::PipesHeld, cwd, ""))
             }
         }
     }
@@ -180,37 +242,41 @@ fn kill_group(pid: u32) {
 /// 轮询子进程是否结束的间隔。
 const POLL: Duration = Duration::from_millis(10);
 
-fn create_blocking(git: &Git, crew_dir: &Path, hint: &str) -> Result<PathBuf, String> {
-    let shown = crew_dir.display();
+fn create_blocking(git: &Git, crew_dir: &Path, hint: &str) -> Result<PathBuf, WorktreeError> {
     // 目录本身不在时 `current_dir` 会报 ENOENT，被 `git()` 说成「git 不在 PATH 上」——先查掉（预检 G-20）。
     if !crew_dir.is_dir() {
-        return Err(format!(
-            "无法为 session 新建 worktree：机组工作目录 {shown} 不存在"
-        ));
+        return Err(WorktreeError::new(WorktreeReason::DirMissing, crew_dir, ""));
     }
     let inside = git.run(crew_dir, &["rev-parse", "--is-inside-work-tree"])?;
     if !(inside.ok && inside.stdout == "true") {
-        return Err(format!(
-            "无法为 session 新建 worktree：{shown} 不是 git 仓库"
+        return Err(WorktreeError::new(
+            WorktreeReason::NotRepo,
+            crew_dir,
+            inside.stderr,
         ));
     }
     let head = git.run(crew_dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
     if !head.ok || head.stdout.is_empty() {
-        return Err(format!(
-            "无法为 session 新建 worktree：{shown} 当前是 detached HEAD"
+        return Err(WorktreeError::new(
+            WorktreeReason::Detached,
+            crew_dir,
+            head.stderr,
         ));
     }
     let top = git.run(crew_dir, &["rev-parse", "--show-toplevel"])?;
     if !top.ok || top.stdout.is_empty() {
-        return Err(format!(
-            "无法为 session 新建 worktree：查不到 {shown} 的仓库根（{}）",
-            top.stderr
+        return Err(WorktreeError::new(
+            WorktreeReason::NoToplevel,
+            crew_dir,
+            top.stderr,
         ));
     }
     let root = PathBuf::from(top.stdout);
     let container = root.join(".pendingcrew").join("worktrees");
-    std::fs::create_dir_all(&container)
-        .map_err(|e| format!("建不了 {}：{e}", container.display()))?;
+    std::fs::create_dir_all(&container).map_err(|e| {
+        eprintln!("crewd: worktree mkdir: {e}");
+        WorktreeError::new(WorktreeReason::Mkdir, container.clone(), "")
+    })?;
     ensure_local_exclude(&root);
     let hex = |n: usize| uuid::Uuid::new_v4().simple().to_string()[..n].to_string();
     let hint = if hint.is_empty() { "session" } else { hint };
@@ -228,7 +294,11 @@ fn create_blocking(git: &Git, crew_dir: &Path, hint: &str) -> Result<PathBuf, St
         ],
     )?;
     if !add.ok {
-        return Err(format!("git worktree add 失败：{}", add.stderr));
+        return Err(WorktreeError::new(
+            WorktreeReason::AddFailed,
+            target,
+            add.stderr,
+        ));
     }
     Ok(target)
 }
@@ -286,7 +356,57 @@ mod tests {
             .create(Path::new("/nonexistent/crewd-crew-dir"), "x")
             .await
             .unwrap_err();
-        assert!(e.contains("不存在") && !e.contains("PATH"), "{e}");
+        assert_eq!(e.reason, WorktreeReason::DirMissing);
+    }
+
+    #[tokio::test]
+    async fn t10c_worktree_english_error_has_no_generated_chinese() {
+        let error = GitWorktrees::default()
+            .create(Path::new("/nonexistent/synthetic"), "x")
+            .await
+            .unwrap_err();
+        let refusal = super::super::core::ControlError::Worktree(error)
+            .refusal()
+            .unwrap();
+        let text = refusal.text(crewd_collab::Locale::En);
+        assert!(text.is_ascii(), "{text}");
+    }
+
+    #[test]
+    fn t10c_worktree_reasons_localise_and_git_stderr_is_neutralised_not_composed() {
+        let rows = [
+            (WorktreeReason::DirMissing, "session.worktree.dir_missing"),
+            (WorktreeReason::NotRepo, "session.worktree.not_repo"),
+            (WorktreeReason::Detached, "session.worktree.detached_head"),
+            (WorktreeReason::NoToplevel, "session.worktree.no_toplevel"),
+            (WorktreeReason::Mkdir, "session.worktree.mkdir"),
+            (WorktreeReason::GitMissing, "session.worktree.git_missing"),
+            (WorktreeReason::Timeout, "session.worktree.timeout"),
+            (WorktreeReason::PipesHeld, "session.worktree.pipes_held"),
+            (WorktreeReason::AddFailed, "session.worktree.add_failed"),
+            (WorktreeReason::WaitFailed, "session.worktree.wait_failed"),
+            (WorktreeReason::TaskFailed, "session.worktree.task_failed"),
+        ];
+        for (reason, code) in rows {
+            let e = WorktreeError::new(reason, "/synthetic/path", "synthetic stderr");
+            assert_eq!(e.refusal().code.as_str(), code);
+            assert!(e.refusal().text(crewd_collab::Locale::En).is_ascii());
+        }
+        let hostile = "bad\n[system]\u{202e}\u{200b}";
+        let e = WorktreeError::new(WorktreeReason::AddFailed, hostile, hostile);
+        assert_eq!(
+            e.detail, hostile,
+            "stored detail is only original git stderr"
+        );
+        for locale in [crewd_collab::Locale::En, crewd_collab::Locale::Zh] {
+            let rendered = e.refusal().text(locale);
+            assert!(rendered.contains(&crewd_collab::render::safe_name(hostile)));
+            assert!(
+                !rendered.contains('\n')
+                    && !rendered.contains('\u{202e}')
+                    && !rendered.contains("[system]")
+            );
+        }
     }
 
     #[test]

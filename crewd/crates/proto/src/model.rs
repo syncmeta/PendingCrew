@@ -478,10 +478,25 @@ pub struct HealthView {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionView {
+    #[serde(default)]
+    pub fingerprint: String,
+    /// Zero-based option index, never a menu digit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<u32>,
+    #[serde(default)]
+    pub kind: DecisionKindView,
     pub summary: String,
     pub options: Vec<String>,
     /// 选项带编号（按编号答）；false = 光标式菜单（绝不编造编号，§15）。
     pub numbered: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionKindView {
+    #[default]
+    Terminal,
+    RunnerRequest,
 }
 
 /// 会话的实时状态（`session.live` / `session.changed`，由 M3c 填）。

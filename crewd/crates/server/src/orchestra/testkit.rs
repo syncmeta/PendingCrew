@@ -975,39 +975,20 @@ impl Port for MemPort {
 
     async fn post_system(&self, to: Audience, text: String) -> Result<()> {
         let mut st = self.lock();
-        // 落在哪个群（同 DbPort：人类群归 home = 最顶上的祖先，§24.1 H2）。
-        let channel = match &to {
-            Audience::HumanChannel { crew } => {
-                let mut home = crew.clone();
-                while let Some(p) = st.crew_parents.get(&home) {
-                    home = p.clone();
-                }
-                format!("{home}/human")
-            }
-            Audience::Lobby { crew, .. } => format!("{crew}/lobby"),
-            Audience::Channel { channel, .. } => channel.clone(),
+        let Audience::HumanChannel {
+            crew,
+            mention_human,
+        } = &to;
+        let mut home = crew.clone();
+        while let Some(p) = st.crew_parents.get(&home) {
+            home = p.clone();
+        }
+        let mentions = if *mention_human {
+            vec!["human".into()]
+        } else {
+            vec![]
         };
-        // @ 谁（同 DbPort）：人类群 @人；`mention_owner` 时 @ 群主（大厅 / 人类群的群主 = 机组机长，别的群看它的群主）。
-        let owner = |st: &MemState, ch: &str| -> Option<String> {
-            let c = st.channels.get(ch)?;
-            match c.kind {
-                MemKind::Lobby | MemKind::Human => Self::captain_of(st, &c.crew),
-                MemKind::Dm | MemKind::Other => c.owner.clone(),
-            }
-        };
-        let mentions: Vec<String> = match &to {
-            Audience::HumanChannel { .. } => vec!["human".into()],
-            Audience::Lobby {
-                mention_owner: true,
-                ..
-            }
-            | Audience::Channel {
-                mention_owner: true,
-                ..
-            } => owner(&st, &channel).into_iter().collect(),
-            _ => vec![],
-        };
-        st.posted.push((channel, text.clone()));
+        st.posted.push((format!("{home}/human"), text.clone()));
         st.posted_mentions.push(mentions);
         st.posts.push((to, text));
         Ok(())
@@ -1119,6 +1100,8 @@ pub struct StandInState {
     pub answer_hold: BTreeMap<String, oneshot::Receiver<()>>,
     /// 每次 `answer` 调用的 `expect`（按 session）。
     pub answers: BTreeMap<String, Vec<String>>,
+    pub choices: BTreeMap<String, Vec<usize>>,
+    pub screens: Vec<(String, usize)>,
 }
 
 impl StandInState {
@@ -1182,10 +1165,10 @@ impl StandInState {
                 .and_then(VecDeque::pop_front)
             {
                 Some(Some(d)) => {
-                    self.boxes.insert(session.to_string(), d);
+                    self.push(session, SessionEvent::Decision(DecisionEvent::Appeared(d)));
                 }
                 Some(None) => {
-                    self.boxes.remove(session);
+                    self.push(session, SessionEvent::Decision(DecisionEvent::Cleared));
                 }
                 None => {}
             }
@@ -1280,7 +1263,7 @@ pub struct StandInWorktrees(pub Arc<Mutex<StandInWtState>>);
 #[derive(Default)]
 pub struct StandInWtState {
     pub calls: Vec<(PathBuf, String)>,
-    pub fail_next: Option<String>,
+    pub fail_next: Option<crate::orchestra::worktree::WorktreeError>,
     /// 下一次 `create` 等这个信号才返回（模拟慢的 `git worktree add`）。
     pub hold: Option<oneshot::Receiver<()>>,
 }
@@ -1290,8 +1273,8 @@ impl StandInWorktrees {
         self.0.lock().expect("测试器材锁中毒").calls.clone()
     }
 
-    pub fn fail_next(&self, why: &str) {
-        self.0.lock().expect("测试器材锁中毒").fail_next = Some(why.into());
+    pub fn fail_next(&self, why: crate::orchestra::worktree::WorktreeError) {
+        self.0.lock().expect("测试器材锁中毒").fail_next = Some(why);
     }
 
     /// 让下一次 `create` 卡住，直到返回的发送端被触发（或丢掉）。
@@ -1302,12 +1285,12 @@ impl StandInWorktrees {
     }
 }
 
-impl super::worktree::Worktrees for StandInWorktrees {
+impl crate::orchestra::worktree::Worktrees for StandInWorktrees {
     fn create<'a>(
         &'a self,
         crew_dir: &'a std::path::Path,
         hint: &'a str,
-    ) -> BoxFut<'a, Result<PathBuf, String>> {
+    ) -> BoxFut<'a, Result<PathBuf, crate::orchestra::worktree::WorktreeError>> {
         let mut st = self.0.lock().expect("测试器材锁中毒");
         st.calls.push((crew_dir.to_path_buf(), hint.to_string()));
         let n = st.calls.len();
@@ -1464,6 +1447,38 @@ impl ExecHandle for StandInHandle {
         })
     }
 
+    fn answer_choice(
+        &self,
+        expect: String,
+        choice: usize,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        let mut s = self.lock();
+        let shown = s.boxes.get(&self.session).cloned();
+        let out = if !s.running.contains(&self.session) {
+            Err(Closed)
+        } else if shown.as_ref().is_some_and(|d| {
+            d.fingerprint() == expect
+                && matches!(d.kind, crewd_term::DecisionKind::RunnerRequest { .. })
+                && choice < d.options.len()
+        }) {
+            s.choices
+                .entry(self.session.clone())
+                .or_default()
+                .push(choice);
+            s.push(
+                &self.session,
+                SessionEvent::Decision(DecisionEvent::Cleared),
+            );
+            Ok(AnswerOutcome::Answered {
+                cleared: true,
+                now: None,
+            })
+        } else {
+            Ok(AnswerOutcome::Conflict { now: shown })
+        };
+        Box::pin(async move { out })
+    }
+
     /// 像真驱动层一样（M2b `stop` + `on_exit`）：先 `abandon("session 被停掉")`（没终局的投递 → Abandoned、
     /// 待决策框清掉、`Working(false)`），再 `Exited { stopped_by_user: true }`。
     fn stop(&self) -> Result<(), Closed> {
@@ -1489,7 +1504,8 @@ impl ExecHandle for StandInHandle {
         Ok(())
     }
 
-    fn screen_text(&self, _max_lines: usize) -> BoxFut<'_, Result<String, Closed>> {
+    fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>> {
+        self.lock().screens.push((self.session.clone(), max_lines));
         Box::pin(async { Ok("合成屏幕".to_string()) })
     }
 
@@ -2399,6 +2415,7 @@ mod self_tests {
         exec.emit(
             "s1",
             SessionEvent::Decision(DecisionEvent::Appeared(crewd_term::PendingDecision {
+                kind: crewd_term::DecisionKind::Terminal,
                 prompt: "p".into(),
                 options: vec![],
                 numbered: false,

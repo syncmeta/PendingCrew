@@ -431,6 +431,17 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-aaaa","sessionId":"worker-2222bbbb"}"#,
             Code(-32009),
         ),
+        (
+            "session.inspect",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        (
+            "session.answer",
+            r#"{"sessionId":"worker-2222bbbb","fingerprint":"synthetic","choice":0}"#,
+            Code(-32009),
+        ),
+        ("decision.list", "null", Code(-32009)),
         ("wake.list", "null", Code(-32009)),
         ("loop.list", "null", Code(-32009)),
         (

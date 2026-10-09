@@ -16,8 +16,8 @@ pub use input_box::{
     body_tail_visible, input_row,
 };
 pub use menu::{
-    BOX_CHARS, CURSOR_MARKERS, PROMPT_SCAN_DEPTH, PendingDecision, RATE_LIMIT_MENU_PHRASES,
-    TRAILING_SLACK, is_confirm_footer, parse_menu, strip,
+    BOX_CHARS, CURSOR_MARKERS, DecisionKind, PROMPT_SCAN_DEPTH, PendingDecision,
+    RATE_LIMIT_MENU_PHRASES, TRAILING_SLACK, is_confirm_footer, parse_menu, strip,
 };
 pub use screen::{CursorPos, Screen, ScreenConfig};
 pub use snapshot::Snapshot;

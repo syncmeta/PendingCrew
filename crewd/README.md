@@ -19,6 +19,25 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 拒绝码：规则拒绝的 `RpcError` 带 `data.refusal`（稳定码，如 `channel.archived`、`crew.management_not_in_tree`），`message` 只是中文缺省，客户端按码本地化、不解析 `message`。码的全集是 `crates/collab/src/refusal.rs` 的 `Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每码一节、两种语言占位符一致、每句说下一步怎么办，测试钉住）；collab 源码里不写给人 / agent 看的句子。`work.*` 的拒绝与参数解析错误暂时没有码
 - 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
 
+## 编排待决策（M3c T10c）
+
+- `decision.list` 只列 actor 当前活着的框；`session.inspect {sessionId, maxLines?}` 返回 `live` 与屏幕（默认 60 行、上限 400）；`session.answer {sessionId, fingerprint, choice}` 只给人类客户端。`choice` / `selected` 都是 **0 起的选项下标**，菜单数字只是执行器输出；旧指纹回 `decision.changed` 并携带实际当前框，不替人默认选。
+- 不做 PendingCrew 审批。runner 自己的权限提示也是待决策：worker、captain 都立刻在人类 home 群 @人，一次指纹一次通知、不升级、不发大厅。agent 的 nudge 只保留无框且正在工作的 `esc` / `interrupt`；文字只发给空闲、无框、无草稿的会话，回执等匹配的最终 `Delivered`，排队不等于成功。
+- 系统问题按进入 / 恢复各通知一次；恢复与续跑拒绝的信息行不 @人。worker 额度只留 health；机长额度按执行器合并。投递放弃从第一笔开始收集十分钟，窗口结束发一行，列各 session 放弃的唤醒数；窗口不是每次失败重新计时。worker 开场 brief 未送达只给机长一条系统唤醒。
+- 草稿第一次从无到持有开始计时，连续持有期间编辑、Text / Unknown 互换都不重置；十分钟报一次，真正清除时恢复一次。Unknown 有独立文案、不会引用占位提示为人的草稿、不会超时放行。Notifier 在内存里：重启会重新报告仍存在的问题；未刷出的聚合窗口不会持久化。
+- `wake.list` 与 `try_deliver` 的 readiness 仍共用 `crewd-wake::explain::live_blocker`；nudge 的命令资格检查只在 `text_nudge_refusal`，收下与 writer 队首都调用它。最终的人的输入来源 / Unknown 闸、提交前复查和 CAS 每键回读仍归执行器（T10d R2/R3/R4），通知计时不构成另一套放行策略。
+- 这里交付的是编排接口与 synthetic/inproc 接线，不宣称完成 T11 的 serve 执行器启动接线、binary watcher 或 M4b 组织级「待人类处理」收件箱。
+
+### M3d 绑定简报：结构化 runner request
+
+T10c 在接受基线 `7b88bf7e676c13df244a0da2ac4ac43460909bab` 上固定以下继承契约；**真实 Codex 接线仍待 M3d，T10c 不修改真实 Codex proto / launch**。
+
+1. M3d 删除 `crates/exec/src/codex/proto.rs` 的 `thread_start_params` 所填 `approvalsReviewer: "auto_review"`，并移除 `answer_server_request` 对 approval 的自动拒绝、approval elicitation 的自动 accept / decline。实际函数是交接目标，不依赖历史行号；接真实 SDK 时先核官方协议与生成类型。
+2. 每条 `item/*/requestApproval`（及 approval elicitation）保留请求 id 与真实 decision values，发 `SessionEvent::Decision(Appeared(PendingDecision))`。本次新增的 domain kind 是 `DecisionKind::RunnerRequest { request_id }`；prompt 是原请求提示、options 是实际 values，`numbered: false`、`selected: None`。其指纹含 request id。线上 `DecisionView.kind` 拼写固定为 **`runner_request`**；旧数据缺 kind 默认 `terminal`，没有伪造 selected。
+3. 编排的 `Cmd::Answer` / `Handle::answer` 用同一人类 CAS 路径与同一 writer 队列。terminal 仍调实际 `ExecHandle::answer(expect, steps)`；runner request 调新增的 typed `ExecHandle::answer_choice(expect, choice)`，**传结构化 0 起下标、绝不模拟按键**。M3d 用该下标查真实 options values，回答原 pending JSON-RPC request，然后发 `Cleared`；指纹变了带当前 decision 回 Conflict。默认 adapter 是 Unsupported，不偷偷回落到按键。
+4. 不增加 PendingCrew 策略、审批门、默认答案或代拒。未回答的请求一直等人。StandIn 已覆盖结构化 choice 与 no-key 路径；这不代表真实 Codex 已实现它。terminal 无编号且高亮未知仍 `NeedsTerminal`。
+5. 尚未验证真实 Claude 人类草稿（包括灰字）与占位文字的样式区分。人类 raw 来源已到 Shown 后，若真草稿全用已识别的 placeholder-grey 画出来，可能读成 Empty 并错误清掉来源标记；T11/T16 必须在**另行明确授权**的真实环境录制里量清样式与提交 / 清除恢复。不得为此减弱 Unknown fail-closed，也不得将本次 synthetic 绿宣称为真实 runner 验证。
+
 ## 备份与恢复
 
 `crewd.db` 是聊天记录的唯一一份，只在这台机器上。

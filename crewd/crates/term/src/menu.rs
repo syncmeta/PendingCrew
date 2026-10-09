@@ -26,9 +26,20 @@ pub const PROMPT_SCAN_DEPTH: usize = 12;
 pub const RATE_LIMIT_MENU_PHRASES: [&str; 2] =
     ["/rate-limit-options", "stop and wait for limit to reset"];
 
+/// Executor transport, not an approval policy. A runner request retains its identity.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DecisionKind {
+    #[default]
+    Terminal,
+    RunnerRequest {
+        request_id: String,
+    },
+}
+
 /// 一个「在等人选」的现场。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingDecision {
+    pub kind: DecisionKind,
     /// 问句原文；认不出时为空串。
     pub prompt: String,
     /// 选项正文（已剥掉序号与光标），按屏幕顺序。
@@ -43,6 +54,17 @@ pub struct PendingDecision {
 impl PendingDecision {
     /// 去重指纹：同一菜单反复重绘 → 同一指纹。故意不含 `numbered` 与 `selected`。
     pub fn fingerprint(&self) -> String {
+        if let DecisionKind::RunnerRequest { request_id } = &self.kind {
+            return format!(
+                "runner_request:{}:{}:{}",
+                request_id.len(),
+                request_id,
+                std::iter::once(self.prompt.as_str())
+                    .chain(self.options.iter().map(String::as_str))
+                    .map(|v| format!("{}:{v}", v.len()))
+                    .collect::<String>()
+            );
+        }
         std::iter::once(self.prompt.as_str())
             .chain(self.options.iter().map(String::as_str))
             .collect::<Vec<_>>()
@@ -176,6 +198,7 @@ fn parse_numbered(lines: &[&str]) -> Option<PendingDecision> {
     // 好几行都带光标（不该发生）时取第一行：判据只要「至少一行」，这里如实报第一处。
     let selected = parsed.iter().position(|o| o.selected);
     Some(PendingDecision {
+        kind: DecisionKind::Terminal,
         prompt: prompt_above(lines, start),
         options: parsed.into_iter().map(|o| o.text).collect(),
         numbered: true,
@@ -216,6 +239,7 @@ fn parse_cursor_list(lines: &[&str]) -> Option<PendingDecision> {
         return None;
     }
     Some(PendingDecision {
+        kind: DecisionKind::Terminal,
         prompt: prompt_above(lines, start),
         options,
         numbered: false,
@@ -408,12 +432,14 @@ mod tests {
     #[test]
     fn fingerprint_ignores_numbered_and_selected() {
         let a = PendingDecision {
+            kind: DecisionKind::Terminal,
             prompt: "q".into(),
             options: vec!["a".into()],
             numbered: true,
             selected: Some(0),
         };
         let b = PendingDecision {
+            kind: DecisionKind::Terminal,
             numbered: false,
             selected: None,
             ..a.clone()
