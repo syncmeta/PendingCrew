@@ -502,8 +502,14 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
                 .number
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| captain.clone());
+            // C3 resolves both the recipient and Session mention from this same address.
+            // Without a directory number the address is a stable creation-time contact.
             cx.r(
-                "r.parent_brief",
+                if child.number.is_some() {
+                    "r.parent_brief"
+                } else {
+                    "r.parent_brief_contact"
+                },
                 &[
                     ("child", &child_name),
                     (
@@ -512,7 +518,7 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
                     ),
                     (
                         "mentions_arg",
-                        &serde_json::json!([{"kind":"session", "target_id":captain}]).to_string(),
+                        &serde_json::json!([{"kind":"session", "target_id":address}]).to_string(),
                     ),
                 ],
             )
@@ -1238,7 +1244,7 @@ mod tests {
                 ),
                 (
                     "mentions_arg",
-                    &serde_json::json!([{"kind":"session", "target_id":f.captain}]).to_string(),
+                    &serde_json::json!([{"kind":"session", "target_id":number_of(&f, &f.crew).await}]).to_string(),
                 ),
             ],
         );

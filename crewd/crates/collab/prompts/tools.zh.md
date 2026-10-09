@@ -867,6 +867,9 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 ## r.parent_brief
 你是新建的上级机组的机长，「{child}」是你的第一个子机组。先 post(to: {child_arg}, message: "请发来当前目标和进展。", mentions: {mentions_arg}) 联系它的机长，向它取得上下文，再决定还要收编哪些机组。上级身份不授予你读取它大厅的权限。
 
+## r.parent_brief_contact
+你是新建的上级机组的机长，「{child}」是你的第一个子机组，但它没有通讯录号。用 post(to: {child_arg}, message: "请发来你掌握的子机组目标和进展。", mentions: {mentions_arg}) 联系建组时的机长 session，向它取得上下文。这是固定 session 联系人，不代表它现在仍是机长；联系失败就用 ask 请人类补充上下文，继续做不依赖答案的事。上级身份不授予你读取子机组大厅的权限。
+
 ## r.parent_brief_no_captain
 你是新建的上级机组的机长，「{child}」是你的第一个子机组，但它还没有机长。用 ask(question: "没有机长的子机组，应该怎样取得目标和进展上下文？") 请人类安排或补充上下文；继续做不依赖答案的事。上级身份不授予你读取它大厅的权限。
 

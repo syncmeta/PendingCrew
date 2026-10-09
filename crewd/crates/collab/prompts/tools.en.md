@@ -867,6 +867,9 @@ Child crew "{crew}" (number {number}) was created, but its captain did not start
 ## r.parent_brief
 You are the captain of a newly created parent crew; "{child}" is your first child crew. Contact its captain with post(to: {child_arg}, message: "Share your current goals and progress.", mentions: {mentions_arg}); get the context from them, then decide whether to adopt other crews. Being its parent does not grant access to its lobby.
 
+## r.parent_brief_contact
+You are the captain of a newly created parent crew; "{child}" is your first child crew, but has no directory number. Contact its creation-time captain session with post(to: {child_arg}, message: "Share the child goals and progress you know.", mentions: {mentions_arg}) to get context. This is a fixed session contact, not a claim that it is still captain; if contact fails, use ask for human context and keep working on what does not need the answer. Being its parent does not grant access to the child lobby.
+
 ## r.parent_brief_no_captain
 You are the captain of a newly created parent crew; "{child}" is your first child crew, but has no captain. Use ask(question: "How should I obtain goals and progress for my child crew without a captain?") to get a human decision or context; keep working on what does not need the answer. Being its parent does not grant access to its lobby.
 

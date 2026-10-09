@@ -964,3 +964,221 @@ async fn residual_multiple_parent_noop_uses_canonical_edges() {
         "same-parent graph no-op must not claim detachment: {failures:?}"
     );
 }
+#[tokio::test]
+async fn residual_parent_contact_tracks_receiver_across_handoff() {
+    let mut failures = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        for unnumbered in [false, true] {
+            for changed in [false, true] {
+                let f = Fixture::new().await;
+                locale(&f, l).await;
+                if unnumbered {
+                    let crew = f.crew.clone();
+                    f.state
+                        .db
+                        .call(move |s| {
+                            s.conn()
+                                .execute("UPDATE crews SET number=NULL WHERE id=?1", [crew])
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                let (st, ctl) = persisted(&f);
+                let created = run(
+                    &st,
+                    &f.captain,
+                    "crew_structure",
+                    json!({"action":"create_parent","title":"parent"}),
+                )
+                .await;
+                assert!(!created.is_error, "{}", created.text);
+                let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+                let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+                let parent = &rows[0].id;
+                assert_eq!(rows[0].role, crewd_server::agent::Role::Captain);
+                let args = advertised(&start.brief, "post");
+                if unnumbered {
+                    let expected = text::r(
+                        l,
+                        "r.parent_brief_contact",
+                        &[
+                            ("child", "示例机组"),
+                            ("child_arg", &serde_json::to_string(&f.captain).unwrap()),
+                            (
+                                "mentions_arg",
+                                &serde_json::json!([{"kind":"session", "target_id":f.captain}])
+                                    .to_string(),
+                            ),
+                        ],
+                    );
+                    assert_eq!(
+                        start.brief, expected,
+                        "stable fallback must not claim a current captain"
+                    );
+                }
+                if changed {
+                    f.set_role(&f.worker, crewd_server::agent::Role::Captain)
+                        .await;
+                    assert_eq!(
+                        port::identity(&st, &f.worker).await.unwrap().unwrap().role,
+                        crewd_server::agent::Role::Captain
+                    );
+                    assert_eq!(
+                        port::identity(&st, &f.captain).await.unwrap().unwrap().role,
+                        crewd_server::agent::Role::Worker
+                    );
+                }
+                let recipient = if changed && !unnumbered {
+                    &f.worker
+                } else {
+                    &f.captain
+                };
+                assert_eq!(
+                    port::resolve_address(&st, args["to"].as_str().unwrap())
+                        .await
+                        .unwrap(),
+                    *recipient
+                );
+                let child_lobby = port::lobby_of(&st, &f.crew).await.unwrap();
+                assert!(
+                    run(
+                        &st,
+                        parent,
+                        "read_channel",
+                        json!({"channel":child_lobby.id})
+                    )
+                    .await
+                    .is_error
+                );
+                let contact = run(&st, parent, "post", args.clone()).await;
+                let dm = port::my_channels(&st, parent)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|c| c.kind == crewd_proto::ChannelKind::Dm && c.has_session(recipient))
+                    .unwrap();
+                let stored = port::messages_raw(&st, &dm.id, None, 20).await.unwrap();
+                if contact.is_error {
+                    assert!(
+                        stored.is_empty(),
+                        "failed contact must not falsely claim or persist a send"
+                    );
+                    failures.push((l, unnumbered, changed, contact.text));
+                } else {
+                    assert_eq!(stored.len(), 1);
+                    assert_eq!(
+                        stored[0].sender_session_id.as_deref(),
+                        Some(parent.as_str())
+                    );
+                    assert_eq!(stored[0].mentions.len(), 1);
+                    assert_eq!(stored[0].mentions[0].kind, MentionKind::Session);
+                    assert_eq!(
+                        stored[0].mentions[0].target_id.as_deref(),
+                        Some(recipient.as_str())
+                    );
+                }
+                // Existing C3 current-recipient/address resolver is the independent positive control.
+                let mut consistent = args;
+                consistent["mentions"] = json!([{"kind":"session","target_id":recipient}]);
+                consistent["message"] = json!(format!(
+                    "explicit recipient control {l:?} {unnumbered} {changed}"
+                ));
+                assert!(!run(&st, parent, "post", consistent).await.is_error);
+                assert!(
+                    run(
+                        &st,
+                        parent,
+                        "read_channel",
+                        json!({"channel":child_lobby.id})
+                    )
+                    .await
+                    .is_error
+                );
+                eprintln!(
+                    "locale={l:?} unnumbered={unnumbered} handoff={changed} actual-role/directory/explicit-recipient/read-boundary controls passed"
+                );
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "advertised recipient and mention must stay consistent after a real role handoff: {failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn residual_departed_contact_is_honestly_refused_without_a_message() {
+    for l in [Locale::Zh, Locale::En] {
+        for unnumbered in [false, true] {
+            let f = Fixture::new().await;
+            locale(&f, l).await;
+            if unnumbered {
+                let crew = f.crew.clone();
+                f.state
+                    .db
+                    .call(move |s| {
+                        s.conn()
+                            .execute("UPDATE crews SET number=NULL WHERE id=?1", [crew])
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            let (st, ctl) = persisted(&f);
+            let created = run(
+                &st,
+                &f.captain,
+                "crew_structure",
+                json!({"action":"create_parent","title":"parent"}),
+            )
+            .await;
+            assert!(!created.is_error);
+            let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+            let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+            let parent = &rows[0].id;
+            let args = advertised(&start.brief, "post");
+            let (crew, cap, worker) = (f.crew.clone(), f.captain.clone(), f.worker.clone());
+            // Real collab lifecycle/guards; no control process, client snapshot or user data.
+            st.collab(move |tx| {
+                crewd_collab::sessions::set_desired(tx, &cap, crewd_proto::Desired::Stopped)?;
+                crewd_collab::sessions::set_desired(tx, &worker, crewd_proto::Desired::Stopped)?;
+                crewd_collab::crews::archive(tx, &crew)?;
+                crewd_collab::crews::purge(tx, &crew)
+            })
+            .await
+            .unwrap();
+            assert!(port::identity(&st, &f.captain).await.unwrap().is_none());
+            assert!(
+                port::resolve_address(&st, args["to"].as_str().unwrap())
+                    .await
+                    .is_err()
+            );
+            let before: i64 = st
+                .db
+                .call(|s| {
+                    s.conn()
+                        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            let result = run(&st, parent, "post", args).await;
+            assert!(
+                result.is_error,
+                "a departed contact must not be reported as sent: {}",
+                result.text
+            );
+            let after: i64 = st
+                .db
+                .call(|s| {
+                    s.conn()
+                        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after, before);
+        }
+    }
+}
