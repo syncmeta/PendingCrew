@@ -1,7 +1,7 @@
 //! 一个 claude 会话的 tokio 任务，和其余部分唯一的接口 [`SessionHandle`]（spec §13 Q12）。
 //!
 //! 任务拥有 PTY 主端、子进程、[`Core`]；命令从句柄进，事件从 `mpsc` 出。
-//! 节拍：每块 PTY 输出一拍、0.6s 定时一拍、`Core::next_wakeup` 到点一拍。
+//! 节拍：PTY 输出先有界排空再一拍、0.6s 定时一拍、`Core::next_wakeup` 到点一拍。
 //! 写 PTY 走单独的写任务：子进程不读输入时写会阻塞，不能卡住读（否则双方互等）。
 //!
 //! 以后执行器拆成独立进程，只把 `SessionHandle` 的命令与事件换成线协议。
@@ -701,35 +701,56 @@ pub(crate) fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatus
     }
 }
 
-/// 定时拍 / 回答按键之前：把 PTY 里此刻已经到了的输出（非阻塞）喂进屏幕，再让 Core 按「当前屏幕」决定按不按
-/// （T10d fix M2）。`select!` 不偏向读那一支：一直有输出时会饿死命令；这里只读已经到了的，至多 [`DRAIN_CHUNKS`] 块。
-fn drain_ready(t: &mut Task) {
-    let mut buf = vec![0u8; 16 * 1024];
-    for _ in 0..DRAIN_CHUNKS {
-        match t.running.master.try_read(&mut buf) {
-            Ok(Some(n)) if n > 0 => t.core.on_output(&buf[..n], Instant::now()),
-            _ => return,
+/// 把这一拍里已经可读的输出逐块喂进解析器，**不逐块 flush**（T10d fix round 2）。
+/// `first` 是普通 read 分支已经读走的第一块；它也占一块预算。
+///
+/// 只有确认读到 WouldBlock / EOF 才回 true，调用方才可以做依赖完整屏幕的 tick / flush。
+/// 预算用尽或读失败回 false：这拍不按回答键，下一次 select / drain 再继续。
+/// `select!` 仍不偏向读分支，加上预算，一直吐字的子进程不会饿死命令。
+fn drain_ready(master: &PtyMaster, core: &mut Core, first: Option<&[u8]>, budget: usize) -> bool {
+    let mut read_chunks = 0;
+    if let Some(bytes) = first {
+        core.ingest_output(bytes, Instant::now());
+        read_chunks += 1;
+    }
+    let mut buf = [0u8; PTY_READ_SIZE];
+    while read_chunks < budget {
+        match master.try_read(&mut buf) {
+            Ok(Some(n)) if n > 0 => {
+                core.ingest_output(&buf[..n], Instant::now());
+                read_chunks += 1;
+            }
+            Ok(None | Some(0)) => return true,
+            Err(_) => return false,
+            _ => unreachable!("有字节或已经排空"),
         }
     }
+    false
 }
 
-/// [`drain_ready`] 一次至多读几块（不让一直吐字的子进程把这一拍拖住）。
+const PTY_READ_SIZE: usize = 16 * 1024;
+/// 一拍至多读几块（不让一直吐字的子进程把这一拍拖住）；触顶不等于已经排空。
 const DRAIN_CHUNKS: usize = 64;
 
 /// 子进程退出后把 PTY 里剩下的输出读干净（最多 `limit`）：claude 拒绝续跑时是先打印再退出的。
 async fn drain(master: &PtyMaster, core: &mut Core, limit: Duration) {
     let deadline = tokio::time::Instant::now() + limit;
-    let mut buf = vec![0u8; 16 * 1024];
+    let mut buf = [0u8; PTY_READ_SIZE];
     while let Ok(Ok(n)) = tokio::time::timeout_at(deadline, master.read(&mut buf)).await {
         if n == 0 {
-            break;
+            core.after_output_drain(Instant::now());
+            return;
         }
-        core.on_output(&buf[..n], Instant::now());
+        core.ingest_output(&buf[..n], Instant::now());
+    }
+    // 子进程虽退了，继承从端的后代可能还活着：超时不是排空。非阻塞确认之后才 flush。
+    if drain_ready(master, core, None, DRAIN_CHUNKS) {
+        core.after_output_drain(Instant::now());
     }
 }
 
 async fn run(mut t: Task) {
-    let mut buf = vec![0u8; 16 * 1024];
+    let mut buf = [0u8; PTY_READ_SIZE];
     let mut reading = true;
     let mut commands_open = true;
     let mut stop_deadline: Option<tokio::time::Instant> = None;
@@ -744,18 +765,23 @@ async fn run(mut t: Task) {
         let mut exit = None;
         tokio::select! {
             r = t.running.master.read(&mut buf), if reading => match r {
-                Ok(n) if n > 0 => t.core.on_output(&buf[..n], Instant::now()),
+                Ok(n) if n > 0 => {
+                    if drain_ready(&t.running.master, &mut t.core, Some(&buf[..n]), DRAIN_CHUNKS) {
+                        t.core.after_output_drain(Instant::now());
+                    }
+                }
                 _ => reading = false,
             },
             status = t.running.child.wait() => exit = Some(decode(status)),
             cmd = t.cmd_rx.recv(), if commands_open => match cmd {
                 Some(c) => {
-                    if matches!(c, Command::Answer { .. }) {
-                        // 第一下当场按（按之前回读）：先把已经到了的输出喂进屏幕，别拿旧屏核框。
-                        drain_ready(&mut t);
-                    }
+                    let answer = matches!(c, Command::Answer { .. });
+                    // handle 只排回答，不当场 flush；预算触顶时第一下也必须等下一轮排空。
                     if handle(&mut t, c) {
                         begin_stop(&mut t, &mut stopping, &mut stop_deadline);
+                    }
+                    if answer && drain_ready(&t.running.master, &mut t.core, None, DRAIN_CHUNKS) {
+                        t.core.after_output_drain(Instant::now());
                     }
                 }
                 None => {
@@ -764,13 +790,15 @@ async fn run(mut t: Task) {
                 }
             },
             _ = tick.tick() => {
-                drain_ready(&mut t);
-                t.core.on_tick(Instant::now());
+                if drain_ready(&t.running.master, &mut t.core, None, DRAIN_CHUNKS) {
+                    t.core.on_tick(Instant::now());
+                }
             }
             _ = tokio::time::sleep_until(wake.unwrap_or_else(tokio::time::Instant::now)), if wake.is_some() => {
-                // 到点的多半是排好的按键（回答 / 提交拍）：按之前回读的屏幕要是此刻的（T10d fix M2）。
-                drain_ready(&mut t);
-                t.core.on_tick(Instant::now());
+                // 到点的多半是排好的按键：只有已经可读的输出全喂完，屏幕才可用来核框。
+                if drain_ready(&t.running.master, &mut t.core, None, DRAIN_CHUNKS) {
+                    t.core.on_tick(Instant::now());
+                }
             }
             _ = tokio::time::sleep_until(stop_deadline.unwrap_or_else(tokio::time::Instant::now)), if stop_deadline.is_some() => {
                 stop_deadline = None;
@@ -888,7 +916,7 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             let id = t.next_answer;
             t.next_answer += 1;
             t.answers.insert(id, reply);
-            t.core.answer(id, expect, steps, now);
+            t.core.queue_answer(id, expect, steps, now);
         }
         Command::Status { reply } => {
             let _ = reply.send(SessionStatus {
@@ -1023,5 +1051,196 @@ mod context_tests {
         );
         assert!(rx.try_recv().is_err(), "拒掉的不进命令通道");
         assert_eq!(h.send_with_context("开工", ctx), Ok(BRIEF_DELIVERY_ID + 1));
+    }
+}
+
+#[cfg(test)]
+mod output_drain_tests {
+    use super::*;
+    use crate::pty::PtyProcess;
+    use crewd_term::blocking_dialog;
+
+    fn menu(prompt: &str, selected: usize) -> Vec<u8> {
+        let mark = |i| if i == selected { "❯" } else { " " };
+        format!(
+            "\x1b[2J\x1b[H{prompt}\r\n{} 1. Yes\r\n{} 2. No\r\n{} 3. Ask later",
+            mark(0),
+            mark(1),
+            mark(2)
+        )
+        .into_bytes()
+    }
+
+    fn shown(core: &Core) -> PendingDecision {
+        let rows = core
+            .screen_text(25)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        blocking_dialog(&rows).expect("前提：屏上有待决策框")
+    }
+
+    fn due_answer() -> (Core, PendingDecision) {
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        core.on_output(&menu("Proceed?", 0), now);
+        core.take_actions();
+        let d = shown(&core);
+        // 与 Command::Answer 一样只排第一下；在第一块 PTY 输出之前已经到点。
+        core.queue_answer(
+            1,
+            d.fingerprint(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: Some(0),
+            }],
+            now,
+        );
+        assert!(core.take_actions().is_empty(), "排队本身不能绕过排空闸");
+        (core, d)
+    }
+
+    fn writes(actions: &[Action]) -> Vec<&[u8]> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Write(bytes) => Some(bytes.as_slice()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 真 PTY，子进程只把合成字节写进去，然后落盘回执。读之前等回执，保证第二块早已可读，
+    /// 不是「我们试图排空之后它才到」的另一种竞态；不启动真 claude / codex。
+    async fn readable_output(bytes: &[u8]) -> (tempfile::TempDir, PtyProcess) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("screen.bin");
+        let ready = dir.path().join("ready");
+        std::fs::write(&source, bytes).unwrap();
+        let p = spawn_pty(&SpawnSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "cat '{}' && printf ready > '{}' && sleep 30",
+                    source.display(),
+                    ready.display()
+                ),
+            ],
+            env: [("PATH".into(), "/usr/bin:/bin".into())].into(),
+            cwd: dir.path().to_path_buf(),
+            cols: 80,
+            lines: 25,
+        })
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("合成输出 5s 内必须已经全写进 PTY");
+        (dir, p)
+    }
+
+    async fn stop(mut p: PtyProcess) {
+        kill_group(p.pid);
+        reap_killed(&mut p.child, &p.master, REAP_LIMIT)
+            .await
+            .unwrap();
+    }
+
+    /// R2 必须钉住的边界：chunk 1 保持旧框；chunk 2 才露出新框。键在 chunk 1 之前已经到点。
+    /// 第一次只给一块预算，直接检查 chunk 1 后无写键；再排完第二块，回 Conflict 且仍一键未写。
+    #[tokio::test]
+    async fn a_due_answer_waits_for_the_second_pty_read() {
+        let (mut core, before) = due_answer();
+        let prefix = b"\x1b[1;1H";
+        let mut output = prefix.to_vec();
+        output.extend(menu("Replace the old decision?", 0));
+        let (_dir, p) = readable_output(&output).await;
+        let mut first = [0u8; 6];
+        let n = p.master.read(&mut first).await.unwrap();
+        assert_eq!(&first[..n], prefix, "第一块只改光标，旧框还没换");
+        assert!(!drain_ready(&p.master, &mut core, Some(&first[..n]), 1));
+        let mut log = core.take_actions();
+        assert!(writes(&log).is_empty(), "chunk 1 后不按到点键：{log:?}");
+        assert_eq!(shown(&core), before, "第一块仍是旧框和旧高亮");
+        assert!(drain_ready(&p.master, &mut core, None, DRAIN_CHUNKS));
+        core.after_output_drain(Instant::now());
+        log.extend(core.take_actions());
+        assert!(writes(&log).is_empty(), "排完第二块也不能按旧答：{log:?}");
+        assert!(
+            matches!(
+                log.iter().find(|a| matches!(a, Action::AnswerDone { .. })),
+                Some(Action::AnswerDone {
+                    id: 1,
+                    outcome: Some(AnswerOutcome::Conflict { now: Some(d) })
+                }) if d.prompt == "Replace the old decision?" && d.selected == Some(0)
+            ),
+            "{log:?}"
+        );
+        stop(p).await;
+    }
+
+    /// 普通 read 分支的 first + 后续 try_read 走同一个排空闸；指纹相同、只有第二块挪了高亮。
+    #[tokio::test]
+    async fn an_ordinary_read_drains_the_changed_highlight_before_a_due_answer() {
+        let (mut core, before) = due_answer();
+        let prefix = b"\x1b[1;1H";
+        let mut output = prefix.to_vec();
+        output.extend(menu("Proceed?", 2));
+        let (_dir, p) = readable_output(&output).await;
+        let mut first = [0u8; 6];
+        let n = p.master.read(&mut first).await.unwrap();
+        assert_eq!(&first[..n], prefix);
+        // 与 run() 的普通 read 分支完全相同，第二次 PTY read 才带来变动。
+        assert!(drain_ready(
+            &p.master,
+            &mut core,
+            Some(&first[..n]),
+            DRAIN_CHUNKS
+        ));
+        core.after_output_drain(Instant::now());
+        let log = core.take_actions();
+        assert!(writes(&log).is_empty(), "不能在第一块之后按 Enter：{log:?}");
+        assert!(
+            matches!(
+                log.iter().find(|a| matches!(a, Action::AnswerDone { .. })),
+                Some(Action::AnswerDone {
+                    id: 1,
+                    outcome: Some(AnswerOutcome::Conflict { now: Some(d) })
+                }) if d.fingerprint() == before.fingerprint() && d.selected == Some(2)
+            ),
+            "{log:?}"
+        );
+        stop(p).await;
+    }
+
+    /// tick / Command::Answer 的无 first 路也不能在预算触顶后 flush，即使刚读完的框看起来完全对。
+    /// 下一轮真正读到 WouldBlock 才放行，避免用「恰好读完」的猜测代替排空事实。
+    #[tokio::test]
+    async fn a_capped_drain_defers_a_due_answer_until_would_block() {
+        let (mut core, before) = due_answer();
+        let (_dir, p) = readable_output(b"\x1b[1;1H").await;
+        assert!(!drain_ready(&p.master, &mut core, None, 1));
+        let mut log = core.take_actions();
+        assert!(writes(&log).is_empty(), "预算触顶不是排空：{log:?}");
+        assert_eq!(shown(&core), before);
+        assert!(drain_ready(&p.master, &mut core, None, DRAIN_CHUNKS));
+        core.after_output_drain(Instant::now());
+        log.extend(core.take_actions());
+        assert_eq!(
+            writes(&log),
+            vec![b"\r".as_slice()],
+            "确认排空后才按：{log:?}"
+        );
+        stop(p).await;
     }
 }

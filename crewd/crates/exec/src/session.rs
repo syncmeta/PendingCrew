@@ -490,8 +490,18 @@ impl Core {
         self.screen.snapshot()
     }
 
-    /// PTY 来了一块输出。
+    /// PTY 来了一块输出，且调用方已经确认这一块就是这拍里最后一块可读输出。
+    ///
+    /// 真 PTY 的驱动必须用 [`Self::ingest_output`] 逐块喂完，再只调用一次
+    /// [`Self::after_output_drain`]；否则拆在两次 `read` 里的重画会让第一块旧屏误放行回答键。
     pub fn on_output(&mut self, bytes: &[u8], now: Instant) {
+        self.ingest_output(bytes, now);
+        self.after_output_drain(now);
+    }
+
+    /// 只把一块 PTY 输出喂进解析器，不根据这块中途屏幕写任何到点按键。
+    /// 驱动把此刻已经可读的所有块喂完后，必须调用一次 [`Self::after_output_drain`]。
+    pub(crate) fn ingest_output(&mut self, bytes: &[u8], now: Instant) {
         if !self.running {
             return;
         }
@@ -517,16 +527,24 @@ impl Core {
         if let Some(h) = self.quota.feed(bytes) {
             self.set_health(Some(h), now);
         }
-        self.observe_input_box();
-        self.flush_due_keys(now);
-        self.verify_answer(now);
-        // 扫描器只是附加触发：它触发与否，按键前都要看屏幕；而屏幕每块输出、每拍都看，
-        // 所以它的结果不改变判定（扫描器没认出的菜单——光标定位摆的词——照样会答）。
+        // 扫描器只是附加触发：真正的屏幕判定在整拍输出喂完后的 `after_output_drain`，
+        // 不会拿拆帧中途的屏幕按键。
         let _scanner_fired = self.rate_limit.feed(bytes, now);
-        self.answer_rate_limit_menu_if_shown(now);
         if self.resume_watch.is_some() {
             self.resume_tail.feed(bytes);
         }
+    }
+
+    /// 一拍里已经可读的 PTY 输出全喂完后，才做依赖完整屏幕的判定和写键。
+    pub(crate) fn after_output_drain(&mut self, now: Instant) {
+        if !self.running {
+            return;
+        }
+        self.last_now = self.last_now.max(now);
+        self.observe_input_box();
+        self.flush_due_keys(now);
+        self.verify_answer(now);
+        self.answer_rate_limit_menu_if_shown(now);
         self.check_resume_refusal(now);
         self.step_delivery(now);
     }
@@ -620,6 +638,19 @@ impl Core {
     /// `selected_before` → 这一下和剩下的都不按，回 `Conflict`。最后一下按完 `answer_verify_delay` 再回读，回
     /// `Answered`。一次只答一个，后来的排队。结果以 [`Action::AnswerDone`] 交出去。
     pub fn answer(&mut self, id: u64, expect: String, steps: Vec<AnswerStep>, now: Instant) {
+        self.queue_answer(id, expect, steps, now);
+        self.flush_due_keys(now);
+    }
+
+    /// 驱动先只把回答排好；等已经可读的 PTY 输出全喂完，再由
+    /// [`Self::after_output_drain`] 放行第一下。`Command::Answer` 本身不会绕过整拍排空闸。
+    pub(crate) fn queue_answer(
+        &mut self,
+        id: u64,
+        expect: String,
+        steps: Vec<AnswerStep>,
+        now: Instant,
+    ) {
         if !self.running || self.stopped_by_user {
             self.actions.push(Action::AnswerDone { id, outcome: None });
             return;
@@ -839,9 +870,9 @@ impl Core {
             remaining: job.steps.into(),
             verify_at,
         });
-        // 第一下「现在」排进去（下一次 flush 之前回读屏幕）；后面的每一下在上一下按下之后再排。
+        // 第一下「现在」排进去；调用方只在整拍 PTY 输出排空之后 flush。后面的每一下在
+        // 上一下按下之后再排。
         self.schedule_next_answer_key(now);
-        self.flush_due_keys(now);
     }
 
     /// 把正在进行的回答的下一下排在 `at`；没有下一下了 = 到 `at + answer_verify_delay` 回读（S73）。
@@ -904,6 +935,8 @@ impl Core {
             });
         }
         self.start_next_answer(now);
+        // `finish_answer` 只会在一轮完整屏幕判定里发生；排着的下一答可在同一轮安全地开始。
+        self.flush_due_keys(now);
     }
 
     fn answer_rate_limit_menu(&mut self, now: Instant) {
