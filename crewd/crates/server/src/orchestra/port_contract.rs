@@ -1262,6 +1262,94 @@ async fn crew_removed_of_an_unknown_crew_is_not_found<W: World>() {
     }
 }
 
+/// 一个持久人停边界，跨后来的 desired=Running：旧行不退回，新行仍退回，次数跟库共用 C24。
+async fn human_stop_boundary_survives_new_work_and_mixed_requeue<W: World>() {
+    let w = W::new().await;
+    let p = w.port();
+    let old = p.enqueue(timer("w-1", "old")).await.unwrap().unwrap();
+    let pending = p.enqueue(timer("w-1", "pending")).await.unwrap().unwrap();
+    let old_row = p
+        .pending("w-1")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == old)
+        .unwrap();
+    p.claim(&batch("w-1", vec![old_row])).await.unwrap();
+    let dropped = p.human_stop("w-1").await.unwrap();
+    assert_eq!(dropped.iter().map(|w| w.id).collect::<Vec<_>>(), [pending]);
+    let fresh = p.enqueue(timer("w-1", "fresh")).await.unwrap().unwrap();
+    p.claim(&batch("w-1", p.pending("w-1").await.unwrap()))
+        .await
+        .unwrap();
+    p.patch_session(
+        "w-1",
+        SessionPatch {
+            desired: Some(Desired::Running),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    p.settle(&[old, fresh], Settle::Requeue, Ms(10))
+        .await
+        .unwrap();
+    let rows = p.list_wakes(Some("w-1")).await.unwrap();
+    let old = rows.iter().find(|w| w.id == old).unwrap();
+    let fresh = rows.iter().find(|w| w.id == fresh).unwrap();
+    assert_eq!(
+        (old.state, old.attempts, old.last_error.as_deref()),
+        (WakeState::Dropped, 1, Some("stopped"))
+    );
+    assert_eq!((fresh.state, fresh.attempts), (WakeState::Pending, 0));
+    assert_eq!(
+        rows.iter().find(|w| w.id == pending).unwrap().state,
+        WakeState::Dropped
+    );
+    assert_eq!(
+        p.session("w-1").await.unwrap().unwrap().desired,
+        Desired::Running
+    );
+}
+
+async fn human_stop_boundary_separates_cancelled_and_fresh_failure_outcomes<W: World>() {
+    let w = W::new().await;
+    let p = w.port();
+    let old = p.enqueue(timer("w-1", "old")).await.unwrap().unwrap();
+    p.claim(&batch("w-1", p.pending("w-1").await.unwrap()))
+        .await
+        .unwrap();
+    p.human_stop("w-1").await.unwrap();
+    let fresh = p.enqueue(timer("w-1", "fresh")).await.unwrap().unwrap();
+    p.claim(&batch("w-1", p.pending("w-1").await.unwrap()))
+        .await
+        .unwrap();
+    let rows = p.list_wakes(Some("w-1")).await.unwrap();
+    let out = p
+        .ack(
+            &batch("w-1", rows),
+            Ack::Failed {
+                error: "failure".into(),
+                now: Ms(10),
+                jitter: 0.0,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.retried, [(fresh, Ms(30_010))]);
+    assert!(out.gave_up.is_empty());
+    let rows = p.list_wakes(Some("w-1")).await.unwrap();
+    let old = rows.iter().find(|w| w.id == old).unwrap();
+    assert_eq!(
+        (old.state, old.attempts, old.last_error.as_deref()),
+        (WakeState::Dropped, 1, Some("stopped"))
+    );
+    assert_eq!(
+        rows.iter().find(|w| w.id == fresh).unwrap().state,
+        WakeState::Pending
+    );
+}
+
 macro_rules! both {
     ($($case:ident),* $(,)?) => {
         mod mem {
@@ -1276,6 +1364,8 @@ macro_rules! both {
 }
 
 both!(
+    human_stop_boundary_survives_new_work_and_mixed_requeue,
+    human_stop_boundary_separates_cancelled_and_fresh_failure_outcomes,
     enqueue_dedupes,
     enqueue_for_a_removed_crew_is_nothing,
     pending_is_by_priority_then_age,

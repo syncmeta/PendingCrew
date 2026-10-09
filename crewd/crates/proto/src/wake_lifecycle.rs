@@ -116,6 +116,25 @@ pub fn next(from: WakeState, event: WakeEvent) -> Result<WakeState, Illegal> {
     }
 }
 
+/// 持久化的人停意图只禁止旧行再尝试，不抹掉真实送达。先核原事件（终态不变、pending 不能 fail/requeue），
+/// 再把旧行的 Fail / GiveUp / Requeue 改为 Drop；Claim 拒绝。取消不是失败，不退次数、不走 give-up 告警。
+/// `cancelled` 来自库里单调的 stop wake-ID 水位，不是此刻的 desired / updated_at（新工作会改它们）。
+pub fn event_after_cancel(
+    from: WakeState,
+    event: WakeEvent,
+    cancelled: bool,
+) -> Result<WakeEvent, Illegal> {
+    next(from, event)?;
+    if !cancelled {
+        return Ok(event);
+    }
+    match event {
+        WakeEvent::Claim => Err(Illegal { from, event }),
+        WakeEvent::Fail { .. } | WakeEvent::GiveUp | WakeEvent::Requeue => Ok(WakeEvent::Drop),
+        WakeEvent::Deliver | WakeEvent::Drop => Ok(event),
+    }
+}
+
 /// 事件之后的次数（只在 [`next`] 认了这个事件时用）。
 pub fn attempts_after(event: WakeEvent, attempts: u32) -> u32 {
     match event {
@@ -197,6 +216,37 @@ mod tests {
         for e in [Deliver, Fail { retry_at: Some(1) }, GiveUp, Drop] {
             assert_eq!(attempts_after(e, 2), 2, "{e:?}");
         }
+    }
+
+    #[test]
+    fn cancellation_uses_the_same_table_and_never_revives_or_rewrites_terminal_rows() {
+        for from in WakeState::ALL {
+            for event in WakeEvent::ALL {
+                let ordinary = next(from, event);
+                assert_eq!(
+                    event_after_cancel(from, event, false),
+                    ordinary.map(|_| event)
+                );
+                let got = event_after_cancel(from, event, true);
+                if ordinary.is_err() || event == Claim {
+                    assert_eq!(got, Err(Illegal { from, event }), "{from:?} {event:?}");
+                } else {
+                    let want = match event {
+                        Fail { .. } | GiveUp | Requeue => Drop,
+                        _ => event,
+                    };
+                    assert_eq!(got, Ok(want), "{from:?} {event:?}");
+                    assert_ne!(next(from, want).unwrap(), Pending);
+                }
+            }
+        }
+        assert_eq!(event_after_cancel(Inflight, Deliver, true), Ok(Deliver));
+        assert_eq!(event_after_cancel(Inflight, Requeue, true), Ok(Drop));
+        assert_eq!(
+            attempts_after(Drop, 3),
+            3,
+            "cancellation is not retry or a refund"
+        );
     }
 
     #[test]

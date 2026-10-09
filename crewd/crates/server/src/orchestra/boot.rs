@@ -14,8 +14,8 @@ const RESTART_ERROR: &str = "crewd restarted before the delivery was confirmed";
 
 impl<P: Port> Core<P> {
     /// serve 启动时调一次（孤儿已由 serve 先回收）：
-    /// ① 上次没确认的 inflight 按一次失败的尝试结算（C25：没到上限立刻再试，到了上限放弃、告警一次；消息类靠游标
-    ///    防重放，裁定 17）；
+    /// ① 上次没确认的 inflight：已有持久人停取消意图的只作废、不重试/告警；其余按一次失败的尝试结算
+    ///    （C25：没到上限立刻再试，到了上限放弃、告警一次；消息类靠游标防重放，裁定 17）；
     /// ② 上次在跑的（`desired=running`）一个都不起，进「待恢复」名单，开一次询问（M3a 发人类群公告、客户端弹窗）；
     /// ③ 积压补救的规划（裁定 16）；④ 记 C4 的水位（控制者裁定 C3：在重扫之前）；⑤ 能投的投出去（待恢复的不会被拉起）。
     pub(crate) async fn boot(&mut self) -> anyhow::Result<()> {

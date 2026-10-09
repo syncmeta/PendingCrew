@@ -740,8 +740,9 @@ hook 行为
 - 在 idle 边沿（`SessionEvent::Working(false)`）和计时到点时调度：取该 session 已到期的 pending，**只取最高一档优先级、合并成一次投递**（上限 10 条 / 8KB，剩下的等下一个 idle；8KB 对消息项只是建议值——一个群的窗口不能截半）[推]。Swift 是一次一条（`:50`）；合并能少转几轮空转，也减轻限流压力。
 - 投递前过滤掉已注入的：消息类唤醒若游标已越过它（目标忙时 hook 已经注入过）→ 直接记 `delivered`（`CrewSessionRunner.swift:479`）。
 - 目标在干活 → 不投，等 idle（claude 忙时 hook 会把未读带进去）。目标没在跑 → 用 `--resume` 拉起，以唤醒正文开场（`CrewLocalMentionWaker.swift:20-21`），受可选上限约束（人类唤醒不受）；在等重启答复的不被自动拉起（§22.7 C4）。
-- 投出去记 `inflight`；收到 `Delivery::Delivered` 才记 `delivered` 并推进游标——推到 `WakeBatch::cursor_targets()`（每个群这批实际带上的最大 seq），不是排队行里最大的 seq：唤醒正文每个群带「游标之后」它看得见的最旧的至多 200 条（R6，见 §23），窗口外的排队行是 `deferred`，留 pending、下一批带上；窗口里只有积压（被叫的那几条全在窗口外）时也照样投。失败按 30s / 2min 退避（写进 `not_before`），第 3 次放弃 → 在本机组大厅 @群主（机长自己 → 人类群 @人）。人停掉一个 session → 丢弃它 pending 的唤醒。
-- 重启时 `inflight` 退回 `pending`；消息类重投前先查游标，防重放。已结的行保留 7 天，M3c 定时清。
+- 投出去记 `inflight`；收到 `Delivery::Delivered` 才记 `delivered` 并推进游标——推到 `WakeBatch::cursor_targets()`（每个群这批实际带上的最大 seq），不是排队行里最大的 seq：唤醒正文每个群带「游标之后」它看得见的最旧的至多 200 条（R6，见 §23），窗口外的排队行是 `deferred`，留 pending、下一批带上；窗口里只有积压（被叫的那几条全在窗口外）时也照样投。失败按 30s / 2min 退避（写进 `not_before`），第 3 次放弃 → 在本机组大厅 @群主（机长自己 → 人类群 @人）。人停掉一个 session → 在同一个 collab 事务里写 `desired=stopped` / `was_working=false`、持久取消水位与全部 pending 作废；提交失败就回失败、不叫停进程。
+- **人停的持久取消意图**：现有 `meta` 里每 session 的 `human_stop_wake_floor:<session id>` 保存截至停止事务的最大 wake ID，只前进、不随后来的新唤醒 / 显式 resume / `desired=running` 清掉。`wakes.id` 是 AUTOINCREMENT（prune 之后也不复用）；水位独立于可变的 desired / updated_at。旧 inflight（含 riders、starting 与结算失败后无人持有的行）先保留终局机会：迟到的真实 Delivered 仍把行与游标一起确认；否则后续失败 / requeue / boot 经共享生命周期转移作废，不重试、不退次数、不触发 give-up。新 ID 大于水位的工作照常可以启动、退避与恢复。坏水位 / 读写错误 fail-loud，不静默当 0；没有停止记录的 session 正常按未取消处理。此状态复用现有 meta，无新表/字段、无 schema 版本或 API 形状变更；N4 的快照、身份与迁移保护路径不变。
+- 重启时未取消的 `inflight` 按库里 claim 记的次数回 `pending`（不退次数，C25；到上限才放弃）；已有人停取消意图的旧行直接作废、不列入重试 / give-up 通知。消息类重投前先查游标，防重放。已结的行保留 7 天，M3c 定时清；取消水位不随 prune 退回。
 
 环路熔断 `crewd_wake::breaker`（§22.7 Q5；取代 `AutomaticWakeAdmission`，**不移植**它的全机 12 次/分、单机组 5 次/分、单 session 2 次/分——那会挡住 30 个 session 的正常收发）
 - 判据：目标 T 上一次有产出之后、10 分钟内送到 T 的非人类唤醒，按「来源 → T」与「T 的非 session 来源合计」两级各超 8 次 → 熔断那一条，落 `wake_latches`；告诉人（根机组人类群）和群主。阈值是一处常量。 **〔2026-10-07 改，见 §24〕** 「根机组人类群」读作 home（顶层机组）的人类群。

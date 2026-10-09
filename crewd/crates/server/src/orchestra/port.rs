@@ -315,6 +315,10 @@ pub trait Port: Send + Sync + 'static {
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<Option<i64>>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
+    /// 人停：停止状态、全部旧行的持久化取消意图、pending 作废一个事务提交。inflight 保留，允许迟到真实送达；
+    /// 之后旧行退回/失败/boot 必须作废，即使新工作已改 desired=Running。Err = 没提交，不能假装停成功。
+    /// 返回本次作废的 pending 行（变化事件）；取消覆盖所有旧行，不只内存里的 batch。
+    fn human_stop(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     /// 不属于一批的结算（见 [`Settle`]）：全部 id 一个事务，表不认 / 没有这一行 = 错误、整批不改。
     fn settle(&self, ids: &[i64], s: Settle, now: Ms) -> impl Future<Output = Result<()>> + Send;
     /// 投出去之前拿走一批（`wakes` + `riders`）：pending → inflight，次数在这里 +1（库记次数，C24）。一个事务、全有或全无。
@@ -324,7 +328,8 @@ pub trait Port: Send + Sync + 'static {
     fn ack(&self, b: &Batch, a: Ack) -> impl Future<Output = Result<Acked>> + Send;
     /// 启动时：上次没确认的全部 inflight 按一次失败的尝试结算（C25；M3a `wakes::reset_inflight`）——次数不退回，
     /// 按库里的次数问 `crewd_wake::queue::after_restart(n, now)`：没到上限立刻回 pending（`not_before = now`），
-    /// 到了上限放弃（dropped）。全部记 `error`（last_error）。一个事务；放弃的行原样带回（[`Reclaimed`]）。
+    /// 到了上限放弃（dropped）。人停已取消的旧行只作废（不退次数，记 stopped），不列入 retried / gave_up；
+    /// 其余记 `error`（last_error）。一个事务；真正到上限放弃的行原样带回（[`Reclaimed`]）。
     fn fail_inflight(&self, error: &str, now: Ms)
     -> impl Future<Output = Result<Reclaimed>> + Send;
     /// 有到期 pending 的 session：按其中最高优先级降序、再按最早一条的 id 升序。

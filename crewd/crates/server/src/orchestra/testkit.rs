@@ -74,6 +74,8 @@ pub struct MemState {
     pub ledgers: BTreeMap<String, Arc<MemoryLedger>>,
     /// 机组 → 工作目录（`Port::crew_workdir`）。
     pub crew_dirs: BTreeMap<String, PathBuf>,
+    /// 同 collab 的持久 meta：每 session 的人停 wake-ID 水位，只前进、不随新工作清掉。
+    pub human_stop_floors: BTreeMap<String, i64>,
     pub next_wake: i64,
     pub next_session: u64,
     /// 测试里的「现在」（入队时间）。
@@ -128,14 +130,17 @@ pub struct MemState {
 /// 每个改状态的 MemPort 方法末尾调一次（同 collab 在转移时写 `settled_at`）。
 fn mark_settled(st: &mut MemState) {
     let now = st.now;
-    let settled: Vec<i64> = st
+    let settled: Vec<(i64, Option<String>)> = st
         .wakes
         .iter()
         .filter(|w| matches!(w.state, WakeState::Delivered | WakeState::Dropped))
-        .map(|w| w.id)
+        .map(|w| (w.id, w.last_error.clone()))
         .collect();
-    for id in settled {
+    for (id, error) in settled {
         st.settled_at.entry(id).or_insert(now);
+        if let Some(error) = error {
+            st.errors.insert(id, error);
+        }
     }
 }
 
@@ -162,28 +167,48 @@ pub fn apply_event(
     ids: &[i64],
     event: lifecycle::WakeEvent,
 ) -> Result<Vec<u32>> {
+    apply_with_stop_floors(wakes, &BTreeMap::new(), ids, event)
+}
+
+fn cancelled(floors: &BTreeMap<String, i64>, w: &QueuedWake) -> bool {
+    w.id <= floors.get(&w.session).copied().unwrap_or(0)
+}
+
+fn apply_with_stop_floors(
+    wakes: &mut [QueuedWake],
+    floors: &BTreeMap<String, i64>,
+    ids: &[i64],
+    event: lifecycle::WakeEvent,
+) -> Result<Vec<u32>> {
     let mut planned = Vec::with_capacity(ids.len());
     for id in ids {
         let Some(w) = wakes.iter().find(|w| w.id == *id) else {
             anyhow::bail!("没有唤醒 {id}");
         };
+        let event =
+            lifecycle::event_after_cancel(lifecycle_state(w.state), event, cancelled(floors, w))
+                .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
         let to = lifecycle::next(lifecycle_state(w.state), event)
             .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
         planned.push((
             *id,
             wake_state(to),
             lifecycle::attempts_after(event, w.attempts),
+            event,
         ));
     }
-    for (id, to, attempts) in &planned {
+    for (id, to, attempts, event) in &planned {
         let w = wakes.iter_mut().find(|w| w.id == *id).expect("上面查过");
         w.state = *to;
         w.attempts = *attempts;
+        if *to == WakeState::Dropped && cancelled(floors, w) {
+            w.last_error = Some(crewd_collab::wakes::HUMAN_STOP_ERROR.into());
+        }
         if let lifecycle::WakeEvent::Fail { retry_at: Some(t) } = event {
-            w.not_before = Ms(t);
+            w.not_before = Ms(*t);
         }
     }
-    Ok(planned.into_iter().map(|(_, _, a)| a).collect())
+    Ok(planned.into_iter().map(|(_, _, a, _)| a).collect())
 }
 
 /// 记下一行的 `last_error`（同 collab：失败 / 作废 / 重启回收时写）：`errors` 表与行上的 `last_error` 一起改。
@@ -572,10 +597,52 @@ impl Port for MemPort {
         Ok(v)
     }
 
-    /// 跟库一样严：规则只来自共享的那张表（[`apply_event`]，C24）；没有这一行 / 表不认 = 错误，整批一行都不改。
+    /// 同 collab 的一个事务：停止状态、单调取消水位、pending 作废全有或全无。
+    async fn human_stop(&self, session: &str) -> Result<Vec<QueuedWake>> {
+        let mut st = self.lock();
+        if let Some(e) = &st.patch_error {
+            anyhow::bail!("{e}");
+        }
+        if !st.sessions.contains_key(session) {
+            anyhow::bail!("没有 session {session}");
+        }
+        let floor = st
+            .wakes
+            .iter()
+            .filter(|w| w.session == session)
+            .map(|w| w.id)
+            .max()
+            .unwrap_or(0)
+            .max(st.human_stop_floors.get(session).copied().unwrap_or(0));
+        let pending: Vec<QueuedWake> = st
+            .wakes
+            .iter()
+            .filter(|w| w.session == session && w.state == WakeState::Pending)
+            .cloned()
+            .collect();
+        let mut wakes = st.wakes.clone();
+        apply_event(
+            &mut wakes,
+            &crewd_wake::queue::ids(&pending),
+            lifecycle::WakeEvent::Drop,
+        )?;
+        st.wakes = wakes;
+        st.human_stop_floors.insert(session.into(), floor);
+        let row = st.sessions.get_mut(session).expect("上面查过");
+        row.desired = Desired::Stopped;
+        row.was_working = false;
+        for w in &pending {
+            note_error(&mut st, w.id, crewd_collab::wakes::HUMAN_STOP_ERROR);
+        }
+        mark_settled(&mut st);
+        Ok(pending)
+    }
+
+    /// 跟库一样严：规则只来自共享的那张表；没有这一行 / 表不认 = 错误，整批一行都不改。
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
         let mut st = self.lock();
-        apply_event(&mut st.wakes, ids, s.event())?;
+        let floors = st.human_stop_floors.clone();
+        apply_with_stop_floors(&mut st.wakes, &floors, ids, s.event())?;
         mark_settled(&mut st);
         // 同 collab `mark_dropped`：作废的原因记进 last_error。
         if let Settle::Dropped { error } = &s {
@@ -593,7 +660,14 @@ impl Port for MemPort {
             apply_event(&mut st.wakes, &[id], lifecycle::WakeEvent::Drop)?;
             mark_settled(&mut st);
         }
-        apply_event(&mut st.wakes, &b.ids(), lifecycle::WakeEvent::Claim).map(|_| ())
+        let floors = st.human_stop_floors.clone();
+        apply_with_stop_floors(
+            &mut st.wakes,
+            &floors,
+            &b.ids(),
+            lifecycle::WakeEvent::Claim,
+        )
+        .map(|_| ())
     }
 
     /// 同库的一个事务：在副本上做完全部步骤，任何一步出错就丢掉副本（一行都不改、游标不动）。
@@ -612,12 +686,17 @@ impl Port for MemPort {
                         anyhow::bail!("唤醒 {id} 属于 {}，不是 {}", w.session, b.session);
                     }
                 }
-                apply_event(&mut wakes, &wake_ids, lifecycle::WakeEvent::Deliver)?;
+                apply_with_stop_floors(
+                    &mut wakes,
+                    &st.human_stop_floors,
+                    &wake_ids,
+                    lifecycle::WakeEvent::Deliver,
+                )?;
                 let fate = match &riders {
                     Riders::Release => lifecycle::WakeEvent::Requeue,
                     Riders::Drop(_) => lifecycle::WakeEvent::Drop,
                 };
-                apply_event(&mut wakes, &rider_ids, fate)?;
+                apply_with_stop_floors(&mut wakes, &st.human_stop_floors, &rider_ids, fate)?;
                 let mut cursors = st.cursors.clone();
                 for (channel, seq) in &b.cursor_targets {
                     if let Some(e) = &st.advance_error {
@@ -667,13 +746,18 @@ impl Port for MemPort {
                         },
                         None => lifecycle::WakeEvent::GiveUp,
                     };
-                    lifecycle::next(lifecycle_state(w.state), event)
-                        .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
-                    planned.push((id, event, retry));
+                    let cancelled = cancelled(&st.human_stop_floors, w);
+                    let event =
+                        lifecycle::event_after_cancel(lifecycle_state(w.state), event, cancelled)
+                            .map_err(|e| anyhow::anyhow!("唤醒 {id}：{e}"))?;
+                    planned.push((id, event, retry, cancelled));
                 }
                 let mut out = Acked::default();
-                for (id, event, retry) in planned {
-                    apply_event(&mut wakes, &[id], event)?;
+                for (id, event, retry, cancelled) in planned {
+                    apply_with_stop_floors(&mut wakes, &st.human_stop_floors, &[id], event)?;
+                    if cancelled {
+                        continue;
+                    }
                     match retry {
                         Some(t) => out.retried.push((id, t)),
                         None => out.gave_up.push(id),
@@ -683,7 +767,16 @@ impl Port for MemPort {
                 mark_settled(&mut st);
                 // 同 collab `ack_failed`：每一行记下这次的原因。
                 for id in b.ids() {
-                    note_error(&mut st, id, &error);
+                    let why = if st
+                        .wakes
+                        .iter()
+                        .any(|w| w.id == id && cancelled(&st.human_stop_floors, w))
+                    {
+                        crewd_collab::wakes::HUMAN_STOP_ERROR
+                    } else {
+                        &error
+                    };
+                    note_error(&mut st, id, why);
                 }
                 Ok(out)
             }
@@ -702,17 +795,32 @@ impl Port for MemPort {
         let mut wakes = st.wakes.clone();
         let mut out = Reclaimed::default();
         for id in &ids {
-            let attempts = wakes.iter().find(|w| w.id == *id).expect("刚选的").attempts;
+            let row = wakes.iter().find(|w| w.id == *id).expect("刚选的");
+            let attempts = row.attempts;
+            if cancelled(&st.human_stop_floors, row) {
+                apply_with_stop_floors(
+                    &mut wakes,
+                    &st.human_stop_floors,
+                    &[*id],
+                    lifecycle::WakeEvent::GiveUp,
+                )?;
+                continue;
+            }
             match crewd_wake::queue::after_restart(attempts, now) {
                 Some(t) => {
                     let fail = lifecycle::WakeEvent::Fail {
                         retry_at: Some(t.0),
                     };
-                    apply_event(&mut wakes, &[*id], fail)?;
+                    apply_with_stop_floors(&mut wakes, &st.human_stop_floors, &[*id], fail)?;
                     out.retried.push((*id, t));
                 }
                 None => {
-                    apply_event(&mut wakes, &[*id], lifecycle::WakeEvent::GiveUp)?;
+                    apply_with_stop_floors(
+                        &mut wakes,
+                        &st.human_stop_floors,
+                        &[*id],
+                        lifecycle::WakeEvent::GiveUp,
+                    )?;
                     let row = wakes.iter_mut().find(|w| w.id == *id).expect("刚改的");
                     row.last_error = Some(error.to_string());
                     out.gave_up.push(row.clone());
@@ -722,7 +830,16 @@ impl Port for MemPort {
         st.wakes = wakes;
         mark_settled(&mut st);
         for id in ids {
-            note_error(&mut st, id, error);
+            let why = if st
+                .wakes
+                .iter()
+                .any(|w| w.id == id && cancelled(&st.human_stop_floors, w))
+            {
+                crewd_collab::wakes::HUMAN_STOP_ERROR
+            } else {
+                error
+            };
+            note_error(&mut st, id, why);
         }
         Ok(out)
     }

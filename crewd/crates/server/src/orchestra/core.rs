@@ -41,7 +41,7 @@ use crewd_wake::breaker::{LoopBreaker, SYSTEM};
 use crewd_wake::notice::{self, AnswerRefusal, DecisionFacts, NudgePlan};
 use crewd_wake::plan::{ChannelCtx, MsgFacts};
 use crewd_wake::policy::{self, Gate, LaunchGate};
-use crewd_wake::queue::{self, ids};
+use crewd_wake::queue;
 use crewd_wake::text;
 use crewd_wake::{HOUR, Latch, LatchScope, Ms, NewWake, Priority, QueuedWake, WakeKind, source};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -1212,8 +1212,8 @@ impl<P: Port> Core<P> {
             .map_err(ControlError::from_port)
     }
 
-    /// 人停掉（裁定 10）：desired=stopped，丢掉此刻 pending 的唤醒，叫停进程（已带进进程、还没投进去的那些
-    /// 在它退出时一并丢掉，见 `on_exited`）。
+    /// 人停掉（裁定 10）：一个事务写停止状态 + 单调 wake-ID 取消水位 + pending 作废，提交后才叫停进程。
+    /// inflight 留到真实终局（迟到 Delivered 仍承认）；结算失败再 crash 也按持久取消意图作废，不重放旧工作。
     async fn stop(&mut self, session: &str) -> Result<(), ControlError> {
         if self
             .port
@@ -1224,35 +1224,15 @@ impl<P: Port> Core<P> {
         {
             return Err(ControlError::NotFound(session.into()));
         }
-        let now = self.now();
         let pending = self
-            .port
-            .pending(session)
+            .due
+            .touch(&self.port)
+            .human_stop(session)
             .await
             .map_err(ControlError::from_port)?;
         if !pending.is_empty() {
-            self.due
-                .touch(&self.port)
-                .settle(
-                    &ids(&pending),
-                    Settle::Dropped {
-                        error: "stopped".into(),
-                    },
-                    now,
-                )
-                .await
-                .map_err(ControlError::from_port)?;
             self.port.publish(wake_changed(session, &pending));
         }
-        let patch = SessionPatch {
-            desired: Some(Desired::Stopped),
-            was_working: Some(false),
-            ..Default::default()
-        };
-        self.port
-            .patch_session(session, patch)
-            .await
-            .map_err(ControlError::from_port)?;
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
             l.stopping = true;

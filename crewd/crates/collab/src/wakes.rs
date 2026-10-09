@@ -147,6 +147,47 @@ impl WakePriority {
     }
 }
 
+/// meta 里的永久、单调取消水位。wakes.id 是 AUTOINCREMENT：即使 prune 删光旧行也不复用 id。
+/// 不随 resume / 新唤醒 / desired=running 清掉；因此旧 inflight 的结算失败也不会在后来的 crash 中复活。
+/// 不是 schema 扩展（同 hibernate 使用现有 meta），没有时间戳比较/兼容分支。
+const STOP_FLOOR_PREFIX: &str = "human_stop_wake_floor:";
+pub const HUMAN_STOP_ERROR: &str = "stopped";
+
+pub fn human_stop_floor(conn: &Connection, session: &str) -> Result<i64> {
+    match crewd_store::meta_get(conn, &format!("{STOP_FLOOR_PREFIX}{session}"))? {
+        None => Ok(0),
+        Some(v) => v.parse::<i64>().ok().filter(|n| *n >= 0).ok_or_else(|| {
+            CollabError::Store(StoreError::Invalid(format!(
+                "human stop wake floor for {session} is unreadable: {v:?}"
+            )))
+        }),
+    }
+}
+
+/// 人停：停止状态 + 截至本事务的 wake-ID 取消意图 + 全部 pending 作废，同一个 Tx、全有或全无。
+/// inflight 只记意图、不提前写终态：迟到的真实 Delivered 仍须原子确认行与游标；未确认的旧行后续退回/失败/boot
+/// 都经共享 event_after_cancel 作废（含没有内存主人的行）。返回本次作废的 pending，给 Port 发布变化。
+pub fn human_stop(tx: &mut Tx<'_>, session: &str) -> Result<Vec<WakeRow>> {
+    crate::sessions::set_desired(tx, session, crewd_proto::Desired::Stopped)?;
+    crate::sessions::set_working(tx, session, false)?;
+    let floor: i64 = tx.conn().query_row(
+        "SELECT COALESCE(MAX(id),0) FROM wakes WHERE session_id=?1",
+        [session],
+        |r| r.get(0),
+    )?;
+    let floor = floor.max(human_stop_floor(tx.conn(), session)?);
+    crewd_store::meta_set(
+        tx.conn(),
+        &format!("{STOP_FLOOR_PREFIX}{session}"),
+        &floor.to_string(),
+    )?;
+    let pending = due_for(tx.conn(), session, i64::MAX)?;
+    for w in &pending {
+        mark_dropped(tx, w.id, HUMAN_STOP_ERROR)?;
+    }
+    Ok(pending)
+}
+
 const COLS: &str = "id,session_id,kind,source,origin,priority,not_before,note,state,attempts,last_error,created_at,settled_at";
 /// 优先级高的先出：human 2、system 1、auto 0。
 const RANK: &str = "CASE priority WHEN 'human' THEN 2 WHEN 'system' THEN 1 ELSE 0 END";
@@ -297,13 +338,15 @@ pub fn by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<WakeRow>> {
 pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>> {
     let mut planned = Vec::with_capacity(ids.len());
     for id in ids {
-        let row: Option<(String, u32)> = tx
+        let row: Option<(String, u32, String)> = tx
             .conn()
-            .query_row("SELECT state,attempts FROM wakes WHERE id=?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT state,attempts,session_id FROM wakes WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?;
-        let Some((state, attempts)) = row else {
+        let Some((state, attempts, session)) = row else {
             return Err(not_found(*id));
         };
         let from = WakeState::parse(&state).ok_or_else(|| {
@@ -311,14 +354,23 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
                 "wake {id} has an unreadable state {state:?}"
             )))
         })?;
+        let cancelled = *id <= human_stop_floor(tx.conn(), &session)?;
+        let event = lifecycle::event_after_cancel(from, event, cancelled)
+            .map_err(|e| bad_transition(*id, e))?;
         let to = lifecycle::next(from, event).map_err(|e| bad_transition(*id, e))?;
-        planned.push((*id, to, lifecycle::attempts_after(event, attempts)));
+        let retry_at = match event {
+            WakeEvent::Fail { retry_at } => retry_at,
+            _ => None,
+        };
+        planned.push((
+            *id,
+            to,
+            lifecycle::attempts_after(event, attempts),
+            retry_at,
+            cancelled && to == WakeState::Dropped,
+        ));
     }
-    let retry_at = match event {
-        WakeEvent::Fail { retry_at } => retry_at,
-        _ => None,
-    };
-    for (id, to, attempts) in &planned {
+    for (id, to, attempts, retry_at, cancelled) in &planned {
         let settled = matches!(to, WakeState::Delivered | WakeState::Dropped);
         tx.conn().execute(
             "UPDATE wakes SET state=?2, attempts=?3, not_before=COALESCE(?4, not_before),
@@ -326,8 +378,11 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
               WHERE id=?1",
             params![id, to.as_str(), attempts, retry_at, settled, tx.now_ts()],
         )?;
+        if *cancelled {
+            note_error(tx, &[*id], HUMAN_STOP_ERROR)?;
+        }
     }
-    Ok(planned.into_iter().map(|(_, _, a)| a).collect())
+    Ok(planned.into_iter().map(|(_, _, a, _, _)| a).collect())
 }
 
 fn not_found(id: i64) -> CollabError {
@@ -418,15 +473,17 @@ pub struct Failed {
     pub id: i64,
     /// 库里的次数（`claim` 记的）。
     pub attempts: u32,
-    /// 再试的时刻（新的 `not_before`）；None = 到上限放弃了（dropped）。
+    /// 再试的时刻（新的 `not_before`）；None = 到上限放弃或人停取消（见 `cancelled`）。
     pub retry_at_ms: Option<i64>,
+    /// 人停的旧行：作废，不算重试或到上限，不触发 give-up 告警。
+    pub cancelled: bool,
 }
 
 /// 一批没送到（终局失败）：每一行按**库里的**次数（`claim` 时记的，不是调用方手里那份）问 `decide`——
 /// `Some(t)` = 回 pending、`not_before = t`；`None` = 放弃（dropped）。全部记下 `error`。一个 `Tx`、全有或全无：
 /// 每一行都按**真正要用的那个事件**（`Fail` 或 `GiveUp`，`decide` 定的）核过表才写（Task 8b 评审 (3)：不拿 `GiveUp`
 /// 当 `Fail` 的替身）；有一行不认整批不动。`decide` 是纯函数（`crewd_wake::queue::after_failure` 一类），
-/// 对整批不动的那次调用没有副作用。
+/// 对整批不动的那次调用没有副作用。已取消的旧行不问 decide：只作废、记 stopped、cancelled=true。
 pub fn ack_failed(
     tx: &mut Tx<'_>,
     ids: &[i64],
@@ -439,18 +496,27 @@ pub fn ack_failed(
         let Some(r) = rows.iter().find(|r| r.id == *id) else {
             return Err(not_found(*id));
         };
-        let retry_at_ms = decide(r.attempts);
-        lifecycle::next(r.state, failure_event(retry_at_ms)).map_err(|e| bad_transition(*id, e))?;
+        let cancelled = r.id <= human_stop_floor(tx.conn(), &r.session)?;
+        let retry_at_ms = if cancelled { None } else { decide(r.attempts) };
+        lifecycle::event_after_cancel(r.state, failure_event(retry_at_ms), cancelled)
+            .map_err(|e| bad_transition(*id, e))?;
         out.push(Failed {
             id: *id,
             attempts: r.attempts,
             retry_at_ms,
+            cancelled,
         });
     }
     for f in &out {
         apply(tx, &[f.id], failure_event(f.retry_at_ms))?;
     }
-    note_error(tx, ids, error)?;
+    for f in &out {
+        note_error(
+            tx,
+            &[f.id],
+            if f.cancelled { HUMAN_STOP_ERROR } else { error },
+        )?;
+    }
     Ok(out)
 }
 
@@ -503,6 +569,7 @@ pub fn drop_for_crew(tx: &mut Tx<'_>, crew: &str, why: &str) -> Result<usize> {
 }
 
 /// inflight 原样退回 pending（没尝试成：crewd 停、撞额度、会话退出时被打断）：退回 `claim` 记的那一次，不算失败。
+/// 人停水位内的旧行例外：经共享转移作废、不退次数，不能因为后来的新工作/停机把旧行重排。
 pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
     apply(tx, ids, WakeEvent::Requeue).map(|_| ())
 }
@@ -526,7 +593,7 @@ pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64, limit: u32) -> Result<usiz
 /// 跟 [`ack_failed`] 同一条路——**不退回** `claim` 记的那一次，按库里的次数问 `decide`（M3c 给
 /// `crewd_wake::queue::after_restart`：没到上限立刻再试、到了上限放弃），所以一条每次都把 crewd 弄崩的唤醒到上限就
 /// 放弃，不无限重投。只在启动时调（运行期的退回是 `requeue`、失败是 `ack_failed`）。语义是至少一次：上次可能已经
-/// 投出去只是没来得及记，所以会再投一遍。delivered / dropped / pending 不动。
+/// 投出去只是没来得及记，所以会再投一遍。delivered / dropped / pending 不动；人停取消的旧 inflight 只作废，不重试/告警。
 pub fn reset_inflight(
     tx: &mut Tx<'_>,
     error: &str,
@@ -941,7 +1008,8 @@ mod tests {
             [Failed {
                 id,
                 attempts: 1,
-                retry_at_ms: Some(NOW + MIN)
+                retry_at_ms: Some(NOW + MIN),
+                cancelled: false,
             }]
         );
         let r = &by_ids(s.conn(), &[id]).unwrap()[0];
@@ -1263,12 +1331,14 @@ mod tests {
                 Failed {
                     id: ids[0],
                     attempts: 2,
-                    retry_at_ms: None
+                    retry_at_ms: None,
+                    cancelled: false,
                 },
                 Failed {
                     id: ids[3],
                     attempts: 1,
-                    retry_at_ms: Some(NOW)
+                    retry_at_ms: Some(NOW),
+                    cancelled: false,
                 },
             ],
             "只动 inflight 那两条，按库里的次数"

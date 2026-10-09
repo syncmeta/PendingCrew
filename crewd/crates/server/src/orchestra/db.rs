@@ -449,6 +449,17 @@ impl Port for DbPort {
         .await
     }
 
+    async fn human_stop(&self, session: &str) -> Result<Vec<QueuedWake>> {
+        let session = session.to_string();
+        self.write(move |tx| {
+            cw::human_stop(tx, &session)?
+                .iter()
+                .map(|w| queued(tx.conn(), w))
+                .collect()
+        })
+        .await
+    }
+
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
         let ids = ids.to_vec();
         self.write(move |tx| match s {
@@ -502,7 +513,7 @@ impl Port for DbPort {
                     })
                     .await?;
                 let mut out = Acked::default();
-                for f in failed {
+                for f in failed.into_iter().filter(|f| !f.cancelled) {
                     match f.retry_at_ms {
                         Some(t) => out.retried.push((f.id, Ms(t))),
                         None => out.gave_up.push(f.id),
@@ -521,7 +532,7 @@ impl Port for DbPort {
             })?;
             let mut out = Reclaimed::default();
             let mut gave_up = Vec::new();
-            for f in failed {
+            for f in failed.into_iter().filter(|f| !f.cancelled) {
                 match f.retry_at_ms {
                     Some(t) => out.retried.push((f.id, Ms(t))),
                     None => gave_up.push(f.id),
@@ -1729,5 +1740,973 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    // Actual DbPort/SQLite + Core; only the executor is controlled. These never start an agent CLI.
+    struct StopDbRig {
+        core: super::super::core::Core<DbPort>,
+        state: Arc<AppState>,
+        port: Arc<DbPort>,
+        exec: super::super::testkit::StandIn,
+        rx: tokio::sync::mpsc::UnboundedReceiver<super::super::core::Input>,
+        dir: tempfile::TempDir,
+    }
+
+    impl StopDbRig {
+        async fn new() -> Self {
+            let (state, port, dir) = seeded().await;
+            Self::on_db(state, Arc::new(port), dir).await
+        }
+
+        async fn on_db(state: Arc<AppState>, port: Arc<DbPort>, dir: tempfile::TempDir) -> Self {
+            use super::super::{clock::ManualClock, core::Core, exec::Executors, hooks::Hooks};
+            let exec = super::super::testkit::StandIn::default();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let core = Core::new(
+                port.clone(),
+                Executors::new().with("claude", Arc::new(exec.clone())),
+                Hooks {
+                    worktrees: Arc::new(super::super::testkit::StandInWorktrees::default()),
+                    ..Default::default()
+                },
+                Arc::new(ManualClock::new(Ms(crewd_store::now_ms()))),
+                super::super::OrchestraConfig::for_tests(),
+                tx,
+            )
+            .await
+            .unwrap();
+            Self {
+                core,
+                state,
+                port,
+                exec,
+                rx,
+                dir,
+            }
+        }
+
+        async fn drain(&mut self) {
+            while let Ok(Some(i)) =
+                tokio::time::timeout(std::time::Duration::from_millis(25), self.rx.recv()).await
+            {
+                self.core.handle(i).await;
+            }
+        }
+
+        async fn wake(&mut self, tag: &str) -> i64 {
+            use super::super::core::{CollabFact, Input};
+            let id = self
+                .port
+                .enqueue(new_wake(
+                    "w-1",
+                    WakeKind::System,
+                    source::system(tag),
+                    Priority::System,
+                    SYSTEM,
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            self.core
+                .handle(Input::Collab(CollabFact::WakeEnqueued {
+                    session: "w-1".into(),
+                }))
+                .await;
+            self.drain().await;
+            assert!(
+                self.core.live.contains_key("w-1"),
+                "actual Core launches the controlled process"
+            );
+            id
+        }
+
+        async fn stop(&mut self) -> Result<(), super::super::core::ControlError> {
+            use super::super::core::{Cmd, Input};
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.core
+                .handle(Input::Cmd(Cmd::Stop {
+                    session: "w-1".into(),
+                    reply: tx,
+                }))
+                .await;
+            let r = rx.await.unwrap();
+            self.drain().await;
+            r
+        }
+
+        async fn enqueue_only(&self, tag: &str) -> i64 {
+            self.port
+                .enqueue(new_wake(
+                    "w-1",
+                    WakeKind::System,
+                    source::system(tag),
+                    Priority::System,
+                    SYSTEM,
+                ))
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn floor(&self) -> i64 {
+            self.state
+                .db
+                .call(|s| cw::human_stop_floor(s.conn(), "w-1").unwrap())
+                .await
+                .unwrap()
+        }
+
+        async fn batch(&self, ids: &[i64]) -> Batch {
+            let ids = ids.to_vec();
+            let wakes = self
+                .state
+                .db
+                .call(move |s| {
+                    cw::by_ids(s.conn(), &ids)
+                        .unwrap()
+                        .iter()
+                        .map(|w| queued(s.conn(), w).unwrap())
+                        .collect()
+                })
+                .await
+                .unwrap();
+            Batch {
+                session: "w-1".into(),
+                wakes,
+                ..Default::default()
+            }
+        }
+
+        async fn row(&self, id: i64) -> cw::WakeRow {
+            self.state
+                .db
+                .call(move |s| cw::by_ids(s.conn(), &[id]).unwrap().remove(0))
+                .await
+                .unwrap()
+        }
+
+        // Known settlement error, not a fake successful cancellation. Dropping the trigger permits boot recovery.
+        async fn block_drop(&self, id: i64) {
+            self.state
+                .db
+                .call(move |s| {
+                    s.conn()
+                        .execute_batch(&format!(
+                            "CREATE TRIGGER stop_settle_fault BEFORE UPDATE OF state ON wakes
+                 WHEN OLD.id={id} AND NEW.state='dropped'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic stop settlement fault'); END;"
+                        ))
+                        .unwrap()
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn unblock_drop(&self) {
+            self.state
+                .db
+                .call(|s| {
+                    s.conn()
+                        .execute_batch("DROP TRIGGER stop_settle_fault")
+                        .unwrap()
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn reboot(self) -> Self {
+            let Self {
+                core,
+                state,
+                port,
+                exec,
+                rx,
+                dir,
+            } = self;
+            drop(core); // Crash: no halt/hibernate/shutdown settlement.
+            exec.lock().running.clear();
+            exec.lock().events.clear();
+            drop(rx);
+            drop(port);
+            let db = state.db.clone();
+            drop(state);
+            tokio::task::spawn_blocking(move || db.shutdown())
+                .await
+                .unwrap();
+            let path = dir.path().join("crewd.db");
+            let state = Arc::new(AppState::new(
+                crewd_store::Db::spawn(crewd_store::Store::open(&path).unwrap()).unwrap(),
+            ));
+            let port = Arc::new(DbPort::new(state.clone(), path));
+            let mut r = Self::on_db(state, port, dir).await;
+            r.core.boot().await.unwrap(); // Actual ordinary boot route, freshly opened SQLite.
+            r.drain().await;
+            r
+        }
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_failed_settlement_boot_does_not_relaunch_old_wake() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        assert_eq!(r.row(old).await.attempts, 1);
+        r.block_drop(old).await;
+        r.stop().await.unwrap(); // Successful public Stop, settlement itself fails on actual SQLite.
+        assert_eq!(r.floor().await, old);
+        assert!(!r.core.live.contains_key("w-1"));
+        assert_eq!(
+            r.row(old).await.state,
+            cw::WakeState::Inflight,
+            "failed atomic settlement changed no row"
+        );
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Stopped
+        );
+        r.unblock_drop().await;
+        let r = r.reboot().await;
+        assert_eq!(
+            r.row(old).await.state,
+            cw::WakeState::Dropped,
+            "I5: boot must honor successful human Stop, not resurrect old unconfirmed work"
+        );
+        assert_eq!(r.floor().await, old, "marker survives SQLite reopen");
+        assert_eq!(
+            r.row(old).await.attempts,
+            1,
+            "human cancellation is not retry/give-up"
+        );
+        assert!(!r.core.live.contains_key("w-1"));
+        assert!(
+            r.exec.launches("w-1").is_empty(),
+            "no wake enqueued after Stop"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_without_fault_boot_does_not_relaunch_old_wake() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.stop().await.unwrap();
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        let r = r.reboot().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert!(r.exec.launches("w-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_new_work_later_crash_does_not_rescue_old_cancelled_wake() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.block_drop(old).await;
+        r.stop().await.unwrap();
+        r.unblock_drop().await;
+        let fresh = r.wake("after-stop").await;
+        assert!(fresh > old);
+        assert_eq!(
+            r.floor().await,
+            old,
+            "new wake does not erase/advance the stop marker"
+        );
+        assert_eq!(
+            r.exec.launches("w-1").len(),
+            2,
+            "new wake after Stop can launch"
+        );
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Running
+        );
+        assert_eq!(r.row(fresh).await.state, cw::WakeState::Inflight);
+        let r = r.reboot().await;
+        assert_eq!(
+            r.row(old).await.state,
+            cw::WakeState::Dropped,
+            "old cancel intent survives mutable desired=Running and later crash"
+        );
+        assert_eq!(r.row(old).await.attempts, 1);
+        assert_eq!(
+            r.row(fresh).await.state,
+            cw::WakeState::Pending,
+            "ordinary C25 rescue of fresh work"
+        );
+        assert_eq!(r.row(fresh).await.attempts, 1, "boot doesn't refund claim");
+        assert!(
+            r.core.held.contains("w-1"),
+            "ordinary restart asks before resuming fresh work"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_pending_drop_fault_rolls_back_intent_and_reports_error() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("inflight").await;
+        let first = r.enqueue_only("pending-first").await;
+        let second = r.enqueue_only("pending-fault").await;
+        r.block_drop(second).await;
+        let before_first = r.row(first).await;
+        let before_second = r.row(second).await;
+        assert!(
+            r.stop().await.is_err(),
+            "pending settlement failure is NOT successful Stop"
+        );
+        assert_eq!(
+            r.floor().await,
+            0,
+            "intent rollback, not a false durable success"
+        );
+        assert_eq!(
+            r.row(first).await,
+            before_first,
+            "even the earlier drop is rolled back"
+        );
+        assert_eq!(r.row(second).await, before_second);
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        let row = r.port.session("w-1").await.unwrap().unwrap();
+        assert_eq!(row.desired, Desired::Running);
+        assert!(
+            r.exec.lock().stops.is_empty(),
+            "no process stop on failed durable transaction"
+        );
+        assert!(!r.core.live["w-1"].stopping);
+        r.unblock_drop().await;
+        r.stop().await.unwrap();
+        assert_eq!(r.floor().await, second);
+        for id in [old, first, second] {
+            assert_eq!(r.row(id).await.state, cw::WakeState::Dropped);
+        }
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_meta_write_failure_is_not_successful_stop() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        let pending = r.enqueue_only("pending").await;
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch(
+                        "CREATE TRIGGER stop_intent_fault BEFORE INSERT ON meta
+             WHEN NEW.key='human_stop_wake_floor:w-1'
+             BEGIN SELECT RAISE(ABORT, 'synthetic cancellation intent failure'); END;",
+                    )
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let error = r.stop().await.unwrap_err();
+        assert!(format!("{error:?}").contains("synthetic cancellation intent failure"));
+        assert_eq!(r.floor().await, 0);
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        assert_eq!(r.row(pending).await.state, cw::WakeState::Pending);
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Running
+        );
+        assert!(r.exec.lock().stops.is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_corrupt_marker_fails_closed_on_stop_claim_requeue_and_boot() {
+        for corrupt in ["not-an-id", "-1", "9223372036854775808"] {
+            let mut r = StopDbRig::new().await;
+            let old = r.wake("old").await;
+            let fresh = r.enqueue_only("fresh").await;
+            r.state
+                .db
+                .call(move |s| {
+                    crewd_store::meta_set(s.conn(), "human_stop_wake_floor:w-1", corrupt).unwrap()
+                })
+                .await
+                .unwrap();
+            let before = r.row(old).await;
+            assert!(
+                r.stop().await.is_err(),
+                "{corrupt}: corrupted marker must not become zero"
+            );
+            assert!(r.port.claim(&r.batch(&[fresh]).await).await.is_err());
+            assert!(
+                r.port
+                    .settle(&[old], Settle::Requeue, Ms(10))
+                    .await
+                    .is_err()
+            );
+            assert!(r.core.boot().await.is_err());
+            assert_eq!(r.row(old).await, before, "no writes on failed marker read");
+            assert_eq!(r.row(fresh).await.state, cw::WakeState::Pending);
+            assert_eq!(
+                r.port.session("w-1").await.unwrap().unwrap().desired,
+                Desired::Running
+            );
+            assert!(r.exec.lock().stops.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_marker_read_sql_failure_rolls_back_and_does_not_stop_process() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("ALTER TABLE meta RENAME TO meta_unavailable")
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let error = r.stop().await.unwrap_err();
+        assert!(format!("{error:?}").contains("no such table"));
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("ALTER TABLE meta_unavailable RENAME TO meta")
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.floor().await, 0);
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Running
+        );
+        assert!(r.exec.lock().stops.is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_late_actual_delivered_retains_row_and_cursor_through_reboot() {
+        use super::super::core::{CollabFact, Input};
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let m = post_as(
+            &r.state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            "合成迟到送达",
+            &["w-1"],
+        )
+        .await;
+        let old = r
+            .port
+            .enqueue(new_wake(
+                "w-1",
+                WakeKind::Message,
+                source::message(&m.id),
+                Priority::Human,
+                HUMAN,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        r.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w-1".into(),
+            }))
+            .await;
+        r.drain().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap();
+        assert_eq!(r.floor().await, old);
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        r.drain().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Delivered);
+        assert!(r.port.cursor("w-1", "c-1/lobby").await.unwrap() >= m.seq);
+        let r = r.reboot().await;
+        assert_eq!(
+            r.row(old).await.state,
+            cw::WakeState::Delivered,
+            "not Delivered -> Dropped"
+        );
+        assert!(r.port.cursor("w-1", "c-1/lobby").await.unwrap() >= m.seq);
+        assert!(r.exec.launches("w-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_mixed_old_and_fresh_retry_is_atomic_and_not_giveup() {
+        use crewd_wake::queue::MAX_ATTEMPTS;
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap();
+        let fresh = r.enqueue_only("fresh").await;
+        r.port.claim(&r.batch(&[fresh]).await).await.unwrap();
+        r.state
+            .db
+            .call(move |s| {
+                s.conn()
+                    .execute(
+                        "UPDATE wakes SET attempts=?1 WHERE id=?2",
+                        rusqlite::params![MAX_ATTEMPTS, old],
+                    )
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let batch = r.batch(&[old, fresh]).await;
+        r.block_drop(old).await;
+        let before_old = r.row(old).await;
+        let before_fresh = r.row(fresh).await;
+        assert!(
+            r.port
+                .ack(
+                    &batch,
+                    Ack::Failed {
+                        error: "synthetic failure".into(),
+                        now: Ms(5_000),
+                        jitter: 0.0
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(r.row(old).await, before_old);
+        assert_eq!(
+            r.row(fresh).await,
+            before_fresh,
+            "failed cancellation rolls back fresh retry too"
+        );
+        r.unblock_drop().await;
+        let acked = r
+            .port
+            .ack(
+                &batch,
+                Ack::Failed {
+                    error: "synthetic failure".into(),
+                    now: Ms(5_000),
+                    jitter: 0.0,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            acked.gave_up.is_empty(),
+            "human stop at MAX is cancellation, not give-up"
+        );
+        assert_eq!(acked.retried, [(fresh, Ms(35_000))]);
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert_eq!(r.row(old).await.attempts, MAX_ATTEMPTS);
+        assert_eq!(r.row(old).await.last_error.as_deref(), Some("stopped"));
+        assert_eq!(r.row(fresh).await.state, cw::WakeState::Pending);
+        assert_eq!(r.row(fresh).await.attempts, 1);
+        assert_eq!(r.row(fresh).await.not_before_ms, 35_000);
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_release_old_rider_drops_it_but_requeues_fresh_rider_atomically() {
+        let r = StopDbRig::new().await;
+        let old = r.enqueue_only("old-rider").await;
+        r.port.claim(&r.batch(&[old]).await).await.unwrap();
+        r.port.human_stop("w-1").await.unwrap();
+        let delivered = r.enqueue_only("fresh-body").await;
+        let rider = r.enqueue_only("fresh-rider").await;
+        r.port
+            .claim(&r.batch(&[delivered, rider]).await)
+            .await
+            .unwrap();
+        let mut b = r.batch(&[delivered]).await;
+        b.riders = r.batch(&[old, rider]).await.wakes;
+        let m = post_as(
+            &r.state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            "合成游标",
+            &[],
+        )
+        .await;
+        b.cursor_targets = vec![("c-1/lobby".into(), m.seq)];
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch(
+                        "CREATE TRIGGER stop_cursor_fault BEFORE INSERT ON read_cursors
+             WHEN NEW.reader='w-1' AND NEW.channel_id='c-1/lobby'
+             BEGIN SELECT RAISE(ABORT, 'synthetic cursor failure'); END;",
+                    )
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        assert!(
+            r.port
+                .ack(
+                    &b,
+                    Ack::Delivered {
+                        riders: Riders::Release
+                    }
+                )
+                .await
+                .is_err()
+        );
+        for id in [old, delivered, rider] {
+            assert_eq!(r.row(id).await.state, cw::WakeState::Inflight);
+        }
+        assert_eq!(r.port.cursor("w-1", "c-1/lobby").await.unwrap(), 0);
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("DROP TRIGGER stop_cursor_fault")
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let acked = r
+            .port
+            .ack(
+                &b,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(acked.origins, [SYSTEM]);
+        assert_eq!(r.row(delivered).await.state, cw::WakeState::Delivered);
+        assert_eq!(
+            (r.row(old).await.state, r.row(old).await.attempts),
+            (cw::WakeState::Dropped, 1)
+        );
+        assert_eq!(r.row(old).await.last_error.as_deref(), Some("stopped"));
+        assert_eq!(
+            (r.row(rider).await.state, r.row(rider).await.attempts),
+            (cw::WakeState::Pending, 0)
+        );
+        assert_eq!(r.port.cursor("w-1", "c-1/lobby").await.unwrap(), m.seq);
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_old_and_fresh_claim_is_rejected_without_partial_new_claim() {
+        let r = StopDbRig::new().await;
+        let old = r.enqueue_only("old-pending").await;
+        let stale_batch = r.batch(&[old]).await;
+        r.port.human_stop("w-1").await.unwrap();
+        let fresh = r.enqueue_only("fresh").await;
+        let mut b = r.batch(&[fresh]).await;
+        b.riders = stale_batch.wakes;
+        assert!(
+            r.port.claim(&b).await.is_err(),
+            "cannot claim/send a stale cancelled batch"
+        );
+        assert_eq!(
+            (r.row(fresh).await.state, r.row(fresh).await.attempts),
+            (cw::WakeState::Pending, 0)
+        );
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert!(r.exec.launches("w-1").is_empty());
+        assert!(
+            r.port
+                .settle(&[old], Settle::Delivered, Ms(1))
+                .await
+                .is_err()
+        );
+        assert!(r.port.settle(&[old], Settle::Requeue, Ms(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_repeated_stop_after_prune_never_regresses_marker_or_reuses_ids() {
+        let r = StopDbRig::new().await;
+        let old = r.enqueue_only("old").await;
+        r.port.human_stop("w-1").await.unwrap();
+        assert_eq!(r.floor().await, old);
+        assert_eq!(
+            r.port
+                .prune_wakes(Ms(crewd_store::now_ms() + 60_000), 100)
+                .await
+                .unwrap(),
+            1
+        );
+        r.port.human_stop("w-1").await.unwrap();
+        assert_eq!(
+            r.floor().await,
+            old,
+            "empty MAX(id) cannot roll back a persisted stop"
+        );
+        let fresh = r.enqueue_only("old").await;
+        assert!(fresh > old, "real AUTOINCREMENT, not a time/desire proxy");
+        r.port.claim(&r.batch(&[fresh]).await).await.unwrap();
+        assert_eq!(r.floor().await, old);
+        r.port.human_stop("w-1").await.unwrap();
+        assert_eq!(
+            r.floor().await,
+            fresh,
+            "another successful Stop cancels the newer work"
+        );
+        let out = r.port.fail_inflight("restart", Ms(1)).await.unwrap();
+        assert!(out.retried.is_empty() && out.gave_up.is_empty());
+        assert_eq!(r.row(fresh).await.state, cw::WakeState::Dropped);
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_boot_rescue_distinguishes_cancelled_at_max_from_ordinary_c25_limit() {
+        use crewd_wake::queue::MAX_ATTEMPTS;
+        let r = StopDbRig::new().await;
+        let old = r.enqueue_only("old").await;
+        r.port.claim(&r.batch(&[old]).await).await.unwrap();
+        r.port.human_stop("w-1").await.unwrap();
+        let fresh = r.enqueue_only("fresh-crash").await;
+        r.port.claim(&r.batch(&[fresh]).await).await.unwrap();
+        r.state
+            .db
+            .call(move |s| {
+                s.conn()
+                    .execute(
+                        "UPDATE wakes SET attempts=?1 WHERE id IN (?2,?3)",
+                        rusqlite::params![MAX_ATTEMPTS, old, fresh],
+                    )
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let out = r.port.fail_inflight("restart", Ms(2)).await.unwrap();
+        assert!(out.retried.is_empty());
+        assert_eq!(
+            out.gave_up.iter().map(|w| w.id).collect::<Vec<_>>(),
+            [fresh]
+        );
+        assert_eq!(r.row(old).await.last_error.as_deref(), Some("stopped"));
+        assert_eq!(r.row(fresh).await.last_error.as_deref(), Some("restart"));
+        for id in [old, fresh] {
+            assert_eq!(r.row(id).await.state, cw::WakeState::Dropped);
+            assert_eq!(r.row(id).await.attempts, MAX_ATTEMPTS);
+        }
+        let out = r.port.fail_inflight("duplicate boot", Ms(3)).await.unwrap();
+        assert!(out.retried.is_empty() && out.gave_up.is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_starting_claimed_batch_failed_settle_is_cancelled_on_boot() {
+        use super::super::core::{CollabFact, Input};
+        let mut r = StopDbRig::new().await;
+        let old = r.enqueue_only("starting-old").await;
+        r.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w-1".into(),
+            }))
+            .await;
+        assert!(
+            r.core.starting.contains_key("w-1"),
+            "Launched input not yet consumed"
+        );
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        r.block_drop(old).await;
+        r.stop().await.unwrap();
+        assert!(!r.core.live.contains_key("w-1") && !r.core.starting.contains_key("w-1"));
+        assert_eq!(r.row(old).await.state, cw::WakeState::Inflight);
+        assert_eq!(r.floor().await, old);
+        r.unblock_drop().await;
+        let r = r.reboot().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert!(r.exec.launches("w-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_explicit_resume_changes_desired_not_old_cancel_intent() {
+        use super::super::core::{Cmd, Input, Origin};
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.block_drop(old).await;
+        r.stop().await.unwrap();
+        r.unblock_drop().await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        r.core
+            .handle(Input::Cmd(Cmd::Resume {
+                session: "w-1".into(),
+                origin: Origin::Human,
+                reply: tx,
+            }))
+            .await;
+        rx.await.unwrap().unwrap();
+        r.drain().await;
+        assert_eq!(
+            r.exec.launches("w-1").len(),
+            2,
+            "explicit human resume is still legal"
+        );
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Running
+        );
+        assert_eq!(r.floor().await, old);
+        let r = r.reboot().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert_eq!(r.row(old).await.attempts, 1);
+        assert!(r.core.held.contains("w-1"));
+        assert!(r.exec.launches("w-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_newwake_while_stopping_and_stale_exit_do_not_cancel_future_work() {
+        use super::super::core::{CollabFact, Input};
+        use crewd_exec::session::{ExitInfo, ExitStatusKind, SessionEvent};
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        let oldgen = r.core.live["w-1"].generator;
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap();
+        let fresh = r.enqueue_only("future").await;
+        r.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w-1".into(),
+            }))
+            .await;
+        r.drain().await;
+        assert_eq!(
+            r.row(fresh).await.state,
+            cw::WakeState::Pending,
+            "stopping blocks writes, not new intent"
+        );
+        assert_eq!(r.exec.launches("w-1").len(), 1);
+        let info = ExitInfo {
+            status: ExitStatusKind::Code(0),
+            stopped_by_user: true,
+            hit_limit: false,
+        };
+        r.exec.emit("w-1", SessionEvent::Exited(info.clone()));
+        r.drain().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert_eq!(r.row(fresh).await.state, cw::WakeState::Inflight);
+        assert_eq!(r.exec.launches("w-1").len(), 2);
+        assert_ne!(r.core.live["w-1"].generator, oldgen);
+        let before = r.row(fresh).await;
+        r.core
+            .handle(Input::Exec {
+                session: "w-1".into(),
+                generator: oldgen,
+                event: SessionEvent::Exited(info),
+            })
+            .await;
+        r.core
+            .handle(Input::StreamEnded {
+                session: "w-1".into(),
+                generator: oldgen,
+            })
+            .await;
+        assert_eq!(
+            r.row(fresh).await,
+            before,
+            "duplicate old callbacks cannot touch the new generation"
+        );
+        assert_eq!(r.floor().await, old);
+        assert!(!r.core.live["w-1"].stopping);
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_later_hibernate_preserves_non_cancelled_new_work_and_attempt_refund() {
+        use super::super::core::{Cmd, Input};
+        use crewd_exec::session::SessionEvent;
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.stop().await.unwrap();
+        let fresh = r.wake("fresh").await;
+        r.exec.emit("w-1", SessionEvent::Working(true));
+        r.drain().await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        r.core
+            .handle(Input::Cmd(Cmd::Hibernate {
+                deadline_ms: Some(0),
+                reply: tx,
+            }))
+            .await;
+        r.drain().await;
+        let report = rx.await.unwrap().unwrap();
+        assert!(report.completed);
+        assert_eq!(report.interrupted, ["w-1"]);
+        assert_eq!(r.floor().await, old, "hibernate is not a new human Stop");
+        assert_eq!(
+            (r.row(fresh).await.state, r.row(fresh).await.attempts),
+            (cw::WakeState::Pending, 0)
+        );
+        assert_eq!(
+            r.port.session("w-1").await.unwrap().unwrap().desired,
+            Desired::Running
+        );
+        let r = r.reboot().await;
+        assert_eq!(r.row(old).await.state, cw::WakeState::Dropped);
+        assert_eq!(r.row(fresh).await.state, cw::WakeState::Pending);
+        assert_eq!(r.floor().await, old);
+        assert!(r.core.held.contains("w-1"));
+        assert_eq!(
+            r.core.hibernated.as_ref().unwrap().reason,
+            RestartReason::Hibernate
+        );
+        assert!(r.exec.launches("w-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn db_human_stop_existing_n4_snapshot_preserves_marker_identity_sequence_and_schema() {
+        let mut r = StopDbRig::new().await;
+        let old = r.wake("old").await;
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap();
+        let db_id = r
+            .state
+            .db
+            .call(|s| crewd_store::meta_get(s.conn(), "dbId").unwrap())
+            .await
+            .unwrap();
+        let path = r.dir.path().join("crewd.db");
+        let snapshot = r.dir.path().join("synthetic-snapshot.db");
+        let dest = snapshot.clone();
+        tokio::task::spawn_blocking(move || crewd_store::backup::backup_db(&path, &dest))
+            .await
+            .unwrap()
+            .unwrap();
+        let store = crewd_store::Store::open(&snapshot).unwrap();
+        assert_eq!(crewd_store::meta_get(store.conn(), "dbId").unwrap(), db_id);
+        assert_eq!(cw::human_stop_floor(store.conn(), "w-1").unwrap(), old);
+        let version: i64 = store
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            version,
+            crewd_store::schema::SCHEMA_VERSION,
+            "no schema migration added"
+        );
+        assert_eq!(
+            cw::by_ids(store.conn(), &[old]).unwrap()[0].state,
+            cw::WakeState::Inflight
+        );
+        let state = Arc::new(AppState::new(crewd_store::Db::spawn(store).unwrap()));
+        let port = DbPort::new(state, snapshot);
+        let out = port.fail_inflight("snapshot reboot", Ms(1)).await.unwrap();
+        assert!(out.retried.is_empty() && out.gave_up.is_empty());
+        assert_eq!(
+            port.list_wakes(Some("w-1")).await.unwrap()[0].state,
+            crewd_wake::WakeState::Dropped
+        );
+        let fresh = port
+            .enqueue(new_wake(
+                "w-1",
+                WakeKind::System,
+                source::system("fresh"),
+                Priority::System,
+                SYSTEM,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(fresh > old, "snapshot carries sqlite_sequence too");
+        assert_eq!(
+            r.row(old).await.state,
+            cw::WakeState::Inflight,
+            "snapshot recovery does not modify source"
+        );
     }
 }
