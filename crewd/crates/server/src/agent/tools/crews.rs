@@ -496,7 +496,29 @@ async fn create_parent(cx: &Ctx<'_>, child: &CrewView, title: Option<String>) ->
     // From here on the crew exists: nothing below may answer a plain failure (M1).
     let name = cx.name(&parent.title);
     let n = number(&parent);
-    let brief = cx.r("r.parent_brief", &[("child", &child_name)]);
+    let brief = match &child.captain {
+        Some(captain) => {
+            let address = child
+                .number
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| captain.clone());
+            cx.r(
+                "r.parent_brief",
+                &[
+                    ("child", &child_name),
+                    (
+                        "child_arg",
+                        &serde_json::to_string(&address).expect("string serialises"),
+                    ),
+                    (
+                        "mentions_arg",
+                        &serde_json::json!([{"kind":"session", "target_id":captain}]).to_string(),
+                    ),
+                ],
+            )
+        }
+        None => cx.r("r.parent_brief_no_captain", &[("child", &child_name)]),
+    };
     let started = start_captain(
         cx,
         &parent,
@@ -1213,7 +1235,20 @@ mod tests {
         assert_eq!(top_level(&f).await, [other.clone(), parent.clone()]);
         let human = port::channel(&f.state, &human.id).await.unwrap().unwrap();
         assert!(human.archived);
-        let brief = z("r.parent_brief", &[("child", "示例机组")]);
+        let brief = z(
+            "r.parent_brief",
+            &[
+                ("child", "示例机组"),
+                (
+                    "child_arg",
+                    &serde_json::to_string(&number_of(&f, &f.crew).await).unwrap(),
+                ),
+                (
+                    "mentions_arg",
+                    &serde_json::json!([{"kind":"session", "target_id":f.captain}]).to_string(),
+                ),
+            ],
+        );
         assert_eq!(
             calls_of(&f, "Start("),
             [captain_start(&parent, &brief, "claude")]

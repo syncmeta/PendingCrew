@@ -865,7 +865,10 @@ Child crew "{crew}" (number {number}) was created, but its captain did not start
 {by} created this crew as the parent of "{child}".
 
 ## r.parent_brief
-You are the captain of a newly created parent crew; "{child}" is your first child crew. Read its lobby first to see what it is doing, then decide whether to adopt other crews.
+You are the captain of a newly created parent crew; "{child}" is your first child crew. Contact its captain with post(to: {child_arg}, message: "Share your current goals and progress.", mentions: {mentions_arg}); get the context from them, then decide whether to adopt other crews. Being its parent does not grant access to its lobby.
+
+## r.parent_brief_no_captain
+You are the captain of a newly created parent crew; "{child}" is your first child crew, but has no captain. Use ask(question: "How should I obtain goals and progress for my child crew without a captain?") to get a human decision or context; keep working on what does not need the answer. Being its parent does not grant access to its lobby.
 
 ## r.parent_created
 Parent crew "{crew}" (number {number}) created above "{child}"; it is top-level, at the end of the top level, and its captain {captain} ({id}) is started. To tell it anything later, post(to: "{number}").

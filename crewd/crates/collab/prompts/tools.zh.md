@@ -865,7 +865,10 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 {by} 在「{child}」头上建了这个上级机组。
 
 ## r.parent_brief
-你是新建的上级机组的机长，「{child}」是你的第一个子机组。先读它的大厅，弄清它在做什么，再决定还要收编哪些机组。
+你是新建的上级机组的机长，「{child}」是你的第一个子机组。先 post(to: {child_arg}, message: "请发来当前目标和进展。", mentions: {mentions_arg}) 联系它的机长，向它取得上下文，再决定还要收编哪些机组。上级身份不授予你读取它大厅的权限。
+
+## r.parent_brief_no_captain
+你是新建的上级机组的机长，「{child}」是你的第一个子机组，但它还没有机长。用 ask(question: "没有机长的子机组，应该怎样取得目标和进展上下文？") 请人类安排或补充上下文；继续做不依赖答案的事。上级身份不授予你读取它大厅的权限。
 
 ## r.parent_created
 已在「{child}」头上建好上级机组「{crew}」（{number}号），它是顶层机组、排在顶层末尾；它的机长 {captain}（{id}）已起。之后要交代它什么，post(to: "{number}")。

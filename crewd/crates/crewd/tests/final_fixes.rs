@@ -572,3 +572,93 @@ async fn already_closed_authority_and_failed_parent_recovery_remain_closed() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn new_parent_bootstrap_uses_a_legal_contact_from_the_registered_captain() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let (st, ctl) = persisted(&f);
+        let r = run(
+            &st,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"create_parent","title":"parent"}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+        let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let cap = &rows[0].id;
+        let lobby = port::lobby_of(&st, &f.crew).await.unwrap();
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+        assert!(
+            start.brief.contains("post("),
+            "bootstrap asks for an illegal read instead of a legal contact: {}",
+            start.brief
+        );
+        let contact = run(&st, cap, "post", advertised(&start.brief, "post")).await;
+        assert!(!contact.is_error, "{}", contact.text);
+        assert_eq!(rows[0].role, crewd_server::agent::Role::Captain);
+        let dm = port::my_channels(&st, cap)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.kind == crewd_proto::ChannelKind::Dm && c.has_session(&f.captain))
+            .unwrap();
+        let posted = port::messages_raw(&st, &dm.id, None, 20).await.unwrap();
+        assert!(posted.iter().any(|m| {
+            m.sender_session_id.as_deref() == Some(cap)
+                && m.mentions.iter().any(|a| {
+                    a.kind == MentionKind::Session && a.target_id.as_deref() == Some(&f.captain)
+                })
+        }));
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+    }
+}
+
+#[tokio::test]
+async fn parent_without_a_child_captain_gets_a_legal_human_context_route() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("vacant child", None).await;
+        let mgmt = f.management_crew().await;
+        f.add_session(
+            &mgmt,
+            "s-management",
+            crewd_server::agent::Role::Captain,
+            "synthetic boss",
+        )
+        .await;
+        let (st, ctl) = persisted(&f);
+        let r = run(
+            &st,
+            "s-management",
+            "crew_structure",
+            json!({"action":"create_parent","crew":child,"title":"parent"}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+        let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+        let cap = &rows[0].id;
+        let reply = run(&st, cap, "ask", advertised(&start.brief, "ask")).await;
+        assert!(!reply.is_error, "{}", reply.text);
+        let lobby = port::lobby_of(&st, &child).await.unwrap();
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+    }
+}
