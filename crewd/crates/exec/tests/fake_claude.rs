@@ -441,14 +441,23 @@ impl EchoRun {
     }
 }
 
-async fn delayed_echo_child(pause_body: bool) -> EchoRun {
-    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+enum EchoMode {
+    Delayed,
+    PauseBody,
+    TimerRecovery,
+}
+
+async fn delayed_echo_child(mode: EchoMode) -> EchoRun {
+    // Synthetic child source stays in Cargo's test artifact root, not the source tree.
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let py = dir.path().join("synthetic_tui.py");
     std::fs::write(
         &py,
         r#"import os, pathlib, select, sys, termios, time
 root = pathlib.Path(__file__).parent
 pause_body = sys.argv[1] == 'pause'
+hold_clear_echo = sys.argv[1] == 'timer'
+clear_echoed = False
 attrs = termios.tcgetattr(0)
 attrs[0] &= ~termios.ICRNL
 attrs[3] &= ~(termios.ICANON | termios.ECHO)
@@ -468,6 +477,10 @@ while True:
         echoed = True
         draw()
         (root / 'echo-shown').write_bytes(value)
+    if hold_clear_echo and not clear_echoed and (root / 'show-clear').exists():
+        clear_echoed = True
+        draw()
+        (root / 'clear-shown').write_bytes(b'yes')
     ready, _, _ = select.select([0], [], [], 0.01)
     if not ready:
         continue
@@ -476,12 +489,14 @@ while True:
     # Append-only evidence: no partial-file read races with the parent.
     with (root / 'received').open('ab') as f:
         f.write(chunk)
+    suppress_draw = False
     for key in chunk:
         if key == 127:
             value = value[:-1]
         elif key == 21:
             value = b''
             (root / 'cleared').write_bytes(b'yes')
+            suppress_draw = hold_clear_echo
         elif key == 13:
             with (root / 'submitted.log').open('ab') as f:
                 f.write(value + b'\n')
@@ -497,7 +512,7 @@ while True:
         (root / 'raw-consumed').write_bytes(b'x')
     if not pause_body and not (root / 'human-consumed').exists():
         (root / 'human-consumed').write_bytes(chunk)
-    if echoed:
+    if echoed and not suppress_draw:
         draw()
 "#,
     )
@@ -508,7 +523,11 @@ while True:
         format!(
             "#!/bin/sh\nexec /usr/bin/python3 -I -u '{}' {}\n",
             py.display(),
-            if pause_body { "pause" } else { "echo" }
+            match mode {
+                EchoMode::Delayed => "echo",
+                EchoMode::PauseBody => "pause",
+                EchoMode::TimerRecovery => "timer",
+            }
         ),
     )
     .unwrap();
@@ -552,7 +571,7 @@ while True:
 
 async fn assert_delayed_echo_hold(queue_first: bool) {
     use crewd_exec::session::{HeldDraft, INPUT_DRAFT};
-    let mut r = delayed_echo_child(false).await;
+    let mut r = delayed_echo_child(EchoMode::Delayed).await;
     let id = if queue_first {
         Some(r.r.h.send("BOT").unwrap())
     } else {
@@ -640,9 +659,88 @@ async fn raw_after_enqueue_before_ready_holds_the_production_delivery() {
     assert_delayed_echo_hold(true).await;
 }
 
+/// Actual production SessionHandle/run()/PTY, default timings, synthetic child only.
+/// Suspend this current-thread runtime while the child writes its sole clear echo:
+/// both read and 600ms tick are ready when select resumes. This samples select order;
+/// deterministic timer-call-path coverage lives in driver::output_drain_tests.
+#[tokio::test(flavor = "current_thread")]
+async fn timer_and_read_ready_together_recover_after_one_clear_echo_without_repaint() {
+    use crewd_exec::session::HeldDraft;
+    for sample in 0..8 {
+        let mut r = delayed_echo_child(EchoMode::TimerRecovery).await;
+        r.r.h.raw(b"x".to_vec()).unwrap();
+        let id = r.r.h.send("BOT").unwrap();
+        r.receipt("human-consumed").await;
+        assert_eq!(r.bytes("received"), b"x");
+        r.release("show-echo");
+        // Four samples also make Text and a timer simultaneously ready.
+        let text_co_ready = sample % 2 == 0;
+        if text_co_ready {
+            std::thread::sleep(Duration::from_millis(700));
+            assert!(
+                r.path("echo-shown").exists(),
+                "child drew Text while paused"
+            );
+        }
+        r.r.until(|e| matches!(e, SessionEvent::InputDraft(Some(HeldDraft::Text(t))) if t == "x"))
+            .await;
+        assert_eq!(r.bytes("received"), b"x", "BOT still held by human Text");
+        r.r.h.raw(vec![0x15]).unwrap();
+        r.receipt("cleared").await;
+        assert_eq!(
+            r.bytes("received"),
+            b"x\x15",
+            "child consumed explicit clear"
+        );
+        r.r.h.status().await.unwrap(); // FIFO barrier: raw handled, old Text still no evidence.
+        assert!(r.r.h.screen_text(25).await.unwrap().contains("❯ x"));
+        r.events();
+        r.release("show-clear");
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(
+            r.path("clear-shown").exists(),
+            "child drew fresh Empty while paused"
+        );
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+        let events = r.events();
+        let bytes = r.bytes("received");
+        let submitted = r.r.submitted();
+        let delivered = events
+            .iter()
+            .filter(|e| outcome(id, |o| *o == DeliveryOutcome::Delivered)(e))
+            .count();
+        println!(
+            "sample={sample} text_co_ready={text_co_ready} clear_consumed=true clear_drawn_before_resume=true received={bytes:?} submitted={submitted:?} delivered={delivered} events={events:?}"
+        );
+        assert!(
+            events.contains(&SessionEvent::InputDraft(None)),
+            "fresh Empty must release the hold without a second clear repaint: {events:?}"
+        );
+        assert_eq!(delivered, 1, "one real Delivered outcome");
+        assert_eq!(submitted, ["BOT"], "no human draft or duplicate submission");
+        assert_eq!(
+            bytes, b"x\x15BOT \x7f\r",
+            "one body and separate submit beats"
+        );
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert_eq!(r.bytes("received"), bytes, "no late retry or cleanup");
+        assert_eq!(r.r.submitted(), submitted);
+        assert!(
+            !r.events()
+                .iter()
+                .any(outcome(id, |o| *o == DeliveryOutcome::Delivered)),
+            "no second Delivered event"
+        );
+        r.stop().await;
+    }
+    println!(
+        "full_loop_samples=8 text_co_ready_samples=4 clear_co_ready_samples=8 recovered_without_extra_repaint=8 select_branch=not_instrumented"
+    );
+}
+
 #[tokio::test]
 async fn raw_during_a_backpressured_body_cancels_the_remaining_bytes_without_cleanup() {
-    let mut r = delayed_echo_child(true).await;
+    let mut r = delayed_echo_child(EchoMode::PauseBody).await;
     let body = "B".repeat(1_000_000);
     let id = r.r.h.send(body.clone()).unwrap();
     r.receipt("body-prefix").await;

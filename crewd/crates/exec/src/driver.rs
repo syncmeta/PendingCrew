@@ -1367,6 +1367,144 @@ mod output_drain_tests {
         }
     }
 
+    fn input_box(text: &str) -> Vec<u8> {
+        format!(
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+        )
+        .into_bytes()
+    }
+
+    fn held_delivery() -> (Core, Instant) {
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        core.on_output(&input_box(""), now);
+        core.raw(b"x");
+        core.send(1, "BOT", now);
+        core.take_actions();
+        (core, now)
+    }
+
+    fn assert_resumed_once(core: &mut Core, now: Instant, mut log: Vec<Action>) {
+        core.on_tick(now + Duration::from_secs(1));
+        log.extend(core.take_actions());
+        core.on_tick(now + Duration::from_millis(1100));
+        log.extend(core.take_actions());
+        assert!(
+            log.contains(&Action::Event(SessionEvent::InputDraft(None))),
+            "the fresh clear must release the draft hold: {log:?}"
+        );
+        assert_eq!(
+            writes(&log),
+            vec![b"BOT".as_slice()],
+            "one body, no cleanup or extra repaint required: {log:?}"
+        );
+        assert!(core.delivery_write_allowed(1));
+    }
+
+    /// Same successful drain_ready + on_tick call path as BOTH production timer branches.
+    /// Actual PTY bytes, not on_output or an assumed Foreign::Shown test premise.
+    #[tokio::test]
+    async fn timer_drained_text_establishes_shown_before_an_ordinary_clear() {
+        use crate::session::HeldDraft;
+        let (mut core, now) = held_delivery();
+        let (_dir, p) = readable_output(&input_box("x")).await;
+        assert!(drain_ready(&p.master, &mut core, None, DRAIN_CHUNKS));
+        assert!(
+            core.take_actions().is_empty(),
+            "ingestion alone stays inert"
+        );
+        core.on_tick(now + Duration::from_millis(100));
+        let shown = core.take_actions();
+        assert!(
+            shown.contains(&Action::Event(SessionEvent::InputDraft(Some(
+                HeldDraft::Text("x".into())
+            )))),
+            "timer-drained Text must establish the human draft: {shown:?}"
+        );
+        assert!(writes(&shown).is_empty());
+        core.raw(b"\x15");
+        core.take_actions();
+        core.on_output(&input_box(""), now + Duration::from_millis(200));
+        let log = core.take_actions();
+        assert_resumed_once(&mut core, now, log);
+        stop(p).await;
+    }
+
+    #[tokio::test]
+    async fn timer_drained_fresh_empty_after_explicit_clear_resumes_without_repaint() {
+        let (mut core, now) = held_delivery();
+        core.on_output(&input_box("x"), now + Duration::from_millis(100));
+        core.take_actions();
+        core.raw(b"\x15");
+        core.take_actions();
+        let (_dir, p) = readable_output(&input_box("")).await;
+        assert!(drain_ready(&p.master, &mut core, None, DRAIN_CHUNKS));
+        assert!(
+            core.take_actions().is_empty(),
+            "ingestion alone stays inert"
+        );
+        core.on_tick(now + Duration::from_millis(200));
+        let log = core.take_actions();
+        assert_resumed_once(&mut core, now, log);
+        stop(p).await;
+    }
+
+    /// Known-normal counterpart: identical lifecycle, finalized by the ordinary read path.
+    #[tokio::test]
+    async fn ordinary_drained_fresh_empty_positive_control_resumes_once() {
+        let (mut core, now) = held_delivery();
+        core.on_output(&input_box("x"), now + Duration::from_millis(100));
+        core.take_actions();
+        core.raw(b"\x15");
+        core.take_actions();
+        let (_dir, p) = readable_output(&input_box("")).await;
+        let mut first = [0u8; PTY_READ_SIZE];
+        let n = p.master.read(&mut first).await.unwrap();
+        assert!(drain_ready(
+            &p.master,
+            &mut core,
+            Some(&first[..n]),
+            DRAIN_CHUNKS
+        ));
+        core.after_output_drain(now + Duration::from_millis(200));
+        let log = core.take_actions();
+        assert_resumed_once(&mut core, now, log);
+        stop(p).await;
+    }
+
+    /// A cap is not completion, even when that chunk already parses as fresh Empty.
+    #[tokio::test]
+    async fn capped_timer_drain_keeps_explicit_clear_held_until_completion() {
+        let (mut core, now) = held_delivery();
+        core.on_output(&input_box("x"), now + Duration::from_millis(100));
+        core.take_actions();
+        core.raw(b"\x15");
+        core.take_actions();
+        let (_dir, p) = readable_output(&input_box("")).await;
+        let complete = drain_ready(&p.master, &mut core, None, 1);
+        if complete {
+            core.on_tick(now + Duration::from_millis(200));
+        }
+        assert!(!complete, "the one-chunk budget cannot confirm WouldBlock");
+        assert!(core.screen_text(25).contains("❯\n"), "Empty already parsed");
+        assert!(core.take_actions().is_empty());
+        assert!(
+            !core.delivery_write_allowed(1),
+            "cap must not release Unknown"
+        );
+        assert!(drain_ready(&p.master, &mut core, None, DRAIN_CHUNKS));
+        core.on_tick(now + Duration::from_millis(200));
+        let log = core.take_actions();
+        assert_resumed_once(&mut core, now, log);
+        stop(p).await;
+    }
+
     /// R2 必须钉住的边界：chunk 1 保持旧框；chunk 2 才露出新框。键在 chunk 1 之前已经到点。
     /// 第一次只给一块预算，直接检查 chunk 1 后无写键；再排完第二块，回 Conflict 且仍一键未写。
     #[tokio::test]

@@ -345,7 +345,7 @@ pub struct Core {
     /// Clearing = 明确清除键的回显未到；Conflicted = own/人混杂，只接受显式 Ctrl-U + 新 Empty。
     /// 我们自己的投递、回答、打断、限流应答、终端回复都不经 raw，不会置它。
     foreign_input: Foreign,
-    /// 已喂进新输出、但还没完成整拍排空。旧屏和定时拍不能充当 raw 回显 / 清空的证据。
+    /// 已喂进新输出、但还没完成整拍排空。没有新输出的定时拍 / 旧屏不能充当 raw 回显或清空证据。
     output_pending: bool,
     /// raw 入队前的输入框读数；同一段旧 Text 的重画不证实这次 raw 已回显。
     foreign_baseline: InputDraft,
@@ -507,15 +507,16 @@ impl Core {
 
     /// PTY 来了一块输出，且调用方已经确认这一块就是这拍里最后一块可读输出。
     ///
-    /// 真 PTY 的驱动必须用 [`Self::ingest_output`] 逐块喂完，再只调用一次
-    /// [`Self::after_output_drain`]；否则拆在两次 `read` 里的重画会让第一块旧屏误放行回答键。
+    /// 真 PTY 的驱动必须用 [`Self::ingest_output`] 逐块喂完，再调用
+    /// [`Self::after_output_drain`] 或 [`Self::on_tick`] 收尾；否则拆在两次 `read` 里的重画
+    /// 会让第一块旧屏误放行回答键。
     pub fn on_output(&mut self, bytes: &[u8], now: Instant) {
         self.ingest_output(bytes, now);
         self.after_output_drain(now);
     }
 
     /// 只把一块 PTY 输出喂进解析器，不根据这块中途屏幕写任何到点按键。
-    /// 驱动把此刻已经可读的所有块喂完后，必须调用一次 [`Self::after_output_drain`]。
+    /// 驱动确认此刻已经可读的所有块排空后，才可调用 [`Self::after_output_drain`] 或 [`Self::on_tick`]。
     pub(crate) fn ingest_output(&mut self, bytes: &[u8], now: Instant) {
         if !self.running {
             return;
@@ -543,7 +544,7 @@ impl Core {
         if let Some(h) = self.quota.feed(bytes) {
             self.set_health(Some(h), now);
         }
-        // 扫描器只是附加触发：真正的屏幕判定在整拍输出喂完后的 `after_output_drain`，
+        // 扫描器只是附加触发：真正的屏幕判定在整拍输出排空后的收尾，
         // 不会拿拆帧中途的屏幕按键。
         let _scanner_fired = self.rate_limit.feed(bytes, now);
         if self.resume_watch.is_some() {
@@ -557,9 +558,7 @@ impl Core {
             return;
         }
         self.last_now = self.last_now.max(now);
-        if std::mem::take(&mut self.output_pending) {
-            self.observe_input_box();
-        }
+        self.observe_drained_output();
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -568,11 +567,13 @@ impl Core {
     }
 
     /// 定时拍（0.6s 节拍，或 `next_wakeup` 到点）。
+    /// 如有已喂进的 PTY 输出，调用方必须先确认整拍排空；触顶 / 读失败不得调用。
     pub fn on_tick(&mut self, now: Instant) {
         if !self.running {
             return;
         }
         self.last_now = self.last_now.max(now);
+        self.observe_drained_output();
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -1226,6 +1227,14 @@ impl Core {
             return None;
         }
         None
+    }
+
+    /// 两种完整 drain 的收尾共用这一道证据门：普通读 / 回答与 tick / next_wakeup。
+    /// 无新输出时不重读旧屏；raw 会撤掉它之前的 pending，所以不能借旧回显放行。
+    fn observe_drained_output(&mut self) {
+        if std::mem::take(&mut self.output_pending) {
+            self.observe_input_box();
+        }
     }
 
     /// 只在 raw 之后的新输出全部排空时调用。Text 才证实回显到了；Unknown 不把未决证据升格为 Shown。
