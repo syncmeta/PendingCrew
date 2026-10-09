@@ -26,6 +26,8 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 系统问题按进入 / 恢复各通知一次；恢复与续跑拒绝的信息行不 @人。worker 额度只留 health；机长额度按执行器合并。投递放弃从第一笔开始收集十分钟，窗口结束发一行，列各 session 放弃的唤醒数；窗口不是每次失败重新计时。worker 开场 brief 未送达只给机长一条系统唤醒。
 - 草稿第一次从无到持有开始计时，连续持有期间编辑、Text / Unknown 互换都不重置；十分钟报一次，真正清除时恢复一次。Unknown 有独立文案、不会引用占位提示为人的草稿、不会超时放行。Notifier 在内存里：重启会重新报告仍存在的问题；未刷出的聚合窗口不会持久化。
 - `wake.list` 与 `try_deliver` 的 readiness 仍共用 `crewd-wake::explain::live_blocker`；nudge 的命令资格检查只在 `text_nudge_refusal`，收下与 writer 队首都调用它。最终的人的输入来源 / Unknown 闸、提交前复查和 CAS 每键回读仍归执行器（T10d R2/R3/R4），通知计时不构成另一套放行策略。
+- 文字 nudge 等终局的 receipt/id/reply 与实际 answer writer 占用分开：仍挡后续正文，但让人类 CAS answer 越过等待的正文，解除挡住该投递的 dialog。answer 自身保持串行与顺序；nudge 的终局回执不释放正在执行的 answer fence。后续正文仍须等原 nudge 终局及实际 answer 写完，并在 writer 队首复查草稿。
+- quota 的参与者按该 episode 注册时的 session id 记录；换机长本身不是恢复。历史参与者即使已降为 worker，其 Working(true) 仍能移除自己；无关 worker 不清别人的问题，只有对应 executor 最后一个参与者恢复才发 recovery，随后新 episode 可重新 raise。
 - 这里交付的是编排接口与 synthetic/inproc 接线，不宣称完成 T11 的 serve 执行器启动接线、binary watcher 或 M4b 组织级「待人类处理」收件箱。
 
 ### M3d 绑定简报：结构化 runner request

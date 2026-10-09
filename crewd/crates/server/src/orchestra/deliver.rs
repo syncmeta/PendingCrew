@@ -748,7 +748,7 @@ impl<P: Port> Core<P> {
                 .is_some_and(|(pending, _)| *pending == id)
         {
             let (_, reply) = l.nudge_pending.take().expect("matched above");
-            l.writing = false;
+            // A final body receipt must not release a concurrently active human answer fence.
             let r = if outcome == DeliveryOutcome::Delivered {
                 Ok(())
             } else {

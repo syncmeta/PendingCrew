@@ -604,6 +604,7 @@ pub struct Live {
     /// 执行器报的输入框草稿（`SessionEvent::InputDraft`，T10d）：有 = 它正挡着一笔投递，不再往里送（`input_draft`）。
     pub input_draft: Option<HeldDraft>,
     pub input_draft_since_ms: Option<Ms>,
+    /// A body delivery awaiting its exact final receipt; blocks later bodies, not human CAS answers.
     pub nudge_pending: Option<(u64, Reply<()>)>,
     pub inflight: Option<Inflight>,
     /// 人从客户端叫停的（不是停机）。
@@ -618,8 +619,9 @@ pub struct Live {
     pub last_outcome: Option<&'static str>,
     /// 往这个会话里写东西的队列（预检 P4 / 控制者裁定）：投递、nudge 与回答按 actor 收下的先后排进来，
     /// 由 [`Core::pump_writes`] 一个个写；一次回答的整串键按完才轮到下一个，两次写不交错。
+    /// 文字 nudge 仅等终局时，后续正文保持排队，允许人类 CAS answer 越过这些正文解决挡住投递的框。
     pub writes: VecDeque<Write>,
-    /// Writer is occupied by an answer (WriteDone) or a text nudge awaiting its final Delivery.
+    /// An actual answer write is in progress; only its WriteDone releases this fence.
     pub writing: bool,
 }
 
@@ -1386,7 +1388,18 @@ impl<P: Port> Core<P> {
             if l.writing || l.stopping || l.halting {
                 return Ok(());
             }
-            let Some(job) = l.writes.pop_front() else {
+            // Waiting for a text receipt is not an active answer writer. Hold all later bodies,
+            // but let the first human CAS answer resolve the dialog blocking that receipt.
+            // Answers retain their own FIFO order and serialize on `writing` / WriteDone.
+            let job = if l.nudge_pending.is_some() {
+                l.writes
+                    .iter()
+                    .position(|job| matches!(job, Write::Answer { .. }))
+                    .and_then(|at| l.writes.remove(at))
+            } else {
+                l.writes.pop_front()
+            };
+            let Some(job) = job else {
                 return Ok(());
             };
             match job {
@@ -1398,8 +1411,8 @@ impl<P: Port> Core<P> {
                     match l.handle.send(text, &Context::new()) {
                         Ok(id) => {
                             l.nudge_pending = Some((id, reply));
-                            l.writing = true;
-                            return Ok(());
+                            // Receipt/id/reply live separately; a late human Answer can now run.
+                            continue;
                         }
                         Err(e) => {
                             let error = match e {
@@ -1861,21 +1874,22 @@ impl<P: Port> Core<P> {
                         &[("name", &safe_name(&l.name))],
                     );
                     let executor = l.executor.clone();
-                    let captain = l.captain;
                     self.notifier
                         .clear(&Key::new(Kind::LaunchFailed, session), msg.clone())
                         .await?;
                     self.notifier
                         .clear(&Key::new(Kind::BriefUndelivered, session), msg.clone())
                         .await?;
-                    if captain {
-                        let blocked = self.quota_blocked.entry(executor.clone()).or_default();
-                        blocked.remove(session);
-                        if blocked.is_empty() {
-                            self.notifier
-                                .clear(&Key::new(Kind::Quota, &executor), msg)
-                                .await?;
-                        }
+                    // Membership belongs to the episode that registered this session, not its
+                    // current role. A demoted captain can recover; an unrelated worker cannot.
+                    let recovered_last = self
+                        .quota_blocked
+                        .get_mut(&executor)
+                        .is_some_and(|blocked| blocked.remove(session) && blocked.is_empty());
+                    if recovered_last {
+                        self.notifier
+                            .clear(&Key::new(Kind::Quota, &executor), msg)
+                            .await?;
                     }
                 }
                 if !on {
