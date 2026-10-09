@@ -126,6 +126,23 @@ impl PtyMaster {
         }
     }
 
+    /// 驱动的单任务写队列：只等可写，不在另一个任务里继续整段 write_all。
+    pub(crate) async fn writable(
+        &self,
+    ) -> io::Result<tokio::io::unix::AsyncFdReadyGuard<'_, OwnedFd>> {
+        self.fd.writable().await
+    }
+
+    /// 一次非阻塞写。驱动在每一次系统调用之前核外来输入闸，并保留部分写入的 offset。
+    pub(crate) fn try_write(&self, bytes: &[u8]) -> io::Result<usize> {
+        loop {
+            match rustix::io::write(self.fd.get_ref(), bytes).map_err(io::Error::from) {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+
     /// 写完整段。子进程不读时会一直等（PTY 缓冲满）。
     pub async fn write_all(&self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {

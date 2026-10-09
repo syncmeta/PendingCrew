@@ -38,13 +38,17 @@ pub const ANSWER_VERIFY_DELAY: Duration = Duration::from_millis(500);
 /// 草稿闸挡住一笔投递时 `DeliveryOutcome::Blocked` 带的原因（是码不是文案：编排层据它显示 `input_draft`）。
 pub const INPUT_DRAFT: &str = "input_draft";
 
-/// 外来输入的标记（[`Core::raw`] 置、输入框读成空清）。分两步清：`raw` 之后回显还没到时框仍读成空，那一次空不算
-/// 「人清掉了」——要先读到过非空（回显到了），再读到空才清。
+/// 外来输入的标记。Typed 自身就是持有 Unknown（旧 Empty 屏不作数）；只有新输出整拍排空后的
+/// Text 回显才能进入 Shown，之后新 Empty 才清掉。控制键始终没留下可见字时不会靠时间自动清除。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Foreign {
     None,
     /// 有外来按键，框里还没读到过字（回显可能还在路上）。
     Typed,
+    /// 看过人留下的字，且这一笔 raw 是单独的清空 / 退格 / 提交键。新 Empty 可确认该生命周期；旧屏仍持有 Unknown。
+    Clearing,
+    /// own 正文 / 残留与 raw 相撞：此后 Text 或 Empty 都可能是 own 回显，不能自动清。只认人显式 Ctrl-U 的新回显。
+    Conflicted,
     /// 有外来按键之后框里读到过字：再读成空 = 清掉。
     Shown,
 }
@@ -228,6 +232,11 @@ pub struct Profile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Write(Vec<u8>),
+    /// 正文 / 清残留 / 提交拍：驱动在每次实际 PTY 写入之前核这笔仍在途且没有外来输入。
+    DeliveryWrite {
+        id: u64,
+        bytes: Vec<u8>,
+    },
     Resize {
         cols: u16,
         lines: u16,
@@ -257,7 +266,7 @@ struct InFlight {
     /// 去毒后的正文：写进去的是它，回读比对的也是它（屏上回显的是去毒后的样子）。
     body: String,
     machine: Delivery,
-    /// 正文至少写进 PTY 一次了（终局不是「已投递」时，输入框里可能还留着它）。
+    /// Core 已排过正文写；驱动可能尚未写或只写了一部分。非 Delivered 终局不能据此声称字节全进了 PTY。
     wrote_body: bool,
     /// 正文落地时输入行的样子（终局不是「已投递」时它就是残留；草稿闸据此认出「是自己的残留」）。
     landed_row: Option<String>,
@@ -331,11 +340,15 @@ pub struct Core {
     residue: Option<String>,
     /// 最近一次发出去的 `SessionEvent::InputDraft`（只在变了时再发）。
     draft_reported: Option<HeldDraft>,
-    /// 输入来源（T10d fix R1，草稿闸的主信号）：输入框上次读成空（`Empty`）之后，有没有经 [`Core::raw`] 进来过
-    /// 人的按键（attach / 人在终端里敲）。`None` = 没人能往框里打过字，框里读出的 `Text` / `Unknown` 都是 claude 自己
-    /// 画的（占位提示的样式没认出来），当空框；其余 = 照样式判据（`Text` / `Unknown` 挡，fail-closed）。
-    /// 我们自己的投递、回答、打断、限流应答、终端回复都不经 `raw`，不会置它。
+    /// 输入来源：None = 没有人经 raw 敲过字，claude 自己的占位提示不挡；Typed = 待回显，
+    /// 无论旧屏是什么都持有 Unknown；Shown = 新输出里已看到草稿，等后续的新 Empty 才清。
+    /// Clearing = 明确清除键的回显未到；Conflicted = own/人混杂，只接受显式 Ctrl-U + 新 Empty。
+    /// 我们自己的投递、回答、打断、限流应答、终端回复都不经 raw，不会置它。
     foreign_input: Foreign,
+    /// 已喂进新输出、但还没完成整拍排空。旧屏和定时拍不能充当 raw 回显 / 清空的证据。
+    output_pending: bool,
+    /// raw 入队前的输入框读数；同一段旧 Text 的重画不证实这次 raw 已回显。
+    foreign_baseline: InputDraft,
     /// 正在进行的回答、排在它后面的回答（一次只答一个）。
     answering: Option<Answering>,
     answers: VecDeque<AnswerJob>,
@@ -378,6 +391,8 @@ impl Core {
             residue: None,
             draft_reported: None,
             foreign_input: Foreign::None,
+            output_pending: false,
+            foreign_baseline: InputDraft::Empty,
             answering: None,
             answers: VecDeque::new(),
             queue: pending.into(),
@@ -507,6 +522,7 @@ impl Core {
         }
         self.last_now = self.last_now.max(now);
         self.screen.feed(bytes);
+        self.output_pending |= !bytes.is_empty();
         let replies = self.screen.take_replies();
         if !replies.is_empty() {
             // 终端回复（DA1 / CPR / OSC 11…）先回给子进程：它可能正卡着等。
@@ -541,7 +557,9 @@ impl Core {
             return;
         }
         self.last_now = self.last_now.max(now);
-        self.observe_input_box();
+        if std::mem::take(&mut self.output_pending) {
+            self.observe_input_box();
+        }
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -555,7 +573,6 @@ impl Core {
             return;
         }
         self.last_now = self.last_now.max(now);
-        self.observe_input_box();
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -617,13 +634,47 @@ impl Core {
         self.start_next(now);
     }
 
-    /// 原样写字节：人在终端里按键 / attach 的输入（**外来输入的唯一入口**，T10d fix R1）。会置 `foreign_input`：
-    /// 从这一刻起直到输入框读成空，框里的字可能是人打的。
+    /// 人 / attach 的唯一入口。回显未到时即持有 Unknown；旧 Empty 屏不能放行。
+    /// 已排正文之后收到 raw，终结该投递为 Unsubmitted（可能写了一部分，是否提交未知），
+    /// 撤掉剩余正文 / 提交拍，不清理可能混有人字的输入框。原始字节本身照常按 FIFO 写入。
     pub fn raw(&mut self, bytes: &[u8]) {
         if self.running && !bytes.is_empty() {
-            self.foreign_input = Foreign::Typed;
+            let collision = self.in_flight.as_ref().is_some_and(|f| f.wrote_body)
+                || self.input_dirty
+                || self.foreign_input == Foreign::Conflicted;
+            self.foreign_input = if (self.foreign_input == Foreign::Shown
+                && matches!(bytes, b"\x15" | b"\x7f" | b"\r"))
+                || (collision && bytes == b"\x15")
+            {
+                Foreign::Clearing
+            } else if collision {
+                Foreign::Conflicted
+            } else {
+                Foreign::Typed
+            };
+            // raw 前喂进的输出不是它的回显。新打字总要重新看到 Text，不能借上一次 Shown 放行旧 Empty。
+            self.output_pending = false;
+            self.foreign_baseline = self.screen.input_draft();
+            self.input_dirty = false;
+            self.residue = None;
+            if self.in_flight.as_ref().is_some_and(|f| f.wrote_body) {
+                self.keys
+                    .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
+                self.report(DeliveryOutcome::Unsubmitted(
+                    "外来输入与已排正文相撞：已停止剩余写入和提交，不清理输入框；正文可能只写入一部分，是否已提交不能确认。重发前请回读屏幕和对话，避免重复。".into()
+                ), self.last_now);
+            }
             self.actions.push(Action::Write(bytes.to_vec()));
+            self.step_delivery(self.last_now);
         }
+    }
+
+    /// 驱动实际写入的最后一道闸；所有重试清空、正文块、空格 / 退格 / 回车都走它。
+    pub(crate) fn delivery_write_allowed(&self, id: u64) -> bool {
+        self.running
+            && !self.stopped_by_user
+            && self.draft_held(None).is_none()
+            && self.in_flight.as_ref().is_some_and(|f| f.pending.id == id)
     }
 
     /// 打断当前回合（我们自己的动作：写一个 Esc，不算外来输入）。
@@ -804,7 +855,8 @@ impl Core {
             let rows = self.screen.screen_rows();
             let safe = match &key.purpose {
                 KeyPurpose::SubmitBeat { via_body } => {
-                    blocking_dialog(&rows).is_none()
+                    self.foreign_input == Foreign::None
+                        && blocking_dialog(&rows).is_none()
                         && if *via_body {
                             self.in_flight
                                 .as_ref()
@@ -839,7 +891,16 @@ impl Core {
                 }
             };
             if safe {
-                self.actions.push(Action::Write(key.bytes));
+                if matches!(key.purpose, KeyPurpose::SubmitBeat { .. }) {
+                    if let Some(f) = &self.in_flight {
+                        self.actions.push(Action::DeliveryWrite {
+                            id: f.pending.id,
+                            bytes: key.bytes,
+                        });
+                    }
+                } else {
+                    self.actions.push(Action::Write(key.bytes));
+                }
             } else if let KeyPurpose::SubmitBeat { .. } = key.purpose {
                 self.keys
                     .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
@@ -1065,7 +1126,10 @@ impl Core {
                 self.residue = None;
                 flight.wrote_body = true;
                 bytes.extend_from_slice(flight.body.as_bytes());
-                self.actions.push(Action::Write(bytes));
+                self.actions.push(Action::DeliveryWrite {
+                    id: flight.pending.id,
+                    bytes,
+                });
             }
             Step::Submit { .. } => {
                 if flight.landed_row.is_none() {
@@ -1073,7 +1137,10 @@ impl Core {
                 }
                 // 正文是一次灌进去的，claude 会当成粘贴：单发回车可能只结束粘贴而不提交。
                 // 先补一个空格再删掉（输入行判据 trim，不影响判定），隔拍再回车。
-                self.actions.push(Action::Write(b" ".to_vec()));
+                self.actions.push(Action::DeliveryWrite {
+                    id: flight.pending.id,
+                    bytes: b" ".to_vec(),
+                });
                 let gap = self.config.submit_key_gap;
                 let purpose = KeyPurpose::SubmitBeat {
                     via_body: row.is_none(),
@@ -1120,7 +1187,10 @@ impl Core {
             }
         }
         if outcome.is_final() {
-            if outcome != DeliveryOutcome::Delivered && wrote_body {
+            if outcome != DeliveryOutcome::Delivered
+                && wrote_body
+                && self.foreign_input == Foreign::None
+            {
                 self.input_dirty = true;
                 self.residue = landed_row;
             }
@@ -1136,45 +1206,50 @@ impl Core {
         }
     }
 
-    /// 草稿闸（T10d / S52）：输入框里有人留下的字（或分不清）= `Some(给人看的草稿文本)`。上一笔没投成、留在框里
-    /// 的残留（[`Self::residue`]，输入行原样没变）是自己的，不算——下一笔照旧先 Ctrl-U 清掉它。
-    /// 屏上没有输入行 = 还没就绪（投递机自己等），不是草稿。
-    ///
-    /// 主信号是输入来源（T10d fix R1）：输入框上次读成空之后没有外来输入（[`Core::raw`]）= 没人打过字，读出什么都当
-    /// 空框；有外来输入才照样式判据（`Text` / `Unknown` 挡）。读成空 = 清掉外来输入的标记。
-    fn draft_held(&mut self, row: Option<&str>) -> Option<HeldDraft> {
+    /// 输入来源优先于样式 / 自己的残留。Typed 的旧屏即使 Empty 或没有输入行，也必须持有 Unknown。
+    /// 只读这里不会推进生命周期；只有新输出的整拍排空可以确认回显和清空。
+    fn draft_held(&self, row: Option<&str>) -> Option<HeldDraft> {
+        match self.foreign_input {
+            Foreign::Typed | Foreign::Clearing | Foreign::Conflicted => {
+                return Some(HeldDraft::Unknown);
+            }
+            Foreign::Shown => {
+                return Some(match self.screen.input_draft() {
+                    InputDraft::Text(t) => HeldDraft::Text(t),
+                    InputDraft::Empty | InputDraft::Unknown => HeldDraft::Unknown,
+                });
+            }
+            Foreign::None => {}
+        }
         let row = row?;
         if self.input_dirty && self.residue.as_deref() == Some(row) {
             return None;
         }
-        let reading = self.observe_input_box()?;
-        match reading {
-            InputDraft::Empty => None,
-            InputDraft::Text(t) => Some(HeldDraft::Text(t)),
-            InputDraft::Unknown => Some(HeldDraft::Unknown),
-        }
+        None
     }
 
-    /// 有外来输入标记时读一次输入框、推进标记（读到字 → `Shown`；`Shown` 后读成空 → 清掉）。返回此刻要按样式判的
-    /// 读数；`None` = 没有标记（或刚清掉），框里的东西不当草稿。屏上没有输入行时不动标记。
-    fn observe_input_box(&mut self) -> Option<InputDraft> {
+    /// 只在 raw 之后的新输出全部排空时调用。Text 才证实回显到了；Unknown 不把未决证据升格为 Shown。
+    /// 看过可见草稿再看到新 Empty 才清掉；空框里的控制键 / 回显始终不可辨认时会一直持有 Unknown。
+    fn observe_input_box(&mut self) {
         if self.foreign_input == Foreign::None {
-            return None;
+            return;
         }
         let rows = self.screen.screen_rows();
-        input_row(&rows)?;
+        if input_row(&rows).is_none() {
+            return;
+        }
         let reading = self.screen.input_draft();
         match (self.foreign_input, &reading) {
-            (Foreign::Shown, InputDraft::Empty) => {
-                self.foreign_input = Foreign::None;
-                return None;
+            (Foreign::Shown | Foreign::Clearing, InputDraft::Empty) => {
+                self.foreign_input = Foreign::None
             }
-            (Foreign::Typed, InputDraft::Text(_) | InputDraft::Unknown) => {
-                self.foreign_input = Foreign::Shown;
+            (Foreign::Typed | Foreign::Clearing, InputDraft::Text(_))
+                if reading != self.foreign_baseline =>
+            {
+                self.foreign_input = Foreign::Shown
             }
             _ => {}
         }
-        Some(reading)
     }
 
     /// 看到的草稿变了才发 `InputDraft`（清掉 = `None`）。
@@ -1392,7 +1467,7 @@ mod tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::Write(b) => Some(b.clone()),
+                Action::Write(b) | Action::DeliveryWrite { bytes: b, .. } => Some(b.clone()),
                 _ => None,
             })
             .collect()
@@ -2484,7 +2559,7 @@ mod tests {
             k += 1;
         }
         t.core.raw("这是".as_bytes());
-        t.core.take_actions();
+        all.extend(t.core.take_actions());
         for chunk in after.chunks(64) {
             all.extend(t.output(chunk, k as f64 * 0.01));
             k += 1;
@@ -2739,8 +2814,9 @@ mod tests {
         t.core.send(1, "唤醒正文", t.at(0.0));
         // 人在终端里打了字（外来输入）：草稿闸才按样式判。
         t.core.raw("人".as_bytes());
-        t.core.take_actions();
-        let mut log = t.output(&styled_box("人打了一半"), 0.0);
+        let mut log = t.core.take_actions();
+        log.retain(|a| matches!(a, Action::Event(_)));
+        log.extend(t.output(&styled_box("人打了一半"), 0.0));
         for s in 1..=5 {
             log.extend(t.tick(s as f64 * 0.4));
         }
@@ -2885,6 +2961,155 @@ mod tests {
         let mut again = t.output(&styled_box("claude 画的"), 6.0);
         again.extend(t.tick(6.3));
         assert_eq!(writes(&again), vec!["丙".as_bytes().to_vec()]);
+    }
+
+    // ---- T10d fix R3 ----
+
+    #[test]
+    fn raw_pending_echo_holds_an_already_settling_empty_row() {
+        let mut t = T::new(vec![]);
+        t.output(&styled_box(""), 0.0);
+        t.core.send(1, "BOT", t.at(0.0));
+        t.core.take_actions();
+        t.core.raw(b"x");
+        let raw = t.core.take_actions();
+        assert_eq!(writes(&raw), vec![b"x".to_vec()]);
+        assert!(events(&raw).contains(&SessionEvent::InputDraft(Some(HeldDraft::Unknown))));
+        let held = t.tick(200.0);
+        assert!(
+            writes(&held).is_empty(),
+            "no timeout may release old Empty: {held:?}"
+        );
+        assert_eq!(t.core.foreign_input, Foreign::Typed);
+        assert!(!t.core.delivery_write_allowed(1));
+    }
+
+    #[test]
+    fn empty_preserving_raw_controls_and_unknown_frames_stay_indeterminate() {
+        for raw in [b"\x1b".as_slice(), b"\x15", b"\r", b"\x1b[A"] {
+            let mut t = T::new(vec![]);
+            t.output(&styled_box(""), 0.0);
+            t.core.raw(raw);
+            t.core.take_actions();
+            t.core.send(1, "BOT", t.at(0.0));
+            let mut log = t.core.take_actions();
+            // A new Empty frame is still not evidence that these controls cleared a visible draft.
+            log.extend(t.output(&styled_box(""), 1.0));
+            log.extend(t.tick(200.0));
+            assert!(writes(&log).is_empty(), "{raw:?}: {log:?}");
+            assert_eq!(t.core.foreign_input, Foreign::Typed);
+            assert_eq!(t.core.draft_held(None), Some(HeldDraft::Unknown));
+        }
+        let mut t = T::new(vec![]);
+        t.core.raw(b"x");
+        t.core.take_actions();
+        // Unknown is not proof a human draft was visibly established; a subsequent empty frame stays held.
+        t.output(&styled_box("\x1b[2mgrey\x1b[22mplain"), 0.1);
+        assert_eq!(t.core.screen.input_draft(), InputDraft::Unknown);
+        t.output(&styled_box(""), 0.2);
+        assert_eq!(t.core.foreign_input, Foreign::Typed);
+    }
+
+    #[test]
+    fn raw_after_a_body_or_each_submit_beat_stops_without_own_residue_cleanup() {
+        for beat in 0..=3 {
+            let mut t = T::new(vec![]);
+            t.core.send(1, "BOT", t.at(0.0));
+            t.output(&styled_box(""), 0.0);
+            assert_eq!(writes(&t.tick(0.3)), vec![b"BOT".to_vec()]);
+            if beat > 0 {
+                assert_eq!(
+                    writes(&t.output(&styled_box("BOT"), 0.9)),
+                    vec![b" ".to_vec()]
+                );
+            }
+            if beat > 1 {
+                assert_eq!(writes(&t.tick(1.0)), vec![vec![0x7f]]);
+            }
+            if beat > 2 {
+                assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
+            }
+            t.core.raw(b"x");
+            let mut log = t.core.take_actions();
+            t.core.send(2, "AFTER", t.at(1.2));
+            log.extend(t.core.take_actions());
+            log.extend(t.tick(10.0));
+            assert_eq!(
+                writes(&log),
+                vec![b"x".to_vec()],
+                "beat {beat}: no retry, cleanup or remaining submit: {log:?}"
+            );
+            assert!(events(&log).iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    id: 1,
+                    outcome: DeliveryOutcome::Unsubmitted(_),
+                    ..
+                }
+            )));
+            assert!(!delivered(&log, 1));
+            assert!(!t.core.input_dirty);
+            assert!(!t.core.delivery_write_allowed(1));
+            assert!(!t.core.delivery_write_allowed(2));
+            // Late own echo / a blank redraw cannot clear a mixed-provenance collision.
+            assert_eq!(t.core.foreign_input, Foreign::Conflicted);
+            t.output(&styled_box("BOT"), 11.0);
+            assert!(writes(&t.output(&styled_box(""), 12.0)).is_empty());
+            assert_eq!(t.core.foreign_input, Foreign::Conflicted);
+            t.core.raw(b"\x15");
+            t.core.take_actions();
+            t.output(&styled_box(""), 13.0);
+            assert_eq!(writes(&t.tick(13.3)), vec![b"AFTER".to_vec()]);
+        }
+    }
+
+    #[test]
+    fn new_typing_cannot_borrow_the_previous_drafts_shown_evidence() {
+        let mut t = T::new(vec![]);
+        t.core.raw(b"x");
+        t.core.take_actions();
+        t.output(&styled_box("x"), 0.1);
+        assert_eq!(t.core.foreign_input, Foreign::Shown);
+        t.core.raw(b"y");
+        t.core.take_actions();
+        t.output(&styled_box("x"), 0.15);
+        assert_eq!(
+            t.core.foreign_input,
+            Foreign::Typed,
+            "unchanged old Text is not this raw's echo"
+        );
+        t.output(&styled_box(""), 0.2);
+        t.core.send(1, "BOT", t.at(0.2));
+        t.core.take_actions();
+        assert_eq!(t.core.foreign_input, Foreign::Typed);
+        assert!(writes(&t.tick(20.0)).is_empty());
+        t.output(&styled_box("y"), 21.0);
+        t.core.raw(b"\x15");
+        t.core.take_actions();
+        assert_eq!(t.core.foreign_input, Foreign::Clearing);
+        assert!(
+            writes(&t.tick(40.0)).is_empty(),
+            "old Text cannot acknowledge clear"
+        );
+        t.output(&styled_box(""), 41.0);
+        assert_eq!(writes(&t.tick(41.3)), vec![b"BOT".to_vec()]);
+    }
+
+    #[test]
+    fn own_answers_interrupts_and_deliveries_do_not_arm_foreign_input() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(1, expect, vec![step(b"1", None)], t.at(0.0));
+        t.core.take_actions();
+        t.output(&styled_box(""), 0.1);
+        t.tick(0.6);
+        t.core.interrupt();
+        t.core.take_actions();
+        t.core.send(1, "BOT", t.at(1.0));
+        let log = drive_one(&mut t, "BOT", 1.0);
+        assert!(delivered(&log, 1), "{log:?}");
+        assert_eq!(t.core.foreign_input, Foreign::None);
     }
 
     /// T10d fix M3：下一下排在上一下真正按下的时刻 + 间隔（拍子晚到时，后面的间隔不会被压没）。

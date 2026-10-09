@@ -2,10 +2,10 @@
 //!
 //! 任务拥有 PTY 主端、子进程、[`Core`]；命令从句柄进，事件从 `mpsc` 出。
 //! 节拍：PTY 输出先有界排空再一拍、0.6s 定时一拍、`Core::next_wakeup` 到点一拍。
-//! 写 PTY 走单独的写任务：子进程不读输入时写会阻塞，不能卡住读（否则双方互等）。
+//! 写 PTY 是本任务的有界非阻塞队列：每个 syscall 前重新核 raw 闸；子进程不读时仍能读输出、处理命令。
 //!
 //! 以后执行器拆成独立进程，只把 `SessionHandle` 的命令与事件换成线协议。
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -240,6 +240,9 @@ pub(crate) enum Command {
 pub struct SessionHandle {
     tx: mpsc::UnboundedSender<Command>,
     next_id: Arc<AtomicU64>,
+    /// claude 的 raw 入队与实际 PTY syscall 共用这道锁：raw 一入队就撤销旧正文的写权限。
+    /// codex 无 PTY，不装这道闸。
+    raw_fence: Option<Arc<Mutex<u64>>>,
 }
 
 impl SessionHandle {
@@ -248,6 +251,7 @@ impl SessionHandle {
         Self {
             tx,
             next_id: Arc::new(AtomicU64::new(BRIEF_DELIVERY_ID + 1)),
+            raw_fence: None,
         }
     }
 
@@ -276,7 +280,17 @@ impl SessionHandle {
     /// 原样写字节（菜单按键）。codex 没有终端：只认单独一个 Esc（= [`Self::interrupt`]），
     /// 其余丢弃并发一条 `Notice`。
     pub fn raw(&self, bytes: impl Into<Vec<u8>>) -> Result<(), Closed> {
-        self.cmd(Command::Raw(bytes.into()))
+        let bytes = bytes.into();
+        if let Some(fence) = &self.raw_fence
+            && !bytes.is_empty()
+        {
+            let mut epoch = fence.lock().expect("raw fence poisoned");
+            *epoch += 1;
+            // Send under the same lock: concurrent handle clones preserve epoch / command order.
+            self.cmd(Command::Raw(bytes))
+        } else {
+            self.cmd(Command::Raw(bytes))
+        }
     }
 
     /// 打断当前回合：claude 写一个 Esc，codex 发 `turn/interrupt`（没有进行中的回合就什么都不做）。
@@ -390,10 +404,16 @@ pub async fn start_claude(
     };
     let core = Core::new(config.core, config.screen, Instant::now(), pending, resumed);
     let _ = ev_tx.send(running.spawned_event());
+    let raw_fence = Arc::new(Mutex::new(0));
+    let mut handle = SessionHandle::new(tx);
+    handle.raw_fence = Some(raw_fence.clone());
     tokio::spawn(run(Task {
         start,
         config,
         core,
+        raw_fence,
+        input_epoch: 0,
+        writes: VecDeque::new(),
         answers: BTreeMap::new(),
         next_answer: 0,
         running,
@@ -402,7 +422,7 @@ pub async fn start_claude(
         auth_tx,
         auth_rx,
     }));
-    Ok((SessionHandle::new(tx), ev_rx))
+    Ok((handle, ev_rx))
 }
 
 /// 一个起好的进程及其附属物。
@@ -410,8 +430,6 @@ struct Running {
     child: tokio::process::Child,
     pid: u32,
     master: Arc<PtyMaster>,
-    writer: mpsc::UnboundedSender<Vec<u8>>,
-    writer_task: JoinHandle<()>,
     auth_task: Option<JoinHandle<()>>,
     agent: AgentSessionArg,
     /// 启动临时文件。字段顺序要紧：先删文件、再放开会话号（[`LiveId`]）——反过来，
@@ -461,7 +479,6 @@ impl Running {
         if let Some(t) = self.auth_task.take() {
             t.abort();
         }
-        self.writer_task.abort();
     }
 
     /// 进程已收尸：整组补一刀、停掉附属任务、删启动文件、放开会话号（按这个顺序）。
@@ -555,15 +572,6 @@ async fn launch(
             return Err(StartError::Registry(e));
         }
     }
-    let (writer, mut writes) = mpsc::unbounded_channel::<Vec<u8>>();
-    let w = master.clone();
-    let writer_task = tokio::spawn(async move {
-        while let Some(bytes) = writes.recv().await {
-            if w.write_all(&bytes).await.is_err() {
-                break;
-            }
-        }
-    });
     let auth_task = config.claude_projects_dir.clone().map(|projects_dir| {
         let probe = AuthProbe {
             session_id: agent.id().to_string(),
@@ -588,8 +596,6 @@ async fn launch(
         child,
         pid: proc.pid,
         master,
-        writer,
-        writer_task,
         auth_task,
         agent,
         files: Some(files),
@@ -597,7 +603,17 @@ async fn launch(
     })
 }
 
+struct PendingWrite {
+    bytes: Vec<u8>,
+    offset: usize,
+    delivery: Option<u64>,
+}
+
 struct Task {
+    raw_fence: Arc<Mutex<u64>>,
+    /// 已处理的 raw 命令数；锁里的数更大 = raw 已入队但还没处理，不能写正文。
+    input_epoch: u64,
+    writes: VecDeque<PendingWrite>,
     start: ClaudeStart,
     config: DriverConfig,
     core: Core,
@@ -763,7 +779,43 @@ async fn run(mut t: Task) {
     loop {
         let wake = t.core.next_wakeup().map(tokio::time::Instant::from_std);
         let mut exit = None;
+        let master = t.running.master.clone();
         tokio::select! {
+            ready = master.writable(), if !t.writes.is_empty() => {
+                // Even if select chose writable over a queued Raw, process commands before any syscall.
+                // Bounded like the output drain; raw_fence blocks writes if a Raw remains beyond the cap.
+                let mut answer = false;
+                for _ in 0..DRAIN_CHUNKS {
+                    match t.cmd_rx.try_recv() {
+                        Ok(c) => {
+                            answer |= matches!(c, Command::Answer { .. });
+                            if handle(&mut t, c) {
+                                begin_stop(&mut t, &mut stopping, &mut stop_deadline);
+                            }
+                        }
+                        Err(mpsc::error::TryRecvError::Empty) => break,
+                        Err(mpsc::error::TryRecvError::Disconnected) => {
+                            commands_open = false;
+                            begin_stop(&mut t, &mut stopping, &mut stop_deadline);
+                            break;
+                        }
+                    }
+                }
+                if answer && drain_ready(&master, &mut t.core, None, DRAIN_CHUNKS) {
+                    t.core.after_output_drain(Instant::now());
+                }
+                match ready {
+                    Ok(mut guard) => match write_one(&mut t) {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => guard.clear_ready(),
+                        Err(e) => {
+                            let _ = t.ev_tx.send(SessionEvent::Notice(format!("PTY write failed: {e}")));
+                            begin_stop(&mut t, &mut stopping, &mut stop_deadline);
+                        }
+                        Ok(()) => {}
+                    },
+                    Err(_) => begin_stop(&mut t, &mut stopping, &mut stop_deadline),
+                }
+            }
             r = t.running.master.read(&mut buf), if reading => match r {
                 Ok(n) if n > 0 => {
                     if drain_ready(&t.running.master, &mut t.core, Some(&buf[..n]), DRAIN_CHUNKS) {
@@ -880,6 +932,7 @@ fn begin_stop(t: &mut Task, stopping: &mut bool, stop_deadline: &mut Option<toki
     }
     *stopping = true;
     t.core.stop(Instant::now());
+    t.writes.clear();
     terminate(t.running.pid);
     *stop_deadline = Some(tokio::time::Instant::now() + t.config.stop_grace);
 }
@@ -892,7 +945,12 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             t.core
                 .send(id, &with_untrusted_context(&context, &text), now)
         }
-        Command::Raw(bytes) => t.core.raw(&bytes),
+        Command::Raw(bytes) => {
+            if !bytes.is_empty() {
+                t.input_epoch += 1;
+            }
+            t.core.raw(&bytes);
+        }
         Command::Interrupt => t.core.interrupt(),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
         Command::Stop => return t.core.is_running(),
@@ -932,14 +990,67 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
     false
 }
 
+/// 单个有界 syscall，与 SessionHandle::raw 入队线性化。锁绝不跨 await / 阻塞 IO。
+/// 不再有旁路 write_all 任务：剩余正文、重试的 Ctrl-U、每一拍提交都能在这里被撤销。
+fn write_one(t: &mut Task) -> io::Result<()> {
+    write_ready(
+        &t.running.master,
+        &t.core,
+        &t.raw_fence,
+        t.input_epoch,
+        &mut t.writes,
+    )
+}
+
+fn write_ready(
+    master: &PtyMaster,
+    core: &Core,
+    raw_fence: &Mutex<u64>,
+    input_epoch: u64,
+    writes: &mut VecDeque<PendingWrite>,
+) -> io::Result<()> {
+    let epoch = raw_fence.lock().expect("raw fence poisoned");
+    if *epoch != input_epoch {
+        return Ok(());
+    }
+    while let Some(write) = writes.front_mut() {
+        if write
+            .delivery
+            .is_some_and(|id| !core.delivery_write_allowed(id))
+            || write.offset == write.bytes.len()
+        {
+            writes.pop_front();
+            continue;
+        }
+        let end = (write.offset + 4096).min(write.bytes.len());
+        let n = master.try_write(&write.bytes[write.offset..end])?;
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        write.offset += n;
+        if write.offset == write.bytes.len() {
+            writes.pop_front();
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// 执行 Core 攒下的动作；返回是否见到了 `ResumeRefused`。
 fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
     let mut refused = false;
     for action in actions {
         match action {
-            Action::Write(bytes) => {
-                let _ = t.running.writer.send(bytes);
-            }
+            Action::Write(bytes) => t.writes.push_back(PendingWrite {
+                bytes,
+                offset: 0,
+                delivery: None,
+            }),
+            Action::DeliveryWrite { id, bytes } => t.writes.push_back(PendingWrite {
+                bytes,
+                offset: 0,
+                delivery: Some(id),
+            }),
             Action::Resize { cols, lines } => {
                 let _ = t.running.master.resize(cols, lines);
             }
@@ -961,6 +1072,8 @@ fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
 /// claude 拒绝了 `--resume`：换新号（先落账）重起一次，没投出去的正文搬过去。
 async fn respawn(t: &mut Task) -> Result<(), StartError> {
     let pending = t.core.take_pending();
+    // Old writer work belongs to the retired PTY. The new Core starts each pending body afresh.
+    t.writes.clear();
     // 旧 Core 上还没答完的回答随它作废：丢掉回执（等的一方拿到 `Closed`）。
     t.answers.clear();
     let agent = AgentSessionArg::New(new_agent_session_id());
@@ -1110,7 +1223,9 @@ mod output_drain_tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::Write(bytes) => Some(bytes.as_slice()),
+                Action::Write(bytes) | Action::DeliveryWrite { bytes, .. } => {
+                    Some(bytes.as_slice())
+                }
                 _ => None,
             })
             .collect()
@@ -1154,6 +1269,102 @@ mod output_drain_tests {
         reap_killed(&mut p.child, &p.master, REAP_LIMIT)
             .await
             .unwrap();
+    }
+
+    /// R3: Raw is enqueued after Core issued a body or submit action, before the driver syscall.
+    /// This deliberately leaves the command unhandled, so only SessionHandle's synchronous fence can stop it.
+    #[tokio::test]
+    async fn a_raw_enqueued_after_readiness_revokes_every_queued_delivery_write() {
+        for beat in 0..=3 {
+            let (_dir, p) = readable_output(b"").await;
+            let now = Instant::now();
+            let mut core = Core::new(
+                CoreConfig::default(),
+                ScreenConfig::default(),
+                now,
+                vec![],
+                None,
+            );
+            let screen = |text| {
+                format!(
+                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+                )
+            };
+            core.on_output(screen("").as_bytes(), now);
+            core.send(1, "BOT", now);
+            core.take_actions();
+            core.on_tick(now + Duration::from_millis(300));
+            let mut actions = core.take_actions();
+            if beat > 0 {
+                core.on_output(screen("BOT").as_bytes(), now + Duration::from_millis(900));
+                actions = core.take_actions();
+            }
+            if beat > 1 {
+                core.on_tick(now + Duration::from_millis(1000));
+                actions = core.take_actions();
+            }
+            if beat > 2 {
+                core.on_tick(now + Duration::from_millis(1100));
+                actions = core.take_actions();
+            }
+            let bytes = actions
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::DeliveryWrite { id: 1, bytes } => Some(bytes),
+                    _ => None,
+                })
+                .expect("premise: Core already issued a delivery write");
+            assert_eq!(
+                bytes,
+                match beat {
+                    0 => b"BOT".to_vec(),
+                    1 => b" ".to_vec(),
+                    2 => vec![0x7f],
+                    _ => b"\r".to_vec(),
+                }
+            );
+            let mut writes = VecDeque::from([PendingWrite {
+                bytes,
+                offset: 0,
+                delivery: Some(1),
+            }]);
+            let fence = Arc::new(Mutex::new(0));
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let mut h = SessionHandle::new(tx);
+            h.raw_fence = Some(fence.clone());
+            h.raw(b"x".to_vec()).unwrap();
+            // Core still thinks the original body may be written. raw_fence must independently stop it.
+            assert!(core.delivery_write_allowed(1));
+            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap();
+            assert_eq!(
+                writes.len(),
+                1,
+                "beat {beat}: must not complete the queued syscall"
+            );
+            assert_eq!(
+                writes.front().unwrap().offset,
+                0,
+                "beat {beat}: no bytes written"
+            );
+            let Command::Raw(raw) = rx.try_recv().unwrap() else {
+                panic!("raw must be enqueued")
+            };
+            core.raw(&raw);
+            write_ready(&p.master, &core, &fence, 1, &mut writes).unwrap();
+            assert!(
+                writes.is_empty(),
+                "the cancelled delivery write is discarded, not retried"
+            );
+            // A known-normal counterpart proves this PTY can accept writes through the same function.
+            writes.push_back(PendingWrite {
+                bytes: b"ok".to_vec(),
+                offset: 0,
+                delivery: None,
+            });
+            write_ready(&p.master, &core, &fence, 1, &mut writes).unwrap();
+            assert!(writes.is_empty(), "ordinary writes remain available");
+            stop(p).await;
+        }
     }
 
     /// R2 必须钉住的边界：chunk 1 保持旧框；chunk 2 才露出新框。键在 chunk 1 之前已经到点。

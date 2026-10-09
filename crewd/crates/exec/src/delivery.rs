@@ -301,9 +301,17 @@ impl Delivery {
         match self.phase.clone() {
             Phase::Finished => Step::Idle,
             Phase::AwaitingReady => {
-                if !obs.draft_held {
-                    self.reported_draft = false;
+                if obs.draft_held {
+                    // Pending echo holds even an old Empty / absent input row. Time cannot resynchronise it.
+                    self.ready_since = None;
+                    self.readiness_since = now;
+                    if self.reported_draft {
+                        return Step::Idle;
+                    }
+                    self.reported_draft = true;
+                    return Step::HeldByDraft;
                 }
+                self.reported_draft = false;
                 if obs.dialog_present {
                     self.ready_since = None;
                     let since = *self.dialog_since.get_or_insert(now);
@@ -344,15 +352,6 @@ impl Delivery {
                             self.subject.noun(),
                             t.readiness_deadline.as_secs()
                         ));
-                    }
-                    if obs.draft_held {
-                        // 等人清掉草稿不算「没就绪」（同对话框）：就绪期限从这一刻重新给满。
-                        self.readiness_since = now;
-                        if self.reported_draft {
-                            return Step::Idle;
-                        }
-                        self.reported_draft = true;
-                        return Step::HeldByDraft;
                     }
                     self.phase = Phase::Writing {
                         attempt: 1,

@@ -14,6 +14,7 @@ use crewd_exec::session::{
     AnswerOutcome, AnswerStep, BRIEF_DELIVERY_ID, DeliveryOutcome, ExitStatusKind, SessionEvent,
 };
 use crewd_term::DecisionEvent;
+use std::os::unix::fs::PermissionsExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake_claude");
@@ -224,11 +225,31 @@ async fn recorded_trust_dialog_blocks_until_answered_then_brief_lands() {
     r.h.raw(b"\x1b[B".to_vec()).unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     r.h.raw(b"\r".to_vec()).unwrap();
-    let seen = r
-        .until(outcome(BRIEF_DELIVERY_ID, |o| {
+    let mut seen = r
+        .until(|e| matches!(e, SessionEvent::Decision(DecisionEvent::Cleared)))
+        .await;
+    // Raw menu controls did not establish a visible input draft. An Empty frame cannot prove
+    // their lifecycle, so the brief stays Unknown until explicit visible-draft / clear evidence.
+    assert!(seen.iter().any(|e| matches!(
+        e,
+        SessionEvent::InputDraft(Some(crewd_exec::session::HeldDraft::Unknown))
+    )));
+    assert!(r.submitted().is_empty());
+    r.h.raw(b"x".to_vec()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !r.h.screen_text(25).await.unwrap().contains("❯ x") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    r.h.raw(vec![0x15]).unwrap();
+    seen.extend(
+        r.until(outcome(BRIEF_DELIVERY_ID, |o| {
             *o == DeliveryOutcome::Delivered
         }))
-        .await;
+        .await,
+    );
     assert!(
         seen.contains(&SessionEvent::Decision(DecisionEvent::Cleared)),
         "{seen:?}"
@@ -350,6 +371,320 @@ async fn huge_brief_is_submitted_exactly_once() {
     .await;
     assert_eq!(r.submitted(), [brief.replace('\n', "\\n")]);
     r.stop().await;
+}
+
+// T10d R3: production SessionHandle/start_claude + real PTY, with a synthetic
+// child acknowledging input consumption independently of its deliberately delayed echo.
+struct EchoRun {
+    r: Run,
+    pid: u32,
+    stopped: bool,
+}
+
+impl Drop for EchoRun {
+    fn drop(&mut self) {
+        if !self.stopped {
+            // Panic/timeout cleanup addresses only this fixture's exact child PID.
+            let _ = self.r.h.stop();
+            if let Some(pid) = rustix::process::Pid::from_raw(self.pid as i32) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        }
+    }
+}
+
+impl EchoRun {
+    fn path(&self, name: &str) -> PathBuf {
+        self.r._dir.path().join(name)
+    }
+
+    fn bytes(&self, name: &str) -> Vec<u8> {
+        std::fs::read(self.path(name)).unwrap_or_default()
+    }
+
+    async fn receipt(&self, name: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !self.path(name).exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("child did not acknowledge {name}"));
+    }
+
+    async fn screen_has(&self, text: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !self.r.h.screen_text(25).await.unwrap().contains(text) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("driver did not observe {text}"));
+    }
+
+    fn release(&self, name: &str) {
+        std::fs::write(self.path(name), b"go").unwrap();
+    }
+
+    fn events(&mut self) -> Vec<SessionEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = self.r.rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    async fn stop(&mut self) {
+        self.r.h.stop().unwrap();
+        self.r.until(|e| matches!(e, SessionEvent::Exited(_))).await;
+        self.stopped = true;
+    }
+}
+
+async fn delayed_echo_child(pause_body: bool) -> EchoRun {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let py = dir.path().join("synthetic_tui.py");
+    std::fs::write(
+        &py,
+        r#"import os, pathlib, select, sys, termios, time
+root = pathlib.Path(__file__).parent
+pause_body = sys.argv[1] == 'pause'
+attrs = termios.tcgetattr(0)
+attrs[0] &= ~termios.ICRNL
+attrs[3] &= ~(termios.ICANON | termios.ECHO)
+attrs[6][termios.VMIN] = 1
+attrs[6][termios.VTIME] = 0
+termios.tcsetattr(0, termios.TCSANOW, attrs)
+value = b''
+received = bytearray()
+echoed = False
+paused = False
+def draw():
+    body = value.decode(errors='replace') if value else '\x1b[2mTry x\x1b[22m'
+    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + body + '\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m').encode())
+draw()
+while True:
+    if not pause_body and not echoed and (root / 'show-echo').exists():
+        echoed = True
+        draw()
+        (root / 'echo-shown').write_bytes(value)
+    ready, _, _ = select.select([0], [], [], 0.01)
+    if not ready:
+        continue
+    chunk = os.read(0, 4096)
+    received.extend(chunk)
+    # Append-only evidence: no partial-file read races with the parent.
+    with (root / 'received').open('ab') as f:
+        f.write(chunk)
+    for key in chunk:
+        if key == 127:
+            value = value[:-1]
+        elif key == 21:
+            value = b''
+            (root / 'cleared').write_bytes(b'yes')
+        elif key == 13:
+            with (root / 'submitted.log').open('ab') as f:
+                f.write(value + b'\n')
+            value = b''
+        else:
+            value += bytes([key])
+    if pause_body and not paused:
+        paused = True
+        (root / 'body-prefix').write_bytes(chunk)
+        while not (root / 'resume-reading').exists():
+            time.sleep(0.01)
+    if pause_body and b'x' in chunk:
+        (root / 'raw-consumed').write_bytes(b'x')
+    if not pause_body and not (root / 'human-consumed').exists():
+        (root / 'human-consumed').write_bytes(chunk)
+    if echoed:
+        draw()
+"#,
+    )
+    .unwrap();
+    let program = dir.path().join("synthetic-tui");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nexec /usr/bin/python3 -I -u '{}' {}\n",
+            py.display(),
+            if pause_body { "pause" } else { "echo" }
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Default delivery, tick, submit and stop timings, not the shortened Run helper.
+    let config = DriverConfig::new(dir.path().join("run"));
+    let (h, rx) = start_claude(
+        ClaudeStart {
+            session_id: next_session_id(),
+            program,
+            child_path: "/usr/bin:/bin".into(),
+            spec: ClaudeSpec {
+                workdir: dir.path().to_path_buf(),
+                ..ClaudeSpec::default()
+            },
+            ledger: Arc::new(MemoryLedger::default()),
+        },
+        config,
+    )
+    .await
+    .unwrap();
+    let mut r = Run {
+        h,
+        rx,
+        log: dir.path().join("submitted.log"),
+        _dir: dir,
+    };
+    let spawned = r.until(|e| matches!(e, SessionEvent::Spawned { .. })).await;
+    let pid = match spawned.last().unwrap() {
+        SessionEvent::Spawned { pid, .. } => *pid,
+        _ => unreachable!(),
+    };
+    let r = EchoRun {
+        r,
+        pid,
+        stopped: false,
+    };
+    r.screen_has("Try x").await;
+    r
+}
+
+async fn assert_delayed_echo_hold(queue_first: bool) {
+    use crewd_exec::session::{HeldDraft, INPUT_DRAFT};
+    let mut r = delayed_echo_child(false).await;
+    let id = if queue_first {
+        Some(r.r.h.send("BOT").unwrap())
+    } else {
+        None
+    };
+    r.r.h.raw(b"x".to_vec()).unwrap();
+    r.receipt("human-consumed").await;
+    assert_eq!(
+        r.bytes("human-consumed"),
+        b"x",
+        "child consumed raw before enqueue"
+    );
+    assert!(r.r.h.screen_text(25).await.unwrap().contains("Try x"));
+    let id = id.unwrap_or_else(|| r.r.h.send("BOT").unwrap());
+    // More than two normal ticks and the entire normal body/submit timing.
+    tokio::time::sleep(Duration::from_millis(1400)).await;
+    let held_bytes = r.bytes("received");
+    let held_submitted = r.r.submitted();
+    let held_events = r.events();
+    let safe = held_bytes == b"x"
+        && held_submitted.is_empty()
+        && !held_events
+            .iter()
+            .any(outcome(id, |o| *o == DeliveryOutcome::Delivered));
+    if !safe {
+        r.stop().await;
+        panic!(
+            "raw pending echo must hold all body/submit writes: received={held_bytes:?}, submitted={held_submitted:?}, events={held_events:?}"
+        );
+    }
+    assert!(
+        held_events.contains(&SessionEvent::InputDraft(Some(HeldDraft::Unknown))),
+        "{held_events:?}"
+    );
+    assert!(
+        held_events.iter().any(outcome(
+            id,
+            |o| matches!(o, DeliveryOutcome::Blocked(d) if d == INPUT_DRAFT)
+        )),
+        "{held_events:?}"
+    );
+    r.release("show-echo");
+    r.receipt("echo-shown").await;
+    r.screen_has("❯ x").await;
+    let shown_events = r.events();
+    assert!(
+        shown_events.contains(&SessionEvent::InputDraft(Some(HeldDraft::Text("x".into())))),
+        "{shown_events:?}"
+    );
+    r.r.h.raw(vec![0x15]).unwrap();
+    r.receipt("cleared").await;
+    let done =
+        r.r.until(outcome(id, |o| *o == DeliveryOutcome::Delivered))
+            .await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let later = r.events();
+    let final_bytes = r.bytes("received");
+    let submitted = r.r.submitted();
+    r.stop().await;
+    assert_eq!(
+        submitted,
+        ["BOT"],
+        "human draft must never be submitted with BOT"
+    );
+    assert_eq!(
+        final_bytes, b"x\x15BOT \x7f\r",
+        "separate, exactly one body/submit"
+    );
+    assert_eq!(
+        done.iter()
+            .chain(&later)
+            .filter(|e| outcome(id, |o| *o == DeliveryOutcome::Delivered)(e))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn raw_consumed_before_echo_holds_the_production_delivery() {
+    assert_delayed_echo_hold(false).await;
+}
+
+#[tokio::test]
+async fn raw_after_enqueue_before_ready_holds_the_production_delivery() {
+    assert_delayed_echo_hold(true).await;
+}
+
+#[tokio::test]
+async fn raw_during_a_backpressured_body_cancels_the_remaining_bytes_without_cleanup() {
+    let mut r = delayed_echo_child(true).await;
+    let body = "B".repeat(1_000_000);
+    let id = r.r.h.send(body.clone()).unwrap();
+    r.receipt("body-prefix").await;
+    let prefix = r.bytes("body-prefix");
+    assert!(!prefix.is_empty() && prefix.iter().all(|b| *b == b'B'));
+    r.r.h.raw(b"x".to_vec()).unwrap();
+    // FIFO barrier proves the raw command was handled while the child still wasn't reading.
+    r.r.h.status().await.unwrap();
+    r.release("resume-reading");
+    r.receipt("raw-consumed").await;
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let bytes = r.bytes("received");
+    let events = r.events();
+    let submitted = r.r.submitted();
+    r.stop().await;
+    assert!(
+        bytes.len() < body.len(),
+        "partial body must not finish after raw"
+    );
+    assert_eq!(
+        bytes.last(),
+        Some(&b'x'),
+        "raw must follow only the already-written prefix"
+    );
+    assert!(
+        bytes[..bytes.len() - 1].iter().all(|b| *b == b'B'),
+        "no Ctrl-U, submit, or retry: {bytes:?}"
+    );
+    assert!(submitted.is_empty());
+    assert!(
+        events.iter().any(outcome(id, |o| matches!(
+            o,
+            DeliveryOutcome::Unsubmitted(_)
+        ))),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(outcome(id, |o| *o == DeliveryOutcome::Delivered)),
+        "{events:?}"
+    );
 }
 
 /// 续跑被拒（claude 打印原话后退出）：换新号重起，开场任务搬到新进程、只提交一次，
