@@ -1243,6 +1243,17 @@ rmcp 3.5.1 的实际本地源码已核：InitializeResult.with_instructions(impl
 - L2 runner 偏好 / 能力块 / 入门 SKILL.md 未搬；L3 change_workdir 不搬 Claude 项目记忆与权限（回执说明）；L4 仍用 shell 引号，不冒用未锁 CLI 版本的 hook args exec；L6 isolation bool 保留，只有 StartRequest 路由验证，M3c 真 worktree 创建 / 真 session 生命周期未联验。
 - L5 Codex token 形状已有原有 M2c 路；此任务没跑真实 Codex，M3c 必须接 runtime_dir、inject prepare/commit、turn_end 与进展信号；不恢复应用审批。
 - L7 meta 回合键删除 session 时仍留软状态；L8 post 附件未接；L9 侧栏人手拖拽，不自动排序（Q4），无排序工具；L10 新机组默认名来自 md，不是 Swift 地名池。
-- `context_for` 的 quota_claude / quota_codex 仍初始化为 None（代码明确把启动时档位填充交给 M3c），本任务的 SessionStart DB refresh 输出未知档位，不是实测额度。M3c 需明确 live 档位数据源 / 填充并联验，避免把 launch 里已知档位覆盖成未知；这里不把渲染了 quota 块称为「真实档位刷新通过」。
+- `context_for` 的 quota_claude / quota_codex 仍初始化为 None（代码明确把启动时档位填充交给 M3c），本任务的 SessionStart DB refresh 输出未知档位，不是实测额度。M3c 需明确 live 档位数据源 / 填充并联验，避免把 launch 里已知档位覆盖成未知；这里不把渲染了 quota 块称为「真实档位刷新通过」。 **本项是 b5bfd9b 的缺口记录；fix-r1 的 typed 接线/联合契约已在 §27.9 闭环，实际 provider feeding / 生产 launch 仍归 M3c，未声称真实额度通过。**
 - T10d idle terminal 样式 / placeholder / cursor **没有新 terminal fixture 授权，未验证**。不能用本次 print-mode MCP init 代替它。
 - eval 扩展与文案版本比较归 M3c/M5b。生产 serve 编排、真实应用数据、Linux、本机已运行 app、iOS/iPad 真机、codex、paid 模型行为和账号配置均不在这趟已验证范围。
+
+### 27.9 T16 fix-r1：进程停止、预检期限与 live quota 联合契约
+
+> **代码基准 `1ff705b`**；`68a25fa` 修 harness，`1ff705b` 修 typed quota。起点 `3657dbb`，这节补充而不改写上面 `b5bfd9b` 的历史实测。没有新 live 权限：本轮未启动任何真实 Claude/Codex，连 --version 也没跑；原 auth BLOCKED、三个 seed NOT RUN、real TUI/live 未验证及 relay/breaker HOLD 永久保留这次读数。
+
+- **F1**：原 finish 在错误后仅关 stdin、等 15s，不会取消当前回合；独立合成探针确实写出迟到 sentinel。修成 prompt 失败即 `Child::start_kill`、不可逆 stop、禁止新 prompt；finish 只在成功终态走 EOF/15s 优雅退出，其他路径立即取消并最多 2s 等收尸。收尸失败诊断，kill_on_drop/Tokio 后台收尸是最终 fallback，无 name/pattern kill、无无界 wait。测试刻意把 finish 推迟 400ms，确认 prompt Err 本身已停止 Child，且 300ms 延迟工作不发生；成功对照必须走 EOF 并完成收尾。
+- **F2**：--version 从无 deadline 的 output().await 改为独立 5s 的输出+退出期限，stdout 4KiB 上限；失败/超时取消 exact Child、2s 有界收尸。240s prompt 期限同时包住 stdin 写入和输出读取，背压不能绕过它。这里只声明这些异步等待边界，不把 CLI 的预算参数说成整个启动/文件 I/O 的绝对 wall-time 保证。
+- **quota**：`port::world_context` 是 launch 与 SessionStart 的同一入口，DB-only `context_for` 不承担 live 数据。复用已有 `SessionControl::quota -> QuotaReport/QuotaLine`，按 executor 取非空 plan；最多 1s 查询。WorldCtx 用 `QuotaTier::{Known,Unknown,Unavailable,Failed}`，成功但没档位=Unknown，Unsupported=Unavailable，其他错误/超时=Failed；后两项在 world-model zh/en md 独立显示，不回传原始错误、不编余额、不令整个身份/角色刷新静默消失。limited_until/detail 仍是 get_quota 的原有数据，不当作档位或余额。
+- **联合 launch 合同**：已提交的 opt-in harness 启动方消费 world_context；确定性 E2E 读取生成的完整 launch 世界观，FakeControl 的已知档位更新后，四个 SessionStart source 都返回新的已知值，两种 locale 均验。M3c 生产启动方必须复用该入口，不能再自行从 context_for 留空；实际 provider feeding / 生产编排未联验，没有查询真实余额。
+- **验收**：原 harness 新 10 项合成测试 RED 2 passed / 8 failed，再 GREEN 10/10；旧 9 项 agent_e2e 加两项 quota 用例 RED 9/2，再 GREEN 11/11。harness 单元完整 check.sh 1402/0/8；quota 单元完整 check.sh 1404/0/8（默认 cargo、macOS、fmt/clippy clean）。提交后四个有效变异：取消信号、预检期限各执行 10 项；SessionStart 绕开 typed 源、Unavailable 压 Unknown 各执行 11 项，合计 42 次实际执行，预期用例都红，复制备份还原。不是新的一轮付费 smoke。
+- **非阻塞审查项**：no_search helper 现在也拒绝失败终态，和注释的成功终态证明对齐；此前 smoke 自己已检查 prompt success，不将这项加强冒称为已证实的 smoke 假绿。initialize E2E 直接比 md instructions / surface hash，不只检查非空和加号。settings/hooks/annotations/schema/goldens 保持原契约，quota 文案仅扩世界观四态。

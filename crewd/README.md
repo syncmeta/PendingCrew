@@ -45,6 +45,10 @@ smoke 两条短 prompt；eval 三个短场景（被 @ 问题、需要人拍板�
 
 **2026-10-09 交付快照（代码基准 `b5bfd9b`）**：macOS 三次 check.sh 均 1382 passed / 0 failed / 8 ignored。授权 smoke 跑一次，native Claude 2.1.295、初始化成功（17 个 crew 工具 upfront，ToolSearch 可用，AskUserQuestion 不在 init）；随后 `Not logged in · Please run /login`，API 耗时 / tokens / cost 均零，没有工具执行。post / 暗号返回 / 首次 crew 前无 ToolSearch / PostToolUseFailure / live role refresh **未验证**；不重试，第二条 prompt 和三个 eval seeds 未发送。完整结果及跨分支集成 hold 见 spec §27。
 
+**fix-r1 补充（代码基准 `1ff705b`，不是新的 live 读数）**：`68a25fa` 修正 harness 的停止/期限：版本预检 5s（stdout 上限 4KiB），prompt 的 240s 包含 stdin 写入；任何错误立即取消该 Child、拒绝后续 prompt，再最多 2s 收尸，失败报诊断并交 kill_on_drop/Tokio 后台收尸。只有成功终态允许 EOF 后最多 15s 的优雅退出，超时再取消/有界收尸。合成子进程对照验证，未再启动真实 CLI（连 --version 也未运行）。
+
+SessionStart 与 launch 的联合入口为 `server::agent::port::world_context`：读 DB 身份/角色/locale 后，经已有 `SessionControl::quota` 取 typed report（最多 1s）；按 executor 只取订阅 plan，不从 detail/limited_until 编造余额。WorldCtx 的 Known / Unknown / Unavailable / Failed 四态分别表示已知档位、来源成功但档位未知、来源未接、读取失败/超时；错误不吞掉身份刷新。已用两种语言的 FakeControl 证明生成的 launch 世界观和四种 SessionStart source 的 known→known 更新。M3c 的实际 provider feeding / 生产 launch 调用仍需接这一个入口；这里没有读取真实额度。原 auth BLOCKED、三个 seed NOT RUN 与 relay/breaker HOLD 均不变，见 spec §27.9。
+
 ## 备份与恢复
 
 `crewd.db` 是聊天记录的唯一一份，只在这台机器上。
