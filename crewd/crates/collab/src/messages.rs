@@ -195,6 +195,72 @@ fn push_mention(v: &mut Vec<Mention>, m: Mention) {
     }
 }
 
+/// Canonical automatic reply mentions, shared by pre-write agent quota and message persistence.
+/// This is a read-only resolution; the write transaction resolves again against current membership.
+pub struct ResolvedReply {
+    pub mentions: Vec<Mention>,
+    pub(crate) answering: Option<(String, String)>,
+}
+
+pub fn resolve_reply(
+    conn: &Connection,
+    sender: &Sender,
+    channel: &str,
+    rid: &str,
+) -> Result<ResolvedReply> {
+    let sender_session_id = match sender {
+        Sender::Session(id) => Some(id.clone()),
+        _ => None,
+    };
+    let mut mentions = Vec::new();
+    let mut answering: Option<(String, String)> = None;
+    let replied = get(conn, rid)?;
+    if replied.channel_id != channel {
+        return Err(CollabError::Invalid(Refusal::new(
+            Code::MessageReplyOtherChannel,
+        )));
+    }
+    // 裁定 11：人回复一条问的公告、且那条问还开着 = 回答它。session 的回复、对已答 / 已撤 / 已按默认办的问的
+    // 回复都是普通消息（只有人能答问）。
+    // `category == "ask"` 是 by_message 的 SQL 之前的廉价前置过滤（绝大多数回复不是回问），不是死代码。
+    if matches!(sender, Sender::Human)
+        && replied.category.as_deref() == Some("ask")
+        && let Some((crew, h)) = asks::by_message(conn, &replied.id)?
+        && asks::get(conn, &crew, &h)?.state == AskStateView::Open
+    {
+        answering = Some((crew, h));
+    }
+    // 裁定 8：只 @ 原发送者，且他得还在群里（@ = 叫醒，叫不醒的不 @）；system 发的不 @ 任何人。
+    // 例外：回答问时不追加 @提问者——叫醒走问的回答路径（ask_answer，带 resume_note），不重复。
+    match (replied.sender_kind, replied.sender_session_id) {
+        _ if answering.is_some() => {}
+        (SenderKind::Human, _) => push_mention(
+            &mut mentions,
+            Mention {
+                kind: MentionKind::Human,
+                target_id: None,
+            },
+        ),
+        (SenderKind::Session | SenderKind::Captain, Some(sid))
+            if sender_session_id.as_deref() != Some(sid.as_str())
+                && channels::is_member(conn, channel, &MemberRef::session(sid.clone()))? =>
+        {
+            push_mention(
+                &mut mentions,
+                Mention {
+                    kind: MentionKind::Session,
+                    target_id: Some(sid),
+                },
+            )
+        }
+        _ => {}
+    }
+    Ok(ResolvedReply {
+        mentions,
+        answering,
+    })
+}
+
 fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Result<Posted> {
     let conn = tx.conn();
     // R1：人类群懒建；现在是 home（总机组 / 顶层机组）的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、
@@ -330,49 +396,13 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         };
         push_mention(&mut mentions, resolved);
     }
-    let mut answering: Option<(String, String)> = None;
+    let mut answering = None;
     if let Some(rid) = &p.in_reply_to {
-        let replied = get(conn, rid)?;
-        if replied.channel_id != ch.id {
-            return Err(CollabError::Invalid(Refusal::new(
-                Code::MessageReplyOtherChannel,
-            )));
+        let resolved = resolve_reply(conn, &sender, &ch.id, rid)?;
+        for m in resolved.mentions {
+            push_mention(&mut mentions, m);
         }
-        // 裁定 11：人回复一条问的公告、且那条问还开着 = 回答它。session 的回复、对已答 / 已撤 / 已按默认办的问的
-        // 回复都是普通消息（只有人能答问）。
-        // `category == "ask"` 是 by_message 的 SQL 之前的廉价前置过滤（绝大多数回复不是回问），不是死代码。
-        if matches!(sender, Sender::Human)
-            && replied.category.as_deref() == Some("ask")
-            && let Some((crew, h)) = asks::by_message(conn, &replied.id)?
-            && asks::get(conn, &crew, &h)?.state == AskStateView::Open
-        {
-            answering = Some((crew, h));
-        }
-        // 裁定 8：只 @ 原发送者，且他得还在群里（@ = 叫醒，叫不醒的不 @）；system 发的不 @ 任何人。
-        // 例外：回答问时不追加 @提问者——叫醒走问的回答路径（ask_answer，带 resume_note），不重复。
-        match (replied.sender_kind, replied.sender_session_id) {
-            _ if answering.is_some() => {}
-            (SenderKind::Human, _) => push_mention(
-                &mut mentions,
-                Mention {
-                    kind: MentionKind::Human,
-                    target_id: None,
-                },
-            ),
-            (SenderKind::Session | SenderKind::Captain, Some(sid))
-                if sender_session_id.as_deref() != Some(sid.as_str())
-                    && channels::is_member(conn, &ch.id, &MemberRef::session(sid.clone()))? =>
-            {
-                push_mention(
-                    &mut mentions,
-                    Mention {
-                        kind: MentionKind::Session,
-                        target_id: Some(sid),
-                    },
-                )
-            }
-            _ => {}
-        }
+        answering = resolved.answering;
     }
     let mut message = Message {
         seq: 0,

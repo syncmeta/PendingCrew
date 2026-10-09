@@ -1038,6 +1038,22 @@ pub async fn latest_seq(st: &AppState, channel: &str) -> PortResult<Option<i64>>
     .await
 }
 
+/// Automatic reply mentions from collab's canonical resolver; agent post quota uses them before
+/// reserving. The persisted write resolves again (no cached membership or caller-provided flag).
+pub async fn reply_mentions(
+    st: &AppState,
+    session: &str,
+    channel: &str,
+    reply: &str,
+) -> PortResult<Vec<Mention>> {
+    let (session, channel, reply) = (session.to_string(), channel.to_string(), reply.to_string());
+    read(st, move |conn| {
+        crewd_collab::messages::resolve_reply(conn, &Sender::Session(session), &channel, &reply)
+            .map(|r| r.mentions)
+    })
+    .await
+}
+
 /// 按 seq（全库唯一）或 id 取一条消息。只给 `me` 读得到的群里的消息；否则 `None`
 /// （不区分「不存在」与「看不见」，免得靠它探别的机组）。数据库错误照实往上抛，不当成「没有」。
 pub async fn message(st: &AppState, me: &Identity, r: MsgRef) -> PortResult<Option<Message>> {

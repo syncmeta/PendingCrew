@@ -134,7 +134,19 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
         Target::Channel(c) => Some(c.id.clone()),
         Target::Dm { existing, .. } => existing.clone(),
     };
-    let human = mentions.iter().any(|m| m.kind == MentionKind::Human);
+    let automatic = match (&target, &reply) {
+        (Target::Channel(c), Some(r)) => {
+            match port::reply_mentions(cx.st, &cx.me.session_id, &c.id, r).await {
+                Ok(m) => m,
+                Err(e) => return cx.fail(e),
+            }
+        }
+        _ => vec![], // New/explicit dm targets cannot carry reply_to (resolve_target enforces it).
+    };
+    let human = mentions
+        .iter()
+        .chain(&automatic)
+        .any(|m| m.kind == MentionKind::Human);
     let attempt = PostAttempt {
         session: &cx.me.session_id,
         channel: gate_channel.as_deref(),
