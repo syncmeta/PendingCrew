@@ -2,7 +2,7 @@
 //! **不是产品代码**——只长到能让执行器的判据成立：输入框、粘贴折叠、信任框、限流菜单、额度报错。
 //!
 //! 环境变量（执行器只放行调用方显式给的变量，所以测试经 `ClaudeSpec::additional_env` 传）：
-//! - `FAKE_CLAUDE_MODE`：`ready`（缺省）/ `deaf`（画框但永不回显）/ `noread`（画框后再也不读
+//! - `FAKE_CLAUDE_MODE`：`ready`（缺省）/ `late-submit-echo`（CR 提交前的有限迟到回显 gate）/ `deaf`（画框但永不回显）/ `noread`（画框后再也不读
 //!   stdin，PTY 输入缓冲会被写满）/ `decision`（普通编号菜单，等待真实人类 RPC 答案）/ `trust`（先过信任框）/ `ratelimit`（第一次提交弹限流菜单）/
 //!   `usage`（第一次提交报额度用尽并退出）/ `refuse`（带 `--resume` 起时照真 claude 打印
 //!   「No conversation found with session ID: <id>」后 exit 1；不带则同 `ready`）。
@@ -14,8 +14,23 @@
 //! 其中的 CR 当换行进输入框；粘贴之后单独来的回车只「结束粘贴」不提交，要先来一个普通按键
 //! 才恢复按键语义——这就是执行器提交时要先发空格、退格再回车的原因。
 use std::io::{Read, Write};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+
+#[derive(Clone)]
+struct Trace {
+    file: Arc<Mutex<std::fs::File>>,
+    start: Instant,
+}
+
+impl Trace {
+    fn record(&self, detail: std::fmt::Arguments<'_>) {
+        let mut file = self.file.lock().expect("synthetic trace lock");
+        writeln!(file, "t_us={} {detail}", self.start.elapsed().as_micros())
+            .expect("write synthetic trace");
+        file.flush().expect("flush synthetic trace");
+    }
+}
 
 const HINT: &str = "Try \"write a test\"";
 
@@ -130,11 +145,32 @@ fn main() {
         std::thread::sleep(Duration::from_secs(600));
         return;
     }
+    let trace = std::env::var("FAKE_CLAUDE_TRACE").ok().map(|path| Trace {
+        file: Arc::new(Mutex::new(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .expect("open synthetic trace"),
+        )),
+        start: Instant::now(),
+    });
+    let reader_trace = trace.clone();
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let mut input = std::io::stdin();
+        let mut seq = 0u64;
         while let Ok(n) = input.read(&mut buf) {
+            seq += 1;
+            if let Some(trace) = &reader_trace {
+                trace.record(format_args!(
+                    "read seq={seq} len={n} cr={} bs={} space={}",
+                    buf[..n].contains(&b'\r'),
+                    buf[..n].contains(&0x7f),
+                    buf[..n].contains(&b' '),
+                ));
+            }
             if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
                 return;
             }
@@ -192,13 +228,37 @@ fn main() {
     }
 
     // 一个 UTF-8 字符可能被切在两次 read 之间：没收全的那几个字节留到下一块。
+    let chunk_delay = Duration::from_millis(
+        std::env::var("FAKE_CLAUDE_CHUNK_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+    );
     let mut partial: Vec<u8> = Vec::new();
+    let mut consume_seq = 0u64;
     while let Ok(chunk) = rx.recv() {
+        if !chunk_delay.is_zero() {
+            std::thread::sleep(chunk_delay);
+        }
+        consume_seq += 1;
         let paste = chunk.len() > 1;
+        if let Some(trace) = &trace {
+            trace.record(format_args!(
+                "consume seq={consume_seq} len={} paste={paste} pasting_before={} cr={} bs={} space={}",
+                chunk.len(), fake.pasting, chunk.contains(&b'\r'),
+                chunk.contains(&0x7f), chunk.contains(&b' '),
+            ));
+        }
         if paste {
             fake.pasting = true;
         } else if chunk != b"\r" {
             fake.pasting = false;
+        }
+        if let Some(trace) = &trace {
+            trace.record(format_args!(
+                "consume-state seq={consume_seq} pasting_after={}",
+                fake.pasting,
+            ));
         }
         partial.extend_from_slice(&chunk);
         let valid = match std::str::from_utf8(&partial) {
@@ -216,6 +276,28 @@ fn main() {
                 // 粘贴之后单独来的回车：只结束粘贴。
                 '\r' if fake.pasting => {}
                 '\r' => {
+                    if fake.mode == "late-submit-echo" && fake.submits == 0 {
+                        let gate = std::path::PathBuf::from(
+                            std::env::var("FAKE_CLAUDE_SUBMIT_GATE")
+                                .expect("late-submit-echo requires its synthetic gate"),
+                        );
+                        // CR was actually read as an ordinary submit key. Delay only
+                        // this commit, not the reader or body consumption. Render an
+                        // additional nonempty paste row without altering the payload.
+                        fake.input.push('\n');
+                        fake.draw_box();
+                        fake.input.pop();
+                        std::fs::write(gate.join("held-cr"), b"received; not submitted")
+                            .expect("write synthetic CR receipt");
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while !gate.join("release-submit").exists() {
+                            if Instant::now() >= deadline {
+                                eprintln!("synthetic submit gate expired without release");
+                                std::process::exit(2);
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
                     fake.submit();
                     submitted = true;
                 }

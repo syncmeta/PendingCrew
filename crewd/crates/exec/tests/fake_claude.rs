@@ -373,6 +373,180 @@ async fn huge_brief_is_submitted_exactly_once() {
     r.stop().await;
 }
 
+struct SlowTrace {
+    dir: tempfile::TempDir,
+}
+
+impl Drop for SlowTrace {
+    fn drop(&mut self) {
+        let path = self.dir.path().join("read-boundaries.log");
+        eprintln!("SLOW-TRACE-BEGIN {}", path.display());
+        match std::fs::read_to_string(&path) {
+            Ok(trace) => eprint!("{trace}"),
+            Err(error) => eprintln!("trace unavailable: {error}"),
+        }
+        eprintln!("SLOW-TRACE-END");
+    }
+}
+
+/// A pending large paste can keep changing rows beyond the submit gap. Those echo
+/// frames must not be mistaken for an actual submission. This deliberately slow
+/// consumer may exhaust the unchanged delivery budget on some read boundaries.
+#[tokio::test]
+async fn slow_chunk_echo_never_reports_unconfirmed_delivery() {
+    let brief: String = (0..2000)
+        .map(|i| format!("{i:05} 白板条目，带点中文\n"))
+        .collect();
+    assert!(brief.len() > 60_000);
+    // 68000 bytes require at least 17 chunks (reads may be smaller/more).
+    // submit_gap remains 300ms and verify_window duration remains 800ms;
+    // these duration values are not enlarged by this fixture.
+    // Declared before EchoRun: its dump follows exact-child cleanup and occurs
+    // before its independent TempDir is removed, including assertion/timeout panic.
+    let trace = SlowTrace {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let trace_path = trace.dir.path().join("read-boundaries.log");
+    let trace_path = trace_path.to_str().unwrap();
+    let r = start(
+        &[
+            ("FAKE_CLAUDE_CHUNK_DELAY_MS", "50"),
+            ("FAKE_CLAUDE_TRACE", trace_path),
+        ],
+        Some(&brief),
+    )
+    .await;
+    let pid = r.h.status().await.unwrap().pid;
+    let mut r = EchoRun {
+        r,
+        pid,
+        stopped: false,
+    };
+    let seen =
+        r.r.until(outcome(BRIEF_DELIVERY_ID, |o| {
+            matches!(
+                o,
+                DeliveryOutcome::Delivered | DeliveryOutcome::Unsubmitted(_)
+            )
+        }))
+        .await;
+    match seen.last().expect("terminal delivery event") {
+        SessionEvent::Delivery {
+            outcome: DeliveryOutcome::Delivered,
+            ..
+        } => {
+            assert_eq!(
+                r.r.submitted(),
+                [brief.replace('\n', "\\n")],
+                "Delivered requires one complete actual submission"
+            );
+        }
+        SessionEvent::Delivery {
+            outcome: DeliveryOutcome::Unsubmitted(_),
+            ..
+        } => {
+            assert!(
+                !seen
+                    .iter()
+                    .chain(r.events().iter())
+                    .any(outcome(BRIEF_DELIVERY_ID, |o| {
+                        *o == DeliveryOutcome::Delivered
+                    })),
+                "budget exhaustion must not report a confirmed delivery"
+            );
+            // Child may still consume previously queued controls. Unsubmitted is
+            // an honest unconfirmed outcome, not proof of zero eventual submits.
+        }
+        unexpected => panic!("unexpected terminal event: {unexpected:?}"),
+    }
+    r.stop().await;
+}
+
+/// A smaller per-chunk echo delay retains the liveness contract: actual complete
+/// submission once and Delivered, without enlarging any delivery timing duration.
+#[tokio::test]
+async fn huge_brief_with_delayed_chunk_echo_is_submitted_exactly_once() {
+    let brief: String = (0..2000)
+        .map(|i| format!("{i:05} 白板条目，带点中文\n"))
+        .collect();
+    assert!(brief.len() > 60_000);
+    let r = start(&[("FAKE_CLAUDE_CHUNK_DELAY_MS", "10")], Some(&brief)).await;
+    let pid = r.h.status().await.unwrap().pid;
+    let mut r = EchoRun {
+        r,
+        pid,
+        stopped: false,
+    };
+    r.r.until(outcome(BRIEF_DELIVERY_ID, |o| {
+        *o == DeliveryOutcome::Delivered
+    }))
+    .await;
+    assert_eq!(r.r.submitted(), [brief.replace('\n', "\\n")]);
+    r.stop().await;
+}
+
+/// A real submit key can precede a late nonempty paste redraw. Success needs
+/// fresh empty input evidence, then the actual complete single submission log.
+#[tokio::test]
+async fn late_nonempty_echo_cannot_acknowledge_a_submit_before_commit() {
+    let gate = tempfile::tempdir().unwrap();
+    let gate_path = gate.path().to_str().unwrap();
+    let brief: String = (0..2000)
+        .map(|i| format!("{i:05} 白板条目，带点中文\n"))
+        .collect();
+    let r = start(
+        &[
+            ("FAKE_CLAUDE_MODE", "late-submit-echo"),
+            ("FAKE_CLAUDE_SUBMIT_GATE", gate_path),
+        ],
+        Some(&brief),
+    )
+    .await;
+    let pid = r.h.status().await.unwrap().pid;
+    let mut r = EchoRun {
+        r,
+        pid,
+        stopped: false,
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !gate.path().join("held-cr").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // screen_text asks the actual driver: this is not just a child receipt.
+        while !r
+            .r
+            .h
+            .screen_text(25)
+            .await
+            .unwrap()
+            .contains("+2001 lines]")
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("real CR and delayed nonempty paste frame must be observed");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let held_events = r.events();
+    assert!(
+        !held_events.iter().any(outcome(BRIEF_DELIVERY_ID, |o| {
+            *o == DeliveryOutcome::Delivered
+        })),
+        "late nonempty echo must not acknowledge the held CR: {held_events:?}"
+    );
+    assert!(
+        r.r.submitted().is_empty(),
+        "gate precedes actual submission"
+    );
+    std::fs::write(gate.path().join("release-submit"), b"go").unwrap();
+    r.r.until(outcome(BRIEF_DELIVERY_ID, |o| {
+        *o == DeliveryOutcome::Delivered
+    }))
+    .await;
+    assert_eq!(r.r.submitted(), [brief.replace('\n', "\\n")]);
+    r.stop().await;
+}
+
 // T10d R3: production SessionHandle/start_claude + real PTY, with a synthetic
 // child acknowledging input consumption independently of its deliberately delayed echo.
 struct EchoRun {

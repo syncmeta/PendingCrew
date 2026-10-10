@@ -78,6 +78,8 @@ impl Default for Timing {
 pub struct Observation<'a> {
     /// 输入行提示符后的内容；`None` = 屏上没有输入行。
     pub input_row: Option<&'a str>,
+    /// 提交最后一拍之后的新输出证实输入框为空；迟到的粘贴重绘不算提交确认。
+    pub input_empty: bool,
     /// 正文末尾是否已出现在屏上（长正文会把提示符顶出屏幕）。
     pub body_visible: bool,
     /// 屏上有需要人回答的对话框。
@@ -236,6 +238,28 @@ impl Delivery {
                 attempt: attempt + 1,
                 deadline: after(now, self.timing.verify_window),
             };
+        }
+    }
+
+    /// Start the unchanged verification window only when the body actually reached the PTY.
+    pub fn body_written(&mut self, now: Instant) {
+        self.last_now = self.last_now.max(now);
+        if let Phase::Writing {
+            not_before,
+            deadline,
+            ..
+        } = &mut self.phase
+        {
+            *not_before = after(now, self.timing.submit_gap);
+            *deadline = after(now, self.timing.verify_window);
+        }
+    }
+
+    /// Enter was actually written; queuing an action does not start this window.
+    pub fn enter_written(&mut self, now: Instant) {
+        self.last_now = self.last_now.max(now);
+        if let Phase::Submitting { deadline, .. } = &mut self.phase {
+            *deadline = after(now, self.timing.verify_window);
         }
     }
 
@@ -464,7 +488,7 @@ impl Delivery {
                     return self.input_row_absent(now, deadline, attempt, Stage::Entered);
                 };
                 self.stalled_since = None;
-                if submitted.as_deref() != Some(row) {
+                if obs.input_empty && submitted.as_deref() != Some(row) {
                     self.phase = Phase::Finished;
                     return Step::Delivered;
                 }
@@ -603,6 +627,7 @@ mod tests {
     fn obs(row: Option<&str>, at: Instant) -> Observation<'_> {
         Observation {
             input_row: row,
+            input_empty: row == Some(""),
             body_visible: false,
             dialog_present: false,
             draft_held: false,
@@ -843,6 +868,7 @@ mod tests {
         let (mut d, c) = setup();
         let dialog = |at| Observation {
             input_row: None,
+            input_empty: false,
             body_visible: false,
             dialog_present: true,
             draft_held: false,
@@ -864,6 +890,7 @@ mod tests {
         for s in 0..=30 {
             let step = d.step(Observation {
                 input_row: None,
+                input_empty: false,
                 body_visible: false,
                 dialog_present: true,
                 draft_held: false,
@@ -916,6 +943,7 @@ mod tests {
         assert_eq!(d.step(obs(Some("No, exit"), at(0.2))), Step::Idle);
         let dialog = Observation {
             input_row: None,
+            input_empty: false,
             body_visible: false,
             dialog_present: true,
             draft_held: false,
@@ -1005,6 +1033,7 @@ mod tests {
         assert_eq!(step_checked(&mut d, obs(None, c.at(1.0)), &c), Step::Idle);
         let dialog = |s: f64| Observation {
             input_row: None,
+            input_empty: false,
             body_visible: false,
             dialog_present: true,
             draft_held: false,
@@ -1156,6 +1185,7 @@ mod tests {
     fn dialog(at: Instant) -> Observation<'static> {
         Observation {
             input_row: None,
+            input_empty: false,
             body_visible: false,
             dialog_present: true,
             draft_held: false,
@@ -1355,6 +1385,7 @@ mod tests {
         assert_eq!(d.step(obs(None, at(1.0))), Step::Idle);
         let dialog = Observation {
             input_row: None,
+            input_empty: false,
             body_visible: false,
             dialog_present: true,
             draft_held: false,

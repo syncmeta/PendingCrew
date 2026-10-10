@@ -229,12 +229,27 @@ pub struct Profile {
 }
 
 /// 交给驱动层执行的动作，按顺序执行。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryWritePurpose {
+    Body,
+    Space { via_body: bool },
+    Backspace { via_body: bool },
+    Enter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveryWriteToken {
+    serial: u64,
+    purpose: DeliveryWritePurpose,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Write(Vec<u8>),
     /// 正文 / 清残留 / 提交拍：驱动在每次实际 PTY 写入之前核这笔仍在途且没有外来输入。
     DeliveryWrite {
         id: u64,
+        token: DeliveryWriteToken,
         bytes: Vec<u8>,
     },
     Resize {
@@ -270,6 +285,11 @@ struct InFlight {
     wrote_body: bool,
     /// 正文落地时输入行的样子（终局不是「已投递」时它就是残留；草稿闸据此认出「是自己的残留」）。
     landed_row: Option<String>,
+    /// 最后一个提交回车之后，必须等完整 PTY drain 的新输出才能确认空框。
+    submit_needs_output: bool,
+    awaiting_write: Option<DeliveryWriteToken>,
+    write_started_at: Instant,
+    write_progress_at: Instant,
 }
 
 /// 排好的按键是干什么的：到点发之前按用途再看一眼屏幕。
@@ -355,6 +375,7 @@ pub struct Core {
     queue: VecDeque<PendingText>,
     keys: VecDeque<Key>,
     actions: Vec<Action>,
+    next_write: u64,
 }
 
 impl Core {
@@ -395,9 +416,10 @@ impl Core {
             foreign_baseline: InputDraft::Empty,
             answering: None,
             answers: VecDeque::new(),
-            queue: pending.into(),
+            queue: pending.into_iter().filter(|p| !p.text.is_empty()).collect(),
             keys: VecDeque::new(),
             actions: Vec::new(),
+            next_write: 0,
         };
         core.start_next(now);
         core
@@ -420,7 +442,9 @@ impl Core {
         let delivery = if self.keys.is_empty() && self.answering.is_none() {
             self.in_flight
                 .as_ref()
+                .filter(|f| f.awaiting_write.is_none())
                 .and_then(|f| f.machine.next_deadline())
+                .or_else(|| self.pending_write_deadline())
         } else {
             None
         };
@@ -893,12 +917,15 @@ impl Core {
             };
             if safe {
                 if matches!(key.purpose, KeyPurpose::SubmitBeat { .. }) {
-                    if let Some(f) = &self.in_flight {
-                        self.actions.push(Action::DeliveryWrite {
-                            id: f.pending.id,
-                            bytes: key.bytes,
-                        });
-                    }
+                    let KeyPurpose::SubmitBeat { via_body } = key.purpose else {
+                        unreachable!()
+                    };
+                    let purpose = if key.bytes == b"\r" {
+                        DeliveryWritePurpose::Enter
+                    } else {
+                        DeliveryWritePurpose::Backspace { via_body }
+                    };
+                    self.queue_delivery_write(key.bytes, purpose, now);
                 } else {
                     self.actions.push(Action::Write(key.bytes));
                 }
@@ -1078,15 +1105,28 @@ impl Core {
                 machine,
                 wrote_body: false,
                 landed_row: None,
+                submit_needs_output: false,
+                awaiting_write: None,
+                write_started_at: now,
+                write_progress_at: now,
             });
             self.step_delivery(now);
         }
     }
 
     fn step_delivery(&mut self, now: Instant) {
+        if self.expire_pending_write(now) {
+            return;
+        }
         // 提交三拍（空格 / 退格 / 回车）没发完之前不回读：中间那一帧（多了个空格）不作数。回答待决策框的键
         // 没按完、或还没回读时也不动（不往一个正在被答的框所在的屏上敲字）。
-        if !self.keys.is_empty() || self.answering.is_some() {
+        if !self.keys.is_empty()
+            || self.answering.is_some()
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|f| f.awaiting_write.is_some())
+        {
             return;
         }
         if self.in_flight.is_none() {
@@ -1101,6 +1141,8 @@ impl Core {
         };
         let step = flight.machine.step(Observation {
             input_row: row.as_deref(),
+            input_empty: self.screen.input_draft() == InputDraft::Empty
+                && !flight.submit_needs_output,
             body_visible: body_tail_visible(&flight.body, &rows),
             dialog_present: blocking_dialog(&rows).is_some(),
             draft_held: held.is_some(),
@@ -1127,10 +1169,7 @@ impl Core {
                 self.residue = None;
                 flight.wrote_body = true;
                 bytes.extend_from_slice(flight.body.as_bytes());
-                self.actions.push(Action::DeliveryWrite {
-                    id: flight.pending.id,
-                    bytes,
-                });
+                self.queue_delivery_write(bytes, DeliveryWritePurpose::Body, now);
             }
             Step::Submit { .. } => {
                 if flight.landed_row.is_none() {
@@ -1138,16 +1177,13 @@ impl Core {
                 }
                 // 正文是一次灌进去的，claude 会当成粘贴：单发回车可能只结束粘贴而不提交。
                 // 先补一个空格再删掉（输入行判据 trim，不影响判定），隔拍再回车。
-                self.actions.push(Action::DeliveryWrite {
-                    id: flight.pending.id,
-                    bytes: b" ".to_vec(),
-                });
-                let gap = self.config.submit_key_gap;
-                let purpose = KeyPurpose::SubmitBeat {
-                    via_body: row.is_none(),
-                };
-                self.schedule(now + gap, vec![0x7f], purpose.clone());
-                self.schedule(now + gap * 2, b"\r".to_vec(), purpose);
+                self.queue_delivery_write(
+                    b" ".to_vec(),
+                    DeliveryWritePurpose::Space {
+                        via_body: row.is_none(),
+                    },
+                    now,
+                );
             }
             Step::BlockedByDialog(detail) => self.report(DeliveryOutcome::Blocked(detail), now),
             Step::NotReady(detail) => self.report(DeliveryOutcome::NotReady(detail), now),
@@ -1155,6 +1191,130 @@ impl Core {
             Step::Undelivered(detail) => self.report(DeliveryOutcome::Undelivered(detail), now),
             Step::Unsubmitted(detail) => self.report(DeliveryOutcome::Unsubmitted(detail), now),
             Step::Delivered => self.report(DeliveryOutcome::Delivered, now),
+        }
+    }
+
+    fn queue_delivery_write(
+        &mut self,
+        bytes: Vec<u8>,
+        purpose: DeliveryWritePurpose,
+        now: Instant,
+    ) {
+        let Some(flight) = self.in_flight.as_mut() else {
+            return;
+        };
+        self.next_write += 1;
+        let token = DeliveryWriteToken {
+            serial: self.next_write,
+            purpose,
+        };
+        flight.awaiting_write = Some(token);
+        flight.write_started_at = now;
+        flight.write_progress_at = now;
+        self.actions.push(Action::DeliveryWrite {
+            id: flight.pending.id,
+            token,
+            bytes,
+        });
+    }
+
+    /// Positive syscall progress is not completion and never advances body or submit phases.
+    pub fn delivery_write_progress(&mut self, id: u64, token: DeliveryWriteToken, now: Instant) {
+        if self.expire_pending_write(now) || !self.delivery_write_pending(id, token) {
+            return;
+        }
+        self.in_flight
+            .as_mut()
+            .expect("pending write")
+            .write_progress_at = now;
+        self.last_now = self.last_now.max(now);
+    }
+
+    pub fn delivery_write_pending(&self, id: u64, token: DeliveryWriteToken) -> bool {
+        self.delivery_write_allowed(id)
+            && self
+                .in_flight
+                .as_ref()
+                .is_some_and(|f| f.awaiting_write == Some(token))
+    }
+
+    fn pending_write_deadline(&self) -> Option<Instant> {
+        let flight = self
+            .in_flight
+            .as_ref()
+            .filter(|f| f.awaiting_write.is_some())?;
+        [
+            flight
+                .write_progress_at
+                .checked_add(self.config.delivery.verify_window),
+            flight
+                .write_started_at
+                .checked_add(self.config.delivery.readiness_deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn expire_pending_write(&mut self, now: Instant) -> bool {
+        if self
+            .pending_write_deadline()
+            .is_none_or(|deadline| now < deadline)
+        {
+            return false;
+        }
+        let purpose = self
+            .in_flight
+            .as_ref()
+            .unwrap()
+            .awaiting_write
+            .unwrap()
+            .purpose;
+        let detail = "PTY 写入未能在现有期限内完成；可能只写入了部分字节，未确认提交。".to_string();
+        let outcome = if purpose == DeliveryWritePurpose::Body {
+            DeliveryOutcome::Undelivered(detail)
+        } else {
+            DeliveryOutcome::Unsubmitted(detail)
+        };
+        self.report(outcome, now);
+        true
+    }
+
+    /// Driver calls this only after the complete write, never for partial, cancelled or blocked writes.
+    pub fn delivery_write_completed(&mut self, id: u64, token: DeliveryWriteToken, now: Instant) {
+        if self.expire_pending_write(now) || !self.delivery_write_pending(id, token) {
+            return;
+        }
+        let Some(flight) = self.in_flight.as_mut() else {
+            return;
+        };
+        if flight.awaiting_write != Some(token) {
+            return;
+        }
+        flight.awaiting_write = None;
+        self.last_now = self.last_now.max(now);
+        match token.purpose {
+            DeliveryWritePurpose::Body => flight.machine.body_written(now),
+            DeliveryWritePurpose::Space { via_body } => {
+                self.schedule(
+                    now + self.config.submit_key_gap,
+                    vec![0x7f],
+                    KeyPurpose::SubmitBeat { via_body },
+                );
+            }
+            DeliveryWritePurpose::Backspace { via_body } => {
+                self.schedule(
+                    now + self.config.submit_key_gap,
+                    b"\r".to_vec(),
+                    KeyPurpose::SubmitBeat { via_body },
+                );
+            }
+            DeliveryWritePurpose::Enter => {
+                flight.machine.enter_written(now);
+                flight.submit_needs_output = true;
+                // Any bytes ingested before actual Enter completion cannot acknowledge it.
+                self.output_pending = false;
+            }
         }
     }
 
@@ -1233,6 +1393,9 @@ impl Core {
     /// 无新输出时不重读旧屏；raw 会撤掉它之前的 pending，所以不能借旧回显放行。
     fn observe_drained_output(&mut self) {
         if std::mem::take(&mut self.output_pending) {
+            if let Some(flight) = &mut self.in_flight {
+                flight.submit_needs_output = false;
+            }
             self.observe_input_box();
         }
     }
@@ -1440,13 +1603,23 @@ mod tests {
         fn output(&mut self, bytes: &[u8], secs: f64) -> Vec<Action> {
             let now = self.at(secs);
             self.core.on_output(bytes, now);
-            self.core.take_actions()
+            self.completed_actions(now)
         }
 
         fn tick(&mut self, secs: f64) -> Vec<Action> {
             let now = self.at(secs);
             self.core.on_tick(now);
-            self.core.take_actions()
+            self.completed_actions(now)
+        }
+
+        fn completed_actions(&mut self, now: Instant) -> Vec<Action> {
+            let actions = self.core.take_actions();
+            for a in &actions {
+                if let Action::DeliveryWrite { id, token, .. } = a {
+                    self.core.delivery_write_completed(*id, *token, now);
+                }
+            }
+            actions
         }
     }
 
@@ -1554,6 +1727,223 @@ mod tests {
         assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
         let done = t.output(&input_box(""), 1.2);
         assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
+    }
+
+    #[test]
+    fn submission_late_paste_redraw_is_not_an_acknowledgement() {
+        let mut t = T::new(brief("一\n二"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
+        t.tick(1.0);
+        assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
+        let late = t.output(&input_box("[Pasted text #1 +3 lines]"), 1.2);
+        assert!(
+            !delivered(&late, BRIEF_DELIVERY_ID),
+            "still occupied: {late:?}"
+        );
+        let empty = t.output(&input_box(""), 1.3);
+        assert!(delivered(&empty, BRIEF_DELIVERY_ID), "{empty:?}");
+        assert!(!delivered(&t.tick(1.4), BRIEF_DELIVERY_ID));
+    }
+
+    #[test]
+    fn submission_old_empty_screen_is_not_a_fresh_enter_acknowledgement() {
+        let mut t = T::new(brief("一\n二"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
+        assert!(!delivered(
+            &t.output(&input_box(""), 0.95),
+            BRIEF_DELIVERY_ID
+        ));
+        t.tick(1.0);
+        let enter = t.tick(1.1);
+        assert_eq!(writes(&enter), vec![b"\r".to_vec()]);
+        assert!(
+            !delivered(&enter, BRIEF_DELIVERY_ID),
+            "old screen predates Enter: {enter:?}"
+        );
+        assert!(!delivered(&t.tick(1.15), BRIEF_DELIVERY_ID));
+        let empty = t.output(&input_box(""), 1.2);
+        assert!(delivered(&empty, BRIEF_DELIVERY_ID), "{empty:?}");
+    }
+
+    #[test]
+    fn pending_write_empty_initial_text_does_not_hold_the_following_task() {
+        let mut pending = brief("");
+        pending.push(PendingText {
+            id: 8,
+            subject: Subject::Steer,
+            text: "BOT".into(),
+        });
+        let mut t = T::new(pending);
+        t.output(&input_box(""), 0.0);
+        assert_eq!(writes(&t.tick(0.3)), vec![b"BOT".to_vec()]);
+    }
+
+    #[test]
+    fn pending_write_without_positive_progress_has_a_bounded_terminal_outcome() {
+        let mut t = T::new(brief("BOT"));
+        t.output(&input_box(""), 0.0);
+        t.core.on_tick(t.at(0.3));
+        let body = t.core.take_actions();
+        assert_eq!(writes(&body), vec![b"BOT".to_vec()]);
+        t.core.on_tick(t.at(2.81));
+        let expired = t.core.take_actions();
+        assert!(
+            events(&expired).iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    outcome: DeliveryOutcome::Undelivered(_),
+                    ..
+                }
+            )),
+            "a writer making no progress cannot wait forever: {expired:?}"
+        );
+        assert!(writes(&expired).is_empty());
+        t.core.on_output(&input_box(""), t.at(3.0));
+        assert!(!delivered(&t.core.take_actions(), BRIEF_DELIVERY_ID));
+    }
+
+    #[test]
+    fn pending_write_progress_is_not_completion_and_cannot_remove_the_total_bound() {
+        let mut t = T::new(brief("BOT"));
+        t.core.config.delivery.verify_window = Duration::from_secs(1);
+        t.core.config.delivery.readiness_deadline = Duration::from_secs(2);
+        t.output(&input_box(""), 0.0);
+        t.core.on_tick(t.at(0.3));
+        let body = t.core.take_actions();
+        let Action::DeliveryWrite { id, token, .. } = body[0] else {
+            panic!("body");
+        };
+        for secs in [0.9, 1.5, 2.1] {
+            t.core.delivery_write_progress(id, token, t.at(secs));
+            t.core.on_output(&input_box("BOT"), t.at(secs));
+            assert!(
+                writes(&t.core.take_actions()).is_empty(),
+                "progress is not completed body"
+            );
+        }
+        assert!(
+            t.core
+                .next_wakeup()
+                .is_some_and(|deadline| deadline <= t.at(2.3))
+        );
+        t.core.on_tick(t.at(2.31));
+        assert!(events(&t.core.take_actions()).iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery {
+                outcome: DeliveryOutcome::Undelivered(_),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn pending_write_enter_timeout_cannot_be_resurrected_by_late_completion_or_empty() {
+        let mut t = T::new(brief("BOT"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        t.output(&input_box("BOT"), 0.9);
+        t.tick(1.0);
+        t.core.on_tick(t.at(1.1));
+        let enter = t.core.take_actions();
+        let Action::DeliveryWrite { id, token, .. } = enter[0] else {
+            panic!("Enter");
+        };
+        t.core.on_tick(t.at(3.61));
+        let terminal = t.core.take_actions();
+        assert!(events(&terminal).iter().any(|e| matches!(
+            e,
+            SessionEvent::Delivery {
+                outcome: DeliveryOutcome::Unsubmitted(_),
+                ..
+            }
+        )));
+        t.core.delivery_write_completed(id, token, t.at(3.7));
+        assert!(!delivered(
+            &t.output(&input_box(""), 3.8),
+            BRIEF_DELIVERY_ID
+        ));
+        assert!(writes(&t.tick(4.0)).is_empty());
+    }
+
+    #[test]
+    fn actual_completion_paces_body_and_each_submit_beat() {
+        let mut t = T::new(brief("BOT"));
+        t.output(&input_box(""), 0.0);
+        t.core.on_tick(t.at(0.3));
+        let body = t.core.take_actions();
+        let Action::DeliveryWrite { id, token, .. } = body[0] else {
+            panic!("body");
+        };
+        t.core.delivery_write_progress(id, token, t.at(2.0));
+        t.core.delivery_write_progress(id, token, t.at(4.0));
+        t.core.on_output(&input_box("BOT"), t.at(5.0));
+        assert!(
+            writes(&t.core.take_actions()).is_empty(),
+            "pending body cannot submit"
+        );
+        t.core.delivery_write_completed(id, token, t.at(5.1));
+        assert!(
+            writes(&t.tick(5.2)).is_empty(),
+            "full body gap starts at completion"
+        );
+        t.core.on_tick(t.at(5.8));
+        let space = t.core.take_actions();
+        assert_eq!(writes(&space), vec![b" ".to_vec()]);
+        assert!(
+            writes(&t.tick(8.0)).is_empty(),
+            "pending Space cannot enqueue Backspace"
+        );
+        let Action::DeliveryWrite { id, token, .. } = space[0] else {
+            panic!("space");
+        };
+        t.core.delivery_write_completed(id, token, t.at(8.0));
+        assert!(writes(&t.tick(8.05)).is_empty());
+        t.core.on_tick(t.at(8.1));
+        let backspace = t.core.take_actions();
+        assert_eq!(writes(&backspace), vec![vec![0x7f]]);
+        assert!(
+            writes(&t.tick(10.0)).is_empty(),
+            "pending Backspace cannot enqueue Enter"
+        );
+        let Action::DeliveryWrite { id, token, .. } = backspace[0] else {
+            panic!("backspace");
+        };
+        t.core.delivery_write_completed(id, token, t.at(10.0));
+        assert!(writes(&t.tick(10.05)).is_empty());
+        assert_eq!(writes(&t.tick(10.1)), vec![b"\r".to_vec()]);
+        assert!(delivered(
+            &t.output(&input_box(""), 10.2),
+            BRIEF_DELIVERY_ID
+        ));
+    }
+
+    #[test]
+    fn pending_enter_cannot_use_late_empty_as_delivery_ack() {
+        let mut t = T::new(brief("一\n二"));
+        t.output(&input_box(""), 0.0);
+        t.tick(0.3);
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
+        t.tick(1.0);
+        // Extract the action without actually completing the queued PTY write.
+        t.core.on_tick(t.at(1.1));
+        let enter = t.core.take_actions();
+        assert_eq!(writes(&enter), vec![b"\r".to_vec()]);
+        t.core.on_output(&input_box(""), t.at(1.2));
+        let late = t.core.take_actions();
+        assert!(
+            !delivered(&late, BRIEF_DELIVERY_ID),
+            "Enter still pending: {late:?}"
+        );
+        let Action::DeliveryWrite { id, token, .. } = enter[0] else {
+            panic!("Enter action");
+        };
+        t.core.delivery_write_completed(id, token, t.at(1.3));
+        assert!(!delivered(&t.tick(1.4), BRIEF_DELIVERY_ID));
+        assert!(delivered(&t.output(&input_box(""), 1.5), BRIEF_DELIVERY_ID));
     }
 
     #[test]

@@ -28,8 +28,8 @@ use crate::pty::{PtyMaster, SpawnSpec, spawn_pty};
 use crate::registry::{ProbeResult, ProcessRegistry, group_signal_refused, probe};
 use crate::resume::{AgentIdLedger, decide_resume};
 use crate::session::{
-    Action, AnswerOutcome, AnswerStep, BRIEF_DELIVERY_ID, Core, CoreConfig, DerivedState,
-    ExitStatusKind, PendingText, SessionEvent,
+    Action, AnswerOutcome, AnswerStep, BRIEF_DELIVERY_ID, Core, CoreConfig, DeliveryWriteToken,
+    DerivedState, ExitStatusKind, PendingText, SessionEvent,
 };
 
 /// 驱动层参数。
@@ -603,10 +603,17 @@ async fn launch(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WriteProgress {
+    id: u64,
+    token: DeliveryWriteToken,
+    complete: bool,
+}
+
 struct PendingWrite {
     bytes: Vec<u8>,
     offset: usize,
-    delivery: Option<u64>,
+    delivery: Option<(u64, DeliveryWriteToken)>,
 }
 
 struct Task {
@@ -993,13 +1000,23 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
 /// 单个有界 syscall，与 SessionHandle::raw 入队线性化。锁绝不跨 await / 阻塞 IO。
 /// 不再有旁路 write_all 任务：剩余正文、重试的 Ctrl-U、每一拍提交都能在这里被撤销。
 fn write_one(t: &mut Task) -> io::Result<()> {
-    write_ready(
+    let completed = write_ready(
         &t.running.master,
         &t.core,
         &t.raw_fence,
         t.input_epoch,
         &mut t.writes,
-    )
+    )?;
+    if let Some(progress) = completed {
+        let now = Instant::now();
+        t.core
+            .delivery_write_progress(progress.id, progress.token, now);
+        if progress.complete {
+            t.core
+                .delivery_write_completed(progress.id, progress.token, now);
+        }
+    }
+    Ok(())
 }
 
 fn write_ready(
@@ -1008,15 +1025,15 @@ fn write_ready(
     raw_fence: &Mutex<u64>,
     input_epoch: u64,
     writes: &mut VecDeque<PendingWrite>,
-) -> io::Result<()> {
+) -> io::Result<Option<WriteProgress>> {
     let epoch = raw_fence.lock().expect("raw fence poisoned");
     if *epoch != input_epoch {
-        return Ok(());
+        return Ok(None);
     }
     while let Some(write) = writes.front_mut() {
         if write
             .delivery
-            .is_some_and(|id| !core.delivery_write_allowed(id))
+            .is_some_and(|(id, token)| !core.delivery_write_pending(id, token))
             || write.offset == write.bytes.len()
         {
             writes.pop_front();
@@ -1028,12 +1045,17 @@ fn write_ready(
             return Err(io::ErrorKind::WriteZero.into());
         }
         write.offset += n;
+        let progress = write.delivery.map(|(id, token)| WriteProgress {
+            id,
+            token,
+            complete: write.offset == write.bytes.len(),
+        });
         if write.offset == write.bytes.len() {
             writes.pop_front();
         }
-        return Ok(());
+        return Ok(progress);
     }
-    Ok(())
+    Ok(None)
 }
 
 /// 执行 Core 攒下的动作；返回是否见到了 `ResumeRefused`。
@@ -1046,10 +1068,10 @@ fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
                 offset: 0,
                 delivery: None,
             }),
-            Action::DeliveryWrite { id, bytes } => t.writes.push_back(PendingWrite {
+            Action::DeliveryWrite { id, token, bytes } => t.writes.push_back(PendingWrite {
                 bytes,
                 offset: 0,
-                delivery: Some(id),
+                delivery: Some((id, token)),
             }),
             Action::Resize { cols, lines } => {
                 let _ = t.running.master.resize(cols, lines);
@@ -1295,22 +1317,29 @@ mod output_drain_tests {
             core.take_actions();
             core.on_tick(now + Duration::from_millis(300));
             let mut actions = core.take_actions();
+            complete_actions(&mut core, &actions, now + Duration::from_millis(300));
             if beat > 0 {
                 core.on_output(screen("BOT").as_bytes(), now + Duration::from_millis(900));
                 actions = core.take_actions();
+                complete_actions(&mut core, &actions, now + Duration::from_millis(900));
             }
             if beat > 1 {
                 core.on_tick(now + Duration::from_millis(1000));
                 actions = core.take_actions();
+                complete_actions(&mut core, &actions, now + Duration::from_millis(1000));
             }
             if beat > 2 {
                 core.on_tick(now + Duration::from_millis(1100));
                 actions = core.take_actions();
             }
-            let bytes = actions
+            let (bytes, token) = actions
                 .into_iter()
                 .find_map(|a| match a {
-                    Action::DeliveryWrite { id: 1, bytes } => Some(bytes),
+                    Action::DeliveryWrite {
+                        id: 1,
+                        token,
+                        bytes,
+                    } => Some((bytes, token)),
                     _ => None,
                 })
                 .expect("premise: Core already issued a delivery write");
@@ -1326,7 +1355,7 @@ mod output_drain_tests {
             let mut writes = VecDeque::from([PendingWrite {
                 bytes,
                 offset: 0,
-                delivery: Some(1),
+                delivery: Some((1, token)),
             }]);
             let fence = Arc::new(Mutex::new(0));
             let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1364,6 +1393,216 @@ mod output_drain_tests {
             write_ready(&p.master, &core, &fence, 1, &mut writes).unwrap();
             assert!(writes.is_empty(), "ordinary writes remain available");
             stop(p).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_completion_requires_the_last_actual_byte_and_survives_no_cancellation() {
+        let (_dir, p) = readable_output(b"").await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "x".repeat(5000),
+            }],
+            None,
+        );
+        core.on_output(&input_box(""), now);
+        core.take_actions();
+        core.on_tick(now + Duration::from_millis(300));
+        let actions = core.take_actions();
+        let Action::DeliveryWrite {
+            id,
+            token,
+            ref bytes,
+        } = actions[0]
+        else {
+            panic!("body");
+        };
+        let mut writes = VecDeque::from([PendingWrite {
+            bytes: bytes.clone(),
+            offset: 0,
+            delivery: Some((id, token)),
+        }]);
+        let fence = Mutex::new(0);
+        let completed = write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap();
+        assert_eq!(
+            completed,
+            Some(WriteProgress {
+                id,
+                token,
+                complete: false
+            }),
+            "one bounded syscall is progress, not completion for 5000 bytes"
+        );
+        assert!(writes[0].offset > 0 && writes[0].offset < bytes.len());
+        core.on_output(&input_box("x"), now + Duration::from_secs(1));
+        assert!(
+            self::writes(&core.take_actions()).is_empty(),
+            "partial body cannot enqueue submit"
+        );
+        core.raw(b"z");
+        assert_eq!(
+            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap(),
+            None
+        );
+        assert!(
+            writes.is_empty(),
+            "cancelled partial write has no completion"
+        );
+        // Full positive writes return the exact token once, leaving the caller to notify Core.
+        let mut fresh = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![PendingText {
+                id: 2,
+                subject: Subject::Brief,
+                text: "ok".into(),
+            }],
+            None,
+        );
+        fresh.on_output(&input_box(""), now);
+        fresh.take_actions();
+        fresh.on_tick(now + Duration::from_millis(300));
+        let actions = fresh.take_actions();
+        let Action::DeliveryWrite {
+            id,
+            token,
+            ref bytes,
+        } = actions[0]
+        else {
+            panic!("body");
+        };
+        let mut writes = VecDeque::from([PendingWrite {
+            bytes: bytes.clone(),
+            offset: 0,
+            delivery: Some((id, token)),
+        }]);
+        assert_eq!(
+            write_ready(&p.master, &fresh, &fence, 0, &mut writes).unwrap(),
+            Some(WriteProgress {
+                id,
+                token,
+                complete: true
+            })
+        );
+        assert_eq!(
+            write_ready(&p.master, &fresh, &fence, 0, &mut writes).unwrap(),
+            None
+        );
+        stop(p).await;
+    }
+
+    #[tokio::test]
+    async fn a_real_would_block_write_expires_without_completion_or_submit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let p = spawn_pty(&SpawnSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "stty raw -echo && printf ready > '{}' && sleep 30",
+                    ready.display()
+                ),
+            ],
+            env: [("PATH".into(), "/usr/bin:/bin".into())].into(),
+            cwd: dir.path().to_path_buf(),
+            cols: 80,
+            lines: 25,
+        })
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("synthetic slave must be raw before testing backpressure");
+        let now = Instant::now();
+        let mut config = CoreConfig::default();
+        config.delivery.verify_window = Duration::from_millis(50);
+        let mut core = Core::new(
+            config,
+            ScreenConfig::default(),
+            now,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "x".repeat(1_000_000),
+            }],
+            None,
+        );
+        core.on_output(&input_box(""), now);
+        core.take_actions();
+        let written_at = now + Duration::from_millis(300);
+        core.on_tick(written_at);
+        let actions = core.take_actions();
+        let Action::DeliveryWrite {
+            id,
+            token,
+            ref bytes,
+        } = actions[0]
+        else {
+            panic!("body");
+        };
+        let mut writes = VecDeque::from([PendingWrite {
+            bytes: bytes.clone(),
+            offset: 0,
+            delivery: Some((id, token)),
+        }]);
+        let fence = Mutex::new(0);
+        let mut blocked = false;
+        for _ in 0..256 {
+            match write_ready(&p.master, &core, &fence, 0, &mut writes) {
+                Ok(Some(progress)) => {
+                    assert!(!progress.complete, "noread slave cannot complete this body");
+                    core.delivery_write_progress(progress.id, progress.token, written_at);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    blocked = true;
+                    break;
+                }
+                other => panic!("unexpected writer result: {other:?}"),
+            }
+        }
+        assert!(blocked, "bounded test must actually encounter WouldBlock");
+        let offset = writes[0].offset;
+        assert!(offset > 0 && offset < bytes.len());
+        core.on_tick(written_at + Duration::from_millis(51));
+        let terminal = core.take_actions();
+        assert!(terminal.iter().any(|a| matches!(
+            a,
+            Action::Event(SessionEvent::Delivery {
+                outcome: crate::session::DeliveryOutcome::Undelivered(_),
+                ..
+            })
+        )));
+        assert!(
+            self::writes(&terminal).is_empty(),
+            "timeout cannot enqueue submit"
+        );
+        assert_eq!(
+            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap(),
+            None
+        );
+        assert!(
+            writes.is_empty(),
+            "timed out partial body is dropped, never completed"
+        );
+        stop(p).await;
+    }
+
+    fn complete_actions(core: &mut Core, actions: &[Action], now: Instant) {
+        for action in actions {
+            if let Action::DeliveryWrite { id, token, .. } = action {
+                core.delivery_write_completed(*id, *token, now);
+            }
         }
     }
 
