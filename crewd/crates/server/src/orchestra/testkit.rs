@@ -1430,6 +1430,9 @@ pub struct StandInState {
     pub box_script: BTreeMap<String, VecDeque<Option<PendingDecision>>>,
     /// 下一次回答先等这个信号（模拟按键要花时间：写队列里排在它后面的得等着）。
     pub answer_hold: BTreeMap<String, oneshot::Receiver<()>>,
+    /// One-shot executor result, without synthetic key presses. Combined with `answer_hold`,
+    /// this models a pending executor future, not a real PTY write or WouldBlock.
+    pub answer_outcome: BTreeMap<String, AnswerOutcome>,
     /// 每次 `answer` 调用的 `expect`（按 session）。
     pub answers: BTreeMap<String, Vec<String>>,
     pub choices: BTreeMap<String, Vec<usize>>,
@@ -1771,8 +1774,9 @@ impl ExecHandle for StandInHandle {
             .or_default()
             .push(expect.clone());
         let hold = s.answer_hold.remove(&self.session);
+        let injected = s.answer_outcome.remove(&self.session);
         let outcome = if s.running.contains(&self.session) {
-            Ok(s.press(&self.session, &expect, steps))
+            Ok(injected.unwrap_or_else(|| s.press(&self.session, &expect, steps)))
         } else {
             Err(Closed)
         };
@@ -2014,6 +2018,7 @@ impl Rig {
             st.boxes.clear();
             st.box_script.clear();
             st.answer_hold.clear();
+            st.answer_outcome.clear();
             st.hang_on_stop.clear();
         }
         let (tx, rx) = mpsc::unbounded_channel();

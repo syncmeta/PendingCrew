@@ -1,6 +1,13 @@
 //! 测试器材：一个只会画几屏的假 claude，跑在真 PTY 里（`tests/fake_claude.rs` 用）。
 //! **不是产品代码**——只长到能让执行器的判据成立：输入框、粘贴折叠、信任框、限流菜单、额度报错。
 //!
+//! 独立 opt-in 参数：`--guarded-write-fixture DIR` 运行真实 PTY 背压器材；默认模式不变。
+//! DIR 必须预先存在并含 marker.bin（8..128 字节唯一可打印 ASCII 标记）。器材 raw/no-echo，
+//! 写 slave-ready；按顺序处理 screen-N.bin + screen-N.request（N 从 0 起），输出 flush 后写
+//! screen-N.written（父需一边排空 PTY、一边等回执；输出非阻塞且限时）。release-input 写精确 filler 字节数后才开始读 stdin；丢完写 filler-drained，
+//! 其余真实字节写 capture.bin，遇 marker 截去标记并写 capture.closed 后退出。协议总限时 30s，
+//! 失败写 fixture.error 并 exit 2；正文和 control byte 都只是合成测试数据。
+//!
 //! 环境变量（执行器只放行调用方显式给的变量，所以测试经 `ClaudeSpec::additional_env` 传）：
 //! - `FAKE_CLAUDE_MODE`：`ready`（缺省）/ `late-submit-echo`（CR 提交前的有限迟到回显 gate）/ `deaf`（画框但永不回显）/ `noread`（画框后再也不读
 //!   stdin，PTY 输入缓冲会被写满）/ `decision`（普通编号菜单，等待真实人类 RPC 答案）/ `trust`（先过信任框）/ `ratelimit`（第一次提交弹限流菜单）/
@@ -103,6 +110,236 @@ impl Fake {
     }
 }
 
+/// Standalone deterministic queue-to-syscall fixture. Before release there is no
+/// stdin reader (including a background reader), so PTY capacity is real kernel
+/// backpressure. File receipts describe completed IO, never elapsed-time guesses.
+fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Error, ErrorKind};
+
+    const LIMIT: usize = 8 * 1024 * 1024;
+    const FRAME_LIMIT: u64 = 1024 * 1024;
+    let invalid = |message: &str| Error::new(ErrorKind::InvalidData, message);
+    let dir = dir.canonicalize()?;
+    if !dir.is_dir() {
+        return Err(invalid("guarded fixture DIR is not a directory"));
+    }
+    let marker = std::fs::read(dir.join("marker.bin"))?;
+    if !(8..=128).contains(&marker.len()) || !marker.iter().all(|b| (0x21..=0x7e).contains(b)) {
+        return Err(invalid(
+            "marker.bin must contain 8..128 printable non-space ASCII bytes",
+        ));
+    }
+    let start = Instant::now();
+    let mut protocol = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dir.join("protocol.log"))?;
+    let receipt = |name: &str, text: &str| -> std::io::Result<()> {
+        let path = dir.join(name);
+        let temporary = dir.join(format!("{name}.tmp"));
+        std::fs::write(&temporary, text)?;
+        std::fs::rename(temporary, path)
+    };
+    let record = |log: &mut File, detail: &str| -> std::io::Result<()> {
+        writeln!(log, "t_us={} {detail}", start.elapsed().as_micros())?;
+        log.flush()
+    };
+    let stdin_fd = rustix::stdio::stdin();
+    let mut term = rustix::termios::tcgetattr(stdin_fd)?;
+    term.make_raw();
+    rustix::termios::tcsetattr(stdin_fd, rustix::termios::OptionalActions::Now, &term)?;
+    // PTY slave clones may share the open-file description: making stdout
+    // nonblocking can also affect stdin, so its read path handles WouldBlock.
+    // SAFETY: fcntl accesses this process's valid stdout fd; flags are preserved.
+    let flags = unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(Error::last_os_error());
+    }
+    // SAFETY: F_SETFL takes the existing flags plus O_NONBLOCK, no pointer.
+    if unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(Error::last_os_error());
+    }
+    // make_raw removes ECHO; require the actual configuration call to succeed.
+    receipt("slave-ready", "raw_no_echo=1\nstdin_reader_started=0\n")?;
+    record(&mut protocol, "slave-ready")?;
+
+    let mut next_screen = 0u64;
+    let mut filler_total = None;
+    let mut filler_left = 0usize;
+    let mut input = std::io::stdin();
+    let mut capture = File::create(dir.join("capture.bin"))?;
+    let mut captured = Vec::new();
+    let mut read_seq = 0u64;
+    loop {
+        if start.elapsed() >= Duration::from_secs(30) {
+            return Err(Error::new(
+                ErrorKind::TimedOut,
+                "guarded fixture 30s protocol deadline",
+            ));
+        }
+        // This channel remains independent of stdin, also after release. Exactly
+        // one sequential request per loop keeps input/drain and deadline fair.
+        let request = dir.join(format!("screen-{next_screen}.request"));
+        if request.exists() {
+            let source = dir.join(format!("screen-{next_screen}.bin"));
+            if source.metadata()?.len() > FRAME_LIMIT {
+                return Err(invalid("guarded fixture screen exceeds 1MiB"));
+            }
+            let frame = std::fs::read(source)?;
+            let mut offset = 0usize;
+            while offset < frame.len() {
+                if start.elapsed() >= Duration::from_secs(30) {
+                    return Err(Error::new(
+                        ErrorKind::TimedOut,
+                        "guarded fixture screen output deadline",
+                    ));
+                }
+                let end = (offset + 4096).min(frame.len());
+                // SAFETY: the slice stays allocated throughout this nonblocking
+                // syscall; stdout is valid and count is within the slice bounds.
+                let written = unsafe {
+                    libc::write(
+                        libc::STDOUT_FILENO,
+                        frame[offset..end].as_ptr().cast::<libc::c_void>(),
+                        end - offset,
+                    )
+                };
+                if written > 0 {
+                    offset += written as usize;
+                } else if written == 0 {
+                    return Err(Error::new(
+                        ErrorKind::WriteZero,
+                        "guarded fixture stdout made no progress",
+                    ));
+                } else {
+                    let error = Error::last_os_error();
+                    match error.kind() {
+                        ErrorKind::Interrupted => continue,
+                        ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(2)),
+                        _ => return Err(error),
+                    }
+                }
+            }
+            // Receipt means the entire frame reached the PTY, not that the
+            // parent consumed it. Parent must drain while waiting for this file.
+            receipt(
+                &format!("screen-{next_screen}.written"),
+                &format!("bytes={}\n", frame.len()),
+            )?;
+            record(
+                &mut protocol,
+                &format!("screen-written seq={next_screen} bytes={}", frame.len()),
+            )?;
+            next_screen += 1;
+        }
+        if filler_total.is_none() && dir.join("release-input").exists() {
+            let release = std::fs::read_to_string(dir.join("release-input"))?;
+            let count = release
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| invalid("release-input is not a decimal byte count"))?;
+            if count > LIMIT {
+                return Err(invalid("filler exceeds 8MiB"));
+            }
+            filler_total = Some(count);
+            filler_left = count;
+            record(
+                &mut protocol,
+                &format!("release-input filler_bytes={count}"),
+            )?;
+            if count == 0 {
+                receipt("filler-drained", "bytes=0\n")?;
+            }
+        }
+        if filler_total.is_none() {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
+        // Single reader, raw VMIN=1, bounded poll. No extra process, shell,
+        // provider, auth probe or background stdin consumer is involved.
+        let mut poll = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll points to one initialized pollfd for this process's stdin.
+        let ready = unsafe { libc::poll(&mut poll, 1, 2) };
+        if ready < 0 {
+            let error = Error::last_os_error();
+            if error.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if ready == 0 {
+            continue;
+        }
+        let mut bytes = [0u8; 4096];
+        let n = match input.read(&mut bytes) {
+            Ok(0) => {
+                return Err(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "stdin closed before capture marker",
+                ));
+            }
+            Ok(n) => n,
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        read_seq += 1;
+        let discard = filler_left.min(n);
+        filler_left -= discard;
+        record(
+            &mut protocol,
+            &format!(
+                "input-read seq={read_seq} bytes={n} filler_discard={discard} captured={}",
+                n - discard
+            ),
+        )?;
+        if discard > 0 && filler_left == 0 {
+            receipt(
+                "filler-drained",
+                &format!("bytes={}\n", filler_total.unwrap()),
+            )?;
+            record(&mut protocol, "filler-drained")?;
+        }
+        let received = &bytes[discard..n];
+        if captured.len().saturating_add(received.len()) > LIMIT {
+            return Err(invalid("capture exceeds 8MiB"));
+        }
+        let search_from = captured.len().saturating_sub(marker.len() - 1);
+        captured.extend_from_slice(received);
+        capture.write_all(received)?;
+        capture.flush()?;
+        if let Some(relative) = captured[search_from..]
+            .windows(marker.len())
+            .position(|w| w == marker)
+        {
+            let end = search_from + relative;
+            let trailing = captured.len() - end - marker.len();
+            capture.set_len(end as u64)?;
+            capture.flush()?;
+            receipt(
+                "capture.closed",
+                &format!(
+                    "captured_bytes={end}\nfiller_bytes={}\ntrailing_bytes={trailing}\n",
+                    filler_total.unwrap()
+                ),
+            )?;
+            record(
+                &mut protocol,
+                &format!("capture-closed bytes={end} trailing={trailing}"),
+            )?;
+            return Ok(());
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let value_of = |flag: &str| {
@@ -111,6 +348,15 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
+    if let Some(dir) = value_of("--guarded-write-fixture") {
+        let path = std::path::Path::new(&dir);
+        if let Err(error) = guarded_write_fixture(path) {
+            let _ = std::fs::write(path.join("fixture.error"), format!("{error}\n"));
+            eprintln!("guarded-write-fixture: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let resumed = value_of("--resume");
     let mut fake = Fake {
         mode: std::env::var("FAKE_CLAUDE_MODE").unwrap_or_else(|_| "ready".into()),

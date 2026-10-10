@@ -85,6 +85,8 @@ pub enum AnswerOutcome {
     Conflict { now: Option<PendingDecision> },
     /// 这个执行器不靠按键回答（codex：M3d 改为回复挂起的服务端请求）。
     Unsupported,
+    /// A bounded safe write could not be confirmed; the session may still be alive.
+    NeedsTerminal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,7 +236,9 @@ pub enum DeliveryWritePurpose {
     Body,
     Space { via_body: bool },
     Backspace { via_body: bool },
-    Enter,
+    Enter { via_body: bool },
+    Answer,
+    RateLimit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,7 +250,9 @@ pub struct DeliveryWriteToken {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Write(Vec<u8>),
-    /// 正文 / 清残留 / 提交拍：驱动在每次实际 PTY 写入之前核这笔仍在途且没有外来输入。
+    /// Terminal protocol reply, distinct from raw human input and guarded product keys.
+    TerminalReply(Vec<u8>),
+    /// 具有用途和单次写入 token 的正文、提交、回答或限流按键；每次 syscall 前重新核屏幕。
     DeliveryWrite {
         id: u64,
         token: DeliveryWriteToken,
@@ -297,15 +303,34 @@ struct InFlight {
 enum KeyPurpose {
     /// 提交三拍里的退格 / 回车。`via_body`：这一轮提交是凭「正文尾巴在屏上」起的
     /// （长正文把提示符滚出了屏），没有输入行可看。
-    SubmitBeat { via_body: bool },
+    SubmitBeat {
+        via_body: bool,
+    },
     /// 限流菜单自动应答「1」之后的回车。
     RateLimitAnswer,
+    RateLimitDigit,
     /// 回答待决策框的一下（[`Core::answer`]）：按之前屏上的框指纹必须是 `expect`，`selected` 给了就还要高亮在那一项。
     Answer {
         id: u64,
         expect: String,
         selected: Option<usize>,
     },
+}
+
+fn paste_placeholder(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix("[Pasted text #") else {
+        return false;
+    };
+    let Some((number, lines)) = rest.split_once(" +") else {
+        return false;
+    };
+    let Some(lines) = lines.strip_suffix(" lines]") else {
+        return false;
+    };
+    !number.is_empty()
+        && !lines.is_empty()
+        && number.bytes().all(|b| b.is_ascii_digit())
+        && lines.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// 排着、还没开始的一次回答。
@@ -317,11 +342,23 @@ struct AnswerJob {
 
 /// 正在进行的一次回答：键排在 `Core::keys` 里；最后一下按完后 `verify_at` 到点回读。
 struct Answering {
+    started_at: Instant,
     id: u64,
     expect: String,
     /// 还没排进 `keys` 的下几下：上一下真正按下去之后才排下一下（按下时刻 + 间隔，T10d fix M3）。
     remaining: VecDeque<AnswerStep>,
     verify_at: Option<Instant>,
+}
+
+const GUARDED_WRITE_IDLE: Duration = Duration::from_millis(2500);
+const GUARDED_WRITE_TOTAL: Duration = Duration::from_secs(90);
+
+struct GuardedKeyWrite {
+    id: u64,
+    token: DeliveryWriteToken,
+    purpose: KeyPurpose,
+    started_at: Instant,
+    progress_at: Instant,
 }
 
 struct Key {
@@ -376,6 +413,7 @@ pub struct Core {
     keys: VecDeque<Key>,
     actions: Vec<Action>,
     next_write: u64,
+    guarded_key: Option<GuardedKeyWrite>,
 }
 
 impl Core {
@@ -420,6 +458,7 @@ impl Core {
             keys: VecDeque::new(),
             actions: Vec::new(),
             next_write: 0,
+            guarded_key: None,
         };
         core.start_next(now);
         core
@@ -458,7 +497,7 @@ impl Core {
                     .and_then(|at| at.checked_add(self.config.working_quiet))
             })
             .flatten();
-        [key, verify, delivery, launch, idle]
+        [key, verify, delivery, launch, idle, self.guarded_deadline()]
             .into_iter()
             .flatten()
             .filter(|t| *t > self.last_now)
@@ -521,6 +560,10 @@ impl Core {
         }
     }
 
+    pub(crate) fn has_actions(&self) -> bool {
+        !self.actions.is_empty()
+    }
+
     pub fn screen_text(&self, max_lines: usize) -> String {
         self.screen.screen_text(max_lines)
     }
@@ -551,7 +594,7 @@ impl Core {
         let replies = self.screen.take_replies();
         if !replies.is_empty() {
             // 终端回复（DA1 / CPR / OSC 11…）先回给子进程：它可能正卡着等。
-            self.actions.push(Action::Write(replies));
+            self.actions.push(Action::TerminalReply(replies));
         }
         self.last_output_at = Some(now);
         if !self.working {
@@ -583,6 +626,7 @@ impl Core {
         }
         self.last_now = self.last_now.max(now);
         self.observe_drained_output();
+        self.validate_guarded_key(now);
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -598,6 +642,7 @@ impl Core {
         }
         self.last_now = self.last_now.max(now);
         self.observe_drained_output();
+        self.validate_guarded_key(now);
         self.flush_due_keys(now);
         self.verify_answer(now);
         self.answer_rate_limit_menu_if_shown(now);
@@ -664,6 +709,7 @@ impl Core {
     /// 撤掉剩余正文 / 提交拍，不清理可能混有人字的输入框。原始字节本身照常按 FIFO 写入。
     pub fn raw(&mut self, bytes: &[u8]) {
         if self.running && !bytes.is_empty() {
+            self.cancel_guarded_key(AnswerOutcome::NeedsTerminal, self.last_now);
             let collision = self.in_flight.as_ref().is_some_and(|f| f.wrote_body)
                 || self.input_dirty
                 || self.foreign_input == Foreign::Conflicted;
@@ -856,6 +902,9 @@ impl Core {
     /// 连按会把多余的「1」敲进输入框。冷却期里菜单真的又弹出来，要等冷却过后下一块输出 /
     /// 下一拍才答（最多晚 30s；比连按的风险小）。
     fn answer_rate_limit_menu_if_shown(&mut self, now: Instant) {
+        if self.guarded_key.is_some() || self.answering.is_some() {
+            return;
+        }
         if self
             .rate_limit_answered_at
             .is_some_and(|at| now.saturating_duration_since(at) < RATE_LIMIT_COOLDOWN)
@@ -875,7 +924,13 @@ impl Core {
     ///   再发一轮（记一次重试）。
     /// - 限流应答的回车：菜单不在了就不发（「1」可能已经直接选中关掉了它）。
     fn flush_due_keys(&mut self, now: Instant) {
+        if self.guarded_key.is_some() {
+            return;
+        }
         while self.keys.front().is_some_and(|k| k.at <= now) {
+            if self.guarded_key.is_some() {
+                return;
+            }
             let key = self.keys.pop_front().expect("刚看过非空");
             let rows = self.screen.screen_rows();
             let safe = match &key.purpose {
@@ -890,7 +945,9 @@ impl Core {
                             input_row(&rows).is_some()
                         }
                 }
-                KeyPurpose::RateLimitAnswer => rate_limit_menu_on_screen(&rows),
+                KeyPurpose::RateLimitAnswer | KeyPurpose::RateLimitDigit => {
+                    rate_limit_menu_on_screen(&rows)
+                }
                 KeyPurpose::Answer {
                     id,
                     expect,
@@ -902,11 +959,7 @@ impl Core {
                             && selected.is_none_or(|want| d.selected == Some(want))
                     });
                     if same {
-                        self.actions.push(Action::Write(key.bytes));
-                        // 下一下 = 这一下真正按下的时刻 + 间隔（不按预排的绝对时刻：拍子晚到时间隔不会被压没）；
-                        // 这是最后一下 = 到点回读。
-                        let next = now + self.config.answer_key_gap;
-                        self.schedule_next_answer_key_or_verify(next, now);
+                        self.queue_guarded_key(*id, key.bytes, key.purpose.clone(), now);
                     } else {
                         let id = *id;
                         self.keys.retain(|k| answer_id(k) != Some(id));
@@ -921,13 +974,13 @@ impl Core {
                         unreachable!()
                     };
                     let purpose = if key.bytes == b"\r" {
-                        DeliveryWritePurpose::Enter
+                        DeliveryWritePurpose::Enter { via_body }
                     } else {
                         DeliveryWritePurpose::Backspace { via_body }
                     };
                     self.queue_delivery_write(key.bytes, purpose, now);
                 } else {
-                    self.actions.push(Action::Write(key.bytes));
+                    self.queue_guarded_key(0, key.bytes, key.purpose, now);
                 }
             } else if let KeyPurpose::SubmitBeat { .. } = key.purpose {
                 self.keys
@@ -943,7 +996,7 @@ impl Core {
 
     /// 没有回答在进行时，开始排着的下一个：键全部排进 `keys`（第一下就是「现在」，下一次 flush 前回读）。
     fn start_next_answer(&mut self, now: Instant) {
-        if self.answering.is_some() {
+        if self.answering.is_some() || self.guarded_key.is_some() {
             return;
         }
         let Some(job) = self.answers.pop_front() else {
@@ -954,6 +1007,7 @@ impl Core {
             .is_empty()
             .then(|| now + self.config.answer_verify_delay);
         self.answering = Some(Answering {
+            started_at: now,
             id: job.id,
             expect: job.expect,
             remaining: job.steps.into(),
@@ -1017,6 +1071,7 @@ impl Core {
 
     /// 当前这次回答有了结果：交出去，开始下一个。
     fn finish_answer(&mut self, outcome: AnswerOutcome, now: Instant) {
+        self.guarded_key = None;
         if let Some(a) = self.answering.take() {
             self.actions.push(Action::AnswerDone {
                 id: a.id,
@@ -1029,17 +1084,12 @@ impl Core {
     }
 
     fn answer_rate_limit_menu(&mut self, now: Instant) {
-        self.actions.push(Action::Write(b"1".to_vec()));
-        self.schedule(
-            now + self.config.rate_limit_answer_gap,
-            b"\r".to_vec(),
-            KeyPurpose::RateLimitAnswer,
-        );
+        self.queue_guarded_key(0, b"1".to_vec(), KeyPurpose::RateLimitDigit, now);
         if self.health.as_ref().map(|h| h.kind) != Some(HealthKind::RateLimited) {
             self.set_health(
                 Some(Health::new(
                     HealthKind::RateLimited,
-                    "Claude Code 撞到额度上限（rate-limit 菜单已自动应答「Stop and wait」）——等额度窗口重置后自动继续。",
+                    "Claude Code 撞到额度上限（rate-limit 菜单等待安全应答「Stop and wait」）——等额度窗口重置后自动继续。",
                 )),
                 now,
             );
@@ -1218,8 +1268,205 @@ impl Core {
         });
     }
 
+    fn queue_guarded_key(&mut self, id: u64, bytes: Vec<u8>, purpose: KeyPurpose, now: Instant) {
+        if self.guarded_key.is_some() {
+            return;
+        }
+        self.next_write += 1;
+        let token = DeliveryWriteToken {
+            serial: self.next_write,
+            purpose: if matches!(purpose, KeyPurpose::Answer { .. }) {
+                DeliveryWritePurpose::Answer
+            } else {
+                DeliveryWritePurpose::RateLimit
+            },
+        };
+        let started_at = if matches!(purpose, KeyPurpose::Answer { .. }) {
+            self.answering
+                .as_ref()
+                .filter(|a| a.id == id)
+                .map_or(now, |a| a.started_at)
+        } else {
+            self.rate_limit_answered_at.unwrap_or(now)
+        };
+        self.guarded_key = Some(GuardedKeyWrite {
+            id,
+            token,
+            purpose,
+            started_at,
+            progress_at: now,
+        });
+        self.actions
+            .push(Action::DeliveryWrite { id, token, bytes });
+    }
+
+    fn guarded_deadline(&self) -> Option<Instant> {
+        let key = self
+            .guarded_key
+            .as_ref()
+            .map(|k| (k.progress_at + GUARDED_WRITE_IDLE).min(k.started_at + GUARDED_WRITE_TOTAL));
+        let answer = self
+            .answering
+            .as_ref()
+            .map(|a| a.started_at + GUARDED_WRITE_TOTAL);
+        key.into_iter().chain(answer).min()
+    }
+
+    fn cancel_guarded_key(&mut self, outcome: AnswerOutcome, now: Instant) {
+        let key = self.guarded_key.take();
+        if let Some(k) = key {
+            if matches!(k.purpose, KeyPurpose::Answer { .. }) {
+                self.keys.retain(|key| answer_id(key) != Some(k.id));
+                self.finish_answer(outcome, now);
+            } else {
+                self.keys.retain(|key| {
+                    !matches!(
+                        key.purpose,
+                        KeyPurpose::RateLimitDigit | KeyPurpose::RateLimitAnswer
+                    )
+                });
+                self.start_next_answer(now);
+            }
+        }
+    }
+
+    /// May run even when an output drain exhausted its budget: only actual positive writes
+    /// refresh the inactivity deadline. Noise and deferred screen decisions cannot renew it.
+    pub(crate) fn expire_guarded_writes(&mut self, now: Instant) {
+        if self
+            .guarded_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            if self.guarded_key.is_some() {
+                self.cancel_guarded_key(AnswerOutcome::NeedsTerminal, now);
+            } else if let Some(a) = &self.answering {
+                let id = a.id;
+                self.keys.retain(|k| answer_id(k) != Some(id));
+                self.finish_answer(AnswerOutcome::NeedsTerminal, now);
+            }
+        }
+        self.expire_pending_write(now);
+    }
+
+    fn validate_guarded_key(&mut self, now: Instant) {
+        self.expire_guarded_writes(now);
+        let Some(key) = self.guarded_key.as_ref() else {
+            return;
+        };
+        let rows = self.screen.screen_rows();
+        let outcome = if self.foreign_input != Foreign::None {
+            Some(AnswerOutcome::NeedsTerminal)
+        } else {
+            match &key.purpose {
+                KeyPurpose::Answer {
+                    expect, selected, ..
+                } => {
+                    let shown = blocking_dialog(&rows);
+                    (!shown.as_ref().is_some_and(|d| {
+                        d.fingerprint() == *expect
+                            && selected.is_none_or(|want| d.selected == Some(want))
+                    }))
+                    .then_some(AnswerOutcome::Conflict { now: shown })
+                }
+                _ => (!rate_limit_menu_on_screen(&rows)).then_some(AnswerOutcome::NeedsTerminal),
+            }
+        };
+        if let Some(outcome) = outcome {
+            self.cancel_guarded_key(outcome, now);
+        }
+    }
+
+    /// Called after a complete fresh PTY drain, immediately before each bounded syscall.
+    /// A token identifies one physical write, not merely a reused public delivery/answer id.
+    pub(crate) fn actual_write_guard(
+        &mut self,
+        id: u64,
+        token: DeliveryWriteToken,
+        offset: usize,
+        now: Instant,
+    ) -> bool {
+        self.validate_guarded_key(now);
+        if !self.delivery_write_pending(id, token) {
+            return false;
+        }
+        if matches!(
+            token.purpose,
+            DeliveryWritePurpose::Answer | DeliveryWritePurpose::RateLimit
+        ) {
+            return true;
+        }
+        let rows = self.screen.screen_rows();
+        let row = input_row(&rows);
+        let flight = self.in_flight.as_ref().expect("matched delivery lease");
+        let authority = match token.purpose {
+            DeliveryWritePurpose::Body => {
+                let owned = if offset == 0 {
+                    self.draft_held(row.as_deref()).is_none()
+                } else {
+                    match self.screen.input_draft() {
+                        InputDraft::Empty => true,
+                        InputDraft::Unknown => false,
+                        InputDraft::Text(text) => {
+                            // A partial syscall is not authority over arbitrary new text. Recognize
+                            // only an echoed prefix actually written, or Claude's paste placeholder.
+                            (!text.is_empty()
+                                && text.len() <= offset
+                                && flight.body.trim_start().starts_with(&text))
+                                || paste_placeholder(&text)
+                        }
+                    }
+                };
+                (row.is_some() || body_tail_visible(&flight.body, &rows)) && owned
+            }
+            DeliveryWritePurpose::Space { via_body }
+            | DeliveryWritePurpose::Backspace { via_body }
+            | DeliveryWritePurpose::Enter { via_body } => {
+                if via_body {
+                    body_tail_visible(&flight.body, &rows)
+                } else {
+                    row.is_some()
+                }
+            }
+            _ => unreachable!(),
+        };
+        if self.foreign_input == Foreign::None && blocking_dialog(&rows).is_none() && authority {
+            return true;
+        }
+        self.keys
+            .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
+        if token.purpose == DeliveryWritePurpose::Body {
+            if offset > 0 {
+                // The written prefix no longer grants authority over this new/unknown
+                // screen. Do not convert it to own residue and later Ctrl-U another job.
+                // Existing explicit raw clear + fresh Empty can recover this hold.
+                self.foreign_input = Foreign::Conflicted;
+                self.foreign_baseline = self.screen.input_draft();
+                self.input_dirty = false;
+                self.residue = None;
+            }
+            self.report(
+                DeliveryOutcome::Unsubmitted(
+                    "正文写入期间输入权威改变；可能写入了部分正文，未确认提交。".into(),
+                ),
+                now,
+            );
+        } else if let Some(flight) = self.in_flight.as_mut() {
+            flight.awaiting_write = None;
+            flight.machine.submit_aborted(now);
+        }
+        false
+    }
+
     /// Positive syscall progress is not completion and never advances body or submit phases.
     pub fn delivery_write_progress(&mut self, id: u64, token: DeliveryWriteToken, now: Instant) {
+        self.expire_guarded_writes(now);
+        if let Some(k) = self.guarded_key.as_mut()
+            && k.id == id
+            && k.token == token
+        {
+            k.progress_at = now;
+            return;
+        }
         if self.expire_pending_write(now) || !self.delivery_write_pending(id, token) {
             return;
         }
@@ -1231,6 +1478,17 @@ impl Core {
     }
 
     pub fn delivery_write_pending(&self, id: u64, token: DeliveryWriteToken) -> bool {
+        if matches!(
+            token.purpose,
+            DeliveryWritePurpose::Answer | DeliveryWritePurpose::RateLimit
+        ) {
+            return self.running
+                && !self.stopped_by_user
+                && self
+                    .guarded_key
+                    .as_ref()
+                    .is_some_and(|k| k.id == id && k.token == token);
+        }
         self.delivery_write_allowed(id)
             && self
                 .in_flight
@@ -1282,6 +1540,31 @@ impl Core {
 
     /// Driver calls this only after the complete write, never for partial, cancelled or blocked writes.
     pub fn delivery_write_completed(&mut self, id: u64, token: DeliveryWriteToken, now: Instant) {
+        if matches!(
+            token.purpose,
+            DeliveryWritePurpose::Answer | DeliveryWritePurpose::RateLimit
+        ) {
+            self.expire_guarded_writes(now);
+            if !self.delivery_write_pending(id, token) {
+                return;
+            }
+            let key = self.guarded_key.take().expect("matched key lease");
+            match key.purpose {
+                KeyPurpose::Answer { .. } => {
+                    self.schedule_next_answer_key_or_verify(now + self.config.answer_key_gap, now)
+                }
+                KeyPurpose::RateLimitDigit => self.schedule(
+                    now + self.config.rate_limit_answer_gap,
+                    b"\r".to_vec(),
+                    KeyPurpose::RateLimitAnswer,
+                ),
+                KeyPurpose::RateLimitAnswer => {
+                    self.start_next_answer(now);
+                }
+                _ => unreachable!(),
+            }
+            return;
+        }
         if self.expire_pending_write(now) || !self.delivery_write_pending(id, token) {
             return;
         }
@@ -1309,12 +1592,13 @@ impl Core {
                     KeyPurpose::SubmitBeat { via_body },
                 );
             }
-            DeliveryWritePurpose::Enter => {
+            DeliveryWritePurpose::Enter { .. } => {
                 flight.machine.enter_written(now);
                 flight.submit_needs_output = true;
                 // Any bytes ingested before actual Enter completion cannot acknowledge it.
                 self.output_pending = false;
             }
+            DeliveryWritePurpose::Answer | DeliveryWritePurpose::RateLimit => unreachable!(),
         }
     }
 
@@ -1445,6 +1729,7 @@ impl Core {
         let lost = self.take_pending();
         self.keys.clear();
         // 回答也答不成了（进程退了 / 被停了）：驱动层回 `Closed`。
+        self.guarded_key = None;
         let answers: Vec<u64> = self
             .answering
             .take()
@@ -1649,7 +1934,9 @@ mod tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::Write(b) | Action::DeliveryWrite { bytes: b, .. } => Some(b.clone()),
+                Action::Write(b)
+                | Action::TerminalReply(b)
+                | Action::DeliveryWrite { bytes: b, .. } => Some(b.clone()),
                 _ => None,
             })
             .collect()
@@ -1693,7 +1980,7 @@ mod tests {
     fn terminal_replies_are_written_back_first() {
         let mut t = T::new(vec![]);
         let actions = t.output(b"\x1b[c", 0.0);
-        assert_eq!(actions[0], Action::Write(b"\x1b[?6c".to_vec()));
+        assert_eq!(actions[0], Action::TerminalReply(b"\x1b[?6c".to_vec()));
     }
 
     #[test]
@@ -3083,12 +3370,261 @@ mod tests {
     }
 
     #[test]
+    fn answer_cannot_verify_before_actual_pty_write_completion() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core
+            .answer(71, expect, vec![step(b"2", Some(0))], t.at(0.1));
+        let pending = t.core.take_actions();
+        assert_eq!(
+            writes(&pending),
+            vec![b"2".to_vec()],
+            "key is issued to the writer"
+        );
+        // Do not use T::tick/completed_actions: no driver syscall has happened.
+        t.core.on_tick(t.at(0.7));
+        let observed = t.core.take_actions();
+        assert!(
+            answers(&observed).is_empty(),
+            "an issued but unwritten key cannot yield Answered: {observed:?}"
+        );
+    }
+
+    #[test]
+    fn answer_next_key_gap_does_not_start_at_queue_insertion() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let expect = shown(&t).fingerprint();
+        t.core.answer(
+            72,
+            expect,
+            vec![step(b"2", Some(0)), step(b"\r", Some(0))],
+            t.at(0.1),
+        );
+        assert_eq!(writes(&t.core.take_actions()), vec![b"2".to_vec()]);
+        t.core.on_tick(t.at(0.3));
+        let observed = t.core.take_actions();
+        assert!(
+            writes(&observed).is_empty(),
+            "the second key must await the first actual completion plus its gap: {observed:?}"
+        );
+    }
+
+    fn pending_answer(t: &mut T, id: u64) -> DeliveryWriteToken {
+        let expect = shown(t).fingerprint();
+        t.core
+            .answer(id, expect, vec![step(b"\r", Some(0))], t.at(0.1));
+        t.core
+            .take_actions()
+            .into_iter()
+            .find_map(|a| match a {
+                Action::DeliveryWrite { token, .. } => Some(token),
+                _ => None,
+            })
+            .expect("real typed Answer action")
+    }
+
+    #[test]
+    fn answer_positive_progress_before_deadline_renews_but_exact_deadline_does_not() {
+        for (delta, renews) in [(2.499, true), (2.5, false)] {
+            let mut t = T::new(vec![]);
+            t.output(&numbered_menu("Proceed?", 0), 0.0);
+            let token = pending_answer(&mut t, 90);
+            t.core.delivery_write_progress(90, token, t.at(0.1 + delta));
+            assert_eq!(t.core.delivery_write_pending(90, token), renews);
+            let events = t.core.take_actions();
+            if renews {
+                assert!(answers(&events).is_empty());
+            } else {
+                assert_eq!(
+                    answers(&events),
+                    vec![(90, Some(AnswerOutcome::NeedsTerminal))]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn answer_noise_and_old_same_id_token_cannot_renew_the_new_write_lease() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let old = pending_answer(&mut t, 90);
+        // Noise is fresh output but is not physical input progress.
+        t.core.on_output(b"\x1b[0m", t.at(2.5));
+        t.core.take_actions();
+        t.core.on_tick(t.at(2.6));
+        assert_eq!(
+            answers(&t.core.take_actions()),
+            vec![(90, Some(AnswerOutcome::NeedsTerminal))]
+        );
+        let expect = shown(&t).fingerprint();
+        t.core
+            .answer(90, expect, vec![step(b"\r", Some(0))], t.at(3.0));
+        let fresh = t
+            .core
+            .take_actions()
+            .into_iter()
+            .find_map(|a| match a {
+                Action::DeliveryWrite { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(
+            old, fresh,
+            "same id has a different physical write generation"
+        );
+        assert!(!t.core.actual_write_guard(90, old, 0, t.at(4.0)));
+        t.core.delivery_write_progress(90, old, t.at(5.0));
+        t.core.delivery_write_completed(90, old, t.at(5.0));
+        assert!(t.core.delivery_write_pending(90, fresh));
+        t.core.on_tick(t.at(5.5));
+        assert_eq!(
+            answers(&t.core.take_actions()),
+            vec![(90, Some(AnswerOutcome::NeedsTerminal))]
+        );
+    }
+
+    #[test]
+    fn answer_positive_partial_progress_cannot_extend_total_job_past_ninety_seconds() {
+        let mut t = T::new(vec![]);
+        t.output(&numbered_menu("Proceed?", 0), 0.0);
+        let token = pending_answer(&mut t, 90);
+        for second in (2..90).step_by(2) {
+            t.core
+                .delivery_write_progress(90, token, t.at(second as f64));
+            assert!(t.core.delivery_write_pending(90, token));
+        }
+        t.core.delivery_write_progress(90, token, t.at(89.9));
+        assert!(t.core.delivery_write_pending(90, token));
+        t.core.delivery_write_completed(90, token, t.at(90.1));
+        assert!(!t.core.delivery_write_pending(90, token));
+        assert_eq!(
+            answers(&t.core.take_actions()),
+            vec![(90, Some(AnswerOutcome::NeedsTerminal))]
+        );
+    }
+
+    fn pending_body_with_partial_prefix() -> (T, DeliveryWriteToken) {
+        let mut t = T::new(brief("BODY"));
+        t.output(&styled_box(""), 0.0);
+        t.core.on_tick(t.at(0.31));
+        let token = t
+            .core
+            .take_actions()
+            .into_iter()
+            .find_map(|a| match a {
+                Action::DeliveryWrite { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        t.core
+            .delivery_write_progress(BRIEF_DELIVERY_ID, token, t.at(0.32));
+        (t, token)
+    }
+
+    #[test]
+    fn partial_body_accepts_only_authoritative_empty_owned_prefix_or_exact_paste_placeholder() {
+        for (frame, expected) in [
+            (styled_box(""), true),
+            (styled_box("BO"), true),
+            (styled_box("[Pasted text #1 +2 lines]"), true),
+            (styled_box("someone else's draft"), false),
+            (input_box("BO"), false),
+        ] {
+            let (mut t, token) = pending_body_with_partial_prefix();
+            t.core.on_output(&frame, t.at(0.4));
+            t.core.take_actions();
+            assert_eq!(
+                t.core
+                    .actual_write_guard(BRIEF_DELIVERY_ID, token, 2, t.at(0.5)),
+                expected
+            );
+            assert_eq!(
+                t.core.delivery_write_pending(BRIEF_DELIVERY_ID, token),
+                expected
+            );
+            if !expected {
+                let actions = t.core.take_actions();
+                assert!(events(&actions).iter().any(|e| matches!(
+                    e,
+                    SessionEvent::Delivery {
+                        outcome: DeliveryOutcome::Unsubmitted(_),
+                        ..
+                    }
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn partial_body_unknown_or_unrelated_text_cannot_clear_or_replay_into_next_job() {
+        for frame in [input_box("BO"), styled_box("someone else's draft")] {
+            let (mut t, token) = pending_body_with_partial_prefix();
+            t.core.send(2, "NEXT", t.at(0.35));
+            t.core.on_output(&frame, t.at(0.4));
+            t.core.take_actions();
+            assert!(
+                !t.core
+                    .actual_write_guard(BRIEF_DELIVERY_ID, token, 2, t.at(0.5))
+            );
+            t.core.take_actions();
+            t.core
+                .delivery_write_completed(BRIEF_DELIVERY_ID, token, t.at(0.6));
+            t.core.on_tick(t.at(2.0));
+            let actions = t.core.take_actions();
+            assert!(
+                writes(&actions).is_empty(),
+                "unknown source cannot become Ctrl-U/replay authority: {actions:?}"
+            );
+            assert!(matches!(t.core.draft_reported, Some(HeldDraft::Unknown)));
+            // Existing explicit human clear + fresh full Empty is a recovery path; hold
+            // is not a permanent veto on every future job.
+            t.core.raw(b"\x15");
+            t.core.take_actions();
+            t.output(&styled_box(""), 2.1);
+            let resumed = t.tick(2.4);
+            assert_eq!(
+                writes(&resumed),
+                vec![b"NEXT".to_vec()],
+                "no implicit Ctrl-U or full BODY replay"
+            );
+        }
+    }
+
+    #[test]
+    fn stop_and_exit_revoke_guarded_token_before_late_callbacks() {
+        for stopped in [false, true] {
+            let mut t = T::new(vec![]);
+            t.output(&numbered_menu("Proceed?", 0), 0.0);
+            let token = pending_answer(&mut t, 96);
+            if stopped {
+                t.core.stop(t.at(0.2));
+            } else {
+                t.core.on_exit(ExitStatusKind::Code(0), t.at(0.2));
+            }
+            let closed = t.core.take_actions();
+            assert_eq!(answers(&closed), vec![(96, None)]);
+            assert!(!t.core.actual_write_guard(96, token, 0, t.at(0.3)));
+            t.core.delivery_write_progress(96, token, t.at(0.3));
+            t.core.delivery_write_completed(96, token, t.at(0.3));
+            t.core.on_tick(t.at(1.0));
+            let late = t.core.take_actions();
+            assert!(writes(&late).is_empty());
+            assert!(
+                answers(&late).is_empty(),
+                "no resurrection/Answered: {late:?}"
+            );
+        }
+    }
+
+    #[test]
     fn digits_on_a_numbered_box_are_answered_and_verified() {
         let mut t = T::new(vec![]);
         t.output(&numbered_menu("Do you want to proceed?", 0), 0.0);
         let expect = shown(&t).fingerprint();
         t.core.answer(7, expect, vec![step(b"2", None)], t.at(0.1));
-        let first = t.core.take_actions();
+        let first = t.completed_actions(t.at(0.1));
         assert_eq!(
             writes(&first),
             vec![b"2".to_vec()],
@@ -3125,7 +3661,7 @@ mod tests {
             vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
             t.at(0.0),
         );
-        let mut log = t.core.take_actions();
+        let mut log = t.completed_actions(t.at(0.0));
         assert_eq!(writes(&log), vec![b"\x1b[B".to_vec()]);
         // 新框的高亮恰好也停在第二项（下一下预期的位置）：只有指纹能分出它不是原来那个框。
         log.extend(t.output(&numbered_menu("Run rm -rf build?", 1), 0.05));
@@ -3156,7 +3692,7 @@ mod tests {
             vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
             t.at(0.0),
         );
-        let mut log = t.core.take_actions();
+        let mut log = t.completed_actions(t.at(0.0));
         // 同一个框（指纹相同），高亮却停在第三项。
         log.extend(t.output(&cursor_list("Trust this folder?", 2), 0.05));
         log.extend(t.tick(0.15));
@@ -3175,7 +3711,7 @@ mod tests {
             vec![step(b"\x1b[B", Some(0)), step(b"\r", Some(1))],
             t.at(0.0),
         );
-        let mut log = t.core.take_actions();
+        let mut log = t.completed_actions(t.at(0.0));
         log.extend(t.output(&cursor_list("Trust this folder?", 1), 0.05));
         log.extend(t.tick(0.15));
         assert_eq!(writes(&log), vec![b"\x1b[B".to_vec(), b"\r".to_vec()]);
@@ -3523,7 +4059,7 @@ mod tests {
             vec![step(b"a", None), step(b"b", None), step(b"c", None)],
             t.at(0.0),
         );
-        assert_eq!(writes(&t.core.take_actions()), vec![b"a".to_vec()]);
+        assert_eq!(writes(&t.completed_actions(t.at(0.0))), vec![b"a".to_vec()]);
         // 这一拍晚到了（本该 0.15）：第二下在 0.4 按下。
         assert_eq!(writes(&t.tick(0.4)), vec![b"b".to_vec()]);
         // 第三下在 0.4 + 0.15 = 0.55，不是预排的 0.3：0.45 时还不能按。

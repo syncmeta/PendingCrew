@@ -1451,6 +1451,9 @@ impl<P: Port> Core<P> {
                                     now,
                                 })
                             }
+                            Ok(AnswerOutcome::NeedsTerminal) => {
+                                Err(ControlError::NeedsTerminal(session.clone()))
+                            }
                             Ok(AnswerOutcome::Unsupported) => {
                                 Err(ControlError::Unsupported(executor))
                             }
@@ -4022,6 +4025,155 @@ mod tests {
             rig.exec.lock().writes["w1"],
             ["answer:2", "send:合成派活甲", "answer:1"],
             "按收下的先后、一次回答按完再下一个"
+        );
+    }
+
+    // This exercises the upstream executor-future contract only. StandIn does not model a
+    // kernel PTY write: the public SessionHandle/driver tests own actual WouldBlock coverage.
+    async fn held_answer_result_preserves_the_body_fence(
+        outcome: AnswerOutcome,
+    ) -> Result<AnswerReport, ControlError> {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let (old_body, old_reply) = nudge_cmd("cap", "合成旧正文");
+        rig.core.handle(old_body).await;
+        let old_id = rig.exec.last_send_id("cap");
+        let d = decision("Synthetic pending answer?");
+        rig.emit(
+            "cap",
+            SessionEvent::Decision(DecisionEvent::Appeared(d.clone())),
+        )
+        .await;
+        let (release, held) = oneshot::channel();
+        {
+            let mut st = rig.exec.lock();
+            st.answer_hold.insert("cap".into(), held);
+            st.answer_outcome.insert("cap".into(), outcome);
+        }
+        let (reply, mut answer_reply) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Answer {
+                session: "cap".into(),
+                fingerprint: d.fingerprint(),
+                choice: 0,
+                reply,
+            }))
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !rig.exec.lock().answers.contains_key("cap") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the executor must enter the held answer future");
+        assert!(matches!(
+            answer_reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(rig.live("cap").unwrap().writing);
+        // A cleared screen and the old body's final receipt are independent of this answer.
+        rig.emit("cap", SessionEvent::Decision(DecisionEvent::Cleared))
+            .await;
+        let (body, body_reply) = nudge_cmd("cap", "合成后续正文");
+        rig.core.handle(body).await;
+        rig.emit(
+            "cap",
+            SessionEvent::Delivery {
+                id: old_id,
+                subject: crewd_exec::delivery::Subject::Steer,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        )
+        .await;
+        rig.settle_until(old_reply).await.unwrap();
+        assert!(
+            rig.live("cap").unwrap().writing,
+            "old receipt is not WriteDone"
+        );
+        let generator = rig.live("cap").unwrap().generator;
+        rig.core
+            .handle(Input::WriteDone {
+                session: "cap".into(),
+                generator: generator.wrapping_sub(1),
+            })
+            .await;
+        assert!(
+            rig.live("cap").unwrap().writing,
+            "another generation cannot release"
+        );
+        assert_eq!(rig.exec.sent("cap"), ["合成旧正文"]);
+        assert!(
+            !rig.exec.lock().raws.contains_key("cap"),
+            "injected result presses no keys"
+        );
+        release.send(()).expect("held executor is still waiting");
+        // Receive and apply the actual derived WriteDone, rather than synthesizing a release.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let input = rig.rx.recv().await.expect("answer task sends WriteDone");
+                let done = matches!(
+                    &input,
+                    Input::WriteDone { session, generator: g } if session == "cap" && *g == generator
+                );
+                rig.core.handle(input).await;
+                if done {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("bounded executor completion must reach the actor");
+        let result = answer_reply
+            .await
+            .expect("answer returns its typed outcome");
+        assert!(!rig.live("cap").unwrap().writing);
+        assert_eq!(rig.exec.sent("cap"), ["合成旧正文", "合成后续正文"]);
+        rig.ack("cap").await;
+        rig.settle_until(body_reply).await.unwrap();
+        rig.settle().await;
+        assert_eq!(rig.exec.sent("cap"), ["合成旧正文", "合成后续正文"]);
+        result
+    }
+
+    #[tokio::test]
+    async fn needs_terminal_answer_waits_for_write_done_and_returns_the_stable_rpc_refusal() {
+        let err = held_answer_result_preserves_the_body_fence(AnswerOutcome::NeedsTerminal)
+            .await
+            .unwrap_err();
+        assert_eq!(err, ControlError::NeedsTerminal("cap".into()));
+        assert_eq!(err.refusal().unwrap().code, Code::DecisionNeedsTerminal);
+        let wire = super::super::rpc::rpc_err(err);
+        assert_eq!(wire.code, crewd_proto::RpcError::CONFLICT);
+        assert_eq!(wire.data.unwrap().refusal, "decision.needs_terminal");
+    }
+
+    #[tokio::test]
+    async fn answered_executor_result_preserves_the_same_answer_fence() {
+        let report = held_answer_result_preserves_the_body_fence(AnswerOutcome::Answered {
+            cleared: true,
+            now: None,
+        })
+        .await
+        .unwrap();
+        assert!(report.cleared);
+        assert_eq!(report.now, None);
+    }
+
+    #[tokio::test]
+    async fn conflict_executor_result_preserves_the_same_answer_fence_and_current_box() {
+        let now = decision("Synthetic replacement box?");
+        let err = held_answer_result_preserves_the_body_fence(AnswerOutcome::Conflict {
+            now: Some(now.clone()),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ControlError::DecisionChanged {
+                session: "cap".into(),
+                now: Some(now),
+            }
         );
     }
 

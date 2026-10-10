@@ -416,11 +416,14 @@ pub async fn start_claude(
         writes: VecDeque::new(),
         answers: BTreeMap::new(),
         next_answer: 0,
+        write_refused: false,
         running,
         cmd_rx,
         ev_tx,
         auth_tx,
         auth_rx,
+        #[cfg(test)]
+        write_observer: None,
     }));
     Ok((handle, ev_rx))
 }
@@ -608,7 +611,11 @@ struct WriteProgress {
     id: u64,
     token: DeliveryWriteToken,
     complete: bool,
+    actual_bytes: usize,
 }
+
+#[cfg(test)]
+type WriteObservation = Result<Option<WriteProgress>, io::ErrorKind>;
 
 struct PendingWrite {
     bytes: Vec<u8>,
@@ -627,11 +634,16 @@ struct Task {
     /// 等结果的回答（[`Command::Answer`]），按 `Core::answer` 的 id。
     answers: BTreeMap<u64, oneshot::Sender<AnswerOutcome>>,
     next_answer: u64,
+    /// Once-only resume-refusal edge dispatched by the final writer drain.
+    write_refused: bool,
     running: Running,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     ev_tx: mpsc::UnboundedSender<SessionEvent>,
     auth_tx: mpsc::UnboundedSender<AuthMsg>,
     auth_rx: mpsc::UnboundedReceiver<AuthMsg>,
+    /// Test-only passive observation of the unchanged real syscall result.
+    #[cfg(test)]
+    write_observer: Option<mpsc::UnboundedSender<WriteObservation>>,
 }
 
 /// 整组 SIGKILL，组发不出去再单杀会话首进程。
@@ -730,7 +742,26 @@ pub(crate) fn decode(status: io::Result<std::process::ExitStatus>) -> ExitStatus
 /// 只有确认读到 WouldBlock / EOF 才回 true，调用方才可以做依赖完整屏幕的 tick / flush。
 /// 预算用尽或读失败回 false：这拍不按回答键，下一次 select / drain 再继续。
 /// `select!` 仍不偏向读分支，加上预算，一直吐字的子进程不会饿死命令。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputDrain {
+    Drained,
+    Closed,
+    Deferred,
+}
+
 fn drain_ready(master: &PtyMaster, core: &mut Core, first: Option<&[u8]>, budget: usize) -> bool {
+    matches!(
+        drain_for_write(master, core, first, budget),
+        OutputDrain::Drained | OutputDrain::Closed
+    )
+}
+
+fn drain_for_write(
+    master: &PtyMaster,
+    core: &mut Core,
+    first: Option<&[u8]>,
+    budget: usize,
+) -> OutputDrain {
     let mut read_chunks = 0;
     if let Some(bytes) = first {
         core.ingest_output(bytes, Instant::now());
@@ -743,12 +774,13 @@ fn drain_ready(master: &PtyMaster, core: &mut Core, first: Option<&[u8]>, budget
                 core.ingest_output(&buf[..n], Instant::now());
                 read_chunks += 1;
             }
-            Ok(None | Some(0)) => return true,
-            Err(_) => return false,
+            Ok(None) => return OutputDrain::Drained,
+            Ok(Some(0)) => return OutputDrain::Closed,
+            Err(_) => return OutputDrain::Deferred,
             _ => unreachable!("有字节或已经排空"),
         }
     }
-    false
+    OutputDrain::Deferred
 }
 
 const PTY_READ_SIZE: usize = 16 * 1024;
@@ -849,11 +881,13 @@ async fn run(mut t: Task) {
                 }
             },
             _ = tick.tick() => {
+                t.core.expire_guarded_writes(Instant::now());
                 if drain_ready(&t.running.master, &mut t.core, None, DRAIN_CHUNKS) {
                     t.core.on_tick(Instant::now());
                 }
             }
             _ = tokio::time::sleep_until(wake.unwrap_or_else(tokio::time::Instant::now)), if wake.is_some() => {
+                t.core.expire_guarded_writes(Instant::now());
                 // 到点的多半是排好的按键：只有已经可读的输出全喂完，屏幕才可用来核框。
                 if drain_ready(&t.running.master, &mut t.core, None, DRAIN_CHUNKS) {
                     t.core.on_tick(Instant::now());
@@ -873,7 +907,8 @@ async fn run(mut t: Task) {
             drain(&t.running.master, &mut t.core, Duration::from_millis(500)).await;
         }
         let actions = t.core.take_actions();
-        let refused = dispatch(&mut t, actions);
+        let from_writer = std::mem::take(&mut t.write_refused);
+        let refused = dispatch(&mut t, actions) || from_writer;
         if refused && !retried && !stopping {
             retried = true;
             // 被拒的那个进程：已经自己退了就用它的退出状态，还活着就杀掉收尸（边读边等）。
@@ -1000,44 +1035,107 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
 /// 单个有界 syscall，与 SessionHandle::raw 入队线性化。锁绝不跨 await / 阻塞 IO。
 /// 不再有旁路 write_all 任务：剩余正文、重试的 Ctrl-U、每一拍提交都能在这里被撤销。
 fn write_one(t: &mut Task) -> io::Result<()> {
-    let completed = write_ready(
+    // Once dispatched, the lifecycle edge owns the next outer-loop decision. No
+    // further old-PTY product write/terminal Body verdict may consume its carry.
+    if t.write_refused {
+        return Ok(());
+    }
+    let result = write_ready(
         &t.running.master,
-        &t.core,
+        &mut t.core,
         &t.raw_fence,
         t.input_epoch,
         &mut t.writes,
-    )?;
-    if let Some(progress) = completed {
+    );
+    #[cfg(test)]
+    if let Some(observer) = &t.write_observer {
+        let _ = observer.send(result.as_ref().map(|p| *p).map_err(|e| e.kind()));
+    }
+    if let Ok(Some(progress)) = &result {
         let now = Instant::now();
-        t.core
-            .delivery_write_progress(progress.id, progress.token, now);
+        if progress.actual_bytes > 0 {
+            t.core
+                .delivery_write_progress(progress.id, progress.token, now);
+        }
         if progress.complete {
             t.core
                 .delivery_write_completed(progress.id, progress.token, now);
         }
     }
-    Ok(())
+    // Cancellation/future completion caused by the fresh drain is dispatched even on
+    // WouldBlock. It must not remain hidden until some unrelated readable event.
+    let actions = t.core.take_actions();
+    t.write_refused |= dispatch(t, actions);
+    result.map(|_| ())
 }
 
 fn write_ready(
     master: &PtyMaster,
-    core: &Core,
+    core: &mut Core,
     raw_fence: &Mutex<u64>,
     input_epoch: u64,
     writes: &mut VecDeque<PendingWrite>,
 ) -> io::Result<Option<WriteProgress>> {
-    let epoch = raw_fence.lock().expect("raw fence poisoned");
-    if *epoch != input_epoch {
+    write_ready_with_budget(master, core, raw_fence, input_epoch, writes, DRAIN_CHUNKS)
+}
+
+fn write_ready_with_budget(
+    master: &PtyMaster,
+    core: &mut Core,
+    raw_fence: &Mutex<u64>,
+    input_epoch: u64,
+    writes: &mut VecDeque<PendingWrite>,
+    drain_budget: usize,
+) -> io::Result<Option<WriteProgress>> {
+    core.expire_guarded_writes(Instant::now());
+    // Fence check also precedes screen processing: queued Raw retains authority.
+    if *raw_fence.lock().expect("raw fence poisoned") != input_epoch {
         return Ok(None);
     }
-    while let Some(write) = writes.front_mut() {
-        if write
-            .delivery
-            .is_some_and(|(id, token)| !core.delivery_write_pending(id, token))
-            || write.offset == write.bytes.len()
-        {
+    while let Some(write) = writes.front() {
+        if let Some((id, token)) = write.delivery {
+            if !core.delivery_write_pending(id, token) {
+                writes.pop_front();
+                continue;
+            }
+            match drain_for_write(master, core, None, drain_budget) {
+                OutputDrain::Deferred => return Ok(None),
+                OutputDrain::Closed => {
+                    writes.clear();
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                OutputDrain::Drained => core.after_output_drain(Instant::now()),
+            }
+            // Lifecycle/control actions from the final drain are handled before a
+            // terminal Body verdict can drop pending work (notably resume-refusal carry).
+            if core.has_actions() {
+                return Ok(None);
+            }
+            if !core.actual_write_guard(id, token, write.offset, Instant::now()) {
+                writes.pop_front();
+                return Ok(None);
+            }
+            // A final fresh drain may create protocol replies or completion/cancellation
+            // actions. Publish them through dispatch before this product syscall.
+            if core.has_actions() {
+                return Ok(None);
+            }
+        }
+        // Raw input admission linearizes with only this bounded syscall, never a drain.
+        let epoch = raw_fence.lock().expect("raw fence poisoned");
+        if *epoch != input_epoch {
+            return Ok(None);
+        }
+        let write = writes.front_mut().expect("checked queue");
+        if write.offset == write.bytes.len() {
+            let complete = write.delivery.map(|(id, token)| WriteProgress {
+                id,
+                token,
+                complete: true,
+                actual_bytes: 0,
+            });
             writes.pop_front();
-            continue;
+            return Ok(complete); // Legal empty body: no syscall or invented positive progress.
         }
         let end = (write.offset + 4096).min(write.bytes.len());
         let n = master.try_write(&write.bytes[write.offset..end])?;
@@ -1049,6 +1147,7 @@ fn write_ready(
             id,
             token,
             complete: write.offset == write.bytes.len(),
+            actual_bytes: n,
         });
         if write.offset == write.bytes.len() {
             writes.pop_front();
@@ -1058,21 +1157,48 @@ fn write_ready(
     Ok(None)
 }
 
+/// The exact production action-to-writer mapping, shared with syscall regressions.
+/// This extraction deliberately preserves the existing queue semantics.
+fn enqueue_write_action(writes: &mut VecDeque<PendingWrite>, action: &Action) -> bool {
+    let write = match action {
+        Action::Write(bytes) | Action::TerminalReply(bytes) => PendingWrite {
+            bytes: bytes.clone(),
+            offset: 0,
+            delivery: None,
+        },
+        Action::DeliveryWrite { id, token, bytes } => PendingWrite {
+            bytes: bytes.clone(),
+            offset: 0,
+            delivery: Some((*id, *token)),
+        },
+        _ => return false,
+    };
+    if matches!(action, Action::TerminalReply(_)) {
+        writes.push_front(write);
+    } else {
+        writes.push_back(write);
+    }
+    true
+}
+
 /// 执行 Core 攒下的动作；返回是否见到了 `ResumeRefused`。
 fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
     let mut refused = false;
+    // Prepend replies as a batch in their original read order, before pending product keys.
+    let (replies, actions): (Vec<_>, Vec<_>) = actions
+        .into_iter()
+        .partition(|a| matches!(a, Action::TerminalReply(_)));
+    for reply in replies.iter().rev() {
+        enqueue_write_action(&mut t.writes, reply);
+    }
     for action in actions {
+        if enqueue_write_action(&mut t.writes, &action) {
+            continue;
+        }
         match action {
-            Action::Write(bytes) => t.writes.push_back(PendingWrite {
-                bytes,
-                offset: 0,
-                delivery: None,
-            }),
-            Action::DeliveryWrite { id, token, bytes } => t.writes.push_back(PendingWrite {
-                bytes,
-                offset: 0,
-                delivery: Some((id, token)),
-            }),
+            Action::Write(_) | Action::TerminalReply(_) | Action::DeliveryWrite { .. } => {
+                unreachable!("queued above")
+            }
             Action::Resize { cols, lines } => {
                 let _ = t.running.master.resize(cols, lines);
             }
@@ -1245,12 +1371,1243 @@ mod output_drain_tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::Write(bytes) | Action::DeliveryWrite { bytes, .. } => {
-                    Some(bytes.as_slice())
-                }
+                Action::Write(bytes)
+                | Action::TerminalReply(bytes)
+                | Action::DeliveryWrite { bytes, .. } => Some(bytes.as_slice()),
                 _ => None,
             })
             .collect()
+    }
+
+    const GUARDED_CAPTURE_MARKER: &[u8] = b"GUARDED_WRITE_CAPTURE_END_74B6";
+
+    struct GuardedFixture {
+        dir: tempfile::TempDir,
+        process: Option<PtyProcess>,
+        next_screen: usize,
+    }
+
+    impl Drop for GuardedFixture {
+        fn drop(&mut self) {
+            if let Some(process) = self.process.as_mut() {
+                // Exact fixture PID/group only; panic paths also cancel the owned child.
+                kill_group(process.pid);
+                let _ = process.child.start_kill();
+            }
+        }
+    }
+
+    impl GuardedFixture {
+        async fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("marker.bin"), GUARDED_CAPTURE_MARKER).unwrap();
+            let debug = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let program = std::env::var_os("CARGO_TARGET_DIR")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("debug/fake_claude"))
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| debug.join("fake_claude"));
+            assert!(
+                program.is_file(),
+                "coordinator must build fresh fake_claude before this test: {program:?}"
+            );
+            let process = spawn_pty(&SpawnSpec {
+                program,
+                args: vec![
+                    "--guarded-write-fixture".into(),
+                    dir.path().to_string_lossy().into_owned(),
+                ],
+                env: [("PATH".into(), "/usr/bin:/bin".into())].into(),
+                cwd: dir.path().to_path_buf(),
+                cols: 80,
+                lines: 25,
+            })
+            .unwrap();
+            let fixture = Self {
+                dir,
+                process: Some(process),
+                next_screen: 0,
+            };
+            fixture.receipt("slave-ready").await;
+            let ready = std::fs::read_to_string(fixture.dir.path().join("slave-ready")).unwrap();
+            assert!(ready.contains("raw_no_echo=1") && ready.contains("stdin_reader_started=0"));
+            fixture
+        }
+
+        fn master(&self) -> &PtyMaster {
+            &self.process.as_ref().unwrap().master
+        }
+
+        async fn receipt(&self, name: &str) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    assert!(
+                        !self.dir.path().join("fixture.error").exists(),
+                        "synthetic fixture error while waiting for {name}"
+                    );
+                    if self.dir.path().join(name).exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("fixture receipt deadline: {name}"));
+        }
+
+        async fn screen(&mut self, core: &mut Core, bytes: &[u8], at: Instant) {
+            let n = self.next_screen;
+            self.next_screen += 1;
+            std::fs::write(self.dir.path().join(format!("screen-{n}.bin")), bytes).unwrap();
+            std::fs::write(self.dir.path().join(format!("screen-{n}.request")), []).unwrap();
+            let written = self.dir.path().join(format!("screen-{n}.written"));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    // Drain while waiting: a large child frame cannot deadlock its receipt.
+                    let fully_drained = drain_ready(self.master(), core, None, DRAIN_CHUNKS);
+                    assert!(!self.dir.path().join("fixture.error").exists());
+                    if written.exists() && fully_drained {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .expect("frame must actually write, then reach a full read drain");
+            core.after_output_drain(at);
+        }
+
+        fn saturate(&self) -> usize {
+            let start = Instant::now();
+            let mut accepted = 0;
+            let mut single = false;
+            let filler = [b'x'; 4096];
+            loop {
+                assert!(
+                    start.elapsed() < Duration::from_secs(3) && accepted < 8 * 1024 * 1024,
+                    "setup failure: could not establish bounded one-byte WouldBlock"
+                );
+                let bytes = if single { &filler[..1] } else { &filler[..] };
+                match self.master().try_write(bytes) {
+                    Ok(n) => {
+                        assert!(n > 0);
+                        accepted += n;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        if single {
+                            break;
+                        }
+                        single = true;
+                    }
+                    Err(e) => panic!("saturation setup error: {e}"),
+                }
+            }
+            eprintln!(
+                "guarded fixture accepted filler bytes={accepted}; actual one-byte WouldBlock"
+            );
+            accepted
+        }
+
+        async fn release(&self, accepted_before_capture: usize) {
+            std::fs::write(
+                self.dir.path().join("release-input"),
+                accepted_before_capture.to_string(),
+            )
+            .unwrap();
+            self.receipt("filler-drained").await;
+        }
+
+        async fn capture(mut self, core: &mut Core, mut queued: VecDeque<PendingWrite>) -> Vec<u8> {
+            // The unguarded terminal marker closes observation AFTER the actual production queue.
+            assert!(enqueue_write_action(
+                &mut queued,
+                &Action::Write(GUARDED_CAPTURE_MARKER.to_vec())
+            ));
+            let fence = Mutex::new(0);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !queued.is_empty() {
+                    let actions = core.take_actions();
+                    enqueue_actions(&mut queued, &actions);
+                    match write_ready(self.master(), core, &fence, 0, &mut queued) {
+                        Ok(Some(progress)) => {
+                            let now = Instant::now();
+                            if progress.actual_bytes > 0 {
+                                core.delivery_write_progress(progress.id, progress.token, now);
+                            }
+                            if progress.complete {
+                                core.delivery_write_completed(progress.id, progress.token, now);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        Err(e) => panic!("capture writer error: {e}"),
+                    }
+                }
+            })
+            .await
+            .expect("production queue and observation marker must finish boundedly");
+            self.receipt("capture.closed").await;
+            let receipt = std::fs::read_to_string(self.dir.path().join("capture.closed")).unwrap();
+            assert!(
+                receipt.lines().any(|line| line == "trailing_bytes=0"),
+                "{receipt}"
+            );
+            let captured = std::fs::read(self.dir.path().join("capture.bin")).unwrap();
+            eprintln!("closed guarded capture bytes={captured:?}; {receipt}");
+            let mut process = self.process.take().unwrap();
+            let status = reap_killed(&mut process.child, &process.master, REAP_LIMIT)
+                .await
+                .unwrap();
+            assert_eq!(
+                status,
+                ExitStatusKind::Code(0),
+                "fixture must exit successfully"
+            );
+            captured
+        }
+    }
+
+    fn enqueue_actions(queue: &mut VecDeque<PendingWrite>, actions: &[Action]) {
+        for action in actions
+            .iter()
+            .rev()
+            .filter(|a| matches!(a, Action::TerminalReply(_)))
+        {
+            enqueue_write_action(queue, action);
+        }
+        for action in actions
+            .iter()
+            .filter(|a| !matches!(a, Action::TerminalReply(_)))
+        {
+            enqueue_write_action(queue, action);
+        }
+    }
+
+    fn write_completed_setup(
+        master: &PtyMaster,
+        core: &mut Core,
+        queue: &mut VecDeque<PendingWrite>,
+        at: Instant,
+    ) -> usize {
+        let before: usize = queue.iter().map(|w| w.bytes.len() - w.offset).sum();
+        let fence = Mutex::new(0);
+        while !queue.is_empty() {
+            let actions = core.take_actions();
+            enqueue_actions(queue, &actions);
+            if let Some(progress) = write_ready(master, core, &fence, 0, queue).unwrap() {
+                if progress.actual_bytes > 0 {
+                    core.delivery_write_progress(progress.id, progress.token, at);
+                }
+                if progress.complete {
+                    core.delivery_write_completed(progress.id, progress.token, at);
+                }
+            }
+        }
+        before
+    }
+
+    #[tokio::test]
+    async fn answer_queued_before_real_would_block_is_revoked_when_same_highlight_dialog_changes() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture
+            .screen(&mut core, &menu("Proceed with old operation?", 0), now)
+            .await;
+        core.take_actions();
+        let old = shown(&core);
+        core.queue_answer(
+            81,
+            old.fingerprint(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: Some(0),
+            }],
+            now,
+        );
+        core.after_output_drain(now);
+        let actions = core.take_actions();
+        assert_eq!(
+            writes(&actions),
+            vec![b"\r".as_slice()],
+            "real answer must reach dispatch first"
+        );
+        let mut queued = VecDeque::new();
+        enqueue_actions(&mut queued, &actions);
+        let filler = fixture.saturate();
+        let fence = Mutex::new(0);
+        let error = write_ready(fixture.master(), &mut core, &fence, 0, &mut queued).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::WouldBlock,
+            "actual answer syscall barrier"
+        );
+        assert_eq!(queued[0].offset, 0);
+        fixture
+            .screen(
+                &mut core,
+                &menu("Allow new permission?", 0),
+                now + Duration::from_millis(20),
+            )
+            .await;
+        let current = shown(&core);
+        assert_eq!(
+            current.selected, old.selected,
+            "highlight guard must not mask fingerprint change"
+        );
+        assert_ne!(current.fingerprint(), old.fingerprint());
+        let after = core.take_actions();
+        enqueue_actions(&mut queued, &after);
+        fixture.release(filler).await;
+        let captured = fixture.capture(&mut core, queued).await;
+        assert!(
+            captured.is_empty(),
+            "stale answer key reached replacement dialog: {captured:?}"
+        );
+        assert!(
+            !after.iter().any(|a| matches!(
+                a,
+                Action::AnswerDone {
+                    outcome: Some(AnswerOutcome::Answered { .. }),
+                    ..
+                }
+            )),
+            "an unwritten key cannot be Answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_enter_after_real_would_block_is_revoked_when_new_dialog_appears() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![PendingText {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), now).await;
+        core.take_actions();
+        let mut queued = VecDeque::new();
+        core.on_tick(now + Duration::from_millis(310));
+        enqueue_actions(&mut queued, &core.take_actions());
+        assert_eq!(
+            queued[0].bytes, b"BOT",
+            "body must actually enter production writer"
+        );
+        let mut setup_bytes = write_completed_setup(
+            fixture.master(),
+            &mut core,
+            &mut queued,
+            now + Duration::from_millis(310),
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                now + Duration::from_millis(400),
+            )
+            .await;
+        core.take_actions();
+        for (at, expected) in [(820, b" ".as_slice()), (930, &[0x7f][..])] {
+            core.on_tick(now + Duration::from_millis(at));
+            let actions = core.take_actions();
+            assert_eq!(
+                writes(&actions),
+                vec![expected],
+                "actual completed setup beat"
+            );
+            enqueue_actions(&mut queued, &actions);
+            setup_bytes += write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queued,
+                now + Duration::from_millis(at),
+            );
+        }
+        core.on_tick(now + Duration::from_millis(1040));
+        let enter = core.take_actions();
+        assert_eq!(writes(&enter), vec![b"\r".as_slice()]);
+        enqueue_actions(&mut queued, &enter);
+        let filler = fixture.saturate();
+        let error =
+            write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queued).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::WouldBlock,
+            "actual pending Enter syscall barrier"
+        );
+        assert_eq!(queued[0].offset, 0);
+        fixture
+            .screen(
+                &mut core,
+                &menu("Allow a new permission?", 0),
+                now + Duration::from_millis(1060),
+            )
+            .await;
+        assert!(
+            blocking_dialog(
+                &core
+                    .screen_text(25)
+                    .lines()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            )
+            .is_some()
+        );
+        let observed = core.take_actions();
+        enqueue_actions(&mut queued, &observed);
+        // Discard exactly the already accepted body/setup beats and inert filler.
+        // Capture contains ONLY the pending post-barrier production bytes.
+        fixture.release(setup_bytes + filler).await;
+        let captured = fixture.capture(&mut core, queued).await;
+        assert!(
+            captured.is_empty(),
+            "stale queued Enter reached the new dialog: {captured:?}"
+        );
+    }
+
+    fn rate_menu() -> Vec<u8> {
+        "\x1b[2J\x1b[HWhat do you want to do?\r\n❯ 1. Stop and wait for limit to reset\r\n  2. Upgrade your plan\r\nEnter to confirm · Esc to cancel".as_bytes().to_vec()
+    }
+
+    #[tokio::test]
+    async fn rate_digit_and_enter_held_by_real_would_block_never_reach_new_permission() {
+        for enter in [false, true] {
+            let mut fixture = GuardedFixture::new().await;
+            let now = Instant::now();
+            let mut core = Core::new(
+                CoreConfig::default(),
+                ScreenConfig::default(),
+                now,
+                vec![],
+                None,
+            );
+            fixture.screen(&mut core, &rate_menu(), now).await;
+            let mut queue = VecDeque::new();
+            enqueue_actions(&mut queue, &core.take_actions());
+            assert_eq!(queue[0].bytes, b"1");
+            let mut setup = 0;
+            if enter {
+                setup = write_completed_setup(fixture.master(), &mut core, &mut queue, now);
+                core.on_tick(now + Duration::from_millis(250));
+                enqueue_actions(&mut queue, &core.take_actions());
+                assert_eq!(queue[0].bytes, b"\r");
+            }
+            let filler = fixture.saturate();
+            let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(queue[0].offset, 0);
+            fixture
+                .screen(
+                    &mut core,
+                    &menu("Allow this permission?", 0),
+                    now + Duration::from_millis(300),
+                )
+                .await;
+            enqueue_actions(&mut queue, &core.take_actions());
+            fixture.release(setup + filler).await;
+            let captured = fixture.capture(&mut core, queue).await;
+            assert!(
+                captured.is_empty(),
+                "rate phase enter={enter} wrote stale key {captured:?}"
+            );
+            eprintln!("rate actual guarded phase enter={enter} capture={captured:?} trailing=0");
+        }
+    }
+
+    #[tokio::test]
+    async fn unchanged_rate_menu_writes_digit_then_enter_only_after_actual_gap() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture.screen(&mut core, &rate_menu(), now).await;
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        fixture.release(0).await;
+        let actual = Instant::now();
+        assert_eq!(
+            write_completed_setup(fixture.master(), &mut core, &mut queue, actual),
+            1
+        );
+        core.on_tick(actual + Duration::from_millis(249));
+        assert!(writes(&core.take_actions()).is_empty());
+        core.on_tick(actual + Duration::from_millis(250));
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(queue[0].bytes, b"\r");
+        let captured = fixture.capture(&mut core, queue).await;
+        assert_eq!(captured, b"1\r");
+        eprintln!(
+            "unchanged rate actual capture={captured:?} trailing=0; gap is injected Core clock"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_queued_delivery_phase_checks_real_new_dialog_and_missing_input_authority() {
+        for beat in 0..=3 {
+            for missing_row in [false, true] {
+                let mut fixture = GuardedFixture::new().await;
+                let now = Instant::now();
+                let mut core = Core::new(
+                    CoreConfig::default(),
+                    ScreenConfig::default(),
+                    now,
+                    vec![PendingText {
+                        id: 1,
+                        subject: Subject::Brief,
+                        text: "BOT".into(),
+                    }],
+                    None,
+                );
+                fixture.screen(&mut core, &input_box(""), now).await;
+                core.take_actions();
+                core.on_tick(now + Duration::from_millis(310));
+                let mut queue = VecDeque::new();
+                enqueue_actions(&mut queue, &core.take_actions());
+                let mut setup = 0;
+                if beat > 0 {
+                    setup += write_completed_setup(
+                        fixture.master(),
+                        &mut core,
+                        &mut queue,
+                        now + Duration::from_millis(310),
+                    );
+                    fixture
+                        .screen(
+                            &mut core,
+                            &input_box("BOT"),
+                            now + Duration::from_millis(900),
+                        )
+                        .await;
+                    enqueue_actions(&mut queue, &core.take_actions());
+                }
+                if beat > 1 {
+                    setup += write_completed_setup(
+                        fixture.master(),
+                        &mut core,
+                        &mut queue,
+                        now + Duration::from_millis(900),
+                    );
+                    core.on_tick(now + Duration::from_millis(1000));
+                    enqueue_actions(&mut queue, &core.take_actions());
+                }
+                if beat > 2 {
+                    setup += write_completed_setup(
+                        fixture.master(),
+                        &mut core,
+                        &mut queue,
+                        now + Duration::from_millis(1000),
+                    );
+                    core.on_tick(now + Duration::from_millis(1100));
+                    enqueue_actions(&mut queue, &core.take_actions());
+                }
+                assert_eq!(queue.len(), 1);
+                assert_eq!(
+                    queue[0].bytes,
+                    match beat {
+                        0 => b"BOT".to_vec(),
+                        1 => b" ".to_vec(),
+                        2 => vec![0x7f],
+                        _ => b"\r".to_vec(),
+                    }
+                );
+                let filler = fixture.saturate();
+                let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+                assert_eq!(queue[0].offset, 0);
+                let frame = if missing_row {
+                    b"\x1b[2J\x1b[HStarting...".to_vec()
+                } else {
+                    menu("New permission?", 0)
+                };
+                fixture
+                    .screen(&mut core, &frame, now + Duration::from_millis(1150))
+                    .await;
+                enqueue_actions(&mut queue, &core.take_actions());
+                fixture.release(setup + filler).await;
+                let captured = fixture.capture(&mut core, queue).await;
+                assert!(
+                    captured.is_empty(),
+                    "beat={beat} missing_row={missing_row}: {captured:?}"
+                );
+                eprintln!(
+                    "delivery actual beat={beat} missing_row={missing_row} capture={captured:?} trailing=0"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn eof_before_guarded_syscall_never_becomes_write_permission_or_answered() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture.screen(&mut core, &menu("Proceed?", 0), now).await;
+        core.take_actions();
+        core.answer(
+            98,
+            shown(&core).fingerprint(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: Some(0),
+            }],
+            now,
+        );
+        let mut pending = VecDeque::new();
+        enqueue_actions(&mut pending, &core.take_actions());
+        fixture.release(0).await;
+        // Observation marker deliberately ends the owned fixture before the tested
+        // product syscall; unlike the positive Answer case, EOF is the negative stimulus.
+        let mut marker = VecDeque::new();
+        enqueue_write_action(&mut marker, &Action::Write(GUARDED_CAPTURE_MARKER.to_vec()));
+        write_completed_setup(fixture.master(), &mut core, &mut marker, now);
+        fixture.receipt("capture.closed").await;
+        let status = tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture.process.as_mut().unwrap().child.wait(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(status.success());
+        let process = fixture.process.take().unwrap(); // reaped: no stale PID kill on Drop
+        let error =
+            write_ready(&process.master, &mut core, &Mutex::new(0), 0, &mut pending).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(pending.is_empty());
+        assert_eq!(
+            std::fs::read(fixture.dir.path().join("capture.bin")).unwrap(),
+            b""
+        );
+        assert!(!core.take_actions().iter().any(|a| matches!(
+            a,
+            Action::AnswerDone {
+                outcome: Some(AnswerOutcome::Answered { .. }),
+                ..
+            }
+        )));
+        eprintln!("actual owned-child EOF rejected guarded write; captured=[]");
+    }
+
+    #[tokio::test]
+    async fn exhausted_writer_drain_budget_defers_and_cannot_renew_pending_answer() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture.screen(&mut core, &menu("Proceed?", 0), now).await;
+        core.take_actions();
+        core.answer(
+            99,
+            shown(&core).fingerprint(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: Some(0),
+            }],
+            now,
+        );
+        let actions = core.take_actions();
+        let token = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::DeliveryWrite { token, .. } => Some(*token),
+                _ => None,
+            })
+            .unwrap();
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &actions);
+        fixture.release(0).await; // real writable master: defer is not WouldBlock
+        assert_eq!(
+            write_ready_with_budget(
+                fixture.master(),
+                &mut core,
+                &Mutex::new(0),
+                0,
+                &mut queue,
+                0
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(queue[0].offset, 0);
+        assert!(core.delivery_write_pending(99, token));
+        // Clock injection tests the existing deadline while the same production seam
+        // has zero read budget. It is not a claim of a 64-chunk live load measurement.
+        core.expire_guarded_writes(now + Duration::from_millis(2500));
+        let events = core.take_actions();
+        assert!(events.iter().any(|a| matches!(
+            a,
+            Action::AnswerDone {
+                id: 99,
+                outcome: Some(AnswerOutcome::NeedsTerminal)
+            }
+        )));
+        let captured = fixture.capture(&mut core, queue).await;
+        assert!(captured.is_empty());
+        eprintln!(
+            "production parameterized zero drain budget deferred actual PTY key; injected deadline NeedsTerminal; capture=[] trailing=0"
+        );
+    }
+
+    struct OwnedTask {
+        pid: u32,
+        join: Option<JoinHandle<()>>,
+    }
+
+    impl Drop for OwnedTask {
+        fn drop(&mut self) {
+            if self.join.is_some() {
+                kill_group(self.pid);
+            }
+        }
+    }
+
+    type FixtureChannels<T> = (
+        SessionHandle,
+        mpsc::UnboundedReceiver<SessionEvent>,
+        mpsc::UnboundedReceiver<WriteObservation>,
+        T,
+    );
+
+    /// The public handle drives the actual production Task. Observation cannot alter
+    /// readiness, the guard, syscall bytes, or completion; no master escapes to a product API.
+    fn prepare_public_fixture(fixture: &mut GuardedFixture, core: Core) -> FixtureChannels<Task> {
+        let p = fixture.process.take().unwrap();
+        let pid = p.pid;
+        let (tx, cmd_rx) = mpsc::unbounded_channel();
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let (auth_tx, auth_rx) = mpsc::unbounded_channel();
+        let (observer, results) = mpsc::unbounded_channel();
+        let raw_fence = Arc::new(Mutex::new(0));
+        let mut handle = SessionHandle::new(tx);
+        handle.raw_fence = Some(raw_fence.clone());
+        let config = DriverConfig::new(fixture.dir.path().join("runtime"));
+        let start = ClaudeStart {
+            session_id: format!("guarded-task-{pid}"),
+            program: PathBuf::from("unused-no-respawn"),
+            child_path: "/usr/bin:/bin".into(),
+            spec: ClaudeSpec {
+                workdir: fixture.dir.path().to_path_buf(),
+                ..ClaudeSpec::default()
+            },
+            ledger: Arc::new(crate::resume::MemoryLedger::default()),
+        };
+        let running = Running {
+            child: p.child,
+            pid,
+            master: Arc::new(p.master),
+            auth_task: None,
+            agent: AgentSessionArg::New(new_agent_session_id()),
+            files: None,
+            live: None,
+        };
+        let task = Task {
+            start,
+            config,
+            core,
+            raw_fence,
+            input_epoch: 0,
+            writes: VecDeque::new(),
+            answers: BTreeMap::new(),
+            next_answer: 0,
+            write_refused: false,
+            running,
+            cmd_rx,
+            ev_tx,
+            auth_tx,
+            auth_rx,
+            write_observer: Some(observer),
+        };
+        (handle, ev_rx, results, task)
+    }
+
+    fn run_public_fixture(fixture: &mut GuardedFixture, core: Core) -> FixtureChannels<OwnedTask> {
+        let (handle, events, results, task) = prepare_public_fixture(fixture, core);
+        let pid = task.running.pid;
+        let join = tokio::spawn(run(task));
+        (
+            handle,
+            events,
+            results,
+            OwnedTask {
+                pid,
+                join: Some(join),
+            },
+        )
+    }
+
+    async fn public_fixture_frame(fixture: &mut GuardedFixture, bytes: &[u8]) {
+        let n = fixture.next_screen;
+        fixture.next_screen += 1;
+        std::fs::write(fixture.dir.path().join(format!("screen-{n}.bin")), bytes).unwrap();
+        std::fs::write(fixture.dir.path().join(format!("screen-{n}.request")), []).unwrap();
+        fixture.receipt(&format!("screen-{n}.written")).await;
+        // The real Task alone reads/drains the frame, then performs the actual CAS.
+    }
+
+    async fn captured_prefix(fixture: &GuardedFixture, expected: &[u8]) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let bytes =
+                    std::fs::read(fixture.dir.path().join("capture.bin")).unwrap_or_default();
+                if bytes == expected {
+                    break;
+                }
+                assert!(
+                    expected.starts_with(&bytes),
+                    "unexpected actual prefix: {bytes:?}"
+                );
+                assert!(!fixture.dir.path().join("fixture.error").exists());
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("actual fixture input capture prefix");
+    }
+
+    #[tokio::test]
+    async fn fresh_write_drain_resume_refusal_carries_brief_and_steer_once_and_stop_prevents_respawn()
+     {
+        for stopped in [false, true] {
+            let mut fixture = GuardedFixture::new().await;
+            let now = Instant::now();
+            let old_id = new_agent_session_id();
+            let mut core = Core::new(
+                CoreConfig::default(),
+                ScreenConfig::default(),
+                now,
+                vec![PendingText {
+                    id: 1,
+                    subject: Subject::Brief,
+                    text: "BOT-RESUME-BRIEF".into(),
+                }],
+                Some(old_id.clone()),
+            );
+            fixture.screen(&mut core, &input_box(""), now).await;
+            core.send(2, "BOT-RESUME-STEER", now);
+            core.take_actions();
+            core.on_tick(now + Duration::from_millis(310));
+            let actions = core.take_actions();
+            let (handle, mut events, _results, mut task) =
+                prepare_public_fixture(&mut fixture, core);
+            task.running.agent = AgentSessionArg::Resume(old_id.clone());
+            enqueue_actions(&mut task.writes, &actions);
+            let debug = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let fake = std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .map(|p| p.join("debug/fake_claude"))
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| debug.join("fake_claude"));
+            task.start.program = std::fs::canonicalize(fake).expect("fresh synthetic fake binary");
+            assert_eq!(task.start.program.file_name().unwrap(), "fake_claude");
+            let home = fixture.dir.path().join("synthetic-home");
+            std::fs::create_dir(&home).unwrap();
+            let submitted = fixture.dir.path().join("respawn-submitted.log");
+            task.start.spec.additional_env = [
+                ("HOME".into(), home.display().to_string()),
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    home.join("claude").display().to_string(),
+                ),
+                (
+                    "CODEX_HOME".into(),
+                    home.join("codex").display().to_string(),
+                ),
+                ("FAKE_CLAUDE_LOG".into(), submitted.display().to_string()),
+            ]
+            .into();
+            // A real child frame is unread until production write_one. In particular it
+            // has no input row: terminal Body guard must not discard the brief before
+            // dispatch/run processes the once-only ResumeRefused edge.
+            public_fixture_frame(
+                &mut fixture,
+                format!("\x1b[2J\x1b[HNo conversation found with session ID: {old_id}\r\n")
+                    .as_bytes(),
+            )
+            .await;
+            if stopped {
+                handle.stop().unwrap();
+                let command = task.cmd_rx.try_recv().unwrap();
+                assert!(handle_command_for_test_stop(&mut task, command));
+            }
+            write_one(&mut task).unwrap();
+            let old_pid = task.running.pid;
+            let join = tokio::spawn(run(task));
+            let mut owner = OwnedTask {
+                pid: old_pid,
+                join: Some(join),
+            };
+            let mut refused = 0;
+            let mut spawned = Vec::new();
+            let mut exited = false;
+            if !stopped {
+                let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                    while let Some(event) = events.recv().await {
+                        match event {
+                            SessionEvent::ResumeRefused { .. } => refused += 1,
+                            SessionEvent::Spawned {
+                                pid,
+                                agent_session_id,
+                                resumed,
+                            } => {
+                                assert!(!resumed);
+                                assert_ne!(agent_session_id, old_id);
+                                spawned.push(pid);
+                                return;
+                            }
+                            SessionEvent::Exited(_) => {
+                                exited = true;
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
+                if !spawned.is_empty() {
+                    let _ = tokio::time::timeout(Duration::from_secs(6), async {
+                        loop {
+                            let text = std::fs::read_to_string(&submitted).unwrap_or_default();
+                            if text.lines().count() >= 2 {
+                                return;
+                            }
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    })
+                    .await;
+                }
+                handle.stop().unwrap();
+            }
+            if !exited {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while let Some(event) = events.recv().await {
+                        match event {
+                            SessionEvent::ResumeRefused { .. } => refused += 1,
+                            SessionEvent::Spawned { pid, .. } => spawned.push(pid),
+                            SessionEvent::Exited(_) => return,
+                            _ => {}
+                        }
+                    }
+                    panic!("owned Task lost Exited");
+                })
+                .await
+                .unwrap();
+            }
+            tokio::time::timeout(Duration::from_secs(5), owner.join.as_mut().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            owner.join.take();
+            if stopped {
+                assert_eq!(refused, 0);
+                assert!(
+                    spawned.is_empty(),
+                    "stop revoked watch before the writer drain"
+                );
+                assert!(!submitted.exists());
+            } else {
+                assert_eq!(refused, 1, "once-only fresh-drain refusal event");
+                assert_eq!(
+                    spawned.len(),
+                    1,
+                    "inner dispatch must reach run's one respawn branch"
+                );
+                assert_ne!(spawned[0], old_pid);
+                let text = std::fs::read_to_string(&submitted).unwrap();
+                assert_eq!(
+                    text.lines().collect::<Vec<_>>(),
+                    vec!["BOT-RESUME-BRIEF", "BOT-RESUME-STEER"]
+                );
+                eprintln!(
+                    "fresh writer refusal actual oldpid={old_pid} newpid={} refused=1 spawned=1 brief/steer each once; after stop no extra Spawned",
+                    spawned[0]
+                );
+            }
+        }
+    }
+
+    fn handle_command_for_test_stop(task: &mut Task, command: Command) -> bool {
+        let stopped = handle(task, command);
+        if stopped {
+            let mut stopping = false;
+            let mut deadline = None;
+            begin_stop(task, &mut stopping, &mut deadline);
+        }
+        stopped
+    }
+
+    #[tokio::test]
+    async fn public_task_real_backpressure_returns_needs_terminal_then_multistep_answer_works() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture.screen(&mut core, &menu("Proceed?", 0), now).await;
+        core.take_actions();
+        let expect = shown(&core).fingerprint();
+        let filler = fixture.saturate(); // Child has no stdin reader: exact actual one-byte EAGAIN.
+        let (handle, mut events, mut observed, mut owner) = run_public_fixture(&mut fixture, core);
+        let started = Instant::now();
+        let held = handle.answer(
+            expect.clone(),
+            vec![AnswerStep {
+                bytes: b"\r".to_vec(),
+                selected_before: Some(0),
+            }],
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match observed.recv().await {
+                    Some(Err(io::ErrorKind::WouldBlock)) => break,
+                    Some(_) => {}
+                    None => panic!("Task observer closed before an actual syscall barrier"),
+                }
+            }
+        })
+        .await
+        .expect("public Task must actually attempt and observe WouldBlock");
+        let outcome = tokio::time::timeout(Duration::from_secs(4), held)
+            .await
+            .expect("bounded pending write must release public future")
+            .unwrap();
+        assert_eq!(outcome, AnswerOutcome::NeedsTerminal);
+        assert!(
+            started.elapsed() >= Duration::from_millis(2400),
+            "not a setup refusal"
+        );
+        let status = handle.status().await.unwrap();
+        assert_eq!(
+            status.pid, owner.pid,
+            "NeedsTerminal is not a false NotRunning/Closed"
+        );
+        assert!(
+            !fixture.dir.path().join("release-input").exists(),
+            "reader has not been released"
+        );
+        assert!(
+            !fixture.dir.path().join("filler-drained").exists(),
+            "no input-drain receipt before release"
+        );
+        assert!(
+            std::fs::read(fixture.dir.path().join("capture.bin"))
+                .unwrap()
+                .is_empty(),
+            "no input captured while reader is held"
+        );
+        fixture.release(filler).await;
+        let positive = handle.answer(
+            expect,
+            vec![
+                AnswerStep {
+                    bytes: b"\x1b[B".to_vec(),
+                    selected_before: Some(0),
+                },
+                AnswerStep {
+                    bytes: b"\r".to_vec(),
+                    selected_before: Some(1),
+                },
+            ],
+        );
+        // Actual first key is captured before the child changes its highlighter. The
+        // second key must re-read the same fingerprint with this real new selected=1.
+        captured_prefix(&fixture, b"\x1b[B").await;
+        public_fixture_frame(&mut fixture, &menu("Proceed?", 1)).await;
+        captured_prefix(&fixture, b"\x1b[B\r").await;
+        public_fixture_frame(&mut fixture, &input_box("")).await;
+        let outcome = tokio::time::timeout(Duration::from_secs(3), positive)
+            .await
+            .expect("normal multi-step answer must finish its real completion/verification")
+            .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                AnswerOutcome::Answered {
+                    cleared: true,
+                    now: None
+                }
+            ),
+            "{outcome:?}"
+        );
+        // Marker is only sent after the public Answer outcome; child exit cannot turn
+        // a pending positive answer into an artificial Closed.
+        handle.raw(GUARDED_CAPTURE_MARKER.to_vec()).unwrap();
+        fixture.receipt("capture.closed").await;
+        let receipt = std::fs::read_to_string(fixture.dir.path().join("capture.closed")).unwrap();
+        assert!(receipt.contains("trailing_bytes=0"));
+        assert_eq!(
+            std::fs::read(fixture.dir.path().join("capture.bin")).unwrap(),
+            b"\x1b[B\r"
+        );
+        eprintln!(
+            "public Task actual capture=[27,91,66,13] trailing=0; held outcome=NeedsTerminal; positive outcome=Answered"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(e) = events.recv().await {
+                if matches!(e, SessionEvent::Exited(_)) {
+                    return;
+                }
+            }
+            panic!("missing Exited");
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), owner.join.as_mut().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        owner.join.take();
+    }
+
+    #[tokio::test]
+    async fn empty_guarded_answer_step_completes_without_positive_syscall_progress() {
+        let (_dir, p) = readable_output(b"").await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        core.on_output(&menu("Proceed?", 0), now);
+        core.take_actions();
+        let shown = blocking_dialog(
+            &core
+                .screen_text(25)
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        core.answer(
+            77,
+            shown.fingerprint(),
+            vec![AnswerStep {
+                bytes: vec![],
+                selected_before: Some(0),
+            }],
+            now,
+        );
+        let actions = core.take_actions();
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &actions);
+        assert_eq!(queue.len(), 1);
+        assert!(
+            queue[0].bytes.is_empty(),
+            "empty guarded step remains empty"
+        );
+        let progress = write_ready(&p.master, &mut core, &Mutex::new(0), 0, &mut queue)
+            .unwrap()
+            .expect("legal zero-byte completion");
+        assert!(progress.complete);
+        assert_eq!(progress.actual_bytes, 0, "no invented syscall progress");
+        assert!(queue.is_empty());
+        core.delivery_write_completed(progress.id, progress.token, now);
+        assert!(!core.delivery_write_pending(progress.id, progress.token));
+        stop(p).await;
+    }
+
+    #[tokio::test]
+    async fn fresh_drain_terminal_reply_is_dispatched_before_pending_body() {
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), now).await;
+        core.take_actions();
+        core.on_tick(now + Duration::from_millis(310));
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(queue[0].bytes, b"BOT");
+        // Short query is actually written by the child, but deliberately not read until
+        // the shared production writer's final fresh drain.
+        let n = fixture.next_screen;
+        fixture.next_screen += 1;
+        std::fs::write(
+            fixture.dir.path().join(format!("screen-{n}.bin")),
+            b"\x1b[c",
+        )
+        .unwrap();
+        std::fs::write(fixture.dir.path().join(format!("screen-{n}.request")), []).unwrap();
+        fixture.receipt(&format!("screen-{n}.written")).await;
+        fixture.release(0).await;
+        let result =
+            write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue).unwrap();
+        assert_eq!(
+            result, None,
+            "fresh actions must be dispatched before body syscall"
+        );
+        assert_eq!(queue[0].offset, 0);
+        let actions = core.take_actions();
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::TerminalReply(_)))
+        );
+        enqueue_actions(&mut queue, &actions);
+        let captured = fixture.capture(&mut core, queue).await;
+        assert_eq!(
+            captured, b"\x1b[?6cBOT",
+            "actual terminal reply precedes body bytes"
+        );
     }
 
     /// 真 PTY，子进程只把合成字节写进去，然后落盘回执。读之前等回执，保证第二块早已可读，
@@ -1317,18 +2674,18 @@ mod output_drain_tests {
             core.take_actions();
             core.on_tick(now + Duration::from_millis(300));
             let mut actions = core.take_actions();
-            complete_actions(&mut core, &actions, now + Duration::from_millis(300));
             if beat > 0 {
+                complete_actions(&mut core, &actions, now + Duration::from_millis(300));
                 core.on_output(screen("BOT").as_bytes(), now + Duration::from_millis(900));
                 actions = core.take_actions();
-                complete_actions(&mut core, &actions, now + Duration::from_millis(900));
             }
             if beat > 1 {
+                complete_actions(&mut core, &actions, now + Duration::from_millis(900));
                 core.on_tick(now + Duration::from_millis(1000));
                 actions = core.take_actions();
-                complete_actions(&mut core, &actions, now + Duration::from_millis(1000));
             }
             if beat > 2 {
+                complete_actions(&mut core, &actions, now + Duration::from_millis(1000));
                 core.on_tick(now + Duration::from_millis(1100));
                 actions = core.take_actions();
             }
@@ -1364,7 +2721,7 @@ mod output_drain_tests {
             h.raw(b"x".to_vec()).unwrap();
             // Core still thinks the original body may be written. raw_fence must independently stop it.
             assert!(core.delivery_write_allowed(1));
-            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap();
+            write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap();
             assert_eq!(
                 writes.len(),
                 1,
@@ -1379,7 +2736,7 @@ mod output_drain_tests {
                 panic!("raw must be enqueued")
             };
             core.raw(&raw);
-            write_ready(&p.master, &core, &fence, 1, &mut writes).unwrap();
+            write_ready(&p.master, &mut core, &fence, 1, &mut writes).unwrap();
             assert!(
                 writes.is_empty(),
                 "the cancelled delivery write is discarded, not retried"
@@ -1390,7 +2747,7 @@ mod output_drain_tests {
                 offset: 0,
                 delivery: None,
             });
-            write_ready(&p.master, &core, &fence, 1, &mut writes).unwrap();
+            write_ready(&p.master, &mut core, &fence, 1, &mut writes).unwrap();
             assert!(writes.is_empty(), "ordinary writes remain available");
             stop(p).await;
         }
@@ -1429,13 +2786,14 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         let fence = Mutex::new(0);
-        let completed = write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap();
+        let completed = write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap();
         assert_eq!(
             completed,
             Some(WriteProgress {
                 id,
                 token,
-                complete: false
+                complete: false,
+                actual_bytes: 4096
             }),
             "one bounded syscall is progress, not completion for 5000 bytes"
         );
@@ -1447,7 +2805,7 @@ mod output_drain_tests {
         );
         core.raw(b"z");
         assert_eq!(
-            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap(),
+            write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap(),
             None
         );
         assert!(
@@ -1484,15 +2842,16 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         assert_eq!(
-            write_ready(&p.master, &fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
             Some(WriteProgress {
                 id,
                 token,
-                complete: true
+                complete: true,
+                actual_bytes: 2
             })
         );
         assert_eq!(
-            write_ready(&p.master, &fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
             None
         );
         stop(p).await;
@@ -1559,7 +2918,7 @@ mod output_drain_tests {
         let fence = Mutex::new(0);
         let mut blocked = false;
         for _ in 0..256 {
-            match write_ready(&p.master, &core, &fence, 0, &mut writes) {
+            match write_ready(&p.master, &mut core, &fence, 0, &mut writes) {
                 Ok(Some(progress)) => {
                     assert!(!progress.complete, "noread slave cannot complete this body");
                     core.delivery_write_progress(progress.id, progress.token, written_at);
@@ -1588,7 +2947,7 @@ mod output_drain_tests {
             "timeout cannot enqueue submit"
         );
         assert_eq!(
-            write_ready(&p.master, &core, &fence, 0, &mut writes).unwrap(),
+            write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap(),
             None
         );
         assert!(
