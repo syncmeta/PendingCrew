@@ -3908,6 +3908,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s46_worldview_polled_for_start_and_resume_launch() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let expected_id = format!("new-{}", rig.port.lock().next_session + 1);
+        let first = "S46 distinct start worldview";
+        rig.port
+            .lock()
+            .worldview_responses
+            .insert(expected_id.clone(), first.into());
+        let row = rig
+            .cmd(|reply| Cmd::Start {
+                req: start("claude"),
+                origin: Origin::Human,
+                reply,
+            })
+            .await
+            .unwrap();
+        let first_calls = rig.port.lock().worldview_calls.clone();
+        let first_prompts: Vec<_> = rig
+            .exec
+            .launches(&row.id)
+            .iter()
+            .map(|r| r.system_prompt.clone())
+            .collect();
+        rig.cmd(|reply| Cmd::Stop {
+            session: row.id.clone(),
+            reply,
+        })
+        .await
+        .unwrap();
+        let fully_stopped = rig.live(&row.id).is_none() && !rig.core.starting.contains_key(&row.id);
+        let second = "S46 distinct resumed worldview";
+        rig.port
+            .lock()
+            .worldview_responses
+            .insert(row.id.clone(), second.into());
+        rig.run(&row.id).await;
+        let resumed_calls = rig.port.lock().worldview_calls.clone();
+        let resumed_prompts: Vec<_> = rig
+            .exec
+            .launches(&row.id)
+            .iter()
+            .map(|r| r.system_prompt.clone())
+            .collect();
+        let again = rig
+            .cmd(|reply| Cmd::Resume {
+                session: row.id.clone(),
+                origin: Origin::Human,
+                reply,
+            })
+            .await;
+        let final_calls = rig.port.lock().worldview_calls.clone();
+        let final_launches = rig.exec.launches(&row.id).len();
+        rig.cmd(|reply| Cmd::Stop {
+            session: row.id.clone(),
+            reply,
+        })
+        .await
+        .unwrap();
+        assert_eq!(row.id, expected_id);
+        assert!(fully_stopped, "Resume follows completed actual Stop");
+        assert_eq!(
+            first_calls.as_slice(),
+            std::slice::from_ref(&row.id),
+            "S46 worldview polled call"
+        );
+        assert_eq!(first_prompts, [Some(first.into())]);
+        assert_eq!(resumed_calls, [row.id.clone(), row.id.clone()]);
+        assert_eq!(resumed_prompts, [Some(first.into()), Some(second.into())]);
+        assert_eq!(again, Err(ControlError::AlreadyRunning(row.id.clone())));
+        assert_eq!(final_calls, resumed_calls);
+        assert_eq!(final_launches, 2);
+    }
+
+    #[derive(Default)]
+    struct S46Quota(std::sync::Mutex<Vec<(String, Ms)>>);
+    impl QuotaSource for S46Quota {
+        fn reset_at<'a>(&'a self, executor: &'a str, now: Ms) -> BoxFut<'a, Option<Ms>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push((executor.into(), now));
+                Some(now.add(17 * MIN))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_quota_polled_reset_controls_actual_pending_wake() {
+        let quota = Arc::new(S46Quota::default());
+        let mut rig = Rig::with(Hooks {
+            quota: quota.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        rig.run("w1").await;
+        for _ in 0..2 {
+            rig.emit(
+                "w1",
+                SessionEvent::Health(Some(Health::new(HealthKind::UsageLimit, "S46"))),
+            )
+            .await;
+        }
+        let calls = quota.0.lock().unwrap().clone();
+        let wakes = rig.port.wakes_of("w1");
+        // Capture the pending episode before human Stop legitimately drops it.
+        rig.cmd(|reply| Cmd::Stop {
+            session: "w1".into(),
+            reply,
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            calls,
+            [("claude".into(), T0)],
+            "S46 QuotaSource polled call"
+        );
+        assert_eq!(wakes.len(), 1);
+        let w = &wakes[0];
+        assert_eq!(w.session, "w1");
+        assert_eq!(w.kind, WakeKind::System);
+        assert_eq!(w.priority, Priority::System);
+        assert_eq!(w.state, WakeState::Pending);
+        assert_eq!(w.not_before, T0.add(18 * MIN));
+        assert_eq!(w.source, format!("quota:{}", T0.add(18 * MIN).0));
+        assert_eq!(w.origin, SYSTEM);
+        assert_eq!(
+            w.note.as_deref(),
+            Some(text::get(text::Lang::Zh, "quota.wake"))
+        );
+        assert!(
+            rig.exec.sent("w1").is_empty(),
+            "future wake has not been sent early"
+        );
+    }
+
+    #[tokio::test]
     async fn quota_with_a_reset_time_fires_a_minute_after_it_and_exit_by_limit_schedules_too() {
         let mut rig = Rig::with(Hooks {
             quota: Arc::new(ResetIn30),

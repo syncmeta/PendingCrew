@@ -1677,6 +1677,269 @@ mod tests {
         assert_eq!(rig.exec.sent("cap").len(), 90);
     }
 
+    // S46 witnesses run inside the polled hook future, never at construction.
+    async fn s46_finish(rig: &mut Rig, sessions: &[&str]) {
+        for session in sessions {
+            if rig
+                .live(session)
+                .and_then(|l| l.inflight.as_ref())
+                .and_then(|f| f.delivery)
+                .is_some()
+            {
+                rig.ack(session).await;
+            }
+            rig.cmd(|reply| Cmd::Stop {
+                session: (*session).to_string(),
+                reply,
+            })
+            .await
+            .unwrap();
+        }
+        rig.settle().await;
+    }
+
+    #[derive(Default)]
+    struct S46Idle(Mutex<Vec<(String, Ms)>>);
+
+    impl IdleHook for S46Idle {
+        fn on_idle<'a>(&'a self, session: &'a str, now: Ms) -> BoxFut<'a, Option<NewWake>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push((session.to_string(), now));
+                Some(NewWake {
+                    session: session.into(),
+                    kind: WakeKind::StopCheck,
+                    source: source::system("s46-idle-witness"),
+                    priority: Priority::System,
+                    not_before: now,
+                    note: Some("S46_UNIQUE_IDLE_BODY".into()),
+                    origin: breaker::SYSTEM.into(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_idle_polled_output_reaches_actual_delivery() {
+        let hook = Arc::new(S46Idle::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        let rows = rig.port.wakes_of("w1");
+        let sent = rig.exec.sent("w1");
+        let delivery = rig
+            .live("w1")
+            .unwrap()
+            .inflight
+            .as_ref()
+            .and_then(|f| f.delivery);
+        s46_finish(&mut rig, &["w1"]).await;
+        assert_eq!(
+            *hook.0.lock().unwrap(),
+            [("w1".to_string(), T0)],
+            "S46 IdleHook polled call"
+        );
+        assert_eq!(sent, ["S46_UNIQUE_IDLE_BODY"], "S46 IdleHook actual output");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, source::system("s46-idle-witness"));
+        assert_eq!(rows[0].kind, WakeKind::StopCheck);
+        assert_eq!(rows[0].note.as_deref(), Some("S46_UNIQUE_IDLE_BODY"));
+        assert_eq!(rows[0].state, WakeState::Inflight);
+        let id = rig.exec.last_send_id("w1");
+        assert_eq!(delivery, Some(id));
+        assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Delivered);
+
+        // A due real body takes this edge before IdleHook. The work is delivered,
+        // so counter zero cannot be explained by an unstarted/unreachable target.
+        let due_hook = Arc::new(S46Idle::default());
+        let mut due = Rig::with(Hooks {
+            idle: due_hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut due, &["w1"], &["w1"]).await;
+        due.emit("w1", SessionEvent::Working(true)).await;
+        due.post(LOBBY, Rig::sender("cap"), at("w1"), "S46_DUE_BODY")
+            .await;
+        assert!(due.exec.sent("w1").is_empty());
+        due.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(due.exec.sent("w1"), ["S46_DUE_BODY"]);
+        assert!(due_hook.0.lock().unwrap().is_empty());
+        s46_finish(&mut due, &["w1"]).await;
+        assert_eq!(due.port.wakes_of("w1")[0].state, WakeState::Delivered);
+        assert!(due_hook.0.lock().unwrap().is_empty());
+    }
+
+    #[derive(Default)]
+    struct S46Arbiter(Mutex<Vec<(MsgFacts, String, ChannelCtx)>>);
+
+    impl Arbiter for S46Arbiter {
+        fn wake_set<'a>(&'a self, q: &'a ArbiterQuestion) -> BoxFut<'a, Option<Vec<String>>> {
+            Box::pin(async move {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((q.message.clone(), q.text.clone(), q.ctx.clone()));
+                Some(vec!["w2".to_string()])
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_arbiter_polled_question_selects_non_owner() {
+        let hook = Arc::new(S46Arbiter::default());
+        let mut rig = Rig::with(Hooks {
+            arbiter: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1", "w2"], &["cap", "w1", "w2"]).await;
+        let ctx = rig.port.channel_ctx(LOBBY, T0).await.unwrap().unwrap();
+        let r = rig
+            .post(LOBBY, Sender::Human, vec![], "S46_ARBITER_BODY")
+            .await;
+        let msg = rig.port.message(&r).await.unwrap().unwrap().0;
+        let sends = [
+            rig.exec.sent("cap"),
+            rig.exec.sent("w1"),
+            rig.exec.sent("w2"),
+        ];
+        let rows = rig.port.wakes_of("w2");
+        s46_finish(&mut rig, &["cap", "w1", "w2"]).await;
+        assert_eq!(
+            *hook.0.lock().unwrap(),
+            [(msg.clone(), "S46_ARBITER_BODY".to_string(), ctx)],
+            "S46 Arbiter polled call"
+        );
+        assert_eq!(msg.at, r);
+        assert_eq!(msg.sender, Sender::Human);
+        assert_eq!(sends[2], ["S46_ARBITER_BODY"], "S46 Arbiter actual output");
+        assert!(sends[0].is_empty());
+        assert!(sends[1].is_empty());
+        assert_eq!(rows[0].source, source::message(&msg.id));
+
+        // Fresh fixtures avoid a preceding inflight batch masking any negative.
+        for mode in ["directed-human", "session", "human-dm"] {
+            let skipped = Arc::new(S46Arbiter::default());
+            let mut negative = Rig::with(Hooks {
+                arbiter: skipped.clone(),
+                ..Hooks::default()
+            })
+            .await;
+            crew_with(&mut negative, &["w1", "w2"], &["cap", "w1", "w2"]).await;
+            let channel = if mode == "human-dm" {
+                negative.channel("s46-dm", "c1", None, &["w1"]);
+                negative
+                    .port
+                    .lock()
+                    .channels
+                    .get_mut("s46-dm")
+                    .unwrap()
+                    .kind = crate::orchestra::testkit::MemKind::Dm;
+                "s46-dm"
+            } else {
+                LOBBY
+            };
+            let sender = if mode == "session" {
+                Rig::sender("cap")
+            } else {
+                Sender::Human
+            };
+            let mentions = if mode == "human-dm" { vec![] } else { at("w1") };
+            let body = format!("S46_NO_ARBITER_{mode}");
+            negative.post(channel, sender, mentions, &body).await;
+            assert!(skipped.0.lock().unwrap().is_empty(), "{mode}");
+            assert_eq!(negative.exec.sent("w1"), [body], "{mode}");
+            assert!(negative.exec.sent("cap").is_empty(), "{mode}");
+            assert!(negative.exec.sent("w2").is_empty(), "{mode}");
+            s46_finish(&mut negative, &["cap", "w1", "w2"]).await;
+            assert_eq!(
+                negative.port.wakes_of("w1")[0].state,
+                WakeState::Delivered,
+                "{mode}"
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct S46Extras(Mutex<Vec<String>>);
+
+    fn s46_context() -> crate::orchestra::exec::Context {
+        [
+            (
+                "s46_work".to_string(),
+                "S46_UNIQUE_WORK_CONTEXT".to_string(),
+            ),
+            (
+                "s46_identity".to_string(),
+                "S46_UNIQUE_IDENTITY_CONTEXT".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    impl crate::orchestra::hooks::ContextExtras for S46Extras {
+        fn extras<'a>(&'a self, session: &'a str) -> BoxFut<'a, crate::orchestra::exec::Context> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push(session.to_string());
+                s46_context()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_context_extras_reaches_context_accepting_send() {
+        for accepts in [true, false] {
+            let hook = Arc::new(S46Extras::default());
+            let mut rig = Rig::with(Hooks {
+                extras: hook.clone(),
+                ..Hooks::default()
+            })
+            .await;
+            crew_with(&mut rig, &["w1"], &["w1"]).await;
+            if accepts {
+                rig.exec.set_accepts_context("w1", true);
+            }
+            assert_eq!(rig.live("w1").unwrap().handle.accepts_context(), accepts);
+            let r = rig
+                .post(LOBBY, Rig::sender("cap"), at("w1"), "S46_CONTEXT_BODY")
+                .await;
+            assert_eq!(rig.exec.sent("w1"), ["S46_CONTEXT_BODY"]);
+            let id = rig.exec.last_send_id("w1");
+            let flight = rig.live("w1").unwrap().inflight.as_ref().unwrap();
+            assert_eq!(flight.delivery, Some(id));
+            assert_eq!(flight.batch.cursor_targets, [(r.channel, r.seq)]);
+            s46_finish(&mut rig, &["w1"]).await;
+            assert_eq!(
+                *hook.0.lock().unwrap(),
+                if accepts {
+                    vec!["w1".to_string()]
+                } else {
+                    vec![]
+                },
+                "S46 ContextExtras polled call"
+            );
+            assert_eq!(
+                rig.exec.sent_contexts("w1"),
+                [(
+                    id,
+                    if accepts {
+                        s46_context()
+                    } else {
+                        Default::default()
+                    }
+                )]
+            );
+            assert_eq!(rig.port.wakes_of("w1")[0].state, WakeState::Delivered);
+            assert_eq!(rig.exec.sent_contexts("w1").len(), 1);
+        }
+    }
+
     struct Picks(Vec<String>);
     impl Arbiter for Picks {
         fn wake_set<'a>(&'a self, _q: &'a ArbiterQuestion) -> BoxFut<'a, Option<Vec<String>>> {

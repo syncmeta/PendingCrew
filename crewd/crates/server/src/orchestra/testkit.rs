@@ -85,6 +85,9 @@ pub struct MemState {
     pub reservation_revision: BTreeMap<String, u64>,
     pub next_reservation: u64,
     pub sessions: BTreeMap<String, SessionRow>,
+    /// S46: recorded in the polled Port future; default WORLD response is unchanged.
+    pub worldview_calls: Vec<String>,
+    pub worldview_responses: BTreeMap<String, String>,
     pub wakes: Vec<QueuedWake>,
     pub latches: Vec<Latch>,
     pub channels: BTreeMap<String, MemChannel>,
@@ -626,7 +629,13 @@ impl Port for MemPort {
     }
 
     async fn worldview(&self, session: &str) -> Result<String> {
-        Ok(format!("WORLD {session}"))
+        let mut st = self.lock();
+        st.worldview_calls.push(session.to_string());
+        Ok(st
+            .worldview_responses
+            .get(session)
+            .cloned()
+            .unwrap_or_else(|| format!("WORLD {session}")))
     }
 
     fn mint_token(&self, session: &str) -> String {
@@ -1667,6 +1676,10 @@ pub struct StandInState {
     /// The entered receipt precedes process creation; release Err creates no handle/stream.
     pub held_launches: BTreeMap<String, HeldLaunch>,
     pub sends: BTreeMap<String, Vec<(u64, String)>>,
+    /// Opt-in synthetic context capability; all existing handles default to false.
+    pub context_sessions: BTreeSet<String>,
+    /// Successful actual send calls, bound to their allocated delivery ID.
+    pub sent_contexts: Vec<(String, u64, Context)>,
     pub raws: BTreeMap<String, Vec<Vec<u8>>>,
     /// 每次 `raw` 的时刻（与 `raws` 一一对应）：量 nudge 键之间的间隔。
     pub raw_at: BTreeMap<String, Vec<std::time::Instant>>,
@@ -1816,6 +1829,24 @@ pub struct StandIn(pub Arc<Mutex<StandInState>>);
 impl StandIn {
     pub fn lock(&self) -> std::sync::MutexGuard<'_, StandInState> {
         self.0.lock().expect("测试器材锁中毒")
+    }
+
+    pub fn set_accepts_context(&self, session: &str, accepts: bool) {
+        let mut st = self.lock();
+        if accepts {
+            st.context_sessions.insert(session.to_string());
+        } else {
+            st.context_sessions.remove(session);
+        }
+    }
+
+    pub fn sent_contexts(&self, session: &str) -> Vec<(u64, Context)> {
+        self.lock()
+            .sent_contexts
+            .iter()
+            .filter(|(s, _, _)| s == session)
+            .map(|(_, id, context)| (*id, context.clone()))
+            .collect()
     }
 
     /// 以驱动层的身份推一条事件（`Exited` 之前自动补 `abandon` 的那串事件，同真驱动）。
@@ -1991,6 +2022,10 @@ impl StandInHandle {
 }
 
 impl ExecHandle for StandInHandle {
+    fn accepts_context(&self) -> bool {
+        self.lock().context_sessions.contains(&self.session)
+    }
+
     fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
         check_context(self.accepts_context(), context)?;
         if text.trim().is_empty() {
@@ -1999,6 +2034,8 @@ impl ExecHandle for StandInHandle {
         let mut s = self.lock();
         s.next_id += 1;
         let id = s.next_id;
+        s.sent_contexts
+            .push((self.session.clone(), id, context.clone()));
         s.sends
             .entry(self.session.clone())
             .or_default()

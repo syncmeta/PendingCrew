@@ -1237,6 +1237,400 @@ mod tests {
     use crewd_wake::breaker;
     use crewd_wake::source;
 
+    /// The real Hub bridge and spawned actor; only the executor/worktrees are synthetic.
+    struct S46ActorDb {
+        state: Arc<AppState>,
+        port: Arc<DbPort>,
+        handle: super::super::Handle,
+        actor: super::super::Actor,
+        bridge: tokio::task::JoinHandle<()>,
+        exec: super::super::testkit::StandIn,
+        now: Ms,
+        clock: Arc<super::super::clock::ManualClock>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl S46ActorDb {
+        async fn new(mut hooks: super::super::hooks::Hooks) -> Self {
+            use super::super::{
+                clock::ManualClock,
+                exec::Executors,
+                testkit::{StandIn, StandInWorktrees},
+            };
+            let (state, port, dir) = seeded().await;
+            let rx = state.hub.subscribe_collab();
+            let port = Arc::new(port);
+            let exec = StandIn::default();
+            let now = Ms(crewd_store::now_ms());
+            let clock = Arc::new(ManualClock::new(now));
+            hooks.worktrees = Arc::new(StandInWorktrees::default());
+            let (handle, actor) = super::super::spawn(
+                port.clone(),
+                Executors::new().with("claude", Arc::new(exec.clone())),
+                hooks,
+                clock.clone(),
+                super::super::OrchestraConfig::for_tests(),
+            )
+            .await
+            .unwrap();
+            let bridge = forward_collab(rx, handle.clone());
+            Self {
+                state,
+                port,
+                handle,
+                actor,
+                bridge,
+                exec,
+                now,
+                clock,
+                _dir: dir,
+            }
+        }
+
+        async fn sent_containing(&self, marker: &str) -> bool {
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    // FIFO actor command barrier; no fabricated collab fact or fixed sleep.
+                    self.handle.latches().await.unwrap();
+                    if self.exec.sent("w-1").iter().any(|s| s.contains(marker)) {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok()
+        }
+
+        /// DbPort uses transaction wall time, while the actor uses its injected clock.
+        /// Wait for the actual persisted source, then tick at that row's real due time.
+        async fn make_source_due(&self, source: String) -> Option<i64> {
+            use super::super::{clock::Clock, core::Input};
+            let at = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    self.handle.latches().await.unwrap();
+                    let sought = source.clone();
+                    let row = self
+                        .port
+                        .read(move |c| {
+                            Ok(cw::list(c, Some("w-1"), 100)?
+                                .into_iter()
+                                .find(|w| w.source == sought))
+                        })
+                        .await
+                        .unwrap();
+                    if let Some(row) = row {
+                        break row.not_before_ms;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .ok()?;
+            self.clock.set(Ms(at.max(self.clock.now().0)));
+            self.handle.tx.send(Input::Tick).unwrap();
+            self.handle.latches().await.unwrap();
+            Some(at)
+        }
+
+        async fn close(self) {
+            let Self {
+                state,
+                port,
+                handle,
+                actor,
+                bridge,
+                exec: _,
+                now: _,
+                clock: _,
+                _dir,
+            } = self;
+            let db = state.db.clone();
+            assert!(handle.shutdown(std::time::Duration::from_secs(3)).await);
+            tokio::time::timeout(std::time::Duration::from_secs(3), actor.finished())
+                .await
+                .unwrap()
+                .unwrap();
+            drop(handle);
+            drop(port);
+            // Dropping the final AppState closes Hub; the existing bridge exits naturally.
+            drop(state);
+            tokio::time::timeout(std::time::Duration::from_secs(3), bridge)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::task::spawn_blocking(move || db.shutdown())
+                .await
+                .unwrap();
+            drop(_dir);
+        }
+    }
+
+    type S46AskCall = (String, String, Vec<(String, Option<String>)>, Ms);
+
+    #[derive(Default)]
+    struct S46Ask {
+        calls: std::sync::Mutex<Vec<S46AskCall>>,
+        receipt: tokio::sync::Notify,
+    }
+
+    impl super::super::hooks::AskAnsweredHook for S46Ask {
+        fn on_answered<'a>(
+            &'a self,
+            crew: &'a str,
+            ask: &'a str,
+            cleared: &'a [(String, Option<String>)],
+            now: Ms,
+        ) -> super::super::exec::BoxFut<'a, ()> {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((crew.into(), ask.into(), cleared.to_vec(), now));
+                self.receipt.notify_one();
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_real_ask_answer_hub_polls_hook_and_delivers_resume_note() {
+        use super::super::{clock::Clock, core::Origin, hooks::Hooks};
+        let hook = Arc::new(S46Ask::default());
+        let rig = S46ActorDb::new(Hooks {
+            ask: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        rig.handle.resume("w-1", Origin::Human).await.unwrap();
+        let live_before_ask = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if rig.handle.live("w-1").await.unwrap().running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok();
+        let ask = rig
+            .state
+            .collab(|tx| {
+                collab::asks::open(
+                    tx,
+                    "w-1",
+                    collab::asks::OpenAsk {
+                        question: "S46 actual standalone question".into(),
+                        resume_note: Some("S46_UNIQUE_RESUME_NOTE".into()),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        let ask_id = ask.ask.clone();
+        let answer_id = ask_id.clone();
+        let answered = rig
+            .state
+            .collab(move |tx| collab::asks::answer(tx, "c-1", &answer_id, "S46 confirmed answer"))
+            .await
+            .unwrap();
+        // Missing-hook mutation still reaches normal cleanup and the exact counter assertion.
+        let receipt =
+            tokio::time::timeout(std::time::Duration::from_secs(3), hook.receipt.notified())
+                .await
+                .is_ok();
+        // Keep clock fixed until the hook's exact-now witness was captured (or diagnosed
+        // absent); only then move it to the actual answer transaction's wake timestamp.
+        let answer_due = rig.make_source_due(cw::source::ask("c-1", &ask.ask)).await;
+        let answer_clock_after = rig.clock.now();
+        let delivered = rig.sent_containing("S46_UNIQUE_RESUME_NOTE").await;
+        let ordinary = "S46_ORDINARY_POST_NEGATIVE";
+        let ordinary_message = post_as(
+            &rig.state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            ordinary,
+            &["w-1"],
+        )
+        .await;
+        // Finish the first delivery so the ordinary post is not hidden behind its fence.
+        let id = rig
+            .exec
+            .lock()
+            .sends
+            .get("w-1")
+            .and_then(|s| s.last())
+            .map(|(id, _)| *id);
+        if let Some(id) = id {
+            rig.exec.emit(
+                "w-1",
+                crewd_exec::session::SessionEvent::Delivery {
+                    id,
+                    subject: crewd_exec::delivery::Subject::Steer,
+                    outcome: crewd_exec::session::DeliveryOutcome::Delivered,
+                },
+            );
+        }
+        let ordinary_due = rig
+            .make_source_due(cw::source::message(&ordinary_message.id))
+            .await;
+        let ordinary_clock_after = rig.clock.now();
+        let ordinary_delivered = rig.sent_containing(ordinary).await;
+        let now = rig.now;
+        let calls = hook.calls.lock().unwrap().clone();
+        let sent = rig.exec.sent("w-1");
+        let durable = rig
+            .port
+            .read(move |c| {
+                Ok((
+                    collab::asks::get(c, "c-1", &ask_id)?,
+                    cw::list(c, Some("w-1"), 100)?,
+                ))
+            })
+            .await
+            .unwrap();
+        rig.close().await;
+        eprintln!(
+            "S46 Ask due alignment: initial={now:?} answer_not_before={answer_due:?} answer_clock={answer_clock_after:?} ordinary_not_before={ordinary_due:?} ordinary_clock={ordinary_clock_after:?}"
+        );
+        assert_eq!(calls.len(), 1, "S46 AskAnsweredHook polled call");
+        assert!(
+            receipt,
+            "missing receipt is diagnostic; counter is the primary oracle"
+        );
+        assert_eq!(calls, [("c-1".into(), ask.ask.clone(), vec![], now)]);
+        assert!(
+            live_before_ask,
+            "ask starts only after public actor reports an actual live handle"
+        );
+        assert_eq!(answered.state, crewd_proto::AskStateView::Answered);
+        assert_eq!(durable.0.answer.as_deref(), Some("S46 confirmed answer"));
+        assert_eq!(durable.0.state, crewd_proto::AskStateView::Answered);
+        assert_eq!(
+            durable.0.resume_note.as_deref(),
+            Some("S46_UNIQUE_RESUME_NOTE")
+        );
+        let answer_wakes: Vec<_> = durable
+            .1
+            .iter()
+            .filter(|w| w.kind == cw::WakeKind::AskAnswer)
+            .collect();
+        assert_eq!(answer_wakes.len(), 1);
+        assert_eq!(answer_wakes[0].source, cw::source::ask("c-1", &ask.ask));
+        assert_eq!(answer_wakes[0].priority, WakePriority::Human);
+        assert_eq!(answer_wakes[0].state.as_str(), "delivered");
+        assert!(answer_due.is_some() && ordinary_due.is_some());
+        assert_eq!(answer_clock_after, Ms(answer_due.unwrap().max(now.0)));
+        assert_eq!(
+            ordinary_clock_after,
+            Ms(ordinary_due.unwrap().max(answer_clock_after.0))
+        );
+        assert!(delivered && ordinary_delivered);
+        assert_eq!(
+            sent.iter()
+                .filter(|s| s.contains("S46_UNIQUE_RESUME_NOTE"))
+                .count(),
+            1
+        );
+        assert_eq!(sent.iter().filter(|s| s.contains(ordinary)).count(), 1);
+    }
+
+    #[derive(Default)]
+    struct S46DbQuota(std::sync::Mutex<Vec<(String, Ms)>>);
+    impl super::super::hooks::QuotaSource for S46DbQuota {
+        fn reset_at<'a>(
+            &'a self,
+            executor: &'a str,
+            now: Ms,
+        ) -> super::super::exec::BoxFut<'a, Option<Ms>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push((executor.into(), now));
+                Some(now.add(17 * crewd_wake::MIN))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn s46_real_usage_limit_persists_one_quota_wake() {
+        use super::super::{core::Origin, hooks::Hooks};
+        let quota = Arc::new(S46DbQuota::default());
+        let rig = S46ActorDb::new(Hooks {
+            quota: quota.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        rig.handle.resume("w-1", Origin::Human).await.unwrap();
+        for _ in 0..2 {
+            rig.exec.emit(
+                "w-1",
+                crewd_exec::session::SessionEvent::Health(Some(crewd_exec::health::Health::new(
+                    crewd_exec::health::HealthKind::UsageLimit,
+                    "S46 durable",
+                ))),
+            );
+        }
+        // Observe the durable pending episode before shutdown legitimately requeues work.
+        rig.handle.latches().await.unwrap();
+        let reached = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                rig.handle.latches().await.unwrap();
+                if !rig.port.pending("w-1").await.unwrap().is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok();
+        // StandIn event forwarding is FIFO; let the actor consume both before capturing the row.
+        rig.exec
+            .emit("w-1", crewd_exec::session::SessionEvent::Working(true));
+        let working = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if rig.handle.live("w-1").await.unwrap().working {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok();
+        let wakes = rig
+            .port
+            .read(|c| cw::list(c, Some("w-1"), 100))
+            .await
+            .unwrap();
+        let decoded = rig.port.pending("w-1").await.unwrap();
+        let calls = quota.0.lock().unwrap().clone();
+        let now = rig.now;
+        rig.close().await;
+        assert_eq!(
+            calls,
+            [("claude".into(), now)],
+            "S46 QuotaSource polled call"
+        );
+        assert!(reached && working);
+        assert_eq!(wakes.len(), 1);
+        let w = &wakes[0];
+        assert_eq!(w.session, "w-1");
+        assert_eq!(w.kind, cw::WakeKind::System);
+        assert_eq!(w.priority, WakePriority::System);
+        assert_eq!(w.state.as_str(), "pending");
+        assert_eq!(w.not_before_ms, now.add(18 * crewd_wake::MIN).0);
+        assert_eq!(w.source, format!("quota:{}", w.not_before_ms));
+        assert_eq!(w.origin, None, "C21 stores system origin as SQL NULL");
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].id, w.id);
+        assert_eq!(
+            decoded[0].origin, SYSTEM,
+            "actual Port decode preserves system identity"
+        );
+        assert_eq!(
+            w.note.as_deref(),
+            Some(crewd_wake::text::get(Lang::Zh, "quota.wake"))
+        );
+    }
+
     struct T11PendingQuota {
         entered: Arc<tokio::sync::Semaphore>,
         fallback: crate::control::NoSessions,
