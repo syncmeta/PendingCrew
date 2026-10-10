@@ -488,7 +488,7 @@ M4 拆为 **M4a** 工作跟进核心（纯计算，本节）→ **M4b** 持久�
 
 复审修正（同分支，M5a 收尾）：脱敏补了带标识符前缀的字段赋值（`_` 是单词字符，原规则的 `\b` 漏掉 `DB_PASSWORD=` / `AWS_SECRET_ACCESS_KEY=` 等）和一批厂商形状；Retry-After 超过退避上限或越过总时限即放弃、交机长（不再压成上限硬重试）；base URL 已带 `/v1/systemone` 不再拼两遍；连接错误带上底层原因链；key 文件只认本用户自己的 0600 普通文件（拒符号链接、核属主、O_NOFOLLOW 打开后检查），缺的父目录按 0700 建；crate 声明只支持 unix。都没有再调真 API。
 
-留给 M5b：上面的别名层与不透明 key 重测；叫醒集合的大小上限（一条消息叫醒过多成员时交机长）；侧边栏紧急度的调用缓存（机组状态没变就不重问）。
+留给 M5b：上面的别名层与不透明 key 重测；叫醒集合的大小上限（一条消息叫醒过多成员时交机长）。~~侧边栏紧急度的调用缓存（机组状态没变就不重问）。~~ **此旧建议已由 S101 / §24.4 作废：侧边栏由人手排序，不按紧急度自动排序，也不为此保留调用缓存任务；上面的历史实测数不改写。**
 
 ## 21. M2c 交付记录与遗留（分支 crewd-m2c，计划 `docs/superpowers/plans/2026-10-06-crewd-m2c-codex-session.md`）
 
@@ -1258,3 +1258,309 @@ rmcp 3.5.1 的实际本地源码已核：InitializeResult.with_instructions(impl
 - **联合 launch 合同**：已提交的 opt-in harness 启动方消费 world_context；确定性 E2E 读取生成的完整 launch 世界观，FakeControl 的已知档位更新后，四个 SessionStart source 都返回新的已知值，两种 locale 均验。M3c 生产启动方必须复用该入口，不能再自行从 context_for 留空；实际 provider feeding / 生产编排未联验，没有查询真实余额。
 - **验收**：原 harness 新 10 项合成测试 RED 2 passed / 8 failed，再 GREEN 10/10；旧 9 项 agent_e2e 加两项 quota 用例 RED 9/2，再 GREEN 11/11。harness 单元完整 check.sh 1402/0/8；quota 单元完整 check.sh 1404/0/8（默认 cargo、macOS、fmt/clippy clean）。提交后四个有效变异：取消信号、预检期限各执行 10 项；SessionStart 绕开 typed 源、Unavailable 压 Unknown 各执行 11 项，合计 42 次实际执行，预期用例都红，复制备份还原。不是新的一轮付费 smoke。
 - **非阻塞审查项**：no_search helper 现在也拒绝失败终态，和注释的成功终态证明对齐；此前 smoke 自己已检查 prompt success，不将这项加强冒称为已证实的 smoke 假绿。initialize E2E 直接比 md instructions / surface hash，不只检查非空和加号。settings/hooks/annotations/schema/goldens 保持原契约，quota 文案仅扩世界观四态。
+
+## 28. M3c 交付记录与遗留边界（2026-10-10，本地组合树）
+
+本节承接 §27，记录已接受的小单元及当前组合证据；T12 文档与 whole-M3c 尚未接受，不代表整个产品已交付。已接受 T11/T11b 组合锚点为 `648124c08a717376069e2925de1c2361768f204c`；后续 ack 五文件单元 `7b72a156e604f3e1bc15fbc403d3f5d92b07d939` 已由另一独立上下文完成 Spec Compliance PASS / Code Quality PASS，仅接受该修补范围。
+
+以下 S/C 均以仓库根为基准：S = `.claude/worktrees/crewd-m3c/.superpowers/sdd/2026-10-06-crewd-m3c-orchestration`；C = `.claude/worktrees/agent-a624116fb76233769/.superpowers/sdd/2026-10-10-codex-continuation`。这些是私有留存证据根，不是已发布公共工件；通配标签指对应日志/JSON，完整索引见 C/t12-evidence-inventory.md。缺失历史元数据明确记为 MISSING，不由摘要补造。
+
+协调者在本次 T12 文档编辑前只读核对：HEAD 为上述完整 7b72a156，父提交为上述完整 648124c0，MERGE_HEAD 空，工作树与 index 干净。此身份记录归协调者实测；本文作者仅核源码/留存日志，本轮没有重跑测试。ack 独立最终报告为 C/C/flake-write-completion-review-prep.md；其中旧 PENDING 检查点已被末尾 Final scoped closure 取代，复审者执行测试数为 0，证据类型是 SOURCE 检查与独立留存日志核验。
+
+### 28.1 模块与实现边界
+
+| Module | Implemented behavior and evidence boundary |
+|---|---|
+| wake::plan | Members plus active listeners minus sender; mentions decide wake targets, not visibility; dm wakes peer, human dm bypasses Arbiter. |
+| wake::breaker | Edge/crew no-progress loop latches persisted before effect; only human recovery; causal multi-party hop count deferred. |
+| wake::queue | Highest-tier batches, claimed riders, per-channel continuous unread window and actual cursor_targets; deferred rows remain pending. |
+| wake::policy | Tier, stagger, restart hold, optional concurrency and human bypass; no default max-live restriction. |
+| wake::notice | Localized safe-name restart/hibernate/failure/recovery text follows actual lifecycle. |
+| wake::explain | Shared why_not_woken/live_blocker used by view and admission. |
+| proto::wake_lifecycle | Shared collab/MemPort transition table; claim counts attempts, Requeue refunds, boot rescue retains failed attempt. |
+| orchestra::Core | Single-actor inputs, launch/delivery ownership, deadlines and FIFO; durable human-stop cancellation; bounded direct-Core simulation. |
+| orchestra::deliver | Atomic rows/riders/cursors/origins ack; deferred retained; no queue-as-Delivered claim. |
+| orchestra::boot | Boot-only inflight rescue, watermark before rescan, human restart choice, staggered per-session resume. |
+| orchestra::hibernate | Stop new work, safe points, deadline interrupt, bounded exit, requeue, record and resume note; not OS checkpointing. |
+| orchestra::notify | Transition notices in home human channel, active decisions, continuous-draft timing, historical quota-episode membership; in-memory notifier. |
+| orchestra::db | Real collab transactions and dual-Port contracts; production DbLedger uses same Db FIFO; quota caller releases DB before one-second shared-source timeout. |
+| orchestra::control | Production SessionControl and removed-crew refusals; accepted API call does not prove provider consumption. |
+| orchestra::rpc | Stable refusals, numbered internal failures, loop/settings/session/decision/receipt/hibernate methods. |
+| exec answer/draft | Per-key fingerprint and selected CAS; raw provenance and Unknown fail-closed; fresh full PTY drains. Typed positive write progress is not completion; body must fully write before submit, each beat's full actual completion starts the next gap, final CR actual completion precedes fresh full drain + authoritative Empty + baseline change. |
+| term selected/input_draft | Actual highlighted zero-based option; Empty/Text/Unknown parsing; real grey typed draft remains unverified. |
+| serve / CLI | Library without executor remains NoSessions; CLI defaults Claude; resolve AgentPaths each launch, current_exe helper identity, external runtime, ordered actor/connection/Ticker/DB shutdown. |
+
+### 28.2 控制器裁定 C1–C28
+
+C numbers in the following table are controller-rulings identifiers. Old sync C3(note_progress), old sync C8(worktree never deleted) and old message-model C7(contact syntactic sugar) are distinct namespaces.
+
+| 裁定 | 记录必须讲清 |
+|---|---|
+| C1 | 库 serve() 无 executor 不开 orchestra；CLI serve 传 Some |
+| C2 | Spawned 前/投递前死亡失败次数有界、backoff/give-up |
+| C3 | boot 自身 rescan 前记录 restart watermark |
+| C4 | shutdown gate 独立 flag，不被 shutdown_done 消耗 |
+| C5 | due 合批测试只改与 R6 实际 delivered max cursor 相冲突的断言 |
+| C6 | on_restart_answered 在 T8 定义，后续不得重定义 |
+| C7 | Rig cfg 保留 stand-in，只有明确 temp repo 测试用 Git |
+| C8 | 外部进程测试置 integration binary，保护 lib 锁测试 |
+| C9 | restart E2E crash window 固定 w1 idle；记录最终 kill9 offline fixture 演进 |
+| C10 | settings 参数验证/null_ok；最终改名 settings.get |
+| C11 | health 1:1；Db shutdown/join 已修，不列旧缺口 |
+| C12 | 插入 notice/note 名称走 safe_name/标准 label |
+| C13 | resume refused、progress 规则及后续 refinement；跨分支真实注入等留 M3i |
+| C14 | internal 编号/stderr，客户端稳定码 |
+| C15 | 被其他 guard 掩盖 mutation 要替换或诚实报 uncaught |
+| C16 | 机械 compile/lint 修正不变语义；Result alias 后续裁定保留实际形状 |
+| C17 | DbPort tests 固定 synthetic ids、经 store seed |
+| C18 | desired=running 仅在 Spawned 后写 |
+| C19 | M3b form-B、shared union、每种优先级 give-up；当前双父整合事实 |
+| C20 | 所有名字/外部自由文本插槽 neutralise，双语文案 |
+| C21 | latch id 只经 Scope、U+2192；Option origin 显式转换 |
+| C22 | ctx 完整填充；旧 visible_to/narrowing 契约已被 T10a membership/injection 对拍替代 |
+| C23 | 历史 Pending→Retry 桥；被 C24 carried Inflight supersede，不能当现行规则 |
+| C24 | 共用状态表、claim计attempt、每批原子ack rows/cursors/origins、not_before真值、seedjitter、persist latch |
+| C25 | boot救回计attempt、panic loud exit、hook超时、why_not_woken、2sarbiter、sim；hopcount后续 |
+| C26 | hibernate deadline/safe-point/interrupt/requeue/record/boot人问/note；不是OScheckpoint |
+| C27 | PendingCrew无审批；runner权限请求交人，不自动替人答 |
+| C28 | T10a→b→d→c→T11/T11b→flakes→T12；dm/版本/receipt/Unknown/humanchannel/hibernate0/systemtopic/改名/locale/splitmix64 |
+
+
+C22 old narrowing cross-check is superseded by membership/injection contracts. C23 Pending-to-Retry bridge is superseded by C24 claimed Inflight riders. C19 form-A waiting is historical: combined source uses M3b shared world_context/render_live and method/topic union. C27 no product approval does not authorize bypassing runner permission refusal. C28 adopted answers remain binding without restarting design approval.
+
+### 28.3 单元 → 完整提交 → 证据
+
+Full commit objects are repository identities. A source report that omits precise historic HEAD/command/exit is not silently upgraded to exact execution metadata. Each supplement headline is indexed below, followed by its implementation commits. A report tag names its retained original evidence; C/t12-evidence-inventory.md preserves missing metadata and historical failure details.
+
+| 单元 | 必须记录的 headlines |
+|---|---|
+| T9a | restart/timer/halt actor；C25；settle-before-sideeffects/boot-only恢复边界、MemPort映射、bounded prune、worktree冷启动flake修补、N4join |
+| T10a | 2.1 membership/dm/listener planner；2.2 DbPort每批Tx映射；2.3 Hub bridge/Lagged；2.4 SessionControl/removedcrew；2.5 lang/2sArbiter/9bfolds；2.6 collab预算/latches；2.7 双Port契约；2.8提交粒度仅历史实施说明 |
+| T10b | 2.1方法表；2.2共享explain；2.3hello/build/compat/Unknown；2.4错误码；2.5settings/hibernate；2.6receipts/eventids；2.7dispatch；2.8历史提交粒度 |
+| T10d | 2.1selected/draft；2.2exec每键CAS/验证/输入guard；2.3answerplan；2.4actorFIFO/refusal；后续R1–R4优先于初始DIM/原agentkeys设计 |
+| T10c | 2.1human决策；2.2raise/clear human notices；2.3nudge仅interrupt/安全文字/终局receipt；2.4双语safe_name；2.5refusal；2.6M3d结构化answer_choice合同；typedWorktree和draft计时foldins |
+| T11 | 2.1Options/AgentPaths/helperidentity/runtime；2.2有序serve/drain；2.3CLI；2.4inprocfake；2.5actor/DB生命周期；2.6binarykill9/hibernate/SIGTERM三链；2.7遗留边界；T11新增DbLedger FIFO/永久reentryguard与quota caller |
+| T11b | 2.1直接Core seededwalk/crash；2.2十条不变量；2.3真实具名mutation；121b→8c两项repair以及组合证据 |
+
+
+| Unit / requirement | Full commit | Retained evidence |
+|---|---|---|
+| T8b: crewd-proto: wake_lifecycle, the one wake transition table (C24): states x events, attempts counted at claim and returned by requeue | `f9a0e14ff71a3ea63959ef63e1c28307ac776d78` | S/task-8b-report.md |
+| T8b: crewd-collab: wake state changes go through the shared table (C24): claim counts attempts, ack_delivered settles rows + riders + cursors in the caller's Tx, ack_failed retries or gives up by the stored count, all-or-nothing | `0ccfa4d8d82e67d65ba1c0c006bd96ea6fd83d2b` | S/task-8b-report.md |
+| T8b: crewd-server: orchestra switches to the shared wake table (C24): riders are claimed with their batch, attempts come from the store, each batch ends in one atomic Port::ack; a Delivered receipt during a stop still settles Delivered | `b4bd798b0a8cfd6a21a0d90e6401919b11e7b50a` | S/task-8b-report.md |
+| T8b: crewd-server: delete the in-memory backoff map; the row's not_before is the only retry time (C24 P2 / R10) | `b4efc1df6129670c06576edacd7b5377dfbdff2d` | S/task-8b-report.md |
+| T8b: crewd-wake + crewd-server: retry jitter (+-20%) from a seeded splitmix, one draw per failed batch; tests run without jitter unless they pass a seed (C24 P2 / R11) | `5af5f40ac8e05b9ef4a2143904f96f48c944a47a` | S/task-8b-report.md |
+| T8b: crewd-wake + crewd-server: a loop latch is persisted before it takes effect; judge only reports a trip, the caller latches after put_latch succeeds (C24 P2 / R12) | `2c3c19fc066a0f5c81fd0465f282aa5678cca06f` | S/task-8b-report.md |
+| T9a: crewd-server: worktree deadline tests warm the fake git and use a 2 s deadline (cold exec under load raced 300 ms) | `72bf67d66a8f0e704c17557fac831e6917b10492` | S/task-9a-report.md including fix1 |
+| T9a: crewd-collab + crewd-server: failed acks check the event actually applied; MemPort refuses another session's rows; state round-trip and not_before cross-check (8b review 2-4) | `9c0c546997f34197945edd3cca7e4f5d96890c8c` | S/task-9a-report.md including fix1 |
+| T9a: crewd-wake + crewd-collab + crewd-server: the boot reset of inflight wakes counts as an attempt; at the limit it gives up (C25) | `ca40866b756c3334e90b84b5e90d6c6cac69f64c` | S/task-9a-report.md including fix1 |
+| T9a: crewd-collab: wakes::prune deletes at most a given number of rows per call, settled earliest first (S28) | `9e4a47287d7fdc05fb03feb370a58bf897d30ea9` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: restart asks the human before resuming, staggered resume, ask defaults and bounded wake pruning on tick, shutdown, actor loop and Handle | `756650656612de62dad6064767b2125a84028230` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: hooks run under a time budget; the IdleHook is asked outside the actor and a stale answer is dropped (C25); halting branches of rulings (4)(6) tested | `840967786d75d7b0b0cf8162c53b6ad05c9a3474` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: side effects at exit / launch failure log and continue so the carried batch is always settled; the invariant and its boot-only cases are written down (8b review 1, 5) | `0476490a6a5de346440834d202311ea7b32a7d81` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: spawn hands back the actor task; a panic in the actor is surfaced by Actor::finished instead of leaving a silently dead handle (C25) | `3f271ea52f0895fa6ed90697d6b42218729d27ab` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: Actor::finished reports the JoinError text as is (it already carries the panic message) | `db44cf3915d83188ab2c2488b8f8928726c086a2` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: fail_inflight hands back the given-up rows so the boot alert never looks them up in the capped wake list; MemPort caps list_wakes and records last_error like the store (9a review 1, 4) | `6b6b3166e268985a2503d7a27d4d3505f3d65fe9` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: Handle::shutdown says whether it finished within the limit; Actor::abort_handle lets serve stop the actor after a timed-out shutdown (9a review 2) | `221571b116cd0664d8d3f74b2dcd69e4d08ef36f` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: the next not_before is cached and only re-read after the queue changes, instead of a store read after every actor input (9a review 3) | `bdea73f3e50c449bf5061fc1c3899ae9a165e0d8` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server: a future wake Core queues itself also invalidates the cached deadline (test) | `256e32ee792a5beec23067070492a23d4ef2a0d8` | S/task-9a-report.md including fix1 |
+| T9a: crewd-server + crewd-collab: in-actor hook contract written on AskAnsweredHook / ContextExtras; prune notes its unindexed scan (9a review 5) | `3971177c0f53bcb9952a76f636eec59b46c095b5` | S/task-9a-report.md including fix1 |
+| T9b: crewd-wake: hibernate resume note (zh/en) and a wake batch summary for the hibernate record (C26) | `8da1f630cf03c8aa517f63f194821bc324e66991` | S/task-9b-report.md including fix1 |
+| T9b: crewd-proto + crewd-collab: hibernate record in meta, hibernate deadline setting, restart prompt says reason=hibernate with the interrupted list (C26) | `48debcf7e92d74b5b715b5ccd60e57ebf1e51da2` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: the cached next not_before is trusted for at most one heartbeat (9a re-review, folded into T9b) | `b4b52612ab020098f43347d0ec88e79784912940` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: hibernate — stop new work, let working sessions reach a safe point until the deadline, interrupt the rest, requeue every wake, record each session; boot asks as hibernate and resumes with the hibernate note (C26) | `0bc4d50acdd2291f28195aeabcc7c1d30616edec` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: hibernate test pins that the record is written before anything is stopped | `07203ffcf8d9d30e515499b4c7a87233f8ea6299` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: the hibernate handle test waits with a bound, so a hibernate that never reports fails instead of hanging | `da6d4f0b7b652c1b02ff0f6989e475179c0ba8d9` | S/task-9b-report.md including fix1 |
+| T9b: crewd-wake + crewd-server: sessions idle at hibernate resume silently, no note (9b review I1) | `28484304238bd29af1c4f8ac4dbaaff47ef7f505` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: the heartbeat is a fixed interval that inputs never reset, so a busy actor still ticks (9b review I2) | `dc3fa8215acd971b0c1edd6d911fcee6a819ac40` | S/task-9b-report.md including fix1 |
+| T9b: crewd-collab + crewd-server: hibernate entries carry a pending/finished/interrupted outcome (a crash mid-hibernate resumes as interrupted); the record stays linked to its prompt after a resume; a corrupt record degrades to a plain restart; the notice counts hibernated sessions only (9b review I3, I4, m3, m4) | `395b7202dd367a52e8502c3dcd395a102198156b` | S/task-9b-report.md including fix1 |
+| T9b: crewd-server: after Esc a hibernating session gets up to 5 s to end its turn before the stop; a hibernate after the report gets that report at once; only held sessions' unresumed entries are carried over (9b review m1, m2, m4) | `e26273f4351554406418c89352d56cc552a81849` | S/task-9b-report.md including fix1 |
+| Merge N0/N4/N1 and corrected codes: merge and retained report resolution | `808362f64f1fde2485f89ef127f390c259350fb6` | S/merge-main-report.md |
+| Merge N0/N4/N1 and corrected codes: merge and retained report resolution | `936765f980e73a2728b173eace3a0bcd479950df` | S/merge-main-report.md |
+| Merge N0/N4/N1 and corrected codes: crewd-server: drop the approval-result mention from a deliver.rs comment (no approvals, C27 / spec §26.7) | `fe50a9e51dbc08901a0df56937a509c066a3bdfb` | S/merge-main-report.md |
+| T10a: crewd-wake: @ only decides who wakes (no narrowing, no broadcast); a dm wakes the other party; candidates = members + listeners minus the sender | `bfaa92f9a3d9e3365067320e503d23224acefe91` | S/task-10a-report.md |
+| T10a: crewd-collab: build_batch takes now_ms (an expired listen no longer delivers), the wake message part has a byte budget, latch Scope::id / Scope::parse are public | `1b0f1baa2c452196cbb7cc945bd82b9c8b32d785` | S/task-10a-report.md |
+| T10a: crewd-server: DbPort over collab and the collab -> orchestra bridge (fact_of, pump_collab, forward_collab) | `8b7456958647894a4b734b80bb4fa307bbe0a17e` | S/task-10a-report.md |
+| T10a: crewd-server: OrchestraControl implements SessionControl; a removed crew's sessions are refused or skipped, never fail a batch; Core's language comes from the setting | `58846d2790d5394f0d56b8b6d2a7d30e11007ef0` | S/task-10a-report.md |
+| T10a: crewd-server: test pins that a skipped removed-crew session keeps its unconsumed hibernate note | `72cae8034f0e125756066b4b152ca144224b3c14` | S/task-10a-report.md |
+| T10a: crewd-server: arbiter budget 2 s (C25); after Esc wait at most half the remaining grace; an exact tick restarts the heartbeat; no nudges to a session cut by hibernate | `6416c725652fca86dc46c2eda8f72bf47b7b4026` | S/task-10a-report.md |
+| T10a: crewd-server: one Port contract suite runs against MemPort and DbPort, plus the injection-vs-planner contract | `eff46b27bc1673c9c981d18b2e39c3734010ffd3` | S/task-10a-report.md |
+| T10a: crewd-server: tests for a claim that loses a race (the next tick goes without the dropped row) and for facts_of's time fallback and target-less mentions | `57e6da670f97ee3f14e80685d0c971cfec43bab3` | S/task-10a-report.md |
+| T10b: crewd-wake + crewd-server: why_not_woken is the one place that says why a wake has not gone out; try_deliver decides with it and wake.list shows it (C25 / R9) | `64ebd100cae2a675d853d673454d2781b5e60e17` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-collab + crewd-server: every orchestra refusal carries a stable code; collab refusals (insert_session) pass through with theirs; storage failures are -32010 (C14, S26) | `b186a4e57bea5075f79195c3309dcc5c56647542` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server: test that a storage failure wrapped in CollabError::Store (DbPort's path) is still Storage (mutation C2 was green, C15) | `1a863e03fcdef1d6246ef57a1d6868deb9cd7fa6` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-proto + crewd-server: M3c client RPC — session.*, crew.setCaptain, wake.list (blockers + targets), loop.list / loop.recover, settings.get / set, crewd.hibernate, message.receipts; dispatch hands them to the orchestra or answers orchestra.not_running | `2f0415590f93845229eb196c9d59f699419e9c51` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-proto + crewd-server: system.hello carries minApiVersion, the build identity (git sha, dirty, exe, exe still on disk) and capabilities; clients report name / version / build / apiVersion; the compatibility rule is written down (U1, S6, S9) | `c1bfc6bf6988d9e75688080bb56c946bd748eb66` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server + crewd-collab: T10a review folds — contract cases for settle, rider release / drop and ownership, prune by settle time, post_system mentions, message() channel mismatch, archived dm, unknown crew; DbPort render_wake test; S45 multi-channel budget tests | `8a4e2c4ce562725a3814ab46c54a28a1113db92a` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server: after the actor has exited every handle call is ShuttingDown (-32009 orchestra.shutting_down), not a numbered internal error; exit_requested documents reply-before-socket-write and sender-dropped = exit (T10b fix I1, I3) | `67f26095b58fb3a3e23cb43724c683e36d3c8e35` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server: build.rs runs git with GIT_OPTIONAL_LOCKS=0, scopes dirty to the crewd workspace, and reruns when crates/ or Cargo.lock change, so dirty does not go stale and a second build stays Fresh (T10b fix I2) | `712b72370ec6b9fb62099dcde882e36ee13a4c76` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-wake + crewd-server: explain::live_blocker is the only readiness rule; why_not_woken and Core's quota-health clear both use it (T10b fix M1) | `5f5f7f3d5632e24820e806481728ce44c3048fbb` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server: test that a due quota wake does not clear quota health while the target is busy (mutation M1b was green) | `5a988b82a95e9be0bb25e8cd48ad09626bdbbe69` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server + crewd-proto: message.receipts reports a rider of the batch in flight as queued, and working means the target is busy now (T10b fix M2) | `9e4eb01f3d01cc1c0bbb6ec5f37308470a5c29f5` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd: regenerate the API schema for the receipts doc text (9e4eb01f was committed with a stale schema; the gate was red) | `bca72d7a3092a2c3f0f75b333f405c300b94a7a3` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server + crewd-proto: set_captain's not-found carries the session id only; WakeBlocker documents what a missing blocker means (T10b fix M6, M7) | `2ef07a1c6e001b0928a44a6a61d0c4c352252214` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-collab + crewd-server: an isolated start in a crew without a working directory is crew.no_workdir [crew], not a Chinese sentence; a scanner keeps prose out of every ControlError built in orchestra (T10b fix M3) | `1a30c9c20dab0faadf26615fa7d3ecf07009f6a5` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-server: settings.set writes in one transaction (Port::set_settings); after a saved latch release or limit change a failed rescan is logged, not returned (T10b fix M4) | `143873c85d5e791ecaf55122cf20f08c66d909d7` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10b: crewd-proto + crewd-server: settings.set rejects locale null with settings.bad_locale (null only means "clear", and a language cannot be cleared); the schema shows locale as non-nullable (T10b fix M5) | `cb225667f14503821810a700f33722557b3ca791` | S/task-10b-report.md including fix1; 9e4eb gate-red schema history retained |
+| T10d: crewd-term: PendingDecision.selected (highlighted option) and Screen::input_draft (Empty / Text / Unknown) for T10d | `f95f232d7feba8d323b232f36524b60b7654c006` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-exec: answer a pending dialog with re-read keys (fingerprint + highlight CAS) and hold bodies behind an input-box draft (T10d) | `5aff213b10b98be25e02a963c1d7141932dd1096` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-wake: answer_plan (digits on numbered boxes up to 9, else arrows from the highlight, else needs_terminal), up/down in NUDGE_KEYS, Blocker::InputDraft in live_blocker (T10d) | `7fa4ba9f301f1804cb09d8782b1e1086e9958018` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-server: answers and key nudges go through the executor's safe keys (no sleeps in orchestra); input drafts hold deliveries and refuse text nudges (T10d) | `cd5dfb561d1f7916055738f9c1cca9cedf37c2d9` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-server: Cmd::Answer hands the executor the caller's fingerprint, not the box the actor holds (T10d) | `9699994dc9157724507cd5a89b06623ba2b131b2` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-exec: the box-replaced answer test keeps the highlight where the next key expects it, so only the fingerprint check can stop it (T10d mutation M1 was masked) | `fe5cd6922d047c304718cca55c584d1bd0623d9e` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-exec + crewd-server: the draft guard keys on input provenance (raw input since the box last read blank); Unknown is reported as unknown, not as the visible row; answer keys timed from the previous write; drain PTY output before ticks and answers (T10d fix R1, R3, M2, M3) | `63f11e67a51bcb2cb841ddd85714b198e9a5d9aa` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-term: mid greys count as placeholder colour: 256-colour 232..=250 and truecolor r~g~b within 16 in 96..=200 (T10d fix R2) | `aea2e30e58fd4514cb4ff690be8d0fa6550863be` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-server: named-key nudges check the highlight at acceptance; `interrupt` interrupts; idle esc / interrupt get session.nothing_to_interrupt; a text nudge's Ok means queued (T10d fix M1, M4, M6, M7) | `7ef4b0937f4080526070a620947209b88f819d25` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: crewd-exec: drain all readable PTY chunks before answer keys (T10d fix R2) | `fc421d65a53f864a81da5fdd72746ffcf46b1812` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: fix(crewd-exec): hold pending raw echo and revoke colliding PTY writes | `d5af330b77aed1da10e8e3c01d1ae94342c32518` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10d: fix(exec): observe fresh input lifecycle after timer drains | `7b88bf7e676c13df244a0da2ac4ac43460909bab` | S/task-10d-report.md; original owned R3 report; C/t12-evidence-inventory.md R4 named logs |
+| T10c initial and R1: feat(crewd): human pending decisions and transition-only notices | `839ff4d2822d1e49578bd668e59c5848ec2cf099` | C/t12-evidence-inventory.md initial+R1 named logs; original full prose report MISSING |
+| T10c initial and R1: fix(crewd): separate nudge receipts from answer writes and recover historical quota members | `018780c9526094be98590d3f5e37e8c007634123` | C/t12-evidence-inventory.md initial+R1 named logs; original full prose report MISSING |
+| Durable human-stop: fix(crewd): persist human stop cancellation across recovery | `6340584bb2c0a96da8b6a9eea2a974c6590e3da3` | C/t12-evidence-inventory.md human-stop named logs |
+| T11 combined production: Integrate accepted M3b and wire T11 orchestration into serve | `c1600f2f8a8ca7b428edc927bcc4e4871e8a82c5` | C/t11-candidate-evidence.md; T11 four mutation red/restore JSON/log; combined-independent-review.md |
+| T11b original/scoped corrections: test(orchestra): add seeded Core crash and fault walk | `121b5b2ad2028e93f67c5fbf526e8ed1f3872c7b` | C/t12-evidence-inventory.md T11b logs and R1/R2 metadata; combined-independent-review.md |
+| T11b original/scoped corrections: test(crewd): preserve abrupt simulation crashes and exact replay prefixes | `8c0dae560533d575158caeed47259e40ab3742de` | C/t12-evidence-inventory.md T11b logs and R1/R2 metadata; combined-independent-review.md |
+| Accepted combination anchor: Integrate accepted T11b simulation and scoped crash/replay fixes | `648124c08a717376069e2925de1c2361768f204c` | C/combined-independent-review.md; historical1984/0/8 |
+| Ack accepted five-file unit: crewd-exec: confirm delivery only after completed PTY submit | `7b72a156e604f3e1bc15fbc403d3f5d92b07d939` | C/launch-unit/write-completion-handback.md; C/flake-ack-*; C/C/flake-write-completion-review-prep.md FINAL scoped Spec/Quality PASS |
+
+### 28.4 hooks 与后续绑定责任
+
+M4b IdleHook/AskAnsweredHook tolerates missed calls after Lagged (cleared list cannot be reconstructed); work commands must call sessions::note_progress, chat is not work progress. M5b Arbiter uses two-second budget, owner fallback and drops late answers. QuotaSource/ContextExtras must run off actor or be memoised before real M3d/M4b/M5 hooks; the T11 one-second caller is not proof that all actor hooks or real provider feeding are implemented.
+
+M3d inherits actual Codex request id/options -> RunnerRequest fingerprint -> human CAS answer_choice, with structured zero-based choice and no simulated keys/default approval/automatic refusal. StandIn coverage is contract evidence only. Delivered-before-Working(true) hibernate gap, per-MCP-server Notice and with_untrusted_context frame neutralisation also remain M3d work.
+
+### 28.5 supplement 的 19 项 carry TODO
+
+Explicit supplement owners are binding. Otherwise the engineering coordinator owns tracking; suggested downstream placement is marked [推], not a newly approved product requirement. Accepted behavioral limits are not reopened by this record.
+
+| # | Remaining behavior / status | Owner and boundary |
+|---|---|---|
+| 1 | Three-party loops not caught | M3i-a causal hop count, human starts new chain, real work resets; no automatic latch recovery. |
+| 2 | Captain progress depends on work commands | M4b note_progress mandatory, not last_output_at/chat receipt. |
+| 3 | System->target latch blocks quota and stop-check too | Intentional retained design; coordinator documents; only human loop.recover. |
+| 4 | Non-message wakes at-least-once | Retained contract; M3i-a integration must not claim universal exactly-once after crashes. |
+| 5 | Resume note consumed even if subsequent launch fails | T9b boundary, coordinator tracks; [推] M3i-a future refinement, no automatic replay promise. |
+| 6 | Corrupt hibernate record logs every boot until next hibernate | Honest fallback, bad row not repaired; coordinator tracks [推] N3/storage diagnostics, no deleting real data. |
+| 7 | Old unanswered hibernate prompt reads restart after newer hibernate | Retained prompt linkage boundary; coordinator tracks [推] M3i-a. |
+| 8 | Notifier/aggregation state in memory; restart re-raises once | Coordinator tracks [推] N2/client observability; no durable notification guarantee. |
+| 9 | kill_group misses setsid pipe holders | Exec lifecycle follow-up; coordinator tracks [推] N3; no name-based process killing. |
+| 10 | worktree duplicates exec pgid guard | Coordinator tracks [推] N3 cleanup; retain present guard. |
+| 11 | set_profile cannot clear model/effort through COALESCE | Coordinator/config follow-up; next launch only; no T12 API change. |
+| 12 | No standalone last_active_at writer, exit time lost | Coordinator tracks [推] N2 signals; output time is not progress. |
+| 13 | Worktrees never deleted (old sync C8) | Intentional retained design, deletion belongs to separately authorized human operation. |
+| 14 | Legacy StoreLedger bypasses N4 identity checks | N3; production T11 now uses DbLedger/same Db FIFO, legacy independent path still open. |
+| 15 | FakeSessionControl looser than OrchestraControl | M3i-a contracts; fake passing is not real permissions proof. |
+| 16 | Hook injection drops vs riders / double delivery | M3i-a reservation cursor + real caller wiring tests; not yet implemented. |
+| 17 | Shared injection / wake message byte cap | M3i-a; retained current one-budget behavior, no claimed split-budget implementation. |
+| 18 | Shared vocab Unknown and additive schema snapshot | iOS/client prep; tolerant decoding plus actual compatibility verification. |
+| 19 | Socket / EPERM | N3 legal runner permission and startup diagnostics; earlier valid run0/frame0 is not behavioral RED and never authorizes bypass. |
+
+Additional carried NOTE boundaries (S/progress.md:37,47): failed notification posts during raise/escalate are not retried; no eventual notice-delivery guarantee is claimed. Whether real Claude menus accept two-digit typed answers remains unverified; synthetic key coverage does not validate real TUI behavior, and this record does not authorize live recording.
+
+Additional boundaries: original plan question2 real quota data source stays OPEN/Unknown with default45-minute fallback; question15 due-default accuracy remains heartbeat30s, large-organization earliest-deadline optimization unmeasured. wake.list does not fully simulate already-injected/batchcap; receipt working is target current busy; builddirty freshness minor and prose scanner coverage remain recorded. Real grey typed draft after Shown may parse Empty; no authorized live recording performed, Unknown/raw fail-closed must remain. HealthKindView turn_failed/version_incompatible and Db JoinHandle are resolved by M3a.1/N4, not remaining deficiencies.
+
+### 28.6 既有 spec 条目落点
+
+Section24.3 M3c T9a/T9b/T10a/T10b/T10c/T10d/T11 map to the full unit/commit/evidence table28.3. N3 runtime token/helper/launch files are partly implemented by T11; that is not completion of socket/EPERM or all data-dir diagnostics.
+
+| Section26.5 item | Placement / boundary |
+|---|---|
+| work refusal/parameter stable codes | Unchanged/deferred work/client task, not M3c code completion. |
+| listen until | T10a1b0f1baa2c452196cbb7cc945bd82b9c8b32d785: now_ms and batch eligibility. |
+| Old long titles | N1 migration boundary unchanged; cannot refuse rename solely because inherited title is too long. |
+| Crew number unique index | Deferred schema migration with collision detection, no M3c index change. |
+| Removed-session skip/claim race | T10a58846d2790d5394f0d56b8b6d2a7d30e11007ef0 and57e6da670f97ee3f14e80685d0c971cfec43bab3: per-session skip; failed claim batch retries next tick. |
+| answered_ask receipt | Client Message wire unchanged; agent receipt belongs M3b section27. |
+| Management non-member post replies | Current membership-based wake boundary; later receiver receipt linkage belongs M3i-a. |
+| readable full scan/lazywrite/forest constraints | Unchanged N1/storage boundaries. |
+| ensure_management id collision | Fail-loud migration boundary unchanged, never rebuild by deleting data. |
+| Object purge | M4b must delete objects with purged crew, removed crew objects freeze but remain readable. |
+| Historical approval/single-root plan | Section24/26 supersede; old plans remain history, no revival. |
+
+| Section26.7 row | Task/commit/evidence |
+|---|---|
+| 1 broadcast/narrowing removal is semantic, not compile | `bfaa92f9a3d9e3365067320e503d23224acefe91`; S/task-10a-report.md §2.1: plan.rs removes Broadcast/visible_to; S/merge-main-report.md “§26.7 rows that were wrong or missing” records why there was no compile break. |
+| 2 new membership injection/planner contract | `eff46b27bc1673c9c981d18b2e39c3734010ffd3`; S/task-10a-report.md §2.7: orchestra/port_contract.rs shared injection-vs-planner fixture and fifteen cases on both Ports. |
+| 3 dm peer default/ctx | `bfaa92f9a3d9e3365067320e503d23224acefe91` + `8b7456958647894a4b734b80bb4fa307bbe0a17e`; S/task-10a-report.md §2.1 + §2.2: planner/MemPort dm_sessions followed by DbPort::channel_ctx filling actual dm session membership. |
+| 4 MemPort unread mirror | `bfaa92f9a3d9e3365067320e503d23224acefe91` + `eff46b27bc1673c9c981d18b2e39c3734010ffd3`; S/task-10a-report.md §2.1 + §2.7: visible_to removal and mem_port_unread_mirrors_collab_unread_for first; later shared contract refinements, not first removal. |
+| 5 build_batch membership/listen/now_ms | `1b0f1baa2c452196cbb7cc945bd82b9c8b32d785`; S/task-10a-report.md §2.6: collab render build_batch eligibility and real now_ms; DbPort caller documented in §2.2. |
+| 6 old approval comment | `fe50a9e51dbc08901a0df56937a509c066a3bdfb`; S/merge-main-report.md “T10a items pulled forward”: orchestra/deliver.rs comment only; C27, no approval feature restored. |
+| 7 home human channel | `8b7456958647894a4b734b80bb4fa307bbe0a17e`; S/task-10a-report.md §2.2: DbPort::post_system(HumanChannel) uses home_of; §2.7 shared human-home fixture. |
+| 8 StartNew title/brief | `8b7456958647894a4b734b80bb4fa307bbe0a17e` + `58846d2790d5394f0d56b8b6d2a7d30e11007ef0`; S/task-10a-report.md §2.2: DbPort::insert_session forwards title/brief to collab; §2.4 adds removed-crew admission/locale, not the title/brief forwarding. |
+| 9 removed admission/restart/claim race | `58846d2790d5394f0d56b8b6d2a7d30e11007ef0` + `57e6da670f97ee3f14e80685d0c971cfec43bab3` + `72cae8034f0e125756066b4b152ca144224b3c14`; S/task-10a-report.md §2.4 and mutations C15 note: removed-crew gates, a_row_dropped_between_pending_and_claim_fails_that_batch_and_the_next_tick_goes_without_it, plus at-most-once hibernate note regression protecting the skipped session. |
+| 10 bad hibernate StoreInvalid | `936765f980e73a2728b173eace3a0bcd479950df`; S/merge-main-report.md “Compile / test breaks after the merge”: collab/hibernate::get bad meta row -> Store(Invalid), updated test. |
+| 11 settings bad deadline refusal | `936765f980e73a2728b173eace3a0bcd479950df`; S/merge-main-report.md “Compile / test breaks after the merge”: settings.bad_hibernate_deadline code, bilingual placeholders and refusal assertion. |
+| 12 restart by_home/refusal/hibernate count | `808362f64f1fde2485f89ef127f390c259350fb6`; S/merge-main-report.md “Conflicts (2 files, 6 hunks)”: collab/restart.rs by_home/home_of, per-home hibernate count, RestartNotFound and unreadable-record diagnostic. |
+| 13 wakes codes/ack_failed/session mismatch StoreInvalid | `808362f64f1fde2485f89ef127f390c259350fb6`; S/merge-main-report.md “Conflicts” and “§26.7 rows that were wrong or missing”: collab/wakes apply/ack_failed stable refusals and ack_delivered_refuses_a_bad_row_without_touching_the_rest expects Store(Invalid). 936765f changes no wakes.rs. |
+| 14 N1 crews tests mark_inflight -> claim | `936765f980e73a2728b173eace3a0bcd479950df`; S/merge-main-report.md “Compile / test breaks after the merge” item3: crews.rs calls changed to claim(tx, &[id]).map(|_| ()). |
+| 15 stored bad-row English / prose scanner | `808362f64f1fde2485f89ef127f390c259350fb6` + `936765f980e73a2728b173eace3a0bcd479950df`; S/merge-main-report.md “Readings and their limits” / “Conflicts” / “Compile / test breaks”: bad stored wakes state/session mismatch and restart diagnostic at merge; hibernate invalid row follow-up. Prose-scan scope is reported, not claimed exhaustive wording review. |
+| 16 coded RPC dispatch | `2f0415590f93845229eb196c9d59f699419e9c51`; S/task-10b-report.md §2.1 / §2.5 / §2.6 / §2.7: orchestra method dispatch after agent.attach; §2.4 stable error/refusal mapping. S/merge-main-report.md records dispatch had not yet been wired at earlier merge. |
+
+No exhaustive Enqueued matches existed in M3c at merge: old testkit used let-else; T10 DbPort handles Skipped. restart stderr historical line34 rather than28, crews calls1866/1905 rather than original prediction; current functions beat old line numbers. Session-mismatch ack_delivered is Store(Invalid), with its regression; ack_failed also carries stable codes. Merge report1391/0/6 is a historical single sample, not final count.
+
+### 28.7 跨计划 notes、S101 与未采用方案
+
+Section23 continuous window/deferred/cursor_targets/backlog-only/per-channel UNREAD_CAP/filter-already-injected land in T8->T8b shared ack and T10a render/contracts; full commits28.3 identify accepted implementation anchors, not invented first-introduction chronology. Render corruption is fail-loud, not tight retry; bad latch ids are Invalid. Timestamp fallback and targetless mentions land57e6da67; origin/explicit-woke/near-monotonic, dedup mentions and single batch FIFO are pinned by shared lifecycle/Port contracts. Old Pending-to-Retry is superseded C24. System alert/human-only transition notification refinement lands T10c839/018.
+
+Boot-only rescue is ca40866; halting/preparing/noPump, settle before exit side effects and loud panic are756/840/047/3f; bounded prune/cache/heartbeat/hibernate notes are T9a/b. Ask origin and Lagged rescan are T10a8b745/57e6, while missed cleared hooks remain tolerated by M4b. Shared schema generator/union, token revoke, Locale and serve DBjoin land T10b/T11. Codex untrusted context/Notice remain M3d. Non-code NOTE categories not tied to unique historical metadata are mapped by category rather than assigned fabricated first completion dates.
+
+S101 sidebar human-order text already exists in1G3/7.2/8.3/11Q4; crossed-out paragraphs remain history. Section20's old Jev urgency-cache guidance is explicitly superseded by S101 / section24.4; historical measurements remain unchanged. Old message-model C7 contact/report_to_parent/message_child_crew syntax is void, cross-crew communication is dm; controller C7 Rig safety is not void.
+
+Reasons touching M3c: loom/turmoil/madsim deferred/rejected because races concern message order; token bucket damages normally busy crews. Human-only loop recovery is preserved, made visible rather than automatically cleared. Restart asks human and captain replacement belongs human, reminders do not take over. proptest/shrink/minidump await demonstrated value and no unapproved new dependency. launchd/SMAppService conflicts with no-login-item decision and requires measuring EPERM first. Full stream-json/SDK replacement loses TUI attach. Real quota double-wake/settings, Codex automatic compression and Claude structured signals remain later M3d/N2 verification. Early synthesis approval-ledger question is superseded by human removal of product approvals and must not reappear as an approval gate.
+
+### 28.8 实测、变异与 flake 记录
+
+These final results are personally parsed retained logs/JSON, not newly executed by this preparer. One gate invocation is one sample.
+
+| Evidence | Measured record |
+|---|---|
+| Precommit source gate | C/flake-ack-full-gate.log/json:1997/0/8 exit0, HEAD648124c0 with uncommitted ack edits. |
+| Committed restored gate | C/flake-ack-restored-full-gate.log/json:1997/0/8 exit0, HEAD7b72a156, MERGE_HEAD empty. |
+| Same declared source | Both source_before=source_after=1e4cc22c8992963b30402b33ad7f0ee32e7a9cd0cd09778e6be871438922a296. This is two same-source green gates, not two committed7b72 runs. |
+| Three full synthetic chains | C/flake-ack-chain1/2/3-{build-fake,server,restart,e2e}.log/json:each build exit0/server4/0/restart3/0/e2e9/0, all7b72 and same source hash. |
+| Sim | C/flake-ack-final-sim.log/json:32seeds0..31 x400=12800random steps, wall8.248490417s, test1/0 exit0; compile time separate. Crash selected298/applied276/skipped22; skipped pending-RPC crash cases are not passes. |
+| Environment | Pinned1.94.0/offline/jobs2/threads2/cargo runner, synthetic HOME/config/cache, false provider/SHELL and own target. Eight ignored not run; no real CLI/auth/live/paid API. |
+
+Core/MemPort sim is not DbPort real-daemon evidence. Pending-RPC abruptcrash skip is not a pass. The coordinator's pre-document identity record is given above; filename alone does not prove clean. Historical648 gate1984/0/8 and wall8.127502458s remain historical evidence only.
+
+Final-table mutation counting is distinct variants, not tests or all attempts. Earlier masked/setup failures remain visible. Full named-log/HEAD/command/exit gaps are in C/t12-evidence-inventory.md, never treated as zero.
+
+| Unit/table | Final distinct variants | Caught | Uncaught | Equivalent | Earlier/non-final evidence |
+|---|---:|---:|---:|---:|---|
+| Task8b table |13|13|0|0|m3b early test non-discriminating; actual early mutation execution/count MISSING|
+| T9a original table |23|21|1|1|c3 masked stays green; p1 explicitly equivalent; full raw attempt history MISSING|
+| T9a fix1 prose list |6|6|0|0|1 earlier weak expiry mutant stays green, replaced; count it as an additional historical uncaught variant, not final caught|
+| T9b original table |21|20|0|1|m17 explicitly equivalent; m4 first run hung/exact-PID killed, then bounded regression caught; exact first-run completed count MISSING|
+| T9b fix1 table |12|12|0|0|No setup failure declared in this table; exhaustive earlier attempt totals MISSING|
+| T10a expanded table |39|38|0|1|P6 equivalent; K4 initially masked green then note assertion caught. F1 given-up differs from fold F1 namespace|
+| T10b initial expanded sets |62|62|0|0|C2 first GREEN then new test caught; D3 first SKIPPED because fmt text mismatch then caught: one documented setup skip|
+| T10b fix1 table |6|6|0|0|M1b first GREEN then caught; B3 has 2 failing script checks but is one mutant|
+| T10d initial table |8|8|0|0|M1 first unit GREEN but e2e RED; later corrected unit RED. M1/M2 reruns not new variants|
+| T10d fix1 table |5|5|0|0|f1 gate old-artifact path setup error is not a mutant|
+| T10d fix2 table |2|2|0|0|Each ran 3 tests; rows not tests|
+| T10d fix3 |1|1|0|0|One Typed+Empty common policy mutant, one named PTY failure|
+| T10d fix4 |1|1|0|0|Same timer lifecycle mutant observed via 8-test run (5/3) and 1-test full-loop run (0/1)|
+| T10c initial |4|4|0|0|Four retained named logs each 0/1; original report file MISSING (text handback only)|
+| T10c R1 |5|5|0|0|Six intended failing test executions across five mutants; no file report, original text-only handback|
+| Durable human-stop |3|3|0|0|Four named RED logs: cancellation predicate exercised old and new-work paths twice; requeue and monotonic-floor one each|
+| T11b 121b |3|2|1|0|P7a default+old regression each GREEN; split-ack and boot-refund each one caught test|
+| T11b 8c R1/R2 |2|2|0|0|R1 2 failing executions, R2 1; restoration/gate separate|
+| T11 c160 |4|4|0|0|Each 0/1 exit101→1/0 exit0. Wiring first restore stayed RED from stale artifact; fresh compile restore then green. Restore error is not mutant setup failure|
+
+Exact arithmetic sum of these 19 final tables (not historical attempt totals): 220 variants = 215 caught + 2 uncaught + 3 equivalent. Cross-task duplicate effects are not deduplicated. This count excludes historical replacement/setup attempts and is not coverage percentage. No approximate ledger “~45” used.
+
+
+
+Ack postcommit adds4 final distinct/caught,0uncaught/0equivalent: empty-authority, actual-write-gate, pending-bound, empty-initial. C/flake-ack-mutation-record.json and each red/restore.log/json show0/1/0exit101 ->1/0/0exit0, original/restored byteSHA equal. Combined final-table arithmetic224=219caught+2uncaught+3equivalent, not coverage percentage, excluding unquantified all-attempt/setup history.
+
+Keep T11b P7a guard-only UNCAUGHT. Original121b B/C and8c R1/R2 do not imply all pending-RPC crash cases covered. T11 four meaningful behavior REDs: omitted wiring refuses orchestra.not_running; omitted final shutdown event fails event-before-EOF; omitted identity notice fails synthetic admission closure (not actual inode replacement); quota1s->3s exceeds outer1.5s actual shared caller bound. Wiring first restoration stayed101 due oldmtime/stale artifact and is retained separately; fresh compiling restoration passed. DB abort barrier is inside job before Tx, not midway through multiple SQL writes. EPERM probe valid-run0/frame0 is permission evidence, not behavior RED.
+
+| Flake register | Status and finite evidence |
+|---|---|
+| T9a worktree cold deadline |72bf67d warms syntheticGit and uses2s deadline; old20load evidence stays S/task-9a-report.md. Not newly rerun here. |
+| Exec huge brief | Original fixed20 planned rounds stopped at round12 fail on648 after11green; C/flake-exec-load-record.json + C/flake-exec-load-12.log. FalseDelivered despite missing actual submission drove ack repair. Control coalescing is not proven as every failure's cause. |
+| Slow echo | Original50ms Delivered expectation failure retained. Parent trace shows67bodychunks consumed after finite3x800ms ack budget and independent one-byte controls; not this preparer's new execution.50ms becomes bounded/no-unconfirmed-delivery negative control, with10ms strict one-complete-submit positive; unchanged window lengths. |
+| Ack7b72 accepted scope | Four postcommit mutants/restorations, same-source two gates, three chains, fixed20 rounds x2positive cases=40invocations all exit0 (C/flake-ack-load-record.json). Independent final scoped Spec/Quality PASS at C/C/flake-write-completion-review-prep.md; five-file unit accepted, not T12/whole-M3c acceptance. |
+| Helper closed_stdout/hookstdout | Each3baseline+20load observations, forty load invocations0exit, C/helper-flake-prep/first-load-report.md and summary:completed_samples_only_not_fixed. Identity is HEAD648124c08a717376069e2925de1c2361768f204c / declared source468958, not final7b72 source; final gate is not a new dedicated helper load sample. OPEN / UNREPRODUCED: no demonstrated root cause or repair. |
+
+Initial pending-Enter behaviorRED, empty/bounded-write RED, compile/lint/setup failures and all restorations remain retained in C/launch-unit and C/flake-ack-*. None implies real provider or user-data validation.

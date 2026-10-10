@@ -19,13 +19,15 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 拒绝码：规则拒绝的 `RpcError` 带 `data.refusal`（稳定码，如 `channel.archived`、`crew.management_not_in_tree`），`message` 只是中文缺省，客户端按码本地化、不解析 `message`。码的全集是 `crates/collab/src/refusal.rs` 的 `Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每码一节、两种语言占位符一致、每句说下一步怎么办，测试钉住）；collab 源码里不写给人 / agent 看的句子。`work.*` 的拒绝与参数解析错误暂时没有码
 - 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
 
-## serve 编排接线（T11，本地候选）
+## serve 编排接线与恢复（M3c）
 
 CLI `serve` 启动 Claude 编排 actor；库的 `serve()` 缺省不带执行器，需要编排的调用者使用 `serve_with(..., ServeOptions { orchestra: Some(...) })`。`serve --claude PATH` / `CREWD_CLAUDE` 可指定执行器；显式路径不存在时绑定 socket 前失败。生成的 helper/runtime 文件放在本机 cache 的 `PendingCrew/run/<数据目录标识>`，不进入聊天数据备份。
 
 启动世界观与 SessionStart 共用 `world_context` / `render_live`；生产 quota 来源目前成功返回空报告，因此 tier 为 Unknown，真实 provider feeding 仍未接入。CLI 二进制被替换后停止新启动，发布一次机级提示并撤销该启动的 token；启动前拒绝不消耗 wake 尝试。
 
-停止/休眠先结束接入，再收尾 actor 与连接，等已进入 RPC 的响应写完后停 Ticker、关闭 DB，最后删除 socket、释放锁。`system.shutdown` 的 `reason` 为 `stop` / `hibernate`。本段记录实现行为；独立 T11 验收和完整组合树 gate 尚待完成，不代表产品整体交付，也不代表真实 provider 验证。
+停止/休眠先结束接入，再收尾 actor 与连接，等已进入 RPC 的响应写完后停 Ticker、关闭 DB，最后删除 socket、释放锁。`system.shutdown` 的 `reason` 为 `stop` / `hibernate`。T11/T11b 组合及后续 ack 五文件修补已分别独立接受；相同声明源码的两次离线门禁均为 1997 通过、0 失败、8 ignored 未运行，第一轮在 ack 提交前，第二轮在提交并恢复后。三轮完整合成链各为 server 4、restart 3、E2E 9 通过；完整提交与证据见 spec §28。T12 文档与 whole-M3c 尚待验收，这些读数不代表真实 provider 或产品整体交付。
+
+重启先通过 `restart.pending` / `restart.answer` 问人；`crewd.hibernate {deadline}` 等安全点，到期打断其余会话并保留唤醒，下次启动仍问人，deadline 0 是立即休眠。`loop.list` 列持久化环路锁，只有人能用 `loop.recover` 清除；设置走 `settings.get` / `settings.set`，可选并发上限缺省不设。`system.hello` 返回 `build`、`minApiVersion`、`capabilities`，构建身份含 git SHA/dirty、执行文件及其是否仍在磁盘上。`message.receipts` 的 working 是目标当前忙，须结合 state 读取，排队不等于 Delivered。helper 历史 stdout flake 候选未复现、未证明修复，保持 OPEN。
 
 ## 编排待决策（M3c T10c）
 
@@ -36,7 +38,7 @@ CLI `serve` 启动 Claude 编排 actor；库的 `serve()` 缺省不带执行器�
 - `wake.list` 与 `try_deliver` 的 readiness 仍共用 `crewd-wake::explain::live_blocker`；nudge 的命令资格检查只在 `text_nudge_refusal`，收下与 writer 队首都调用它。最终的人的输入来源 / Unknown 闸、提交前复查和 CAS 每键回读仍归执行器（T10d R2/R3/R4），通知计时不构成另一套放行策略。
 - 文字 nudge 等终局的 receipt/id/reply 与实际 answer writer 占用分开：仍挡后续正文，但让人类 CAS answer 越过等待的正文，解除挡住该投递的 dialog。answer 自身保持串行与顺序；nudge 的终局回执不释放正在执行的 answer fence。后续正文仍须等原 nudge 终局及实际 answer 写完，并在 writer 队首复查草稿。
 - quota 的参与者按该 episode 注册时的 session id 记录；换机长本身不是恢复。历史参与者即使已降为 worker，其 Working(true) 仍能移除自己；无关 worker 不清别人的问题，只有对应 executor 最后一个参与者恢复才发 recovery，随后新 episode 可重新 raise。
-- 这里交付的是编排接口与 synthetic/inproc 接线，不宣称完成 T11 的 serve 执行器启动接线、binary watcher 或 M4b 组织级「待人类处理」收件箱。
+- T10c 的原验收范围是编排接口与 synthetic/inproc 接线；后续 T11 已接入 serve 执行器启动与 binary identity watcher。M4b 组织级「待人类处理」收件箱仍待实现。
 
 ### M3d 绑定简报：结构化 runner request
 
