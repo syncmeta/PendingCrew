@@ -58,12 +58,21 @@ pub enum Mention {
     Human,
 }
 
+/// Trusted adapter fact. Public message text/category/mentions never establish this source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageProvenance {
+    Ordinary,
+    StopRelay,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MsgFacts {
     /// 消息 id（唤醒的 source 用它，`source::message`）。
     pub id: String,
     pub at: MessageRef,
     pub sender: Sender,
+    /// Internal durable source, read and validated by the database adapter.
+    pub provenance: MessageProvenance,
     /// 空 = 一个 @ 都没写。
     pub mentions: Vec<Mention>,
     pub created_at: Ms,
@@ -241,6 +250,7 @@ mod tests {
 
     fn msg(sender: Sender, mentions: Vec<Mention>) -> MsgFacts {
         MsgFacts {
+            provenance: crate::plan::MessageProvenance::Ordinary,
             id: "m-7".into(),
             at: MessageRef {
                 channel: "c1/lobby".into(),

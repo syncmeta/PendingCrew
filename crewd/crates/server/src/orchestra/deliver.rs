@@ -181,7 +181,9 @@ impl<P: Port> Core<P> {
     ) -> anyhow::Result<()> {
         let now = self.now();
         let targets = plan::plan(msg, ctx, answer, now);
-        if let Sender::Session { id: poster, .. } = &msg.sender {
+        if let Sender::Session { id: poster, .. } = &msg.sender
+            && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
+        {
             // 裁定 3：这条消息算不算产出（回叫叫醒自己的人不算）。`woke` 只取**显式目标**（@ 到的、Arbiter /
             // 群主兜底的）——只因收听被叫醒的不算（Task 3 评审：否则 a↔b 互 @、旁边有个收听者时环路截不住）。
             // 显式目标 = 同一份规划去掉收听者，规则只在 `plan` 一处。
@@ -1916,6 +1918,7 @@ mod tests {
             (LOBBY.into(), 1),
             (
                 MsgFacts {
+                    provenance: crewd_wake::plan::MessageProvenance::Ordinary,
                     id: "m-lag".into(),
                     at: MessageRef {
                         channel: LOBBY.into(),

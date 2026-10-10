@@ -684,6 +684,9 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     // 级联之前：它的 session 退出别的机组的群、交出群主（终审 I4）。
     let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
+    // Message cascades have completed. Keep provenance for surviving foreign-channel history,
+    // even when the source session was purged; only actual orphan messages lose their markers.
+    crate::message_provenance::prune_orphans(tx)?;
     for channel_id in cascaded {
         tx.note(Change::ChannelRemoved { channel_id });
     }
@@ -2992,6 +2995,191 @@ mod tests {
         assert_eq!(
             crate::asks::get(s.conn(), "crew-x", &h).unwrap().state,
             crewd_proto::AskStateView::Open
+        );
+    }
+
+    const PURGE_PROVENANCE_PREFIX: &str = "message.provenance.v1.";
+
+    fn provenance_purge_snapshot(
+        s: &crewd_store::Store,
+    ) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+        let mut st = s
+            .conn()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap();
+        let names = st
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        names
+            .into_iter()
+            .map(|name| {
+                let quoted = name.replace('"', "\"\"");
+                let mut rows = s
+                    .conn()
+                    .prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY rowid"))
+                    .unwrap();
+                let columns = rows.column_count();
+                let values = rows
+                    .query_map([], |r| {
+                        (0..columns)
+                            .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                    })
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                (name, values)
+            })
+            .collect()
+    }
+
+    // Synthetic cleanup fixture only: Stop does not currently relay into a DM. Manually seeding a
+    // private marker here tests purge ownership/transaction semantics, not the trusted Stop caller.
+    fn provenance_purge_fixture() -> (crewd_store::Store, String, String, String, String) {
+        let mut s = store();
+        let (doomed_dm, _) = ok(&mut s, |tx| {
+            crate::channels::ensure_dm(
+                tx,
+                "crew-x",
+                &crewd_proto::MemberRef::session("cap-x"),
+                &crewd_proto::MemberRef::session("w-a1"),
+            )
+        });
+        let (foreign_dm, _) = ok(&mut s, |tx| {
+            crate::channels::ensure_dm(
+                tx,
+                "crew-a",
+                &crewd_proto::MemberRef::session("w-a2"),
+                &crewd_proto::MemberRef::session("cap-x"),
+            )
+        });
+        // DM reuse is global by member pair, regardless of requested crew. Distinct pairs
+        // are necessary to exercise both real ownership directions instead of the same DM.
+        assert_ne!(doomed_dm.id, foreign_dm.id);
+        assert_eq!(doomed_dm.crew_id, "crew-x");
+        assert_eq!(foreign_dm.crew_id, "crew-a");
+        let post = |tx: &mut Tx<'_>, channel: &str| {
+            crate::messages::post(
+                tx,
+                crate::Sender::System,
+                crate::messages::NewPost {
+                    channel_id: channel.into(),
+                    text: "synthetic retained question?".into(),
+                    category: Some("question".into()),
+                    ..Default::default()
+                },
+            )
+        };
+        let doomed = ok(&mut s, |tx| post(tx, &doomed_dm.id)).message;
+        let foreign = ok(&mut s, |tx| post(tx, &foreign_dm.id)).message;
+        for m in [&doomed, &foreign] {
+            let envelope = serde_json::json!({
+                "version": 1, "kind": "stop_relay", "messageId": m.id,
+                "seq": m.seq, "sourceSession": "cap-x"
+            });
+            crewd_store::meta_set(
+                s.conn(),
+                &format!("{PURGE_PROVENANCE_PREFIX}{}", m.id),
+                &envelope.to_string(),
+            )
+            .unwrap();
+        }
+        crewd_store::meta_set(s.conn(), "messageXprovenanceXv1.orphan", "untouched").unwrap();
+        crewd_store::meta_set(s.conn(), "agent.turn.unrelated", "untouched").unwrap();
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        (s, doomed.id, foreign.id, doomed_dm.id, foreign_dm.id)
+    }
+
+    #[test]
+    fn purge_cleans_doomed_dm_markers_but_keeps_foreign_history() {
+        let (mut s, doomed, foreign, doomed_dm, foreign_dm) = provenance_purge_fixture();
+        let foreign_before =
+            crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{foreign}"))
+                .unwrap();
+        let ((), changes) = ok_at(&mut s, NOW + 1, |tx| purge(tx, "crew-x"));
+        assert!(crate::messages::get(s.conn(), &doomed).is_err());
+        assert!(crate::channels::get(s.conn(), &doomed_dm).is_err());
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{doomed}")).unwrap(),
+            None,
+            "the actual channel/message cascade must not leave an orphan provenance marker"
+        );
+        assert_eq!(
+            crate::messages::get(s.conn(), &foreign).unwrap().channel_id,
+            foreign_dm
+        );
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{foreign}"))
+                .unwrap(),
+            foreign_before,
+            "foreign DM history retains provenance even after its source session is purged"
+        );
+        assert!(crate::sessions::get(s.conn(), "cap-x").is_err());
+        let retained = crate::messages::get(s.conn(), &foreign).unwrap();
+        assert_eq!(
+            crate::message_provenance::read(s.conn(), &retained).unwrap(),
+            crate::message_provenance::MessageProvenance::StopRelay {
+                source_session: "cap-x".into()
+            }
+        );
+        assert_eq!(
+            crate::channels::members(s.conn(), &foreign_dm).unwrap(),
+            [crewd_proto::MemberRef::session("w-a2")]
+        );
+        for key in ["messageXprovenanceXv1.orphan", "agent.turn.unrelated"] {
+            assert_eq!(
+                crewd_store::meta_get(s.conn(), key).unwrap().as_deref(),
+                Some("untouched")
+            );
+        }
+        assert!(changes.contains(&Change::CrewRemoved {
+            crew_id: "crew-x".into()
+        }));
+        assert!(changes.contains(&Change::ChannelRemoved {
+            channel_id: doomed_dm
+        }));
+    }
+
+    #[test]
+    fn provenance_cleanup_failure_rolls_back_actual_purge() {
+        let (mut s, doomed, _, _, _) = provenance_purge_fixture();
+        // This trigger is reached only when the real post-cascade orphan cleanup deletes meta.
+        // Install it through a bound key table rather than interpolating a message id into SQL.
+        s.conn()
+            .execute_batch(
+                "CREATE TEMP TABLE synthetic_failed_provenance_key(key TEXT PRIMARY KEY);
+             CREATE TEMP TRIGGER fail_provenance_cleanup BEFORE DELETE ON meta
+             WHEN OLD.key IN (SELECT key FROM synthetic_failed_provenance_key)
+             BEGIN SELECT RAISE(ABORT,'synthetic provenance cleanup failure'); END;",
+            )
+            .unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO synthetic_failed_provenance_key(key) VALUES(?1)",
+                [format!("{PURGE_PROVENANCE_PREFIX}{doomed}")],
+            )
+            .unwrap();
+        let before = provenance_purge_snapshot(&s);
+        let failed = crate::run(&mut s, NOW + 1, |tx| purge(tx, "crew-x"));
+        assert!(
+            matches!(&failed, Err(CollabError::Store(_))),
+            "actual purge must propagate the orphan-marker DELETE failure: {failed:?}"
+        );
+        assert_eq!(
+            provenance_purge_snapshot(&s),
+            before,
+            "crew, sessions, messages, membership/owner changes and every marker must roll back"
+        );
+        // Err contains no committed Change list; a separate server contract must observe Hub.
+        s.conn()
+            .execute_batch("DROP TRIGGER fail_provenance_cleanup")
+            .unwrap();
+        ok(&mut s, |tx| purge(tx, "crew-x"));
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{doomed}")).unwrap(),
+            None
         );
     }
 }

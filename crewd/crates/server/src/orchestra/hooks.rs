@@ -139,6 +139,7 @@ mod tests {
         let h = Hooks::default();
         let q = ArbiterQuestion {
             message: MsgFacts {
+                provenance: crewd_wake::plan::MessageProvenance::Ordinary,
                 id: "m-1".into(),
                 at: MessageRef {
                     channel: "c1/lobby".into(),

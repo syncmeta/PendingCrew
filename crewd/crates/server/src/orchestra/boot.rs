@@ -241,6 +241,7 @@ mod tests {
         };
         let id = format!("m-{seq}");
         let facts = MsgFacts {
+            provenance: crewd_wake::plan::MessageProvenance::Ordinary,
             id: id.clone(),
             at: r.clone(),
             sender: Sender::Human,
@@ -560,6 +561,7 @@ mod tests {
                 seq: 1,
             };
             let facts = MsgFacts {
+                provenance: crewd_wake::plan::MessageProvenance::Ordinary,
                 id: "m-old".into(),
                 at: r.clone(),
                 sender: Sender::Human,

@@ -190,6 +190,7 @@ pub(crate) fn facts_of(m: &Message, now: Ms) -> MsgFacts {
         now
     });
     MsgFacts {
+        provenance: crewd_wake::plan::MessageProvenance::Ordinary,
         id: m.id.clone(),
         at: MessageRef {
             channel: m.channel_id.clone(),
@@ -199,6 +200,24 @@ pub(crate) fn facts_of(m: &Message, now: Ms) -> MsgFacts {
         mentions,
         created_at,
     }
+}
+
+/// Keep provenance read/validation in the same DB operation as the message facts.
+fn facts_with_provenance(
+    conn: &rusqlite::Connection,
+    message: &Message,
+    now: Ms,
+) -> collab::Result<MsgFacts> {
+    let mut facts = facts_of(message, now);
+    facts.provenance = match collab::message_provenance::read(conn, message)? {
+        collab::message_provenance::MessageProvenance::Ordinary => {
+            crewd_wake::plan::MessageProvenance::Ordinary
+        }
+        collab::message_provenance::MessageProvenance::StopRelay { .. } => {
+            crewd_wake::plan::MessageProvenance::StopRelay
+        }
+    };
+    Ok(facts)
 }
 
 fn row_of(conn: &rusqlite::Connection, s: crewd_proto::Session) -> collab::Result<SessionRow> {
@@ -713,9 +732,10 @@ impl Port for DbPort {
         let now = Ms(crewd_store::now_ms());
         self.read(move |c| {
             // seq 全库唯一（M3a.1）；群对不上 = 不是这条。
-            Ok(opt(collab::messages::get_by_seq(c, r.seq))?
+            opt(collab::messages::get_by_seq(c, r.seq))?
                 .filter(|m| m.channel_id == r.channel)
-                .map(|m| (facts_of(&m, now), m.text.clone())))
+                .map(|m| facts_with_provenance(c, &m, now).map(|f| (f, m.text.clone())))
+                .transpose()
         })
         .await
     }
@@ -781,13 +801,15 @@ impl Port for DbPort {
         let session = session.to_string();
         let now = Ms(crewd_store::now_ms());
         // 写事务：`unread_for` 会把缺的游标钉到群末尾（入群点）。
-        let blocks = self
-            .write(move |tx| collab::cursors::unread_for(tx, &session))
-            .await?;
-        Ok(blocks
-            .iter()
-            .flat_map(|(_, msgs)| msgs.iter().map(|m| facts_of(m, now)))
-            .collect())
+        self.write(move |tx| {
+            let blocks = collab::cursors::unread_for(tx, &session)?;
+            blocks
+                .iter()
+                .flat_map(|(_, messages)| messages.iter())
+                .map(|m| facts_with_provenance(tx.conn(), m, now))
+                .collect()
+        })
+        .await
     }
 
     async fn cursor(&self, session: &str, channel: &str) -> Result<i64> {
@@ -2940,5 +2962,155 @@ mod tests {
             cw::WakeState::Inflight,
             "snapshot recovery does not modify source"
         );
+    }
+}
+
+#[cfg(test)]
+mod stop_provenance_tests {
+    use super::fixture::{post_as, seeded};
+    use super::*;
+    use crewd_wake::plan::MessageProvenance;
+
+    fn marker(message: &Message) -> (String, String) {
+        (
+            format!("message.provenance.v1.{}", message.id),
+            serde_json::json!({
+                "version": 1, "kind": "stop_relay", "messageId": message.id,
+                "seq": message.seq, "sourceSession": message.sender_session_id,
+            })
+            .to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn malformed_stop_provenance_fails_message_and_rolls_back_unread_lazy_cursor() {
+        let (state, port, _dir) = seeded().await;
+        let message = post_as(
+            &state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "合成问题？",
+            &["cap-1"],
+        )
+        .await;
+        let human = state
+            .collab(|tx| collab::channels::ensure_human_channel(tx, "c-1"))
+            .await
+            .unwrap()
+            .id;
+        let human_for_delete = human.clone();
+        let (key, _) = marker(&message);
+        state
+            .db
+            .call(move |s| {
+                s.conn().execute(
+                    "DELETE FROM read_cursors WHERE reader='cap-1' AND channel_id=?1",
+                    [&human_for_delete],
+                )?;
+                crewd_store::meta_set(s.conn(), &key, "{broken")
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let read_error = port
+            .message(&MessageRef {
+                channel: message.channel_id,
+                seq: message.seq,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            read_error.downcast_ref::<collab::CollabError>(),
+            Some(collab::CollabError::Store(
+                crewd_store::StoreError::Invalid(_)
+            ))
+        ));
+        let unread_error = port.unread("cap-1").await.unwrap_err();
+        assert!(matches!(
+            unread_error.downcast_ref::<collab::CollabError>(),
+            Some(collab::CollabError::Store(
+                crewd_store::StoreError::Invalid(_)
+            ))
+        ));
+        // unread_for DID visit every channel and lazily insert this cursor. Mapping must fail
+        // inside that same write transaction, rolling the insert back instead of committing it.
+        let cursor = state
+            .db
+            .call(move |s| collab::cursors::cursor(s.conn(), "cap-1", &human))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor, None);
+        let db = state.db.clone();
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retained_foreign_dm_provenance_is_read_after_source_crew_purge() {
+        let (state, port, _dir) = seeded().await;
+        let message = state
+            .collab(|tx| {
+                let (dm, _) = collab::channels::ensure_dm(
+                    tx,
+                    "c-1",
+                    &crewd_proto::MemberRef::session("w-1"),
+                    &crewd_proto::MemberRef::session("w-9"),
+                )?;
+                let posted = collab::messages::post(
+                    tx,
+                    collab::Sender::Session("w-9".into()),
+                    collab::messages::NewPost {
+                        channel_id: dm.id,
+                        text: "合成保留历史？".into(),
+                        ..Default::default()
+                    },
+                )?;
+                // Storage fixture models an existing valid durable marker; this is not a claim
+                // that worker Stop currently relays into a foreign DM (S67 step2 is deferred).
+                let (key, value) = marker(&posted.message);
+                crewd_store::meta_set(tx.conn(), &key, &value)?;
+                Ok(posted.message)
+            })
+            .await
+            .unwrap();
+        state
+            .collab(|tx| {
+                collab::crews::archive(tx, "c-9")?;
+                collab::crews::purge(tx, "c-9")
+            })
+            .await
+            .unwrap();
+        assert!(
+            state
+                .db
+                .call(|s| crewd_store::sessions::get(s.conn(), "w-9"))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        let facts = port
+            .message(&MessageRef {
+                channel: message.channel_id.clone(),
+                seq: message.seq,
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(facts.provenance, MessageProvenance::StopRelay);
+        assert!(matches!(facts.sender, Sender::Session { id, .. } if id == "w-9"));
+        let unread = port.unread("w-1").await.unwrap();
+        assert!(
+            unread
+                .iter()
+                .any(|f| f.id == message.id && f.provenance == MessageProvenance::StopRelay)
+        );
+        let db = state.db.clone();
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
     }
 }

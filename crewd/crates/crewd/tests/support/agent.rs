@@ -69,6 +69,27 @@ pub fn matches(entry: &Value, value: &str) -> bool {
 }
 
 pub async fn fire(settings: &Value, event: &str, payload: Value) -> Option<Value> {
+    fire_with_home(settings, event, payload, None).await
+}
+
+/// Exact generated helper command, with a test-owned environment (no login shell/profile).
+// This shared support module is also compiled by suites using only the original helpers.
+#[allow(dead_code)]
+pub async fn fire_isolated(
+    settings: &Value,
+    event: &str,
+    payload: Value,
+    home: &Path,
+) -> Option<Value> {
+    fire_with_home(settings, event, payload, Some(home)).await
+}
+
+async fn fire_with_home(
+    settings: &Value,
+    event: &str,
+    payload: Value,
+    home: Option<&Path>,
+) -> Option<Value> {
     let entries = settings["hooks"][event].as_array()?;
     let key = if event == "SessionStart" {
         "source"
@@ -82,7 +103,17 @@ pub async fn fire(settings: &Value, event: &str, payload: Value) -> Option<Value
         }
         for hook in entry["hooks"].as_array().unwrap() {
             assert_eq!(hook["type"], "command");
-            let mut child = Command::new("sh")
+            let mut command = Command::new(if home.is_some() { "/bin/sh" } else { "sh" });
+            if let Some(home) = home {
+                command
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                    .env("HOME", home)
+                    .env("XDG_CACHE_HOME", home.join("cache"))
+                    .env("CLAUDE_CONFIG_DIR", home.join("claude-config"))
+                    .env("SHELL", "/usr/bin/false");
+            }
+            let mut child = command
                 .args(["-c", hook["command"].as_str().unwrap()])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -128,9 +159,27 @@ pub struct Mcp {
 
 impl Mcp {
     pub async fn start(cfg: &Value) -> Self {
+        Self::start_with_home(cfg, None).await
+    }
+    // Other integration suites include this module without using the isolated entry point.
+    #[allow(dead_code)]
+    pub async fn start_isolated(cfg: &Value, home: &Path) -> Self {
+        Self::start_with_home(cfg, Some(home)).await
+    }
+    async fn start_with_home(cfg: &Value, home: Option<&Path>) -> Self {
         let crew = &cfg["mcpServers"]["crew"];
         assert_eq!(crew["type"], "stdio");
-        let mut child = Command::new(crew["command"].as_str().unwrap())
+        let mut command = Command::new(crew["command"].as_str().unwrap());
+        if let Some(home) = home {
+            command
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("HOME", home)
+                .env("XDG_CACHE_HOME", home.join("cache"))
+                .env("CLAUDE_CONFIG_DIR", home.join("claude-config"))
+                .env("SHELL", "/usr/bin/false");
+        }
+        let mut child = command
             .args(
                 crew["args"]
                     .as_array()

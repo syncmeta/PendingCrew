@@ -82,11 +82,30 @@ impl Fixture {
 
     /// A fixture with a prepared runtime (e.g. a post gate on a clock the test moves).
     pub async fn with_runtime(runtime: AgentRuntime) -> Self {
+        Self::build(runtime, None).await
+    }
+
+    /// Real orchestra adapter; default fixtures retain FakeSessionControl.
+    pub async fn with_orchestra(cell: Arc<std::sync::OnceLock<crate::orchestra::Handle>>) -> Self {
+        Self::build(AgentRuntime::new(AgentConfig::default()), Some(cell)).await
+    }
+
+    async fn build(
+        runtime: AgentRuntime,
+        cell: Option<Arc<std::sync::OnceLock<crate::orchestra::Handle>>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let control = Arc::new(FakeSessionControl::default());
         let store = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
         let db = crewd_store::Db::spawn(store).unwrap();
-        let mut state = AppState::new(db).with_sessions(control.clone());
+        let sessions: Arc<dyn crate::control::SessionControl> = match cell {
+            Some(cell) => Arc::new(crate::orchestra::control::OrchestraControl::new(
+                cell,
+                db.clone(),
+            )),
+            None => control.clone(),
+        };
+        let mut state = AppState::new(db).with_sessions(sessions);
         state.agent = runtime;
         let mut f = Self {
             state: Arc::new(state),
@@ -273,6 +292,31 @@ impl Fixture {
         sock
     }
 
+    /// Owned socket/connection tasks for integration cases requiring bounded cleanup.
+    pub async fn spawn_owned_socket(
+        &self,
+        mut stop: tokio::sync::oneshot::Receiver<()>,
+    ) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(self.dir.path().join("crewd.sock")).unwrap();
+        let state = self.state.clone();
+        tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = &mut stop => break,
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else { break };
+                        let st = state.clone();
+                        connections.spawn(async move { let _ = crate::conn::run(st, stream).await; });
+                    }
+                    _ = connections.join_next(), if !connections.is_empty() => {}
+                }
+            }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+        })
+    }
+
     pub fn data_dir(&self) -> &Path {
         self.dir.path()
     }
@@ -435,5 +479,261 @@ impl RpcClient {
             Ok(crewd_proto::ServerFrame::Event(e)) => Some(e),
             _ => None,
         }
+    }
+}
+
+/// Small feature-testkit executor for real helper/DbPort integration. No PTY or provider.
+#[derive(Clone, Default)]
+pub struct RelayStandIn(Arc<std::sync::Mutex<RelayExecState>>);
+#[derive(Clone)]
+pub struct RelayLaunch {
+    pub initial: Option<String>,
+}
+#[derive(Default)]
+struct RelayExecState {
+    sessions: std::collections::BTreeMap<String, RelayExecSession>,
+    next_id: u64,
+}
+struct RelayExecSession {
+    tx: tokio::sync::mpsc::UnboundedSender<crewd_exec::session::SessionEvent>,
+    launches: Vec<RelayLaunch>,
+    sends: Vec<(u64, String)>,
+    outstanding: std::collections::BTreeSet<u64>,
+    running: bool,
+    working: bool,
+}
+impl RelayExecSession {
+    fn emit(&mut self, event: crewd_exec::session::SessionEvent) {
+        use crewd_exec::session::SessionEvent;
+        match &event {
+            SessionEvent::Working(on) => self.working = *on,
+            SessionEvent::Delivery { id, outcome, .. } if outcome.is_final() => {
+                self.outstanding.remove(id);
+            }
+            SessionEvent::Exited(_) => self.running = false,
+            _ => {}
+        }
+        self.tx.send(event).expect("relay actor event stream");
+    }
+}
+impl RelayStandIn {
+    pub fn emit(&self, id: &str, event: crewd_exec::session::SessionEvent) {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get_mut(id)
+            .expect("launch before event")
+            .emit(event);
+    }
+    pub fn launches(&self, id: &str) -> Vec<RelayLaunch> {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get(id)
+            .map(|s| s.launches.clone())
+            .unwrap_or_default()
+    }
+    pub fn sent(&self, id: &str) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get(id)
+            .map(|s| s.sends.iter().map(|(_, t)| t.clone()).collect())
+            .unwrap_or_default()
+    }
+    pub fn last_send_id(&self, id: &str) -> u64 {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get(id)
+            .and_then(|s| s.sends.last())
+            .expect("send before receipt")
+            .0
+    }
+}
+impl crate::orchestra::exec::Executor for RelayStandIn {
+    fn launch(
+        &self,
+        req: crate::orchestra::exec::LaunchRequest,
+    ) -> crate::orchestra::exec::BoxFut<
+        '_,
+        Result<crate::orchestra::exec::Launched, crate::orchestra::exec::LaunchError>,
+    > {
+        let state = self.0.clone();
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut locked = state.lock().unwrap();
+            let mut launches = locked
+                .sessions
+                .get(&req.session_id)
+                .map(|s| s.launches.clone())
+                .unwrap_or_default();
+            launches.push(RelayLaunch {
+                initial: req.initial_prompt.clone(),
+            });
+            let mut session = RelayExecSession {
+                tx,
+                launches,
+                sends: vec![],
+                outstanding: Default::default(),
+                running: true,
+                working: false,
+            };
+            if req.initial_prompt.is_some() {
+                session
+                    .outstanding
+                    .insert(crewd_exec::session::BRIEF_DELIVERY_ID);
+            }
+            session.emit(crewd_exec::session::SessionEvent::Spawned {
+                pid: 4242,
+                agent_session_id: format!("synthetic-{}", req.session_id),
+                resumed: false,
+            });
+            locked.sessions.insert(req.session_id.clone(), session);
+            drop(locked);
+            let h: Arc<dyn crate::orchestra::exec::ExecHandle> = Arc::new(RelayExecHandle {
+                id: req.session_id,
+                state,
+            });
+            Ok((h, rx))
+        })
+    }
+}
+struct RelayExecHandle {
+    id: String,
+    state: Arc<std::sync::Mutex<RelayExecState>>,
+}
+impl crate::orchestra::exec::ExecHandle for RelayExecHandle {
+    fn send(
+        &self,
+        text: String,
+        context: &crate::orchestra::exec::Context,
+    ) -> Result<u64, crate::orchestra::exec::ExecSendError> {
+        use crewd_exec::driver::SendError;
+        crate::orchestra::exec::check_context(false, context)?;
+        if text.trim().is_empty() {
+            return Err(SendError::EmptyText.into());
+        }
+        let mut state = self.state.lock().unwrap();
+        if !state.sessions.get(&self.id).is_some_and(|s| s.running) {
+            return Err(SendError::Closed.into());
+        }
+        state.next_id += 1;
+        let id = state.next_id;
+        let session = state.sessions.get_mut(&self.id).unwrap();
+        session.sends.push((id, text));
+        session.outstanding.insert(id);
+        Ok(id)
+    }
+    fn raw(&self, _bytes: Vec<u8>) -> Result<(), crewd_exec::driver::Closed> {
+        Err(crewd_exec::driver::Closed)
+    }
+    fn interrupt(&self) -> Result<(), crewd_exec::driver::Closed> {
+        let mut state = self.state.lock().unwrap();
+        let s = state
+            .sessions
+            .get_mut(&self.id)
+            .ok_or(crewd_exec::driver::Closed)?;
+        if !s.running {
+            return Err(crewd_exec::driver::Closed);
+        }
+        if s.working {
+            s.emit(crewd_exec::session::SessionEvent::Working(false));
+        }
+        Ok(())
+    }
+    fn answer(
+        &self,
+        _expect: String,
+        _steps: crate::orchestra::exec::AnswerSteps,
+    ) -> crate::orchestra::exec::BoxFut<
+        '_,
+        Result<crewd_exec::session::AnswerOutcome, crewd_exec::driver::Closed>,
+    > {
+        Box::pin(async { Ok(crewd_exec::session::AnswerOutcome::Unsupported) })
+    }
+    fn stop(&self) -> Result<(), crewd_exec::driver::Closed> {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, ExitStatusKind, SessionEvent},
+        };
+        let mut state = self.state.lock().unwrap();
+        let s = state
+            .sessions
+            .get_mut(&self.id)
+            .ok_or(crewd_exec::driver::Closed)?;
+        if !s.running {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut s.outstanding);
+        for id in pending {
+            s.emit(SessionEvent::Delivery {
+                id,
+                subject: if id == BRIEF_DELIVERY_ID {
+                    Subject::Brief
+                } else {
+                    Subject::Steer
+                },
+                outcome: DeliveryOutcome::Abandoned("synthetic stop".into()),
+            });
+        }
+        if s.working {
+            s.emit(SessionEvent::Working(false));
+        }
+        s.emit(SessionEvent::Exited(ExitInfo {
+            status: ExitStatusKind::Code(0),
+            stopped_by_user: true,
+            hit_limit: false,
+        }));
+        Ok(())
+    }
+    fn clear_quota_health(&self) -> Result<(), crewd_exec::driver::Closed> {
+        Ok(())
+    }
+    fn screen_text(
+        &self,
+        _max: usize,
+    ) -> crate::orchestra::exec::BoxFut<'_, Result<String, crewd_exec::driver::Closed>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+    fn snapshot(
+        &self,
+    ) -> crate::orchestra::exec::BoxFut<
+        '_,
+        Result<Option<crewd_term::Snapshot>, crewd_exec::driver::Closed>,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+    fn status(
+        &self,
+    ) -> crate::orchestra::exec::BoxFut<
+        '_,
+        Result<crewd_exec::driver::SessionStatus, crewd_exec::driver::Closed>,
+    > {
+        let state = self.state.clone();
+        let id = self.id.clone();
+        Box::pin(async move {
+            let state = state.lock().unwrap();
+            let s = state.sessions.get(&id).ok_or(crewd_exec::driver::Closed)?;
+            if !s.running {
+                return Err(crewd_exec::driver::Closed);
+            }
+            Ok(crewd_exec::driver::SessionStatus {
+                state: if s.working {
+                    crewd_exec::session::DerivedState::Working
+                } else {
+                    crewd_exec::session::DerivedState::Idle
+                },
+                working: s.working,
+                health: None,
+                pending_decision: None,
+                pid: 4242,
+                agent_session_id: format!("synthetic-{id}"),
+            })
+        })
     }
 }

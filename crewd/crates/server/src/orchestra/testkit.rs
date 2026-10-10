@@ -2105,6 +2105,7 @@ impl Rig {
                 seq,
             };
             let facts = MsgFacts {
+                provenance: crewd_wake::plan::MessageProvenance::Ordinary,
                 id: format!("{channel}#{seq}"),
                 at: r.clone(),
                 sender,
@@ -2262,6 +2263,7 @@ mod self_tests {
 
     fn msg(st: &mut MemState, ch: &str, seq: i64, sender: Sender, mentions: Vec<Mention>) {
         let facts = MsgFacts {
+            provenance: crewd_wake::plan::MessageProvenance::Ordinary,
             id: format!("{ch}#{seq}"),
             at: MessageRef {
                 channel: ch.into(),

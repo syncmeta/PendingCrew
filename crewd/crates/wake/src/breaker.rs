@@ -618,6 +618,7 @@ mod tests {
             ..ChannelCtx::default()
         };
         let msg = MsgFacts {
+            provenance: crate::plan::MessageProvenance::Ordinary,
             id: "m-1".into(),
             at: MessageRef {
                 channel: "c1/lobby".into(),

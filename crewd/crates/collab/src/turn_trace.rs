@@ -281,7 +281,7 @@ fn relay(
         category: Some("question".into()),
         ..Default::default()
     };
-    match messages::post(tx, Sender::Session(session.to_string()), post(as_session)) {
+    let posted = match messages::post(tx, Sender::Session(session.to_string()), post(as_session)) {
         Err(CollabError::Forbidden(r))
             if matches!(
                 r.code,
@@ -291,7 +291,11 @@ fn relay(
             messages::post(tx, Sender::System, post(as_system))
         }
         other => other,
-    }
+    }?;
+    // Both successful sender paths carry the same trusted source. A failed marker write rolls
+    // back the actual relay, memo and awaiting state in the caller's existing transaction.
+    crate::message_provenance::mark_stop_relay(tx, &posted, session)?;
+    Ok(posted)
 }
 
 #[cfg(test)]
@@ -721,6 +725,12 @@ mod tests {
         assert_eq!(m.sender_session_id.as_deref(), Some("w-a1"));
         assert_eq!(m.sender_kind, crewd_proto::SenderKind::Session);
         assert_eq!(m.category.as_deref(), Some("question"));
+        assert_eq!(
+            crate::message_provenance::read(s.conn(), &m).unwrap(),
+            crate::message_provenance::MessageProvenance::StopRelay {
+                source_session: "w-a1".into()
+            }
+        );
         assert_eq!(m.channel_id, crewd_store::channels::lobby_id("crew-a"));
         assert!(
             m.text.ends_with(f.get("trace.reply")) && m.text.starts_with("（自动代发）"),
@@ -743,6 +753,12 @@ mod tests {
         assert_eq!(m.channel_id, crewd_store::channels::human_id("crew-a"));
         assert_eq!(m.sender_session_id.as_deref(), Some("cap-b"));
         assert_eq!(m.sender_kind, crewd_proto::SenderKind::Captain);
+        assert_eq!(
+            crate::message_provenance::read(s.conn(), &m).unwrap(),
+            crate::message_provenance::MessageProvenance::StopRelay {
+                source_session: "cap-b".into()
+            }
+        );
         let r = reply(&mut s, Sender::Human, &m);
         assert!(wakes(&r, "cap-b"), "{:?}", r.mentions);
     }
@@ -786,6 +802,15 @@ mod tests {
         assert_eq!(m.sender_session_id, None);
         assert_eq!(m.text, "as system");
         assert_eq!(m.category.as_deref(), Some("question"));
+        // This private helper drives today's naturally unreachable on_turn_end fallback. Its
+        // successful real System post must still carry the same source, exactly once.
+        assert_real_relay_marker(&s, &m.id, "cap-x");
+        assert_eq!(
+            crate::message_provenance::read(s.conn(), &m).unwrap(),
+            crate::message_provenance::MessageProvenance::StopRelay {
+                source_session: "cap-x".into()
+            }
+        );
         assert_eq!(
             m.mentions,
             [Mention {
@@ -838,5 +863,139 @@ mod tests {
             Some("要不要做 B？"),
             "标红照样提交"
         );
+        let markers: i64 = s
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM meta WHERE substr(key,1,length(?1))=?1",
+                ["message.provenance.v1."],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "no captain means no relay or provenance marker");
+    }
+
+    // These contracts intentionally use only the existing production API. A missing real marker
+    // write must be a behaviour failure, not a missing-new-API compiler failure.
+    const RELAY_PROVENANCE_PREFIX: &str = "message.provenance.v1.";
+
+    fn relay_transaction_snapshot(
+        s: &crewd_store::Store,
+    ) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+        let mut tables = s
+            .conn()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap();
+        let names = tables
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        names
+            .into_iter()
+            .map(|name| {
+                let quoted = name.replace('"', "\"\"");
+                let mut st = s
+                    .conn()
+                    .prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY rowid"))
+                    .unwrap();
+                let columns = st.column_count();
+                let rows = st
+                    .query_map([], |r| {
+                        (0..columns)
+                            .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                    })
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                (name, rows)
+            })
+            .collect()
+    }
+
+    fn assert_real_relay_marker(s: &crewd_store::Store, id: &str, source: &str) {
+        let message = messages::get(s.conn(), id).unwrap();
+        let raw = crewd_store::meta_get(s.conn(), &format!("{RELAY_PROVENANCE_PREFIX}{id}"))
+            .unwrap()
+            .expect("the actual successful Stop relay must persist its own provenance");
+        let marker: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(marker["version"], 1);
+        assert_eq!(marker["kind"], "stop_relay");
+        assert_eq!(marker["messageId"], id);
+        assert_eq!(marker["seq"], message.seq);
+        assert_eq!(marker["sourceSession"], source);
+    }
+
+    #[test]
+    fn relay_marker_failure_rolls_back_the_actual_turn_transaction() {
+        let mut s = store();
+        turn(&mut s, "w-a1", "setup", "已经完成。");
+        // A real SQLite write failure at the marker boundary, after the relay message and memo
+        // would have been written. The old implementation never hits this trigger and returns Ok.
+        s.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_stop_relay_marker BEFORE INSERT ON meta
+                 WHEN substr(NEW.key,1,length('message.provenance.v1.'))='message.provenance.v1.'
+                 BEGIN SELECT RAISE(ABORT,'synthetic relay marker insert failure'); END;",
+            )
+            .unwrap();
+        let before = relay_transaction_snapshot(&s);
+        let failed = crate::run(&mut s, crate::testkit::NOW + 1, |tx| {
+            on_turn_end(tx, "w-a1", "failed-prompt", "现在要继续吗？")
+        });
+        assert!(
+            matches!(&failed, Err(CollabError::Store(_))),
+            "the real on_turn_end must propagate the marker write failure: {failed:?}"
+        );
+        assert_eq!(
+            relay_transaction_snapshot(&s),
+            before,
+            "message, sqlite_sequence, memo, awaiting/output, cursors, memberships and all meta must roll back"
+        );
+        // run returned Err, so it handed back no committed changes. This is not a Hub observation.
+        s.conn()
+            .execute_batch("DROP TRIGGER fail_stop_relay_marker")
+            .unwrap();
+        let (out, changes) = crate::run(&mut s, crate::testkit::NOW + 1, |tx| {
+            on_turn_end(tx, "w-a1", "failed-prompt", "现在要继续吗？")
+        })
+        .unwrap();
+        let id = posted_id(out);
+        assert_real_relay_marker(&s, &id, "w-a1");
+        assert!(changes.iter().any(|change|
+            matches!(change, crate::Change::MessageAppended { message_id, .. } if message_id == &id)));
+        assert_eq!(awaiting(&s, "w-a1").as_deref(), Some("现在要继续吗？"));
+    }
+
+    #[test]
+    fn relay_provenance_retains_each_prompt_and_preserves_replay_rules() {
+        let mut s = store();
+        let first = posted_id(turn(&mut s, "w-a1", "first-prompt", "接着做第一项吗？"));
+        let second = posted_id(turn(&mut s, "w-a1", "second-prompt", "接着做第二项吗？"));
+        assert_ne!(first, second);
+        assert_real_relay_marker(&s, &first, "w-a1");
+        assert_real_relay_marker(&s, &second, "w-a1");
+        let before = relay_transaction_snapshot(&s);
+        assert_eq!(
+            turn(&mut s, "w-a1", "second-prompt", "接着做第二项吗？"),
+            TurnEnd::Replayed
+        );
+        assert_eq!(relay_transaction_snapshot(&s), before);
+        // Empty prompt ids retain the accepted no-dedup rule: each actual new message is marked.
+        let empty_one = posted_id(turn(&mut s, "w-a1", "", "没有回合号也接着做吗？"));
+        let empty_two = posted_id(turn(&mut s, "w-a1", "", "没有回合号也接着做吗？"));
+        assert_ne!(empty_one, empty_two);
+        for id in [&first, &second, &empty_one, &empty_two] {
+            assert_real_relay_marker(&s, id, "w-a1");
+        }
+        let markers: i64 = s
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM meta WHERE substr(key,1,length(?1))=?1",
+                [RELAY_PROVENANCE_PREFIX],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 4, "history must not be a latest-memo-only marker");
     }
 }

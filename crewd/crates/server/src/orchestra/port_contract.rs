@@ -439,6 +439,7 @@ impl World for MemWorld {
             },
         };
         let facts = MsgFacts {
+            provenance: crewd_wake::plan::MessageProvenance::Ordinary,
             id: format!("m-{}", self.messages),
             at: MessageRef {
                 channel: channel.into(),

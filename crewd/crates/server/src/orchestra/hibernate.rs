@@ -914,6 +914,7 @@ mod tests {
             seq: 1,
         };
         let facts = MsgFacts {
+            provenance: crewd_wake::plan::MessageProvenance::Ordinary,
             id: "m-1".into(),
             at: r.clone(),
             sender: Sender::Human,
