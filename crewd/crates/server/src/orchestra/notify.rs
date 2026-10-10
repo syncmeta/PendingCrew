@@ -31,6 +31,15 @@ impl Key {
         }
     }
 }
+/// Successful real notifier posts, observed only by the synthetic Core harness.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct Transition {
+    pub key: Key,
+    pub raise: bool,
+    pub crew: String,
+    pub text: String,
+}
 struct GiveUps {
     due: Ms,
     sessions: BTreeMap<String, (String, usize)>,
@@ -40,6 +49,8 @@ pub struct Notifier<P: Port> {
     port: Arc<P>,
     raised: HashMap<Key, String>,
     give_ups: HashMap<String, GiveUps>,
+    #[cfg(test)]
+    transitions: Vec<Transition>,
 }
 impl<P: Port> Notifier<P> {
     pub fn new(port: Arc<P>) -> Self {
@@ -47,8 +58,15 @@ impl<P: Port> Notifier<P> {
             port,
             raised: HashMap::new(),
             give_ups: HashMap::new(),
+            #[cfg(test)]
+            transitions: Vec::new(),
         }
     }
+    #[cfg(test)]
+    pub(crate) fn transitions(&self) -> &[Transition] {
+        &self.transitions
+    }
+
     pub fn is_raised(&self, key: &Key) -> bool {
         self.raised.contains_key(key)
     }
@@ -56,6 +74,8 @@ impl<P: Port> Notifier<P> {
         if self.raised.contains_key(&key) {
             return Ok(());
         }
+        #[cfg(test)]
+        let observed_text = text.clone();
         self.port
             .post_system(
                 Audience::HumanChannel {
@@ -65,6 +85,13 @@ impl<P: Port> Notifier<P> {
                 text,
             )
             .await?;
+        #[cfg(test)]
+        self.transitions.push(Transition {
+            key: key.clone(),
+            raise: true,
+            crew: crew.into(),
+            text: observed_text,
+        });
         self.raised.insert(key, crew.into());
         Ok(())
     }
@@ -72,6 +99,8 @@ impl<P: Port> Notifier<P> {
         let Some(crew) = self.raised.get(key) else {
             return Ok(());
         };
+        #[cfg(test)]
+        let observed_text = text.clone();
         self.port
             .post_system(
                 Audience::HumanChannel {
@@ -81,6 +110,13 @@ impl<P: Port> Notifier<P> {
                 text,
             )
             .await?;
+        #[cfg(test)]
+        self.transitions.push(Transition {
+            key: key.clone(),
+            raise: false,
+            crew: crew.clone(),
+            text: observed_text,
+        });
         self.raised.remove(key);
         Ok(())
     }

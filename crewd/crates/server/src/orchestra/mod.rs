@@ -16,6 +16,8 @@ pub mod port;
 mod port_contract;
 pub mod rpc;
 #[cfg(test)]
+mod sim;
+#[cfg(test)]
 mod t10c;
 #[cfg(test)]
 mod testkit;
