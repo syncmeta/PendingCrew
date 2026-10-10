@@ -43,8 +43,44 @@ pub struct MemChannel {
     pub members: Vec<String>,
 }
 
+/// One-shot BUGGIFY-style failures. AckCursor fails inside the atomic ack,
+/// after planning rows, so the sim exercises the row/cursor rollback seam too.
+macro_rules! memory_faults {
+    ($($kind:ident),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+        pub enum MemFault { $($kind),+ }
+        impl MemFault { pub const ALL: &'static [Self] = &[$(Self::$kind),+]; }
+    };
+}
+memory_faults! { Claim, Ack, AckCursor, RenderWake, PutLatch, Settle }
+
+#[derive(Clone, Debug)]
+pub struct FaultHit {
+    pub fault: MemFault,
+    pub rows: Vec<QueuedWake>,
+    pub cursors: BTreeMap<(String, String), i64>,
+    pub after_rows: Vec<QueuedWake>,
+    pub after_cursors: BTreeMap<(String, String), i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpResult {
+    pub ids: Vec<i64>,
+    pub fault_hit: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Rescue {
+    pub before: Vec<QueuedWake>,
+    pub after: Vec<QueuedWake>,
+}
+
 #[derive(Default)]
 pub struct MemState {
+    pub faults: BTreeSet<MemFault>,
+    pub fault_hits: Vec<FaultHit>,
+    pub rescues: Vec<Rescue>,
+    pub op_results: Vec<OpResult>,
     pub sessions: BTreeMap<String, SessionRow>,
     pub wakes: Vec<QueuedWake>,
     pub latches: Vec<Latch>,
@@ -82,6 +118,10 @@ pub struct MemState {
     pub now: Ms,
     /// 模拟 M3a R6 的窗口：列在这里的唤醒 id 由 `render_wake` 报成 deferred（不进正文）。
     pub defer: BTreeSet<i64>,
+    /// Optional real-style oldest unread window, with a small synthetic cap.
+    /// Unlike fixed `defer`, advancing the cursor eventually admits every rider.
+    pub window_cap: Option<usize>,
+    pub rendered_windows: Vec<(Vec<i64>, Vec<i64>)>,
     /// 模拟窗口里比被叫消息更旧的积压：session → [(群, seq)]，进正文、并入 `cursor_targets`。
     pub backlog: BTreeMap<String, Vec<(String, i64)>>,
     /// `revoke_token` 调过的 session（按调用顺序）。
@@ -124,6 +164,52 @@ pub struct MemState {
     pub settled_at: BTreeMap<i64, Ms>,
     /// `post_system` 每一条 @ 了谁（与 `posted` 一一对应）：session id，人 = `"human"`（同 DbPort 发出的 mentions）。
     pub posted_mentions: Vec<Vec<String>>,
+}
+
+/// Consume a single fault, retaining the exact affected rows and cursor snapshot.
+/// Claim/ack exemptions in the sim come from these hits, never from an armed flag.
+fn injected(st: &mut MemState, fault: MemFault, ids: &[i64]) -> Result<()> {
+    if !st.faults.contains(&fault) {
+        return Ok(());
+    }
+    let rows = st
+        .wakes
+        .iter()
+        .filter(|w| ids.contains(&w.id))
+        .cloned()
+        .collect();
+    let cursors = st.cursors.clone();
+    injected_from(st, fault, ids, rows, cursors)
+}
+
+fn injected_from(
+    st: &mut MemState,
+    fault: MemFault,
+    ids: &[i64],
+    rows: Vec<QueuedWake>,
+    cursors: BTreeMap<(String, String), i64>,
+) -> Result<()> {
+    if !st.faults.remove(&fault) {
+        return Ok(());
+    }
+    let fault_hit = st.fault_hits.len();
+    st.op_results.push(OpResult {
+        ids: ids.to_vec(),
+        fault_hit: Some(fault_hit),
+    });
+    st.fault_hits.push(FaultHit {
+        fault,
+        rows,
+        cursors,
+        after_rows: st
+            .wakes
+            .iter()
+            .filter(|w| ids.contains(&w.id))
+            .cloned()
+            .collect(),
+        after_cursors: st.cursors.clone(),
+    });
+    anyhow::bail!("synthetic one-shot {fault:?}")
 }
 
 /// 刚进 delivered / dropped 的行记下结算时刻（`st.now`）；回到 pending 的（不会发生：终态不再转移）不动。
@@ -228,6 +314,14 @@ impl MemPort {
         Self {
             st: Mutex::new(MemState::default()),
         }
+    }
+
+    pub fn fail_next(&self, fault: MemFault) {
+        self.lock().faults.insert(fault);
+    }
+
+    pub fn faults_off(&self) {
+        self.lock().faults.clear();
     }
 
     pub fn lock(&self) -> std::sync::MutexGuard<'_, MemState> {
@@ -641,6 +735,7 @@ impl Port for MemPort {
     /// 跟库一样严：规则只来自共享的那张表；没有这一行 / 表不认 = 错误，整批一行都不改。
     async fn settle(&self, ids: &[i64], s: Settle, _now: Ms) -> Result<()> {
         let mut st = self.lock();
+        injected(&mut st, MemFault::Settle, ids)?;
         let floors = st.human_stop_floors.clone();
         apply_with_stop_floors(&mut st.wakes, &floors, ids, s.event())?;
         mark_settled(&mut st);
@@ -650,11 +745,16 @@ impl Port for MemPort {
                 note_error(&mut st, *id, error);
             }
         }
+        st.op_results.push(OpResult {
+            ids: ids.to_vec(),
+            fault_hit: None,
+        });
         Ok(())
     }
 
     async fn claim(&self, b: &Batch) -> Result<()> {
         let mut st = self.lock();
+        injected(&mut st, MemFault::Claim, &b.ids())?;
         // 模拟 `pending()` 与 `claim` 之间别人作废了一行（人停、机组移除）：先把它记 dropped，再照常 claim。
         if let Some(id) = st.claim_race.take() {
             apply_event(&mut st.wakes, &[id], lifecycle::WakeEvent::Drop)?;
@@ -666,13 +766,25 @@ impl Port for MemPort {
             &floors,
             &b.ids(),
             lifecycle::WakeEvent::Claim,
-        )
-        .map(|_| ())
+        )?;
+        st.op_results.push(OpResult {
+            ids: b.ids(),
+            fault_hit: None,
+        });
+        Ok(())
     }
 
     /// 同库的一个事务：在副本上做完全部步骤，任何一步出错就丢掉副本（一行都不改、游标不动）。
     async fn ack(&self, b: &Batch, a: Ack) -> Result<Acked> {
         let mut st = self.lock();
+        injected(&mut st, MemFault::Ack, &b.ids())?;
+        let entry_rows: Vec<_> = st
+            .wakes
+            .iter()
+            .filter(|w| b.ids().contains(&w.id))
+            .cloned()
+            .collect();
+        let entry_cursors = st.cursors.clone();
         let mut wakes = st.wakes.clone();
         let wake_ids: Vec<i64> = b.wakes.iter().map(|w| w.id).collect();
         let rider_ids: Vec<i64> = b.riders.iter().map(|w| w.id).collect();
@@ -699,6 +811,13 @@ impl Port for MemPort {
                 apply_with_stop_floors(&mut wakes, &st.human_stop_floors, &rider_ids, fate)?;
                 let mut cursors = st.cursors.clone();
                 for (channel, seq) in &b.cursor_targets {
+                    injected_from(
+                        &mut st,
+                        MemFault::AckCursor,
+                        &b.ids(),
+                        entry_rows.clone(),
+                        entry_cursors.clone(),
+                    )?;
                     if let Some(e) = &st.advance_error {
                         anyhow::bail!("{e}");
                     }
@@ -726,6 +845,10 @@ impl Port for MemPort {
                         origins.push(w.origin.clone());
                     }
                 }
+                st.op_results.push(OpResult {
+                    ids: b.ids(),
+                    fault_hit: None,
+                });
                 Ok(Acked {
                     origins,
                     ..Default::default()
@@ -778,6 +901,10 @@ impl Port for MemPort {
                     };
                     note_error(&mut st, id, why);
                 }
+                st.op_results.push(OpResult {
+                    ids: b.ids(),
+                    fault_hit: None,
+                });
                 Ok(out)
             }
         }
@@ -790,6 +917,12 @@ impl Port for MemPort {
             .iter()
             .filter(|w| w.state == WakeState::Inflight)
             .map(|w| w.id)
+            .collect();
+        let before: Vec<_> = st
+            .wakes
+            .iter()
+            .filter(|w| ids.contains(&w.id))
+            .cloned()
             .collect();
         // 同 collab `reset_inflight`（= `ack_failed`）：按库里的次数判，每行按真正要用的事件改；全部记 last_error。
         let mut wakes = st.wakes.clone();
@@ -829,18 +962,25 @@ impl Port for MemPort {
         }
         st.wakes = wakes;
         mark_settled(&mut st);
-        for id in ids {
+        for id in &ids {
             let why = if st
                 .wakes
                 .iter()
-                .any(|w| w.id == id && cancelled(&st.human_stop_floors, w))
+                .any(|w| w.id == *id && cancelled(&st.human_stop_floors, w))
             {
                 crewd_collab::wakes::HUMAN_STOP_ERROR
             } else {
                 error
             };
-            note_error(&mut st, id, why);
+            note_error(&mut st, *id, why);
         }
+        let after = st
+            .wakes
+            .iter()
+            .filter(|w| ids.contains(&w.id))
+            .cloned()
+            .collect();
+        st.rescues.push(Rescue { before, after });
         Ok(out)
     }
 
@@ -905,6 +1045,7 @@ impl Port for MemPort {
 
     async fn put_latch(&self, l: &Latch) -> Result<()> {
         let mut st = self.lock();
+        injected(&mut st, MemFault::PutLatch, &[])?;
         if let Some(e) = &st.latch_error {
             anyhow::bail!("{e}");
         }
@@ -1114,12 +1255,83 @@ impl Port for MemPort {
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
         let mut st = self.lock();
         st.renders += 1;
+        injected(
+            &mut st,
+            MemFault::RenderWake,
+            &batch.iter().map(|w| w.id).collect::<Vec<_>>(),
+        )?;
         if let Some(e) = st
             .render_error
             .as_ref()
             .or(st.render_error_for.get(session))
         {
             anyhow::bail!("{e}");
+        }
+        if let Some(cap) = st.window_cap {
+            let cap = cap.max(1);
+            let mut ranges: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+            for message in batch
+                .iter()
+                .filter(|w| w.kind == WakeKind::Message)
+                .filter_map(|w| w.msg.as_ref())
+            {
+                let range = ranges
+                    .entry(message.channel.clone())
+                    .or_insert((message.seq, message.seq));
+                range.0 = range.0.min(message.seq);
+                range.1 = range.1.max(message.seq);
+            }
+            let mut tops = BTreeMap::new();
+            let mut parts = Vec::new();
+            for (channel, (min, max)) in ranges {
+                let after = st
+                    .cursors
+                    .get(&(session.into(), channel.clone()))
+                    .copied()
+                    .unwrap_or(min - 1)
+                    .min(min - 1);
+                let shown: Vec<_> = st
+                    .messages
+                    .range((channel.clone(), after + 1)..=(channel.clone(), max))
+                    .filter(|(_, (m, _))| m.sender.session_id() != Some(session))
+                    .take(cap)
+                    .map(|(_, (m, text))| (m.at.seq, text.clone()))
+                    .collect();
+                let end = if shown.len() >= cap {
+                    shown.last().expect("positive cap").0
+                } else {
+                    max
+                };
+                parts.extend(shown.into_iter().map(|(_, text)| text));
+                tops.insert(channel, end);
+            }
+            parts.extend(
+                batch
+                    .iter()
+                    .filter(|w| w.kind != WakeKind::Message)
+                    .map(|w| {
+                        w.note
+                            .clone()
+                            .unwrap_or_else(|| format!("{}:{}", w.kind, w.source))
+                    }),
+            );
+            let deferred: Vec<_> = batch
+                .iter()
+                .filter(|w| {
+                    w.msg
+                        .as_ref()
+                        .is_some_and(|m| tops.get(&m.channel).is_some_and(|end| m.seq > *end))
+                })
+                .map(|w| w.id)
+                .collect();
+            st.rendered_windows
+                .push((batch.iter().map(|w| w.id).collect(), deferred.clone()));
+            return Ok(Rendered {
+                text: parts.join("\n---\n"),
+                dropped: vec![],
+                deferred,
+                cursor_targets: tops.into_iter().collect(),
+            });
         }
         let deferred: Vec<i64> = batch
             .iter()
@@ -1184,6 +1396,7 @@ pub struct LaunchRecord {
 #[derive(Default)]
 pub struct StandInState {
     pub launches: Vec<LaunchRecord>,
+    pub launch_outcomes: Vec<(String, bool)>,
     /// 依次让下几次 launch 失败（原因）。
     pub fail_next: Vec<String>,
     pub sends: BTreeMap<String, Vec<(u64, String)>>,
@@ -1209,6 +1422,8 @@ pub struct StandInState {
     pub working: BTreeSet<String>,
     pub deciding: BTreeSet<String>,
     pub running: BTreeSet<String>,
+    /// Independent launch/exit accounting; a set alone would hide duplicate launches.
+    pub process_counts: BTreeMap<String, i64>,
     /// 屏上此刻的待决策框（T10d 的回答按它核）：推 `Decision(Appeared)` 时记下、`Cleared` 时清掉；测试也可以直接改。
     pub boxes: BTreeMap<String, PendingDecision>,
     /// 回答每按下一键之后屏上换成什么（依次取；`None` = 框没了）。取完了就不变——「被人改了框」的测试往这里排。
@@ -1247,6 +1462,7 @@ impl StandInState {
             }
             SessionEvent::Exited(_) => {
                 if self.running.remove(session) {
+                    *self.process_counts.entry(session.into()).or_default() -= 1;
                     self.abandon(session, "进程退出");
                 }
             }
@@ -1343,7 +1559,9 @@ impl StandIn {
     pub fn end_stream(&self, session: &str) {
         let mut st = self.lock();
         st.events.remove(session);
-        st.running.remove(session);
+        if st.running.remove(session) {
+            *st.process_counts.entry(session.into()).or_default() -= 1;
+        }
     }
 
     pub fn sent(&self, session: &str) -> Vec<String> {
@@ -1432,8 +1650,10 @@ impl Executor for StandIn {
             let mut s = st.lock().expect("测试器材锁中毒");
             if !s.fail_next.is_empty() {
                 let why = s.fail_next.remove(0);
+                s.launch_outcomes.push((req.session_id.clone(), false));
                 return Err(LaunchError::Failed(why));
             }
+            s.launch_outcomes.push((req.session_id.clone(), true));
             s.launches.push(LaunchRecord {
                 session: req.session_id.clone(),
                 workdir: req.workdir.clone(),
@@ -1449,6 +1669,7 @@ impl Executor for StandIn {
             })
             .expect("刚建的通道");
             s.events.insert(req.session_id.clone(), tx);
+            *s.process_counts.entry(req.session_id.clone()).or_default() += 1;
             s.running.insert(req.session_id.clone());
             let outstanding = s.outstanding.entry(req.session_id.clone()).or_default();
             outstanding.clear();
@@ -1605,6 +1826,7 @@ impl ExecHandle for StandInHandle {
             return Ok(());
         }
         if s.running.remove(&self.session) {
+            *s.process_counts.entry(self.session.clone()).or_default() -= 1;
             s.abandon(&self.session, "session 被停掉");
             let info = crewd_exec::session::ExitInfo {
                 status: crewd_exec::session::ExitStatusKind::Signal(15),
@@ -1762,6 +1984,52 @@ impl Rig {
                 Err(_) => quiet += 1,
             }
         }
+    }
+
+    /// Simulated process/actor crash: no orderly Exited, same durable Port and clock.
+    /// Only synthetic StandIn state is cleared; old forwarding tasks lose both ends.
+    pub async fn crash(self) -> anyhow::Result<Self> {
+        let Self {
+            core,
+            port,
+            exec,
+            clock,
+            worktrees,
+            rx,
+        } = self;
+        let cfg = core.cfg.clone();
+        let hooks = core.hooks.clone();
+        drop(core);
+        drop(rx);
+        {
+            let mut st = exec.lock();
+            st.events.clear();
+            st.running.clear();
+            for count in st.process_counts.values_mut() {
+                *count = 0;
+            }
+            st.outstanding.clear();
+            st.working.clear();
+            st.deciding.clear();
+            st.boxes.clear();
+            st.box_script.clear();
+            st.answer_hold.clear();
+            st.hang_on_stop.clear();
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let execs = Executors::new().with("claude", Arc::new(exec.clone()));
+        let mut core = Core::new(port.clone(), execs, hooks, clock.clone(), cfg, tx).await?;
+        core.boot().await?;
+        let mut rig = Self {
+            core,
+            port,
+            exec,
+            clock,
+            worktrees,
+            rx,
+        };
+        rig.settle().await;
+        Ok(rig)
     }
 
     pub async fn cmd<T>(&mut self, make: impl FnOnce(oneshot::Sender<T>) -> Cmd) -> T {
