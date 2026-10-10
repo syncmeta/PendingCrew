@@ -13,6 +13,12 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 impl TokenTable {
+    /// Fixture cardinality only; never exposes token values or a production RPC.
+    #[cfg(test)]
+    pub(crate) fn test_len(&self) -> usize {
+        self.inner.lock().expect("token table poisoned").len()
+    }
+
     /// 给 session 发一个新令牌（替换旧的）。64 个十六进制字符。
     pub fn mint(&self, session: &str) -> String {
         let t = format!(

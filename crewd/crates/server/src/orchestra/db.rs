@@ -15,9 +15,13 @@ use crewd_collab::Change;
 use crewd_collab::cursor_reservations as cr;
 use crewd_collab::wakes::{self as cw, Enqueued, WakePriority, WakeRequest, WakeRow};
 use crewd_exec::resume::AgentIdLedger;
-use crewd_proto::{ChannelKind, MemberRef, MentionKind, Message, RestartAnswer, SenderKind};
+#[cfg(test)]
+use crewd_proto::Message;
+use crewd_proto::{MentionKind, RestartAnswer, SenderKind};
 use crewd_wake::breaker::{HUMAN, SYSTEM};
-use crewd_wake::plan::{ChannelCtx, Listen, Mention, MsgFacts, Sender};
+use crewd_wake::plan::{ChannelCtx, MsgFacts};
+#[cfg(test)]
+use crewd_wake::plan::{Mention, Sender};
 use crewd_wake::text::Lang;
 use crewd_wake::{Latch, LatchScope, MessageRef, Ms, NewWake, Priority, QueuedWake, WakeKind};
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -160,66 +164,9 @@ fn queued(conn: &rusqlite::Connection, row: &WakeRow) -> collab::Result<QueuedWa
     })
 }
 
-/// 消息 → 规划要素。`now` 只在读不出发送时刻时用：读不出 = 当作刚发的（绝不当成陈旧而不叫，ledger NOTE T2）。
-pub(crate) fn facts_of(m: &Message, now: Ms) -> MsgFacts {
-    let sender = match (m.sender_kind, &m.sender_session_id) {
-        (SenderKind::Human, _) => Sender::Human,
-        (SenderKind::Session | SenderKind::Captain, Some(id)) => Sender::Session {
-            id: id.clone(),
-            captain: m.sender_kind == SenderKind::Captain,
-        },
-        _ => Sender::System,
-    };
-    // @ 只决定叫醒谁（§24.2）。没有目标的 session / 机长 @（旧数据：机组没有机长时没落定的 @机长）叫不醒任何人，略过；
-    // 人发的消息因此没指向任何成员时照兜底规则走（Option A）。
-    let mentions = m
-        .mentions
-        .iter()
-        .filter_map(|x| match (x.kind, &x.target_id) {
-            (MentionKind::Session | MentionKind::Captain, Some(t)) => {
-                Some(Mention::Session(t.clone()))
-            }
-            (MentionKind::Session | MentionKind::Captain, None) => None,
-            (MentionKind::Human, _) => Some(Mention::Human),
-        })
-        .collect();
-    let created_at = ms_of(&m.created_at).unwrap_or_else(|| {
-        eprintln!(
-            "crewd: 编排：消息 {} 的发送时刻读不出（{:?}），按刚发的算",
-            m.id, m.created_at
-        );
-        now
-    });
-    MsgFacts {
-        provenance: crewd_wake::plan::MessageProvenance::Ordinary,
-        id: m.id.clone(),
-        at: MessageRef {
-            channel: m.channel_id.clone(),
-            seq: m.seq,
-        },
-        sender,
-        mentions,
-        created_at,
-    }
-}
-
-/// Keep provenance read/validation in the same DB operation as the message facts.
-fn facts_with_provenance(
-    conn: &rusqlite::Connection,
-    message: &Message,
-    now: Ms,
-) -> collab::Result<MsgFacts> {
-    let mut facts = facts_of(message, now);
-    facts.provenance = match collab::message_provenance::read(conn, message)? {
-        collab::message_provenance::MessageProvenance::Ordinary => {
-            crewd_wake::plan::MessageProvenance::Ordinary
-        }
-        collab::message_provenance::MessageProvenance::StopRelay { .. } => {
-            crewd_wake::plan::MessageProvenance::StopRelay
-        }
-    };
-    Ok(facts)
-}
+#[cfg(test)]
+pub(crate) use crate::wake_adapter::facts_of;
+use crate::wake_adapter::message_facts as facts_with_provenance;
 
 fn row_of(conn: &rusqlite::Connection, s: crewd_proto::Session) -> collab::Result<SessionRow> {
     let crew = collab::crews::get(conn, &s.crew_id)?;
@@ -262,15 +209,6 @@ fn row_of(conn: &rusqlite::Connection, s: crewd_proto::Session) -> collab::Resul
 fn latch_scope(scope: LatchScope, id: &str) -> Result<cw::latches::Scope> {
     cw::latches::Scope::parse(scope.as_str(), id)
         .ok_or_else(|| anyhow::anyhow!("熔断 id 认不出：{scope} {id:?}"))
-}
-
-fn session_ids(ms: Vec<MemberRef>) -> Vec<String> {
-    ms.into_iter()
-        .filter_map(|m| match m {
-            MemberRef::Session { id } => Some(id),
-            MemberRef::Human => None,
-        })
-        .collect()
 }
 
 fn acked_origins(b: &Batch) -> Vec<String> {
@@ -842,59 +780,8 @@ impl Port for DbPort {
 
     async fn channel_ctx(&self, channel: &str, now: Ms) -> Result<Option<ChannelCtx>> {
         let channel = channel.to_string();
-        self.read(move |c| {
-            let Some(ch) = opt(collab::channels::get(c, &channel))? else {
-                return Ok(None);
-            };
-            // 成员 = M3a 的有效成员（`channels::members`），且与注入面（`cursors::unread_for` 用的
-            // `channels_of_session`）同一口径：归档的 topic / dm / 人类群里没有人「在」（大厅照算：它的机组
-            // 被移除时大厅归档，大厅仍在它的 session 的注入面上）。
-            let archived_out = ch.archived_at.is_some() && ch.kind != ChannelKind::Lobby;
-            let session_members = if archived_out {
-                Vec::new()
-            } else {
-                session_ids(collab::channels::members(c, &channel)?)
-            };
-            let owner = match ch.owner {
-                Some(MemberRef::Session { id }) => Some(id),
-                _ => None,
-            };
-            let crew_captain = collab::crews::captain_of(c, &ch.crew_id)?;
-            let dm_sessions = if ch.kind == ChannelKind::Dm {
-                session_members.clone()
-            } else {
-                Vec::new()
-            };
-            // 传真实的 now（不是 0）：0 会把已过期的收听也读回来。归档的群、读不到的收听 collab 已滤掉。
-            let active = collab::listens::active_for_channel(c, &channel, now.0)?;
-            // 活着 = 存在且机组没被移除（不是「进程在跑」）：群成员 ∪ 机组没被移除的收听者。
-            let mut live_sessions = session_members.clone();
-            for l in &active {
-                let Some(s) = crewd_store::sessions::get(c, &l.session)? else {
-                    continue;
-                };
-                if !collab::crews::is_archived(c, &s.crew_id)? && !live_sessions.contains(&s.id) {
-                    live_sessions.push(s.id);
-                }
-            }
-            let listens = active
-                .into_iter()
-                .map(|l| Listen {
-                    session: l.session,
-                    until: l.until_ms.map_or(Ms(i64::MAX), Ms),
-                    senders: (!l.senders.is_empty()).then_some(l.senders),
-                })
-                .collect();
-            Ok(Some(ChannelCtx {
-                session_members,
-                live_sessions,
-                owner,
-                dm_sessions,
-                crew_captain,
-                listens,
-            }))
-        })
-        .await
+        self.read(move |c| crate::wake_adapter::channel_context(c, &channel, now))
+            .await
     }
 
     async fn unread(&self, session: &str) -> Result<Vec<MsgFacts>> {

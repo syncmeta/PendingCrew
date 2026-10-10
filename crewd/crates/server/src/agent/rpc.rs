@@ -205,6 +205,8 @@ fn spawn_watcher(
 
 #[cfg(test)]
 mod tests {
+    mod s72_tests;
+
     use std::time::Duration;
 
     use crewd_proto::agent::{TOOLS_CHANGED, methods};

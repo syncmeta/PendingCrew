@@ -133,6 +133,8 @@ pub fn now_ms() -> i64 {
     crewd_store::now_ms()
 }
 
+pub use crate::wake_adapter::{PredictedWake, predict_wakes};
+
 /// 读：在库线程上拿只读连接跑 `f`。
 async fn read<T, F>(st: &AppState, f: F) -> PortResult<T>
 where
@@ -2376,5 +2378,352 @@ mod tests {
         assert!(matches!(e, PortError::Internal(_)), "{e:?}");
         let e = PortError::from(CollabError::Work(Rejected::OwnerRequired));
         assert!(matches!(e, PortError::Refused(_)), "{e:?}");
+    }
+
+    mod s72_prediction_tests {
+        use super::*;
+        use crate::agent::{Role, testkit::Fixture};
+        use crate::wake_adapter::{PredictionTestControl, set_prediction_test_control};
+        use crewd_wake::{Ms, plan::MAX_WAKE_AGE_MS};
+
+        async fn close(f: &Fixture) {
+            let db = f.state.db.clone();
+            tokio::task::spawn_blocking(move || db.shutdown())
+                .await
+                .unwrap();
+        }
+
+        async fn directed(f: &Fixture, body: &str) -> Message {
+            let lobby = lobby_of(&f.state, &f.crew).await.unwrap().id;
+            f.session_post(
+                &f.worker,
+                &lobby,
+                body,
+                vec![Mention {
+                    kind: crewd_proto::MentionKind::Session,
+                    target_id: Some(f.captain.clone()),
+                }],
+            )
+            .await
+        }
+
+        async fn snapshot(
+            f: &Fixture,
+        ) -> (Vec<i64>, Vec<(String, String, i64)>, Vec<(String, String)>) {
+            f.state
+                .db
+                .call(|s| {
+                    let counts = [
+                        "messages",
+                        "wakes",
+                        "channels",
+                        "channel_members",
+                        "listens",
+                        "sessions",
+                    ]
+                    .iter()
+                    .map(|table| {
+                        s.conn()
+                            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                            .unwrap()
+                    })
+                    .collect();
+                    let cursors = s
+                    .conn()
+                    .prepare(
+                        "SELECT reader,channel_id,seq FROM read_cursors ORDER BY reader,channel_id",
+                    )
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                    let meta = s
+                        .conn()
+                        .prepare("SELECT key,value FROM meta ORDER BY key")
+                        .unwrap()
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .unwrap()
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap();
+                    (counts, cursors, meta)
+                })
+                .await
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_reloads_identity_and_has_no_write_effects() {
+            let f = Fixture::new().await;
+            let m = directed(&f, "S72_REAL_PERSISTED_BODY").await;
+            let before = snapshot(&f).await;
+            let mut forged = m.clone();
+            forged.text = "untrusted caller copy".into();
+            forged.mentions.clear();
+            forged.created_at = "1900-01-01T00:00:00Z".into();
+            let predicted = predict_wakes(&f.state, &f.worker, &[forged], Locale::Zh)
+                .await
+                .unwrap();
+            let mut wrong_seq = m.clone();
+            wrong_seq.seq += 1;
+            let bad_seq = predict_wakes(&f.state, &f.worker, &[wrong_seq], Locale::Zh).await;
+            let mut wrong_channel = m.clone();
+            wrong_channel.channel_id = "wrong-channel".into();
+            let bad_channel =
+                predict_wakes(&f.state, &f.worker, &[wrong_channel], Locale::Zh).await;
+            let mut wrong_id = m.clone();
+            wrong_id.id = "missing-message".into();
+            let bad_id = predict_wakes(&f.state, &f.worker, &[wrong_id], Locale::Zh).await;
+            let bad_sender = predict_wakes(&f.state, &f.captain, &[m], Locale::Zh).await;
+            let after = snapshot(&f).await;
+            close(&f).await;
+            assert_eq!(predicted.len(), 1);
+            assert_eq!(predicted[0].session, f.captain);
+            assert!(!predicted[0].label.is_empty());
+            assert!(
+                bad_seq.is_err() && bad_channel.is_err() && bad_id.is_err() && bad_sender.is_err()
+            );
+            assert_eq!(before, after, "S72 readonly prediction effects");
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_persisted_age_and_bad_time_use_explicit_snapshot() {
+            let f = Fixture::new().await;
+            let m = directed(&f, "S72_TIME_BODY").await;
+            let at = chrono::DateTime::parse_from_rfc3339(&m.created_at)
+                .unwrap()
+                .timestamp_millis();
+            let expired = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: Some(Ms(at + MAX_WAKE_AGE_MS + 1)),
+                    fail_read: false,
+                },
+            );
+            let old = predict_wakes(&f.state, &f.worker, std::slice::from_ref(&m), Locale::Zh)
+                .await
+                .unwrap();
+            drop(expired);
+            let id = m.id.clone();
+            f.state
+                .db
+                .call(move |s| {
+                    s.conn()
+                        .execute(
+                            "UPDATE messages SET created_at='unparseable' WHERE id=?1",
+                            [id],
+                        )
+                        .unwrap()
+                })
+                .await
+                .unwrap();
+            let fresh = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: Some(Ms(at + MAX_WAKE_AGE_MS + 1)),
+                    fail_read: false,
+                },
+            );
+            let bad_time = predict_wakes(&f.state, &f.worker, &[m], Locale::Zh)
+                .await
+                .unwrap();
+            drop(fresh);
+            close(&f).await;
+            assert!(old.is_empty(), "S72 actual persisted old message");
+            assert_eq!(
+                bad_time[0].session, f.captain,
+                "S72 bad time is now, never stale"
+            );
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_bad_provenance_is_error_not_nobody() {
+            let f = Fixture::new().await;
+            let m = directed(&f, "S72_BAD_PROVENANCE_BODY").await;
+            let key = format!("message.provenance.v1.{}", m.id);
+            f.state
+                .db
+                .call(move |s| crewd_store::meta_set(s.conn(), &key, "invalid-json").unwrap())
+                .await
+                .unwrap();
+            let before = snapshot(&f).await;
+            let result = predict_wakes(&f.state, &f.worker, &[m], Locale::Zh).await;
+            let after = snapshot(&f).await;
+            close(&f).await;
+            assert!(
+                matches!(result, Err(PortError::Internal(_))),
+                "S72 strict provenance read failure"
+            );
+            assert_eq!(before, after);
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_controls_are_one_shot_scoped_and_cancel_safe() {
+            let f = Fixture::new().await;
+            let other = Fixture::new().await;
+            let m = directed(&f, "S72_SCOPED_FAILURE_BODY").await;
+            let n = directed(&other, "S72_OTHER_STATE_BODY").await;
+            let unused = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: None,
+                    fail_read: true,
+                },
+            );
+            drop(unused);
+            let cancelled =
+                predict_wakes(&f.state, &f.worker, std::slice::from_ref(&m), Locale::Zh)
+                    .await
+                    .unwrap();
+            let guard = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: None,
+                    fail_read: true,
+                },
+            );
+            let empty = predict_wakes(&f.state, &f.worker, &[], Locale::Zh)
+                .await
+                .unwrap();
+            let independent = predict_wakes(&other.state, &other.worker, &[n], Locale::Zh)
+                .await
+                .unwrap();
+            let failed =
+                predict_wakes(&f.state, &f.worker, std::slice::from_ref(&m), Locale::Zh).await;
+            let replacement = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: None,
+                    fail_read: true,
+                },
+            );
+            drop(guard); // Must not erase a newer registration for the same poster.
+            let newer =
+                predict_wakes(&f.state, &f.worker, std::slice::from_ref(&m), Locale::Zh).await;
+            drop(replacement);
+            let positive = predict_wakes(&f.state, &f.worker, &[m], Locale::Zh)
+                .await
+                .unwrap();
+            close(&f).await;
+            close(&other).await;
+            assert_eq!(cancelled.len(), 1);
+            assert!(empty.is_empty());
+            assert_eq!(independent.len(), 1);
+            assert!(matches!(failed, Err(PortError::Internal(_))));
+            assert!(matches!(newer, Err(PortError::Internal(_))));
+            assert_eq!(positive.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_dedups_ids_not_equal_display_names() {
+            let f = Fixture::new().await;
+            f.add_session(&f.crew, "s72-peer", Role::Worker, "same-safe-name")
+                .await;
+            let captain = f.captain.clone();
+            f.state
+                .db
+                .call(move |s| {
+                    s.conn()
+                        .execute(
+                            "UPDATE sessions SET display_name='same-safe-name' WHERE id=?1",
+                            [captain],
+                        )
+                        .unwrap();
+                })
+                .await
+                .unwrap();
+            let lobby = lobby_of(&f.state, &f.crew).await.unwrap().id;
+            let m = f
+                .session_post(
+                    &f.worker,
+                    &lobby,
+                    "S72_ID_UNION_BODY",
+                    vec![
+                        Mention {
+                            kind: crewd_proto::MentionKind::Session,
+                            target_id: Some(f.captain.clone()),
+                        },
+                        Mention {
+                            kind: crewd_proto::MentionKind::Session,
+                            target_id: Some("s72-peer".into()),
+                        },
+                    ],
+                )
+                .await;
+            let first = predict_wakes(&f.state, &f.worker, &[m.clone(), m], Locale::Zh)
+                .await
+                .unwrap();
+            close(&f).await;
+            assert_eq!(
+                first.iter().map(|p| p.session.as_str()).collect::<Vec<_>>(),
+                [f.captain.as_str(), "s72-peer"]
+            );
+            assert_eq!(
+                first.len(),
+                2,
+                "S72 duplicate messages do not duplicate target IDs"
+            );
+        }
+
+        #[tokio::test]
+        async fn s72_prediction_listener_expiry_equality_is_exclusive() {
+            let f = Fixture::new().await;
+            f.add_session(&f.crew, "s72-listener", Role::Worker, "expiry listener")
+                .await;
+            let m = directed(&f, "S72_EXPIRY_BODY").await;
+            // The real setter refuses past deadlines; use a future persisted deadline,
+            // then exercise the exact boundary with the receipt-only time control.
+            let until = now_ms() + 60_000;
+            set_listen(
+                &f.state,
+                "s72-listener",
+                &m.channel_id,
+                Some(until),
+                vec![f.worker.clone()],
+            )
+            .await
+            .unwrap();
+            let g = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: Some(Ms(until - 1)),
+                    fail_read: false,
+                },
+            );
+            let before = predict_wakes(&f.state, &f.worker, std::slice::from_ref(&m), Locale::Zh)
+                .await
+                .unwrap();
+            drop(g);
+            let g = set_prediction_test_control(
+                &f.state,
+                &f.worker,
+                PredictionTestControl {
+                    now: Some(Ms(until)),
+                    fail_read: false,
+                },
+            );
+            let equal = predict_wakes(&f.state, &f.worker, &[m], Locale::Zh)
+                .await
+                .unwrap();
+            drop(g);
+            close(&f).await;
+            assert_eq!(
+                before
+                    .iter()
+                    .map(|p| p.session.as_str())
+                    .collect::<Vec<_>>(),
+                [f.captain.as_str(), "s72-listener"]
+            );
+            assert_eq!(
+                equal.iter().map(|p| p.session.as_str()).collect::<Vec<_>>(),
+                [f.captain.as_str()]
+            );
+        }
     }
 }

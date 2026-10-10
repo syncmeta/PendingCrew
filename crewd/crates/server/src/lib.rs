@@ -8,6 +8,7 @@ pub mod hub;
 pub mod ledger;
 pub mod orchestra;
 pub mod token;
+pub(crate) mod wake_adapter;
 
 use crewd_exec::registry::{ApplyOutcome, OrphanDecision, OrphanReport, ProcessRegistry};
 use crewd_store::{Db, Store};
@@ -34,6 +35,8 @@ pub struct AppState {
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
     #[cfg(test)]
     test_db_write_barrier: Arc<std::sync::Mutex<Option<DbWriteBarrier>>>,
+    #[cfg(test)]
+    pub(crate) s72_prediction_tests: wake_adapter::PredictionTestControls,
 }
 
 impl AppState {
@@ -47,6 +50,8 @@ impl AppState {
             orchestra: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_db_write_barrier: Default::default(),
+            #[cfg(test)]
+            s72_prediction_tests: Default::default(),
         }
     }
 

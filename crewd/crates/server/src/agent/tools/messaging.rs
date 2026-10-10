@@ -213,7 +213,7 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
                 // The @ rode on the first item, which was posted: only the tokens come back.
                 cx.st.agent.refund_post(&cx.me.session_id, total - i, false);
                 let detail = cx.fail(e).text;
-                return cx.err(
+                let partial = cx.err(
                     "r.post_partial",
                     &[
                         ("sent", &seq_list(&posted)),
@@ -222,6 +222,10 @@ pub async fn post(cx: &Ctx<'_>, args: Value) -> CallResult {
                         ("detail", &detail),
                     ],
                 );
+                // Only the actual committed prefix participates. The original failure,
+                // refund and no-whole-batch-retry contract remain an error result.
+                let (prediction, _) = wake_receipt(cx, &channel.id, &posted).await;
+                return CallResult::err(format!("{}\n{prediction}", partial.text));
             }
         }
     }
@@ -340,7 +344,7 @@ async fn no_target(cx: &Ctx<'_>) -> CallResult {
     cx.err("r.post_no_target", &[("choices", &choices)])
 }
 
-/// What happened and whom it wakes (S72: the stored @ targets; M3i-a swaps in the wake planner).
+/// What was committed and whom the shared planner currently predicts, not delivery confirmation.
 async fn receipt(
     cx: &Ctx<'_>,
     channel: &ChannelView,
@@ -370,18 +374,14 @@ async fn receipt(
         }
         None => out.push(cx.r("r.posted", &[("channel", &label), ("seqs", &seqs)])),
     }
-    if channel.kind == ChannelKind::Dm {
-        out.push(cx.r("r.posted_wakes_dm", &[]));
-    } else {
-        let names = match wake_names(cx, posted).await {
-            Ok(n) => n,
-            Err(e) => return e,
-        };
-        if names.is_empty() {
-            out.push(cx.r("r.posted_wakes_none", &[]));
-        } else {
-            out.push(cx.r("r.posted_wakes", &[("names", &names.join(NAME_SEP))]));
-        }
+    let (prediction, unavailable) = wake_receipt(cx, &channel.id, posted).await;
+    out.push(prediction);
+    if unavailable {
+        // The posts already committed. In a real read failure, optional member/home reads
+        // may fail too; do not let them overwrite successful refs with a failed-post result.
+        return CallResult::ok(out.join("\n"));
+    }
+    if channel.kind != ChannelKind::Dm {
         // Membership AFTER the post: posting into my home human channel joins it (collab).
         let member = match port::channel(cx.st, &channel.id).await {
             Ok(c) => c.is_some_and(|c| c.has_session(&cx.me.session_id)),
@@ -418,43 +418,34 @@ async fn receipt(
     CallResult::ok(out.join("\n"))
 }
 
-/// The @ targets of the posted messages that this wakes, as the injection surface labels them:
-/// not me, and not @human (the human is not woken; `r.human_not_watching` covers where it is seen).
-/// Listeners are not listed (S72 placeholder; M3i-a swaps in the wake planner).
-async fn wake_names(
+/// A readonly prediction of actual committed identities, for both DM and non-DM and prefixes.
+/// IDs are deduplicated by the shared adapter before established safe labels are rendered.
+async fn wake_receipt(
     cx: &Ctx<'_>,
+    channel: &str,
     posted: &[crewd_proto::Message],
-) -> Result<Vec<String>, CallResult> {
-    let Some(first) = posted.first() else {
-        return Ok(vec![]);
-    };
-    let me = cx.me.session_id.as_str();
-    let woken: Vec<crewd_proto::Message> = posted
-        .iter()
-        .cloned()
-        .map(|mut m| {
-            m.mentions
-                .retain(|x| x.kind != MentionKind::Human && x.target_id.as_deref() != Some(me));
-            m
-        })
-        .collect();
-    let blocks = port::blocks(
-        cx.st,
-        &cx.me.session_id,
-        cx.loc,
-        vec![(first.channel_id.clone(), woken)],
-    )
-    .await
-    .map_err(|e| cx.fail(e))?;
-    let mut names: Vec<String> = Vec::new();
-    for line in blocks.iter().flat_map(|b| &b.lines) {
-        for n in &line.mentions {
-            if !names.contains(n) {
-                names.push(n.clone());
-            }
+) -> (String, bool) {
+    match port::predict_wakes(cx.st, &cx.me.session_id, posted, cx.loc).await {
+        Ok(targets) if targets.is_empty() => (cx.r("r.posted_wakes_none", &[]), false),
+        Ok(targets) => {
+            let names = targets
+                .into_iter()
+                .map(|t| t.label)
+                .collect::<Vec<_>>()
+                .join(NAME_SEP);
+            (cx.r("r.posted_wakes", &[("names", &names)]), false)
+        }
+        Err(e) => {
+            let detail = cx.detail(e);
+            (
+                cx.r(
+                    "r.posted_wakes_unavailable",
+                    &[("detail", &detail), ("channel", channel)],
+                ),
+                true,
+            )
         }
     }
-    Ok(names)
 }
 
 #[derive(Deserialize)]
@@ -1233,7 +1224,7 @@ mod tests {
             "{}",
             r.text
         );
-        // A dm: the other side is always woken.
+        // A dm uses the same actual planner target labels, not the old fixed-peer prose.
         let n = number_of(&f, &f.crew).await;
         let r = run(
             &f,
@@ -1243,9 +1234,20 @@ mod tests {
         )
         .await;
         assert!(!r.is_error, "{}", r.text);
+        let peer = f.captain.clone();
+        let peer_label = f
+            .state
+            .db
+            .call(move |s| crewd_collab::render::target_label(s.conn(), Locale::Zh, &peer))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
-            r.text
-                .contains(&text::r(Locale::Zh, "r.posted_wakes_dm", &[])),
+            r.text.contains(&text::r(
+                Locale::Zh,
+                "r.posted_wakes",
+                &[("names", &peer_label)]
+            )),
             "{}",
             r.text
         );

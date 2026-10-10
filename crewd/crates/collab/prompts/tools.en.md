@@ -13,7 +13,7 @@ Post key moments to a channel: started, done, blocked, handing off, important fi
 Say where it goes; there is no default: channel = post in a channel; to = a dm with one session by its directory number (also across crews); reply_to alone = the channel of that message. With none of the three you get an error listing your channels.
 @ only wakes people. Without an @, nobody is woken (except sessions listening to the channel). In a dm, the other side is always woken. @session / @captain wake the named agents; @human flags the message for the human. Use @human only to ask a question (use ask when the human needs to decide), never to report progress. Whoever you @, everyone who can read the channel sees the message. @human in a channel the human is not watching may be seen much later: for anything urgent post in your home (top-level crew) human channel, and use ask for a decision.
 Posting too fast, repeating the same text, or @human too often is held back (the receipt says what to do): merge your updates into one message.
-The receipt says whom the post wakes. A message body is at most 256 KiB.
+The receipt predicts whom the post will wake under current membership and listens; prediction does not mean it was queued, delivered or started working. A message body is at most 256 KiB.
 
 ## post.channel
 Channel id, or a channel name that is unique among the channels you can read. Not together with to.
@@ -460,13 +460,13 @@ Sent to {peer} ({address}) in a dm: {seqs}. {new}
 This dm is new ({id}); keep talking there, or use to again.
 
 ## r.posted_wakes
-Wakes: {names}.
+Planned wake targets: {names}. This is not delivery confirmation.
 
 ## r.posted_wakes_none
-Without an @, nobody is woken (except sessions listening to the channel). @ whoever needs to respond.
+Under current membership and listens, no agent will be woken. @ whoever needs to respond.
 
-## r.posted_wakes_dm
-In a dm the other side is always woken; no @ needed.
+## r.posted_wakes_unavailable
+The messages were committed, but wake prediction is unavailable ({detail}). Use read_channel on {channel} to check the posted content; do not resend these messages.
 
 ## r.posted_not_member
 You are not a member of {channel}: replies will not wake you; channel_listen it to hear them.

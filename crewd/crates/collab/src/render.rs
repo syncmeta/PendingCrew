@@ -143,7 +143,7 @@ pub fn sender_label(conn: &Connection, m: &Message, l: Locale) -> Result<String>
 }
 
 /// 「@ 了谁」的目标标签：同 `session_label`（是不是机长按此刻的机长指针）；session 已不在 = 无号的 id。
-fn target_label(conn: &Connection, l: Locale, id: &str) -> Result<String> {
+pub fn target_label(conn: &Connection, l: Locale, id: &str) -> Result<String> {
     Ok(match crewd_store::sessions::get(conn, id)? {
         Some(s) => {
             let captain = crews::captain_of(conn, &s.crew_id)?.as_deref() == Some(id);
