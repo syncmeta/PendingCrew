@@ -7,6 +7,10 @@
 //! Message freshness is checked after a real qualifying delivery attempt (using
 //! shared readiness/priority gates); an exact failed stale-row settlement must
 //! retry on a subsequent fault-free attempt. No second readiness policy lives here.
+//! Random crashes with outstanding RPC replies are explicitly skipped (coverage
+//! reports selected/applied/skipped); pending-RPC abrupt death is not covered.
+//! Eligible random crashes do not stop or settle first. Only end-run cleanup
+//! uses Stop to release remaining replies, preserving the I8 contract.
 //! Synthetic config uses loop thresholds 2/2, 250ms stagger, seeded retry jitter,
 //! and advancing 1-2 message windows to exercise rare persistence interleavings.
 //! Reproduce with CREWD_SIM_SEED=<decimal or 0xhex> CREWD_SIM_STEPS=<n> cargo test
@@ -687,6 +691,7 @@ fn require_not_stale(rows: &[QueuedWake], id: i64, now: Ms) -> Result<(), String
 struct Walk {
     seed: u64,
     step: usize,
+    phase: &'static str,
     trace: VecDeque<String>,
     oracle: Oracle,
     replies: Replies,
@@ -704,6 +709,7 @@ impl Walk {
         Self {
             seed,
             step: 0,
+            phase: "random",
             trace: VecDeque::new(),
             oracle: Oracle::default(),
             replies: Replies::default(),
@@ -725,15 +731,19 @@ impl Walk {
         }
     }
     fn failed(&self, e: impl Debug) -> ! {
-        panic!(
-            "SIM seed={} step={} invariant={e:?}\nlast {} inputs:\n{}\nreproduce: CREWD_SIM_SEED={} CREWD_SIM_STEPS={}",
+        panic!("{}", self.failure_report(e));
+    }
+    fn failure_report(&self, e: impl Debug) -> String {
+        format!(
+            "SIM seed={} step={} phase={} invariant={e:?}\nlast {} inputs:\n{}\nreproduce: CREWD_SIM_SEED={} CREWD_SIM_STEPS={}",
             self.seed,
             self.step,
+            self.phase,
             self.trace.len(),
             self.trace.iter().cloned().collect::<Vec<_>>().join("\n"),
             self.seed,
-            self.step + 1
-        );
+            self.step + usize::from(self.phase == "random")
+        )
     }
     fn poll_replies(&mut self) -> Result<(), String> {
         for session in self.replies.poll()? {
@@ -1215,7 +1225,27 @@ impl Walk {
         }
         false
     }
-    // Real control inputs release pending RPCs before an intentional actor crash.
+    async fn random_crash(&mut self, r: Rig) -> Result<(Rig, bool), String> {
+        // An abrupt actor crash cannot answer an outstanding RPC. Keep I8 honest:
+        // skip this selected input instead of changing durable intent with Stop.
+        self.poll_replies()?;
+        if !self.replies.pending.is_empty()
+            || !self.replies.resumes.is_empty()
+            || !self.replies.nudges.is_empty()
+        {
+            self.record("Crash skipped: outstanding reply; no stop, tick or settlement");
+            return Ok((r, false));
+        }
+        self.record("Crash(drop Core, kill StandIn, same Port, boot)");
+        self.check(&r).await?;
+        let before = r.port.lock().wakes.clone();
+        let r = r.crash().await.map_err(|e| e.to_string())?;
+        self.oracle.after_crash(before, &r).await?;
+        Ok((r, true))
+    }
+
+    // End-run cleanup releases pending RPCs with real control inputs. Random
+    // crashes never call this: Stop would change durable cancellation intent.
     // No fabricated successful Delivery: stop/shutdown produce genuine Abandoned
     // and NotRunning replies through the existing StandIn/Core path.
     async fn release_replies(&mut self, r: &mut Rig) -> Result<(), String> {
@@ -1262,19 +1292,12 @@ async fn run(seed: u64, steps: usize) -> Walk {
         let op = w.rng.operation();
         *w.selected.entry(op).or_default() += 1;
         let result = if op == Op::Crash {
-            w.record("Crash(drop Core, kill StandIn, same Port, boot)");
-            if let Err(e) = w.release_replies(&mut r).await {
-                w.failed(e);
-            }
-            if let Err(e) = w.check(&r).await {
-                w.failed(e);
-            }
-            let before = r.port.lock().wakes.clone();
-            r = match r.crash().await {
-                Ok(r) => r,
+            let (next, applied) = match w.random_crash(r).await {
+                Ok(result) => result,
                 Err(e) => w.failed(e),
             };
-            w.oracle.after_crash(before, &r).await.map(|_| true)
+            r = next;
+            Ok(applied)
         } else {
             w.apply(&mut r, op).await
         };
@@ -1291,6 +1314,7 @@ async fn run(seed: u64, steps: usize) -> Walk {
         }
     }
     w.step = steps;
+    w.phase = "cleanup";
     r.port.faults_off();
     r.exec.lock().fail_next.clear();
     if let Err(e) = w.release_replies(&mut r).await {
@@ -2025,4 +2049,81 @@ async fn sim_process_ruler_rejects_duplicate_not_hidden_by_running_set() {
     );
     r.exec.lock().process_counts.insert("cap".into(), 1);
     Oracle::default().check(&r).await.unwrap();
+}
+
+#[tokio::test]
+async fn sim_random_crash_with_pending_reply_does_not_insert_human_stop() {
+    let mut r = minimal_stop_rig().await;
+    let mut w = Walk::new(0);
+    let (tx, rx) = oneshot::channel();
+    w.replies.add_nudge(rx);
+    r.core
+        .handle(Input::Cmd(Cmd::Nudge {
+            session: "w".into(),
+            input: "sim pending nudge".into(),
+            reply: tx,
+        }))
+        .await;
+    r.settle().await;
+    w.check(&r).await.unwrap();
+    assert!(
+        !w.replies.nudges.is_empty(),
+        "control must retain a pending actual reply"
+    );
+    let before = r.port.lock().wakes.clone();
+    let floors = r.port.lock().human_stop_floors.clone();
+    let (mut r, applied) = w.random_crash(r).await.unwrap();
+    assert!(
+        !applied,
+        "a pending RPC makes this crash ineligible; do not fabricate a stop"
+    );
+    assert_eq!(r.port.lock().human_stop_floors, floors);
+    assert_eq!(r.port.lock().wakes, before);
+    assert!(r.live("w").is_some());
+    w.release_replies(&mut r).await.unwrap();
+    w.replies.complete().unwrap();
+}
+
+#[tokio::test]
+async fn sim_random_crash_keeps_stopping_inflight_until_actual_boot_rescue() {
+    let mut r = minimal_stop_rig().await;
+    r.exec.lock().hang_on_stop.insert("w".into());
+    let mut w = Walk::new(0);
+    w.stop(&mut r, "w".into()).await.unwrap();
+    w.check(&r).await.unwrap();
+    let before = r.port.lock().wakes.clone();
+    let floors = r.port.lock().human_stop_floors.clone();
+    assert_eq!(before[0].state, WakeState::Inflight);
+    let (r, applied) = w.random_crash(r).await.unwrap();
+    assert!(applied);
+    assert_eq!(r.port.lock().human_stop_floors, floors);
+    assert_eq!(
+        r.port.lock().rescues.last().unwrap().before,
+        before,
+        "crash must not settle the inflight batch before boot observes it"
+    );
+    assert_eq!(r.port.wakes_of("w")[0].state, WakeState::Dropped);
+}
+
+#[tokio::test]
+async fn sim_cleanup_replay_preserves_exact_random_prefix() {
+    let w = run(0, 22).await;
+    let report = w.failure_report("synthetic cleanup observation");
+    assert!(
+        report.contains("CREWD_SIM_SEED=0 CREWD_SIM_STEPS=22"),
+        "{report}"
+    );
+    assert!(report.contains("phase=cleanup"), "{report}");
+}
+
+#[test]
+fn sim_random_failure_replay_includes_the_failing_input() {
+    let mut w = Walk::new(7);
+    w.step = 21;
+    let report = w.failure_report("synthetic random observation");
+    assert!(
+        report.contains("CREWD_SIM_SEED=7 CREWD_SIM_STEPS=22"),
+        "{report}"
+    );
+    assert!(report.contains("phase=random"), "{report}");
 }
