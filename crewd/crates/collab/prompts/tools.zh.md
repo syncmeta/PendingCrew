@@ -468,6 +468,9 @@ mention 写法不对（kind = {kind}）：kind 只能是 session / captain / hum
 ## r.posted_wakes_unavailable
 消息已经提交，但唤醒预测暂不可用（{detail}）。用 read_channel 读取 {channel} 核对已发内容；请勿重发这些消息。
 
+## r.posted_wakes_internal
+内部错误 #{n}，详情见 crewd 日志
+
 ## r.posted_not_member
 你不是{channel}的成员：别人的回复叫不醒你；要听回复就 channel_listen 它。
 

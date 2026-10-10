@@ -556,6 +556,19 @@ fn assert_surfaces_unchanged(before: &Surface, after: &Surface) {
 }
 
 fn assert_unavailable(result: &CallResult, loc: Locale, channel: &str) {
+    let retry_advice = text::get(loc, "r.internal").split_once("{n}").unwrap().1;
+    assert!(
+        !result.text.contains(retry_advice),
+        "S72 committed prediction warning must not advise retrying the post: {}",
+        result.text
+    );
+    let numbered = text::r(loc, "r.posted_wakes_internal", &[("n", "INCIDENT")]);
+    let (number_prefix, number_suffix) = numbered.split_once("INCIDENT").unwrap();
+    assert!(
+        result.text.contains(number_prefix) && result.text.contains(number_suffix),
+        "S72 prediction error keeps a localized logged incident number: {}",
+        result.text
+    );
     let expected = text::r(
         loc,
         "r.posted_wakes_unavailable",

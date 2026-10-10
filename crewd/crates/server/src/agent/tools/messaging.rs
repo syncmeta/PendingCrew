@@ -436,7 +436,13 @@ async fn wake_receipt(
             (cx.r("r.posted_wakes", &[("names", &names)]), false)
         }
         Err(e) => {
-            let detail = cx.detail(e);
+            let detail = match e {
+                port::PortError::Internal(detail) => {
+                    let n = crate::dispatch::log_internal(&detail).to_string();
+                    cx.r("r.posted_wakes_internal", &[("n", &n)])
+                }
+                other => cx.detail(other),
+            };
             (
                 cx.r(
                     "r.posted_wakes_unavailable",

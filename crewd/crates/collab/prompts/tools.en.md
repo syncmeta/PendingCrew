@@ -468,6 +468,9 @@ Under current membership and listens, no agent will be woken. @ whoever needs to
 ## r.posted_wakes_unavailable
 The messages were committed, but wake prediction is unavailable ({detail}). Use read_channel on {channel} to check the posted content; do not resend these messages.
 
+## r.posted_wakes_internal
+internal error #{n}; details are in the crewd log
+
 ## r.posted_not_member
 You are not a member of {channel}: replies will not wake you; channel_listen it to hear them.
 
