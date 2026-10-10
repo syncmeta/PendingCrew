@@ -1,5 +1,5 @@
 //! claude 会话号账本的 SQLite 实现（`crewd_exec::resume::AgentIdLedger`）。
-//! 每次读写各开一条连接：一次启动只读写一两回，不值得跟 RPC 抢 `AppState` 那把锁。
+//! serve 使用 DbLedger，与 RPC 共用同一 DB FIFO；独立命令保留每次开连接的 StoreLedger。
 use std::io;
 use std::path::PathBuf;
 
@@ -84,6 +84,43 @@ impl AgentIdLedger for StoreLedger {
     }
 }
 
+/// Serve ledger: the driver calls this from its blocking task, and the writes
+/// join the server's DB FIFO instead of racing collab read-to-write transactions.
+/// The legacy standalone StoreLedger remains available for non-serve callers.
+pub struct DbLedger {
+    db: crewd_store::Db,
+    session_id: String,
+}
+
+impl DbLedger {
+    pub fn new(db: crewd_store::Db, session_id: impl Into<String>) -> Self {
+        Self {
+            db,
+            session_id: session_id.into(),
+        }
+    }
+}
+
+impl AgentIdLedger for DbLedger {
+    fn recorded(&self) -> io::Result<Option<String>> {
+        let session = self.session_id.clone();
+        self.db
+            .call_blocking(move |s| sessions::agent_session_id(s.conn(), &session))
+            .map_err(to_io)?
+            .map_err(to_io)
+    }
+
+    fn record(&self, agent_session_id: &str) -> io::Result<()> {
+        check_agent_session_id(agent_session_id)?;
+        let session = self.session_id.clone();
+        let id = agent_session_id.to_owned();
+        self.db
+            .call_blocking(move |s| sessions::set_agent_session_id(s.conn(), &session, &id))
+            .map_err(to_io)?
+            .map_err(to_io)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +159,37 @@ mod tests {
         };
         sessions::upsert(s.conn(), &ses, None).unwrap();
         db
+    }
+
+    #[test]
+    fn db_ledger_keeps_validation_missing_and_closed_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seeded(dir.path());
+        let db = crewd_store::Db::spawn(Store::open(&path).unwrap()).unwrap();
+        let ledger = DbLedger::new(db.clone(), "w-1");
+        assert_eq!(ledger.recorded().unwrap(), None);
+        assert_eq!(
+            ledger.record("bad/id").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(ledger.recorded().unwrap(), None);
+        ledger.record("synthetic-id").unwrap();
+        assert_eq!(ledger.recorded().unwrap().as_deref(), Some("synthetic-id"));
+        let missing = DbLedger::new(db.clone(), "missing");
+        assert_eq!(
+            missing.recorded().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            missing.record("synthetic-id").unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        db.shutdown();
+        assert_eq!(ledger.recorded().unwrap_err().kind(), io::ErrorKind::Other);
+        assert_eq!(
+            ledger.record("synthetic-id").unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
     }
 
     #[test]

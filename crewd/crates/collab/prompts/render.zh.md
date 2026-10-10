@@ -29,7 +29,7 @@ crewd
 （机长）{name}
 
 ## inject.header
-以下是你所在的群里别人发的全部新消息（不只是 @ 你的；每行标出 @ 了谁）：
+以下是你所在的群里别人发的新消息（不只是 @ 你的；每行标出 @ 了谁；进度、收到这类消息可能折叠成一行摘要）：
 
 ## inject.channel.lobby
 【{crew} · 大厅】
@@ -44,7 +44,7 @@ crewd
 【私聊】
 
 ## line
-[{at}] {sender}：{text}
+#{seq} [{at}] {sender}：{text}
 
 ## line.at
 （@{targets}）

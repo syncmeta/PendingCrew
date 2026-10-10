@@ -13,7 +13,7 @@
 目标
 - G1 布置下去的事一定有人跟进，不靠 session 记性，不靠人催 **[人]**。
 - G2 卡在人身上只卡那一件，不卡 session **[人]**。
-- G3 高频小判断（派给谁、谁收消息、归到哪条、~~侧边栏排序~~）由 Jev 做，机长只接低置信度 **[人]**。 **〔2026-10-07 改，见 §24〕** 侧栏不自动排序（§22.7 Q4 / C1），「侧边栏排序」这项删除。
+- G3 高频小判断（派给谁、谁收消息、归到哪条、~~侧边栏排序~~）由 Jev 做，机长只接低置信度 **[人]**。 **〔2026-10-07 改，见 §24〕** 侧栏不自动排序（Q4，§22.7 / C1），「侧边栏排序」这项删除。
 - G4 前后端解耦，后端跨平台，Mac 与 iOS 平等地是客户端 **[人]**。
 - G5 iOS 正式重启（08-23 的「当没有 iOS」作废），与 iPadOS 一起做 **[人]**。
 
@@ -135,7 +135,9 @@ revision, createdAt, updatedAt
 ### 7.1 定位
 Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**；低 → 交机长按老办法处理。未配置/调用失败 = 低置信度。本机诊断日志记每次判断（输入摘要、答案、置信度、耗时），不记 key，不上传。
 
-### 7.2 四个决策（官方 API：`POST /v1/systemone`，`choice`/`score`/`noul`，choice/score 带 `confidence`∈[0,1]）
+### 7.2 三个现行决策（官方 API：`POST /v1/systemone`，`choice`/`score`/`noul`，choice/score 带 `confidence`∈[0,1]）
+
+不自动排序（Q4）；下面保留划掉的历史排序项说明裁定，urgency 实现清理归 M5b。
 | 决策 | 问题 | 状态（state） | 执行 |
 |---|---|---|---|
 | 入口 Todo 派给谁 | `choice`：captain / 每个活跃 session 一项 / new_session / new_crew | Todo 原文 + 活跃名单（角色、名下工作项标题、忙闲、最近活跃**相对排名**而非时间戳） | 绑定并唤醒；new_session → crewd 起 worker，首条唤醒 = Todo 原文 + 机组上下文；**new_crew → 交机长执行**（建组要起名/写章程，Jev 不能生成文字）**[推]** |
@@ -163,6 +165,8 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 行政 = 运转：账目、编制、督办、档案、人的待办。**无业务决策权**：只能基于事实关闭（已完成/重复/被取代，附证据），不能以「不值得做」关闭。
 
 ### 8.3 职能 × 执行者
+
+不自动排序（Q4）；秘书的合并 / 等待时长与侧栏机组顺序是不同的事。
 | 职能 | 代码 | Jev | 行政 session |
 |---|---|---|---|
 | 前台/调度 | 名单、阈值、打乱 | 全部判断（§7） | — |
@@ -187,6 +191,7 @@ Jev 是机长的一部分。置信度中/高直接执行，**群里不留痕**�
 - 删除：todo-sweep.json、session-continuations.json 的语义（文件留作备份不读）。
 
 ## 11. UI（最小）
+- 侧栏机组序由人手动拖拽，不自动排序（Q4）；不把待人类处理清单的等候时长排序当成机组排序。
 - 入口 Todo 行内显示「→ W3 W4（2/3）」与负责人。
 - 人的待确认清单：~~按紧急度排~~按已等时长排，显示已等时长。**〔2026-10-07 改，见 §24〕** 清单即全组织一个的「待人类处理」收件箱（M4b）。
 - 机组页一个「行政巡检」按钮。设置页 Jev 一节。
@@ -654,6 +659,8 @@ crews    += title_source, status_line, policy, captain_session_id, next_ext, pos
 
 ### 22.3 M3b agent 面
 
+**2026-10-09 现行交付以 §27 为准**：下面保留原始需求及已标注的作废项；helper 为 `post-tool-use|stop|session-start`，注册 PostToolUse / PostToolUseFailure / Stop / SessionStart，不注册 PreToolUse。`CommsSpec` 已无 approval_gates；attach 还带 instructions / surfaceHash，初始化指纹在 serverInfo.version 中。prod launch 拒绝阻塞的 AskUserQuestion、保留 crew alwaysLoad；不是修改用户 harness 的规则。
+
 目标
 - `crewd mcp`：stdio MCP server，用官方 Rust SDK **rmcp 3.5.x**（2026-10-06 查 crates.io：最新 3.5.1，2026-10-05 发布，仓库 modelcontextprotocol/rust-sdk；features 用 `server` + `transport-io`，入口 `rmcp::transport::io::stdio()`）。工具表来自 crewd，所以**不用 `#[tool]` 宏**，手写 `ServerHandler::list_tools / call_tool`。helper 只是一根哑管道：连 `crewd.sock` → `agent.attach` → 原样转发。业务全在 serve 里（唯一写者，角色是当下的事实）。
 - `crewd hook <post-tool-use|pre-tool-use|stop>`：读 stdin JSON → `agent.hook` → 把返回的 stdout 原样打印，exit 0。
@@ -681,7 +688,7 @@ hook 行为
 - stop：调 `turn_trace`；连不上 crewd → 什么都不做（宁可漏一次）。
 - 任何失败都写 stderr，绝不输出坏 JSON。
 
-工具表（Swift 源：`Sources/Mcp/McpServer.swift:190-740`；C = 机长专用）
+工具表（历史基线；**superseded by §27 catalog**，2026-10-09：当前名字 / 合并 / 权限 / hints 以 §27.2 及代码 golden 为准；下面不是当前可调用接口）：
 | crewd 工具 | 来源 | 变化 |
 |---|---|---|
 | post(channel?, message 或 messages[≤6], mentions?, reply_to?, category?) | post_to_crew | 加 channel（缺省：有 reply_to 就发到那条所在的群，否则发本机组大厅）；删 plan / todo / todo_status / todo_reference / evidence* / headline / audience / crew_status；在没人注视的群 @人类 时，回执写明 §17 那句免打扰提示 |
@@ -821,7 +828,7 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 - **C4 重启询问 vs 人 @**：等答复期间，人在群里 @ 了名单里的某一个 → 只恢复它（算它单个 resume），其余照旧等；启动前就排着的人类唤醒不算。
 - **C5** 人类唤醒绕过可选并发上限；其余照 M3c 的默认：环路窗口 10 分钟 / 8 次、人停 session 丢弃它 pending 的唤醒、`set_profile` 下次启动生效。（原写的「`worktree` = 已存在的目录、`start_session` 改收 `workdir?`」已被 C8 取代。）
 - **C6** M3b / M3c 要的读写口全部由 M3a 提供并冻结（M3b 的 G3 / G-F / G-S / G-T / G9 / G11；M3c 的 `next_due_after`、`cursor`、`mark_failed` 带退避时刻、`requeue`、`by_ids`、`prune`、`members` 含隐式成员）；任何计划都不往别的计划的表里写 SQL。
-- **C7** 默认方案到点由 M3c 的定时拍调 `asks::apply_due_defaults`；ask 唤醒的 source 一律 `ask:<crew>/H<n>`；跨机组语法糖（`contact` 到别的机组 / `report_to_parent` / `message_child_crew`）= system 发言 + 正文首行署名。 **〔2026-10-07 改，见 §24〕** 跨机组语法糖那半句作废（跨机组 = dm）。
+- **C7** 默认方案到点由 M3c 的定时拍调 `asks::apply_due_defaults`；ask 唤醒的 source 一律 `ask:<crew>/H<n>`。**VOID（跨机组 system 语法糖半句）**：`contact` / `report_to_parent` / `message_child_crew` 不再 system 发言或正文署名，跨机组走 `post(to:)` 的 dm（§24.2 / §27）；默认方案的定时职责不因此作废。
 - **C8 `start_session` 保留 Swift 的 `isolation`**（必填 bool，机长逐次定，取代 C5 里「`worktree` = 已存在目录」）：`true` = M3c 的会话管理器在机组工作目录里新建 git worktree（位置、分支名、slug 照 Swift，见 §22.4），记进 `sessions.worktree`，session 在那里起；`false` = 机组共享目录；建失败 = start 失败并带原因、不写行、不起进程、不退回共享目录；crewd 永不删 worktree（删除是人的动作）。落点：M3a `StartRequest.isolation` 与列注释，M3b `start_session` 工具，M3c `orchestra/worktree.rs` + `Core::start_new`。测试一律用临时 git 仓库（合成），不碰真仓库。
 - **C9 一次性放行票的范围 = (session, tool)**（照原计划，对 C2 的补记）：人同意一条审批 = 只放行「同一个 session 的下一次同名工具调用」，不跨 session、不按工具名全局放行。 **〔2026-10-07 改，见 §24〕** **作废**（不做审批）。
 - **C10 审批仍是独立的表 / 清单，客户端「等你拍板」视图把 ask 与 approval 合并显示**（红标、侧栏顶层）：合并在客户端做；M3a 的 `Ask`（`crewId`、`askedAt`）与 `Approval`（`crewId`、`requestedAt`）都带机组与创建时间，人类群 = `<根机组>/human`（`crew.list` 的父链推得），`ask.changed` / `approval.changed` 负载就是整条，足够客户端合并、排序、计徽标；不把审批并进 `ask.list`（H 号只给工作卡点，C2）。 **〔2026-10-07 改，见 §24〕** **作废**（不做审批）；「等你」清单只剩问（M4b 的「待人类处理」）。
@@ -1098,3 +1105,156 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | N1 自己的测试 `collab/src/crews.rs:1840` 与 `:1879` 调 `wakes::mark_inflight` | M3c 把它换成 `claim`（**合并后编不过**） | 改成 `wakes::claim(tx, &[id]).map(\|_\| ())` |
 | `hibernate.rs:73` 与 wakes「坏行 → `Store(Invalid)`」那几行 | collab 的文字扫描测试连 `Store(Invalid(format!(…)))` 里的中文也报 | 写英文，或进 `LOG_ONLY` 白名单（同 `restart.rs:28` 的做法） |
 | `dispatch.rs` 里 M3c 加的方法若构造 `CollabError` 字符串 | 变体装 `Refusal` | 用码（`collab::refusal::Code`）；`dispatch::collab_err` 会带上 `data.refusal` |
+
+## 27. M3b agent 面交付记录与遗留（2026-10-09）
+
+> **代码快照基准 `b5bfd9b`，导入基准 `d641ebe576e28fc7afe1367033a44ae99e83db52`**。计划名 `2026-10-06-crewd-m3b-agent-surface`；本节写入者只在原生隔离 task branch 上做 T16，控制者另行集成，**本节不表示 M3b/M3c 已合并或真 Claude 行为已通过**。T16 代码提交 `98b524c`（确定性接线 / 配置 / surface）与 `b5bfd9b`（有界 opt-in smoke / eval）。T12–T15c 的功能是导入基准已有的交付；下面分清当前代码、确定性实测与 live 未验证边界。
+
+### 27.1 当前已交付
+
+- 线协议 `proto::agent`：attach / tools / call / hook 及 attach 连接专属 tools_changed；`HookKind::SessionStart`（线上 `session-start`），attach 返回角色、机组、label、md instructions、surfaceHash。共享 SchemaGenerator，契约已重生成，顶层 `$defs` 不重复。
+- helper：`agent_client` 分发 response / events，`Response::into_result()`；`mcp_cmd` 每次现问 serve、不缓存；`hook_cmd` 总期限 5s、静默 exit 0。坏 token / 未 attach 拒绝；命令行只有数据目录、session、token 文件。
+- T12 消息：`post` 必须选 channel / to / reply_to，地址经目录解析、跨机组走 dm；读 / 搜索覆盖真实可读范围，分页 / 已读 / 回复及回执；`list_channels` 合并旧 human_watching、home 人类群优先；无默认大厅目标。
+- T13 群：转让 / 接受 / 强制合并 channel_owner，收听 / 取消合并 channel_listen(off)；dm 只由 post(to) 打开；陌生 @ 不藏消息，行内带目标标注。队友 progress / ack 只折进摘要，自己的不读。
+- T14 人类决定 / Todo / 额度 / timer / profile：ask 非阻塞，H 号 / resume_note / 可撤回默认方案按 collab；withdraw_ask、respond_todo（只回复 Agent 那本，不改状态）、get_quota、schedule_wakeup、set_session_profile。
+- T15a/b 机长：现角色权限 + acts_as_captain_of；管理机长对所有机组按机长算，其他管理 session 仍是 worker 表。handoff_captain、delegation_policy、crew_structure 合并旧入口；不提供排序 / 移除 / 永久删除工具。start_session 的 isolation 必填 bool 原样传 StartRequest；M3c 创建 worktree 尚未在本分支联验。
+- T15b annotations：所有工具 openWorldHint=false；RO / destructive / idempotent 来自 catalog；被动 = RO ∪ talk(post, channel_listen)，用同一份目录判产出，不再把所有 crew 工具一概当被动。
+- T15c 世界观：固定机组模型 / 行为习惯与实时事实分层；无审批 / 单根 / 可见性收窄 / broadcast 老机制。Stop 未叫到人的问句以 **该 session** 发 question，非 System，按 prompt 去重。
+- T16 SessionStart：生成 matcher `resume|compact|clear|fork`，startup 排除。真配置 → shell helper → agent.hook → port 现读 `context_for` → `render_live`；输出 hookEventName 正确。live 文本必要字段预算（单值 256，角色 / 机长 / 额度块各 1,000，谱系 4,000），最终不超 10,000 字符；launch 完整世界观不按这个预算裁。
+- T16 launch：crew alwaysLoad=true；产品生成 permissions.deny=[AskUserQuestion]，不禁用 ToolSearch，不加 PreToolUse。官方支持的 spinnerTipsEnabled=false、prefersReducedMotion=true、feedbackSurveyRate=0、autoUpdatesChannel=stable 与两项 disable-survey/title env；SSH_AUTH_SOCK、HTTP_PROXY、HTTPS_PROXY、NO_PROXY 及小写透传。stable 是更新渠道，**不是锁版**，Homebrew 忽略这个 setting。
+- T16 surface：tools md 的 instructions（两行）经 attach 进入 rmcp InitializeResult.with_instructions；catalog 名字 / schemas / annotations / locale 描述与 instructions 生成 worker/captain 两张表的 golden，`surface.{zh,en}.json` 漂移即红，审查后 CREWD_BLESS=1 才更新。FNV-1a/64 指纹追加 serverInfo.version、attach 记 stderr；非安全哈希。r.unknown_tool 的 hint 来自 REMOVED map，旧名字说下一步调哪个。
+- T16 验证工具：`agent_e2e` 直接读生成的 mcp.json/settings.json 执行真 helper（不另拼 argv），9 项确定性测试；Fixture 只在 test/testkit 构建记已完成的 hook 名称、工具名称和 context 字数。live stdout 的结构化完整 tool-use/result 顺序另行观测，绝不读用户 transcripts。
+
+### 27.2 工具目录：历史基线 → 本快照
+
+补充清单的历史基线 `82918d4`：40 个（任何角色 21、机长额外 19）；本快照由两种语言 golden 与真 helper 验证：28 个（任何角色 17、机长额外 11）。总机组没有 catalog 特例；admin 与 worker 同表。下表当前名称来自本快照的同一次 golden 读取，RO / D / I 分别是 readOnly / destructive / idempotent；全部 openWorld=false。
+
+| 当前工具 | 谁 | RO/D/I | 历史来源 / 改动 |
+|---|---|---|---|
+| post | any | –/–/– | 增 to/address→dm；无默认目标；contact / report_to_parent / message_child_crew → post(to) |
+| read_channel | any | ✓/–/✓ | 同名，页与已读语义 |
+| search | any | ✓/–/✓ | 同名，readable ∪ valid listens |
+| list_channels | any | ✓/–/✓ | list_channels + human_watching |
+| channel_create | any | –/–/– | 只建 topic；dm → post(to) |
+| channel_invite | any | –/–/– | collab 决定权限 |
+| channel_leave | any | –/–/– | 同名 |
+| channel_archive | any | –/✓/– | collab 群主 / 机长 |
+| channel_owner | any | –/–/– | channel_transfer + channel_accept |
+| channel_listen | any | –/–/✓ | channel_listen + channel_unlisten(off) |
+| directory | any | ✓/–/✓ | 目录统一地址，contact 删除 |
+| ask | any | –/–/– | H 项，非阻塞；管理机组也有 |
+| withdraw_ask | any | –/–/– | 同名；目标 crew 可指定 |
+| respond_todo | any | –/–/– | 管理机组也有；只追加 Agent 回复 |
+| get_quota | any | ✓/–/✓ | 同名 |
+| schedule_wakeup | any | –/–/– | 同名 |
+| set_session_profile | any | –/–/✓ | 同名，下一次启动 |
+| rename_crew | captain | –/–/✓ | 同名 |
+| change_workdir | captain | –/✓/✓ | preview→confirm；不搬项目权限 / 记忆 |
+| set_crew_status | captain | –/–/✓ | 同名 |
+| delegation_policy | captain | –/–/✓ | read_delegation_policy + update_delegation_policy |
+| start_session | captain | –/–/– | isolation 必填 bool，title / brief |
+| stop_session | captain | –/✓/– | 先发 reason 再停 |
+| inspect_session | captain | ✓/–/✓ | 真状态与屏幕 |
+| nudge_session | captain | –/–/– | esc / interrupt；不是替人选项 |
+| list_sessions | captain | ✓/–/✓ | 同名，可指定 crew |
+| handoff_captain | captain | –/✓/– | handoff_captain_to_session + create_and_handoff_captain |
+| crew_structure | captain | –/✓/– | create_child / create_parent / adopt / adopt_parent / release 五入口合并 |
+
+失效名字及替代调用唯一维护在 `catalog::REMOVED`；不会在这节再维护第二份完整删除名单。净减少 12 个，主动弃掉的是 system 署名的跨机组发言和 agent 直接 channel_create(kind=dm)，其余是合并入口而非丢能力。
+
+### 27.3 原计划与 spec 的出入（1–9 原文；后续裁定紧接说明）
+
+1. `CommsSpec` 比 §22.5 多一个字段 `approval_gates`（裁定 3）。
+2. `listen(channel?, minutes?, senders?, off?)` 换成 `channel_listen` / `channel_unlisten`（§22.7 Q2）；新增 `channel_transfer` / `channel_accept`；归档权限 = 群主或机长。
+3. 回合记账（这一轮叫没叫过人、上一轮的 prompt_id）存在 collab 的 `meta` 表（键 `agent.turn.<session>`），不加迁移；M3a 冻结的 `turn_trace::on_turn_end(tx, …)` 在 collab 里实现落库（代发 + `awaiting_question`），M3c 的 codex `TurnEnded` 直接调它；新增 `turn_trace::note_post(tx, session, mentions)` 由 M3b 的工具在发消息后调。
+4. agent RPC 必须按连接记 attach 状态，所以 M3b 要改 `server/src/conn.rs`（§22.5 的文件归属没列它；M3c 不碰 conn.rs，不冲突）。
+5. 可见性（`CrewWhiteboardVisibility.swift:48`）与「发给 X 的」标注用 M3a 的 `cursors::unread_for` / `render::blocks_for`（§22.3 写的「M3b 移植可见性」由 M3a 做掉了，M3b 不另写一份）；M3b 只加注入的总字数上限与「省略了几条」的自报。M3c 给 codex 组 `additionalContext` 时调 `server::agent::inject::prepare / commit`。
+6. 审批照 Swift #75②**不阻塞**（`McpPermissionHook.swift:69-76`：当场拒 + 开待确认 + 一次性放行票；控制者裁定 C2，spec §22.3 已改）。放行票、去重、公告都在 M3a 的 `approvals::gate` 一个事务里，M3b 只把结果翻成 hook 输出。
+7. `post` 暂不收 `attachments`：M3a 的 `message.post` 附件非空一律拒（M3a 计划裁定 14，附件上传不在 M3）。Swift 一直有这个参数，等 M3a 之后支持附件再加回（遗留 L8）。
+8. 机长注入面上的附加物（命名提醒、拆组信号、计划陈旧度、全机组织树、派活策略更新，`HookEmitter.swift:246-311`）不移植：计划板已删（§9），派活策略改由 `read_delegation_policy` 现读；组织树由世界观的 lineage 节 + `directory` 取代（遗留 L1）。
+9. 世界观去掉 Swift 的 `humanRoster` / `sharesBlock` / `tiebreakerBlock` / `captainRunnerBlock` 与入门机组的 SKILL.md 提示（`LocalSessionWorldModel.swift:56-70`）；人类只有一个人，runner 偏好设置 crewd 里还没有（遗留 L2）。
+
+**这些是计划历史文本，不是当前接口承诺**：1 / 6 已由 §24.1 B16 全部作废（无审批、无 approval_gates）；2 / 8 的独立工具名按 T13/T15b 合并（见本节 catalog）；5 的收窄 / broadcast 已由 N1 删除，成员消息全见。原计划后续 10–13：产出如今按 catalog passive 判；isolation 仍必填、M3c 创建未联验；新机组缺省标题来自 md 而非地名池；seq 引用已用 M3a.1 get_by_seq，不再逐群扫描。
+
+### 27.4 M3a 接口核对、缺口及跨计划吸收
+
+Task 1 原始对齐记录与当前实现一致的差异：safe_name 已是 pub，无需另包；M3a.1 已有 get_by_seq / display_label / sender_label / Db::shutdown（**没有另一个 Db::join**）；Role 是封闭 Captain/Worker/Admin（缺省 Worker）；agent schema 的真签名是 `schema(&mut SchemaGenerator) -> Value`，不是无参 schema。
+
+| 缺口代号 | 原来的供给与最终落点 | T16 边界 |
+|---|---|---|
+| G3 Todo 回复 | M3a todos::respond 已提供；M3b asks::respond_todo 通过 port 追加 Agent 回应 | 没补表 / SQL；已纳入全量测试 |
+| G-F fill 再展开 | M3a prompts::fill 一遍扫描已提供；M3b 保留值内占位符不再展开的测试 | 没复制 fill |
+| G-S StartRequest | M3a control.rs 已有 executor / isolation；T15a 保留必填 bool 并传递 | 真 worktree 创建归 M3c，当前只有 FakeSessionControl / request 验证 |
+| G-T TurnEnd | M3a 提供五态与 stub；M3b turn_trace 实现记账 / 问句 / 代发，T15c 改 session sender | T16 用真 Stop helper 验一次 / 去重 / category；codex 集成未验 |
+| G9 AppState.agent | M3a 已有 field + mod/runtime 占位，M3b 换实现 | T16 未改 AppState 结构 |
+| G11 夹具 / conn | M3a 已有 FakeSessionControl、conn::run、dispatch::handle 与 testkit 入口；M3b 实现 Fixture/socket | T16 crewd dev feature 开 testkit，实际 helper 连接它；不是真执行器 |
+
+§23 末给 M3b 的三点已吸收：helper 用 Response::into_result；proto agent schema 共用同一生成器 / 顶层 defs；port 的 blocks_for / build_batch 传 Locale。safe_name / sender_label / display_label 都复用 collab，不自造。默认方案定时执行、token revoke、shutdown 次序与真正启动 / 停止仍由 M3c 接；本分支不代表这些动作已联验。
+
+### 27.5 §26.6 合 main 注意的七项纠正
+
+历史 main/N1 合并报告（基准 `4c06b0e`，整合后 `82918d4`）记录的七项，在导入基准已有对应实现；这里纠正 §26.6 那张预告表，**T16 没再合旧 worktree 或 main**。
+
+1. `From<CollabError>` 不知道 locale：NotFound 保持 NotFound，其他规则拒绝装 Reason::Rule，到 tools::Ctx::fail 才按 agent locale 渲染；不是在那里直接 r.text(locale)。
+2. 裸 SQL 造旧收听行不够：必须翻转「旧行授予可读」的断言；listens::channels_of 会过滤不再可读的群，旧收听不能扩权。
+3. B15 规则②改变同群成员的机组同事 / 跨机组 dm 的另一机组同事的可读预期；单看旧门会编译过却语义错。
+4. 地址 session 参数走 directory::resolve；**crew** 号码不能强行走一个依赖现任机长存在的 session resolver，按相同 created_at/id 顺序解析 crew，已移除回 directory.crew_removed。
+5. 总机组 ask 恢复会翻转 catalog、直接调用拒绝测试和世界观工具字断言；T15b 进一步去掉全部管理 catalog 特例，不保留 not_on_management。
+6. 顶层人类群不是旧 root，world-model 的 role/lineage 测试也要改；管理机组是树外，必须有自己的 lineage，而不只是改一句名称。
+7. render.rs 的 MsgLine.directed_to→mentions 合并断点在合并树原报告为 1076，不是预告的约 1167。**行号是历史读数，今后 grep 当前树**；N1 @ 标记与 M3b #seq 都保留。
+
+### 27.6 T16 确定性与变异实测
+
+macOS、本分支 `b5bfd9b`，默认 cargo runner（未跑 nextest / Linux / 真机）：
+
+- `agent_e2e`：9 passed，真生成配置 / socket / helper；四种 SessionStart source、startup 与近似值排除、超长值≤10k，角色升降即时 list_changed / 17↔28 / 调用权限，post 注入 / 他人 @ 标记 / progress 摘要 / 一次性游标，PostToolUseFailure wire name、Stop sender/category/去重、token 与未 attach、removed 提示。
+- 首个实现 gate：1378 passed / 0 failed / 6 ignored。live harness 的两个纯结构化 trace 测试分别进入 smoke 与 eval test binary 后，gate 为 1382 passed / 0 failed / 8 ignored。
+- 保存提交后 pre-live **三次 check.sh**：各自 1382 passed / 0 failed / 8 ignored，fmt / clippy -D warnings 均通过；每次保留完整独立日志。更早全量 RED：旧 scripted-serve attach fixture 缺 instructions/surfaceHash，导致 helper_cli 两项测试失败；随后 RPC exact-JSON 期望没加这两项；修正 fixture/期望后全绿。这些不是「重跑吞掉的 flaky」。
+- 提交后 cp backup/restore 做 **10 次有效变异**：SessionStart RPC context、fork matcher、alwaysLoad、AskUserQuestion deny、initialize instructions、wire annotations、constant hash、golden content、removed hint、fixture log 接线。8 次各执行 9 个 agent_e2e，2 次各执行 2 个 surface 测试，合计 76 次测试执行；每次预期用例真红，编译失败 / 执行数不符不算有效。还原后三个完整 gates 全绿。
+
+rmcp 3.5.1 的实际本地源码已核：InitializeResult.with_instructions(impl Into<String>)，enable_tools + enable_tool_list_changed 设置 tools.listChanged，ToolListChangedNotificationMethod 的 wire 是 notifications/tools/list_changed，Peer<RoleServer>::notify_tool_list_changed 存在。不是按 API connector 的字段猜 MCP 配置。T8 原始 lock diff（`ab3f469^..ab3f469`）新增 **10** 条 package：equivalent、futures、futures-executor、futures-macro、futures-sink、indexmap、pastey、rmcp、tokio-util、tracing-attributes；T16 只增加本仓库 dev dependency/feature 关联，没引入新第三方 crate。
+
+### 27.7 授权 live smoke 与三 seed 结果（不涂绿）
+
+2026-10-09，仅运行一次：`CREWD_LIVE_CLAUDE=1 cargo +1.94.0 test -p crewd --test live_agent -- --ignored --nocapture --exact real_claude_uses_crewd_mcp_and_receives_injection`（在 own worktree，manifest/target 都指向本分支）。测试内部读产品生成配置，print-mode stream-json stdin/stdout；使用真实 build_env，restricted + strict-mcp-config，只提供 Bash / ToolSearch / AskUserQuestion 内置候选（最后一项仍由产品 deny 移除），正常 CLI auth，不读凭据或用户 transcripts。
+
+**结果：0 passed / 1 failed / 2 filtered out，exit 101。** native Claude **2.1.295**；init model `claude-opus-5-5`，permissionMode auto。四个 test-owned stdout 事件里 crew connected，17 个 worker 工具 upfront；其他工具恰好 Bash / ToolSearch，AskUserQuestion 不在 init。随后 result **is_error=true**、terminal_reason=api_error，原文 `Not logged in · Please run /login`。duration_ms=340、duration_api_ms=0、input/cache/output tokens 全 0、total_cost_usd=0；测试自身观测 CLI wall_ms=1689（全测试含 fixture 1.86s）。不把 subtype=success 当成功。
+
+没有任何 tool_use，hooks 0。**不存在 first crew call，因此 ToolSearch 顺序不可验证**；MCP 握手和 upfront 列表是已观测到的，但 post / secret 返回 / started-failure hook / live role-refresh 未观测。第二个 smoke prompt 未发送，角色未改变，Bash false 没启动；零失败 hook 不是通过。停止后没有登录绕路、paid retry、额外 prompt、真实 Codex 或终端 fixture。
+
+每 prompt 8 turns / 240s，预算每 CLI process 客户端估算 2 美元（不是实际余额 / 硬 token 上限）；remaining quota 未量。不因账号失败改 launch 的 auth 策略，不用全局 ToolSearch 禁用把结果改绿。
+
+| seed | 实际状态 | posted / right channel / message count / ask / injected chars |
+|---|---|---|
+| @ 问题 → 一句 ack 再回答 | NOT RUN：smoke 登录错误后停止 | 全部未量 |
+| 需要人决定 → ask、不在大厅 @human | NOT RUN：同上 | 全部未量 |
+| 完成 → 一个 done、≤2 posts | NOT RUN：同上 | 全部未量 |
+
+三个 seed 的 named ignored test 已实现且普通检查只编译 / 跑纯 parser 控制样本；**未发送三个付费 prompts、没有行为分数**。live 范围已用完的 smoke 不自动再跑；后续验证需新的明确授权与正常账号环境。
+
+官方文档 2026-10-09 核对：[settings-reference](https://code.claude.com/docs/en/settings-reference)、[env-vars](https://code.claude.com/docs/en/env-vars)、[hooks](https://code.claude.com/docs/en/hooks)、[mcp](https://code.claude.com/docs/en/mcp)、[prompt-caching](https://code.claude.com/docs/en/prompt-caching)、[CLI](https://code.claude.com/docs/en/cli-reference)、[headless](https://code.claude.com/docs/en/headless)、[SDK message types](https://code.claude.com/docs/en/agent-sdk/typescript)。文档支持≠runtime 合规；ToolSearch 的 hook 覆盖没有被文档建立，故必须用独立完整结构化流，不能用未证明 hook 的零计数。
+
+### 27.8 遗留、集成 hold 与验证边界
+
+- **CROSS-BRANCH HOLD（M3i-a）**：M3b/M3c 合并后，Stop 的自动 Sender::Session question **不得调用 M3c breaker.on_post**。T16 不修、不宣称集成已过；M3i-a 要用合并树做专门回归。
+- **CROSS-BRANCH NOTE**：T13 progress/ack digest folding；T15c stop sender/session trace；T16 SessionStart HookKind、launch pins、env.rs 的 transport 白名单。M3c T11 AgentPaths 的共享 env.rs 修改须保留双方，不挑边合；schema 后合者重生成。
+- S44 hook 注入 / wake 双发与 receipt→wake::plan 归 M3i-a；当前 E2E 的「至多一次」只覆盖 hook 游标，不是跨执行器唤醒集成。
+- N2 在这条 SessionStart 上扩 UserPromptSubmit / StopFailure / Notification / session id 信号，不另立第二套 hook；AgentPaths 每次 launch 重解析归 M3c T11；statusLine 稍后。
+- L1 机长附加注入面（命名 / 拆组 / 陈旧度 / 全树 / 派活更新）仍未搬；计划板已删，其他由 M4b/M5 行政简报设计决定。
+- L2 runner 偏好 / 能力块 / 入门 SKILL.md 未搬；L3 change_workdir 不搬 Claude 项目记忆与权限（回执说明）；L4 仍用 shell 引号，不冒用未锁 CLI 版本的 hook args exec；L6 isolation bool 保留，只有 StartRequest 路由验证，M3c 真 worktree 创建 / 真 session 生命周期未联验。
+- L5 Codex token 形状已有原有 M2c 路；此任务没跑真实 Codex，M3c 必须接 runtime_dir、inject prepare/commit、turn_end 与进展信号；不恢复应用审批。
+- L7 meta 回合键删除 session 时仍留软状态；L8 post 附件未接；L9 侧栏人手拖拽，不自动排序（Q4），无排序工具；L10 新机组默认名来自 md，不是 Swift 地名池。
+- `context_for` 的 quota_claude / quota_codex 仍初始化为 None（代码明确把启动时档位填充交给 M3c），本任务的 SessionStart DB refresh 输出未知档位，不是实测额度。M3c 需明确 live 档位数据源 / 填充并联验，避免把 launch 里已知档位覆盖成未知；这里不把渲染了 quota 块称为「真实档位刷新通过」。 **本项是 b5bfd9b 的缺口记录；fix-r1 的 typed 接线/联合契约已在 §27.9 闭环，实际 provider feeding / 生产 launch 仍归 M3c，未声称真实额度通过。**
+- T10d idle terminal 样式 / placeholder / cursor **没有新 terminal fixture 授权，未验证**。不能用本次 print-mode MCP init 代替它。
+- eval 扩展与文案版本比较归 M3c/M5b。生产 serve 编排、真实应用数据、Linux、本机已运行 app、iOS/iPad 真机、codex、paid 模型行为和账号配置均不在这趟已验证范围。
+
+### 27.9 T16 fix-r1：进程停止、预检期限与 live quota 联合契约
+
+> **代码基准 `1ff705b`**；`68a25fa` 修 harness，`1ff705b` 修 typed quota。起点 `3657dbb`，这节补充而不改写上面 `b5bfd9b` 的历史实测。没有新 live 权限：本轮未启动任何真实 Claude/Codex，连 --version 也没跑；原 auth BLOCKED、三个 seed NOT RUN、real TUI/live 未验证及 relay/breaker HOLD 永久保留这次读数。
+
+- **F1**：原 finish 在错误后仅关 stdin、等 15s，不会取消当前回合；独立合成探针确实写出迟到 sentinel。修成 prompt 失败即 `Child::start_kill`、不可逆 stop、禁止新 prompt；finish 只在成功终态走 EOF/15s 优雅退出，其他路径立即取消并最多 2s 等收尸。收尸失败诊断，kill_on_drop/Tokio 后台收尸是最终 fallback，无 name/pattern kill、无无界 wait。测试刻意把 finish 推迟 400ms，确认 prompt Err 本身已停止 Child，且 300ms 延迟工作不发生；成功对照必须走 EOF 并完成收尾。
+- **F2**：--version 从无 deadline 的 output().await 改为独立 5s 的输出+退出期限，stdout 4KiB 上限；失败/超时取消 exact Child、2s 有界收尸。240s prompt 期限同时包住 stdin 写入和输出读取，背压不能绕过它。这里只声明这些异步等待边界，不把 CLI 的预算参数说成整个启动/文件 I/O 的绝对 wall-time 保证。
+- **quota**：`port::world_context` 是 launch 与 SessionStart 的同一入口，DB-only `context_for` 不承担 live 数据。复用已有 `SessionControl::quota -> QuotaReport/QuotaLine`，按 executor 取非空 plan；最多 1s 查询。WorldCtx 用 `QuotaTier::{Known,Unknown,Unavailable,Failed}`，成功但没档位=Unknown，Unsupported=Unavailable，其他错误/超时=Failed；后两项在 world-model zh/en md 独立显示，不回传原始错误、不编余额、不令整个身份/角色刷新静默消失。limited_until/detail 仍是 get_quota 的原有数据，不当作档位或余额。
+- **联合 launch 合同**：已提交的 opt-in harness 启动方消费 world_context；确定性 E2E 读取生成的完整 launch 世界观，FakeControl 的已知档位更新后，四个 SessionStart source 都返回新的已知值，两种 locale 均验。M3c 生产启动方必须复用该入口，不能再自行从 context_for 留空；实际 provider feeding / 生产编排未联验，没有查询真实余额。
+- **验收**：原 harness 新 10 项合成测试 RED 2 passed / 8 failed，再 GREEN 10/10；旧 9 项 agent_e2e 加两项 quota 用例 RED 9/2，再 GREEN 11/11。harness 单元完整 check.sh 1402/0/8；quota 单元完整 check.sh 1404/0/8（默认 cargo、macOS、fmt/clippy clean）。提交后四个有效变异：取消信号、预检期限各执行 10 项；SessionStart 绕开 typed 源、Unavailable 压 Unknown 各执行 11 项，合计 42 次实际执行，预期用例都红，复制备份还原。不是新的一轮付费 smoke。
+- **非阻塞审查项**：no_search helper 现在也拒绝失败终态，和注释的成功终态证明对齐；此前 smoke 自己已检查 prompt success，不将这项加强冒称为已证实的 smoke 假绿。initialize E2E 直接比 md instructions / surface hash，不只检查非空和加号。settings/hooks/annotations/schema/goldens 保持原契约，quota 文案仅扩世界观四态。

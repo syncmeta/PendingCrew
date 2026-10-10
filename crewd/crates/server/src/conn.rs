@@ -7,14 +7,32 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::OwnedReadHalf;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 /// 单行请求的上限；超过且仍没有换行就回错误并断开。
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 /// 一条连接：读一行请求 → 回一行响应；订阅的事件由独立任务推到同一个写通道。
+#[cfg(any(test, feature = "testkit"))]
 pub(crate) async fn run(state: Arc<AppState>, stream: UnixStream) -> anyhow::Result<()> {
+    let (_tx, rx) = watch::channel(false);
+    run_draining(state, stream, rx).await
+}
+
+// Force-aborted connection futures must not leave detached writers/watchers.
+struct AbortOnDrop(tokio::task::AbortHandle);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+pub(crate) async fn run_draining(
+    state: Arc<AppState>,
+    stream: UnixStream,
+    mut drain: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
     let (rd, mut wr) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let writer = tokio::spawn(async move {
@@ -30,12 +48,25 @@ pub(crate) async fn run(state: Arc<AppState>, stream: UnixStream) -> anyhow::Res
         }
     });
 
+    let _writer_guard = AbortOnDrop(writer.abort_handle());
     let mut forwarder: Option<JoinHandle<()>> = None;
-    let result = read_loop(&state, rd, &tx, &mut forwarder).await;
+    let mut forward_guard: Option<AbortOnDrop> = None;
+    let result = read_loop(
+        &state,
+        rd,
+        &tx,
+        &mut forwarder,
+        &mut forward_guard,
+        &mut drain,
+    )
+    .await;
 
     // 无论怎么退出（EOF、读错误、行过长）都要收尾。
     if let Some(f) = forwarder {
-        f.abort();
+        if !*drain.borrow() {
+            f.abort();
+        }
+        let _ = f.await;
     }
     drop(tx);
     let _ = writer.await;
@@ -47,19 +78,30 @@ fn parse_error(msg: &str) -> ServerFrame {
 }
 
 async fn read_loop(
-    state: &AppState,
+    state: &Arc<AppState>,
     rd: OwnedReadHalf,
     tx: &mpsc::Sender<ServerFrame>,
     forwarder: &mut Option<JoinHandle<()>>,
+    forward_guard: &mut Option<AbortOnDrop>,
+    drain: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let mut rd = BufReader::new(rd);
     let mut buf: Vec<u8> = Vec::new();
+    // 同一条连接上的 agent.* 请求共享一份状态（attach 过没有、推送任务）；连接结束时随之 drop。
+    let mut agent = crate::agent::rpc::AgentConn::default();
     loop {
         buf.clear();
-        let n = (&mut rd)
-            .take(MAX_LINE_BYTES as u64 + 1)
-            .read_until(b'\n', &mut buf)
-            .await?;
+        if *drain.borrow() {
+            return Ok(());
+        }
+        // Only the read is cancellable. Dispatch and its response enqueue finish
+        // even when hibernate closes the actor/watch while this RPC is in flight.
+        let mut limited = (&mut rd).take(MAX_LINE_BYTES as u64 + 1);
+        let n = tokio::select! {
+            biased;
+            _ = drain.changed() => return Ok(()),
+            n = limited.read_until(b'\n', &mut buf) => n?,
+        };
         if n == 0 {
             return Ok(());
         }
@@ -121,8 +163,13 @@ async fn read_loop(
                 if let Some(old) = forwarder.take() {
                     old.abort();
                 }
-                *forwarder = Some(spawn_forwarder(rx, p.topics, tx.clone()));
+                let task = spawn_forwarder(rx, p.topics, tx.clone(), drain.clone());
+                *forward_guard = Some(AbortOnDrop(task.abort_handle()));
+                *forwarder = Some(task);
                 continue;
+            }
+            Ok(req) if req.method.starts_with("agent.") => {
+                ServerFrame::Response(crate::agent::rpc::handle(state, &mut agent, req, tx).await)
             }
             Ok(req) => ServerFrame::Response(crate::dispatch::handle(state, req).await),
         };
@@ -161,10 +208,30 @@ fn spawn_forwarder(
     mut rx: broadcast::Receiver<Event>,
     topics: Vec<String>,
     tx: mpsc::Sender<ServerFrame>,
+    mut drain: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let frame = match rx.recv().await {
+            // Shutdown was published before drain. Consume the already queued
+            // broadcasts before dropping this sender, then let the writer flush.
+            let received = if *drain.borrow() {
+                match rx.try_recv() {
+                    Ok(e) => Ok(e),
+                    Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                        Err(broadcast::error::RecvError::Lagged(n))
+                    }
+                    Err(
+                        broadcast::error::TryRecvError::Empty
+                        | broadcast::error::TryRecvError::Closed,
+                    ) => break,
+                }
+            } else {
+                tokio::select! {
+                    received = rx.recv() => received,
+                    _ = drain.changed() => continue,
+                }
+            };
+            let frame = match received {
                 Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => ServerFrame::Event(e),
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(n)) => ServerFrame::Event(Event {

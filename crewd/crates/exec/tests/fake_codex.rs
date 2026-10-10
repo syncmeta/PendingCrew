@@ -2,7 +2,8 @@
 //! 回合、每一种服务端请求、额度、超时、压缩、打断、控制、停止与进程组、stderr 灌满、超长行。
 //! 不碰真 codex（真机见 `live_codex.rs`）。
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +39,7 @@ impl Env {
     fn config(&self) -> CodexConfig {
         let mut c = CodexConfig {
             stop_grace: Duration::from_millis(500),
+            runtime_dir: self.path("run"),
             ..CodexConfig::default()
         };
         c.core.initialize_timeout = Duration::from_secs(3);
@@ -99,6 +101,27 @@ impl Env {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    /// Wire a comms spec (token `token`) onto a start.
+    fn with_comms(start: &mut CodexStart, token: &str) {
+        start.spec.comms = Some(CommsSpec {
+            helper: PathBuf::from("/opt/crewd/bin/crewd"),
+            data_dir: PathBuf::from("/data"),
+            session_id: "worker-1".into(),
+            token: token.into(),
+            hooks: false,
+        });
+    }
+
+    /// The `--token-file` path handed to the `n`-th `thread/start` (0-based).
+    fn token_file_of(&self, n: usize) -> PathBuf {
+        let start = &self.sent("thread/start")[n]["params"];
+        let args = start["config"]["mcp_servers"]["crew"]["args"]
+            .as_array()
+            .unwrap();
+        let i = args.iter().position(|a| a == "--token-file").unwrap();
+        PathBuf::from(args[i + 1].as_str().unwrap())
     }
 
     fn sent(&self, method: &str) -> Vec<Value> {
@@ -185,16 +208,7 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
     let env = Env::new();
     let ledger = Arc::new(MemoryLedger::default());
     let mut start = env.start("", ledger.clone(), Some("开场任务"));
-    start.spec.comms = Some(CommsSpec {
-        helper: PathBuf::from("/opt/crewd/bin/crewd"),
-        data_dir: PathBuf::from("/data"),
-        crew_id: "c1".into(),
-        session_id: "worker-1".into(),
-        captain: false,
-        structured_post: false,
-        label: None,
-        hooks: false,
-    });
+    Env::with_comms(&mut start, SENTINEL);
     let (h, mut rx) = start_codex(start, env.config()).await.unwrap();
     let SessionEvent::Spawned {
         agent_session_id,
@@ -244,9 +258,22 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
         .map(|a| a.as_str().unwrap())
         .collect();
     assert_eq!(args[0], "mcp");
+    assert_eq!(args.len(), 7, "{args:?}");
+    assert_eq!(
+        &args[1..5],
+        ["--data-dir", "/data", "--session", "worker-1"]
+    );
+    assert_eq!(args[5], "--token-file");
+    assert!(!args.contains(&"--agent"), "{args:?}");
+    let token_file = Path::new(args[6]);
+    assert_eq!(std::fs::read_to_string(token_file).unwrap(), SENTINEL);
+    assert_eq!(
+        std::fs::metadata(token_file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     assert!(
-        args.windows(2).any(|w| w == ["--agent", "codex"]),
-        "{args:?}"
+        token_file.starts_with(env.path("run")),
+        "token file lives under CodexConfig.runtime_dir: {token_file:?}"
     );
     let turn = &env.sent("turn/start")[0]["params"];
     assert_eq!(turn["threadId"], agent_session_id.as_str());
@@ -256,6 +283,10 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
         "untrusted"
     );
 
+    for log in ["rpc.log", "env.log"] {
+        let text = std::fs::read_to_string(env.path(log)).unwrap();
+        assert!(!text.contains(SENTINEL), "token leaked into {log}");
+    }
     let names = std::fs::read_to_string(env.path("env.log")).unwrap();
     assert!(!names.lines().any(|n| n == "OPENAI_API_KEY"), "{names}");
     assert!(names.lines().any(|n| n == "FAKE_CODEX_MODE"));
@@ -267,6 +298,54 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
     assert!(!status.working);
     let info = stop(&h, &mut rx).await;
     assert!(info.stopped_by_user);
+    assert!(
+        !token_file.exists(),
+        "token file is gone by the time Exited is observed"
+    );
+}
+
+const SENTINEL: &str = "tok-SENTINEL-7f3a91";
+
+/// A quick restart with the same crewd session id must keep its own token file: the old
+/// launch directory is removed before `Exited`, and directories are unique per launch.
+#[tokio::test]
+async fn restarting_on_exited_keeps_the_new_token_file() {
+    let env = Env::new();
+    let mut first = env.start("", Arc::new(MemoryLedger::default()), None);
+    Env::with_comms(&mut first, "tok-one");
+    let (h, mut rx) = start_codex(first, env.config()).await.unwrap();
+    next(&mut rx).await;
+    let old = env.token_file_of(0);
+    assert!(old.exists());
+    stop(&h, &mut rx).await;
+    assert!(!old.exists(), "old token file gone at Exited");
+    let mut second = env.start("", Arc::new(MemoryLedger::default()), None);
+    Env::with_comms(&mut second, "tok-two");
+    let (h2, mut rx2) = start_codex(second, env.config()).await.unwrap();
+    next(&mut rx2).await;
+    let new = env.token_file_of(1);
+    assert_ne!(old, new, "launch directories are unique per launch");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(std::fs::read_to_string(&new).unwrap(), "tok-two");
+    stop(&h2, &mut rx2).await;
+    assert!(!new.exists());
+}
+
+/// A start that fails at the handshake leaves no launch directory behind when it returns.
+#[tokio::test]
+async fn a_failed_start_leaves_no_token_file() {
+    let env = Env::new();
+    let mut config = env.config();
+    config.core.thread_timeout = Duration::from_millis(500);
+    config.core.initialize_timeout = Duration::from_millis(500);
+    let mut start = env.start("init_silent", Arc::new(MemoryLedger::default()), None);
+    Env::with_comms(&mut start, "tok-fail");
+    let err = start_codex(start, config).await.err().expect("must fail");
+    assert!(matches!(err, StartError::Handshake { .. }), "{err:?}");
+    let left: Vec<_> = std::fs::read_dir(env.path("run"))
+        .map(|d| d.map(|e| e.unwrap().path()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "launch dir left behind: {left:?}");
 }
 
 #[tokio::test]

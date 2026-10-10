@@ -22,7 +22,7 @@ pub const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 /// （`AuthProbe::projects_dir_for`）按 crewd 自己的环境找日志——两边要看到同一个值。
 /// `CODEX_HOME`：设了才有；codex 的登录态、配置、thread 记录都在它下面（缺省 `~/.codex`），
 /// 不透传的话用了自定义目录的机器上 crewd 起的 codex 读错地方、登录态对不上（人 2026-10-06 定）。
-pub const PASSTHROUGH_KEYS: [&str; 8] = [
+pub const PASSTHROUGH_KEYS: [&str; 15] = [
     "HOME",
     "SHELL",
     "LANG",
@@ -31,6 +31,13 @@ pub const PASSTHROUGH_KEYS: [&str; 8] = [
     "TMPDIR",
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
+    "SSH_AUTH_SOCK",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
 ];
 /// 调用方给的额外变量里绝不放行的前缀（大小写不敏感）：我们自己的凭据与配置。
 pub const FORBIDDEN_PREFIXES: [&str; 4] = ["PENDINGBOT_", "PENDINGCREW_", "SUPABASE_", "CREWD_"];
@@ -235,6 +242,25 @@ mod tests {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    #[test]
+    fn launch_preserves_ssh_and_proxy_transport_but_not_product_secrets() {
+        let parent = [
+            ("SSH_AUTH_SOCK", "/synthetic/ssh"),
+            ("HTTP_PROXY", "http://example.invalid"),
+            ("HTTPS_PROXY", "http://example.invalid"),
+            ("NO_PROXY", "localhost"),
+            ("http_proxy", "http://example.invalid"),
+            ("https_proxy", "http://example.invalid"),
+            ("no_proxy", "localhost"),
+            ("CREWD_TOKEN", "synthetic-secret"),
+        ];
+        let env = build_env(parent, "/bin", &BTreeMap::new());
+        for (k, v) in &parent[..7] {
+            assert_eq!(env.get(*k).map(String::as_str), Some(*v), "{k}");
+        }
+        assert!(!env.contains_key("CREWD_TOKEN"));
     }
 
     #[test]

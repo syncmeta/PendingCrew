@@ -3,7 +3,7 @@
 //!
 //! 环境变量（执行器只放行调用方显式给的变量，所以测试经 `ClaudeSpec::additional_env` 传）：
 //! - `FAKE_CLAUDE_MODE`：`ready`（缺省）/ `deaf`（画框但永不回显）/ `noread`（画框后再也不读
-//!   stdin，PTY 输入缓冲会被写满）/ `trust`（先过信任框）/ `ratelimit`（第一次提交弹限流菜单）/
+//!   stdin，PTY 输入缓冲会被写满）/ `decision`（普通编号菜单，等待真实人类 RPC 答案）/ `trust`（先过信任框）/ `ratelimit`（第一次提交弹限流菜单）/
 //!   `usage`（第一次提交报额度用尽并退出）/ `refuse`（带 `--resume` 起时照真 claude 打印
 //!   「No conversation found with session ID: <id>」后 exit 1；不带则同 `ready`）。
 //! - `FAKE_CLAUDE_READY_DELAY_MS`：先只画横幅，这段时间收到的按键全部吞掉（真 claude 首屏重绘就这样吞字）。
@@ -242,6 +242,20 @@ fn main() {
                 }
             }
             fake.input = format!("RATE-ANSWER:{}", answer.trim_end_matches('\r'));
+            fake.submit();
+        }
+        if submitted && fake.submits == 1 && fake.mode == "decision" {
+            out("\x1b[2J\x1b[HWhich synthetic option?\r\n\r\n\u{276f} 1. Synthetic first\r\n  2. Synthetic second\r\n\r\nEnter to confirm".as_bytes());
+            let mut answer = String::new();
+            while let Ok(chunk) = rx.recv() {
+                answer.push_str(&String::from_utf8_lossy(&chunk));
+                // Numbered menus accept the displayed digit immediately; the
+                // production answer_plan deliberately sends no Enter for them.
+                if answer.chars().any(|c| c == '1' || c == '2') {
+                    break;
+                }
+            }
+            fake.input = format!("DECISION-ANSWER:{}", answer.trim_end_matches('\r'));
             fake.submit();
         }
         fake.draw_box();

@@ -183,6 +183,13 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let h = with_book(tx, &crew.id, |b, now| {
         b.open_ask(&actor, now, &question, default, None)
             .map(|a| a.value)
+    })
+    .map_err(|e| match e {
+        // 账本的英文短句换成带码的拒绝（M3b T14，同 `withdraw_refused`）。
+        CollabError::Work(Rejected::Blank("question")) => {
+            CollabError::Invalid(Refusal::new(Code::AskQuestionEmpty))
+        }
+        e => e,
     })?;
     let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
@@ -299,13 +306,35 @@ pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &st
             )));
         }
     };
-    with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))?;
+    let canonical = h.to_string();
+    with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))
+        .map_err(|e| withdraw_refused(e, &canonical))?;
     // 规范写法（"H1"），不是调用方原样给的（"h1"）：客户端按它对号（终审 M3）。
     tx.note(Change::AskChanged {
         crew_id: crew.into(),
         ask: h.to_string(),
     });
     get(tx.conn(), crew, ask)
+}
+
+/// 账本对撤回的拒绝 → 带码的规则拒绝（M3b T14：agent 按自己的语言看到「下一步」，不是账本的英文短句）。
+/// RPC 码不变：Forbidden / Invalid / Conflict 与 `dispatch::collab_err` 对账本原拒绝的映射一致。
+fn withdraw_refused(e: CollabError, ask: &str) -> CollabError {
+    match e {
+        CollabError::Work(Rejected::Forbidden(_)) => {
+            CollabError::Forbidden(Refusal::new(Code::AskWithdrawForbidden).arg("ask", ask))
+        }
+        CollabError::Work(Rejected::Blank(_)) => {
+            CollabError::Invalid(Refusal::new(Code::AskReasonEmpty))
+        }
+        CollabError::Work(Rejected::AskNotOpen(_)) => {
+            CollabError::Conflict(Refusal::new(Code::AskNotOpen).arg("ask", ask))
+        }
+        CollabError::Work(Rejected::AskInUse(_)) => {
+            CollabError::Conflict(Refusal::new(Code::AskInUse).arg("ask", ask))
+        }
+        e => e,
+    }
 }
 
 /// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里全部还开着的问，理由取
@@ -666,7 +695,7 @@ mod tests {
                 &a.ask,
                 "不是我的"
             )),
-            CollabError::Work(Rejected::Forbidden(_))
+            CollabError::Forbidden(r) if r.code == Code::AskWithdrawForbidden
         ));
         let w = ok(&mut s, |tx| {
             withdraw(
@@ -764,7 +793,7 @@ mod tests {
                 &a.ask,
                 "不是你的"
             )),
-            CollabError::Work(Rejected::Forbidden(_))
+            CollabError::Forbidden(r) if r.code == Code::AskWithdrawForbidden
         ));
         let w = ok(&mut s, |tx| {
             withdraw(
@@ -792,7 +821,7 @@ mod tests {
                         &a.ask,
                         "不是你的"
                     )),
-                    CollabError::Work(Rejected::Forbidden(_))
+                    CollabError::Forbidden(r) if r.code == Code::AskWithdrawForbidden
                 ),
                 "{other} 是别的机组的机长，不能撤 crew-a 的问"
             );
@@ -812,6 +841,51 @@ mod tests {
             withdraw(tx, &Sender::Human, "crew-a", &b.ask, "人撤")
         });
         assert_eq!(h.state, AskStateView::Withdrawn);
+    }
+
+    #[test]
+    fn a_blank_question_is_refused_with_a_code() {
+        let mut s = store();
+        match err(&mut s, |tx| open(tx, "w-a1", q(" \n "))) {
+            CollabError::Invalid(r) => assert_eq!(r, Refusal::new(Code::AskQuestionEmpty)),
+            e => panic!("{e:?}"),
+        }
+    }
+
+    /// 账本对撤回的四种拒绝都带码（M3b T14）：agent 拿到的是按语言渲染的「下一步」，不是账本的英文短句。
+    #[test]
+    fn withdraw_refusals_carry_codes() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("还要吗？")));
+        let me = Sender::Session("w-a1".into());
+        match err(&mut s, |tx| withdraw(tx, &me, "crew-a", "h1", "  ")) {
+            CollabError::Invalid(r) => assert_eq!(r, Refusal::new(Code::AskReasonEmpty)),
+            e => panic!("{e:?}"),
+        }
+        match err(&mut s, |tx| {
+            withdraw(tx, &Sender::Session("w-a2".into()), "crew-a", "h1", "x")
+        }) {
+            CollabError::Forbidden(r) => assert_eq!(
+                r,
+                Refusal::new(Code::AskWithdrawForbidden).arg("ask", "H1"),
+                "canonical id, not the caller's spelling"
+            ),
+            e => panic!("{e:?}"),
+        }
+        ok(&mut s, |tx| withdraw(tx, &me, "crew-a", &a.ask, "不用了"));
+        match err(&mut s, |tx| withdraw(tx, &me, "crew-a", &a.ask, "再撤")) {
+            CollabError::Conflict(r) => {
+                assert_eq!(r, Refusal::new(Code::AskNotOpen).arg("ask", "H1"))
+            }
+            e => panic!("{e:?}"),
+        }
+        let h = blocked_item_with_default(&mut s);
+        match err(&mut s, |tx| withdraw(tx, &me, "crew-a", &h, "不用了")) {
+            CollabError::Conflict(r) => {
+                assert_eq!(r, Refusal::new(Code::AskInUse).arg("ask", h.as_str()))
+            }
+            e => panic!("{e:?}"),
+        }
     }
 
     /// crew-a 里 w-a1 名下的一项卡在一条带默认方案（30 分钟）的新问上，返回 H 号。

@@ -18,6 +18,7 @@ mod params;
 /// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
 pub mod wake_lifecycle;
 
+pub mod agent;
 pub use model::*;
 pub use params::*;
 use schemars::JsonSchema;
@@ -129,8 +130,9 @@ pub mod events {
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
     pub const TOPICS: &[&str] = &[
-        "message", "channel", "crew", "badge", "ask", "session", "restart", "wake",
+        "message", "channel", "crew", "badge", "ask", "session", "restart", "wake", "system",
     ];
+    pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
     pub const CHANNEL_CHANGED: &str = "channel.changed";
     /// 群随机组的永久删除（`crew.purge`）被级联删掉（`{channelId}`）。不叫 `*.removed`：
@@ -290,9 +292,22 @@ pub struct Event {
     pub data: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SystemShutdown {
+    pub reason: ShutdownReason,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShutdownReason {
+    Stop,
+    Hibernate,
+}
+
 /// 每个事件名 → 它的 `data` 类型。契约的 `events` 表与 `Event` 的 schema 都从这一张表来。
 fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value)> {
     vec![
+        (events::SYSTEM_SHUTDOWN, sub::<SystemShutdown>(g)),
         (events::MESSAGE_APPENDED, sub::<Message>(g)),
         (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
         (events::CHANNEL_PURGED, sub::<ChannelRef>(g)),
@@ -551,6 +566,7 @@ pub fn api_schema() -> Value {
         "Request": sub::<Request>(g),
         "ServerFrame": sub::<ServerFrame>(g),
     });
+    let agent = agent::schema(g);
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "apiVersion": API_VERSION,
@@ -559,6 +575,7 @@ pub fn api_schema() -> Value {
         "frames": frames,
         "methods": methods,
         "events": events,
+        "agent": agent,
         "$defs": generator.take_definitions(true),
     })
 }

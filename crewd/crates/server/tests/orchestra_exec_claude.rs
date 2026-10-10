@@ -19,6 +19,8 @@ fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
         registry: None,
         extra_env: BTreeMap::new(),
         projects_dir: None,
+        runtime_dir: None,
+        child_path: Some("/usr/bin:/bin".into()),
     })
 }
 

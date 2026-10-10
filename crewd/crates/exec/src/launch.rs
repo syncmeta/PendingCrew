@@ -5,8 +5,8 @@
 //!   它走 PTY 投递（[`crate::delivery`]）。
 //! - `--permission-mode auto`，绝不 bypass。
 //!
-//! hooks / MCP 的命令行指向一个可配置的 helper（M3 实现 `crewd mcp` / `crewd hook`）。
-//! 命令行的形状只在 [`HelperCommands`] 一处拼，M3 改子命令时只改这里。
+//! hooks / MCP 的命令行指向 helper（`crewd mcp` / `crewd hook`，spec §22.3）。
+//! 命令行的形状只在 [`HelperCommands`] 一处拼。
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -100,89 +100,72 @@ pub fn new_agent_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// crew 通讯（MCP + hooks）要用的 helper 与身份。M2b 里 helper 只是一个路径参数。
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// 文件名：`<launch dir>/agent-token`。helper 读它做 `agent.attach`。
+pub const TOKEN_FILE: &str = "agent-token";
+/// 各 hook 的超时（秒）。官方默认 600 秒：卡住的 crewd 会把每次工具调用拖 10 分钟。
+/// 一次 hook 就是一次本机 socket 往返。
+pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
+
+/// crew 通讯（MCP + hooks）要用的 helper 与身份（spec §22.3「身份」）。
+/// 机组、角色、显示名不在这里：会话中途会变（换机长），由 serve 每次现查。
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommsSpec {
-    /// helper 可执行文件（终态是 crewd 自己）。
+    /// helper 可执行文件（crewd 自己）。
     pub helper: PathBuf,
-    /// crewd 数据目录（helper 据此找 socket）。
+    /// crewd 数据目录（helper 据此找 `crewd.sock`）。
     pub data_dir: PathBuf,
-    pub crew_id: String,
     /// crewd 的 session id（不是 claude 的会话号）。
     pub session_id: String,
-    pub captain: bool,
-    pub structured_post: bool,
-    pub label: Option<String>,
-    /// false = 只挂 MCP，不注册任何 hook（M3 之前 helper 还没有 `hook` 子命令）。
+    /// `TokenTable::mint` 给的；只写进 0600 的 token 文件，不进任何配置或 argv。
+    pub token: String,
+    /// false = 只挂 MCP，不注册任何 hook。
     pub hooks: bool,
 }
 
-/// helper 命令行。M3 定子命令时只改这里。
+/// `Debug` 不打印 token（它会进日志 / panic 信息）。
+impl std::fmt::Debug for CommsSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommsSpec")
+            .field("helper", &self.helper)
+            .field("data_dir", &self.data_dir)
+            .field("session_id", &self.session_id)
+            .field("token", &"<redacted>")
+            .field("hooks", &self.hooks)
+            .finish()
+    }
+}
+
+/// helper 命令行。子命令形状只在这里拼。
 pub struct HelperCommands<'a>(pub &'a CommsSpec);
 
 impl HelperCommands<'_> {
-    fn identity(&self) -> Vec<String> {
+    fn identity(&self, token_file: &Path) -> Vec<String> {
         let c = self.0;
         vec![
             "--data-dir".to_string(),
             c.data_dir.display().to_string(),
-            "--crew".to_string(),
-            c.crew_id.clone(),
             "--session".to_string(),
             c.session_id.clone(),
+            "--token-file".to_string(),
+            token_file.display().to_string(),
         ]
     }
 
     /// MCP server：exec 形式（claude 直接 spawn，不过 shell），所以不加引号。
-    pub fn mcp_args(&self) -> Vec<String> {
-        self.mcp_args_for("claude")
-    }
-
-    /// 同 [`Self::mcp_args`]，`--agent` 由调用方给（codex 驱动传 `"codex"`）。
-    pub fn mcp_args_for(&self, agent: &str) -> Vec<String> {
-        let c = self.0;
+    pub fn mcp_args(&self, token_file: &Path) -> Vec<String> {
         let mut a = vec!["mcp".to_string()];
-        a.extend(self.identity());
-        a.extend(["--agent".to_string(), agent.to_string()]);
-        if c.captain {
-            a.push("--captain".to_string());
-        }
-        if c.structured_post {
-            a.push("--structured-post".to_string());
-        }
-        if let Some(label) = c.label.as_deref().filter(|l| !l.is_empty()) {
-            a.extend(["--label".to_string(), label.to_string()]);
-        }
+        a.extend(self.identity(token_file));
         a
     }
 
-    /// hook：claude 经 `sh -c` 跑，所以整条按词单引号拼成一个 shell 串。
-    pub fn hook_command(&self, event: HookEvent) -> String {
-        let c = self.0;
+    /// hook：claude 经 `sh -c` 跑（没有 `args` 字段 = shell 形式），整条按词单引号拼。
+    pub fn hook_command(&self, event: HookEvent, token_file: &Path) -> String {
         let mut words = vec![
-            c.helper.display().to_string(),
+            self.0.helper.display().to_string(),
             "hook".to_string(),
             event.subcommand().to_string(),
         ];
-        words.extend(self.identity());
-        match event {
-            HookEvent::PostToolUse => {
-                if c.captain {
-                    words.push("--captain".to_string());
-                }
-            }
-            HookEvent::PreToolUse => {
-                words.extend(["--gate".to_string(), "computer-use".to_string()]);
-            }
-            HookEvent::Stop => {
-                if c.captain {
-                    words.push("--captain".to_string());
-                }
-                if let Some(label) = c.label.as_deref().filter(|l| !l.is_empty()) {
-                    words.extend(["--label".to_string(), label.to_string()]);
-                }
-            }
-        }
+        words.extend(self.identity(token_file));
         words
             .iter()
             .map(|w| shell_quote(w))
@@ -195,29 +178,50 @@ impl HelperCommands<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookEvent {
     PostToolUse,
-    PreToolUse,
+    /// Fires instead of `PostToolUse` when the tool call failed (official hooks docs); handled by
+    /// the same `crewd hook post-tool-use` command.
+    PostToolUseFailure,
     Stop,
+    SessionStart,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 3] = [Self::PostToolUse, Self::PreToolUse, Self::Stop];
+    pub const ALL: [HookEvent; 4] = [
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
+        Self::Stop,
+        Self::SessionStart,
+    ];
 
     /// claude settings.json 里的事件名。
     pub fn settings_key(self) -> &'static str {
         match self {
             Self::PostToolUse => "PostToolUse",
-            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
             Self::Stop => "Stop",
+            Self::SessionStart => "SessionStart",
         }
     }
 
-    fn subcommand(self) -> &'static str {
+    /// `crewd hook <它>`；与 `crewd_proto::agent::HookKind` 的线上名一致（PostToolUseFailure 与 PostToolUse 共用
+    /// `post-tool-use`：serve 按 payload 里的 `hook_event_name` 区分）。
+    pub fn subcommand(self) -> &'static str {
         match self {
-            Self::PostToolUse => "post-tool-use",
-            Self::PreToolUse => "pre-tool-use",
+            Self::PostToolUse | Self::PostToolUseFailure => "post-tool-use",
             Self::Stop => "stop",
+            Self::SessionStart => "session-start",
         }
     }
+
+    /// 显式超时（秒）。helper 自己的期限（`hook_cmd::QUICK` = 5s）短于它：卡住的 crewd 拖不住 claude。
+    pub fn timeout_secs(self) -> u64 {
+        QUICK_HOOK_TIMEOUT_SECS
+    }
+}
+
+/// 写 token 文件（0600、`create_new`）。claude 的启动目录与 codex 驱动共用。
+pub fn write_token_file(dir: &Path, token: &str) -> std::io::Result<PathBuf> {
+    write_private(dir, TOKEN_FILE, token.as_bytes())
 }
 
 /// 单引号包一个 shell 词（内部的 `'` 写成 `'\''`）。
@@ -250,6 +254,20 @@ pub struct LaunchFiles {
 }
 
 impl LaunchFiles {
+    /// 建 `runtime_dir/<name>/`（目录 0700；已存在的同名目录先清掉）。claude 与 codex 驱动共用。
+    pub fn create(runtime_dir: &Path, name: &str) -> std::io::Result<LaunchFiles> {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(runtime_dir)?;
+        let dir = runtime_dir.join(name);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        Ok(LaunchFiles { dir })
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -274,16 +292,7 @@ pub fn prepare_claude(
             format!("非法的会话号 {:?}", session.id()),
         ));
     }
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(runtime_dir)?;
-    let dir = runtime_dir.join(format!("claude-{}", session.id()));
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)?;
-    }
-    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    let files = LaunchFiles { dir };
+    let files = LaunchFiles::create(runtime_dir, &format!("claude-{}", session.id()))?;
 
     let mut args = ClaudeArgs::new(session);
     args.effort = spec.effort.clone();
@@ -303,25 +312,52 @@ pub fn prepare_claude(
             text.as_bytes(),
         )?);
     }
-    let mut settings = serde_json::Map::new();
+    // Product-local pins, verified against the official settings/env reference (2026-10-09).
+    // stable selects a release channel; it is not a version lock (Homebrew ignores it).
+    let mut settings = json!({
+        "permissions": {"deny": ["AskUserQuestion"]},
+        "spinnerTipsEnabled": false,
+        "prefersReducedMotion": true,
+        "feedbackSurveyRate": 0,
+        "autoUpdatesChannel": "stable",
+        "env": {
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+            "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+        },
+    })
+    .as_object()
+    .unwrap()
+    .clone();
     if let Some(comms) = &spec.comms {
+        let token_file = write_token_file(files.dir(), &comms.token)?;
         let helper = HelperCommands(comms);
         let mcp = json!({"mcpServers": {"crew": {
+            "type": "stdio",
+            "alwaysLoad": true,
             "command": comms.helper.display().to_string(),
-            "args": helper.mcp_args(),
+            "args": helper.mcp_args(&token_file),
         }}});
         args.mcp_config_file = Some(write_json(files.dir(), "mcp.json", &mcp)?);
         if comms.hooks {
-            let hooks: serde_json::Map<String, Value> = HookEvent::ALL
-                .iter()
-                .map(|e| {
-                    let cmd = helper.hook_command(*e);
-                    (
-                        e.settings_key().to_string(),
-                        json!([{"hooks": [{"type": "command", "command": cmd}]}]),
-                    )
-                })
-                .collect();
+            let mut hooks = serde_json::Map::new();
+            for e in HookEvent::ALL {
+                let mut entry = serde_json::Map::new();
+                if e == HookEvent::SessionStart {
+                    entry.insert("matcher".into(), json!("resume|compact|clear|fork"));
+                }
+                entry.insert(
+                    "hooks".to_string(),
+                    json!([{
+                        "type": "command",
+                        "command": helper.hook_command(e, &token_file),
+                        "timeout": e.timeout_secs(),
+                    }]),
+                );
+                hooks.insert(
+                    e.settings_key().to_string(),
+                    Value::Array(vec![Value::Object(entry)]),
+                );
+            }
             settings.insert("hooks".to_string(), Value::Object(hooks));
         }
     }
@@ -365,11 +401,8 @@ mod tests {
         CommsSpec {
             helper: PathBuf::from("/opt/crew d/crewd"),
             data_dir: PathBuf::from("/data"),
-            crew_id: "local-aaaa".to_string(),
             session_id: "worker-1".to_string(),
-            captain: true,
-            structured_post: true,
-            label: Some("O'Neil".to_string()),
+            token: "tok-SECRET".to_string(),
             hooks: true,
         }
     }
@@ -503,53 +536,106 @@ mod tests {
     }
 
     #[test]
-    fn mcp_config_is_exec_form_and_hooks_are_quoted_shell_strings() {
+    fn mcp_config_is_exec_form_with_token_file_only() {
         let rt = tempfile::tempdir().unwrap();
         let spec = ClaudeSpec {
             comms: Some(comms()),
             ..ClaudeSpec::default()
         };
-        let (args, _files) =
+        let (args, files) =
             prepare_claude(&spec, AgentSessionArg::New("u-3".into()), rt.path()).unwrap();
+        let token_file = files.dir().join(TOKEN_FILE);
+        assert_eq!(std::fs::read_to_string(&token_file).unwrap(), "tok-SECRET");
+        assert_eq!(mode(&token_file), 0o600);
         let mcp: Value =
-            serde_json::from_slice(&std::fs::read(args.mcp_config_file.unwrap()).unwrap()).unwrap();
-        assert_eq!(mcp["mcpServers"]["crew"]["command"], "/opt/crew d/crewd");
+            serde_json::from_slice(&std::fs::read(args.mcp_config_file.clone().unwrap()).unwrap())
+                .unwrap();
+        let crew = &mcp["mcpServers"]["crew"];
+        assert_eq!(crew["type"], "stdio");
+        assert_eq!(crew["alwaysLoad"], true);
+        assert_eq!(crew["command"], "/opt/crew d/crewd");
         assert_eq!(
-            mcp["mcpServers"]["crew"]["args"],
+            crew["args"],
             json!([
                 "mcp",
                 "--data-dir",
                 "/data",
-                "--crew",
-                "local-aaaa",
                 "--session",
                 "worker-1",
-                "--agent",
-                "claude",
-                "--captain",
-                "--structured-post",
-                "--label",
-                "O'Neil"
+                "--token-file",
+                token_file.display().to_string()
             ])
         );
-        let settings: Value =
-            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
-        assert_eq!(
-            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "'/opt/crew d/crewd' 'hook' 'pre-tool-use' '--data-dir' '/data' '--crew' \
-             'local-aaaa' '--session' 'worker-1' '--gate' 'computer-use'"
+        let all = std::fs::read_to_string(files.dir().join("mcp.json")).unwrap()
+            + &std::fs::read_to_string(files.dir().join("settings.json")).unwrap()
+            + &args.argv().join(" ");
+        assert!(
+            !all.contains("tok-SECRET"),
+            "token 只在 0600 文件里，不进配置与 argv"
         );
-        assert_eq!(
-            settings["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "'/opt/crew d/crewd' 'hook' 'stop' '--data-dir' '/data' '--crew' 'local-aaaa' \
-             '--session' 'worker-1' '--captain' '--label' 'O'\\''Neil'"
-        );
-        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["type"], "command");
-        assert!(settings.get("fastMode").is_none());
     }
 
     #[test]
-    fn hooks_can_be_omitted_until_m3() {
+    fn hooks_are_quoted_shell_strings_with_explicit_timeouts() {
+        let rt = tempfile::tempdir().unwrap();
+        let spec = ClaudeSpec {
+            comms: Some(comms()),
+            ..ClaudeSpec::default()
+        };
+        let (args, files) =
+            prepare_claude(&spec, AgentSessionArg::New("u-4".into()), rt.path()).unwrap();
+        let tf = files.dir().join(TOKEN_FILE).display().to_string();
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
+        let post = &settings["hooks"]["PostToolUse"][0];
+        assert!(post.get("matcher").is_none(), "PostToolUse 对所有工具");
+        assert_eq!(
+            post["hooks"][0]["command"],
+            format!(
+                "'/opt/crew d/crewd' 'hook' 'post-tool-use' '--data-dir' '/data' \
+                 '--session' 'worker-1' '--token-file' '{tf}'"
+            )
+        );
+        assert_eq!(post["hooks"][0]["type"], "command");
+        assert_eq!(post["hooks"][0]["timeout"], 15);
+        // PostToolUseFailure (official hooks docs: fires instead of PostToolUse when the tool
+        // fails) runs the very same helper command with the same timeout.
+        let failed = &settings["hooks"]["PostToolUseFailure"][0];
+        assert!(failed.get("matcher").is_none());
+        assert_eq!(failed["hooks"][0], post["hooks"][0]);
+        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["timeout"], 15);
+    }
+
+    /// B16: PendingCrew does no approvals (claude / codex handle permissions themselves), so no
+    /// hook ever sits in front of a tool call: there is no PreToolUse entry, whatever the config.
+    #[test]
+    fn launch_settings_never_register_a_pre_tool_use_hook() {
+        let rt = tempfile::tempdir().unwrap();
+        let spec = ClaudeSpec {
+            comms: Some(comms()),
+            ..ClaudeSpec::default()
+        };
+        let (args, _f) =
+            prepare_claude(&spec, AgentSessionArg::New("u-5".into()), rt.path()).unwrap();
+        let raw = std::fs::read_to_string(args.settings_file.unwrap()).unwrap();
+        assert!(!raw.contains("PreToolUse"), "{raw}");
+        assert!(!raw.contains("pre-tool-use"), "{raw}");
+        let settings: Value = serde_json::from_str(&raw).unwrap();
+        let mut keys: Vec<&str> = settings["hooks"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["PostToolUse", "PostToolUseFailure", "SessionStart", "Stop"]
+        );
+    }
+
+    #[test]
+    fn hooks_can_still_be_switched_off() {
         let rt = tempfile::tempdir().unwrap();
         let mut c = comms();
         c.hooks = false;
@@ -557,12 +643,62 @@ mod tests {
             comms: Some(c),
             ..ClaudeSpec::default()
         };
-        let (args, _files) =
-            prepare_claude(&spec, AgentSessionArg::New("u-4".into()), rt.path()).unwrap();
+        let (args, files) =
+            prepare_claude(&spec, AgentSessionArg::New("u-6".into()), rt.path()).unwrap();
         assert!(args.mcp_config_file.is_some());
-        assert_eq!(
-            args.settings_file, None,
-            "没有 hook 也没有 fastMode 就不带 --settings"
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
+        assert!(settings.get("hooks").is_none());
+        assert!(files.dir().join(TOKEN_FILE).exists(), "MCP 也要 token");
+    }
+
+    #[test]
+    fn product_settings_pin_documented_ui_env_and_nonblocking_questions() {
+        for comms in [None, Some(comms())] {
+            let rt = tempfile::tempdir().unwrap();
+            let spec = ClaudeSpec {
+                comms,
+                ..ClaudeSpec::default()
+            };
+            let (args, _files) =
+                prepare_claude(&spec, AgentSessionArg::New("pins".into()), rt.path()).unwrap();
+            let settings: Value =
+                serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(settings["permissions"]["deny"], json!(["AskUserQuestion"]));
+            assert_eq!(settings["spinnerTipsEnabled"], false);
+            assert_eq!(settings["prefersReducedMotion"], true);
+            assert_eq!(settings["feedbackSurveyRate"], 0);
+            assert_eq!(settings["autoUpdatesChannel"], "stable");
+            assert_eq!(settings["env"]["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"], "1");
+            assert_eq!(settings["env"]["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"], "1");
+            assert!(settings["hooks"].get("PreToolUse").is_none());
+            assert!(
+                settings["permissions"]["deny"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|x| x != "ToolSearch")
+            );
+            assert!(settings["env"].get("ENABLE_TOOL_SEARCH").is_none());
+        }
+    }
+
+    #[test]
+    fn comms_debug_redacts_the_token() {
+        let shown = format!("{:?}", comms());
+        assert!(!shown.contains("tok-SECRET"), "{shown}");
+        assert!(shown.contains("worker-1"), "{shown}");
+    }
+
+    #[test]
+    fn token_file_is_private_and_refuses_to_overwrite() {
+        let rt = tempfile::tempdir().unwrap();
+        let p = write_token_file(rt.path(), "t1").unwrap();
+        assert_eq!(mode(&p), 0o600);
+        assert!(
+            write_token_file(rt.path(), "t2").is_err(),
+            "已存在 = 有人在抢"
         );
     }
 
@@ -579,7 +715,7 @@ mod tests {
         assert_eq!(args.model.as_deref(), Some("opus"));
         let settings: Value =
             serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
-        assert_eq!(settings, json!({"fastMode": true}));
+        assert_eq!(settings["fastMode"], true);
 
         let spec = ClaudeSpec {
             model: Some("claude-opus-5".into()),

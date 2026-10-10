@@ -141,11 +141,43 @@ pub enum FakeCall {
     Live(String),
 }
 
+/// Which SessionControl method a `FakeCall` is (for `FakeSessionControl::fail_method`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FakeMethod {
+    Start,
+    Resume,
+    Stop,
+    Nudge,
+    Inspect,
+    SetProfile,
+    Handoff,
+    Quota,
+    Live,
+}
+
+impl FakeCall {
+    pub fn method(&self) -> FakeMethod {
+        match self {
+            Self::Start(_) => FakeMethod::Start,
+            Self::Resume(_) => FakeMethod::Resume,
+            Self::Stop(..) => FakeMethod::Stop,
+            Self::Nudge(..) => FakeMethod::Nudge,
+            Self::Inspect(..) => FakeMethod::Inspect,
+            Self::SetProfile(..) => FakeMethod::SetProfile,
+            Self::Handoff(..) => FakeMethod::Handoff,
+            Self::Quota => FakeMethod::Quota,
+            Self::Live(_) => FakeMethod::Live,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FakeSessionControl {
     calls: Mutex<Vec<FakeCall>>,
     live: Mutex<std::collections::HashMap<String, SessionLive>>,
+    quota: Mutex<QuotaReport>,
     fail_next: Mutex<Option<ControlError>>,
+    fail_method: Mutex<Option<(FakeMethod, ControlError)>>,
 }
 
 impl FakeSessionControl {
@@ -155,17 +187,35 @@ impl FakeSessionControl {
     pub fn set_live(&self, l: SessionLive) {
         self.live.lock().unwrap().insert(l.session_id.clone(), l);
     }
+    pub fn set_quota(&self, report: QuotaReport) {
+        *self.quota.lock().unwrap() = report;
+    }
     /// 下一次调用（任何方法）返回这个错误。
     pub fn fail_next(&self, e: ControlError) {
         *self.fail_next.lock().unwrap() = Some(e);
+    }
+    /// The next call of `method` (only that method; other calls go through) returns this error.
+    pub fn fail_method(&self, method: FakeMethod, e: ControlError) {
+        *self.fail_method.lock().unwrap() = Some((method, e));
     }
     fn record<T: Send + 'static>(
         &self,
         c: FakeCall,
         ok: T,
     ) -> BoxFuture<'_, Result<T, ControlError>> {
+        let method = c.method();
         self.calls.lock().unwrap().push(c);
-        let r = match self.fail_next.lock().unwrap().take() {
+        let by_method = {
+            let mut slot = self.fail_method.lock().unwrap();
+            match slot.take() {
+                Some((m, e)) if m == method => Some(e),
+                other => {
+                    *slot = other;
+                    None
+                }
+            }
+        };
+        let r = match by_method.or_else(|| self.fail_next.lock().unwrap().take()) {
             Some(e) => Err(e),
             None => Ok(ok),
         };
@@ -234,7 +284,7 @@ impl SessionControl for FakeSessionControl {
         self.record(FakeCall::Handoff(crew, to), ())
     }
     fn quota(&self) -> BoxFuture<'_, Result<QuotaReport, ControlError>> {
-        self.record(FakeCall::Quota, QuotaReport::default())
+        self.record(FakeCall::Quota, self.quota.lock().unwrap().clone())
     }
     fn live(&self, id: String) -> BoxFuture<'_, Result<SessionLive, ControlError>> {
         let l = self

@@ -13,8 +13,14 @@ crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-server = { version = "0.1.0", path = "../server" }
 crewd-store = { version = "0.1.0", path = "../store" }
 dirs = "7.0.0"
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "signal", "io-std", "io-util"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "signal", "io-std", "io-util", "net", "sync", "time"] }
 
 [dev-dependencies]
+crewd-wake = { path = "../wake" }
+crewd-collab = { path = "../collab" }
+crewd-server = { path = "../server", features = ["testkit"] }
 tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["process", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }

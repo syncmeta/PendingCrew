@@ -13,6 +13,21 @@ The system cannot withdraw an ask. Withdraw it as a session or as the human.
 ## ask.remove_blocked
 Ask {ask} in crew {crew} still blocks a live work item. Answer it, or have the owner reroute, then remove the crew.
 
+## ask.withdraw_forbidden
+Only the asker, the captain of the ask's crew, the management crew's captain, or the human can withdraw {ask}. Ask one of them to withdraw it, or explain in the channel.
+
+## ask.reason_empty
+The withdraw reason cannot be empty. Say in one sentence what changed.
+
+## ask.not_open
+{ask} is already answered, defaulted or withdrawn, so it cannot be withdrawn again. Nothing more to do for it.
+
+## ask.in_use
+{ask} still blocks a live work item and cannot be withdrawn. Have the owner reroute that item (report it back to open / active) first, then withdraw.
+
+## ask.question_empty
+The question cannot be empty. Write the decision you need, ideally with the options and your preference.
+
 ## channel.not_found
 There is no channel {channel}. List the existing channels and check the id.
 
@@ -298,6 +313,10 @@ Session {session} has no usable working directory (its worktree and the crew dir
 
 ## orchestra.not_running
 Session management is not running on this crewd (no agent executor configured). Restart it with crewd serve --claude <path> and try again.
+
+## orchestra.binary_replaced
+
+The crewd executable was replaced. Restart crewd before starting or resuming sessions.
 
 ## orchestra.shutting_down
 crewd is shutting down or hibernating and will not start, resume or wake sessions. Try again once it is back up.

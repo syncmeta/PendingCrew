@@ -13,6 +13,21 @@
 ## ask.remove_blocked
 机组 {crew} 的 {ask} 还卡着活项；先答掉它或让负责人改道，再移除机组
 
+## ask.withdraw_forbidden
+{ask} 只能由提问者本人、问所在机组的机长、总机组的机长或人撤回；需要撤的话请他们来撤，或在群里说明情况
+
+## ask.reason_empty
+撤回理由不能为空；用一句话写清变了什么
+
+## ask.not_open
+{ask} 已经答过、按默认办了或撤回了，不能再撤；这条不用再处理
+
+## ask.in_use
+{ask} 还卡着一个活项，撤不了；先让负责人改道（把那一项报回 open / active），再撤
+
+## ask.question_empty
+问题不能为空；写清要人拍板的那件事，最好带上选项和你的倾向
+
 ## channel.not_found
 没有群 {channel}；先列出现有的群，核对 id
 
@@ -298,6 +313,10 @@ session {session} 没有可用的工作目录（它的 worktree 与机组目录�
 
 ## orchestra.not_running
 这台 crewd 没有启用会话管理（没配 agent 执行器）；用 crewd serve --claude <路径> 重新启动后再试
+
+## orchestra.binary_replaced
+
+crewd 的可执行文件已被替换。请重启 crewd 后再启动或恢复会话。
 
 ## orchestra.shutting_down
 crewd 正在停机或休眠，不再起、恢复或叫醒 session；等它重新起来后再试

@@ -1,8 +1,12 @@
 //! crewd：PendingCrew 的跨平台后端。
+mod agent_client;
 mod claude_cmd;
 mod codex_cmd;
+mod hook_cmd;
+mod mcp_cmd;
 
 use anyhow::{Context, bail};
+use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use crewd_proto::{Request, ServerFrame};
 use std::io::{BufRead, BufReader, Write};
@@ -22,7 +26,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// 前台运行服务
-    Serve,
+    Serve {
+        #[arg(long, env = "CREWD_CLAUDE")]
+        claude: Option<PathBuf>,
+        #[arg(long = "claude-env", value_name = "K=V", hide = true)]
+        claude_env: Vec<String>,
+    },
     /// 从旧版 JSON 数据只读导入到一个新库
     Import {
         /// 旧数据目录；缺省取 PENDINGCREW_DATA_DIR 或 ~/Library/Application Support/PendingCrew
@@ -55,6 +64,20 @@ enum Cmd {
     Claude(claude_cmd::ClaudeArgs),
     /// 前台起一个 codex 会话（M2c 验收 / 调试；会话事件打到 stdout）
     Codex(codex_cmd::CodexArgs),
+    /// agent session 的 stdio MCP server（claude / codex 经 --mcp-config 拉起）
+    Mcp(mcp_cmd::McpArgs),
+    /// claude hook：读 stdin JSON，转给 crewd，打印要给 claude 的输出（永远 exit 0）
+    Hook(hook_cmd::HookArgs),
+}
+
+fn runtime_dir(data: &std::path::Path) -> anyhow::Result<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    std::fs::canonicalize(data)?.hash(&mut hash);
+    Ok(dirs::cache_dir()
+        .context("cannot determine cache directory")?
+        .join("PendingCrew/run")
+        .join(format!("{:016x}", hash.finish())))
 }
 
 /// `--data-dir` / `CREWD_DATA_DIR`：与 PENDINGCREW_DATA_DIR 同规则——去首尾空白、展开 `~/`；
@@ -86,11 +109,61 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let dir = data_dir(&cli)?;
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        // `crewd hook …` 的命令行错不能 exit 2（对 Stop 是「挡住」、对 PostToolUse 会喂回给模型）：
+        // exit 0、不打 stdout。`--help` / `--version` 照常。
+        Err(e) if !matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
+            if hook_cmd::is_hook_argv(&argv) {
+                eprintln!("crewd hook: bad command line: {e}");
+                std::process::exit(0);
+            }
+            e.exit()
+        }
+        Err(e) => e.exit(),
+    };
+    if let Cmd::Hook(args) = &cli.cmd {
+        hook_cmd::install_panic_guard(args.event().to_string());
+    }
+    let dir = match (data_dir(&cli), &cli.cmd) {
+        (Ok(d), _) => d,
+        (Err(e), Cmd::Hook(args)) => {
+            eprintln!("crewd hook {}: {e:#}", args.event());
+            return Ok(());
+        }
+        (Err(e), _) => return Err(e),
+    };
     match &cli.cmd {
-        Cmd::Serve => {
-            crewd_server::serve(dir, shutdown_signal()).await?;
+        Cmd::Serve { claude, claude_env } => {
+            let mut extra = std::collections::BTreeMap::new();
+            for kv in claude_env {
+                let (k, v) = kv
+                    .split_once('=')
+                    .with_context(|| format!("--claude-env must be K=V: {kv}"))?;
+                extra.insert(k.to_string(), v.to_string());
+            }
+            crewd_server::ensure_data_dir(&dir)?;
+            let runtime = runtime_dir(&dir)?;
+            let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
+                .map(|d| d.join("projects"));
+            let opts = crewd_server::ServeOptions {
+                orchestra: Some(crewd_server::OrchestraServe {
+                    claude: match claude {
+                        Some(p) => {
+                            crewd_server::orchestra::exec_claude::ClaudeProgram::Path(p.clone())
+                        }
+                        None => crewd_server::orchestra::exec_claude::ClaudeProgram::Discover,
+                    },
+                    claude_env: extra,
+                    claude_projects_dir: projects,
+                    runtime_dir: Some(runtime),
+                    ..Default::default()
+                }),
+            };
+            crewd_server::serve_with(dir, opts, shutdown_signal()).await?;
         }
         Cmd::Import { from } => {
             let src = from
@@ -158,6 +231,13 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
         Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
+        Cmd::Mcp(args) => mcp_cmd::run(&dir, args.clone()).await?,
+        Cmd::Hook(args) => {
+            // `run` 只在 bug 时返回 Err：同样 exit 0、不打 stdout。
+            if let Err(e) = hook_cmd::run(&dir, args.clone()).await {
+                eprintln!("crewd hook {}: {e:#}", args.event());
+            }
+        }
         Cmd::Schema => {
             println!(
                 "{}",

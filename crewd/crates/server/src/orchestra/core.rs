@@ -48,7 +48,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::OrchestraConfig;
 use super::clock::Clock;
-use super::exec::{AnswerSteps, Context, ExecHandle, Executor, Executors, LaunchRequest};
+use super::exec::{
+    AnswerSteps, Context, ExecHandle, Executor, Executors, LaunchError, LaunchRequest,
+};
 use super::hibernate::{HibernateReport, Hibernation};
 use super::hooks::Hooks;
 use super::port::*;
@@ -237,6 +239,10 @@ pub enum Input {
         generator: u64,
         event: SessionEvent,
     },
+    LaunchBinaryReplaced {
+        session: String,
+        generator: u64,
+    },
     Launched {
         session: String,
         generator: u64,
@@ -355,6 +361,7 @@ pub enum ControlError {
         text: Option<String>,
     },
     /// crewd 正在停机 / 休眠：不再起 / 恢复会话。
+    BinaryReplaced,
     ShuttingDown,
     /// 机组已被移除（归档，只读；spec §26.5 / §26.7）：不起新 session、不恢复它的 session（机组 id）。
     CrewRemoved(String),
@@ -452,6 +459,7 @@ impl ControlError {
                 session,
                 text: None,
             } => r(Code::SessionInputDraftUnknown).arg("session", session),
+            Self::BinaryReplaced => r(Code::OrchestraBinaryReplaced),
             Self::ShuttingDown => r(Code::OrchestraShuttingDown),
             Self::CrewRemoved(crew) => r(Code::CrewRemoved).arg("crew", crew),
             Self::Storage { .. } | Self::Internal(_) => return None,
@@ -702,6 +710,7 @@ pub struct Core<P: Port> {
     pub(crate) jitter: queue::Jitter,
     /// 停机闸（控制者裁定 C4：跟回执分开——回执发出去之后闸仍关着）：不投、不拉起、不起 / 恢复会话。
     pub(crate) shutting_down: bool,
+    pub(crate) binary_replaced: bool,
     /// 停机回执（全部会话退出后发，[`Core::shutdown_done`]）；可能有好几个人在等。
     pub(crate) shutdown: Vec<oneshot::Sender<()>>,
     /// 上一次清旧唤醒的时刻（`Ms(0)` = 启动后第一拍就清）。
@@ -786,6 +795,7 @@ impl<P: Port> Core<P> {
             seen_progress: HashMap::new(),
             jitter,
             shutting_down: false,
+            binary_replaced: false,
             shutdown: Vec::new(),
             last_prune: Ms(0),
             prune_more: false,
@@ -829,7 +839,11 @@ impl<P: Port> Core<P> {
                 Some(l) if l.generator == generator => self.on_exited(&session, None).await,
                 _ => Ok(()),
             },
+            Input::LaunchBinaryReplaced { session, generator } => {
+                self.on_binary_launch_rejected(&session, generator).await
+            }
             Input::BinaryReplaced { crew } => {
+                self.binary_replaced = true;
                 self.notifier
                     .raise(
                         Key::new(Kind::BinaryReplaced, "machine"),
@@ -1058,9 +1072,11 @@ impl<P: Port> Core<P> {
         req: &StartSession,
         origin: Origin,
     ) -> Result<Option<PathBuf>, ControlError> {
-        self.execs
+        let exec = self
+            .execs
             .get(&req.executor)
             .map_err(|_| ControlError::Unsupported(req.executor.clone()))?;
+        self.check_launch(&exec, &req.crew_id)?;
         // 已移除的机组只读（§26.7）：什么都不建、不写、不起。
         if self
             .port
@@ -1136,6 +1152,7 @@ impl<P: Port> Core<P> {
             .execs
             .get(&req.executor)
             .map_err(|_| kept(ControlError::Unsupported(req.executor.clone())))?;
+        self.check_launch(&exec, &req.crew_id).map_err(kept)?;
         // 建 worktree 期间机长指针可能变了（换机长）：再查一次。
         if worktree.is_some()
             && req.captain
@@ -1196,6 +1213,7 @@ impl<P: Port> Core<P> {
             .execs
             .get(&row.executor)
             .map_err(|_| ControlError::Unsupported(row.executor.clone()))?;
+        self.check_launch(&exec, &row.crew_id)?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
@@ -1472,6 +1490,19 @@ impl<P: Port> Core<P> {
 
     // —— 拉起
 
+    fn check_launch(&self, exec: &Arc<dyn Executor>, crew: &str) -> Result<(), ControlError> {
+        if self.binary_replaced {
+            return Err(ControlError::BinaryReplaced);
+        }
+        exec.check_launch().map_err(|e| match e {
+            LaunchError::BinaryReplaced => {
+                let _ = self.inbox.send(Input::BinaryReplaced { crew: crew.into() });
+                ControlError::BinaryReplaced
+            }
+            other => ControlError::internal(other),
+        })
+    }
+
     /// 拉起一个 session：`text` = 开场正文（新会话的 brief，或唤醒批的正文），`wakes` = 随正文送的唤醒（记 inflight；
     /// 非空时 `text` 必须有）。
     /// 真正的启动在派生任务里做，结果以 `Input::Launched` 回来（裁定 6）。`desired=running` 等 `Spawned` 再写（C18）。
@@ -1504,6 +1535,7 @@ impl<P: Port> Core<P> {
         if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
             return Err(ControlError::AlreadyRunning(row.id).into());
         }
+        self.check_launch(&exec, &row.crew_id)?;
         let now = self.now();
         let workdir = row
             .workdir
@@ -1573,6 +1605,12 @@ impl<P: Port> Core<P> {
                         });
                     }
                 }
+                Err(LaunchError::BinaryReplaced) => {
+                    let _ = tx.send(Input::LaunchBinaryReplaced {
+                        session: task_session,
+                        generator,
+                    });
+                }
                 Err(e) => {
                     let _ = tx.send(Input::Launched {
                         session: task_session,
@@ -1583,6 +1621,49 @@ impl<P: Port> Core<P> {
             }
         });
         self.publish_live(&session).await;
+        Ok(())
+    }
+
+    async fn on_binary_launch_rejected(
+        &mut self,
+        session: &str,
+        generator: u64,
+    ) -> anyhow::Result<()> {
+        if self
+            .starting
+            .get(session)
+            .is_some_and(|s| s.generator == generator)
+        {
+            let st = self.starting.remove(session).expect("checked");
+            self.binary_replaced = true;
+            self.port.revoke_token(session);
+            let ids = st.batch.ids();
+            if !ids.is_empty() {
+                let fate = if st.stop_requested {
+                    Settle::Dropped {
+                        error: "stopped".into(),
+                    }
+                } else {
+                    Settle::Requeue
+                };
+                self.due
+                    .touch(&self.port)
+                    .settle(&ids, fate, self.now())
+                    .await?;
+                self.port.publish(wake_changed(
+                    session,
+                    st.batch.wakes.iter().chain(&st.batch.riders),
+                ));
+            }
+            self.notifier
+                .raise(
+                    Key::new(Kind::BinaryReplaced, "machine"),
+                    &st.row.crew_id,
+                    text::get(self.lang(), "notice.binary_replaced").into(),
+                )
+                .await?;
+            self.publish_live(session).await;
+        }
         Ok(())
     }
 
@@ -2551,6 +2632,160 @@ mod tests {
         rig.exec.lock().fail_next = vec!["合成：claude 不在".into()];
         rig.run("w1").await;
         assert_eq!(rig.port.row("w1").desired, Desired::Stopped);
+    }
+
+    struct ReplacedExecutor;
+    impl Executor for ReplacedExecutor {
+        fn check_launch(&self) -> Result<(), LaunchError> {
+            Err(LaunchError::BinaryReplaced)
+        }
+        fn launch(
+            &self,
+            _: LaunchRequest,
+        ) -> super::super::exec::BoxFut<'_, Result<super::super::exec::Launched, LaunchError>>
+        {
+            panic!("identity refusal must never launch")
+        }
+    }
+
+    #[tokio::test]
+    async fn t11_identity_admission_refusal_raises_the_machine_notice() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.core.execs = Executors::new().with("claude", Arc::new(ReplacedExecutor));
+        assert_eq!(
+            rig.core.resume("cap", Origin::Human).await,
+            Err(ControlError::BinaryReplaced)
+        );
+        rig.settle().await;
+        assert!(
+            rig.core.binary_replaced,
+            "admission must schedule the machine notice and close future launches"
+        );
+        assert_eq!(rig.port.row("cap").resume_failed_at, None);
+    }
+
+    #[tokio::test]
+    async fn t11_binary_replacement_refuses_resume_before_claim_or_failure() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.core
+            .handle(Input::BinaryReplaced { crew: "c1".into() })
+            .await;
+        assert_eq!(
+            rig.core.resume("cap", Origin::Human).await,
+            Err(ControlError::BinaryReplaced)
+        );
+        assert!(rig.exec.launches("cap").is_empty());
+        assert_eq!(rig.port.row("cap").resume_failed_at, None);
+        assert_eq!(
+            super::super::rpc::rpc_err(ControlError::BinaryReplaced)
+                .data
+                .map(|d| d.refusal),
+            Some("orchestra.binary_replaced".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn t11_replacement_during_launch_requeues_without_additional_failure() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.port
+            .enqueue(NewWake {
+                session: "cap".into(),
+                kind: WakeKind::Timer,
+                source: source::timer("replacement"),
+                priority: Priority::Auto,
+                not_before: T0,
+                note: Some("synthetic".into()),
+                origin: "cap".into(),
+            })
+            .await
+            .unwrap();
+        let wakes = rig.port.pending("cap").await.unwrap();
+        let row = rig.port.row("cap");
+        let exec = rig.core.execs.get("claude").unwrap();
+        rig.core
+            .launch(row, exec, Some("synthetic".into()), wakes, vec![])
+            .await
+            .unwrap();
+        let generator = rig.core.starting["cap"].generator;
+        assert_eq!(
+            rig.port.wakes_of("cap")[0].attempts,
+            1,
+            "the batch is claimed"
+        );
+        rig.core
+            .handle(Input::LaunchBinaryReplaced {
+                session: "cap".into(),
+                generator,
+            })
+            .await;
+        let after = rig.port.wakes_of("cap")[0].clone();
+        assert_eq!(after.state, crewd_wake::WakeState::Pending);
+        assert_eq!(
+            after.attempts, 0,
+            "no process started: shared Requeue refunds claim; no failure is counted"
+        );
+        assert_eq!(rig.port.row("cap").resume_failed_at, None);
+        assert!(rig.core.starting.is_empty());
+        assert!(rig.core.binary_replaced);
+        rig.settle().await;
+    }
+
+    #[tokio::test]
+    async fn t11_replacement_race_preserves_human_stop_cancellation() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.port
+            .enqueue(NewWake {
+                session: "cap".into(),
+                kind: WakeKind::Timer,
+                source: source::timer("replacement"),
+                priority: Priority::Auto,
+                not_before: T0,
+                note: Some("synthetic".into()),
+                origin: "cap".into(),
+            })
+            .await
+            .unwrap();
+        let wakes = rig.port.pending("cap").await.unwrap();
+        let row = rig.port.row("cap");
+        let exec = rig.core.execs.get("claude").unwrap();
+        rig.core
+            .launch(row, exec, Some("synthetic".into()), wakes, vec![])
+            .await
+            .unwrap();
+        let generator = rig.core.starting["cap"].generator;
+        assert_eq!(
+            rig.port.wakes_of("cap")[0].attempts,
+            1,
+            "the batch is claimed"
+        );
+        let (reply, response) = oneshot::channel();
+        rig.core
+            .handle(Input::Cmd(Cmd::Stop {
+                session: "cap".into(),
+                reply,
+            }))
+            .await;
+        assert_eq!(response.await.unwrap(), Ok(()));
+        rig.core
+            .handle(Input::LaunchBinaryReplaced {
+                session: "cap".into(),
+                generator,
+            })
+            .await;
+        let after = rig.port.wakes_of("cap")[0].clone();
+        assert_eq!(after.state, crewd_wake::WakeState::Dropped);
+        assert_eq!(
+            after.attempts, 1,
+            "human cancellation is neither retry nor refund"
+        );
+        assert_eq!(rig.port.row("cap").resume_failed_at, None);
+        assert!(rig.core.starting.is_empty());
+        assert!(rig.core.binary_replaced);
+        rig.settle().await;
     }
 
     /// C18：人在进程起来之前就停掉了——之后到的 `Spawned` 不能把 `desired` 改回 running。

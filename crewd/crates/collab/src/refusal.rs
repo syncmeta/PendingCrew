@@ -27,6 +27,11 @@ refusal_codes! {
     AskBadId = "ask.bad_id" ["input"],
     AskSystemCannotWithdraw = "ask.system_cannot_withdraw" [],
     AskRemoveBlocked = "ask.remove_blocked" ["crew", "ask"],
+    AskWithdrawForbidden = "ask.withdraw_forbidden" ["ask"],
+    AskReasonEmpty = "ask.reason_empty" [],
+    AskNotOpen = "ask.not_open" ["ask"],
+    AskInUse = "ask.in_use" ["ask"],
+    AskQuestionEmpty = "ask.question_empty" [],
     // channel
     ChannelNotFound = "channel.not_found" ["channel"],
     ChannelSystemCannotAct = "channel.system_cannot_act" [],
@@ -107,6 +112,7 @@ refusal_codes! {
     MessageIdConflict = "message.id_conflict" [],
     // orchestra（M3c 的会话管理与唤醒）
     OrchestraNotRunning = "orchestra.not_running" [],
+    OrchestraBinaryReplaced = "orchestra.binary_replaced" [],
     OrchestraShuttingDown = "orchestra.shutting_down" [],
     OrchestraKeysHumanOnly = "orchestra.keys_human_only" [],
     OrchestraNudgeBusy = "orchestra.nudge_busy" [],

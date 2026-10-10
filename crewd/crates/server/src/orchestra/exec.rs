@@ -36,6 +36,7 @@ pub struct LaunchRequest {
 
 #[derive(Debug)]
 pub enum LaunchError {
+    BinaryReplaced,
     /// 这种执行器还没接进 crewd（codex 在 M2c 合入前）。
     Unsupported(String),
     /// 本 crewd 没配置这个执行器的可执行文件。
@@ -47,6 +48,7 @@ pub enum LaunchError {
 impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::BinaryReplaced => f.write_str("crewd executable was replaced; restart required"),
             Self::Unsupported(kind) => write!(f, "执行器 {kind} 还没接入 crewd"),
             Self::NotConfigured(why) | Self::Failed(why) => write!(f, "{why}"),
             Self::Start(e) => write!(f, "{e}"),
@@ -59,6 +61,10 @@ impl std::error::Error for LaunchError {}
 pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
 
 pub trait Executor: Send + Sync {
+    /// Synchronous launch admission; must not enter the actor mailbox.
+    fn check_launch(&self) -> Result<(), LaunchError> {
+        Ok(())
+    }
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>>;
 
     /// 续跑被拒时多说一句诊断：这个会话号的日志在不在盘上（只用来说明，不决定任何事；

@@ -3,10 +3,19 @@ use std::path::Path;
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
+// Each binary test process owns a synthetic home outside every data directory.
+static TEST_HOME: std::sync::LazyLock<tempfile::TempDir> =
+    std::sync::LazyLock::new(|| tempfile::tempdir().unwrap());
+
 fn crewd(data: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_crewd"));
     c.env("CREWD_DATA_DIR", data)
-        .env_remove("PENDINGCREW_DATA_DIR");
+        .env_remove("PENDINGCREW_DATA_DIR")
+        .env("CREWD_CLAUDE", "/usr/bin/false")
+        .env("SHELL", "/usr/bin/false")
+        .env("HOME", TEST_HOME.path())
+        .env("XDG_CACHE_HOME", TEST_HOME.path().join("cache"))
+        .env("CLAUDE_CONFIG_DIR", TEST_HOME.path().join(".claude"));
     c
 }
 

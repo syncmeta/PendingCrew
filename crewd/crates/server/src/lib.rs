@@ -17,6 +17,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::UnixListener;
 
+#[cfg(test)]
+struct DbWriteBarrier {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
 pub struct AppState {
     pub db: Db,
     pub hub: Hub,
@@ -26,6 +32,8 @@ pub struct AppState {
     pub agent: agent::AgentRuntime,
     /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
+    #[cfg(test)]
+    test_db_write_barrier: Arc<std::sync::Mutex<Option<DbWriteBarrier>>>,
 }
 
 impl AppState {
@@ -37,6 +45,8 @@ impl AppState {
             tokens: token::TokenTable::default(),
             agent: agent::AgentRuntime::default(),
             orchestra: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            test_db_write_barrier: Default::default(),
         }
     }
 
@@ -52,8 +62,15 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
+        #[cfg(test)]
+        let barrier = self.test_db_write_barrier.clone();
         self.db
             .call(move |s| {
+                #[cfg(test)]
+                if let Some(b) = barrier.lock().unwrap().take() {
+                    let _ = b.entered.send(());
+                    b.release.recv().expect("test must release DB write");
+                }
                 // 在库线程上取时间：库线程串行执行，时间戳顺序 = 提交顺序（排队期间不会被后来者超过）。
                 let now = crewd_store::now_ms();
                 let (v, changes) = crewd_collab::run(s, now, f)?;
@@ -170,20 +187,77 @@ pub fn log_reap_reports(reports: &[OrphanReport]) {
     }
 }
 
+#[cfg(test)]
+type ServeReady = Box<dyn FnOnce(Arc<AppState>, Option<tokio::task::AbortHandle>) + Send>;
+#[cfg(test)]
+type ServeStorageClosed = Box<dyn FnOnce(PathBuf) + Send>;
+
+/// Optional orchestration. Library callers retain the no-session default.
+#[derive(Default)]
+pub struct ServeOptions {
+    pub orchestra: Option<OrchestraServe>,
+    #[cfg(test)]
+    test_ready: Option<ServeReady>,
+    #[cfg(test)]
+    test_storage_closed: Option<ServeStorageClosed>,
+}
+
+pub struct OrchestraServe {
+    pub claude: orchestra::exec_claude::ClaudeProgram,
+    pub claude_env: std::collections::BTreeMap<String, String>,
+    pub helper: Option<PathBuf>,
+    pub claude_projects_dir: Option<PathBuf>,
+    pub runtime_dir: Option<PathBuf>,
+    pub child_path: Option<String>,
+    pub config: orchestra::OrchestraConfig,
+    /// Also bounds final response draining; stalled clients cannot hold shutdown.
+    pub shutdown_limit: std::time::Duration,
+}
+
+impl Default for OrchestraServe {
+    fn default() -> Self {
+        Self {
+            claude: orchestra::exec_claude::ClaudeProgram::default(),
+            claude_env: Default::default(),
+            helper: None,
+            claude_projects_dir: None,
+            runtime_dir: None,
+            child_path: None,
+            config: Default::default(),
+            shutdown_limit: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
 pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
+    serve_with(data_dir, ServeOptions::default(), shutdown).await
+}
+
+pub async fn serve_with(
+    data_dir: PathBuf,
+    mut opts: ServeOptions,
+    shutdown: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    // A missing explicit program fails before binding or creating storage.
+    if let Some(o) = &mut opts.orchestra {
+        if let orchestra::exec_claude::ClaudeProgram::Path(p) = &mut o.claude {
+            *p = std::fs::canonicalize(&*p)?;
+        }
+        if o.helper.is_none() {
+            o.helper = Some(std::env::current_exe()?);
+        }
+    }
     ensure_data_dir(&data_dir)?;
     let lock = lock_data_dir(&data_dir)?;
-    // M3 起会话由 serve 拉起，登记表交给会话管理；M2b 先只在启动时回收。
-    let (_registry, reports) = reap_orphans(&data_dir)?;
+    let _ = build_info::exe();
+    let (registry, reports) = reap_orphans(&data_dir)?;
     log_reap_reports(&reports);
-    // 拿到锁 = 没有别的实例在跑，残留的 socket 文件一定是上次崩溃留下的。
     let sock = data_dir.join("crewd.sock");
     let _ = std::fs::remove_file(&sock);
-
-    // 核对库的身份：该在的库不在 / 被换掉时拒绝启动，不新建空库（N4 / S24）。
-    let store = Store::open_data_dir(&data_dir)?;
-    let db = Db::spawn(store)?;
-    // 定时备份（N4 / D-8：serve 自己的 interval，不进编排 Core）：启动时拍一次，之后每小时看一次到没到点。
+    if let Some(o) = &opts.orchestra {
+        ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
+    }
+    let db = Db::spawn(Store::open_data_dir(&data_dir)?)?;
     let backups = match crewd_store::backup::Ticker::start(
         data_dir.join(crewd_store::DB_FILE),
         std::time::Duration::from_secs(3600),
@@ -191,54 +265,173 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
     ) {
         Ok(t) => t,
         Err(e) => {
-            // 起不来也先关库再放锁（复审 2 轮 5）。
-            let db = db.clone();
             tokio::task::spawn_blocking(move || db.shutdown()).await?;
-            drop(lock);
             return Err(e.into());
         }
     };
-    let state = Arc::new(AppState::new(db));
-    let listener = match UnixListener::bind(&sock) {
-        Ok(l) => l,
-        Err(e) => {
-            // 绑不上也要按次序收尾再放锁（复审 M7）。
-            close_storage(backups, state.db.clone()).await?;
-            drop(lock);
-            return Err(e.into());
-        }
+    let limit = opts
+        .orchestra
+        .as_ref()
+        .map_or(std::time::Duration::from_secs(10), |o| o.shutdown_limit);
+    let cell = Arc::new(std::sync::OnceLock::new());
+    let state = if opts.orchestra.is_some() {
+        Arc::new(AppState::new(db.clone()).with_sessions(Arc::new(
+            orchestra::control::OrchestraControl::new(cell.clone(), db.clone()),
+        )))
+    } else {
+        Arc::new(AppState::new(db.clone()))
     };
-
-    tokio::pin!(shutdown);
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => break,
-            accepted = listener.accept() => {
-                let stream = match accepted {
-                    Ok((stream, _)) => stream,
-                    Err(e) => {
-                        eprintln!("crewd: accept 失败: {e}");
-                        // 句柄耗尽（EMFILE/ENFILE）时别空转。
-                        if matches!(e.raw_os_error(), Some(23) | Some(24)) {
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        }
-                        continue;
-                    }
-                };
-                let st = state.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = conn::run(st, stream).await {
-                        eprintln!("crewd: 连接异常结束: {e}");
-                    }
-                });
+    let mut handle = None;
+    let mut actor = None;
+    let mut forwarder = None;
+    if let Some(o) = opts.orchestra {
+        let rx = state.hub.subscribe_collab(); // subscribe before boot
+        let executor = orchestra::exec_claude::ClaudeExecutor::new(
+            orchestra::exec_claude::ClaudeExecutorConfig {
+                program: o.claude,
+                data_dir: data_dir.clone(),
+                helper: o.helper.expect("captured helper"),
+                registry: Some(registry),
+                extra_env: o.claude_env,
+                projects_dir: o.claude_projects_dir,
+                runtime_dir: o.runtime_dir,
+                child_path: o.child_path,
+            },
+        );
+        match orchestra::spawn(
+            Arc::new(orchestra::db::DbPort::new(
+                state.clone(),
+                data_dir.join(crewd_store::DB_FILE),
+            )),
+            orchestra::exec::Executors::new().with("claude", Arc::new(executor)),
+            orchestra::hooks::Hooks::default(),
+            Arc::new(orchestra::clock::SystemClock),
+            o.config,
+        )
+        .await
+        {
+            Ok((h, a)) => {
+                let _ = cell.set(h.clone());
+                let _ = state.orchestra.set(h.clone());
+                forwarder = Some(orchestra::db::forward_collab(rx, h.clone()));
+                handle = Some(h);
+                actor = Some(a);
+            }
+            Err(e) => {
+                drop(state);
+                close_storage(backups, db).await?;
+                return Err(e);
             }
         }
     }
+    let abort = actor.as_ref().map(orchestra::Actor::abort_handle);
+    let mut done = Box::pin(async move {
+        match actor {
+            Some(a) => a.finished().await,
+            None => std::future::pending().await,
+        }
+    });
+    let (_no_exit, no_exit) = tokio::sync::watch::channel(false);
+    let mut exit = handle
+        .as_ref()
+        .map_or(no_exit, orchestra::Handle::exit_requested);
+    let listener = UnixListener::bind(&sock);
+    let mut fatal = None;
+    let mut ended = false;
+    let mut reason = "stop";
+    let (drain_tx, drain_rx) = tokio::sync::watch::channel(false);
+    let mut conns = tokio::task::JoinSet::new();
+    match listener {
+        Err(e) => fatal = Some(anyhow::Error::from(e)),
+        Ok(listener) => {
+            #[cfg(test)]
+            if let Some(ready) = opts.test_ready.take() {
+                ready(state.clone(), abort.clone());
+            }
+            tokio::pin!(shutdown);
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown => break,
+                    changed = exit.changed(), if handle.is_some() => {
+                        match changed {
+                            Ok(()) if *exit.borrow() => { reason = "hibernate"; break; }
+                            Ok(()) => {},
+                            Err(_) => {
+                                if *exit.borrow() { reason = "hibernate"; }
+                                else { fatal = Some(orchestra::ActorDied("exit watch closed without hibernate".into()).into()); }
+                                break;
+                            }
+                        }
+                    }
+                    result = &mut done, if handle.is_some() => {
+                        ended = true;
+                        match result {
+                            Err(e) => fatal = Some(e.into()),
+                            Ok(()) if *exit.borrow() => reason = "hibernate",
+                            Ok(()) => fatal = Some(orchestra::ActorDied("actor ended without hibernate".into()).into()),
+                        }
+                        break;
+                    }
+                    _ = conns.join_next(), if !conns.is_empty() => {},
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _)) => {
+                                let st = state.clone(); let drain = drain_rx.clone();
+                                conns.spawn(async move {
+                                    if let Err(e) = conn::run_draining(st, stream, drain).await { eprintln!("crewd: connection ended: {e}"); }
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("crewd: accept failed: {e}");
+                                if matches!(e.raw_os_error(), Some(23) | Some(24)) { tokio::time::sleep(std::time::Duration::from_millis(100)).await; }
+                            }
+                        }
+                    }
+                }
+            }
+            drop(listener); // stop intake before actor/storage cleanup
+        }
+    }
+    state.hub.publish(crewd_proto::Event {
+        event: crewd_proto::events::SYSTEM_SHUTDOWN.into(),
+        data: serde_json::json!({"reason":reason}),
+    });
+    let _ = drain_tx.send(true); // stop reads; in-flight dispatch and writer still finish
+    if let Some(h) = &handle
+        && !ended
+    {
+        if !h.shutdown(limit).await {
+            abort.as_ref().expect("actor abort").abort();
+        }
+        if let Err(e) = done.await {
+            fatal.get_or_insert(e.into());
+        }
+    }
+    if tokio::time::timeout(limit, async { while conns.join_next().await.is_some() {} })
+        .await
+        .is_err()
+    {
+        conns.abort_all();
+        while conns.join_next().await.is_some() {}
+    }
+    if let Some(f) = forwarder {
+        f.abort();
+        let _ = f.await;
+    }
+    drop(handle);
+    drop(cell);
+    drop(state);
+    close_storage(backups, db).await?;
+    #[cfg(test)]
+    if let Some(closed) = opts.test_storage_closed {
+        closed(data_dir.clone());
+    }
     let _ = std::fs::remove_file(&sock);
-    // 放锁之前关库：已入队的写跑完，optimize + WAL 截断，库线程 join（N4 / S16）。
-    close_storage(backups, state.db.clone()).await?;
     drop(lock);
-    Ok(())
+    match fatal {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// 放锁之前的存储收尾：先停 Ticker（等正在拍的那次做完），再关库（已入队的写跑完，optimize + WAL 截断，
@@ -439,5 +632,304 @@ mod tests {
         assert!(err.to_string().contains("另一个 crewd"), "{err}");
         drop(first);
         lock_data_dir(root.path()).unwrap();
+    }
+    #[tokio::test]
+    async fn t11_shutdown_closes_idle_client_connections() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(serve(data.clone(), async {
+            let _ = rx.await;
+        }));
+        let stream = loop {
+            if let Ok(s) = tokio::net::UnixStream::connect(data.join("crewd.sock")).await {
+                break s;
+            }
+            tokio::task::yield_now().await;
+        };
+        let (rd, mut wr) = stream.into_split();
+        wr.write_all(b"{\"id\":1,\"method\":\"system.hello\"}\n")
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(rd).lines();
+        assert!(lines.next_line().await.unwrap().unwrap().contains("result"));
+        tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let eof =
+            tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line()).await;
+        assert!(
+            matches!(eof, Ok(Ok(None))),
+            "serve must own and close idle connection tasks: {eof:?}"
+        );
+    }
+
+    fn t11_options(data: &Path) -> ServeOptions {
+        ServeOptions {
+            orchestra: Some(OrchestraServe {
+                claude: orchestra::exec_claude::ClaudeProgram::Path("/usr/bin/false".into()),
+                claude_projects_dir: Some(data.join("synthetic-projects")),
+                runtime_dir: Some(data.join("synthetic-runtime")),
+                config: orchestra::OrchestraConfig::for_tests(),
+                shutdown_limit: std::time::Duration::from_millis(500),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_actor_panic_makes_serve_exit_with_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut opts = t11_options(&data);
+        opts.test_ready = Some(Box::new(move |state, _| {
+            tx.send(state).ok();
+        }));
+        let task = tokio::spawn(serve_with(data.clone(), opts, std::future::pending()));
+        let state = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        state.orchestra.get().unwrap().panic_for_serve_test();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_err(), "actor panic must fail the server");
+        assert!(!data.join("crewd.sock").exists());
+        assert!(
+            state.db.call(|_| ()).await.is_err(),
+            "DB must be closed even with surviving clones"
+        );
+        lock_data_dir(&data).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborting_the_actor_mid_db_call_still_shuts_the_db_down_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut opts = t11_options(&data);
+        opts.test_ready = Some(Box::new(move |state, abort| {
+            tx.send((state, abort.unwrap())).ok();
+        }));
+        let task = tokio::spawn(serve_with(data.clone(), opts, std::future::pending()));
+        let (state, abort) = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *state.test_db_write_barrier.lock().unwrap() = Some(DbWriteBarrier {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        let handle = state.orchestra.get().unwrap().clone();
+        let rpc = tokio::spawn(async move {
+            handle
+                .set_settings(orchestra::port::SettingsUpdate {
+                    lang: Some(crewd_wake::text::Lang::En),
+                    max_live: Some(Some(7)),
+                    ..Default::default()
+                })
+                .await
+        });
+        tokio::task::spawn_blocking(move || {
+            entered_rx.recv_timeout(std::time::Duration::from_secs(5))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        // The actual actor write is now inside the DB thread. Cancellation of
+        // its awaiting future must not cancel this already queued transaction.
+        abort.abort();
+        release_tx.send(()).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_err());
+        let _ = rpc.await;
+        assert!(state.db.call(|_| ()).await.is_err());
+        let store = Store::open_data_dir(&data).unwrap();
+        assert_eq!(
+            crewd_collab::settings::locale(store.conn()).unwrap(),
+            crewd_collab::Locale::En
+        );
+        assert_eq!(
+            crewd_collab::settings::max_live_sessions(store.conn()).unwrap(),
+            Some(7)
+        );
+        let integrity: String = store
+            .conn()
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        assert!(!data.join("crewd.sock").exists());
+        lock_data_dir(&data).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_order_closes_storage_before_the_socket_and_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let db_observer = Arc::new(std::sync::Mutex::new(None::<Db>));
+        let mut opts = t11_options(&data);
+        let observer = db_observer.clone();
+        opts.test_ready = Some(Box::new(move |state, _| {
+            *observer.lock().unwrap() = Some(state.db.clone());
+            tx.send(()).ok();
+        }));
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = observed.clone();
+        opts.test_storage_closed = Some(Box::new(move |data| {
+            let db = db_observer.lock().unwrap().take().unwrap();
+            let mut call = Box::pin(db.call(|_| ()));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(matches!(
+                call.as_mut().poll(&mut context),
+                std::task::Poll::Ready(Err(_))
+            ));
+            assert!(
+                data.join("crewd.sock").exists(),
+                "socket cleanup follows storage close"
+            );
+            assert!(
+                lock_data_dir(&data).is_err(),
+                "lock must still be held at storage close"
+            );
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let task = tokio::spawn(serve_with(data.clone(), opts, async {
+            let _ = stop_rx.await;
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        stop_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!data.join("crewd.sock").exists());
+        lock_data_dir(&data).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_explicit_program_fails_before_storage_or_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let mut opts = t11_options(&data);
+        opts.orchestra.as_mut().unwrap().claude =
+            orchestra::exec_claude::ClaudeProgram::Path(dir.path().join("does-not-exist"));
+        assert!(
+            serve_with(data.clone(), opts, std::future::pending())
+                .await
+                .is_err()
+        );
+        assert!(
+            !data.exists(),
+            "missing program must fail before any storage is created"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_failure_closes_storage_then_releases_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        ensure_data_dir(&data).unwrap();
+        // A directory cannot be removed as a stale socket or bound as one.
+        std::fs::create_dir(data.join("crewd.sock")).unwrap();
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = observed.clone();
+        let mut opts = t11_options(&data);
+        opts.test_storage_closed = Some(Box::new(move |data| {
+            assert!(data.join("crewd.sock").is_dir());
+            assert!(lock_data_dir(&data).is_err());
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            serve_with(data.clone(), opts, std::future::pending()),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        assert!(observed.load(std::sync::atomic::Ordering::SeqCst));
+        lock_data_dir(&data).unwrap();
+        let store = Store::open_data_dir(&data).unwrap();
+        let integrity: String = store
+            .conn()
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+    }
+
+    #[tokio::test]
+    async fn shutdown_subscription_flushes_final_event_before_eof() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let opts = ServeOptions {
+            test_ready: Some(Box::new(move |_, _| {
+                ready_tx.send(()).ok();
+            })),
+            ..Default::default()
+        };
+        let task = tokio::spawn(serve_with(data.clone(), opts, async {
+            let _ = stop_rx.await;
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let stream = tokio::net::UnixStream::connect(data.join("crewd.sock"))
+            .await
+            .unwrap();
+        let (rd, mut wr) = stream.into_split();
+        wr.write_all(
+            b"{\"id\":1,\"method\":\"events.subscribe\",\"params\":{\"topics\":[\"system\"]}}\n",
+        )
+        .await
+        .unwrap();
+        let mut lines = BufReader::new(rd).lines();
+        let ack: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(ack["id"], 1);
+        assert!(ack.get("result").is_some());
+        stop_tx.send(()).unwrap();
+        let line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("shutdown event before EOF");
+        let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(event["event"], crewd_proto::events::SYSTEM_SHUTDOWN);
+        assert_eq!(event["data"]["reason"], "stop");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 }

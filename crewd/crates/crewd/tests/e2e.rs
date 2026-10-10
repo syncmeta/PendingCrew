@@ -2,10 +2,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
+// Each binary test process owns a synthetic home outside every data directory.
+static TEST_HOME: std::sync::LazyLock<tempfile::TempDir> =
+    std::sync::LazyLock::new(|| tempfile::tempdir().unwrap());
+
 fn crewd(data: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_crewd"));
     c.env("CREWD_DATA_DIR", data)
-        .env_remove("PENDINGCREW_DATA_DIR");
+        .env_remove("PENDINGCREW_DATA_DIR")
+        .env("CREWD_CLAUDE", "/usr/bin/false")
+        .env("SHELL", "/usr/bin/false")
+        .env("HOME", TEST_HOME.path())
+        .env("XDG_CACHE_HOME", TEST_HOME.path().join("cache"))
+        .env("CLAUDE_CONFIG_DIR", TEST_HOME.path().join(".claude"));
     c
 }
 
@@ -204,7 +213,11 @@ fn data_dir_is_trimmed_and_tilde_expanded() {
     ] {
         let mut c = Command::new(env!("CARGO_BIN_EXE_crewd"));
         c.env("HOME", home.path())
-            .env_remove("PENDINGCREW_DATA_DIR");
+            .env_remove("PENDINGCREW_DATA_DIR")
+            .env("CREWD_CLAUDE", "/usr/bin/false")
+            .env("SHELL", "/usr/bin/false")
+            .env("XDG_CACHE_HOME", TEST_HOME.path().join("cache"))
+            .env("CLAUDE_CONFIG_DIR", TEST_HOME.path().join(".claude"));
         if how == "env" {
             c.env("CREWD_DATA_DIR", raw);
         } else {
@@ -405,54 +418,48 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("events.subscribe", r#"{"topics":["message"]}"#, Ok),
-        // M3c（编排）：`crewd serve` 还没接上编排（T11 接线），都回 -32009 `orchestra.not_running`，不是 -32601。
+        // M3c is active in CLI serve. Synthetic imported Codex sessions cannot
+        // launch; read-only methods and stopping still reach the real actor.
         (
             "session.start",
-            r#"{"crewId":"local-aaaa","role":"worker","executor":"claude","brief":"x","isolation":false}"#,
+            r#"{"crewId":"local-aaaa","role":"worker","executor":"codex","brief":"x","isolation":false}"#,
             Code(-32009),
         ),
         (
             "session.stop",
             r#"{"sessionId":"worker-2222bbbb","reason":"x"}"#,
-            Code(-32009),
+            Ok,
         ),
         (
             "session.resume",
             r#"{"sessionId":"worker-2222bbbb"}"#,
             Code(-32009),
         ),
-        (
-            "session.live",
-            r#"{"sessionId":"worker-2222bbbb"}"#,
-            Code(-32009),
-        ),
+        ("session.live", r#"{"sessionId":"worker-2222bbbb"}"#, Ok),
         (
             "crew.setCaptain",
             r#"{"crewId":"local-aaaa","sessionId":"worker-2222bbbb"}"#,
-            Code(-32009),
+            Ok,
         ),
-        (
-            "session.inspect",
-            r#"{"sessionId":"worker-2222bbbb"}"#,
-            Code(-32009),
-        ),
+        ("session.inspect", r#"{"sessionId":"worker-2222bbbb"}"#, Ok),
         (
             "session.answer",
             r#"{"sessionId":"worker-2222bbbb","fingerprint":"synthetic","choice":0}"#,
             Code(-32009),
         ),
-        ("decision.list", "null", Code(-32009)),
-        ("wake.list", "null", Code(-32009)),
-        ("loop.list", "null", Code(-32009)),
+        ("decision.list", "null", Ok),
+        ("wake.list", "null", Ok),
+        ("loop.list", "null", Ok),
         (
             "loop.recover",
             r#"{"scope":"session","targetSessionId":"worker-2222bbbb"}"#,
-            Code(-32009),
+            Ok,
         ),
-        ("settings.get", "null", Code(-32009)),
-        ("settings.set", r#"{"maxLiveSessions":null}"#, Code(-32009)),
-        ("crewd.hibernate", "null", Code(-32009)),
-        ("message.receipts", r#"{"messageId":"m1"}"#, Code(-32009)),
+        ("settings.get", "null", Ok),
+        ("settings.set", r#"{"maxLiveSessions":null}"#, Ok),
+        ("message.receipts", r#"{"messageId":"m1"}"#, Ok),
+        // Hibernate ends the server, so it is the final method in this table.
+        ("crewd.hibernate", "null", Ok),
     ];
     let mut covered: Vec<&str> = cases.iter().map(|c| c.0).collect();
     covered.sort();

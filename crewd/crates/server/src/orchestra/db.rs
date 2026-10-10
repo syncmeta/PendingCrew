@@ -26,17 +26,15 @@ use super::core::CollabFact;
 use super::port::*;
 use crate::AppState;
 use crate::hub::CollabEvent;
-use crate::ledger::StoreLedger;
+use crate::ledger::DbLedger;
 
 pub struct DbPort {
     state: Arc<AppState>,
-    /// `<数据目录>/crewd.db`：claude 会话号账本（`StoreLedger`）每次开自己的连接。
-    db_path: PathBuf,
 }
 
 impl DbPort {
-    pub fn new(state: Arc<AppState>, db_path: PathBuf) -> Self {
-        Self { state, db_path }
+    pub fn new(state: Arc<AppState>, _db_path: PathBuf) -> Self {
+        Self { state }
     }
 
     async fn read<T: Send + 'static>(
@@ -391,18 +389,14 @@ impl Port for DbPort {
     }
 
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger> {
-        Arc::new(StoreLedger::new(self.db_path.clone(), session))
+        Arc::new(DbLedger::new(self.state.db.clone(), session))
     }
 
     async fn worldview(&self, session: &str) -> Result<String> {
-        let session = session.to_string();
-        self.read(move |c| {
-            let locale = collab::settings::locale(c)?;
-            Ok(collab::worldview::render(&collab::worldview::context_for(
-                c, &session, locale,
-            )?))
-        })
-        .await
+        // Shared launch/SessionStart source: DB read is released before the bounded quota read.
+        // OrchestraControl's source is outside the actor mailbox; provider feeding is unavailable.
+        let ctx = crate::agent::port::world_context(&self.state, session).await?;
+        Ok(collab::worldview::render(&ctx))
     }
 
     fn mint_token(&self, session: &str) -> String {
@@ -1074,6 +1068,244 @@ mod tests {
     use super::*;
     use crewd_wake::breaker;
     use crewd_wake::source;
+
+    struct T11PendingQuota {
+        entered: Arc<tokio::sync::Semaphore>,
+        fallback: crate::control::NoSessions,
+    }
+
+    impl crate::control::SessionControl for T11PendingQuota {
+        fn start(
+            &self,
+            req: crate::control::StartRequest,
+        ) -> crate::control::BoxFuture<
+            '_,
+            std::result::Result<crewd_proto::Session, crate::control::ControlError>,
+        > {
+            crate::control::SessionControl::start(&self.fallback, req)
+        }
+        fn resume(
+            &self,
+            s: String,
+        ) -> crate::control::BoxFuture<'_, std::result::Result<(), crate::control::ControlError>>
+        {
+            crate::control::SessionControl::resume(&self.fallback, s)
+        }
+        fn stop(
+            &self,
+            s: String,
+            reason: String,
+        ) -> crate::control::BoxFuture<'_, std::result::Result<(), crate::control::ControlError>>
+        {
+            crate::control::SessionControl::stop(&self.fallback, s, reason)
+        }
+        fn nudge(
+            &self,
+            s: String,
+            text: String,
+        ) -> crate::control::BoxFuture<'_, std::result::Result<(), crate::control::ControlError>>
+        {
+            crate::control::SessionControl::nudge(&self.fallback, s, text)
+        }
+        fn inspect(
+            &self,
+            s: String,
+            n: usize,
+        ) -> crate::control::BoxFuture<
+            '_,
+            std::result::Result<crate::control::Inspection, crate::control::ControlError>,
+        > {
+            crate::control::SessionControl::inspect(&self.fallback, s, n)
+        }
+        fn set_profile(
+            &self,
+            s: String,
+            model: Option<String>,
+            effort: Option<String>,
+        ) -> crate::control::BoxFuture<'_, std::result::Result<(), crate::control::ControlError>>
+        {
+            crate::control::SessionControl::set_profile(&self.fallback, s, model, effort)
+        }
+        fn handoff_captain(
+            &self,
+            c: String,
+            s: String,
+        ) -> crate::control::BoxFuture<'_, std::result::Result<(), crate::control::ControlError>>
+        {
+            crate::control::SessionControl::handoff_captain(&self.fallback, c, s)
+        }
+        fn quota(
+            &self,
+        ) -> crate::control::BoxFuture<
+            '_,
+            std::result::Result<crate::control::QuotaReport, crate::control::ControlError>,
+        > {
+            Box::pin(async move {
+                self.entered.add_permits(1);
+                std::future::pending().await
+            })
+        }
+        fn live(
+            &self,
+            s: String,
+        ) -> crate::control::BoxFuture<
+            '_,
+            std::result::Result<crewd_proto::SessionLive, crate::control::ControlError>,
+        > {
+            crate::control::SessionControl::live(&self.fallback, s)
+        }
+    }
+
+    #[tokio::test]
+    async fn t11_launch_quota_deadline_releases_db_and_preserves_identity() {
+        use collab::worldview::QuotaTier;
+        use std::time::Duration;
+        let (base, _old_port, _dir) = seeded().await;
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let state = Arc::new(AppState::new(base.db.clone()).with_sessions(Arc::new(
+            T11PendingQuota {
+                entered: entered.clone(),
+                fallback: crate::control::NoSessions,
+            },
+        )));
+        let port = DbPort::new(state.clone(), PathBuf::from("/synthetic/not-opened"));
+        let captured_locale = state
+            .db
+            .call(|s| collab::settings::locale(s.conn()))
+            .await
+            .unwrap()
+            .unwrap();
+        let reader_state = state.clone();
+        let callers = tokio::spawn(async move {
+            // Two independent real callers, both bound by the public 1s quota deadline.
+            tokio::time::timeout(Duration::from_millis(1500), async move {
+                tokio::join!(
+                    port.worldview("w-1"),
+                    crate::agent::port::world_context(&reader_state, "w-1")
+                )
+            })
+            .await
+            .expect("pending quota must not stall actual launch caller past 1.5s")
+        });
+        let permits = tokio::time::timeout(Duration::from_millis(400), entered.acquire_many(2))
+            .await
+            .expect("both actual callers must reach quota source")
+            .unwrap();
+        permits.forget();
+        // The sources are now pending, yet the same DB can commit another collab
+        // transaction and read it back. This catches quota awaits held under Db::call.
+        tokio::time::timeout(Duration::from_millis(300), async {
+            state
+                .collab(|tx| collab::settings::set_locale(tx, collab::Locale::En))
+                .await
+                .unwrap();
+            let loc = state
+                .db
+                .call(|s| collab::settings::locale(s.conn()))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(loc, collab::Locale::En);
+        })
+        .await
+        .expect("quota wait must release the DB actor before awaiting source");
+        assert!(
+            !callers.is_finished(),
+            "quota source is still pending before its deadline"
+        );
+        let (launch, ctx) = callers.await.unwrap();
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.quota_claude, QuotaTier::Failed);
+        assert_eq!(ctx.quota_codex, QuotaTier::Failed);
+        assert_eq!(ctx.session_id, "w-1");
+        assert_eq!(ctx.crew_id, "c-1");
+        assert_eq!(ctx.role, crewd_proto::Role::Worker);
+        assert_eq!(ctx.executor, "claude");
+        assert_eq!(
+            ctx.locale, captured_locale,
+            "identity context was captured before the quota wait"
+        );
+        assert_eq!(launch.unwrap(), collab::worldview::render(&ctx));
+        tokio::task::spawn_blocking(move || state.db.clone().shutdown())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn t11_ledger_write_serializes_with_collab_read_then_write() {
+        let (state, port, _dir) = seeded().await;
+        let ledger = port.ledger("w-1");
+        let writer = Arc::new(std::sync::Mutex::new(None));
+        let writer_slot = writer.clone();
+        let result = state
+            .collab(move |tx| {
+                // Pin the WAL snapshot before the concurrently launched driver's ledger write.
+                crewd_store::sessions::agent_session_id(tx.conn(), "w-1")?;
+                let (done, wait) = std::sync::mpsc::channel();
+                *writer_slot.lock().unwrap() = Some(std::thread::spawn(move || {
+                    let r = ledger.record("synthetic-uuid");
+                    let _ = done.send(());
+                    r
+                }));
+                // Old StoreLedger finishes on another connection here. Shared Db queues it
+                // until this transaction commits, so this bounded wait then times out.
+                let _ = wait.recv_timeout(std::time::Duration::from_millis(100));
+                tx.conn().execute(
+                    "UPDATE sessions SET title='synthetic title' WHERE id='w-1'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await;
+        let write = writer.lock().unwrap().take().unwrap().join().unwrap();
+        assert!(write.is_ok(), "ledger write: {write:?}");
+        assert!(result.is_ok(), "collab read-to-write upgrade: {result:?}");
+        let ledger = port.ledger("w-1");
+        assert_eq!(
+            tokio::task::spawn_blocking(move || ledger.recorded())
+                .await
+                .unwrap()
+                .unwrap()
+                .as_deref(),
+            Some("synthetic-uuid")
+        );
+        tokio::task::spawn_blocking(move || state.db.clone().shutdown())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn t11_launch_world_uses_the_shared_executor_tier_source() {
+        use crate::control::{QuotaLine, QuotaReport};
+        let f = crate::agent::testkit::Fixture::new().await;
+        f.set_quota(QuotaReport {
+            lines: vec![
+                QuotaLine {
+                    executor: "codex".into(),
+                    plan: Some("Synthetic Codex".into()),
+                    ..Default::default()
+                },
+                QuotaLine {
+                    executor: "claude".into(),
+                    plan: Some("Synthetic Claude".into()),
+                    ..Default::default()
+                },
+            ],
+        });
+        let p = DbPort::new(f.state.clone(), PathBuf::from("/synthetic/not-opened"));
+        let ctx = crate::agent::port::world_context(&f.state, &f.worker)
+            .await
+            .unwrap();
+        let launch = p.worldview(&f.worker).await.unwrap();
+        assert_eq!(launch, collab::worldview::render(&ctx));
+        assert!(launch.contains("Synthetic Claude") && launch.contains("Synthetic Codex"));
+        assert_eq!(
+            crate::agent::port::live_world(&f.state, &f.worker)
+                .await
+                .unwrap(),
+            collab::worldview::render_live(&ctx)
+        );
+    }
 
     fn new_wake(
         session: &str,

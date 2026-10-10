@@ -106,6 +106,7 @@ pub fn map_error(e: ControlError, l: Locale) -> M3aError {
         ControlError::AtCap { .. }
         | ControlError::Worktree(_)
         | ControlError::CrewNoWorkdir(_)
+        | ControlError::BinaryReplaced
         | ControlError::ShuttingDown
         | ControlError::Storage { .. }
         | ControlError::Internal(_) => M3aError::Failed(text),
@@ -303,6 +304,7 @@ mod tests {
             ),
             (invalid.clone(), M3aError::Invalid),
             (ControlError::NotRunning(s()), M3aError::Invalid),
+            (ControlError::BinaryReplaced, M3aError::Failed),
             (ControlError::NoWorkdir(s()), M3aError::Invalid),
             (ControlError::CaptainTaken("c-1".into()), M3aError::Invalid),
             (ControlError::CrewRemoved("c-1".into()), M3aError::Invalid),

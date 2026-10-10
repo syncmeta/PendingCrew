@@ -167,6 +167,52 @@
       ],
       "type": "object"
     },
+    "AttachParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "token"
+      ],
+      "type": "object"
+    },
+    "AttachResult": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "instructions": {
+          "description": "MCP initialize instructions from the active locale's tools md.",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/Role",
+          "description": "M3a 的 `crewd_proto::Role`（线上 \"captain\" / \"worker\"）。"
+        },
+        "surfaceHash": {
+          "description": "Stable public surface fingerprint, appended to MCP serverInfo.version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "crewId",
+        "label",
+        "instructions",
+        "surfaceHash"
+      ],
+      "type": "object"
+    },
     "Attachment": {
       "description": "模型类型对库里读出来的行宽松（多余的键忽略）；客户端参数用严格的 `AttachmentParam`。",
       "properties": {
@@ -375,6 +421,36 @@
         "dirty",
         "exe",
         "exeStillOnDisk"
+      ],
+      "type": "object"
+    },
+    "CallParams": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "default": null
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "type": "object"
+    },
+    "CallResult": {
+      "properties": {
+        "isError": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "isError"
       ],
       "type": "object"
     },
@@ -1107,6 +1183,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/SystemShutdown"
+            },
+            "event": {
+              "const": "system.shutdown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/Message"
             },
             "event": {
@@ -1449,6 +1541,42 @@
         "failed",
         "completed"
       ],
+      "type": "object"
+    },
+    "HookKind": {
+      "enum": [
+        "post-tool-use",
+        "stop",
+        "session-start"
+      ],
+      "type": "string"
+    },
+    "HookParams": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/HookKind"
+        },
+        "payload": {
+          "description": "claude 喂给 hook 的 stdin JSON，原样转来。"
+        }
+      },
+      "required": [
+        "event",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "HookResult": {
+      "properties": {
+        "stdout": {
+          "description": "helper 原样打到 stdout 的内容；None = 什么都不打。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "HumanWait": {
@@ -2696,6 +2824,13 @@
       },
       "type": "object"
     },
+    "ShutdownReason": {
+      "enum": [
+        "stop",
+        "hibernate"
+      ],
+      "type": "string"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -2710,7 +2845,8 @@
               "ask",
               "session",
               "restart",
-              "wake"
+              "wake",
+              "system"
             ],
             "type": "string"
           },
@@ -2734,6 +2870,18 @@
       },
       "required": [
         "topics"
+      ],
+      "type": "object"
+    },
+    "SystemShutdown": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/ShutdownReason"
+        }
+      },
+      "required": [
+        "reason"
       ],
       "type": "object"
     },
@@ -2903,6 +3051,71 @@
         "sessionId",
         "text",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "ToolDef": {
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolHints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "MCP tool annotations (hints for the agent's client). Absent from a serve that predates\nthem: the helper then lists the tool without annotations."
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "inputSchema"
+      ],
+      "type": "object"
+    },
+    "ToolHints": {
+      "description": "MCP `ToolAnnotations` hints, under their MCP wire names (`readOnlyHint` …); `crewd mcp` passes\nthem through as they are. Every crewd tool works inside crewd only: `openWorldHint` is false.\nNot `deny_unknown_fields`: a newer serve may add a hint (MCP's `title` …) that an older helper\nshould skip, not fail the whole tool list on.",
+      "properties": {
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "idempotentHint": {
+          "type": "boolean"
+        },
+        "openWorldHint": {
+          "type": "boolean"
+        },
+        "readOnlyHint": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint"
+      ],
+      "type": "object"
+    },
+    "ToolsChanged": {
+      "additionalProperties": false,
+      "description": "`agent.tools_changed` 的 `data`：此刻的角色（线上 `{\"role\": \"captain\" | \"worker\" | \"admin\"}`；\nadmin 的工具表同 worker，但线上照实报）。",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "role"
       ],
       "type": "object"
     },
@@ -3126,6 +3339,50 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "agent": {
+    "methods": {
+      "agent.attach": {
+        "params": {
+          "$ref": "#/$defs/AttachParams"
+        },
+        "result": {
+          "$ref": "#/$defs/AttachResult"
+        }
+      },
+      "agent.call": {
+        "params": {
+          "$ref": "#/$defs/CallParams"
+        },
+        "result": {
+          "$ref": "#/$defs/CallResult"
+        }
+      },
+      "agent.hook": {
+        "params": {
+          "$ref": "#/$defs/HookParams"
+        },
+        "result": {
+          "$ref": "#/$defs/HookResult"
+        }
+      },
+      "agent.tools": {
+        "params": {
+          "type": "null"
+        },
+        "result": {
+          "items": {
+            "$ref": "#/$defs/ToolDef"
+          },
+          "type": "array"
+        }
+      }
+    },
+    "push": {
+      "agent.tools_changed": {
+        "$ref": "#/$defs/ToolsChanged"
+      }
+    }
+  },
   "apiVersion": 3,
   "events": {
     "ask.changed": {
@@ -3157,6 +3414,9 @@
     },
     "session.changed": {
       "$ref": "#/$defs/SessionLive"
+    },
+    "system.shutdown": {
+      "$ref": "#/$defs/SystemShutdown"
     },
     "wake.changed": {
       "$ref": "#/$defs/WakeChanged"
@@ -3599,7 +3859,8 @@
     "ask",
     "session",
     "restart",
-    "wake"
+    "wake",
+    "system"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

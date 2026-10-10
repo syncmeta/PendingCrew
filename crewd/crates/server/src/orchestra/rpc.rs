@@ -57,6 +57,7 @@ pub fn rpc_err(e: ControlError) -> RpcError {
         | ControlError::NothingToInterrupt(_)
         | ControlError::InputDraft { .. }
         | ControlError::AtCap { .. }
+        | ControlError::BinaryReplaced
         | ControlError::ShuttingDown
         | ControlError::NoWorkdir(_)
         | ControlError::Worktree(_)

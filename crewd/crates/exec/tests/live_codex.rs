@@ -80,11 +80,8 @@ async fn start(
             comms: Some(CommsSpec {
                 helper: PathBuf::from("/usr/bin/true"),
                 data_dir: tmp.path().to_path_buf(),
-                crew_id: "live".into(),
                 session_id: "live".into(),
-                captain: false,
-                structured_post: false,
-                label: None,
+                token: "t".into(),
                 hooks: false,
             }),
             ..CodexSpec::default()

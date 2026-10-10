@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crewd_exec::driver::{ClaudeStart, DriverConfig, start_claude};
-use crewd_exec::env::{AgentPaths, compose_child_path};
+use crewd_exec::env::AgentPaths;
 use crewd_exec::launch::{ClaudeSpec, CommsSpec};
 use crewd_exec::registry::ProcessRegistry;
 use crewd_exec::resume::valid_agent_session_id;
@@ -31,6 +31,10 @@ pub struct ClaudeExecutorConfig {
     pub extra_env: BTreeMap<String, String>,
     /// claude 的 `projects` 目录（认证探测与续跑被拒诊断）。
     pub projects_dir: Option<PathBuf>,
+    /// Launch files; None preserves the library fixture default.
+    pub runtime_dir: Option<PathBuf>,
+    /// Explicit fixture PATH, or one cached login-shell discovery.
+    pub child_path: Option<String>,
 }
 
 pub struct ClaudeExecutor {
@@ -40,51 +44,76 @@ pub struct ClaudeExecutor {
     registry: Option<Arc<ProcessRegistry>>,
     extra_env: BTreeMap<String, String>,
     projects_dir: Option<PathBuf>,
-    paths: tokio::sync::OnceCell<AgentPaths>,
+    runtime_dir: PathBuf,
+    child_path: tokio::sync::OnceCell<String>,
+    #[cfg(test)]
+    identity_override: Option<bool>,
 }
 
 impl ClaudeExecutor {
     pub fn new(c: ClaudeExecutorConfig) -> Self {
         Self {
+            #[cfg(test)]
+            identity_override: None,
             program: c.program,
-            data_dir: c.data_dir,
+            data_dir: c.data_dir.clone(),
             helper: c.helper,
             registry: c.registry,
             extra_env: c.extra_env,
             projects_dir: c.projects_dir,
-            paths: tokio::sync::OnceCell::new(),
+            runtime_dir: c.runtime_dir.unwrap_or_else(|| c.data_dir.join("run")),
+            child_path: match c.child_path {
+                Some(path) => tokio::sync::OnceCell::new_with(Some(path)),
+                None => tokio::sync::OnceCell::new(),
+            },
         }
     }
 
     /// (claude 可执行文件, 子进程 PATH)。
     async fn program(&self) -> Result<(PathBuf, String), LaunchError> {
-        match &self.program {
-            ClaudeProgram::Disabled => Err(LaunchError::NotConfigured(
-                "这个 crewd 没配置 claude（serve 没给 --claude，也没开自动查找）".into(),
-            )),
-            ClaudeProgram::Path(p) => {
-                let parent = std::env::var("PATH").ok();
-                Ok((p.clone(), compose_child_path(&[], parent.as_deref())))
-            }
-            ClaudeProgram::Discover => {
-                let paths = self.paths.get_or_init(AgentPaths::discover).await;
-                let program = paths.resolve("claude").ok_or_else(|| {
-                    LaunchError::NotConfigured(format!(
-                        "PATH 里找不到 claude：{}",
-                        paths.child_path
-                    ))
-                })?;
-                Ok((program, paths.child_path.clone()))
-            }
+        if self.program == ClaudeProgram::Disabled {
+            return Err(LaunchError::NotConfigured("claude is disabled".into()));
         }
+        let child_path = self
+            .child_path
+            .get_or_init(|| async { AgentPaths::discover().await.child_path })
+            .await;
+        // Cache only PATH. A program can disappear or be replaced between launches.
+        let paths = AgentPaths {
+            child_path: child_path.clone(),
+        };
+        let program = match &self.program {
+            ClaudeProgram::Path(p) => std::fs::canonicalize(p).map_err(|e| {
+                LaunchError::NotConfigured(format!("claude path {}: {e}", p.display()))
+            })?,
+            ClaudeProgram::Discover => paths.resolve("claude").ok_or_else(|| {
+                LaunchError::NotConfigured(format!("claude not found in PATH: {child_path}"))
+            })?,
+            ClaudeProgram::Disabled => unreachable!(),
+        };
+        Ok((program, child_path.clone()))
     }
 }
 
 impl Executor for ClaudeExecutor {
+    fn check_launch(&self) -> Result<(), LaunchError> {
+        #[cfg(test)]
+        if let Some(false) = self.identity_override {
+            return Err(LaunchError::BinaryReplaced);
+        }
+        if crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk) {
+            Ok(())
+        } else {
+            Err(LaunchError::BinaryReplaced)
+        }
+    }
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
+            self.check_launch()?;
             let (program, child_path) = self.program().await?;
-            let mut config = DriverConfig::new(self.data_dir.join("run"));
+            // Discovery can await a login shell; recheck immediately before creating launch files.
+            self.check_launch()?;
+            let mut config = DriverConfig::new(self.runtime_dir.clone());
             config.registry = self.registry.clone();
             config.claude_projects_dir = self.projects_dir.clone();
             let comms = comms_for(
@@ -132,26 +161,20 @@ impl Executor for ClaudeExecutor {
     }
 }
 
-/// 唯一拼 `CommsSpec` 的地方（裁定 18）。M3b 改了它的形状后，后合者只改这里。
-/// 写法 A：M3b 还没合进 main（`CommsSpec` 仍是 M2b 的 `crew_id / captain / structured_post / label` 形状）。
+/// 启动身份只带 session + token；角色与机组由 M3b 的 helper 每次向 serve 现查。
 pub fn comms_for(
     helper: &Path,
     data_dir: &Path,
     session_id: &str,
-    crew_id: &str,
+    _crew_id: &str,
     token: &str,
 ) -> CommsSpec {
-    let _ = token; // M3b 之前 helper 还不读 token
     CommsSpec {
         helper: helper.to_path_buf(),
         data_dir: data_dir.to_path_buf(),
-        crew_id: crew_id.to_string(),
         session_id: session_id.to_string(),
-        captain: false,
-        structured_post: false,
-        label: None,
-        // M3b 之前 helper 没有 `hook` 子命令。
-        hooks: false,
+        token: token.to_string(),
+        hooks: true,
     }
 }
 
@@ -168,6 +191,8 @@ mod tests {
             registry: None,
             extra_env: BTreeMap::new(),
             projects_dir: None,
+            runtime_dir: None,
+            child_path: Some("/usr/bin:/bin".into()),
         })
     }
 
@@ -194,6 +219,61 @@ mod tests {
             .err()
             .expect("没配置就不起");
         assert!(matches!(err, LaunchError::NotConfigured(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn t11_discovery_resolves_again_using_only_the_cached_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude");
+        std::fs::write(&path, "synthetic, never executed").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut exec = executor(ClaudeProgram::Discover, dir.path());
+        exec.child_path = tokio::sync::OnceCell::new_with(Some(dir.path().display().to_string()));
+        assert_eq!(exec.program().await.unwrap().0, path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            exec.program().await,
+            Err(LaunchError::NotConfigured(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn t11_explicit_program_keeps_child_path_and_canonicalizes_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("fake");
+        let link = dir.path().join("claude");
+        std::fs::write(&target, "synthetic, never executed").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let exec = executor(ClaudeProgram::Path(link), dir.path());
+        let (program, path) = exec.program().await.unwrap();
+        assert_eq!(program, target.canonicalize().unwrap());
+        assert_eq!(path, "/usr/bin:/bin");
+        std::fs::remove_file(target).unwrap();
+        assert!(exec.program().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn t11_replaced_binary_refuses_before_any_launch_files_are_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut exec = executor(
+            ClaudeProgram::Path(dir.path().join("never-run")),
+            dir.path(),
+        );
+        assert!(
+            exec.check_launch().is_ok(),
+            "actual running test executable is present"
+        );
+        exec.identity_override = Some(false);
+        let error = exec
+            .launch(request("synthetic", dir.path()))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, LaunchError::BinaryReplaced));
+        assert!(!dir.path().join("run").exists());
+        exec.identity_override = None;
+        assert!(exec.check_launch().is_ok());
     }
 
     // `launches_the_given_program_with_world_model_and_comms` 要起进程：按控制者裁定 C8 放在

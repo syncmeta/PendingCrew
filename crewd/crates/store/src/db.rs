@@ -16,6 +16,7 @@ enum Msg {
 #[derive(Clone)]
 pub struct Db {
     tx: mpsc::Sender<Msg>,
+    database_thread_id: std::thread::ThreadId,
     /// 线程句柄由所有克隆共享；`shutdown` 取走它来 join。
     thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -36,8 +37,10 @@ impl Db {
                     eprintln!("crewd: 关库收尾没做完：{e}");
                 }
             })?;
+        let database_thread_id = handle.thread().id();
         Ok(Db {
             tx,
+            database_thread_id,
             thread: Arc::new(Mutex::new(Some(handle))),
         })
     }
@@ -51,6 +54,31 @@ impl Db {
         if let Some(h) = handle {
             let _ = h.join();
         }
+    }
+
+    /// Run a synchronous driver's ledger job on the same FIFO database thread.
+    /// Only call from a blocking thread, never from a DB job or a Tokio worker.
+    /// Like `call`, panic/closed errors are returned and accepted jobs finish even
+    /// if their caller stops waiting. Re-entering this database thread is rejected.
+    pub fn call_blocking<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Store) -> T + Send + 'static,
+    {
+        if self.database_thread_id == std::thread::current().id() {
+            return Err(StoreError::Invalid(
+                "cannot call_blocking from its database thread".into(),
+            ));
+        }
+        let (done, wait) = mpsc::channel();
+        let job: Job = Box::new(move |s| {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(s)));
+            let _ = done.send(r.map_err(|_| StoreError::DbJobPanicked));
+        });
+        self.tx
+            .send(Msg::Job(job))
+            .map_err(|_| StoreError::DbClosed)?;
+        wait.recv().map_err(|_| StoreError::DbClosed)?
     }
 
     /// 在库线程上跑 `f`（与其它调用串行）。`call` 是惰性的：任务在返回的 future
@@ -108,6 +136,93 @@ mod tests {
         })
         .await;
         out.into_iter().map(|v| v.unwrap()).collect()
+    }
+
+    #[test]
+    fn blocking_reentry_is_rejected_after_shutdown_takes_the_handle() {
+        let db = db();
+        let nested = db.clone();
+        let (entered, inside) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let (done, result) = mpsc::channel();
+        db.tx
+            .send(Msg::Job(Box::new(move |_| {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+                let _ = done.send(nested.call_blocking(|_| ()));
+            })))
+            .unwrap();
+        inside.recv().unwrap();
+        let shutdown = {
+            let db = db.clone();
+            std::thread::spawn(move || db.shutdown())
+        };
+        let limit = Instant::now() + Duration::from_secs(2);
+        while db.thread.lock().unwrap().is_some() {
+            assert!(Instant::now() < limit, "shutdown did not take the handle");
+            std::thread::yield_now();
+        }
+        release.send(()).unwrap();
+        // A broken guard must fail this bounded assertion, not hang the test join.
+        assert!(matches!(
+            result.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(StoreError::Invalid(_))
+        ));
+        shutdown.join().unwrap();
+    }
+
+    #[test]
+    fn blocking_jobs_share_fifo_and_report_closed_panic_and_reentry() {
+        let db = db();
+        let (entered, inside) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        db.tx
+            .send(Msg::Job(Box::new(move |s| {
+                s.conn().execute_batch("CREATE TABLE t(v INTEGER)").unwrap();
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+                s.conn().execute("INSERT INTO t VALUES(1)", []).unwrap();
+            })))
+            .unwrap();
+        inside.recv().unwrap();
+        let worker = {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                db.call_blocking(|s| {
+                    let n: i64 = s
+                        .conn()
+                        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+                        .unwrap();
+                    assert_eq!(n, 1, "prior queued DB job must commit first");
+                    s.conn().execute("INSERT INTO t VALUES(2)", []).unwrap();
+                })
+            })
+        };
+        release.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        assert!(matches!(
+            db.call_blocking::<(), _>(|_| panic!("synthetic panic")),
+            Err(StoreError::DbJobPanicked)
+        ));
+        let nested = db.clone();
+        assert!(matches!(
+            db.call_blocking(move |_| nested.call_blocking(|_| ()))
+                .unwrap(),
+            Err(StoreError::Invalid(_))
+        ));
+        assert_eq!(
+            db.call_blocking(|s| s
+                .conn()
+                .query_row("SELECT COUNT(*) FROM t", [], |r| r.get::<_, i64>(0))
+                .unwrap())
+                .unwrap(),
+            2
+        );
+        db.clone().shutdown();
+        assert!(matches!(
+            db.call_blocking(|_| ()),
+            Err(StoreError::DbClosed)
+        ));
     }
 
     #[tokio::test]

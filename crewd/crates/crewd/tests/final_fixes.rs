@@ -1,0 +1,1184 @@
+//! Public frozen-Todo regression; synthetic data, real attached socket, no real runner.
+use crewd_collab::{
+    Locale,
+    refusal::{Code, Refusal},
+};
+use crewd_proto::{MentionKind, Session, SessionLive};
+use crewd_server::agent::port;
+use crewd_server::control::*;
+use crewd_server::{
+    AppState,
+    agent::{
+        testkit::{Fixture, RpcClient},
+        text,
+    },
+};
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+
+#[tokio::test]
+async fn frozen_todo_write_is_refused_on_an_already_attached_connection() {
+    let f = Fixture::new().await;
+    f.add_agent_todo(1, "synthetic frozen todo").await;
+    let mut rpc = RpcClient::connect(&f.spawn_socket().await).await;
+    rpc.call(
+        "agent.attach",
+        json!({"sessionId":f.worker,"token":f.token(&f.worker)}),
+    )
+    .await
+    .unwrap();
+    let active = rpc
+        .call(
+            "agent.call",
+            json!({"tool":"respond_todo","args":{"number":1,"response":"active response"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(active["isError"], false);
+    f.rpc("crew.remove", json!({"crewId":f.crew})).await;
+    let before = f
+        .state
+        .db
+        .call(|s| {
+            s.conn()
+                .query_row("SELECT updated_at FROM todos WHERE number=1", [], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let v = rpc
+        .call(
+            "agent.call",
+            json!({"tool":"respond_todo","args":{"number":1,"response":"after freeze"}}),
+        )
+        .await
+        .unwrap();
+    let r: crewd_proto::agent::CallResult = serde_json::from_value(v).unwrap();
+    assert!(r.is_error, "frozen Todo write was accepted: {}", r.text);
+    let refusal = Refusal::new(Code::CrewRemoved)
+        .arg("crew", f.crew.as_str())
+        .text(Locale::Zh);
+    assert_eq!(
+        r.text,
+        text::r(Locale::Zh, "r.failed", &[("detail", &refusal)])
+    );
+    let after = f
+        .state
+        .db
+        .call(|s| {
+            s.conn()
+                .query_row("SELECT updated_at FROM todos WHERE number=1", [], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, before);
+    let count: i64 = f
+        .state
+        .db
+        .call(|s| {
+            s.conn().query_row(
+                "SELECT COUNT(*) FROM todo_responses WHERE text='after freeze'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count, 0);
+    let read = rpc
+        .call(
+            "agent.call",
+            json!({"tool":"read_channel","args":{"channel":format!("{}/lobby",f.crew)}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read["isError"], false,
+        "freeze must not remove valid read access"
+    );
+}
+
+async fn run(st: &AppState, who: &str, name: &str, args: Value) -> crewd_proto::agent::CallResult {
+    let me = crewd_server::agent::port::identity(st, who)
+        .await
+        .unwrap()
+        .unwrap();
+    crewd_server::agent::tools::call(st, &me, name, args).await
+}
+
+#[tokio::test]
+async fn implicit_and_explicit_human_mentions_share_one_reservation() {
+    for mode in ["implicit", "explicit", "mixed"] {
+        let f = Fixture::new().await;
+        let lobby = crewd_server::agent::port::lobby_of(&f.state, &f.crew)
+            .await
+            .unwrap();
+        let h = f
+            .human_post(&lobby.id, "synthetic human question", vec![])
+            .await;
+        for i in 0..4 {
+            let mut a = json!({"message":format!("{mode}-answer-{i}")});
+            if mode != "explicit" {
+                a["reply_to"] = json!(h.seq);
+            } else {
+                a["channel"] = json!(lobby.id);
+            }
+            if mode == "explicit" || (mode == "mixed" && i % 2 == 1) {
+                a["mentions"] = json!([{"kind":"human"}]);
+            }
+            let r = run(&f.state, &f.worker, "post", a).await;
+            assert_eq!(r.is_error, i == 3, "{mode} {i}: {}", r.text);
+            if i == 3 {
+                assert_eq!(
+                    r.text,
+                    crewd_server::agent::text::r(Locale::Zh, "r.human_mention_throttled", &[])
+                );
+            }
+        }
+        let rows = crewd_server::agent::port::messages_raw(&f.state, &lobby.id, None, 20)
+            .await
+            .unwrap();
+        let sent: Vec<_> = rows
+            .iter()
+            .filter(|m| m.sender_session_id.as_deref() == Some(&f.worker))
+            .collect();
+        assert_eq!(sent.len(), 3);
+        assert!(sent.iter().all(|m| {
+            m.mentions
+                .iter()
+                .filter(|a| a.kind == MentionKind::Human)
+                .count()
+                == 1
+        }));
+    }
+}
+
+#[tokio::test]
+async fn implicit_human_reservation_refunds_failed_first_write_but_not_partial_success() {
+    for partial in [false, true] {
+        let f = Fixture::new().await;
+        let lobby = crewd_server::agent::port::lobby_of(&f.state, &f.crew)
+            .await
+            .unwrap();
+        let h = f.human_post(&lobby.id, "synthetic human", vec![]).await;
+        let huge = "x".repeat(300 * 1024);
+        let args = if partial {
+            json!({"reply_to":h.seq,"messages":[{"text":"partial first"},{"text":huge},{"text":"never sent"}]})
+        } else {
+            json!({"reply_to":h.seq,"message":huge})
+        };
+        assert!(run(&f.state, &f.worker, "post", args).await.is_error);
+        for i in 0..(3 - usize::from(partial)) {
+            let args = json!({"reply_to":h.seq,"message":format!("valid-{i}")});
+            let r = run(&f.state, &f.worker, "post", args.clone()).await;
+            assert!(!r.is_error, "{partial}/{i}: {}", r.text);
+            if i == 0 {
+                let duplicate = run(&f.state, &f.worker, "post", args).await;
+                assert!(duplicate.is_error, "duplicate unexpectedly persisted");
+            }
+        }
+        let r = run(
+            &f.state,
+            &f.worker,
+            "post",
+            json!({"reply_to":h.seq,"message":"fourth human ping"}),
+        )
+        .await;
+        assert_eq!(
+            r.text,
+            text::r(Locale::Zh, "r.human_mention_throttled", &[])
+        );
+        let rows = crewd_server::agent::port::messages_raw(&f.state, &lobby.id, None, 20)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(|m| m.sender_session_id.as_deref() == Some(&f.worker))
+                .count(),
+            3
+        );
+    }
+}
+
+#[tokio::test]
+async fn concurrent_implicit_human_mentions_are_serialized_before_reservation() {
+    let f = Fixture::new().await;
+    let lobby = crewd_server::agent::port::lobby_of(&f.state, &f.crew)
+        .await
+        .unwrap();
+    let h = f
+        .human_post(&lobby.id, "synthetic concurrent question", vec![])
+        .await;
+    let (a, b, c, d) = tokio::join!(
+        run(
+            &f.state,
+            &f.worker,
+            "post",
+            json!({"reply_to":h.seq,"message":"concurrent-a"})
+        ),
+        run(
+            &f.state,
+            &f.worker,
+            "post",
+            json!({"reply_to":h.seq,"message":"concurrent-b"})
+        ),
+        run(
+            &f.state,
+            &f.worker,
+            "post",
+            json!({"reply_to":h.seq,"message":"concurrent-c"})
+        ),
+        run(
+            &f.state,
+            &f.worker,
+            "post",
+            json!({"reply_to":h.seq,"message":"concurrent-d"})
+        ),
+    );
+    assert_eq!([a, b, c, d].iter().filter(|r| r.is_error).count(), 1);
+    let rows = crewd_server::agent::port::messages_raw(&f.state, &lobby.id, None, 20)
+        .await
+        .unwrap();
+    let replies: Vec<_> = rows
+        .iter()
+        .filter(|m| m.sender_session_id.as_deref() == Some(&f.worker))
+        .collect();
+    assert_eq!(replies.len(), 3);
+    assert!(replies.iter().all(|m| {
+        m.mentions
+            .iter()
+            .filter(|x| x.kind == MentionKind::Human)
+            .count()
+            == 1
+    }));
+}
+
+// Persists the real collab session row; only process/control outcomes are synthetic.
+struct PersistedControl {
+    backing: Arc<AppState>,
+    fake: FakeSessionControl,
+    starts: Mutex<Vec<StartRequest>>,
+}
+impl SessionControl for PersistedControl {
+    fn start(&self, r: StartRequest) -> BoxFuture<'_, Result<Session, ControlError>> {
+        self.starts.lock().unwrap().push(r.clone());
+        Box::pin(async move {
+            self.backing
+                .collab(move |tx| {
+                    crewd_collab::sessions::register(
+                        tx,
+                        crewd_collab::sessions::NewSession {
+                            crew_id: r.crew_id,
+                            role: r.role,
+                            executor: r.executor,
+                            title: r.title,
+                            brief: Some(r.brief),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .await
+                .map_err(|e| ControlError::Failed(e.to_string()))
+        })
+    }
+    fn resume(&self, s: String) -> BoxFuture<'_, Result<(), ControlError>> {
+        self.fake.resume(s)
+    }
+    fn stop(&self, s: String, r: String) -> BoxFuture<'_, Result<(), ControlError>> {
+        self.fake.stop(s, r)
+    }
+    fn nudge(&self, s: String, t: String) -> BoxFuture<'_, Result<(), ControlError>> {
+        self.fake.nudge(s, t)
+    }
+    fn inspect(&self, s: String, n: usize) -> BoxFuture<'_, Result<Inspection, ControlError>> {
+        self.fake.inspect(s, n)
+    }
+    fn set_profile(
+        &self,
+        s: String,
+        m: Option<String>,
+        e: Option<String>,
+    ) -> BoxFuture<'_, Result<(), ControlError>> {
+        self.fake.set_profile(s, m, e)
+    }
+    fn handoff_captain(&self, c: String, s: String) -> BoxFuture<'_, Result<(), ControlError>> {
+        self.fake.handoff_captain(c, s)
+    }
+    fn quota(&self) -> BoxFuture<'_, Result<QuotaReport, ControlError>> {
+        self.fake.quota()
+    }
+    fn live(&self, s: String) -> BoxFuture<'_, Result<SessionLive, ControlError>> {
+        self.fake.live(s)
+    }
+}
+fn persisted(f: &Fixture) -> (AppState, Arc<PersistedControl>) {
+    let c = Arc::new(PersistedControl {
+        backing: f.state.clone(),
+        fake: Default::default(),
+        starts: Default::default(),
+    });
+    (
+        AppState::new(f.state.db.clone()).with_sessions(c.clone()),
+        c,
+    )
+}
+
+async fn locale(f: &Fixture, l: Locale) {
+    f.state
+        .collab(move |tx| crewd_collab::settings::set_locale(tx, l))
+        .await
+        .unwrap();
+}
+// Parse the actual readable call's quoted JSON values (not an independently invented retry).
+fn advertised(text: &str, tool: &str) -> Value {
+    let tail = text
+        .split_once(&format!("{tool}("))
+        .expect("receipt must advertise a callable route")
+        .1;
+    let body = tail.split_once(')').unwrap().0;
+    let mut rest = body;
+    let mut args = serde_json::Map::new();
+    while !rest.trim().is_empty() {
+        let (key, value) = rest.trim_start().split_once(':').unwrap();
+        let mut parsed =
+            serde_json::Deserializer::from_str(value.trim_start()).into_iter::<Value>();
+        let v = parsed.next().unwrap().unwrap();
+        let used = parsed.byte_offset();
+        args.insert(key.trim().into(), v);
+        rest = value.trim_start()[used..]
+            .trim_start()
+            .trim_start_matches(',');
+    }
+    Value::Object(args)
+}
+
+#[tokio::test]
+async fn child_handoff_failure_advertises_a_usable_retry_without_widening_stop_authority() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("child", Some(&f.crew)).await;
+        let (st, ctl) = persisted(&f);
+        ctl.fake.fail_method(
+            FakeMethod::Handoff,
+            ControlError::Failed("synthetic handoff failure".into()),
+        );
+        let r = run(
+            &st,
+            &f.captain,
+            "handoff_captain",
+            json!({"crew":child,"runner":"claude","title":"new captain"}),
+        )
+        .await;
+        assert!(r.is_error);
+        let rows = port::sessions_of(&st, &child).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let sid = &rows[0].id;
+        let args = advertised(&r.text, "handoff_captain");
+        let session_arg = serde_json::to_string(sid).unwrap();
+        assert!(
+            r.text.contains(&text::r(
+                l,
+                "r.handoff_cleanup_authority",
+                &[("session_arg", &session_arg)]
+            )),
+            "cleanup must be directed to an authorized actor: {}",
+            r.text
+        );
+        assert!(
+            !r.text.contains("stop_session("),
+            "ordinary parent must not be told to execute child stop"
+        );
+        assert!(
+            args.get("crew").is_some(),
+            "retry lost resolved child crew: {}",
+            r.text
+        );
+        assert_eq!(args["to_session"], *sid);
+        let retry = run(&st, &f.captain, "handoff_captain", args).await;
+        assert!(!retry.is_error, "{}", retry.text);
+        assert_eq!(ctl.starts.lock().unwrap().len(), 1);
+        assert_eq!(
+            ctl.fake
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, FakeCall::Handoff(..)))
+                .count(),
+            2
+        );
+        let stop = run(
+            &st,
+            &f.captain,
+            "stop_session",
+            json!({"session_id":sid,"reason":"not wanted"}),
+        )
+        .await;
+        assert!(stop.is_error);
+        assert!(
+            !ctl.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Stop(..)))
+        );
+    }
+}
+
+#[tokio::test]
+async fn own_and_management_handoff_recovery_can_execute_retry_and_cleanup() {
+    for l in [Locale::Zh, Locale::En] {
+        for management in [false, true] {
+            for unnumbered in [false, true] {
+                let f = Fixture::new().await;
+                locale(&f, l).await;
+                let target = if management {
+                    f.add_crew("child", Some(&f.crew)).await
+                } else {
+                    f.crew.clone()
+                };
+                let who = if management {
+                    let mgmt = f.management_crew().await;
+                    f.add_session(
+                        &mgmt,
+                        "s-management",
+                        crewd_server::agent::Role::Captain,
+                        "synthetic boss",
+                    )
+                    .await;
+                    "s-management".to_string()
+                } else {
+                    f.captain.clone()
+                };
+                if unnumbered {
+                    let id = target.clone();
+                    f.state
+                        .db
+                        .call(move |s| {
+                            s.conn()
+                                .execute("UPDATE crews SET number=NULL WHERE id=?1", [id])
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                let (st, ctl) = persisted(&f);
+                ctl.fake.fail_method(
+                    FakeMethod::Handoff,
+                    ControlError::Failed("synthetic failure".into()),
+                );
+                let r = run(
+                    &st,
+                    &who,
+                    "handoff_captain",
+                    json!({"crew":target,"runner":"claude","title":"new captain"}),
+                )
+                .await;
+                assert!(r.is_error);
+                let args = advertised(&r.text, "handoff_captain");
+                if unnumbered {
+                    assert_eq!(args["crew"], target);
+                }
+                assert!(!run(&st, &who, "handoff_captain", args).await.is_error);
+                assert_eq!(ctl.starts.lock().unwrap().len(), 1);
+                let cleanup = run(
+                    &st,
+                    &who,
+                    "stop_session",
+                    advertised(&r.text, "stop_session"),
+                )
+                .await;
+                assert!(!cleanup.is_error, "{}", cleanup.text);
+                assert_eq!(
+                    ctl.fake
+                        .calls()
+                        .iter()
+                        .filter(|c| matches!(c, FakeCall::Stop(..)))
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn already_closed_authority_and_failed_parent_recovery_remain_closed() {
+    let f = Fixture::new().await;
+    let unrelated = f.add_crew("unrelated", None).await;
+    assert!(
+        run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"adopt","target":unrelated})
+        )
+        .await
+        .is_error
+    );
+    assert!(
+        port::crew(&f.state, &unrelated)
+            .await
+            .unwrap()
+            .unwrap()
+            .parent_ids
+            .is_empty()
+    );
+    assert!(
+        run(
+            &f.state,
+            &f.captain,
+            "handoff_captain",
+            json!({"crew":unrelated,"runner":"claude"})
+        )
+        .await
+        .is_error
+    );
+    assert!(f.control_calls().is_empty());
+    f.fail_method(
+        FakeMethod::Start,
+        ControlError::Failed("synthetic start failure".into()),
+    );
+    let r = run(
+        &f.state,
+        &f.captain,
+        "crew_structure",
+        json!({"action":"create_parent","title":"parent"}),
+    )
+    .await;
+    assert!(r.is_error);
+    assert!(r.text.contains("post(to: \"0\")"));
+    let parent = port::crew(&f.state, &f.crew)
+        .await
+        .unwrap()
+        .unwrap()
+        .parent_ids[0]
+        .clone();
+    assert!(
+        port::crew(&f.state, &parent)
+            .await
+            .unwrap()
+            .unwrap()
+            .captain
+            .is_none()
+    );
+    assert!(
+        !port::acts_as_captain_of(&f.state, &f.captain, &parent)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn new_parent_bootstrap_uses_a_legal_contact_from_the_registered_captain() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let (st, ctl) = persisted(&f);
+        let r = run(
+            &st,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"create_parent","title":"parent"}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+        let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let cap = &rows[0].id;
+        let lobby = port::lobby_of(&st, &f.crew).await.unwrap();
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+        assert!(
+            start.brief.contains("post("),
+            "bootstrap asks for an illegal read instead of a legal contact: {}",
+            start.brief
+        );
+        let contact = run(&st, cap, "post", advertised(&start.brief, "post")).await;
+        assert!(!contact.is_error, "{}", contact.text);
+        assert_eq!(rows[0].role, crewd_server::agent::Role::Captain);
+        let dm = port::my_channels(&st, cap)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.kind == crewd_proto::ChannelKind::Dm && c.has_session(&f.captain))
+            .unwrap();
+        let posted = port::messages_raw(&st, &dm.id, None, 20).await.unwrap();
+        assert!(posted.iter().any(|m| {
+            m.sender_session_id.as_deref() == Some(cap)
+                && m.mentions.iter().any(|a| {
+                    a.kind == MentionKind::Session && a.target_id.as_deref() == Some(&f.captain)
+                })
+        }));
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+    }
+}
+
+#[tokio::test]
+async fn parent_without_a_child_captain_gets_a_legal_human_context_route() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("vacant child", None).await;
+        let mgmt = f.management_crew().await;
+        f.add_session(
+            &mgmt,
+            "s-management",
+            crewd_server::agent::Role::Captain,
+            "synthetic boss",
+        )
+        .await;
+        let (st, ctl) = persisted(&f);
+        let r = run(
+            &st,
+            "s-management",
+            "crew_structure",
+            json!({"action":"create_parent","crew":child,"title":"parent"}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+        let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+        let cap = &rows[0].id;
+        let reply = run(&st, cap, "ask", advertised(&start.brief, "ask")).await;
+        assert!(!reply.is_error, "{}", reply.text);
+        let lobby = port::lobby_of(&st, &child).await.unwrap();
+        assert!(
+            run(&st, cap, "read_channel", json!({"channel":lobby.id}))
+                .await
+                .is_error
+        );
+    }
+}
+
+#[tokio::test]
+async fn release_receipts_describe_actual_same_and_existing_parent_effects() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("child", Some(&f.crew)).await;
+        let sibling = f.add_crew("sibling", Some(&f.crew)).await;
+        let before = port::crew(&f.state, &f.crew)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":f.crew}),
+        )
+        .await;
+        assert!(!r.is_error);
+        assert_eq!(
+            port::crew(&f.state, &f.crew)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            before
+        );
+        let from = port::crew(&f.state, &f.crew).await.unwrap().unwrap().title;
+        let false_receipt = text::r(
+            l,
+            "r.released_to",
+            &[
+                ("child", "child"),
+                ("from", &text::name(&from)),
+                ("to", &text::name(&from)),
+            ],
+        );
+        assert_ne!(
+            r.text, false_receipt,
+            "same-parent no-op falsely claimed movement/append"
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_same_parent",
+                &[("child", "child"), ("from", &text::name(&from))]
+            )
+        );
+        f.rpc("crew.adopt", json!({"crewId":child,"parentId":sibling}))
+            .await;
+        f.add_crew("after-child", Some(&sibling)).await;
+        let dest_before = port::crew(&f.state, &sibling)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        assert_eq!(dest_before[0], child);
+        assert_eq!(dest_before.len(), 2);
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":sibling}),
+        )
+        .await;
+        assert!(!r.is_error);
+        assert_eq!(
+            port::crew(&f.state, &sibling)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            dest_before
+        );
+        assert!(
+            !port::crew(&f.state, &f.crew)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids
+                .contains(&child)
+        );
+        let false_receipt = text::r(
+            l,
+            "r.released_to",
+            &[
+                ("child", "child"),
+                ("from", &text::name(&from)),
+                ("to", "sibling"),
+            ],
+        );
+        assert_ne!(
+            r.text, false_receipt,
+            "existing-parent edge removal falsely claimed append"
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_existing_parent",
+                &[
+                    ("child", "child"),
+                    ("from", &text::name(&from)),
+                    ("to", "sibling")
+                ]
+            )
+        );
+        assert_eq!(
+            port::crew(&f.state, &child)
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_ids,
+            vec![sibling.clone()]
+        );
+    }
+}
+
+#[tokio::test]
+async fn release_new_destination_appends_without_reordering_existing_children() {
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let child = f.add_crew("child", Some(&f.crew)).await;
+        let dest = f.add_crew("destination", Some(&f.crew)).await;
+        f.add_crew("first", Some(&dest)).await;
+        f.add_crew("second", Some(&dest)).await;
+        let mut expected = port::crew(&f.state, &dest)
+            .await
+            .unwrap()
+            .unwrap()
+            .child_ids;
+        let r = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":dest}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        expected.push(child.clone());
+        assert_eq!(
+            port::crew(&f.state, &dest)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            expected
+        );
+        assert_eq!(
+            port::crew(&f.state, &child)
+                .await
+                .unwrap()
+                .unwrap()
+                .parent_ids,
+            vec![dest.clone()]
+        );
+        assert_eq!(
+            r.text,
+            text::r(
+                l,
+                "r.released_to",
+                &[
+                    ("child", "child"),
+                    ("from", "示例机组"),
+                    ("to", "destination")
+                ]
+            )
+        );
+        let repeat = run(
+            &f.state,
+            &f.captain,
+            "crew_structure",
+            json!({"action":"release","target":child,"to":dest}),
+        )
+        .await;
+        assert!(repeat.is_error, "a removed source edge is not a new move");
+        assert_eq!(
+            port::crew(&f.state, &dest)
+                .await
+                .unwrap()
+                .unwrap()
+                .child_ids,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn residual_multiple_parent_noop_uses_canonical_edges() {
+    let mut failures = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        let f = Fixture::new().await;
+        locale(&f, l).await;
+        let second = f.add_crew("second parent", None).await;
+        let (from, other) = if f.crew > second {
+            (f.crew.clone(), second)
+        } else {
+            (second, f.crew.clone())
+        };
+        let (early, late) = (from.clone(), other.clone());
+        f.state
+            .db
+            .call(move |s| {
+                s.conn().execute(
+                    "UPDATE crews SET created_at='2026-01-01T00:00:00.000Z' WHERE id=?1",
+                    [early],
+                )?;
+                s.conn().execute(
+                    "UPDATE crews SET created_at='2026-01-02T00:00:00.000Z' WHERE id=?1",
+                    [late],
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        f.add_crew("from first", Some(&from)).await;
+        let child = f.add_crew("multi child", Some(&from)).await;
+        f.add_crew("from last", Some(&from)).await;
+        f.add_crew("other first", Some(&other)).await;
+        f.rpc("crew.adopt", json!({"crewId":child,"parentId":other}))
+            .await;
+        f.add_crew("other last", Some(&other)).await;
+        let (c, p, q) = (child.clone(), from.clone(), other.clone());
+        let before = f
+            .state
+            .db
+            .call(move |s| {
+                Ok::<_, crewd_collab::CollabError>((
+                    crewd_collab::crews::parents(s.conn(), &c)?,
+                    crewd_collab::crews::get(s.conn(), &c)?.parent_ids,
+                    crewd_collab::crews::children(s.conn(), &p)?,
+                    crewd_collab::crews::children(s.conn(), &q)?,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            before.0, before.1,
+            "raw store and chronological orders must really differ"
+        );
+        assert_eq!(before.0, [from.clone(), other.clone()]);
+        assert_eq!(before.2[1], child);
+        assert_eq!(before.3[1], child);
+        let management = f.management_crew().await;
+        f.add_session(
+            &management,
+            "s-management",
+            crewd_server::agent::Role::Captain,
+            "synthetic boss",
+        )
+        .await;
+        let result = run(
+            &f.state,
+            "s-management",
+            "crew_structure",
+            json!({"action":"release","crew":from,"target":child,"to":from}),
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.text);
+        let (c, p, q) = (child.clone(), from.clone(), other.clone());
+        let after = f
+            .state
+            .db
+            .call(move |s| {
+                Ok::<_, crewd_collab::CollabError>((
+                    crewd_collab::crews::parents(s.conn(), &c)?,
+                    crewd_collab::crews::get(s.conn(), &c)?.parent_ids,
+                    crewd_collab::crews::children(s.conn(), &p)?,
+                    crewd_collab::crews::children(s.conn(), &q)?,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "true edges and both manual child orders must stay unchanged"
+        );
+        let title = port::crew(&f.state, &from).await.unwrap().unwrap().title;
+        let expected = text::r(
+            l,
+            "r.released_same_parent",
+            &[("child", "multi child"), ("from", &text::name(&title))],
+        );
+        eprintln!(
+            "locale={l:?} different-order fixture verified; unchanged edges/order verified; receipt={}",
+            result.text
+        );
+        if result.text != expected {
+            failures.push((l, result.text));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "same-parent graph no-op must not claim detachment: {failures:?}"
+    );
+}
+#[tokio::test]
+async fn residual_parent_contact_tracks_receiver_across_handoff() {
+    let mut failures = Vec::new();
+    for l in [Locale::Zh, Locale::En] {
+        for unnumbered in [false, true] {
+            for changed in [false, true] {
+                let f = Fixture::new().await;
+                locale(&f, l).await;
+                if unnumbered {
+                    let crew = f.crew.clone();
+                    f.state
+                        .db
+                        .call(move |s| {
+                            s.conn()
+                                .execute("UPDATE crews SET number=NULL WHERE id=?1", [crew])
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                let (st, ctl) = persisted(&f);
+                let created = run(
+                    &st,
+                    &f.captain,
+                    "crew_structure",
+                    json!({"action":"create_parent","title":"parent"}),
+                )
+                .await;
+                assert!(!created.is_error, "{}", created.text);
+                let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+                let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+                let parent = &rows[0].id;
+                assert_eq!(rows[0].role, crewd_server::agent::Role::Captain);
+                let args = advertised(&start.brief, "post");
+                if unnumbered {
+                    let expected = text::r(
+                        l,
+                        "r.parent_brief_contact",
+                        &[
+                            ("child", "示例机组"),
+                            ("child_arg", &serde_json::to_string(&f.captain).unwrap()),
+                            (
+                                "mentions_arg",
+                                &serde_json::json!([{"kind":"session", "target_id":f.captain}])
+                                    .to_string(),
+                            ),
+                        ],
+                    );
+                    assert_eq!(
+                        start.brief, expected,
+                        "stable fallback must not claim a current captain"
+                    );
+                }
+                if changed {
+                    f.set_role(&f.worker, crewd_server::agent::Role::Captain)
+                        .await;
+                    assert_eq!(
+                        port::identity(&st, &f.worker).await.unwrap().unwrap().role,
+                        crewd_server::agent::Role::Captain
+                    );
+                    assert_eq!(
+                        port::identity(&st, &f.captain).await.unwrap().unwrap().role,
+                        crewd_server::agent::Role::Worker
+                    );
+                }
+                let recipient = if changed && !unnumbered {
+                    &f.worker
+                } else {
+                    &f.captain
+                };
+                assert_eq!(
+                    port::resolve_address(&st, args["to"].as_str().unwrap())
+                        .await
+                        .unwrap(),
+                    *recipient
+                );
+                let child_lobby = port::lobby_of(&st, &f.crew).await.unwrap();
+                assert!(
+                    run(
+                        &st,
+                        parent,
+                        "read_channel",
+                        json!({"channel":child_lobby.id})
+                    )
+                    .await
+                    .is_error
+                );
+                let contact = run(&st, parent, "post", args.clone()).await;
+                let dm = port::my_channels(&st, parent)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|c| c.kind == crewd_proto::ChannelKind::Dm && c.has_session(recipient))
+                    .unwrap();
+                let stored = port::messages_raw(&st, &dm.id, None, 20).await.unwrap();
+                if contact.is_error {
+                    assert!(
+                        stored.is_empty(),
+                        "failed contact must not falsely claim or persist a send"
+                    );
+                    failures.push((l, unnumbered, changed, contact.text));
+                } else {
+                    assert_eq!(stored.len(), 1);
+                    assert_eq!(
+                        stored[0].sender_session_id.as_deref(),
+                        Some(parent.as_str())
+                    );
+                    assert_eq!(stored[0].mentions.len(), 1);
+                    assert_eq!(stored[0].mentions[0].kind, MentionKind::Session);
+                    assert_eq!(
+                        stored[0].mentions[0].target_id.as_deref(),
+                        Some(recipient.as_str())
+                    );
+                }
+                // Existing C3 current-recipient/address resolver is the independent positive control.
+                let mut consistent = args;
+                consistent["mentions"] = json!([{"kind":"session","target_id":recipient}]);
+                consistent["message"] = json!(format!(
+                    "explicit recipient control {l:?} {unnumbered} {changed}"
+                ));
+                assert!(!run(&st, parent, "post", consistent).await.is_error);
+                assert!(
+                    run(
+                        &st,
+                        parent,
+                        "read_channel",
+                        json!({"channel":child_lobby.id})
+                    )
+                    .await
+                    .is_error
+                );
+                eprintln!(
+                    "locale={l:?} unnumbered={unnumbered} handoff={changed} actual-role/directory/explicit-recipient/read-boundary controls passed"
+                );
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "advertised recipient and mention must stay consistent after a real role handoff: {failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn residual_departed_contact_is_honestly_refused_without_a_message() {
+    for l in [Locale::Zh, Locale::En] {
+        for unnumbered in [false, true] {
+            let f = Fixture::new().await;
+            locale(&f, l).await;
+            if unnumbered {
+                let crew = f.crew.clone();
+                f.state
+                    .db
+                    .call(move |s| {
+                        s.conn()
+                            .execute("UPDATE crews SET number=NULL WHERE id=?1", [crew])
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            let (st, ctl) = persisted(&f);
+            let created = run(
+                &st,
+                &f.captain,
+                "crew_structure",
+                json!({"action":"create_parent","title":"parent"}),
+            )
+            .await;
+            assert!(!created.is_error);
+            let start = ctl.starts.lock().unwrap().last().unwrap().clone();
+            let rows = port::sessions_of(&st, &start.crew_id).await.unwrap();
+            let parent = &rows[0].id;
+            let args = advertised(&start.brief, "post");
+            let (crew, cap, worker) = (f.crew.clone(), f.captain.clone(), f.worker.clone());
+            // Real collab lifecycle/guards; no control process, client snapshot or user data.
+            st.collab(move |tx| {
+                crewd_collab::sessions::set_desired(tx, &cap, crewd_proto::Desired::Stopped)?;
+                crewd_collab::sessions::set_desired(tx, &worker, crewd_proto::Desired::Stopped)?;
+                crewd_collab::crews::archive(tx, &crew)?;
+                crewd_collab::crews::purge(tx, &crew)
+            })
+            .await
+            .unwrap();
+            assert!(port::identity(&st, &f.captain).await.unwrap().is_none());
+            assert!(
+                port::resolve_address(&st, args["to"].as_str().unwrap())
+                    .await
+                    .is_err()
+            );
+            let before: i64 = st
+                .db
+                .call(|s| {
+                    s.conn()
+                        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            let result = run(&st, parent, "post", args).await;
+            assert!(
+                result.is_error,
+                "a departed contact must not be reported as sent: {}",
+                result.text
+            );
+            let after: i64 = st
+                .db
+                .call(|s| {
+                    s.conn()
+                        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after, before);
+        }
+    }
+}

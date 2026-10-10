@@ -104,6 +104,8 @@ impl OrchestraConfig {
 pub struct Handle {
     tx: mpsc::UnboundedSender<Input>,
     exit: watch::Receiver<bool>,
+    #[cfg(test)]
+    test_panic: mpsc::UnboundedSender<()>,
 }
 
 /// 跑着的 actor 任务（C25：不能悄悄留下一个死句柄）。serve 必须等它：[`Actor::finished`] 回 `Err` = actor panic 了，
@@ -155,8 +157,26 @@ pub async fn spawn<P: Port>(
     let mut core = Core::new(port, execs, hooks, clock, cfg, tx.clone()).await?;
     core.boot().await?;
     let exit = core.exit.subscribe();
+    #[cfg(not(test))]
     let task = tokio::spawn(run(core, rx));
-    Ok((Handle { tx, exit }, Actor { task }))
+    #[cfg(test)]
+    let (test_panic, mut panic_rx) = mpsc::unbounded_channel();
+    #[cfg(test)]
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = run(core, rx) => {},
+            Some(()) = panic_rx.recv() => panic!("synthetic actor panic for serve lifecycle"),
+        }
+    });
+    Ok((
+        Handle {
+            tx,
+            exit,
+            #[cfg(test)]
+            test_panic,
+        },
+        Actor { task },
+    ))
 }
 
 /// actor 循环：输入一条条处理；没输入时睡到下一次定时拍（`next_deadline`：最早的未来 not_before、退避 / 错开的
@@ -196,6 +216,11 @@ fn stopped() -> ControlError {
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(crate) fn panic_for_serve_test(&self) {
+        self.test_panic.send(()).unwrap();
+    }
+
     async fn call<T>(&self, make: impl FnOnce(Reply<T>) -> Cmd) -> Result<T, ControlError> {
         let (tx, rx) = oneshot::channel();
         self.tx.send(Input::Cmd(make(tx))).map_err(|_| stopped())?;
