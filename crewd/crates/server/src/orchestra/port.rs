@@ -131,6 +131,32 @@ impl Settle {
     }
 }
 
+/// Exact preparation and receipt identities. Memory variants implement the same minimum
+/// cursor/revision/token contract in the unit-test Port; real DB identities remain opaque.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreparedSnapshot {
+    Database(crewd_collab::cursor_reservations::Snapshot),
+    #[cfg(test)]
+    Memory {
+        session: String,
+        revision: u64,
+        bases: Vec<(String, i64)>,
+        surface: Vec<(String, bool)>,
+        messages: Vec<(MsgFacts, String)>,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BatchLease {
+    Database(crewd_collab::cursor_reservations::Lease),
+    #[cfg(test)]
+    Memory {
+        session: String,
+        token: u64,
+        generation: u64,
+    },
+}
+pub use crewd_collab::cursor_reservations::Decision;
+
 /// 一次投递拿着的全部行（C24）：进正文的 `wakes`、随批的窗口外行 `riders`（M3a R6 `deferred`）、送到后各群游标推到哪。
 /// `wakes` 与 `riders` 在投出去之前一起 [`Port::claim`]（pending → inflight，次数 +1）：一行要么 pending 要么被一批拿着，
 /// 没有「看起来 pending、其实跟着一批」的行。
@@ -142,6 +168,8 @@ pub struct Batch {
     pub riders: Vec<QueuedWake>,
     /// 送到后各群游标推到哪（`Rendered::cursor_targets` = 批里**实际带上**的最大 seq）。只有积压时 `wakes` 可以为空而它非空。
     pub cursor_targets: Vec<(String, i64)>,
+    pub prepared: Option<PreparedSnapshot>,
+    pub lease: Option<BatchLease>,
 }
 
 impl Batch {
@@ -183,6 +211,8 @@ pub enum Ack {
 /// [`Port::ack`] 提交之后的结果（没提交 = `Err`，什么都没改）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Acked {
+    /// Exact old receipt did not own the current batch; no rows/cursor/origins changed.
+    pub stale: bool,
     /// `Delivered`：要记进环路熔断的来源（批里进正文的唤醒的来源，去重、按出现先后）。
     pub origins: Vec<String>,
     /// `Failed`：还要再试的 (id, 新的 not_before)。
@@ -231,6 +261,7 @@ pub struct Rendered {
     /// 投递成功后每个群的游标推到哪（M3a `WakeBatch::cursor_targets()` = 批里**实际带上**的最大 seq）。
     /// 可能在没有任何 `wake_ids` 的时候非空（只有积压的窗口），这样的批照样要投。
     pub cursor_targets: Vec<(String, i64)>,
+    pub prepared: Option<PreparedSnapshot>,
 }
 
 /// 改设置（`settings.set`）：外层 None = 不改；`max_live` / `hibernate_deadline_secs` 里层 None = 清掉（回到默认）。
@@ -323,6 +354,20 @@ pub trait Port: Send + Sync + 'static {
     fn settle(&self, ids: &[i64], s: Settle, now: Ms) -> impl Future<Output = Result<()>> + Send;
     /// 投出去之前拿走一批（`wakes` + `riders`）：pending → inflight，次数在这里 +1（库记次数，C24）。一个事务、全有或全无。
     fn claim(&self, b: &Batch) -> impl Future<Output = Result<()>> + Send;
+    /// Every actual rendered body, including zero wake IDs, must acquire exact ownership.
+    fn claim_reserved(
+        &self,
+        b: &Batch,
+        generation: u64,
+    ) -> impl Future<Output = Result<Decision<BatchLease>>> + Send;
+    /// Non-Delivered terminal fate plus exact lease release, one transaction.
+    fn settle_batch(
+        &self,
+        b: &Batch,
+        s: Settle,
+        now: Ms,
+    ) -> impl Future<Output = Result<Decision<()>>> + Send;
+
     /// 一批的终局，**一次调用、一个事务**（C24）：送到 = 行 + 随批行 + 游标一起提交；没送到 = 全部行一起退避或放弃。
     /// `Err` = 什么都没改（那几行仍是 inflight，由重启时的回收接走）。
     fn ack(&self, b: &Batch, a: Ack) -> impl Future<Output = Result<Acked>> + Send;

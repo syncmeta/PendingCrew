@@ -150,12 +150,15 @@ pub struct Prepared {
     pub context: Option<String>,
     /// Per channel, the highest seq that is really in `context` (shown or announced).
     advance_to: Vec<(String, i64)>,
+    snapshot: crewd_collab::cursor_reservations::Snapshot,
 }
 
 pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared>> {
     let loc = port::locale(st).await?;
     let cap = st.agent.config.inject_cap_chars;
-    let unread = port::unread(st, &me.session_id).await?;
+    let captured = port::prepare_injection(st, &me.session_id).await?;
+    let snapshot = captured.snapshot;
+    let unread = captured.blocks;
     if unread.iter().all(|(_, v)| v.is_empty()) {
         return Ok(None);
     }
@@ -227,6 +230,7 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
         return Ok(Some(Prepared {
             context: None,
             advance_to: vec![],
+            snapshot,
         }));
     }
     let advance_to = runs
@@ -238,6 +242,7 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
     Ok(Some(Prepared {
         context: Some(fitted.context),
         advance_to,
+        snapshot,
     }))
 }
 
@@ -438,8 +443,12 @@ fn longest_fitting(max: usize, fits: impl Fn(usize) -> bool) -> usize {
 }
 
 /// All cursors of one injection in one transaction.
-pub async fn commit(st: &AppState, me: &Identity, p: &Prepared) -> PortResult<()> {
-    port::advance_all(st, &me.session_id, p.advance_to.clone()).await
+pub async fn commit(
+    st: &AppState,
+    _me: &Identity,
+    p: &Prepared,
+) -> PortResult<crewd_collab::cursor_reservations::Decision<()>> {
+    port::commit_injection(st, &p.snapshot, p.advance_to.clone()).await
 }
 
 /// `agent.hook {event: post-tool-use}`; also serves `PostToolUseFailure` (same helper command,
@@ -465,33 +474,118 @@ async fn post_tool_use_since(
     // same unread messages.
     let lock = st.agent.session_lock(&me.session_id);
     let _held = lock.lock().await;
-    let prepared = match prepare(st, me).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return HookResult { stdout: None },
-        Err(e) => {
-            eprintln!("crewd: post-tool-use for {}: {e}", me.session_id);
+    for attempt in 0..2 {
+        let prepared = match prepare(st, me).await {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                #[cfg(feature = "testkit")]
+                crate::agent::testkit::record_injection_completion(
+                    st,
+                    &me.session_id,
+                    payload,
+                    crate::agent::testkit::InjectionOutcome::Empty,
+                );
+                return HookResult { stdout: None };
+            }
+            Err(e) => {
+                #[cfg(feature = "testkit")]
+                crate::agent::testkit::record_injection_completion(
+                    st,
+                    &me.session_id,
+                    payload,
+                    crate::agent::testkit::InjectionOutcome::InternalError,
+                );
+                eprintln!("crewd: post-tool-use for {}: {e}", me.session_id);
+                return HookResult { stdout: None };
+            }
+        };
+        #[cfg(feature = "testkit")]
+        crate::agent::testkit::pause_caller(
+            st,
+            crate::agent::testkit::CallerStage::HookPrepared,
+            &me.session_id,
+            prepared.advance_to.clone(),
+            prepared.context.clone().unwrap_or_default(),
+        )
+        .await;
+        if started.elapsed() > COMMIT_DEADLINE {
+            #[cfg(feature = "testkit")]
+            crate::agent::testkit::record_injection_completion(
+                st,
+                &me.session_id,
+                payload,
+                crate::agent::testkit::InjectionOutcome::Deadline,
+            );
+            eprintln!(
+                "crewd: post-tool-use for {} took too long; nothing injected, cursors kept",
+                me.session_id
+            );
             return HookResult { stdout: None };
         }
-    };
-    if started.elapsed() > COMMIT_DEADLINE {
-        eprintln!(
-            "crewd: post-tool-use for {} took too long; nothing injected, cursors kept",
-            me.session_id
-        );
-        return HookResult { stdout: None };
+        match commit(st, me, &prepared).await {
+            Ok(crewd_collab::cursor_reservations::Decision::Applied(())) => {
+                let event = match payload.get("hook_event_name").and_then(Value::as_str) {
+                    Some("PostToolUseFailure") => "PostToolUseFailure",
+                    _ => "PostToolUse",
+                };
+                let stdout = prepared.context.map(|c| {
+                    json!({"hookSpecificOutput": {
+                        "hookEventName": event, "additionalContext": c,
+                    }})
+                    .to_string()
+                });
+                #[cfg(feature = "testkit")]
+                crate::agent::testkit::record_injection_completion(
+                    st,
+                    &me.session_id,
+                    payload,
+                    if stdout.is_some() {
+                        crate::agent::testkit::InjectionOutcome::Committed
+                    } else {
+                        crate::agent::testkit::InjectionOutcome::Empty
+                    },
+                );
+                return HookResult { stdout };
+            }
+            Ok(decision) => {
+                // A competing wake/hook changed ownership. Reprepare once within the original
+                // budget; never print the old context or turn a storage error into a normal refusal.
+                if attempt == 0 && started.elapsed() < COMMIT_DEADLINE {
+                    continue;
+                }
+                #[cfg(feature = "testkit")]
+                crate::agent::testkit::record_injection_completion(
+                    st,
+                    &me.session_id,
+                    payload,
+                    match decision {
+                        crewd_collab::cursor_reservations::Decision::Stale => {
+                            crate::agent::testkit::InjectionOutcome::Stale
+                        }
+                        crewd_collab::cursor_reservations::Decision::Busy => {
+                            crate::agent::testkit::InjectionOutcome::Busy
+                        }
+                        crewd_collab::cursor_reservations::Decision::Applied(()) => unreachable!(),
+                    },
+                );
+                #[cfg(not(feature = "testkit"))]
+                let _ = decision;
+                return HookResult { stdout: None };
+            }
+            Err(e) => {
+                #[cfg(feature = "testkit")]
+                crate::agent::testkit::record_injection_completion(
+                    st,
+                    &me.session_id,
+                    payload,
+                    crate::agent::testkit::InjectionOutcome::InternalError,
+                );
+                eprintln!("crewd: post-tool-use cursor for {}: {e}", me.session_id);
+                return HookResult { stdout: None };
+            }
+        }
     }
-    if let Err(e) = commit(st, me, &prepared).await {
-        eprintln!("crewd: post-tool-use cursor for {}: {e}", me.session_id);
-        return HookResult { stdout: None };
-    }
-    let event = match payload.get("hook_event_name").and_then(Value::as_str) {
-        Some("PostToolUseFailure") => "PostToolUseFailure",
-        _ => "PostToolUse",
-    };
-    let stdout = prepared.context.map(|c| {
-        json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": c}}).to_string()
-    });
-    HookResult { stdout }
+    unreachable!("two bounded attempts always return")
 }
 
 #[cfg(test)]
@@ -916,6 +1010,10 @@ mod tests {
         let me = f.me(&f.worker).await;
         let p = Prepared {
             context: None,
+            snapshot: port::prepare_injection(&f.state, &me.session_id)
+                .await
+                .unwrap()
+                .snapshot,
             advance_to: vec![(l.clone(), m.seq), ("no-such-channel".into(), 1)],
         };
         let err = commit(&f.state, &me, &p).await;

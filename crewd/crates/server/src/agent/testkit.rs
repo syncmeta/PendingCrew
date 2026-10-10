@@ -50,6 +50,122 @@ pub(crate) fn record_hook(
     st.agent.hook_log.lock().unwrap().push(row);
 }
 
+/// Actual injection handler termination, independently of helper exit0/empty stdout.
+/// Stale/Busy are emitted only from actual typed CAS decisions, never from storage errors.
+#[cfg(feature = "testkit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InjectionOutcome {
+    Committed,
+    Empty,
+    Stale,
+    Busy,
+    InternalError,
+    Deadline,
+}
+#[cfg(feature = "testkit")]
+#[derive(Clone, Debug)]
+pub struct InjectionCompletion {
+    pub session: String,
+    pub event: String,
+    pub outcome: InjectionOutcome,
+}
+#[cfg(feature = "testkit")]
+pub(crate) fn record_injection_completion(
+    st: &AppState,
+    session: &str,
+    payload: &serde_json::Value,
+    outcome: InjectionOutcome,
+) {
+    let event = match payload["hook_event_name"].as_str() {
+        Some("PostToolUseFailure") => "PostToolUseFailure",
+        _ => "PostToolUse",
+    };
+    st.agent
+        .injection_completions
+        .lock()
+        .unwrap()
+        .push(InjectionCompletion {
+            session: session.into(),
+            event: event.into(),
+            outcome,
+        });
+}
+
+/// Single-use pauses at actual caller stages. Absent outside feature=testkit and idle by default.
+#[cfg(feature = "testkit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CallerStage {
+    HookPrepared,
+    WakeRendered,
+}
+#[cfg(feature = "testkit")]
+#[derive(Clone, Debug)]
+pub struct CallerEvidence {
+    pub targets: Vec<(String, i64)>,
+    pub text: String,
+}
+#[cfg(feature = "testkit")]
+#[derive(Debug)]
+pub(crate) struct CallerPause {
+    id: u64,
+    entered: tokio::sync::oneshot::Sender<CallerEvidence>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+#[cfg(feature = "testkit")]
+pub struct CallerGate {
+    state: Arc<AppState>,
+    stage: CallerStage,
+    session: String,
+    id: u64,
+    entered: tokio::sync::oneshot::Receiver<CallerEvidence>,
+    release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+#[cfg(feature = "testkit")]
+impl CallerGate {
+    pub async fn entered(&mut self) -> CallerEvidence {
+        (&mut self.entered)
+            .await
+            .expect("actual caller must reach installed stage")
+    }
+    pub fn release(mut self) {
+        let _ = self
+            .release
+            .take()
+            .expect("single-use gate release")
+            .send(());
+    }
+}
+#[cfg(feature = "testkit")]
+impl Drop for CallerGate {
+    fn drop(&mut self) {
+        // Cancellation before entry removes only this registration. Cancellation after entry
+        // drops its release sender, so the caller proceeds; no mutex/DB thread stays held.
+        let key = (self.stage, self.session.clone());
+        let mut slots = self.state.agent.caller_gates.lock().unwrap();
+        if slots.get(&key).is_some_and(|p| p.id == self.id) {
+            slots.remove(&key);
+        }
+    }
+}
+#[cfg(feature = "testkit")]
+pub(crate) async fn pause_caller(
+    state: &AppState,
+    stage: CallerStage,
+    session: &str,
+    targets: Vec<(String, i64)>,
+    text: String,
+) {
+    let pause = {
+        let mut slots = state.agent.caller_gates.lock().unwrap();
+        slots.remove(&(stage, session.to_string()))
+    }; // the ordinary mutex is released before either send or await
+    if let Some(p) = pause
+        && p.entered.send(CallerEvidence { targets, text }).is_ok()
+    {
+        let _ = p.release.await;
+    }
+}
+
 pub struct Fixture {
     pub state: Arc<AppState>,
     pub crew: String,
@@ -60,6 +176,49 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    #[cfg(feature = "testkit")]
+    pub fn caller_gate(&self, session: &str, stage: CallerStage) -> CallerGate {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (entered, receipt) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let key = (stage, session.to_string());
+        let mut slots = self.state.agent.caller_gates.lock().unwrap();
+        assert!(
+            !slots.contains_key(&key),
+            "one active gate per session/stage"
+        );
+        slots.insert(
+            key,
+            CallerPause {
+                id,
+                entered,
+                release: wait,
+            },
+        );
+        CallerGate {
+            state: self.state.clone(),
+            stage,
+            session: session.into(),
+            id,
+            entered: receipt,
+            release: Some(release),
+        }
+    }
+
+    #[cfg(feature = "testkit")]
+    pub fn injection_completions(&self, session: &str) -> Vec<InjectionCompletion> {
+        self.state
+            .agent
+            .injection_completions
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.session == session)
+            .cloned()
+            .collect()
+    }
+
     pub fn hook_observations(&self, session: &str) -> Vec<HookObservation> {
         self.state
             .agent
@@ -501,6 +660,8 @@ struct RelayExecSession {
     outstanding: std::collections::BTreeSet<u64>,
     running: bool,
     working: bool,
+    hold_stop: bool,
+    stop_requests: usize,
 }
 impl RelayExecSession {
     fn emit(&mut self, event: crewd_exec::session::SessionEvent) {
@@ -517,6 +678,25 @@ impl RelayExecSession {
     }
 }
 impl RelayStandIn {
+    /// Opt-in only: a successful Stop request is not a terminal executor receipt.
+    pub fn hold_stop(&self, id: &str, hold: bool) {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get_mut(id)
+            .expect("launch before stop control")
+            .hold_stop = hold;
+    }
+    pub fn stop_requests(&self, id: &str) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .sessions
+            .get(id)
+            .expect("launch before stop control")
+            .stop_requests
+    }
     pub fn emit(&self, id: &str, event: crewd_exec::session::SessionEvent) {
         self.0
             .lock()
@@ -582,6 +762,8 @@ impl crate::orchestra::exec::Executor for RelayStandIn {
                 outstanding: Default::default(),
                 running: true,
                 working: false,
+                hold_stop: false,
+                stop_requests: 0,
             };
             if req.initial_prompt.is_some() {
                 session
@@ -667,6 +849,10 @@ impl crate::orchestra::exec::ExecHandle for RelayExecHandle {
             .get_mut(&self.id)
             .ok_or(crewd_exec::driver::Closed)?;
         if !s.running {
+            return Ok(());
+        }
+        s.stop_requests += 1;
+        if s.hold_stop {
             return Ok(());
         }
         let pending = std::mem::take(&mut s.outstanding);

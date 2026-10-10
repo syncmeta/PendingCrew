@@ -234,6 +234,7 @@ impl<P: Port> Core<P> {
         if self.shutting_down {
             return Ok(false); // 停机中不投、不拉起
         }
+        self.retry_terminal(session).await?;
         let now = self.now();
         // 每轮可能把「已注入」的消息类唤醒直接记 delivered，然后重选；最多 4 轮。
         for _ in 0..4 {
@@ -568,6 +569,8 @@ impl<P: Port> Core<P> {
                             wakes: batch,
                             riders,
                             cursor_targets: r.cursor_targets,
+                            prepared: r.prepared,
+                            lease: None,
                         },
                         text: r.text,
                     });
@@ -591,13 +594,12 @@ impl<P: Port> Core<P> {
             self.port.publish(wake_changed(session, &silent));
             return Ok(true);
         }
-        let Fitted { batch, text } = self.render_fitted(session, speak).await?;
+        let Fitted { mut batch, text } = self.render_fitted(session, speak).await?;
         // 只有积压（M3a R6：窗口里全是比被叫消息更旧的未读，被叫的那几行 deferred）：`wakes` 空而 `cursor_targets`
         // 非空——照样投，投完游标前进，下一批就轮到被叫的那几条。两样都空才是真没东西可投（随批行不 claim、留在 pending）。
         if !batch.has_work() {
             return Ok(false);
         }
-        let held = batch.ids();
         let accepts = self
             .live
             .get(session)
@@ -618,17 +620,22 @@ impl<P: Port> Core<P> {
             return Ok(false);
         }
         // 进正文的与随批的一起拿走（C24）：从此它们只属于这一批，直到这批的 ack。
-        if !held.is_empty() {
-            self.due.touch(&self.port).claim(&batch).await?;
-        }
+        let generator = self.live.get(session).expect("checked live").generator;
+        batch.lease = match self
+            .due
+            .touch(&self.port)
+            .claim_reserved(&batch, generator)
+            .await?
+        {
+            super::port::Decision::Applied(lease) => Some(lease),
+            super::port::Decision::Stale | super::port::Decision::Busy => return Ok(false),
+        };
         let Some(l) = self.live.get_mut(session) else {
             // 到不了（见上）；万一到了就原样退回，退回出错由重启回收接走（core.rs 模块文档的不变式 ①）。
-            if !held.is_empty() {
-                self.due
-                    .touch(&self.port)
-                    .settle(&held, Settle::Requeue, now)
-                    .await?;
-            }
+            self.due
+                .touch(&self.port)
+                .settle_batch(&batch, Settle::Requeue, now)
+                .await?;
             return Ok(false);
         };
         let changed = wake_changed(
@@ -729,9 +736,11 @@ impl<P: Port> Core<P> {
             session,
             silent.iter().chain(&batch.wakes).chain(&batch.riders),
         );
-        self.launch_carrying(row, exec, Some(text), batch).await?;
-        self.port.publish(changed);
-        Ok(true)
+        let launched = self.launch_carrying(row, exec, Some(text), batch).await?;
+        if launched {
+            self.port.publish(changed);
+        }
+        Ok(launched)
     }
 
     /// 投递回执（裁定 8）。非终局的（Blocked / NotReady / Stalled）驱动层自己会补投，等终局；`Abandoned`（停掉 /
@@ -795,10 +804,7 @@ impl<P: Port> Core<P> {
         if !delivered {
             return self.fail_batch(inf.batch, &format!("{outcome:?}")).await;
         }
-        l.worked = true;
-        if !inf.batch.wakes.is_empty() {
-            l.last_wakes = inf.batch.wakes.clone();
-        }
+
         // 随批行：平时放回 pending、下一批带上；人正在停它时跟别的 pending 一样丢掉（不把刚停掉的拉起来）。
         let riders = if l.stopping {
             Riders::Drop("stopped".into())
@@ -813,6 +819,15 @@ impl<P: Port> Core<P> {
             .touch(&self.port)
             .ack(&inf.batch, Ack::Delivered { riders })
             .await?;
+        if acked.stale {
+            return Ok(());
+        }
+        if let Some(l) = self.live.get_mut(session) {
+            l.worked = true;
+            if !inf.batch.wakes.is_empty() {
+                l.last_wakes = inf.batch.wakes.clone();
+            }
+        }
         // 环路熔断只数投进去了的（评审 (2)）、而且只在确认提交之后：一次投递、每个来源记一次（同一批里同一来源的几条
         // 合并成一次唤醒）。随批行没投进去，不记；只有积压的批没有唤醒，什么都不记。
         for o in &acked.origins {
@@ -972,7 +987,9 @@ impl<P: Port> Core<P> {
 
     pub(crate) async fn rescan(&mut self) -> anyhow::Result<()> {
         let now = self.now();
-        for s in self.port.due_sessions(now).await? {
+        let mut sessions: BTreeSet<_> = self.port.due_sessions(now).await?.into_iter().collect();
+        sessions.extend(self.terminal_sessions());
+        for s in sessions {
             // 一个 session 出错（例如 M3a `build_batch` 遇到坏账本 fail-loud）只记日志、不连累别人；它的唤醒留在
             // pending，下一次定时拍 / idle 边沿再试——不在这里原地重试（不紧循环：过期的 not_before 不会让定时器立刻再响，
             // 只剩 30s 心跳）。
@@ -1334,6 +1351,7 @@ mod tests {
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
         rig.emit("w1", SessionEvent::Working(true)).await;
+        seed_unwoken_backlog(&rig, 1);
         let r = rig
             .post(LOBBY, Rig::sender("cap"), at("w1"), "合成派活甲")
             .await;
@@ -2174,10 +2192,30 @@ mod tests {
     }
 
     /// 让第一条唤醒（id 1）落在窗口外、窗口里只有更旧的积压：之后的批都是「只有积压」的（M3a R6）。
-    fn defer_first_wake_behind_a_backlog(rig: &Rig, session: &str) {
+    fn seed_unwoken_backlog(rig: &Rig, count: usize) {
         let mut st = rig.port.lock();
-        st.defer.insert(1);
-        st.backlog.insert(session.into(), vec![(LOBBY.into(), 0)]);
+        for seq in 1..=count as i64 {
+            let facts = MsgFacts {
+                id: format!("actual-backlog-{seq}"),
+                at: MessageRef {
+                    channel: LOBBY.into(),
+                    seq,
+                },
+                sender: Sender::Human,
+                provenance: crewd_wake::plan::MessageProvenance::Ordinary,
+                mentions: vec![],
+                created_at: st.now,
+            };
+            st.messages
+                .insert((LOBBY.into(), seq), (facts, format!("合成真实积压{seq}")));
+        }
+    }
+
+    fn defer_first_wake_behind_a_backlog(rig: &Rig, _session: &str) {
+        // Real positive-seq unread prefixes; each actual Delivered consumes the next
+        // oldest one. No zero-width/equal-base synthetic cursor window.
+        seed_unwoken_backlog(rig, LOOP_LIMITS.edge_max + 6);
+        rig.port.lock().window_cap = Some(1);
     }
 
     /// 裁定 (1)：只有积压的拉起，起来就死——带着的 deferred 唤醒照样记一次失败（退避），三次后放弃、告警一次；

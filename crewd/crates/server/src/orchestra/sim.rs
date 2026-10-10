@@ -700,6 +700,7 @@ struct Walk {
     matched_receipts: BTreeMap<Op, usize>,
     stale_receipts: BTreeMap<Op, usize>,
     fired_faults: BTreeMap<MemFault, usize>,
+    latch_skip_reasons: BTreeMap<String, usize>,
     launch_ok: usize,
     launch_error: usize,
     rng: SplitMix64,
@@ -718,6 +719,7 @@ impl Walk {
             matched_receipts: BTreeMap::new(),
             stale_receipts: BTreeMap::new(),
             fired_faults: BTreeMap::new(),
+            latch_skip_reasons: BTreeMap::new(),
             launch_ok: 0,
             launch_error: 0,
             rng: SplitMix64(seed),
@@ -794,6 +796,504 @@ impl Walk {
             Err(_) => return Err("I8_stop_missing_immediate_reply".into()),
         }
         r.settle().await;
+        Ok(())
+    }
+
+    // Read-only attribution: never consumes RNG, faults, rows or control inputs.
+    fn latch_skip_state(&mut self, r: &Rig, reason: &str) {
+        *self.latch_skip_reasons.entry(reason.into()).or_default() += 1;
+        let now = r.clock.now();
+        let st = r.port.lock();
+        let faults = st.faults.clone();
+        let mut target_rows = Vec::new();
+        let mut sessions: Vec<_> = r.core.live.keys().cloned().collect();
+        sessions.sort();
+        for session in &sessions {
+            let pending_due: Vec<_> = st
+                .wakes
+                .iter()
+                .filter(|w| {
+                    w.session == *session && w.state == WakeState::Pending && queue::is_due(w, now)
+                })
+                .map(|w| (w.id, w.kind, w.priority, w.not_before))
+                .collect();
+            let pending_future: Vec<_> = st
+                .wakes
+                .iter()
+                .filter(|w| {
+                    w.session == *session && w.state == WakeState::Pending && !queue::is_due(w, now)
+                })
+                .map(|w| (w.id, w.kind, w.priority, w.not_before))
+                .collect();
+            let inflight: Vec<_> = st
+                .wakes
+                .iter()
+                .filter(|w| w.session == *session && w.state == WakeState::Inflight)
+                .map(|w| w.id)
+                .collect();
+            target_rows.push(format!("target={session} reservation={} pending_due={pending_due:?} pending_future={pending_future:?} inflight_rows={inflight:?} render_error={:?} advance_error={:?} latch_error={:?} claim_race={:?}",
+                st.reservations.contains_key(session), st.render_error.as_ref().or(st.render_error_for.get(session)), st.advance_error, st.latch_error, st.claim_race));
+        }
+        drop(st);
+        let exec = r.exec.lock();
+        let launch_faults = exec.fail_next.clone();
+        for (session, rows) in sessions.iter().zip(target_rows) {
+            let l = &r.core.live[session];
+            eprintln!(
+                "SIM FaultLatch skip seed={} step={} reason={reason} {rows} actual_live={{generation:{}, working:{}, health:{:?}, decision:{}, draft:{}, refused:{}, stopping:{}, halting:{}, writing:{}, queued_writes:{}, nudge_pending:{}, body_inflight:{}, restart_held:{}, system_held:{:?}}} outstanding={:?}",
+                self.seed,
+                self.step,
+                l.generator,
+                l.working,
+                l.health,
+                l.decision.is_some(),
+                l.input_draft.is_some(),
+                l.refused,
+                l.stopping,
+                l.halting,
+                l.writing,
+                l.writes.len(),
+                l.nudge_pending.is_some(),
+                l.inflight.is_some(),
+                r.core.held.contains(session),
+                r.core.breaker.held(session, SYSTEM),
+                exec.outstanding.get(session)
+            );
+        }
+        eprintln!(
+            "SIM FaultLatch skip seed={} step={} reason={reason} faults={faults:?} launch_faults={launch_faults:?} shutdown={} hibernation={} live_count={} now={now:?}",
+            self.seed,
+            self.step,
+            r.core.shutting_down,
+            r.core.hibernation.is_some(),
+            sessions.len()
+        );
+    }
+
+    // A selected random FaultLatch is a bounded, same-Rig Core exercise, not
+    // merely an armed hook. No separate fixture's counters enter this walk.
+    async fn latch_fault_sequence(&mut self, r: &mut Rig) -> Result<bool, String> {
+        if !r.port.lock().faults.is_empty()
+            || !r.exec.lock().fail_next.is_empty()
+            || r.core.shutting_down
+            || r.core.hibernation.is_some()
+        {
+            self.record("FaultLatch skipped: another fault or shutdown is active");
+            self.latch_skip_state(r, "operation:other_fault_or_shutdown");
+            return Ok(false);
+        }
+        let mut candidates: Vec<_> = r.core.live.keys().cloned().collect();
+        candidates.sort();
+        let mut target = None;
+        for session in candidates {
+            let live = &r.core.live[&session];
+            if live.health.is_some()
+                || live.refused
+                || live.writing
+                || !live.writes.is_empty()
+                || live.nudge_pending.is_some()
+                || r.core.held.contains(&session)
+                || r.core.breaker.held(&session, SYSTEM).is_some()
+            {
+                *self
+                    .latch_skip_reasons
+                    .entry("candidate:live_state_or_held".into())
+                    .or_default() += 1;
+                continue;
+            }
+            let clean = {
+                let st = r.port.lock();
+                !st.reservations.contains_key(&session)
+                    && !st.wakes.iter().any(|w| {
+                        w.session == session
+                            && (w.state == WakeState::Inflight
+                                || (w.state == WakeState::Pending
+                                    && queue::is_due(w, r.clock.now())))
+                    })
+                    && st.render_error.is_none()
+                    && !st.render_error_for.contains_key(&session)
+                    && st.advance_error.is_none()
+                    && st.latch_error.is_none()
+                    && st.claim_race.is_none()
+            };
+            if !clean
+                || r.exec
+                    .lock()
+                    .outstanding
+                    .get(&session)
+                    .is_some_and(|ids| !ids.is_empty())
+            {
+                *self
+                    .latch_skip_reasons
+                    .entry("candidate:rows_reservation_error_or_outstanding".into())
+                    .or_default() += 1;
+                continue;
+            }
+            let facts = r
+                .core
+                .target_facts(&session, &[], Some(Priority::System), &[], r.clock.now())
+                .await
+                .map_err(|e| e.to_string())?;
+            if explain::live_blocker(&facts).is_none() {
+                target = Some(session);
+                break;
+            }
+            *self
+                .latch_skip_reasons
+                .entry(format!(
+                    "candidate:shared_live_blocker:{:?}",
+                    explain::live_blocker(&facts)
+                ))
+                .or_default() += 1;
+            eprintln!(
+                "SIM FaultLatch candidate seed={} step={} target={session} actual_target_facts={facts:?}",
+                self.seed, self.step
+            );
+        }
+        let Some(session) = target else {
+            self.record("FaultLatch skipped: no originally ready, unheld, empty target");
+            self.latch_skip_state(r, "operation:no_eligible_target");
+            return Ok(false);
+        };
+        let generation = r.core.live[&session].generator;
+        self.record(format!("FaultLatch begin target={session} generation={generation}; synthetic real-work Input::Progress"));
+        r.core
+            .handle(Input::Progress {
+                session: session.clone(),
+            })
+            .await;
+        r.settle().await;
+        self.check(r).await?;
+        let rounds = r.core.cfg.loops.edge_max.min(r.core.cfg.loops.target_max);
+        require(rounds == 2, "FaultLatch_test_threshold_is_two", rounds)?;
+        for round in 0..rounds {
+            let id = self
+                .latch_enqueue(r, &session, WakeKind::System, round)
+                .await?;
+            self.record(format!(
+                "FaultLatch real try_deliver round={round} row={id}"
+            ));
+            let sent = r
+                .core
+                .try_deliver(&session)
+                .await
+                .map_err(|e| e.to_string())?;
+            r.settle().await;
+            require(sent, "FaultLatch_system_actually_sent", (round, id))?;
+            self.check(r).await?;
+            self.latch_ack(r, &session, generation, id).await?;
+        }
+        let blocked = self
+            .latch_enqueue(r, &session, WakeKind::System, rounds)
+            .await?;
+        let before_hits = r.port.lock().fault_hits.len();
+        let before_sends = r.exec.sent(&session).len();
+        self.record(format!(
+            "FaultLatch arm PutLatch then actual admit row={blocked}"
+        ));
+        r.port.fail_next(MemFault::PutLatch);
+        self.check(r).await?;
+        let result = r.core.try_deliver(&session).await;
+        r.settle().await;
+        require(result.is_err(), "FaultLatch_admit_must_fail", &result)?;
+        self.check(r).await?;
+        {
+            let st = r.port.lock();
+            require(
+                st.fault_hits.len() == before_hits + 1
+                    && st.fault_hits[before_hits].fault == MemFault::PutLatch,
+                "FaultLatch_actual_single_hit",
+                &st.fault_hits[before_hits..],
+            )?;
+            require(
+                st.faults.is_empty(),
+                "FaultLatch_consumed_not_cleared",
+                &st.faults,
+            )?;
+            require(
+                st.wakes
+                    .iter()
+                    .any(|w| w.id == blocked && w.state == WakeState::Pending),
+                "FaultLatch_failed_row_pending",
+                blocked,
+            )?;
+            require(
+                st.latches
+                    .iter()
+                    .all(|l| l.id != crewd_wake::breaker::edge_id(SYSTEM, &session)),
+                "FaultLatch_no_persisted_latch_on_error",
+                &st.latches,
+            )?;
+        }
+        require(
+            r.core.breaker.held(&session, SYSTEM).is_none(),
+            "FaultLatch_no_memory_latch_on_error",
+            &session,
+        )?;
+        require(
+            r.exec.sent(&session).len() == before_sends,
+            "FaultLatch_no_send_on_error",
+            &session,
+        )?;
+        self.record(format!(
+            "FaultLatch real retry target={session} row={blocked}"
+        ));
+        let retry = r
+            .core
+            .try_deliver(&session)
+            .await
+            .map_err(|e| e.to_string())?;
+        r.settle().await;
+        require(!retry, "FaultLatch_retry_persists_without_send", &session)?;
+        self.check(r).await?;
+        let held = r
+            .core
+            .breaker
+            .held(&session, SYSTEM)
+            .cloned()
+            .ok_or_else(|| "FaultLatch_retry_missing_memory_latch".to_string())?;
+        require(
+            r.port.lock().latches.contains(&held),
+            "FaultLatch_same_target_durable_latch",
+            &held,
+        )?;
+        require(
+            r.exec.sent(&session).len() == before_sends,
+            "FaultLatch_no_send_after_trip",
+            &session,
+        )?;
+
+        self.record(format!(
+            "FaultLatch Working(true) target={session}; hold Human/Ask for original I6"
+        ));
+        r.emit(&session, SessionEvent::Working(true)).await;
+        self.check(r).await?;
+        let ask = self
+            .latch_enqueue(r, &session, WakeKind::AskAnswer, rounds + 1)
+            .await?;
+        self.record(format!("FaultLatch actual Human post target={session}"));
+        let channel = format!("{}/lobby", r.core.live[&session].crew);
+        let message = r
+            .post(
+                &channel,
+                Sender::Human,
+                vec![Mention::Session(session.clone())],
+                "sim FaultLatch human display",
+            )
+            .await;
+        self.check(r).await?;
+        {
+            let st = r.port.lock();
+            require(
+                st.latches.contains(&held),
+                "FaultLatch_I6_same_target_persisted",
+                &held,
+            )?;
+            require(
+                st.wakes.iter().any(|w| {
+                    w.session == session
+                        && w.kind == WakeKind::AskAnswer
+                        && w.id == ask
+                        && w.state == WakeState::Pending
+                }),
+                "FaultLatch_I6_ask_pending",
+                ask,
+            )?;
+            require(
+                st.wakes.iter().any(|w| {
+                    w.session == session
+                        && w.origin == HUMAN
+                        && w.msg.as_ref() == Some(&message)
+                        && w.state == WakeState::Pending
+                }),
+                "FaultLatch_I6_human_pending",
+                &message,
+            )?;
+            require(
+                !st.reservations.contains_key(&session),
+                "FaultLatch_display_before_any_lease",
+                &session,
+            )?;
+        }
+        self.record(format!("FaultLatch synthetic explicit displayed-prefix advance {session} {}#{}; not a helper stdout claim", message.channel, message.seq));
+        r.port
+            .advance(&session, &message.channel, message.seq)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.check(r).await?;
+        let before_fresh = self.oracle.stale_checked;
+        let settle_hits = r.port.lock().fault_hits.len();
+        self.record(format!(
+            "FaultLatch I7 arm one Settle then actual Working(false) {session}"
+        ));
+        r.port.fail_next(MemFault::Settle);
+        r.emit(&session, SessionEvent::Working(false)).await;
+        self.check(r).await?;
+        {
+            let st = r.port.lock();
+            require(
+                st.fault_hits.len() == settle_hits + 1
+                    && st.fault_hits[settle_hits].fault == MemFault::Settle
+                    && st.faults.is_empty(),
+                "FaultLatch_I7_settle_consumed_not_cleared",
+                &st.fault_hits[settle_hits..],
+            )?;
+        }
+        self.record(format!("FaultLatch I7 actual freshness retry {session}"));
+        self.freshness(r).await?;
+        require(
+            self.oracle.stale_checked > before_fresh,
+            "FaultLatch_I7_actual_successful_check",
+            self.oracle.stale_checked,
+        )?;
+        self.latch_ack(r, &session, generation, ask).await?;
+        self.record(format!(
+            "FaultLatch complete target={session}; actual hit, durable latch, I6 and I7"
+        ));
+        Ok(true)
+    }
+
+    async fn latch_enqueue(
+        &mut self,
+        r: &mut Rig,
+        session: &str,
+        kind: WakeKind,
+        part: usize,
+    ) -> Result<i64, String> {
+        let token = format!("sim-latch-{}-{}-{part}", self.seed, self.step);
+        let w = NewWake {
+            session: session.into(),
+            kind,
+            source: if kind == WakeKind::System {
+                source::system(&token)
+            } else {
+                format!("ask:{token}")
+            },
+            priority: if kind == WakeKind::AskAnswer {
+                Priority::Human
+            } else {
+                Priority::System
+            },
+            not_before: r.clock.now(),
+            note: Some(token),
+            origin: if kind == WakeKind::AskAnswer {
+                HUMAN.into()
+            } else {
+                SYSTEM.into()
+            },
+        };
+        self.record(format!(
+            "FaultLatch real enqueue {session} {kind:?} part={part}"
+        ));
+        let id = r
+            .port
+            .enqueue(w)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "FaultLatch_unique_enqueue_missing".to_string())?;
+        r.settle().await;
+        self.check(r).await?;
+        Ok(id)
+    }
+
+    async fn latch_ack(
+        &mut self,
+        r: &mut Rig,
+        session: &str,
+        generation: u64,
+        row: i64,
+    ) -> Result<(), String> {
+        let live = r
+            .core
+            .live
+            .get(session)
+            .ok_or_else(|| "FaultLatch_live_disappeared".to_string())?;
+        let inf = live
+            .inflight
+            .as_ref()
+            .ok_or_else(|| "FaultLatch_actual_inflight_missing".to_string())?;
+        let delivery = inf
+            .delivery
+            .ok_or_else(|| "FaultLatch_actual_delivery_id_missing".to_string())?;
+        require(
+            live.generator == generation
+                && inf.batch.wakes.len() == 1
+                && inf.batch.wakes[0].id == row
+                && inf.batch.riders.is_empty(),
+            "FaultLatch_exact_current_row_no_old_body",
+            (&inf.batch, generation),
+        )?;
+        require(
+            matches!(
+                inf.batch.wakes[0].kind,
+                WakeKind::System | WakeKind::AskAnswer
+            ) && inf.batch.wakes[0].origin
+                == if inf.batch.wakes[0].kind == WakeKind::System {
+                    SYSTEM
+                } else {
+                    HUMAN
+                },
+            "FaultLatch_exact_current_origin",
+            &inf.batch.wakes,
+        )?;
+        require(
+            inf.batch.cursor_targets.is_empty(),
+            "FaultLatch_system_or_ask_no_cursor_body",
+            &inf.batch,
+        )?;
+        let lease = inf
+            .batch
+            .lease
+            .clone()
+            .ok_or_else(|| "FaultLatch_exact_lease_missing".to_string())?;
+        require(
+            matches!(&lease, super::port::BatchLease::Memory { session: owner, generation: g, .. } if owner == session && *g == generation),
+            "FaultLatch_exact_lease_generation",
+            &lease,
+        )?;
+        require(
+            r.port
+                .lock()
+                .reservations
+                .get(session)
+                .is_some_and(|b| b.lease.as_ref() == Some(&lease)),
+            "FaultLatch_durable_exact_lease",
+            &lease,
+        )?;
+        require(
+            r.exec
+                .lock()
+                .outstanding
+                .get(session)
+                .is_some_and(|ids| ids.contains(&delivery)),
+            "FaultLatch_actual_executor_receipt_id",
+            delivery,
+        )?;
+        self.record(format!("FaultLatch real Delivered target={session} generation={generation} delivery={delivery} lease={lease:?} row={row}"));
+        r.emit(
+            session,
+            SessionEvent::Delivery {
+                id: delivery,
+                subject: Subject::Steer,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        )
+        .await;
+        self.check(r).await?;
+        require(
+            r.port
+                .lock()
+                .wakes
+                .iter()
+                .any(|w| w.id == row && w.state == WakeState::Delivered),
+            "FaultLatch_actual_ack_committed",
+            row,
+        )?;
+        require(
+            !r.port.lock().reservations.contains_key(session),
+            "FaultLatch_ack_released_exact_lease",
+            &lease,
+        )?;
         Ok(())
     }
     async fn apply(&mut self, r: &mut Rig, op: Op) -> Result<bool, String> {
@@ -1038,18 +1538,17 @@ impl Walk {
                     return Ok(false);
                 }
             }
+            Op::FaultLatch => return self.latch_fault_sequence(r).await,
             Op::FaultClaim
             | Op::FaultAck
             | Op::FaultAckCursor
             | Op::FaultRender
-            | Op::FaultLatch
             | Op::FaultSettle => {
                 let f = match op {
                     Op::FaultClaim => MemFault::Claim,
                     Op::FaultAck => MemFault::Ack,
                     Op::FaultAckCursor => MemFault::AckCursor,
                     Op::FaultRender => MemFault::RenderWake,
-                    Op::FaultLatch => MemFault::PutLatch,
                     _ => MemFault::Settle,
                 };
                 r.port.fail_next(f);
@@ -1384,6 +1883,10 @@ async fn run(seed: u64, steps: usize) -> Walk {
             w.launch_error += 1;
         }
     }
+    eprintln!(
+        "SIM FaultLatch skip_reason_counts seed={seed} counts={:?}",
+        w.latch_skip_reasons
+    );
     w
 }
 
@@ -1517,6 +2020,7 @@ async fn sim_one_shot_claim_fault_is_atomic_and_records_exact_rows() {
         wakes: wakes.clone(),
         riders: vec![],
         cursor_targets: vec![],
+        ..Default::default()
     };
     r.port.fail_next(MemFault::Claim);
     assert!(
@@ -1556,6 +2060,7 @@ async fn sim_all_fault_hooks_fire_once_and_preserve_atomic_rows() {
         wakes: r.port.wakes_of("cap"),
         riders: vec![],
         cursor_targets: vec![("c/lobby".into(), 1)],
+        ..Default::default()
     };
     r.port.claim(&batch).await.unwrap();
     for fault in [MemFault::Ack, MemFault::AckCursor] {

@@ -185,6 +185,7 @@ pub fn human_stop(tx: &mut Tx<'_>, session: &str) -> Result<Vec<WakeRow>> {
     for w in &pending {
         mark_dropped(tx, w.id, HUMAN_STOP_ERROR)?;
     }
+    crate::cursor_reservations::cancel_active(tx, session)?;
     Ok(pending)
 }
 
@@ -580,6 +581,7 @@ pub fn requeue(tx: &mut Tx<'_>, ids: &[i64]) -> Result<()> {
 /// 代价：`settled_at` 上没有索引，每次调用扫一遍已结的行再排序取前 `limit` 条——按预期规模（保留 7 天、一小时一次）
 /// 可以接受；行数大到这一步显眼时再加 `(state, settled_at)` 索引（那是一次迁移）。
 pub fn prune(tx: &mut Tx<'_>, settled_before_ms: i64, limit: u32) -> Result<usize> {
+    crate::cursor_reservations::guard_prune(tx.conn())?;
     Ok(tx.conn().execute(
         "DELETE FROM wakes WHERE id IN (
            SELECT id FROM wakes

@@ -1181,6 +1181,30 @@ pub async fn sender_label(st: &AppState, m: &Message, loc: Locale) -> PortResult
 }
 
 /// 注入面：各群游标之后、对它可见、不是它自己发的消息（M3a 把缺的游标钉在末尾、本次不返回）。
+/// Reservation-aware unread and its exact captured basis, in the same write transaction.
+pub async fn prepare_injection(
+    st: &AppState,
+    session: &str,
+) -> PortResult<crewd_collab::cursor_reservations::PreparedUnread> {
+    let session = session.to_string();
+    write(st, move |tx| {
+        crewd_collab::cursor_reservations::prepare_unread(tx, &session)
+    })
+    .await
+}
+
+pub async fn commit_injection(
+    st: &AppState,
+    prepared: &crewd_collab::cursor_reservations::Snapshot,
+    targets: Vec<(String, i64)>,
+) -> PortResult<crewd_collab::cursor_reservations::Decision<()>> {
+    let prepared = prepared.clone();
+    write(st, move |tx| {
+        crewd_collab::cursor_reservations::commit_hook(tx, &prepared, &targets)
+    })
+    .await
+}
+
 pub async fn unread(st: &AppState, session: &str) -> PortResult<Vec<(String, Vec<Message>)>> {
     let s = session.to_string();
     write(st, move |tx| crewd_collab::cursors::unread_for(tx, &s)).await

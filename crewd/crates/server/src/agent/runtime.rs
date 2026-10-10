@@ -118,6 +118,12 @@ pub struct AgentRuntime {
     post_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     #[cfg(any(test, feature = "testkit"))]
     pub(crate) hook_log: Mutex<Vec<crate::agent::testkit::HookObservation>>,
+    #[cfg(feature = "testkit")]
+    pub(crate) injection_completions: Mutex<Vec<crate::agent::testkit::InjectionCompletion>>,
+    #[cfg(feature = "testkit")]
+    pub(crate) caller_gates: Mutex<
+        HashMap<(crate::agent::testkit::CallerStage, String), crate::agent::testkit::CallerPause>,
+    >,
 }
 
 impl AgentRuntime {

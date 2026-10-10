@@ -5,6 +5,7 @@
 pub mod asks;
 pub mod channels;
 pub mod crews;
+pub mod cursor_reservations;
 pub mod cursors;
 pub mod directory;
 pub mod hibernate;

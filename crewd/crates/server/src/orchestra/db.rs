@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crewd_collab as collab;
 use crewd_collab::Change;
+use crewd_collab::cursor_reservations as cr;
 use crewd_collab::wakes::{self as cw, Enqueued, WakePriority, WakeRequest, WakeRow};
 use crewd_exec::resume::AgentIdLedger;
 use crewd_proto::{ChannelKind, MemberRef, MentionKind, Message, RestartAnswer, SenderKind};
@@ -495,7 +496,106 @@ impl Port for DbPort {
         self.write(move |tx| cw::claim(tx, &ids).map(|_| ())).await
     }
 
+    async fn claim_reserved(&self, b: &Batch, generation: u64) -> Result<Decision<BatchLease>> {
+        let Some(PreparedSnapshot::Database(prepared)) = &b.prepared else {
+            anyhow::bail!("actual body has no database preparation snapshot");
+        };
+        let prepared = prepared.clone();
+        let windows = prepared.windows_for(&b.cursor_targets)?;
+        let wake_ids: Vec<_> = b.wakes.iter().map(|w| w.id).collect();
+        let rider_ids: Vec<_> = b.riders.iter().map(|w| w.id).collect();
+        let owner = cr::Owner::new(generation)?;
+        let decision = self
+            .write(move |tx| {
+                cr::claim_reserved(tx, &prepared, &windows, &wake_ids, &rider_ids, owner)
+            })
+            .await?;
+        Ok(match decision {
+            Decision::Applied(lease) => Decision::Applied(BatchLease::Database(lease)),
+            Decision::Stale => Decision::Stale,
+            Decision::Busy => Decision::Busy,
+        })
+    }
+
+    async fn settle_batch(&self, b: &Batch, s: Settle, now: Ms) -> Result<Decision<()>> {
+        if let Some(BatchLease::Database(lease)) = &b.lease {
+            let lease = lease.clone();
+            return self
+                .write(move |tx| {
+                    let fate = match &s {
+                        Settle::Requeue => cr::Terminal::Requeue,
+                        Settle::Dropped { error } => cr::Terminal::Dropped(error),
+                        Settle::Delivered => {
+                            return Err(crewd_store::StoreError::Invalid(
+                                "reserved Delivered requires actual delivery ack".into(),
+                            )
+                            .into());
+                        }
+                    };
+                    cr::settle_reserved(tx, &lease, fate)
+                })
+                .await;
+        }
+        if b.prepared.is_some() {
+            anyhow::bail!("prepared body has no claimed lease");
+        }
+        self.settle(&b.ids(), s, now).await?;
+        Ok(Decision::Applied(()))
+    }
+
     async fn ack(&self, b: &Batch, a: Ack) -> Result<Acked> {
+        if let Some(BatchLease::Database(lease)) = &b.lease {
+            let lease = lease.clone();
+            return match a {
+                Ack::Delivered { riders } => {
+                    let decision = self
+                        .write(move |tx| {
+                            let riders = match &riders {
+                                Riders::Release => cw::Riders::Release,
+                                Riders::Drop(why) => cw::Riders::Drop(why),
+                            };
+                            cr::ack_reserved_delivered(tx, &lease, riders)
+                        })
+                        .await?;
+                    Ok(match decision {
+                        Decision::Applied(()) => Acked {
+                            origins: acked_origins(b),
+                            ..Default::default()
+                        },
+                        _ => Acked {
+                            stale: true,
+                            ..Default::default()
+                        },
+                    })
+                }
+                Ack::Failed { error, now, jitter } => {
+                    let decision = self
+                        .write(move |tx| {
+                            cr::ack_reserved_failed(tx, &lease, &error, |n| {
+                                crewd_wake::queue::after_failure(n, now, jitter).map(|t| t.0)
+                            })
+                        })
+                        .await?;
+                    let Decision::Applied(failed) = decision else {
+                        return Ok(Acked {
+                            stale: true,
+                            ..Default::default()
+                        });
+                    };
+                    let mut out = Acked::default();
+                    for f in failed.into_iter().filter(|f| !f.cancelled) {
+                        match f.retry_at_ms {
+                            Some(t) => out.retried.push((f.id, Ms(t))),
+                            None => out.gave_up.push(f.id),
+                        }
+                    }
+                    Ok(out)
+                }
+            };
+        }
+        if b.prepared.is_some() {
+            anyhow::bail!("prepared delivery ack has no claimed lease");
+        }
         let session = b.session.clone();
         let wake_ids: Vec<i64> = b.wakes.iter().map(|w| w.id).collect();
         let rider_ids: Vec<i64> = b.riders.iter().map(|w| w.id).collect();
@@ -540,7 +640,7 @@ impl Port for DbPort {
     async fn fail_inflight(&self, error: &str, now: Ms) -> Result<Reclaimed> {
         let error = error.to_string();
         self.write(move |tx| {
-            let failed = cw::reset_inflight(tx, &error, |n| {
+            let failed = cr::reset_inflight_and_reservations(tx, &error, |n| {
                 crewd_wake::queue::after_restart(n, now).map(|t| t.0)
             })?;
             let mut out = Reclaimed::default();
@@ -847,27 +947,72 @@ impl Port for DbPort {
 
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
         let session = session.to_string();
+        #[cfg(feature = "testkit")]
+        let gate_session = session.clone();
         let ids: Vec<i64> = batch.iter().map(|w| w.id).collect();
         let now_ms = crewd_store::now_ms();
-        let (text, dropped, deferred, cursor_targets) = self
-            .read(move |c| {
+        let (text, dropped, deferred, cursor_targets, prepared, already_injected) = self
+            .write(move |tx| {
+                // Normalize absent cursors and leading-own prefixes only with the shared
+                // reservation-aware scanner. Rendering and snapshot stay in this same job.
+                cr::prepare_unread(tx, &session)?;
+                let c = tx.conn();
                 // `by_ids` 按 id 排；正文的顺序要跟这一批（按优先级选好的）一致。
                 let mut rows: Vec<WakeRow> = cw::by_ids(c, &ids)?;
                 rows.sort_by_key(|r| ids.iter().position(|i| *i == r.id));
                 let locale = collab::settings::locale(c)?;
                 // 报错（如账本坏了）是 fail-loud：原样上抛，Core 记日志、这批留在 pending，不在这里重试。
+                let original = collab::render::build_batch(c, &session, locale, &rows, now_ms)?;
+                let mut already = Vec::new();
+                for row in &rows {
+                    if row.state != cw::WakeState::Pending
+                        || row.kind != cw::WakeKind::Message
+                        || original.unusable.iter().any(|(id, _)| *id == row.id)
+                    {
+                        continue;
+                    }
+                    if let Some(id) = row.source.strip_prefix("msg:")
+                        && let Some(m) = crewd_store::messages::get(c, id)?
+                        && collab::cursors::cursor(c, &session, &m.channel_id)?
+                            .is_some_and(|base| base >= m.seq)
+                    {
+                        already.push(row.id);
+                    }
+                }
+                // The renderer may lower to min queued seq. Remove only actually announced,
+                // eligible pending rows atomically, then render afresh; never claim the old body.
+                if !already.is_empty() {
+                    cw::mark_delivered(tx, &already)?;
+                }
+                rows.retain(|r| !already.contains(&r.id));
+                let c = tx.conn();
                 let b = collab::render::build_batch(c, &session, locale, &rows, now_ms)?;
                 let text = collab::render::wake_text(locale, &b);
+                let targets = b.cursor_targets();
+                let channels: Vec<_> = targets.iter().map(|(ch, _)| ch.clone()).collect();
+                let prepared = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
                 // R6 / S45：`deferred` 随这批走（Core 一起 claim）；`cursor_targets()` 是送到后游标推到哪。
                 Ok((
                     text,
                     b.unusable.clone(),
                     b.deferred.clone(),
-                    b.cursor_targets(),
+                    targets,
+                    prepared,
+                    already,
                 ))
             })
             .await?;
-        let dropped_ids: Vec<i64> = dropped.iter().map(|(id, _)| *id).collect();
+        #[cfg(feature = "testkit")]
+        crate::agent::testkit::pause_caller(
+            &self.state,
+            crate::agent::testkit::CallerStage::WakeRendered,
+            &gate_session,
+            cursor_targets.clone(),
+            text.clone(),
+        )
+        .await;
+        let mut dropped_ids: Vec<i64> = dropped.iter().map(|(id, _)| *id).collect();
+        dropped_ids.extend(already_injected);
         if !dropped.is_empty() {
             self.write(move |tx| {
                 for (id, why) in &dropped {
@@ -882,6 +1027,7 @@ impl Port for DbPort {
             dropped: dropped_ids,
             deferred,
             cursor_targets,
+            prepared: Some(PreparedSnapshot::Database(prepared)),
         })
     }
 
@@ -1761,6 +1907,7 @@ mod tests {
             wakes: port.pending("w-1").await.unwrap(),
             riders: vec![],
             cursor_targets: vec![("c-1/lobby".into(), m.seq)],
+            ..Default::default()
         };
         port.claim(&b).await.unwrap();
         let acked = port
@@ -2197,6 +2344,537 @@ mod tests {
             r.drain().await;
             r
         }
+    }
+
+    // White-box Core/inbox + real DbPort proof, not a public helper E2E:
+    // real rendering supplies a cursor-only body; its synthetic unowned trigger is
+    // disposed before admission, so the claimed batch has genuinely zero wake IDs.
+    impl StopDbRig {
+        async fn cursor_body(&self) -> (Batch, String, i64) {
+            let m = post_as(
+                &self.state,
+                collab::Sender::Human,
+                "c-1/lobby",
+                "合成零行积压",
+                &[],
+            )
+            .await;
+            let id = self
+                .port
+                .enqueue(new_wake(
+                    "w-1",
+                    WakeKind::Message,
+                    source::message(&m.id),
+                    Priority::Human,
+                    HUMAN,
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            let wakes = self.port.pending("w-1").await.unwrap();
+            let rendered = self.port.render_wake("w-1", &wakes).await.unwrap();
+            assert!(
+                rendered
+                    .cursor_targets
+                    .contains(&("c-1/lobby".into(), m.seq))
+            );
+            self.port
+                .settle(
+                    &[id],
+                    Settle::Dropped {
+                        error: "synthetic trigger disposed".into(),
+                    },
+                    self.core.now(),
+                )
+                .await
+                .unwrap();
+            let b = Batch {
+                session: "w-1".into(),
+                cursor_targets: rendered.cursor_targets,
+                prepared: rendered.prepared,
+                ..Default::default()
+            };
+            assert!(b.ids().is_empty() && b.has_work());
+            (b, rendered.text, m.seq)
+        }
+
+        async fn held_cursor(&self) -> bool {
+            self.state
+                .db
+                .call(|s| {
+                    cr::snapshot(
+                        s.conn(),
+                        "w-1",
+                        &["c-1/lobby".into()],
+                        crewd_store::now_ms(),
+                    )
+                    .map(|p| p.blocks_channel("c-1/lobby"))
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn close(mut self) {
+            use super::super::core::Input;
+            self.exec.lock().hang_on_stop.clear();
+            let (tx, closed) = tokio::sync::oneshot::channel();
+            self.core.handle(Input::Shutdown(tx)).await;
+            self.drain().await;
+            assert!(
+                self.core.live.is_empty() && self.core.starting.is_empty(),
+                "normal controlled terminal drain"
+            );
+            assert!(self.core.shutdown_done());
+            tokio::time::timeout(std::time::Duration::from_secs(2), closed)
+                .await
+                .unwrap()
+                .unwrap();
+            self.exec.lock().events.clear();
+            self.drain().await; // executor streams finish; no real child was spawned
+            let db = self.state.db.clone();
+            drop(self.core);
+            drop(self.port);
+            drop(self.state);
+            tokio::task::spawn_blocking(move || db.shutdown())
+                .await
+                .unwrap();
+        }
+    }
+
+    // All cases below use real SQLite reservations and actual Core dispatch, with
+    // controlled executor futures/events. They are not public actor/helper E2E.
+    async fn launch_zero_id_body(r: &mut StopDbRig) -> (Batch, i64) {
+        let (body, text, seq) = r.cursor_body().await;
+        let row = r.port.session("w-1").await.unwrap().unwrap();
+        let executor = r.core.execs.get("claude").unwrap();
+        assert!(
+            r.core
+                .launch_carrying(row, executor, Some(text), body)
+                .await
+                .unwrap()
+        );
+        (r.core.starting["w-1"].batch.clone(), seq)
+    }
+
+    #[derive(Clone, Copy)]
+    enum ZeroStarting {
+        Failed,
+        BinaryReplaced,
+        StopFailed,
+        HaltFailed,
+    }
+
+    async fn zero_id_starting_terminal_case(kind: ZeroStarting) {
+        use super::super::{core::Input, exec::LaunchError};
+        let mut r = StopDbRig::new().await;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        r.exec
+            .lock()
+            .held_launches
+            .insert("w-1".into(), (entered_tx, release_rx));
+        let (batch, _) = launch_zero_id_body(&mut r).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let held_before = r.held_cursor().await;
+        let no_process_before = r.exec.launches("w-1").is_empty();
+        let mut shutdown = None;
+        match kind {
+            ZeroStarting::StopFailed => {
+                r.stop().await.unwrap();
+            }
+            ZeroStarting::HaltFailed => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                r.core.handle(Input::Shutdown(tx)).await;
+                shutdown = Some(rx);
+            }
+            _ => {}
+        }
+        let held_while_terminal_unresolved = r.held_cursor().await;
+        let error = if matches!(kind, ZeroStarting::BinaryReplaced) {
+            LaunchError::BinaryReplaced
+        } else {
+            LaunchError::Failed("synthetic held zero-ID launch failure".into())
+        };
+        release_tx.send(Err(error)).unwrap();
+        r.drain().await;
+        if let Some(rx) = shutdown {
+            assert!(r.core.shutdown_done());
+            rx.await.unwrap();
+        }
+        let held_after = r.held_cursor().await;
+        let cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let no_process_after = r.core.live.is_empty()
+            && r.core.starting.is_empty()
+            && r.exec.launches("w-1").is_empty();
+        let receipt = r
+            .port
+            .ack(
+                &batch,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap();
+        r.close().await;
+        assert!(held_before && held_while_terminal_unresolved && no_process_before);
+        assert!(!held_after && no_process_after);
+        assert_eq!(
+            cursor_after, 0,
+            "failed/refused/cancelled body was never delivered"
+        );
+        assert!(
+            receipt.stale,
+            "old exact lease retired after actual future terminal"
+        );
+    }
+
+    #[tokio::test]
+    async fn s44_zero_id_starting_actual_failed_future_releases_exact_owner() {
+        zero_id_starting_terminal_case(ZeroStarting::Failed).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_starting_actual_binary_refusal_releases_exact_owner() {
+        zero_id_starting_terminal_case(ZeroStarting::BinaryReplaced).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_starting_stop_retains_owner_until_actual_failed_future() {
+        zero_id_starting_terminal_case(ZeroStarting::StopFailed).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_starting_halt_retains_owner_until_actual_failed_future() {
+        zero_id_starting_terminal_case(ZeroStarting::HaltFailed).await;
+    }
+
+    #[derive(Clone, Copy)]
+    enum ZeroStop {
+        Delivered,
+        Failed,
+        NoReceipt,
+    }
+
+    async fn zero_id_stop_terminal_case(kind: ZeroStop) {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, ExitStatusKind, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let (batch, seq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap();
+        let held_after_stop = r.held_cursor().await;
+        let still_physical = r.core.live.get("w-1").is_some_and(|l| l.stopping);
+        match kind {
+            ZeroStop::Delivered | ZeroStop::Failed => {
+                r.exec.emit(
+                    "w-1",
+                    SessionEvent::Delivery {
+                        id: BRIEF_DELIVERY_ID,
+                        subject: Subject::Brief,
+                        outcome: if matches!(kind, ZeroStop::Delivered) {
+                            DeliveryOutcome::Delivered
+                        } else {
+                            DeliveryOutcome::Unsubmitted("synthetic stopped body failure".into())
+                        },
+                    },
+                );
+                r.drain().await;
+            }
+            ZeroStop::NoReceipt => {}
+        }
+        let held_after_receipt = r.held_cursor().await;
+        let cursor_after_receipt = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Exited(ExitInfo {
+                status: ExitStatusKind::Code(0),
+                stopped_by_user: true,
+                hit_limit: false,
+            }),
+        );
+        r.drain().await;
+        let held_after_exit = r.held_cursor().await;
+        let cursor_after_exit = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let no_live = r.core.live.is_empty() && r.core.starting.is_empty();
+        let receipt = r
+            .port
+            .ack(
+                &batch,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap();
+        r.close().await;
+        assert!(
+            held_after_stop && still_physical,
+            "Stop alone cannot release a physical owner"
+        );
+        assert_eq!(held_after_receipt, !matches!(kind, ZeroStop::Delivered));
+        let expected_cursor = if matches!(kind, ZeroStop::Delivered) {
+            seq
+        } else {
+            0
+        };
+        assert_eq!(cursor_after_receipt, expected_cursor);
+        assert!(!held_after_exit && no_live && receipt.stale);
+        assert_eq!(
+            cursor_after_exit, expected_cursor,
+            "Exit must not reinterpret confirmed Delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn s44_zero_id_stop_late_actual_delivered_commits_before_exit() {
+        zero_id_stop_terminal_case(ZeroStop::Delivered).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_stop_failed_receipt_keeps_owner_until_actual_exit() {
+        zero_id_stop_terminal_case(ZeroStop::Failed).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_stop_without_receipt_releases_only_at_actual_exit() {
+        zero_id_stop_terminal_case(ZeroStop::NoReceipt).await;
+    }
+
+    #[derive(Clone, Copy)]
+    enum ZeroExit {
+        Halt,
+        Quota,
+        Natural,
+        StreamClosed,
+    }
+
+    async fn zero_id_exit_terminal_case(kind: ZeroExit) {
+        use crewd_exec::session::{ExitInfo, ExitStatusKind, SessionEvent};
+        let mut r = StopDbRig::new().await;
+        let (batch, _) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let mut held_while_halting = None;
+        if matches!(kind, ZeroExit::Halt) {
+            r.exec.lock().hang_on_stop.insert("w-1".into());
+            r.core.halt("w-1");
+            held_while_halting = Some(r.held_cursor().await);
+        }
+        if matches!(kind, ZeroExit::StreamClosed) {
+            r.exec.end_stream("w-1"); // actual sender close, no fabricated StreamEnded input
+        } else {
+            r.exec.emit(
+                "w-1",
+                SessionEvent::Exited(ExitInfo {
+                    status: ExitStatusKind::Code(1),
+                    stopped_by_user: false,
+                    hit_limit: matches!(kind, ZeroExit::Quota),
+                }),
+            );
+        }
+        r.drain().await;
+        let held_after = r.held_cursor().await;
+        let cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let no_live = r.core.live.is_empty() && r.core.starting.is_empty();
+        let receipt = r
+            .port
+            .ack(
+                &batch,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap();
+        r.close().await;
+        assert!(held_while_halting.is_none_or(|held| held));
+        assert!(!held_after && no_live && receipt.stale);
+        assert_eq!(
+            cursor_after, 0,
+            "no successful body receipt advances the cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn s44_zero_id_halt_releases_only_after_actual_exit() {
+        zero_id_exit_terminal_case(ZeroExit::Halt).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_quota_exit_releases_exact_owner() {
+        zero_id_exit_terminal_case(ZeroExit::Quota).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_natural_exit_releases_exact_owner() {
+        zero_id_exit_terminal_case(ZeroExit::Natural).await;
+    }
+    #[tokio::test]
+    async fn s44_zero_id_actual_stream_sender_close_releases_exact_owner() {
+        zero_id_exit_terminal_case(ZeroExit::StreamClosed).await;
+    }
+
+    #[tokio::test]
+    async fn s44_zero_id_reopened_boot_fences_old_lease_from_new_owner() {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let (old, _) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let old_held = r.held_cursor().await;
+        let mut r = r.reboot().await; // real Db close/reopen and ordinary Core boot reset
+        let held_after_boot = r.held_cursor().await;
+        let (new, seq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let held_new = r.held_cursor().await;
+        let different_exact_owner = old.lease != new.lease;
+        // Actor generations are local to a Core incarnation, so do not fabricate
+        // a cross-restart generation mismatch. The durable exact lease is the fence.
+        let old_receipt = r
+            .port
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap();
+        let held_after_old = r.held_cursor().await;
+        let cursor_after_old = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        r.drain().await;
+        let held_after_new = r.held_cursor().await;
+        let cursor_after_new = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.close().await;
+        assert!(old_held && !held_after_boot && held_new && different_exact_owner);
+        assert!(old_receipt.stale && held_after_old);
+        assert_eq!(cursor_after_old, 0);
+        assert!(!held_after_new);
+        assert_eq!(cursor_after_new, seq);
+    }
+
+    #[tokio::test]
+    async fn s44_zero_id_actual_stop_exit_sql_failure_retains_owner_until_exact_retry() {
+        use super::super::core::{CollabFact, Input};
+        use crewd_exec::session::{ExitInfo, ExitStatusKind, SessionEvent};
+        let mut r = StopDbRig::new().await;
+        let (body, text, seq) = r.cursor_body().await;
+        let row = r.port.session("w-1").await.unwrap().unwrap();
+        let exec = r.core.execs.get("claude").unwrap();
+        assert!(
+            r.core
+                .launch_carrying(row, exec, Some(text), body)
+                .await
+                .unwrap()
+        );
+        r.drain().await;
+        let old = r.core.live["w-1"].inflight.as_ref().unwrap().batch.clone();
+        r.exec.lock().hang_on_stop.insert("w-1".into());
+        r.stop().await.unwrap(); // actual durable cancellation, but process is unresolved
+        let held_before_exit = r.held_cursor().await;
+        r.state
+            .db
+            .call(|s| {
+                s.conn().execute_batch(
+                    "CREATE TRIGGER s44_terminal_meta_fault BEFORE UPDATE ON meta
+             WHEN OLD.key='cursor.reservation.v1.w-1'
+             BEGIN SELECT RAISE(ABORT, 'synthetic exact terminal release fault'); END;",
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Exited(ExitInfo {
+                status: ExitStatusKind::Code(0),
+                stopped_by_user: true,
+                hit_limit: false,
+            }),
+        );
+        r.drain().await; // actual matching Exited; original atomic fate fails
+        let dead = !r.core.live.contains_key("w-1");
+        let held_after_failure = r.held_cursor().await;
+        let fresh = r.enqueue_only("fresh-after-zero-terminal").await;
+        for _ in 0..2 {
+            r.core
+                .handle(Input::Collab(CollabFact::WakeEnqueued {
+                    session: "w-1".into(),
+                }))
+                .await;
+            r.drain().await;
+        }
+        let launches_while_failed = r.exec.launches("w-1").len();
+        let fresh_before = r.row(fresh).await;
+        let cursor_before = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("DROP TRIGGER s44_terminal_meta_fault")
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        r.core
+            .handle(Input::Collab(CollabFact::WakeEnqueued {
+                session: "w-1".into(),
+            }))
+            .await;
+        r.drain().await;
+        let new_running = r.core.live.contains_key("w-1");
+        let launches_after = r.exec.launches("w-1").len();
+        let fresh_after = r.row(fresh).await;
+        let stale_old = r
+            .port
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await
+            .unwrap()
+            .stale;
+        let untouched_after_old = r.row(fresh).await;
+        let cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.close().await;
+        assert!(held_before_exit && dead && held_after_failure);
+        assert_eq!(
+            launches_while_failed, 1,
+            "persistent SQL error cannot admit a new process"
+        );
+        assert_eq!(
+            (fresh_before.state, fresh_before.attempts),
+            (cw::WakeState::Pending, 0)
+        );
+        assert!(
+            cursor_before < seq && cursor_after == cursor_before,
+            "no unconfirmed cursor advance"
+        );
+        assert!(
+            new_running && launches_after == 2,
+            "exact same-fate retry admits fresh work only after commit"
+        );
+        assert_eq!(
+            (fresh_after.state, fresh_after.attempts),
+            (cw::WakeState::Inflight, 1)
+        );
+        assert!(stale_old);
+        assert_eq!(
+            (untouched_after_old.state, untouched_after_old.attempts),
+            (fresh_after.state, fresh_after.attempts)
+        );
     }
 
     #[tokio::test]

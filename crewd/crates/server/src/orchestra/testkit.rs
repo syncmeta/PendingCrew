@@ -81,6 +81,9 @@ pub struct MemState {
     pub fault_hits: Vec<FaultHit>,
     pub rescues: Vec<Rescue>,
     pub op_results: Vec<OpResult>,
+    pub reservations: BTreeMap<String, Batch>,
+    pub reservation_revision: BTreeMap<String, u64>,
+    pub next_reservation: u64,
     pub sessions: BTreeMap<String, SessionRow>,
     pub wakes: Vec<QueuedWake>,
     pub latches: Vec<Latch>,
@@ -752,6 +755,135 @@ impl Port for MemPort {
         Ok(())
     }
 
+    async fn claim_reserved(&self, b: &Batch, generation: u64) -> Result<Decision<BatchLease>> {
+        anyhow::ensure!(generation > 0, "zero executor generation");
+        let Some(PreparedSnapshot::Memory {
+            session,
+            revision,
+            bases,
+            surface,
+            messages,
+        }) = &b.prepared
+        else {
+            anyhow::bail!("missing memory preparation");
+        };
+        anyhow::ensure!(session == &b.session, "snapshot session mismatch");
+        anyhow::ensure!(b.has_work(), "empty reservation");
+        anyhow::ensure!(
+            b.cursor_targets
+                .iter()
+                .all(|(ch, top)| bases.iter().any(|(c, base)| c == ch && top > base)),
+            "invalid actual window"
+        );
+        let mut st = self.lock();
+        if st.reservations.contains_key(session) {
+            return Ok(Decision::Busy);
+        }
+        if *revision != *st.reservation_revision.get(session).unwrap_or(&0)
+            || surface
+                .iter()
+                .any(|(ch, allowed)| *allowed != memory_eligible(&st, session, ch))
+            || surface.iter().any(|(_, allowed)| !allowed)
+            || bases.iter().any(|(ch, base)| {
+                st.cursors
+                    .get(&(session.clone(), ch.clone()))
+                    .copied()
+                    .unwrap_or(0)
+                    != *base
+            })
+            || messages.iter().any(|(m, text)| {
+                st.messages.get(&(m.at.channel.clone(), m.at.seq))
+                    != Some(&(m.clone(), text.clone()))
+            })
+            || b.cursor_targets.iter().any(|(ch, top)| {
+                let base = bases
+                    .iter()
+                    .find(|(c, _)| c == ch)
+                    .map(|(_, b)| *b)
+                    .unwrap_or(0);
+                let current: Vec<_> = st
+                    .messages
+                    .iter()
+                    .filter(|((c, seq), _)| c == ch && *seq > base && *seq <= *top)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                let prepared: Vec<_> = messages
+                    .iter()
+                    .filter(|(m, _)| &m.at.channel == ch)
+                    .cloned()
+                    .collect();
+                current != prepared
+            })
+        {
+            return Ok(Decision::Stale);
+        }
+        injected(&mut st, MemFault::Claim, &b.ids())?;
+        if let Some(id) = st.claim_race.take() {
+            apply_event(&mut st.wakes, &[id], lifecycle::WakeEvent::Drop)?;
+            mark_settled(&mut st);
+            return Ok(Decision::Stale);
+        }
+        let floors = st.human_stop_floors.clone();
+        apply_with_stop_floors(
+            &mut st.wakes,
+            &floors,
+            &b.ids(),
+            lifecycle::WakeEvent::Claim,
+        )?;
+        st.next_reservation = st
+            .next_reservation
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("lease exhausted"))?;
+        let lease = BatchLease::Memory {
+            session: session.clone(),
+            token: st.next_reservation,
+            generation,
+        };
+        let mut held = b.clone();
+        held.lease = Some(lease.clone());
+        st.reservations.insert(session.clone(), held);
+        *st.reservation_revision.entry(session.clone()).or_default() += 1;
+        st.op_results.push(OpResult {
+            ids: b.ids(),
+            fault_hit: None,
+        });
+        Ok(Decision::Applied(lease))
+    }
+
+    async fn settle_batch(&self, b: &Batch, fate: Settle, _now: Ms) -> Result<Decision<()>> {
+        let mut st = self.lock();
+        let held = match &b.lease {
+            Some(BatchLease::Memory { session, .. }) => match st.reservations.get(session) {
+                Some(held) if held.lease == b.lease => held.clone(),
+                _ => return Ok(Decision::Stale),
+            },
+            _ => {
+                anyhow::ensure!(b.prepared.is_none(), "prepared batch without lease");
+                b.clone()
+            }
+        };
+        injected(&mut st, MemFault::Settle, &held.ids())?;
+        let floors = st.human_stop_floors.clone();
+        apply_with_stop_floors(&mut st.wakes, &floors, &held.ids(), fate.event())?;
+        mark_settled(&mut st);
+        if let Settle::Dropped { error } = &fate {
+            for id in held.ids() {
+                note_error(&mut st, id, error);
+            }
+        }
+        if held.lease.is_some() {
+            st.reservations.remove(&held.session);
+            *st.reservation_revision
+                .entry(held.session.clone())
+                .or_default() += 1;
+        }
+        st.op_results.push(OpResult {
+            ids: held.ids(),
+            fault_hit: None,
+        });
+        Ok(Decision::Applied(()))
+    }
+
     async fn claim(&self, b: &Batch) -> Result<()> {
         let mut st = self.lock();
         injected(&mut st, MemFault::Claim, &b.ids())?;
@@ -777,6 +909,24 @@ impl Port for MemPort {
     /// 同库的一个事务：在副本上做完全部步骤，任何一步出错就丢掉副本（一行都不改、游标不动）。
     async fn ack(&self, b: &Batch, a: Ack) -> Result<Acked> {
         let mut st = self.lock();
+        let held;
+        let b = if let Some(BatchLease::Memory { session, .. }) = &b.lease {
+            match st.reservations.get(session) {
+                Some(current) if current.lease == b.lease => {
+                    held = current.clone();
+                    &held
+                }
+                _ => {
+                    return Ok(Acked {
+                        stale: true,
+                        ..Default::default()
+                    });
+                }
+            }
+        } else {
+            anyhow::ensure!(b.prepared.is_none(), "prepared batch without lease");
+            b
+        };
         injected(&mut st, MemFault::Ack, &b.ids())?;
         let entry_rows: Vec<_> = st
             .wakes
@@ -832,6 +982,12 @@ impl Port for MemPort {
                 }
                 st.wakes = wakes;
                 st.cursors = cursors;
+                if b.lease.is_some() {
+                    st.reservations.remove(&b.session);
+                }
+                *st.reservation_revision
+                    .entry(b.session.clone())
+                    .or_default() += 1;
                 mark_settled(&mut st);
                 // 同 collab `ack_delivered(.., Riders::Drop(why), ..)`：作废的随批行记下原因。
                 if let Riders::Drop(why) = &riders {
@@ -887,6 +1043,12 @@ impl Port for MemPort {
                     }
                 }
                 st.wakes = wakes;
+                if b.lease.is_some() {
+                    st.reservations.remove(&b.session);
+                }
+                *st.reservation_revision
+                    .entry(b.session.clone())
+                    .or_default() += 1;
                 mark_settled(&mut st);
                 // 同 collab `ack_failed`：每一行记下这次的原因。
                 for id in b.ids() {
@@ -961,6 +1123,11 @@ impl Port for MemPort {
             }
         }
         st.wakes = wakes;
+        let sessions: Vec<_> = st.reservations.keys().cloned().collect();
+        st.reservations.clear();
+        for session in sessions {
+            *st.reservation_revision.entry(session).or_default() += 1;
+        }
         mark_settled(&mut st);
         for id in &ids {
             let why = if st
@@ -1205,6 +1372,13 @@ impl Port for MemPort {
         }
         let mut out = Vec::new();
         for ch in chans {
+            if st
+                .reservations
+                .get(session)
+                .is_some_and(|b| b.cursor_targets.iter().any(|(channel, _)| channel == &ch))
+            {
+                continue;
+            }
             let key = (session.to_string(), ch.clone());
             let Some(after) = st.cursors.get(&key).copied() else {
                 let end = Self::end_of(&st, &ch);
@@ -1267,6 +1441,36 @@ impl Port for MemPort {
         {
             anyhow::bail!("{e}");
         }
+        let already: Vec<_> = batch
+            .iter()
+            .filter(|w| w.kind == WakeKind::Message && w.state == WakeState::Pending)
+            .filter(|w| {
+                w.msg.as_ref().is_some_and(|m| {
+                    st.messages.contains_key(&(m.channel.clone(), m.seq))
+                        && st
+                            .cursors
+                            .get(&(session.into(), m.channel.clone()))
+                            .is_some_and(|base| *base >= m.seq)
+                })
+            })
+            .map(|w| w.id)
+            .collect();
+        if !already.is_empty() {
+            let floors = st.human_stop_floors.clone();
+            apply_with_stop_floors(
+                &mut st.wakes,
+                &floors,
+                &already,
+                lifecycle::WakeEvent::Deliver,
+            )?;
+            mark_settled(&mut st);
+        }
+        let remaining: Vec<_> = batch
+            .iter()
+            .filter(|w| !already.contains(&w.id))
+            .cloned()
+            .collect();
+        let batch = remaining.as_slice();
         if let Some(cap) = st.window_cap {
             let cap = cap.max(1);
             let mut ranges: BTreeMap<String, (i64, i64)> = BTreeMap::new();
@@ -1326,11 +1530,14 @@ impl Port for MemPort {
                 .collect();
             st.rendered_windows
                 .push((batch.iter().map(|w| w.id).collect(), deferred.clone()));
+            let targets: Vec<_> = tops.into_iter().collect();
+            let prepared = memory_preparation(&st, session, &targets);
             return Ok(Rendered {
+                prepared: Some(prepared),
                 text: parts.join("\n---\n"),
-                dropped: vec![],
+                dropped: already.clone(),
                 deferred,
-                cursor_targets: tops.into_iter().collect(),
+                cursor_targets: targets,
             });
         }
         let deferred: Vec<i64> = batch
@@ -1371,17 +1578,69 @@ impl Port for MemPort {
             let top = tops.entry(ch).or_insert(seq);
             *top = (*top).max(seq);
         }
+        let targets: Vec<_> = tops.into_iter().collect();
+        let prepared = memory_preparation(&st, session, &targets);
         Ok(Rendered {
+            prepared: Some(prepared),
             text: parts.join("\n---\n"),
-            dropped: vec![],
+            dropped: already.clone(),
             deferred,
-            cursor_targets: tops.into_iter().collect(),
+            cursor_targets: targets,
         })
     }
 
     fn publish(&self, e: OrchestraEvent) {
         self.lock().events.push(e);
     }
+}
+
+fn memory_preparation(st: &MemState, session: &str, targets: &[(String, i64)]) -> PreparedSnapshot {
+    let bases: Vec<_> = targets
+        .iter()
+        .map(|(ch, _)| {
+            (
+                ch.clone(),
+                st.cursors
+                    .get(&(session.into(), ch.clone()))
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect();
+    let messages = targets
+        .iter()
+        .flat_map(|(ch, top)| {
+            let base = st
+                .cursors
+                .get(&(session.into(), ch.clone()))
+                .copied()
+                .unwrap_or(0);
+            st.messages
+                .iter()
+                .filter(move |((channel, seq), _)| channel == ch && *seq > base && *seq <= *top)
+                .map(|(_, value)| value.clone())
+        })
+        .collect();
+    PreparedSnapshot::Memory {
+        session: session.into(),
+        revision: *st.reservation_revision.get(session).unwrap_or(&0),
+        bases,
+        surface: targets
+            .iter()
+            .map(|(ch, _)| (ch.clone(), memory_eligible(st, session, ch)))
+            .collect(),
+        messages,
+    }
+}
+
+fn memory_eligible(st: &MemState, session: &str, channel: &str) -> bool {
+    MemPort::ctx_of(st, channel, st.now).is_some_and(|ctx| {
+        ctx.session_members.iter().any(|s| s == session)
+            || ctx
+                .listens
+                .iter()
+                .any(|l| l.session == session && l.until > st.now)
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -1393,12 +1652,20 @@ pub struct LaunchRecord {
     pub token: String,
 }
 
+pub type HeldLaunch = (
+    oneshot::Sender<()>,
+    oneshot::Receiver<Result<(), LaunchError>>,
+);
+
 #[derive(Default)]
 pub struct StandInState {
     pub launches: Vec<LaunchRecord>,
     pub launch_outcomes: Vec<(String, bool)>,
     /// 依次让下几次 launch 失败（原因）。
     pub fail_next: Vec<String>,
+    /// Opt-in one-shot actual launch future gate. Taken before await; defaults to none.
+    /// The entered receipt precedes process creation; release Err creates no handle/stream.
+    pub held_launches: BTreeMap<String, HeldLaunch>,
     pub sends: BTreeMap<String, Vec<(u64, String)>>,
     pub raws: BTreeMap<String, Vec<Vec<u8>>>,
     /// 每次 `raw` 的时刻（与 `raws` 一一对应）：量 nudge 键之间的间隔。
@@ -1650,6 +1917,25 @@ impl Executor for StandIn {
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         let st = self.0.clone();
         Box::pin(async move {
+            let held = {
+                st.lock()
+                    .expect("测试器材锁中毒")
+                    .held_launches
+                    .remove(&req.session_id)
+            };
+            if let Some((entered, release)) = held {
+                let _ = entered.send(());
+                let result = release.await.unwrap_or_else(|_| {
+                    Err(LaunchError::Failed("synthetic launch gate closed".into()))
+                });
+                if let Err(error) = result {
+                    st.lock()
+                        .expect("测试器材锁中毒")
+                        .launch_outcomes
+                        .push((req.session_id.clone(), false));
+                    return Err(error);
+                }
+            }
             let mut s = st.lock().expect("测试器材锁中毒");
             if !s.fail_next.is_empty() {
                 let why = s.fail_next.remove(0);
@@ -2593,6 +2879,7 @@ mod self_tests {
             wakes: pick(wakes),
             riders: pick(riders),
             cursor_targets: targets.iter().map(|(c, s)| (c.to_string(), *s)).collect(),
+            ..Default::default()
         }
     }
 

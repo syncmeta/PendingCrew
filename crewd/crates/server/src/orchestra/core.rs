@@ -18,6 +18,12 @@
 //! 那批已经交出去了）；② crewd 被杀 / 崩在 claim 与结算之间（裁定 17，至少一次）；③ actor panic（C25：serve 随之
 //! 非零退出，下次启动回收）。运行期没有「没人拿着的 inflight」扫描：①只在库出错时发生，那时扫描也写不进去。
 //!
+//! S44 exact leases add a bounded retained obligation for a known terminal Failed /
+//! stop-exit / launch-error fate whose atomic transaction failed. A later tick or new
+//! claim retries that same lease/fate once; persistent errors keep ownership. Confirmed
+//! Delivered ack errors retain the prior orphan-to-boot boundary; they are never
+//! reclassified as Failed/Dropped merely because the process later exits.
+//!
 //! **写进会话的先后**：投递、nudge 与回答待决策框都排进 actor 自己的每会话队列 `Live::writes`（[`Write`]），按 actor
 //! 收下的先后一个个写（[`Core::pump_writes`]）；回答（一串键）交给执行器的 `ExecHandle::answer`——键之间的间隔与
 //! 「每一下之前回读屏幕、框换了就停手」都在执行器里（T10d），编排层**不 sleep**——派生任务只等它的结果，结果以
@@ -676,6 +682,17 @@ pub struct Raised {
     pub fingerprint: String,
 }
 
+#[derive(Clone)]
+struct TerminalObligation {
+    batch: Batch,
+    fate: TerminalFate,
+}
+#[derive(Clone)]
+enum TerminalFate {
+    Settle(Settle),
+    Failed { error: String, now: Ms, jitter: f64 },
+}
+
 pub struct Core<P: Port> {
     pub(crate) port: Arc<P>,
     pub(crate) execs: Executors,
@@ -690,6 +707,9 @@ pub struct Core<P: Port> {
     /// 正在建 worktree 的「起机长」请求所在的机组：同一机组的第二个机长此时就该被拒。
     pub(crate) captain_pending: BTreeSet<String>,
     pub(crate) next_generator: u64,
+    // Exact terminal evidence survives a failed atomic settlement. This is not wake
+    // retry/backoff truth; it only retains the original lease/fate until commit or boot.
+    terminal_obligations: HashMap<String, TerminalObligation>,
     pub(crate) gate: LaunchGate,
     pub(crate) notifier: Notifier<P>,
     pub(crate) decisions: HashMap<String, Raised>,
@@ -783,6 +803,7 @@ impl<P: Port> Core<P> {
             preparing: 0,
             captain_pending: BTreeSet::new(),
             next_generator: 0,
+            terminal_obligations: HashMap::new(),
             gate,
             decisions: HashMap::new(),
             seen_decisions: HashSet::new(),
@@ -1522,8 +1543,11 @@ impl<P: Port> Core<P> {
             wakes,
             riders: vec![],
             cursor_targets,
+            ..Default::default()
         };
-        self.launch_carrying(row, exec, text, batch).await
+        self.launch_carrying(row, exec, text, batch)
+            .await
+            .map(|_| ())
     }
 
     /// 同 [`launch`](Self::launch)，带一整批（含随批的窗口外行 `Batch::riders`）。这批在拉起之前 claim。
@@ -1532,12 +1556,13 @@ impl<P: Port> Core<P> {
         row: SessionRow,
         exec: Arc<dyn Executor>,
         text: Option<String>,
-        batch: Batch,
-    ) -> anyhow::Result<()> {
+        mut batch: Batch,
+    ) -> anyhow::Result<bool> {
         // 一个 session 一个进程（裁定 6）：所有拉起路径都经过这里，所以在这里挡，不只靠调用方先查。
         if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
             return Err(ControlError::AlreadyRunning(row.id).into());
         }
+        self.retry_terminal(&row.id).await?;
         self.check_launch(&exec, &row.crew_id)?;
         let now = self.now();
         let workdir = row
@@ -1545,13 +1570,24 @@ impl<P: Port> Core<P> {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session {} 没有工作目录", row.id))?;
         let system_prompt = Some(self.port.worldview(&row.id).await?);
-        let token = self.port.mint_token(&row.id);
-        if !batch.ids().is_empty() {
-            self.due.touch(&self.port).claim(&batch).await?;
+        let generator = self
+            .next_generator
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("executor generation exhausted"))?;
+        if batch.has_work() {
+            batch.lease = match self
+                .due
+                .touch(&self.port)
+                .claim_reserved(&batch, generator)
+                .await?
+            {
+                super::port::Decision::Applied(lease) => Some(lease),
+                super::port::Decision::Stale | super::port::Decision::Busy => return Ok(false),
+            };
         }
         self.gate.launched(now);
-        self.next_generator += 1;
-        let generator = self.next_generator;
+        self.next_generator = generator;
+        let token = self.port.mint_token(&row.id);
         let session = row.id.clone();
         let req = LaunchRequest {
             session_id: row.id.clone(),
@@ -1624,7 +1660,7 @@ impl<P: Port> Core<P> {
             }
         });
         self.publish_live(&session).await;
-        Ok(())
+        Ok(true)
     }
 
     async fn on_binary_launch_rejected(
@@ -1641,7 +1677,7 @@ impl<P: Port> Core<P> {
             self.binary_replaced = true;
             self.port.revoke_token(session);
             let ids = st.batch.ids();
-            if !ids.is_empty() {
+            if !ids.is_empty() || st.batch.lease.is_some() {
                 let fate = if st.stop_requested {
                     Settle::Dropped {
                         error: "stopped".into(),
@@ -1649,14 +1685,7 @@ impl<P: Port> Core<P> {
                 } else {
                     Settle::Requeue
                 };
-                self.due
-                    .touch(&self.port)
-                    .settle(&ids, fate, self.now())
-                    .await?;
-                self.port.publish(wake_changed(
-                    session,
-                    st.batch.wakes.iter().chain(&st.batch.riders),
-                ));
+                self.settle_terminal(st.batch.clone(), fate).await?;
             }
             self.notifier
                 .raise(
@@ -1729,32 +1758,19 @@ impl<P: Port> Core<P> {
             Err(_) if st.stop_requested => {
                 // 人在拉起回来之前就停掉了：带着的唤醒（含随批行）跟人停一样丢掉（裁定 10）——不重试、不告警、不记「起不来」。
                 let held = st.batch.ids();
-                if !held.is_empty() {
+                if !held.is_empty() || st.batch.lease.is_some() {
                     let s = Settle::Dropped {
                         error: "stopped".into(),
                     };
-                    self.due
-                        .touch(&self.port)
-                        .settle(&held, s, self.now())
-                        .await?;
-                    self.port.publish(wake_changed(
-                        session,
-                        st.batch.wakes.iter().chain(&st.batch.riders),
-                    ));
+                    self.settle_terminal(st.batch.clone(), s).await?;
                 }
             }
             Err(_) if st.halt_requested => {
                 // crewd 停机时它还在起、结果起不来：那批原样退回（停机不是人停、也不算一次失败；起不来的原因多半就是停机）。
                 let held = st.batch.ids();
-                if !held.is_empty() {
-                    self.due
-                        .touch(&self.port)
-                        .settle(&held, Settle::Requeue, self.now())
+                if !held.is_empty() || st.batch.lease.is_some() {
+                    self.settle_terminal(st.batch.clone(), Settle::Requeue)
                         .await?;
-                    self.port.publish(wake_changed(
-                        session,
-                        st.batch.wakes.iter().chain(&st.batch.riders),
-                    ));
                 }
             }
             Err(e) => {
@@ -1801,36 +1817,112 @@ impl<P: Port> Core<P> {
     /// Give-ups of every priority join the crew notification window (T10c).
     /// 控制者裁定 C2 让它在这里先落地（拉起后、投进去之前进程就没了 = 一次失败）；Task 8 的投递失败也走它。
     pub(crate) async fn fail_batch(&mut self, batch: Batch, error: &str) -> anyhow::Result<()> {
-        if batch.ids().is_empty() {
+        if batch.ids().is_empty() && batch.lease.is_none() {
             return Ok(());
         }
-        let now = self.now();
         let session = batch.session.clone();
-        let acked = self
-            .due
-            .touch(&self.port)
-            .ack(
-                &batch,
-                Ack::Failed {
-                    error: error.into(),
-                    now,
-                    jitter: self.jitter.draw(),
-                },
-            )
-            .await?;
-        for (_, retry_at) in &acked.retried {
-            // 在那一刻再看一次（定时拍 / 下一个 not_before）。退避本身只在库里的 `not_before`（唯一的事实，P2 / R10）。
-            self.timers.insert(*retry_at);
+        if let Some(held) = self.terminal_obligations.get(&session) {
+            anyhow::ensure!(
+                held.batch.lease == batch.lease && held.batch.ids() == batch.ids(),
+                "different terminal batch already retained"
+            );
+            return self.retry_terminal(&session).await;
         }
-        let changed = wake_changed(&session, batch.wakes.iter().chain(&batch.riders));
-        let gave_up: Vec<QueuedWake> = batch
-            .wakes
-            .into_iter()
-            .chain(batch.riders)
-            .filter(|w| acked.gave_up.contains(&w.id))
-            .collect();
-        self.alert_gave_up(&session, &gave_up, error).await?;
-        self.port.publish(changed);
+        let fate = TerminalFate::Failed {
+            error: error.into(),
+            now: self.now(),
+            jitter: self.jitter.draw(),
+        };
+        self.remember_terminal(batch, fate)?;
+        self.retry_terminal(&session).await
+    }
+
+    fn remember_terminal(&mut self, batch: Batch, fate: TerminalFate) -> anyhow::Result<()> {
+        if let Some(existing) = self.terminal_obligations.get(&batch.session) {
+            anyhow::ensure!(
+                existing.batch.lease == batch.lease && existing.batch.ids() == batch.ids(),
+                "another exact terminal obligation owns this session"
+            );
+            return Ok(());
+        }
+        self.terminal_obligations
+            .insert(batch.session.clone(), TerminalObligation { batch, fate });
+        Ok(())
+    }
+
+    async fn settle_terminal(&mut self, batch: Batch, fate: Settle) -> anyhow::Result<()> {
+        let session = batch.session.clone();
+        self.remember_terminal(batch, TerminalFate::Settle(fate))?;
+        self.retry_terminal(&session).await
+    }
+
+    pub(crate) fn terminal_sessions(&self) -> Vec<String> {
+        self.terminal_obligations.keys().cloned().collect()
+    }
+
+    // Exactly one attempt per caller/tick. On Err the original lease and policy remain;
+    // never infer a terminal from desired/phase and never clear metadata separately.
+    pub(crate) async fn retry_terminal(&mut self, session: &str) -> anyhow::Result<()> {
+        let Some(held) = self.terminal_obligations.get(session).cloned() else {
+            return Ok(());
+        };
+        let acked = match &held.fate {
+            TerminalFate::Settle(fate) => {
+                match self
+                    .due
+                    .touch(&self.port)
+                    .settle_batch(&held.batch, fate.clone(), self.now())
+                    .await?
+                {
+                    super::port::Decision::Applied(()) => {}
+                    super::port::Decision::Stale => {
+                        self.terminal_obligations.remove(session);
+                        return Ok(()); // retire only old receipt; no row-change success event
+                    }
+                    super::port::Decision::Busy => {
+                        anyhow::bail!("exact terminal settlement is busy; ownership retained")
+                    }
+                }
+                None
+            }
+            TerminalFate::Failed { error, now, jitter } => Some(
+                self.due
+                    .touch(&self.port)
+                    .ack(
+                        &held.batch,
+                        Ack::Failed {
+                            error: error.clone(),
+                            now: *now,
+                            jitter: *jitter,
+                        },
+                    )
+                    .await?,
+            ),
+        };
+        self.terminal_obligations.remove(session);
+        if let Some(acked) = acked {
+            if acked.stale {
+                return Ok(());
+            }
+            for (_, retry_at) in &acked.retried {
+                self.timers.insert(*retry_at);
+            }
+            let gave_up: Vec<_> = held
+                .batch
+                .wakes
+                .iter()
+                .chain(&held.batch.riders)
+                .filter(|w| acked.gave_up.contains(&w.id))
+                .cloned()
+                .collect();
+            if let TerminalFate::Failed { error, .. } = &held.fate {
+                self.alert_gave_up(session, &gave_up, error).await?;
+            }
+        }
+        self.port.publish(wake_changed(
+            session,
+            held.batch.wakes.iter().chain(&held.batch.riders),
+        ));
         Ok(())
     }
 
@@ -2109,26 +2201,16 @@ impl<P: Port> Core<P> {
         // （裁定 17 至少一次；额度唤醒另挂；退回 claim 那一次）；进程自己没了 → 一次失败的投递，退避、有限次后放弃（C2）。
         if let Some(inf) = l.inflight {
             let held = inf.batch.ids();
-            if held.is_empty() {
-                // 只有积压、没有唤醒行的批：没有可记账的。
+            if held.is_empty() && inf.batch.lease.is_none() {
+                // 普通启动没有 reservation。
             } else if l.stopping {
                 let s = Settle::Dropped {
                     error: "stopped".into(),
                 };
-                self.due.touch(&self.port).settle(&held, s, now).await?;
-                self.port.publish(wake_changed(
-                    session,
-                    inf.batch.wakes.iter().chain(&inf.batch.riders),
-                ));
+                self.settle_terminal(inf.batch.clone(), s).await?;
             } else if l.halting || stopped_by_user || hit_limit {
-                self.due
-                    .touch(&self.port)
-                    .settle(&held, Settle::Requeue, now)
+                self.settle_terminal(inf.batch.clone(), Settle::Requeue)
                     .await?;
-                self.port.publish(wake_changed(
-                    session,
-                    inf.batch.wakes.iter().chain(&inf.batch.riders),
-                ));
             } else {
                 let why = match &info {
                     Some(i) => format!("{:?}", i.status),
@@ -2708,10 +2790,7 @@ mod tests {
         let wakes = rig.port.pending("cap").await.unwrap();
         let row = rig.port.row("cap");
         let exec = rig.core.execs.get("claude").unwrap();
-        rig.core
-            .launch(row, exec, Some("synthetic".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_rendered_wakes(&mut rig, row, exec, wakes).await;
         let generator = rig.core.starting["cap"].generator;
         assert_eq!(
             rig.port.wakes_of("cap")[0].attempts,
@@ -2755,10 +2834,7 @@ mod tests {
         let wakes = rig.port.pending("cap").await.unwrap();
         let row = rig.port.row("cap");
         let exec = rig.core.execs.get("claude").unwrap();
-        rig.core
-            .launch(row, exec, Some("synthetic".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_rendered_wakes(&mut rig, row, exec, wakes).await;
         let generator = rig.core.starting["cap"].generator;
         assert_eq!(
             rig.port.wakes_of("cap")[0].attempts,
@@ -3136,6 +3212,136 @@ mod tests {
     /// 带着一条定时唤醒把 `session` 拉起（唤醒记 inflight，开场正文 = 它），并让它开始干活。
     /// 唤醒一小时后才到点：退回 pending 之后，Task 8 的「退出即重扫」不会当场把它重新拉起来（这几条测的是退出时
     /// 怎么结算；停机时不再拉起是 Task 9 停机闸的事）。
+    async fn launch_rendered_wakes(
+        rig: &mut Rig,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        wakes: Vec<QueuedWake>,
+    ) {
+        let rendered = rig.port.render_wake(&row.id, &wakes).await.unwrap();
+        let batch = Batch {
+            session: row.id.clone(),
+            wakes,
+            riders: vec![],
+            cursor_targets: rendered.cursor_targets,
+            prepared: rendered.prepared,
+            lease: None,
+        };
+        assert!(
+            rig.core
+                .launch_carrying(row, exec, Some(rendered.text), batch)
+                .await
+                .unwrap()
+        );
+    }
+
+    // R4 exercises the actual terminal caller, not retry_terminal's return value.
+    // The message and its unread window exist in MemPort before real render/claim.
+    async fn terminal_receipt_event_observation(
+        stale: bool,
+    ) -> (Vec<OrchestraEvent>, OrchestraEvent) {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        let message_id = "c1/lobby#1".to_string();
+        let at = crewd_wake::MessageRef {
+            channel: "c1/lobby".into(),
+            seq: 1,
+        };
+        rig.port.lock().messages.insert(
+            (at.channel.clone(), at.seq),
+            (
+                MsgFacts {
+                    provenance: crewd_wake::plan::MessageProvenance::Ordinary,
+                    id: message_id.clone(),
+                    at,
+                    sender: crewd_wake::plan::Sender::Human,
+                    mentions: vec![],
+                    created_at: T0,
+                },
+                "synthetic terminal receipt message".into(),
+            ),
+        );
+        rig.port
+            .enqueue(NewWake {
+                session: "cap".into(),
+                kind: WakeKind::Message,
+                source: source::message(&message_id),
+                priority: Priority::Human,
+                not_before: T0,
+                note: None,
+                origin: "human".into(),
+            })
+            .await
+            .unwrap();
+        let wakes = rig.port.pending("cap").await.unwrap();
+        let row = rig.port.row("cap");
+        let exec = rig.core.execs.get("claude").unwrap();
+        launch_rendered_wakes(&mut rig, row, exec, wakes).await;
+        let starting = &rig.core.starting["cap"];
+        let generator = starting.generator;
+        let batch = starting.batch.clone();
+        assert!(batch.lease.is_some());
+        assert_eq!(batch.cursor_targets, [("c1/lobby".into(), 1)]);
+        let expected = wake_changed("cap", batch.wakes.iter().chain(&batch.riders));
+        assert!(
+            matches!(&expected, OrchestraEvent::WakeChanged {wake_ids, message_ids, ..}
+            if !wake_ids.is_empty() && message_ids == &[message_id])
+        );
+        if stale {
+            // A real, exact successful settlement retires this lease; the actor's
+            // subsequently arriving terminal receipt must now be genuinely Stale.
+            assert_eq!(
+                rig.port
+                    .settle_batch(&batch, Settle::Requeue, T0)
+                    .await
+                    .unwrap(),
+                super::super::port::Decision::Applied(())
+            );
+            assert_eq!(rig.port.wakes_of("cap")[0].state, WakeState::Pending);
+        }
+        rig.port.lock().events.clear(); // exclude prepare/claim/admission observations
+        rig.core
+            .handle(Input::LaunchBinaryReplaced {
+                session: "cap".into(),
+                generator,
+            })
+            .await;
+        let changes: Vec<_> = rig
+            .port
+            .lock()
+            .events
+            .iter()
+            .filter(|e| matches!(e, OrchestraEvent::WakeChanged { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(rig.port.wakes_of("cap")[0].state, WakeState::Pending);
+        assert_eq!(rig.port.wakes_of("cap")[0].attempts, 0);
+        assert!(rig.core.terminal_obligations.is_empty());
+        // Reap the delayed StandIn launch via its stale-generation handler,
+        // then finish the normal actor shutdown before the behavioral assertion.
+        rig.settle().await;
+        let (done, complete) = oneshot::channel();
+        rig.core.handle(Input::Shutdown(done)).await;
+        rig.settle().await;
+        assert!(rig.core.shutdown_done());
+        complete.await.unwrap();
+        assert!(rig.core.starting.is_empty());
+        assert!(rig.core.live.is_empty());
+        (changes, expected)
+    }
+
+    #[tokio::test]
+    async fn s44_applied_terminal_receipt_publishes_one_actual_wake_change() {
+        let (changes, expected) = terminal_receipt_event_observation(false).await;
+        assert_eq!(changes, [expected], "Applied must publish exactly once");
+    }
+
+    #[tokio::test]
+    async fn s44_stale_terminal_receipt_publishes_no_actual_wake_change() {
+        let (changes, _) = terminal_receipt_event_observation(true).await;
+        assert!(changes.is_empty(), "Stale changed no rows: {changes:?}");
+    }
+
     async fn launch_with_a_wake(rig: &mut Rig, session: &str) {
         let wake = NewWake {
             not_before: T0.add(HOUR),
@@ -3145,10 +3351,7 @@ mod tests {
         let wakes = rig.port.pending(session).await.unwrap();
         let exec = rig.core.execs.get("claude").unwrap();
         let row = rig.port.row(session);
-        rig.core
-            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_rendered_wakes(rig, row, exec, wakes).await;
         rig.settle().await;
         assert_eq!(rig.port.wakes_of(session)[0].state, WakeState::Inflight);
         rig.emit(session, SessionEvent::Working(true)).await;
@@ -3241,10 +3444,7 @@ mod tests {
         let wakes = rig.port.pending("w1").await.unwrap();
         let exec = rig.core.execs.get("claude").unwrap();
         let row = rig.port.row("w1");
-        rig.core
-            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_rendered_wakes(&mut rig, row, exec, wakes).await;
         let (tx, stopped) = oneshot::channel();
         rig.core
             .handle(Input::Cmd(Cmd::Stop {
@@ -3432,10 +3632,7 @@ mod tests {
         let wakes = rig.port.pending("w1").await.unwrap();
         let exec = rig.core.execs.get("claude").unwrap();
         let row = rig.port.row("w1");
-        rig.core
-            .launch(row, exec, Some("合成定时".into()), wakes, vec![])
-            .await
-            .unwrap();
+        launch_rendered_wakes(&mut rig, row, exec, wakes).await;
         rig.settle().await;
         let w = &rig.port.wakes_of("w1")[0];
         assert_eq!((w.state, w.attempts), (WakeState::Pending, 1));

@@ -557,6 +557,7 @@ fn refuse_running(conn: &Connection, id: &str) -> Result<()> {
 pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     let crew = get(tx.conn(), id)?;
     refuse_management(tx.conn(), id)?;
+    crate::cursor_reservations::guard_crew(tx.conn(), id)?;
     if crew.removed_at.is_some() {
         return Ok(crew);
     }
@@ -663,7 +664,8 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
             Refusal::new(Code::CrewNotRemoved).arg("crew", id),
         ));
     }
-    refuse_running(conn, id)
+    refuse_running(conn, id)?;
+    crate::cursor_reservations::guard_crew(conn, id)
 }
 
 /// 永久删除（`crew.purge`，N4 的快照之后跑；只收已归档的机组，见 `check_purgeable`）。子机组的父边随之消失；
@@ -687,6 +689,7 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     // Message cascades have completed. Keep provenance for surviving foreign-channel history,
     // even when the source session was purged; only actual orphan messages lose their markers.
     crate::message_provenance::prune_orphans(tx)?;
+    crate::cursor_reservations::prune_orphan_readers(tx)?;
     for channel_id in cascaded {
         tx.note(Change::ChannelRemoved { channel_id });
     }

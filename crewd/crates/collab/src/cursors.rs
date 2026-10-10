@@ -18,17 +18,28 @@ pub fn cursor(conn: &Connection, reader: &str, channel: &str) -> Result<Option<i
 
 /// 推进游标（只进不退；夹在 0..=群当前末尾之内——远未来的 seq 不能吞掉之后才到的消息）。
 pub fn advance(tx: &mut Tx<'_>, reader: &str, channel: &str, seq: i64) -> Result<()> {
+    crate::cursor_reservations::validate_reader(tx.conn(), reader)?;
     let seq = seq.clamp(0, crewd_store::messages::max_seq(tx.conn(), channel)?);
+    let before = cursor(tx.conn(), reader, channel)?;
     tx.conn().execute(
         "INSERT INTO read_cursors(reader,channel_id,seq,updated_at) VALUES(?1,?2,?3,?4)
          ON CONFLICT(reader,channel_id) DO UPDATE SET seq=MAX(seq, excluded.seq), updated_at=excluded.updated_at",
         params![reader, channel, seq, tx.now_ts()],
     )?;
+    if before.is_none_or(|old| seq > old) {
+        crate::cursor_reservations::cursor_changed(tx, reader)?;
+    }
     Ok(())
 }
 
 /// 入群点：把游标钉到群的当前末尾（裁定 9）。返回钉到的 seq。
 pub fn pin_to_end(tx: &mut Tx<'_>, reader: &str, channel: &str) -> Result<i64> {
+    if crate::cursor_reservations::channel_held(tx.conn(), reader, channel)? {
+        return cursor(tx.conn(), reader, channel)?.ok_or_else(|| {
+            crewd_store::StoreError::Invalid("active cursor reservation has no cursor".into())
+                .into()
+        });
+    }
     let end = crewd_store::messages::max_seq(tx.conn(), channel)?;
     advance(tx, reader, channel, end)?;
     Ok(end)
@@ -65,44 +76,51 @@ pub const UNREAD_CAP: u32 = 200;
 /// 或扫到群末尾为止（绝不丢旧留新）。调用方只能把游标推进到**实际带上**的那批里最大的 seq——
 /// 不能推到群末尾，否则没带上的消息永远丢了；下一次调用自然从紧接其后的消息开始。
 pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Message>)>> {
-    let mut ids: Vec<String> = channels::channels_of_session(tx.conn(), session)?
-        .into_iter()
-        .map(|c| c.id)
-        .collect();
-    for c in listens::channels_of(tx.conn(), session, tx.now_ms())? {
-        if !ids.contains(&c) {
-            ids.push(c);
+    let ids = injection_channels(tx.conn(), session, tx.now_ms())?;
+    unread_for_channels(tx, session, ids)
+}
+
+/// New automatic output preparation is stricter than retained-history membership reads.
+/// Filter before lazy pin/leading-own writes; legacy unread_for's surface stays unchanged.
+pub(crate) fn automatic_unread_for(
+    tx: &mut Tx<'_>,
+    session: &str,
+) -> Result<Vec<(String, Vec<Message>)>> {
+    let reader = crate::sessions::get(tx.conn(), session)?;
+    if crate::crews::is_archived(tx.conn(), &reader.crew_id)? {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for id in injection_channels(tx.conn(), session, tx.now_ms())? {
+        if channels::get(tx.conn(), &id)?.archived_at.is_none() {
+            ids.push(id);
         }
     }
+    unread_for_channels(tx, session, ids)
+}
+
+fn unread_for_channels(
+    tx: &mut Tx<'_>,
+    session: &str,
+    ids: Vec<String>,
+) -> Result<Vec<(String, Vec<Message>)>> {
+    let held = crate::cursor_reservations::held_channels(tx.conn(), session)?;
     let mut out = Vec::new();
     for ch in ids {
-        let Some(mut after) = cursor(tx.conn(), session, &ch)? else {
+        if held.contains(&ch) {
+            if cursor(tx.conn(), session, &ch)?.is_none() {
+                return Err(crewd_store::StoreError::Invalid(
+                    "active cursor reservation has no cursor".into(),
+                )
+                .into());
+            }
+            continue;
+        }
+        let Some(after) = cursor(tx.conn(), session, &ch)? else {
             pin_to_end(tx, session, &ch)?;
             continue;
         };
-        let mut got: Vec<Message> = Vec::new();
-        let mut leading_end: Option<i64> = None; // 开头那段自己发的消息的最后一个 seq
-        'scan: loop {
-            let page = crewd_store::messages::list(tx.conn(), &ch, after, None, UNREAD_CAP)?;
-            let Some(last) = page.last().map(|m| m.seq) else {
-                break;
-            };
-            let full = page.len() >= UNREAD_CAP as usize;
-            for m in page {
-                if m.sender_session_id.as_deref() != Some(session) {
-                    got.push(m);
-                    if got.len() >= UNREAD_CAP as usize {
-                        break 'scan;
-                    }
-                } else if got.is_empty() {
-                    leading_end = Some(m.seq);
-                }
-            }
-            if !full {
-                break;
-            }
-            after = last;
-        }
+        let (got, leading_end) = scan_unread(tx.conn(), session, &ch, after)?;
         if let Some(seq) = leading_end {
             advance(tx, session, &ch, seq)?;
         }
@@ -111,6 +129,56 @@ pub fn unread_for(tx: &mut Tx<'_>, session: &str) -> Result<Vec<(String, Vec<Mes
         }
     }
     Ok(out)
+}
+
+pub(crate) fn injection_channels(
+    conn: &Connection,
+    session: &str,
+    now_ms: i64,
+) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = channels::channels_of_session(conn, session)?
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    for c in listens::channels_of(conn, session, now_ms)? {
+        if !ids.contains(&c) {
+            ids.push(c);
+        }
+    }
+    Ok(ids)
+}
+
+/// Shared oldest eligible prefix scan; reads only. Both snapshot and unread use this cap/order.
+pub(crate) fn scan_unread(
+    conn: &Connection,
+    session: &str,
+    ch: &str,
+    mut after: i64,
+) -> Result<(Vec<Message>, Option<i64>)> {
+    let mut got: Vec<Message> = Vec::new();
+    let mut leading_end: Option<i64> = None; // 开头那段自己发的消息的最后一个 seq
+    'scan: loop {
+        let page = crewd_store::messages::list(conn, ch, after, None, UNREAD_CAP)?;
+        let Some(last) = page.last().map(|m| m.seq) else {
+            break;
+        };
+        let full = page.len() >= UNREAD_CAP as usize;
+        for m in page {
+            if m.sender_session_id.as_deref() != Some(session) {
+                got.push(m);
+                if got.len() >= UNREAD_CAP as usize {
+                    break 'scan;
+                }
+            } else if got.is_empty() {
+                leading_end = Some(m.seq);
+            }
+        }
+        if !full {
+            break;
+        }
+        after = last;
+    }
+    Ok((got, leading_end))
 }
 
 /// 人类看过某群到 `seq`（`read.mark`；夹在群末尾之内，回退 / 空操作不产生变更）。Mac / iOS 共用一个人类游标。

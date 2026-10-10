@@ -51,6 +51,7 @@ trait World: Sized {
     async fn human_channel(&mut self, crew: &str) -> String;
     /// `until` 早于现在 = 一条已经过期的收听（collab 的 `listens::set` 不收，DbPort 直接写行模拟）。
     async fn listen(&mut self, session: &str, channel: &str, until: Option<Ms>);
+    async fn expire_listen(&mut self, session: &str, channel: &str);
     async fn post(&mut self, from: Who<'_>, channel: &str, at: &[&str]) -> MsgFacts;
     async fn remove_crew(&mut self, crew: &str);
     /// 人归档一个群（topic / dm）。
@@ -176,6 +177,22 @@ impl World for DbWorld {
                 .await
             }
         }
+    }
+
+    async fn expire_listen(&mut self, session: &str, channel: &str) {
+        let (session, channel, until) =
+            (session.to_string(), channel.to_string(), self.now().0 - 1);
+        self.state
+            .db
+            .call(move |s| {
+                s.conn().execute(
+                    "UPDATE listens SET until=?3 WHERE session_id=?1 AND channel_id=?2",
+                    rusqlite::params![session, channel, until],
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     async fn post(&mut self, from: Who<'_>, channel: &str, at: &[&str]) -> MsgFacts {
@@ -423,6 +440,22 @@ impl World for MemWorld {
                 senders: None,
             });
         self.port.join(session, channel);
+    }
+
+    async fn expire_listen(&mut self, session: &str, channel: &str) {
+        let until = self.now().add(-1);
+        for l in self
+            .port
+            .lock()
+            .listens
+            .get_mut(channel)
+            .into_iter()
+            .flatten()
+        {
+            if l.session == session {
+                l.until = until;
+            }
+        }
     }
 
     async fn post(&mut self, from: Who<'_>, channel: &str, at: &[&str]) -> MsgFacts {
@@ -1351,6 +1384,235 @@ async fn human_stop_boundary_separates_cancelled_and_fresh_failure_outcomes<W: W
     );
 }
 
+/// Both adapters own a real timer batch, reject an old receipt after the next
+/// incarnation is claimed, and keep the next attempt intact until its own receipt.
+async fn reservation_receipt_is_exact_and_old_receipt_cannot_ack_next<W: World>() {
+    let w = W::new().await;
+    w.port()
+        .enqueue(timer("w-1", "reserved-old"))
+        .await
+        .unwrap();
+    let wakes = w.port().pending("w-1").await.unwrap();
+    let rendered = w.port().render_wake("w-1", &wakes).await.unwrap();
+    let mut old = Batch {
+        session: "w-1".into(),
+        wakes,
+        cursor_targets: rendered.cursor_targets,
+        prepared: rendered.prepared,
+        ..Default::default()
+    };
+    old.lease = match w.port().claim_reserved(&old, 1).await.unwrap() {
+        Decision::Applied(lease) => Some(lease),
+        other => panic!("first claim: {other:?}"),
+    };
+    assert!(matches!(
+        w.port().claim_reserved(&old, 1).await.unwrap(),
+        Decision::Stale | Decision::Busy
+    ));
+    assert!(matches!(
+        w.port()
+            .settle_batch(&old, Settle::Requeue, w.now())
+            .await
+            .unwrap(),
+        Decision::Applied(())
+    ));
+    let wakes = w.port().pending("w-1").await.unwrap();
+    let rendered = w.port().render_wake("w-1", &wakes).await.unwrap();
+    let mut next = Batch {
+        session: "w-1".into(),
+        wakes,
+        cursor_targets: rendered.cursor_targets,
+        prepared: rendered.prepared,
+        ..Default::default()
+    };
+    next.lease = match w.port().claim_reserved(&next, 2).await.unwrap() {
+        Decision::Applied(lease) => Some(lease),
+        other => panic!("second claim: {other:?}"),
+    };
+    assert!(
+        w.port()
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release
+                }
+            )
+            .await
+            .unwrap()
+            .stale
+    );
+    assert!(w.port().pending("w-1").await.unwrap().is_empty());
+    let rows = w.port().list_wakes(Some("w-1")).await.unwrap();
+    assert_eq!(rows[0].state, WakeState::Inflight);
+    assert_eq!(rows[0].attempts, 1);
+    assert!(
+        !w.port()
+            .ack(
+                &next,
+                Ack::Delivered {
+                    riders: Riders::Release
+                }
+            )
+            .await
+            .unwrap()
+            .stale
+    );
+    assert_eq!(
+        w.port().list_wakes(Some("w-1")).await.unwrap()[0].state,
+        WakeState::Delivered
+    );
+}
+
+/// Pure backlog still owns the cursor even though no wake ID exists; boot reset
+/// invalidates its receipt and permits a new actual rendered body to claim.
+async fn zero_id_body_reservation_is_released_by_boot_and_old_ack_is_stale<W: World>() {
+    let mut w = W::new().await;
+    let channel = w.topic("c-1", "cap-1", &["w-1"]).await;
+    w.port().unread("w-1").await.unwrap();
+    let m = w.post(Who::Human, &channel, &[]).await;
+    let queued = QueuedWake {
+        id: 0,
+        session: "w-1".into(),
+        kind: WakeKind::Message,
+        source: source::message(&m.id),
+        priority: Priority::Human,
+        not_before: Ms(0),
+        note: None,
+        origin: HUMAN.into(),
+        state: WakeState::Pending,
+        attempts: 0,
+        created_at: w.now(),
+        last_error: None,
+        msg: Some(m.at.clone()),
+    };
+    // Renderer needs an actual queued row in DbPort, so enqueue normally, render,
+    // then select the true cursor-only prefix rather than manufacturing a snapshot.
+    w.port()
+        .enqueue(NewWake {
+            session: queued.session.clone(),
+            kind: queued.kind,
+            source: queued.source.clone(),
+            priority: queued.priority,
+            not_before: queued.not_before,
+            note: None,
+            origin: queued.origin.clone(),
+        })
+        .await
+        .unwrap();
+    let pending = w.port().pending("w-1").await.unwrap();
+    let r = w.port().render_wake("w-1", &pending).await.unwrap();
+    assert!(r.cursor_targets.contains(&(channel.clone(), m.at.seq)));
+    let mut body = Batch {
+        session: "w-1".into(),
+        cursor_targets: r.cursor_targets,
+        prepared: r.prepared,
+        ..Default::default()
+    };
+    body.lease = match w.port().claim_reserved(&body, 3).await.unwrap() {
+        Decision::Applied(lease) => Some(lease),
+        other => panic!("zero ID claim: {other:?}"),
+    };
+    // Same-channel suffix is held behind the unconfirmed prefix.
+    w.post(Who::Human, &channel, &[]).await;
+    assert!(
+        w.port()
+            .unread("w-1")
+            .await
+            .unwrap()
+            .iter()
+            .all(|m| m.at.channel != channel)
+    );
+    w.port()
+        .fail_inflight("synthetic boot", w.now())
+        .await
+        .unwrap();
+    assert!(
+        w.port()
+            .ack(
+                &body,
+                Ack::Delivered {
+                    riders: Riders::Release
+                }
+            )
+            .await
+            .unwrap()
+            .stale
+    );
+    assert!(w.port().cursor("w-1", &channel).await.unwrap() < m.at.seq);
+    let r = w.port().render_wake("w-1", &pending).await.unwrap();
+    let retry = Batch {
+        session: "w-1".into(),
+        cursor_targets: r.cursor_targets,
+        prepared: r.prepared,
+        ..Default::default()
+    };
+    assert!(matches!(
+        w.port().claim_reserved(&retry, 4).await.unwrap(),
+        Decision::Applied(_)
+    ));
+}
+
+async fn prepared_body_rechecks_archived_or_expired_injection_surface<W: World>() {
+    for expired in [false, true] {
+        let mut w = W::new().await;
+        let ch = w
+            .topic("c-1", "cap-1", if expired { &[] } else { &["w-1"] })
+            .await;
+        if expired {
+            w.listen("w-1", &ch, None).await;
+        }
+        w.port().unread("w-1").await.unwrap();
+        let m = w.post(Who::Human, &ch, &[]).await;
+        w.port()
+            .enqueue(NewWake {
+                session: "w-1".into(),
+                kind: WakeKind::Message,
+                source: source::message(&m.id),
+                priority: Priority::Human,
+                not_before: Ms(0),
+                note: None,
+                origin: HUMAN.into(),
+            })
+            .await
+            .unwrap();
+        let pending = w.port().pending("w-1").await.unwrap();
+        let r = w.port().render_wake("w-1", &pending).await.unwrap();
+        assert!(
+            r.cursor_targets.contains(&(ch.clone(), m.at.seq)),
+            "must prepare a real readable prefix"
+        );
+        let b = Batch {
+            session: "w-1".into(),
+            wakes: pending,
+            cursor_targets: r.cursor_targets,
+            prepared: r.prepared,
+            ..Default::default()
+        };
+        let cursor = w.port().cursor("w-1", &ch).await.unwrap();
+        if expired {
+            w.expire_listen("w-1", &ch).await;
+        } else {
+            w.archive_channel(&ch).await;
+        }
+        assert!(
+            matches!(
+                w.port().claim_reserved(&b, 1).await.unwrap(),
+                Decision::Stale
+            ),
+            "expired={expired}"
+        );
+        assert_eq!(w.port().cursor("w-1", &ch).await.unwrap(), cursor);
+        assert!(
+            w.port()
+                .list_wakes(Some("w-1"))
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.attempts == 0)
+        );
+    }
+}
+
 macro_rules! both {
     ($($case:ident),* $(,)?) => {
         mod mem {
@@ -1365,6 +1627,9 @@ macro_rules! both {
 }
 
 both!(
+    prepared_body_rechecks_archived_or_expired_injection_surface,
+    reservation_receipt_is_exact_and_old_receipt_cannot_ack_next,
+    zero_id_body_reservation_is_released_by_boot_and_old_ack_is_stale,
     human_stop_boundary_survives_new_work_and_mixed_requeue,
     human_stop_boundary_separates_cancelled_and_fresh_failure_outcomes,
     enqueue_dedupes,
