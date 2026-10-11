@@ -120,6 +120,9 @@ pub struct AgentRuntime {
     pub(crate) hook_log: Mutex<Vec<crate::agent::testkit::HookObservation>>,
     #[cfg(feature = "testkit")]
     pub(crate) injection_completions: Mutex<Vec<crate::agent::testkit::InjectionCompletion>>,
+    /// Explicitly armed, fixture-owned passive journal; absent in production builds.
+    #[cfg(feature = "testkit")]
+    pub(crate) injection_attempts: Mutex<Option<crate::agent::testkit::InjectionAttemptJournal>>,
     #[cfg(feature = "testkit")]
     pub(crate) caller_gates: Mutex<
         HashMap<(crate::agent::testkit::CallerStage, String), crate::agent::testkit::CallerPause>,

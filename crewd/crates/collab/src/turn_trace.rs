@@ -281,14 +281,19 @@ fn relay(
         category: Some("question".into()),
         ..Default::default()
     };
-    let posted = match messages::post(tx, Sender::Session(session.to_string()), post(as_session)) {
+    let posted = match messages::post_stop_relay(
+        tx,
+        session,
+        Sender::Session(session.to_string()),
+        post(as_session),
+    ) {
         Err(CollabError::Forbidden(r))
             if matches!(
                 r.code,
                 Code::MessageSenderNotMember | Code::ChannelHumanChannelOtherHome
             ) =>
         {
-            messages::post(tx, Sender::System, post(as_system))
+            messages::post_stop_relay(tx, session, Sender::System, post(as_system))
         }
         other => other,
     }?;

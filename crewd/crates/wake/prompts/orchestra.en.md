@@ -27,6 +27,14 @@ Your quota should have reset. You stopped last time because you hit the usage li
 ## loop.tripped.human
 Possible wake loop: "{origin}" woke "{target}" {count} times within {minutes} minutes and "{target}" produced nothing new meanwhile (no tool call, no work-item change, replies only went back to whoever woke it). Only this one link is stopped: "{origin}" will no longer wake "{target}" automatically; human messages still arrive. If this is fine, press "Recover" on this breaker in the client.
 
+## loop.chain.tripped.human
+
+Paused the message chain from {origin} to {target}: hop {hop} exceeds the current engineering limit of {limit}. Chain identity: {chain}. Independent chains can continue. Only a human can recover this exact chain and route.
+
+## loop.chain.unresolved.human
+
+Paused the message chain from {origin} to {target}: successful delivery of its parent has not been established. Chain identity: {chain}. Independent chains can continue. Only a human can recover this exact chain and route.
+
 ## origin.system
 system
 

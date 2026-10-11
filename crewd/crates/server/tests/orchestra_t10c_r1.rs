@@ -23,6 +23,7 @@ use tokio::time::{sleep, timeout};
 #[derive(Default)]
 struct State {
     sessions: HashMap<String, mpsc::UnboundedSender<SessionEvent>>,
+    observers: HashMap<String, Arc<dyn crewd_exec::driver::DeliverySuccessObserver>>,
     boxes: HashMap<String, PendingDecision>,
     sends: Vec<(String, u64)>,
     answers: Vec<(String, AnswerSteps)>,
@@ -50,7 +51,20 @@ impl Fake {
             }
             _ => {}
         }
-        s.sessions[id].send(e).unwrap();
+        let observer = s.observers.get(id).cloned();
+        let events = s.sessions[id].clone();
+        drop(s);
+        // Match the actual producer seam: only accepted Delivered, before channel emission.
+        if let SessionEvent::Delivery {
+            id: delivery,
+            outcome: DeliveryOutcome::Delivered,
+            ..
+        } = &e
+            && let Some(observer) = observer
+        {
+            observer.emitted(*delivery);
+        }
+        events.send(e).unwrap();
     }
     fn delivery(&self, id: &str, n: u64, outcome: DeliveryOutcome) {
         self.emit(
@@ -137,6 +151,24 @@ macro_rules! common {
         fn send(&self, _text: String, _context: &Context) -> Result<u64, ExecSendError> {
             Ok(self.$access().send_impl())
         }
+        fn send_bound(
+            &self,
+            _text: String,
+            context: &Context,
+            binding: &dyn crewd_exec::driver::DeliveryBinding,
+        ) -> Result<u64, ExecSendError> {
+            check_context(self.accepts_context(), context)?;
+            let b = self.$access();
+            let n = {
+                let mut s = b.fake.0.lock().unwrap();
+                s.next += 1;
+                s.next
+            };
+            // The original capability must register the actual ID before synthetic enqueue.
+            binding.register(n)?;
+            b.fake.0.lock().unwrap().sends.push((b.id.clone(), n));
+            Ok(n)
+        }
         fn raw(&self, _bytes: Vec<u8>) -> Result<(), Closed> {
             self.$access().fake.0.lock().unwrap().raws += 1;
             Ok(())
@@ -222,12 +254,15 @@ struct FakeExecutor {
 impl Executor for FakeExecutor {
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.fake
-            .0
-            .lock()
-            .unwrap()
-            .sessions
-            .insert(req.session_id.clone(), tx);
+        {
+            let mut s = self.fake.0.lock().unwrap();
+            s.sessions.insert(req.session_id.clone(), tx);
+            if let Some(observer) = req.delivery_observer {
+                s.observers.insert(req.session_id.clone(), observer);
+            } else {
+                s.observers.remove(&req.session_id);
+            }
+        }
         let b = Basic {
             fake: self.fake.clone(),
             id: req.session_id,

@@ -138,7 +138,7 @@ fn origin_from(row: &WakeRow, msg_sender: Option<SenderKind>) -> String {
     }
 }
 
-fn queued(conn: &rusqlite::Connection, row: &WakeRow) -> collab::Result<QueuedWake> {
+pub(super) fn queued(conn: &rusqlite::Connection, row: &WakeRow) -> collab::Result<QueuedWake> {
     let m = match row.source.strip_prefix("msg:") {
         Some(id) if row.kind == cw::WakeKind::Message => opt(collab::messages::get(conn, id))?,
         _ => None,
@@ -357,6 +357,10 @@ impl Port for DbPort {
         Ok(collab::worldview::render(&ctx))
     }
 
+    fn causal_fence(&self) -> Option<Arc<crate::causal_fence::CausalFence>> {
+        Some(self.state.causal_fence.clone())
+    }
+
     fn mint_token(&self, session: &str) -> String {
         self.state.tokens.mint(session)
     }
@@ -435,6 +439,32 @@ impl Port for DbPort {
     }
 
     async fn claim_reserved(&self, b: &Batch, generation: u64) -> Result<Decision<BatchLease>> {
+        if let Some(PreparedSnapshot::CausalDatabase {
+            reservation,
+            causes,
+        }) = &b.prepared
+        {
+            let (reservation, causes) = (reservation.clone(), causes.clone());
+            let windows = reservation.windows_for(&b.cursor_targets)?;
+            let ids = b.wakes.iter().map(|w| w.id).collect::<Vec<_>>();
+            let riders = b.riders.iter().map(|w| w.id).collect::<Vec<_>>();
+            let owner = cr::Owner::new(generation)?;
+            return Ok(
+                match self
+                    .write(move |tx| {
+                        cr::claim_output(tx, &reservation, &causes, &windows, &ids, &riders, owner)
+                    })
+                    .await?
+                {
+                    Decision::Applied(claimed) => Decision::Applied(BatchLease::CausalDatabase {
+                        claimed: Box::new(claimed),
+                        observed: None,
+                    }),
+                    Decision::Stale => Decision::Stale,
+                    Decision::Busy => Decision::Busy,
+                },
+            );
+        }
         let Some(PreparedSnapshot::Database(prepared)) = &b.prepared else {
             anyhow::bail!("actual body has no database preparation snapshot");
         };
@@ -456,6 +486,21 @@ impl Port for DbPort {
     }
 
     async fn settle_batch(&self, b: &Batch, s: Settle, now: Ms) -> Result<Decision<()>> {
+        if let Some(BatchLease::CausalDatabase { claimed, .. }) = &b.lease {
+            let claimed = claimed.clone();
+            return self
+                .write(move |tx| match s {
+                    Settle::Requeue => cr::settle_output(tx, &claimed, cr::Terminal::Requeue),
+                    Settle::Dropped { error } => {
+                        cr::settle_output(tx, &claimed, cr::Terminal::Dropped(&error))
+                    }
+                    Settle::Delivered => Err(crewd_store::StoreError::Invalid(
+                        "reserved Delivered requires success evidence".into(),
+                    )
+                    .into()),
+                })
+                .await;
+        }
         if let Some(BatchLease::Database(lease)) = &b.lease {
             let lease = lease.clone();
             return self
@@ -482,6 +527,77 @@ impl Port for DbPort {
     }
 
     async fn ack(&self, b: &Batch, a: Ack) -> Result<Acked> {
+        if let Some(BatchLease::CausalDatabase { claimed, observed }) = &b.lease {
+            let claimed = claimed.clone();
+            return match a {
+                Ack::Delivered { riders } => {
+                    let observed = observed.clone();
+                    let result = self
+                        .write(move |tx| {
+                            let observed = match observed {
+                                Some(success) => success,
+                                None => {
+                                    if cr::output_receipt_retired(tx, &claimed)? {
+                                        return Ok(Decision::Stale);
+                                    }
+                                    return Err(crewd_store::StoreError::Invalid(
+                                        "missing original emitted success".into(),
+                                    )
+                                    .into());
+                                }
+                            };
+                            let riders = match &riders {
+                                Riders::Release => cw::Riders::Release,
+                                Riders::Drop(why) => cw::Riders::Drop(why),
+                            };
+                            cr::ack_output_delivered(tx, &claimed, &observed, riders)
+                        })
+                        .await?;
+                    match result {
+                        Decision::Applied(_) => Ok(Acked {
+                            origins: acked_origins(b),
+                            ..Default::default()
+                        }),
+                        Decision::Stale => Ok(Acked {
+                            stale: true,
+                            ..Default::default()
+                        }),
+                        Decision::Busy => anyhow::bail!(
+                            "causal Delivered is busy; exact successful fate retained"
+                        ),
+                    }
+                }
+                Ack::Failed { error, now, jitter } => {
+                    let result = self
+                        .write(move |tx| {
+                            cr::ack_output_failed(tx, &claimed, &error, |n| {
+                                crewd_wake::queue::after_failure(n, now, jitter).map(|t| t.0)
+                            })
+                        })
+                        .await?;
+                    match result {
+                        Decision::Stale => Ok(Acked {
+                            stale: true,
+                            ..Default::default()
+                        }),
+                        Decision::Busy => {
+                            anyhow::bail!("causal Failed is busy; exact fate retained")
+                        }
+                        Decision::Applied(failed) => {
+                            let mut out = Acked::default();
+                            for f in failed.into_iter().filter(|f| !f.cancelled) {
+                                if let Some(t) = f.retry_at_ms {
+                                    out.retried.push((f.id, Ms(t)));
+                                } else {
+                                    out.gave_up.push(f.id);
+                                }
+                            }
+                            Ok(out)
+                        }
+                    }
+                }
+            };
+        }
         if let Some(BatchLease::Database(lease)) = &b.lease {
             let lease = lease.clone();
             return match a {
@@ -630,6 +746,52 @@ impl Port for DbPort {
         .await
     }
 
+    async fn prepare_causal_admission(&self, session: &str, _now: Ms) -> Result<()> {
+        let session = session.to_owned();
+        self.write(move |tx| {
+            let captured = cr::prepare_causal_unread(tx, &session)?;
+            crate::causal_fence::blocked_channels(tx, &captured.causes)?;
+            Ok(())
+        })
+        .await
+    }
+    async fn causal_diagnostics(
+        &self,
+        session: &str,
+        now: Ms,
+    ) -> Result<Vec<(String, crewd_wake::explain::CausalBlockage)>> {
+        let session = session.to_owned();
+        self.read(move |conn| {
+            Ok(crate::causal_fence::diagnostic_values(
+                collab::causal::diagnostics(conn, &session, now.0)?,
+            ))
+        })
+        .await
+    }
+    async fn causal_holds(
+        &self,
+        target: Option<&str>,
+    ) -> Result<Vec<crewd_collab::causal::ChainHold>> {
+        let target = target.map(str::to_owned);
+        self.read(move |conn| crewd_collab::causal::holds(conn, target.as_deref()))
+            .await
+    }
+    async fn recover_chain(
+        &self,
+        chain: &str,
+        from: &str,
+        target: &str,
+        action: &crewd_collab::causal::HumanRecoveryAction,
+    ) -> Result<bool> {
+        let (chain, from, target, action) = (
+            chain.to_owned(),
+            from.to_owned(),
+            target.to_owned(),
+            action.clone(),
+        );
+        self.write(move |tx| crewd_collab::causal::recover(tx, &chain, &from, &target, &action))
+            .await
+    }
     async fn latches(&self) -> Result<Vec<Latch>> {
         self.read(|c| {
             Ok(cw::latches::list(c)?
@@ -842,11 +1004,26 @@ impl Port for DbPort {
             .write(move |tx| {
                 // Normalize absent cursors and leading-own prefixes only with the shared
                 // reservation-aware scanner. Rendering and snapshot stay in this same job.
-                cr::prepare_unread(tx, &session)?;
+                let captured = cr::prepare_causal_unread(tx, &session)?;
+                let blocked = crate::causal_fence::blocked_channels(tx, &captured.causes)?;
                 let c = tx.conn();
                 // `by_ids` 按 id 排；正文的顺序要跟这一批（按优先级选好的）一致。
                 let mut rows: Vec<WakeRow> = cw::by_ids(c, &ids)?;
                 rows.sort_by_key(|r| ids.iter().position(|i| *i == r.id));
+                // Unsafe channel bodies are indivisible; safe channels still render normally.
+                let mut allowed = Vec::new();
+                for row in rows {
+                    let blocked_message = match row.source.strip_prefix("msg:") {
+                        Some(id) => crewd_store::messages::get(c, id)?
+                            .is_some_and(|m| blocked.contains(&m.channel_id)),
+                        None => false,
+                    };
+                    if !blocked_message {
+                        allowed.push(row);
+                    }
+                }
+                let mut rows = allowed;
+
                 let locale = collab::settings::locale(c)?;
                 // 报错（如账本坏了）是 fail-loud：原样上抛，Core 记日志、这批留在 pending，不在这里重试。
                 let original = collab::render::build_batch(c, &session, locale, &rows, now_ms)?;
@@ -877,7 +1054,12 @@ impl Port for DbPort {
                 let text = collab::render::wake_text(locale, &b);
                 let targets = b.cursor_targets();
                 let channels: Vec<_> = targets.iter().map(|(ch, _)| ch.clone()).collect();
-                let prepared = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
+                let reservation = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
+                let causes = captured.causes.select(&targets)?;
+                let prepared = PreparedSnapshot::CausalDatabase {
+                    reservation,
+                    causes,
+                };
                 // R6 / S45：`deferred` 随这批走（Core 一起 claim）；`cursor_targets()` 是送到后游标推到哪。
                 Ok((
                     text,
@@ -914,7 +1096,7 @@ impl Port for DbPort {
             dropped: dropped_ids,
             deferred,
             cursor_targets,
-            prepared: Some(PreparedSnapshot::Database(prepared)),
+            prepared: Some(prepared),
         })
     }
 
@@ -1251,6 +1433,397 @@ mod tests {
                 .unwrap();
             drop(_dir);
         }
+    }
+
+    // Test-first: current wire/Port shape only. No proposed cursorUnknown field is needed.
+    // This uses the actual DB facade, spawned actor and public orchestration RPC dispatcher.
+    type S42ReadonlyTables = Vec<(String, Vec<Vec<rusqlite::types::Value>>)>;
+
+    fn s42_readonly_tables(c: &rusqlite::Connection) -> rusqlite::Result<S42ReadonlyTables> {
+        let mut names = c.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence') ORDER BY name")?;
+        let names = names
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names
+            .into_iter()
+            .map(|name| {
+                let quoted = name.replace('"', "\"\"");
+                let mut query = c.prepare(&format!("SELECT * FROM \"{quoted}\""))?;
+                let width = query.column_count();
+                let mut rows = query
+                    .query_map([], |r| {
+                        (0..width)
+                            .map(|i| r.get(i))
+                            .collect::<rusqlite::Result<Vec<rusqlite::types::Value>>>()
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows.sort_by_key(|r| format!("{r:?}"));
+                Ok((name, rows))
+            })
+            .collect()
+    }
+
+    struct S42DiagnosticCatch<F: std::future::Future>(std::pin::Pin<Box<F>>);
+    impl<F: std::future::Future> std::future::Future for S42DiagnosticCatch<F> {
+        type Output = std::result::Result<F::Output, Box<dyn std::any::Any + Send>>;
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.0.as_mut().poll(cx)
+            })) {
+                Ok(std::task::Poll::Ready(v)) => std::task::Poll::Ready(Ok(v)),
+                Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                Err(e) => std::task::Poll::Ready(Err(e)),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn s42_db_readonly_missing_cursor_survives_port_and_wake_list_without_writes() {
+        let rig = S46ActorDb::new(super::super::hooks::Hooks::default()).await;
+        // Boot/actor creation already completed. There is no pending work or live child,
+        // so ticks cannot legitimately prepare this channel while inspecting it.
+        let collected = S42DiagnosticCatch(Box::pin(async {
+            let deleted =
+                rig.state
+                    .db
+                    .call(|s| {
+                        s.conn().execute(
+                "DELETE FROM read_cursors WHERE reader='w-1' AND channel_id='c-1/lobby'", []
+            )
+                    })
+                    .await??;
+            rig.handle.latches().await?; // real FIFO actor barrier, not a synthetic collab fact
+            let mut hub = rig.state.hub.subscribe_collab();
+            let before = rig
+                .state
+                .db
+                .call(|s| s42_readonly_tables(s.conn()))
+                .await??;
+            let raw = rig
+                .state
+                .db
+                .call(|s| collab::causal::diagnostics(s.conn(), "w-1", crewd_store::now_ms()))
+                .await??;
+            let mut ports = Vec::new();
+            let mut wires = Vec::new();
+            for _ in 0..2 {
+                ports.push(rig.port.causal_diagnostics("w-1", rig.now).await?);
+                wires.push(
+                    super::super::rpc::call(
+                        &rig.handle,
+                        &rig.state,
+                        crewd_proto::orchestra::methods::WAKE_LIST,
+                        serde_json::json!({"sessionId":"w-1"}),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("actual wake.list RPC error: {e:?}"))?,
+                );
+            }
+            rig.handle.latches().await?;
+            let after = rig
+                .state
+                .db
+                .call(|s| s42_readonly_tables(s.conn()))
+                .await??;
+            let missing = rig
+                .state
+                .db
+                .call(|s| collab::cursors::cursor(s.conn(), "w-1", "c-1/lobby"))
+                .await??;
+            let mut events = Vec::new();
+            loop {
+                match hub.try_recv() {
+                    Ok(event) => events.push(format!("{event:?}")),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(e) => anyhow::bail!("readonly Hub observer failed: {e}"),
+                }
+            }
+            Ok::<_, anyhow::Error>((deleted, raw, ports, wires, before, after, missing, events))
+        }))
+        .await;
+        // This handles setup errors and unexpected panics before the normal cleanup.
+        // Functional oracles run only after normal actor/bridge/DB joins.
+        let cleanup = S42DiagnosticCatch(Box::pin(rig.close())).await;
+        let result = match (collected, cleanup) {
+            (Ok(result), Ok(())) => result,
+            (Err(panic), Ok(())) => std::panic::resume_unwind(panic),
+            (original, Err(_)) => panic!(
+                "S42 readonly normal cleanup failed; original stage failed={}",
+                original.as_ref().map_or(true, |v| v.is_err())
+            ),
+        };
+        let (deleted, raw, ports, wires, before, after, missing, events) = result.expect(
+            "readonly fixture/dispatcher stage failed after normal cleanup; not causal RED",
+        );
+        assert!(deleted <= 1);
+        assert!(
+            raw.unknown_channels.iter().any(|ch| ch == "c-1/lobby"),
+            "fixture must expose actual missing eligible cursor"
+        );
+        assert_eq!(missing, None);
+        assert_eq!(
+            before, after,
+            "readonly Port/actor/RPC must not pin, hold, alter receipts or any durable table"
+        );
+        assert!(
+            events.is_empty(),
+            "readonly diagnosis must not publish Hub effects"
+        );
+        for wire in &wires {
+            assert!(
+                wire["wakes"]
+                    .as_array()
+                    .expect("actual wake.list shape")
+                    .is_empty(),
+                "no fabricated wake row for unknown cursor"
+            );
+        }
+        eprintln!(
+            "S42 missing-cursor observed normal_cleanup=true raw_unknown={:?} port_channels={:?} rpc_targets={:?} hub_events={}",
+            raw.unknown_channels,
+            ports
+                .iter()
+                .map(|v| v.iter().map(|(ch, _)| ch).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            wires.iter().map(|v| &v["targets"]).collect::<Vec<_>>(),
+            events.len()
+        );
+        // Expected first old-source behavioral RED: raw storage is honest, adapter loses it.
+        for diagnostic in &ports {
+            assert!(
+                diagnostic.iter().any(|(ch, _)| ch == "c-1/lobby"),
+                "S42 missing cursor must survive actual Port diagnostic conversion"
+            );
+        }
+        for wire in &wires {
+            let target = wire["targets"]
+                .as_array()
+                .expect("actual wake.list targets")
+                .iter()
+                .find(|v| v["sessionId"] == "w-1")
+                .expect("explicit actual target");
+            assert!(
+                target["causalDiagnostics"]
+                    .as_array()
+                    .is_some_and(|channels| channels.iter().any(|v| v["channelId"] == "c-1/lobby")),
+                "S42 missing cursor must survive actual actor and RPC target diagnostics"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn s42_missing_cursor_actual_prepare_then_claim_has_no_diagnostic_latch() {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        let rig = S46ActorDb::new(super::super::hooks::Hooks::default()).await;
+        let collected = S42DiagnosticCatch(Box::pin(async {
+            rig.state
+                .db
+                .call(|s| {
+                    s.conn().execute(
+                        "DELETE FROM read_cursors WHERE reader='w-1' AND channel_id='c-1/lobby'",
+                        [],
+                    )
+                })
+                .await??;
+            rig.handle.latches().await?;
+            let before = rig.port.causal_diagnostics("w-1", rig.now).await?;
+            let cursor_before = rig
+                .state
+                .db
+                .call(|s| collab::cursors::cursor(s.conn(), "w-1", "c-1/lobby"))
+                .await??;
+            // Real ordinary preparation, not a diagnostic side effect or fixture pin.
+            rig.port.prepare_causal_admission("w-1", rig.now).await?;
+            let prepared_cursor = rig
+                .state
+                .db
+                .call(|s| collab::cursors::cursor(s.conn(), "w-1", "c-1/lobby"))
+                .await??;
+            let after_prepare = rig.port.causal_diagnostics("w-1", rig.now).await?;
+            let message = rig
+                .state
+                .collab(|tx| {
+                    collab::messages::post(
+                        tx,
+                        collab::Sender::Human,
+                        collab::messages::NewPost {
+                            channel_id: "c-1/lobby".into(),
+                            text: "S42_CURSOR_PREP_REAL_BODY".into(),
+                            mentions: vec![crewd_proto::Mention {
+                                kind: crewd_proto::MentionKind::Session,
+                                target_id: Some("w-1".into()),
+                            }],
+                            ..Default::default()
+                        },
+                    )
+                    .map(|p| p.message)
+                })
+                .await?;
+            let due = rig.make_source_due(source::message(&message.id)).await;
+            // Actual Hub->actor->planner->render/claim->controlled executor launch.
+            let body_seen = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    rig.handle.latches().await?;
+                    if rig.exec.launches("w-1").iter().any(|l| {
+                        l.initial
+                            .as_deref()
+                            .is_some_and(|t| t.contains(&message.text))
+                    }) {
+                        break Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            if matches!(&body_seen, Ok(Ok(()))) {
+                rig.exec.emit(
+                    "w-1",
+                    SessionEvent::Delivery {
+                        id: BRIEF_DELIVERY_ID,
+                        subject: Subject::Brief,
+                        outcome: DeliveryOutcome::Delivered,
+                    },
+                );
+            }
+            let expected_source = source::message(&message.id);
+            let settled = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    rig.handle.latches().await?;
+                    let expected_source = expected_source.clone();
+                    let row = rig
+                        .port
+                        .read(move |c| {
+                            Ok(cw::list(c, Some("w-1"), 100)?
+                                .into_iter()
+                                .find(|w| w.source == expected_source))
+                        })
+                        .await?;
+                    if row
+                        .as_ref()
+                        .is_some_and(|w| w.state == cw::WakeState::Delivered)
+                    {
+                        break Ok::<_, anyhow::Error>(row);
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            let final_cursor = rig
+                .state
+                .db
+                .call(|s| collab::cursors::cursor(s.conn(), "w-1", "c-1/lobby"))
+                .await??;
+            let final_diag = rig.port.causal_diagnostics("w-1", rig.now).await?;
+            let holds = rig.port.causal_holds(Some("w-1")).await?;
+            let wire = super::super::rpc::call(
+                &rig.handle,
+                &rig.state,
+                crewd_proto::orchestra::methods::WAKE_LIST,
+                serde_json::json!({"sessionId":"w-1"}),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("actual RPC: {e:?}"))?;
+            Ok::<_, anyhow::Error>((
+                before,
+                cursor_before,
+                prepared_cursor,
+                after_prepare,
+                message,
+                due,
+                body_seen,
+                settled,
+                final_cursor,
+                final_diag,
+                holds,
+                wire,
+            ))
+        }))
+        .await;
+        let cleanup = S42DiagnosticCatch(Box::pin(rig.close())).await;
+        let result = match (collected, cleanup) {
+            (Ok(result), Ok(())) => result,
+            (Err(p), Ok(())) => std::panic::resume_unwind(p),
+            (original, Err(_)) => panic!(
+                "S42 preparation cleanup failed; original failed={}",
+                original.as_ref().map_or(true, |v| v.is_err())
+            ),
+        };
+        let (
+            before,
+            cursor_before,
+            prepared_cursor,
+            after_prepare,
+            message,
+            due,
+            body_seen,
+            settled,
+            final_cursor,
+            final_diag,
+            holds,
+            wire,
+        ) = result.expect("preparation fixture failed after cleanup, not behavior proof");
+        assert_eq!(cursor_before, None);
+        assert!(
+            before
+                .iter()
+                .any(|(ch, b)| ch == "c-1/lobby" && b.cursor_unknown),
+            "S42 original eligible surface is honestly unknown"
+        );
+        assert!(
+            prepared_cursor.is_some(),
+            "S42 actual preparation establishes a safe real cursor"
+        );
+        assert!(
+            !after_prepare
+                .iter()
+                .any(|(ch, b)| ch == "c-1/lobby" && b.cursor_unknown),
+            "S42 preparation removes lookup uncertainty"
+        );
+        assert!(
+            due.is_some(),
+            "actual committed Hub message creates real planner row"
+        );
+        assert!(
+            matches!(body_seen, Ok(Ok(()))),
+            "S42 prepared surface actual rendered body must launch"
+        );
+        let row = settled
+            .expect("actual Delivered row missing after normal cleanup")
+            .expect("actual receipt storage failure")
+            .unwrap();
+        assert_eq!(row.source, source::message(&message.id));
+        assert_eq!(row.state, cw::WakeState::Delivered);
+        assert_eq!(final_cursor, Some(message.seq));
+        assert!(
+            holds.is_empty(),
+            "S42 cursor uncertainty is not a durable causal latch"
+        );
+        assert!(
+            !final_diag
+                .iter()
+                .any(|(ch, b)| ch == "c-1/lobby" && b.cursor_unknown)
+        );
+        let target = wire["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["sessionId"] == "w-1")
+            .unwrap();
+        assert!(
+            !target["causalDiagnostics"]
+                .as_array()
+                .is_some_and(|v| v
+                    .iter()
+                    .any(|ch| ch["channelId"] == "c-1/lobby"
+                        && ch["blockage"]["cursorUnknown"] == true)),
+            "actual RPC no longer reports unknown prepared channel"
+        );
     }
 
     type S46AskCall = (String, String, Vec<(String, Option<String>)>, Ms);
@@ -2814,6 +3387,1556 @@ mod tests {
         );
     }
 
+    // S42 original-file/Core-boot composition; controlled executor, no public helper/process.
+    async fn s42_boot_cause(r: &StopDbRig, m: &Message) -> Option<Vec<(String, u32)>> {
+        let m = m.clone();
+        r.state
+            .db
+            .call(
+                move |s| match collab::causal::read_message(s.conn(), &m).unwrap() {
+                    collab::causal::MessageCause::Resolved(f) => Some(
+                        f.components()
+                            .iter()
+                            .map(|v| (v.chain_id(), v.hop()))
+                            .collect(),
+                    ),
+                    collab::causal::MessageCause::Unresolved { .. } => None,
+                },
+            )
+            .await
+            .unwrap()
+    }
+    async fn s42_boot_stamp(r: &StopDbRig, m: &Message) -> (Message, String) {
+        let id = m.id.clone();
+        r.state
+            .db
+            .call(move |s| {
+                (
+                    collab::messages::get(s.conn(), &id).unwrap(),
+                    crewd_store::meta_get(s.conn(), &format!("causal.message.v1.{id}"))
+                        .unwrap()
+                        .unwrap(),
+                )
+            })
+            .await
+            .unwrap()
+    }
+    async fn s42_boot_state(r: &StopDbRig) -> serde_json::Value {
+        r.state
+            .db
+            .call(|s| {
+                let raw = crewd_store::meta_get(s.conn(), "causal.session.v1.w-1")
+                    .unwrap()
+                    .unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()["value"].clone()
+            })
+            .await
+            .unwrap()
+    }
+    async fn s42_boot_meta(r: &StopDbRig) -> Vec<(String, String)> {
+        r.state
+            .db
+            .call(|s| {
+                let mut q = s
+                    .conn()
+                    .prepare("SELECT key,value FROM meta ORDER BY key")
+                    .unwrap();
+                q.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<(String, String)>>>()
+                    .unwrap()
+            })
+            .await
+            .unwrap()
+    }
+    async fn s42_boot_actual_brief_success(r: &mut StopDbRig) {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        r.drain().await;
+    }
+
+    #[tokio::test]
+    async fn s42_original_file_boot_preserves_committed_basis_hold_and_immutable_tuple() {
+        let mut r = StopDbRig::new().await;
+        r.state
+            .collab(|tx| collab::cursors::pin_to_end(tx, "w-2", "c-1/lobby"))
+            .await
+            .unwrap();
+        let (initial_batch, seq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let initial_cursor = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let initial_rows = r
+            .state
+            .db
+            .call(|s| crewd_store::messages::list(s.conn(), "c-1/lobby", 0, None, 100))
+            .await
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "S42 original boot before actual success human_seq={seq} cursor={initial_cursor} targets={:?} rows={initial_rows:?}",
+            initial_batch.cursor_targets
+        );
+        s42_boot_actual_brief_success(&mut r).await;
+        let cursor_after_initial_ack = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        eprintln!("S42 original boot after actual success cursor={cursor_after_initial_ack}");
+        let child = post_as(
+            &r.state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "S42 committed before original-file boot",
+            &[],
+        )
+        .await;
+        let before_cause = s42_boot_cause(&r, &child).await;
+        let before_stamp = s42_boot_stamp(&r, &child).await;
+        let before_state = s42_boot_state(&r).await;
+        let chain = before_cause
+            .as_ref()
+            .expect("actual committed brief produced basis")[0]
+            .0
+            .clone();
+        // Actual typed durable hold API. This is retention proof, not a fabricated
+        // over-budget caller oracle; live hop17 admission has its separate caller case.
+        let hold = collab::causal::ChainHold {
+            chain_id: chain,
+            from: "w-1".into(),
+            target: "w-2".into(),
+            hop: 1,
+            reason: "explicit typed retention fixture".into(),
+            at_ms: crewd_store::now_ms(),
+        };
+        let installed = r
+            .state
+            .collab({
+                let hold = hold.clone();
+                move |tx| collab::causal::hold(tx, &hold)
+            })
+            .await
+            .unwrap();
+        let cursor_before = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let foreign_cursor_before = r.port.cursor("w-2", "c-1/lobby").await.unwrap();
+        let mut r = r.reboot().await; // original path Db.shutdown / Store::open / actual Core.boot
+        let cause_after = s42_boot_cause(&r, &child).await;
+        let stamp_after = s42_boot_stamp(&r, &child).await;
+        let state_after = s42_boot_state(&r).await;
+        let holds_after = r.port.causal_holds(Some("w-2")).await.unwrap();
+        let cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let foreign_cursor_after = r.port.cursor("w-2", "c-1/lobby").await.unwrap();
+        let diagnostics = r
+            .port
+            .causal_diagnostics("w-2", r.core.now())
+            .await
+            .unwrap();
+        r.drain().await;
+        let repeated_cause = s42_boot_cause(&r, &child).await;
+        let repeated_holds = r.port.causal_holds(Some("w-2")).await.unwrap();
+        let live_after_boot = r.core.live.keys().cloned().collect::<Vec<_>>();
+        let original_held = r.core.held.contains("w-1");
+        let restart_prompt = r.core.restart_prompt;
+        eprintln!(
+            "S42 original boot live={live_after_boot:?} original_held={original_held} restart_prompt={restart_prompt:?}"
+        );
+        r.close().await;
+        assert!(installed, "S42 actual typed hold installed before shutdown");
+        assert_eq!(
+            cursor_after_initial_ack, seq,
+            "actual brief DB ack committed original prefix before subsequent own post"
+        );
+        assert_eq!(
+            cause_after, before_cause,
+            "S42 boot cannot reset committed cause or add hop"
+        );
+        assert_eq!(
+            stamp_after, before_stamp,
+            "S42 original-file reopen retains immutable actual tuple/stamp"
+        );
+        assert_eq!(
+            state_after["basis"], before_state["basis"],
+            "S42 boot preserves canonical committed basis"
+        );
+        assert_eq!(
+            state_after["epoch"], before_state["epoch"],
+            "S42 boot must not manufacture Work epoch"
+        );
+        assert_eq!(
+            holds_after,
+            vec![hold.clone()],
+            "S42 boot cannot clear exact persisted hold episode"
+        );
+        assert_eq!(
+            cursor_before, seq,
+            "own child was not delivered as an incoming body before boot"
+        );
+        // Ordinary boot replan skips leading own rows using the shared scanner. A
+        // foreign receiver's held prefix must remain untouched by that cleanup.
+        assert_eq!(
+            cursor_after, child.seq,
+            "boot may skip exactly the leading own child, never a foreign prefix"
+        );
+        assert_eq!(
+            foreign_cursor_after, foreign_cursor_before,
+            "boot cannot consume a foreign held input"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|(channel, blockage)| channel == "c-1/lobby"
+                    && blockage.holds.iter().any(|h| h.chain_id == hold.chain_id
+                        && h.from == hold.from
+                        && h.target == hold.target)),
+            "S42 reopened exact held actual tuple remains observable, not merely missing-cursor diagnostic"
+        );
+        assert_eq!(repeated_cause, cause_after);
+        assert_eq!(repeated_holds, holds_after);
+        assert!(
+            !live_after_boot.iter().any(|id| id == "w-1")
+                && original_held
+                && restart_prompt.is_some(),
+            "boot must hold the original crashed session for its actual restart decision; other legitimate backlog remains independent"
+        );
+    }
+
+    #[tokio::test]
+    async fn s42_original_file_boot_retires_pending_eligible_old_ticket_without_overwriting_new_owner()
+     {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, ExitStatusKind, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let (_, _) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        s42_boot_actual_brief_success(&mut r).await;
+        let previous = post_as(
+            &r.state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "S42 previous committed cause before pending restart",
+            &[],
+        )
+        .await;
+        let previous_cause = s42_boot_cause(&r, &previous).await;
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Exited(ExitInfo {
+                status: ExitStatusKind::Code(0),
+                stopped_by_user: false,
+                hit_limit: false,
+            }),
+        );
+        r.drain().await;
+        let (mut old, _) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        // Genuine StandIn producer publishes via registered original observer before
+        // Core receives the queued event. No fabricated observe_success factory.
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        match old.lease.as_mut().expect("actual old claim lease") {
+            BatchLease::CausalDatabase { claimed, observed } => {
+                let p = &claimed.pending;
+                *observed = Some(Box::new(
+                    r.state
+                        .causal_fence
+                        .success(p, p.generation(), BRIEF_DELIVERY_ID)
+                        .unwrap(),
+                ));
+            }
+            other => panic!("actual causal lease required: {other:?}"),
+        }
+        let eligible = post_as(
+            &r.state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "S42 final emission before original DB ack and boot",
+            &[],
+        )
+        .await;
+        let early_cause = s42_boot_cause(&r, &eligible).await;
+        let early_stamp = s42_boot_stamp(&r, &eligible).await;
+        let state_before = s42_boot_state(&r).await;
+        let mut r = r.reboot().await; // drop queued old receipt; boot conservatively terminals pending
+        let boot_cause = s42_boot_cause(&r, &eligible).await;
+        let boot_stamp = s42_boot_stamp(&r, &eligible).await;
+        let boot_state = s42_boot_state(&r).await;
+        let previous_after = s42_boot_cause(&r, &previous).await;
+        let after_boot_receipt = r
+            .port
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        // Existing launch helper is a white-box caller of actual Core launch_carrying;
+        // it does NOT pretend that restart held intent was answered through public RPC.
+        let (new, newseq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let new_held = r.held_cursor().await;
+        let different_owner = match (old.lease.as_ref(), new.lease.as_ref()) {
+            (
+                Some(BatchLease::CausalDatabase { claimed: old, .. }),
+                Some(BatchLease::CausalDatabase { claimed: new, .. }),
+            ) => old.pending != new.pending,
+            _ => false,
+        }; // compare immutable exact receipts, not observed Some/None or local generation integers
+        let before_late = s42_boot_meta(&r).await;
+        let cursor_before_late = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let late = r
+            .port
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let after_late = s42_boot_meta(&r).await;
+        let cursor_after_late = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let held_after_late = r.held_cursor().await;
+        s42_boot_actual_brief_success(&mut r).await;
+        let new_cursor = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let new_basis = s42_boot_state(&r).await;
+        let late_again = r
+            .port
+            .ack(
+                &old,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let after_final_late = s42_boot_state(&r).await;
+        let final_eligible = s42_boot_cause(&r, &eligible).await;
+        let final_stamp = s42_boot_stamp(&r, &eligible).await;
+        r.close().await;
+        assert!(
+            early_cause.is_none(),
+            "S42 real emitted-before-DB-ack child remains conservative"
+        );
+        assert!(
+            boot_cause.is_none() && final_eligible.is_none(),
+            "S42 boot/old receipt cannot retroactively activate terminal Eligible child"
+        );
+        assert_eq!(boot_stamp, early_stamp);
+        assert_eq!(
+            final_stamp, early_stamp,
+            "immutable candidate stamp remains historical"
+        );
+        assert_eq!(
+            previous_after, previous_cause,
+            "S42 pending reset preserves prior committed ancestry"
+        );
+        assert_eq!(boot_state["basis"], state_before["basis"]);
+        assert_eq!(boot_state["epoch"], state_before["epoch"]);
+        assert!(
+            after_boot_receipt.unwrap().stale,
+            "S42 old exact ticket stale after actual boot reset"
+        );
+        assert!(
+            different_owner && new_held && held_after_late,
+            "actual new durable lease survives late old ticket"
+        );
+        assert!(late.unwrap().stale);
+        assert_eq!(
+            before_late, after_late,
+            "old exact observed success cannot mutate new owner metadata"
+        );
+        assert_eq!(
+            cursor_after_late, cursor_before_late,
+            "old ticket cannot advance new claimed prefix"
+        );
+        assert_eq!(
+            new_cursor, newseq,
+            "actual new original success still commits its prefix"
+        );
+        assert!(late_again.unwrap().stale);
+        assert_eq!(
+            after_final_late["basis"], new_basis["basis"],
+            "late old success cannot replace new canonical basis"
+        );
+        assert_eq!(after_final_late["epoch"], new_basis["epoch"]);
+    }
+
+    // Real Core callback -> original observer -> real SQL abort -> same-fate retry.
+    // Work here is real note_progress Tx, not a replacement for actual hook/Tool caller coverage.
+    async fn s42_core_known_delivered_sql_retry_case(new_work: bool) {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, ExitInfo, ExitStatusKind, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        r.state
+            .collab(|tx| collab::cursors::pin_to_end(tx, "w-1", "c-1/lobby"))
+            .await
+            .unwrap();
+        let input = post_as(
+            &r.state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            "S42 original successful debt input",
+            &[],
+        )
+        .await;
+        let input_cause = s42_boot_cause(&r, &input).await;
+        // Real Message row, shared rendering and actual Core dispatch; no System-only surrogate.
+        let id = r
+            .port
+            .enqueue(new_wake(
+                "w-1",
+                WakeKind::Message,
+                source::message(&input.id),
+                Priority::Human,
+                HUMAN,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        r.core
+            .handle(super::super::core::Input::Collab(
+                super::super::core::CollabFact::WakeEnqueued {
+                    session: "w-1".into(),
+                },
+            ))
+            .await;
+        r.drain().await;
+        let mut original = r.core.live["w-1"]
+            .inflight
+            .as_ref()
+            .expect("actual launched body inflight")
+            .batch
+            .clone();
+        let actual_ids = original.ids();
+        let actual_targets = original.cursor_targets.clone();
+        let actual_payload = r
+            .exec
+            .launches("w-1")
+            .last()
+            .and_then(|l| l.initial.clone());
+        let output_key = match original.lease.as_ref().unwrap() {
+            BatchLease::CausalDatabase { claimed, .. } => {
+                format!("causal.output.v1.{}", claimed.pending.stable_key())
+            }
+            other => panic!("actual causal lease required: {other:?}"),
+        };
+        let capture=r.state.db.call(move|s| {
+            let raw=crewd_store::meta_get(s.conn(),&output_key).unwrap().unwrap();
+            serde_json::from_str::<serde_json::Value>(&raw).unwrap()["value"]["receipt"]["capture"].clone()
+        }).await.unwrap();
+        let actual_tuple = capture["tuples"].as_array().unwrap().iter().any(|t| {
+            t["id"] == input.id && t["channel"] == input.channel_id && t["seq"] == input.seq
+        });
+        let row_before = r.row(id).await;
+        let cursor_before = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let queued = post_as(
+            &r.state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "S42 before original final success must stay unknown",
+            &[],
+        )
+        .await;
+        r.state.db.call(move |s|s.conn().execute_batch(&format!(
+            "CREATE TRIGGER s42_original_delivered_abort BEFORE UPDATE OF state ON wakes WHEN OLD.id={id} AND NEW.state='delivered' BEGIN SELECT RAISE(ABORT,'s42 original Delivered SQL abort'); END;"
+        )).unwrap()).await.unwrap();
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        let original_success = match original
+            .lease
+            .as_mut()
+            .expect("actual original causal lease")
+        {
+            BatchLease::CausalDatabase { claimed, observed } => {
+                let p = &claimed.pending;
+                let ticket = r
+                    .state
+                    .causal_fence
+                    .success(p, p.generation(), BRIEF_DELIVERY_ID)
+                    .unwrap();
+                *observed = Some(Box::new(ticket.clone()));
+                ticket
+            }
+            other => panic!("actual causal lease required: {other:?}"),
+        };
+        let eligible = post_as(
+            &r.state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "S42 emitted original success before SQL acknowledgement",
+            &[],
+        )
+        .await;
+        let before_failure = s42_boot_meta(&r).await;
+        let eligible_before = s42_boot_cause(&r, &eligible).await;
+        r.drain().await; // real Input::Session callback stores KnownDelivered, then actual SQL error
+        let debt_after_error = r.core.terminal_sessions();
+        let after_failure = s42_boot_meta(&r).await;
+        let row_after_error = r.row(id).await;
+        let cursor_after_error = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let deferred = r.core.try_deliver("w-1").await;
+        let debt_after_defer = r.core.terminal_sessions();
+        let exact_retry_error = r.core.retry_terminal("w-1").await;
+        let basis_before_work = s42_boot_state(&r).await;
+        let applied_work = if new_work {
+            r.state
+                .collab(|tx| {
+                    collab::sessions::note_progress(tx, "w-1", collab::ProgressKind::ToolCall)
+                })
+                .await
+                .unwrap();
+            let message = post_as(
+                &r.state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "S42 newer real work applied before older same-fate retry",
+                &[],
+            )
+            .await;
+            let stamp = s42_boot_stamp(&r, &message).await;
+            Some((
+                message.clone(),
+                s42_boot_cause(&r, &message).await,
+                s42_boot_state(&r).await,
+                stamp,
+            ))
+        } else {
+            None
+        };
+        // A subsequent actual process terminal must not convert known Delivered to Failed.
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Exited(ExitInfo {
+                status: ExitStatusKind::Code(0),
+                stopped_by_user: false,
+                hit_limit: false,
+            }),
+        );
+        r.drain().await;
+        let debt_after_exit = r.core.terminal_sessions();
+        let row_after_exit = r.row(id).await;
+        r.state
+            .db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("DROP TRIGGER s42_original_delivered_abort")
+                    .unwrap()
+            })
+            .await
+            .unwrap();
+        let repaired_retry = r.core.retry_terminal("w-1").await;
+        let debt_after_retry = r.core.terminal_sessions();
+        let row_after_retry = r.row(id).await;
+        let cursor_after_retry = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let eligible_after = s42_boot_cause(&r, &eligible).await;
+        let queued_after = s42_boot_cause(&r, &queued).await;
+        let basis_after_retry = s42_boot_state(&r).await;
+        let work_after_retry = if let Some((message, _, _, _)) = &applied_work {
+            let m = message.clone();
+            let frontier = r
+                .state
+                .db
+                .call(
+                    move |s| match collab::causal::read_message(s.conn(), &m).unwrap() {
+                        collab::causal::MessageCause::Resolved(frontier) => {
+                            Some(serde_json::to_value(frontier).unwrap())
+                        }
+                        collab::causal::MessageCause::Unresolved { .. } => None,
+                    },
+                )
+                .await
+                .unwrap();
+            Some((frontier, s42_boot_stamp(&r, message).await))
+        } else {
+            None
+        };
+        // Repeated original exact capability must be idempotent, not another SQL fate/hop.
+        let before_duplicate = s42_boot_meta(&r).await;
+        let duplicate = r
+            .port
+            .ack(
+                &original,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let after_duplicate = s42_boot_meta(&r).await;
+        let row_after_duplicate = r.row(id).await;
+        let same_ticket = match original.lease.as_ref().unwrap() {
+            BatchLease::CausalDatabase {
+                observed: Some(ticket),
+                ..
+            } => ticket.as_ref() == &original_success,
+            _ => false,
+        };
+        // Fresh actual owner and original final event after old debt commits; no hand-made generation.
+        let (new, newseq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let distinct = match (original.lease.as_ref(), new.lease.as_ref()) {
+            (
+                Some(BatchLease::CausalDatabase { claimed: a, .. }),
+                Some(BatchLease::CausalDatabase { claimed: b, .. }),
+            ) => a.pending != b.pending,
+            _ => false,
+        };
+        // Old exact committed capability while the NEW owner is active, before its success.
+        let active_meta_before = s42_boot_meta(&r).await;
+        let active_cursor_before = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let active_basis_before = s42_boot_state(&r).await;
+        let active_lease_before = r.core.live["w-1"]
+            .inflight
+            .as_ref()
+            .unwrap()
+            .batch
+            .lease
+            .clone();
+        let active_held_before = r.held_cursor().await;
+        let old_during_active = r
+            .port
+            .ack(
+                &original,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let active_meta_after = s42_boot_meta(&r).await;
+        let active_cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let active_basis_after = s42_boot_state(&r).await;
+        let active_lease_after = r.core.live["w-1"]
+            .inflight
+            .as_ref()
+            .unwrap()
+            .batch
+            .lease
+            .clone();
+        let active_held_after = r.held_cursor().await;
+        s42_boot_actual_brief_success(&mut r).await;
+        let new_cursor = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let new_basis = s42_boot_state(&r).await;
+        let before_old_late = s42_boot_meta(&r).await;
+        let old_late = r
+            .port
+            .ack(
+                &original,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let after_old_late = s42_boot_meta(&r).await;
+        let after_old_basis = s42_boot_state(&r).await;
+        let eligible_final = s42_boot_cause(&r, &eligible).await;
+        r.close().await; // normal controlled executor/Core/Db terminal before primary oracles
+        assert_eq!(
+            actual_ids,
+            vec![id],
+            "S42 exact actual Message trigger is claimed without riders"
+        );
+        assert_eq!(row_before.source, source::message(&input.id));
+        assert!(
+            actual_targets.contains(&(input.channel_id.clone(), input.seq)),
+            "S42 actual Message target conveys input prefix"
+        );
+        assert!(
+            actual_payload
+                .as_deref()
+                .is_some_and(|text| text.contains(&input.text)),
+            "S42 actual launched body contains exact Human input"
+        );
+        assert!(
+            actual_tuple,
+            "S42 actual persisted claimed receipt captures exact input tuple"
+        );
+        assert_eq!(
+            debt_after_error,
+            vec!["w-1"],
+            "S42 actual known Delivered SQL error retains original Core debt"
+        );
+        assert_eq!(
+            before_failure, after_failure,
+            "S42 failed actual ack must roll back all causal/reservation metadata"
+        );
+        assert_eq!(row_before.state, cw::WakeState::Inflight);
+        assert_eq!(row_after_error, row_before);
+        assert_eq!(cursor_after_error, cursor_before);
+        assert!(
+            deferred
+                .unwrap_err()
+                .to_string()
+                .contains("s42 original Delivered SQL abort"),
+            "new attempt retries exact debt before claim"
+        );
+        assert_eq!(debt_after_defer, vec!["w-1"]);
+        assert!(
+            exact_retry_error
+                .unwrap_err()
+                .to_string()
+                .contains("s42 original Delivered SQL abort"),
+            "actual SQL trigger reached on same-fate retry"
+        );
+        assert_eq!(
+            debt_after_exit,
+            vec!["w-1"],
+            "Exit cannot convert known original Delivered into Failed"
+        );
+        assert_eq!(
+            row_after_exit, row_before,
+            "known successful output cannot requeue/drop/refund after Exit"
+        );
+        repaired_retry.unwrap();
+        assert!(debt_after_retry.is_empty());
+        assert_eq!(row_after_retry.state, cw::WakeState::Delivered);
+        assert_eq!(
+            row_after_retry.attempts, row_before.attempts,
+            "same-fate retry neither reclains nor refunds attempts"
+        );
+        assert_eq!(
+            cursor_after_retry, input.seq,
+            "one exact original confirmed prefix"
+        );
+        assert!(
+            eligible_before.is_none() && queued_after.is_none(),
+            "pre-success never retroactively gains parent; pre-ack is conservative"
+        );
+        let root = input_cause.as_ref().unwrap()[0].0.clone();
+        assert_eq!(
+            eligible_after,
+            Some(vec![(root, 1)]),
+            "original trusted success resolves exact old child once"
+        );
+        if let Some((_, preack_cause, work_state, preack_stamp)) = applied_work {
+            assert!(
+                preack_cause.is_none(),
+                "S42 actual Eligible Work post remains conservative before original DB ack"
+            );
+            let stamp: serde_json::Value = serde_json::from_str(&preack_stamp.1).unwrap();
+            let resolution = &stamp["value"]["resolution"];
+            assert_eq!(
+                resolution["kind"], "eligible",
+                "S42 actual original success ticket stamps Eligible, not a free root"
+            );
+            let epoch = work_state["epoch"].as_u64().unwrap();
+            assert_eq!(
+                epoch,
+                basis_before_work["epoch"].as_u64().unwrap() + 1,
+                "S42 one actual ToolCall increments exactly once"
+            );
+            assert_eq!(work_state["applied"], work_state["epoch"]);
+            assert_eq!(
+                work_state["basis"], basis_before_work["basis"],
+                "S42 pending original ack preserves previous canonical basis"
+            );
+            let mut expected = capture["frontier"].clone();
+            assert_eq!(
+                expected.as_array().unwrap().len(),
+                1,
+                "S42 original actual input is a single exact cause"
+            );
+            for component in expected.as_array_mut().unwrap() {
+                component["key"]["reset"] =
+                    serde_json::json!({"kind":"work","session":"w-1","epoch":epoch});
+                component["hop"] = serde_json::json!(0);
+            }
+            assert_eq!(
+                resolution["frontier"], expected,
+                "S42 actual preack stamp retains original roots with qualified Work zero"
+            );
+            assert_eq!(work_state["provisional"]["basis"], expected);
+            assert_eq!(work_state["provisional"]["epoch"], epoch);
+            assert_eq!(work_state["provisional"]["output"], resolution["output"]);
+            let (resolved, after_stamp) = work_after_retry.unwrap();
+            assert_eq!(
+                preack_stamp, after_stamp,
+                "S42 same-fate retry does not rewrite original Eligible message history"
+            );
+            assert_eq!(
+                resolved,
+                Some(expected.clone()),
+                "S42 original ack resolves exact qualified Work cause once"
+            );
+            assert_eq!(
+                basis_after_retry["basis"], expected,
+                "S42 same-fate retry installs current Work provisional instead of old Initial hop1"
+            );
+            assert_eq!(basis_after_retry["epoch"], epoch);
+            assert_eq!(basis_after_retry["applied"], epoch);
+            assert!(basis_after_retry["provisional"].is_null());
+        }
+        duplicate.unwrap();
+        assert!(same_ticket);
+        assert_eq!(after_duplicate, before_duplicate);
+        assert_eq!(
+            row_after_duplicate, row_after_retry,
+            "duplicate exact original receipt is not another row fate"
+        );
+        old_during_active.unwrap();
+        assert_eq!(
+            active_meta_before, active_meta_after,
+            "S42 old receipt cannot mutate active new owner metadata"
+        );
+        assert_eq!(active_cursor_before, active_cursor_after);
+        assert_eq!(active_basis_before, active_basis_after);
+        assert_eq!(
+            active_lease_before, active_lease_after,
+            "S42 exact active new lease remains held"
+        );
+        assert!(
+            active_held_before && active_held_after,
+            "S42 older committed duplicate cannot release current reservation"
+        );
+        assert!(distinct);
+        assert_eq!(
+            new_cursor, newseq,
+            "new actual owner still commits original success"
+        );
+        old_late.unwrap();
+        assert_eq!(
+            before_old_late, after_old_late,
+            "late older committed success cannot mutate new owner"
+        );
+        assert_eq!(after_old_basis["basis"], new_basis["basis"]);
+        assert_eq!(after_old_basis["epoch"], new_basis["epoch"]);
+        assert_eq!(eligible_final, eligible_after);
+    }
+    #[tokio::test]
+    async fn s42_core_original_delivered_sql_failure_retains_debt_and_same_fate_retry_once() {
+        s42_core_known_delivered_sql_retry_case(false).await;
+    }
+    #[tokio::test]
+    async fn s42_core_original_delivered_sql_retry_preserves_new_work_and_new_owner_basis() {
+        s42_core_known_delivered_sql_retry_case(true).await;
+    }
+
+    #[tokio::test]
+    async fn s42_active_unwitnessed_ack_keeps_owner_and_retired_replay_is_stale() {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let (batch, seq) = launch_zero_id_body(&mut r).await;
+        r.drain().await;
+        let before = r
+            .state
+            .db
+            .call(|s| {
+                let mut q = s
+                    .conn()
+                    .prepare("SELECT key,value FROM meta ORDER BY key")
+                    .unwrap();
+                q.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+            })
+            .await
+            .unwrap();
+        let held_before = r.held_cursor().await;
+        let refusal = r
+            .port
+            .ack(
+                &batch,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let after = r
+            .state
+            .db
+            .call(|s| {
+                let mut q = s
+                    .conn()
+                    .prepare("SELECT key,value FROM meta ORDER BY key")
+                    .unwrap();
+                q.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+            })
+            .await
+            .unwrap();
+        let held_after = r.held_cursor().await;
+        let cursor_after = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.exec.emit(
+            "w-1",
+            SessionEvent::Delivery {
+                id: BRIEF_DELIVERY_ID,
+                subject: Subject::Brief,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        r.drain().await;
+        let delivered_cursor = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        let retired = r
+            .port
+            .ack(
+                &batch,
+                Ack::Delivered {
+                    riders: Riders::Release,
+                },
+            )
+            .await;
+        let final_cursor = r.port.cursor("w-1", "c-1/lobby").await.unwrap();
+        r.close().await;
+        assert!(held_before && held_after);
+        assert_eq!(
+            before, after,
+            "unwitnessed active ack cannot mutate causal or reservation state"
+        );
+        assert_eq!(cursor_after, 0);
+        assert!(
+            refusal
+                .unwrap_err()
+                .to_string()
+                .contains("missing original emitted success")
+        );
+        assert_eq!(
+            delivered_cursor, seq,
+            "actual observed successful delivery still commits"
+        );
+        assert!(
+            retired.unwrap().stale,
+            "unwitnessed retired replay is not new Applied"
+        );
+        assert_eq!(final_cursor, seq);
+    }
+
+    // S42 family6 actual DbPort/shared renderer/Core. Only executor emission is
+    // controlled. Planner inputs are real committed messages; no private stamp is
+    // inserted, no Frontier is manufactured, no live/provider process is started.
+    type S42Family6Frontier = std::collections::BTreeMap<String, u32>;
+
+    // No new futures dependency or unsafe pinning. Catch each observation/cleanup
+    // poll while preserving the owned Rig outside the observed future.
+    struct S42Family6Catch<F: std::future::Future> {
+        inner: std::pin::Pin<Box<F>>,
+    }
+    impl<F: std::future::Future> std::future::Future for S42Family6Catch<F> {
+        type Output = Result<F::Output, Box<dyn std::any::Any + Send>>;
+        fn poll(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            let this = self.get_mut();
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                this.inner.as_mut().poll(cx)
+            })) {
+                Ok(std::task::Poll::Ready(value)) => std::task::Poll::Ready(Ok(value)),
+                Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                Err(panic) => std::task::Poll::Ready(Err(panic)),
+            }
+        }
+    }
+    fn s42_family6_catch<F: std::future::Future>(future: F) -> S42Family6Catch<F> {
+        S42Family6Catch {
+            inner: Box::pin(future),
+        }
+    }
+    fn s42_family6_panic_note(payload: &(dyn std::any::Any + Send)) -> &str {
+        if let Some(note) = payload.downcast_ref::<String>() {
+            note.as_str()
+        } else if let Some(note) = payload.downcast_ref::<&'static str>() {
+            note
+        } else {
+            "non-string panic payload"
+        }
+    }
+    async fn s42_family6_finish<T>(
+        r: StopDbRig,
+        observation: Result<anyhow::Result<T>, Box<dyn std::any::Any + Send>>,
+    ) -> anyhow::Result<T> {
+        // Even inherited setup helpers' unwrap/index panics first attempt the
+        // normal Core terminal drain and actual DB shutdown. Never make them None.
+        let cleanup = s42_family6_catch(r.close()).await;
+        match (observation, cleanup) {
+            (Err(original), Err(cleanup)) => {
+                eprintln!(
+                    "S42 family6 original panic: {}; cleanup panic: {}",
+                    s42_family6_panic_note(original.as_ref()),
+                    s42_family6_panic_note(cleanup.as_ref())
+                );
+                std::panic::resume_unwind(original)
+            }
+            (Err(original), Ok(())) => std::panic::resume_unwind(original),
+            (Ok(Err(original)), Err(cleanup)) => {
+                eprintln!(
+                    "S42 family6 original error: {original:#}; cleanup panic: {}",
+                    s42_family6_panic_note(cleanup.as_ref())
+                );
+                std::panic::resume_unwind(cleanup)
+            }
+            (Ok(Ok(_)), Err(cleanup)) => std::panic::resume_unwind(cleanup),
+            (Ok(result), Ok(())) => result,
+        }
+    }
+
+    async fn s42_family6_frontier(
+        r: &StopDbRig,
+        m: &Message,
+    ) -> anyhow::Result<Option<S42Family6Frontier>> {
+        let m = m.clone();
+        Ok(r.state
+            .db
+            .call(move |s| -> collab::Result<_> {
+                Ok(match collab::causal::read_message(s.conn(), &m)? {
+                    collab::causal::MessageCause::Resolved(f) => Some(
+                        f.components()
+                            .iter()
+                            .map(|c| (c.chain_id(), c.hop()))
+                            .collect(),
+                    ),
+                    collab::causal::MessageCause::Unresolved { .. } => None,
+                })
+            })
+            .await??)
+    }
+
+    async fn s42_family6_enqueue(r: &StopDbRig, target: &str, m: &Message) -> anyhow::Result<i64> {
+        let at = MessageRef {
+            channel: m.channel_id.clone(),
+            seq: m.seq,
+        };
+        let (facts, _) = r
+            .port
+            .message(&at)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("actual committed message missing"))?;
+        let now = r.core.now();
+        let ctx = r
+            .port
+            .channel_ctx(&at.channel, now)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("actual channel missing"))?;
+        let chosen = crewd_wake::plan::plan(&facts, &ctx, None, now)
+            .into_iter()
+            .find(|t| t.session == target)
+            .ok_or_else(|| anyhow::anyhow!("actual planner omitted explicit target"))?;
+        let origin = crewd_wake::breaker::origin_of(WakeKind::Message, Some(&facts.sender), target);
+        r.port
+            .enqueue(NewWake {
+                session: chosen.session,
+                kind: WakeKind::Message,
+                source: source::message(&facts.id),
+                priority: chosen.priority,
+                not_before: now,
+                note: None,
+                origin,
+            })
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("new planner row deduplicated"))
+    }
+
+    async fn s42_family6_dispatch(
+        r: &mut StopDbRig,
+        target: &str,
+    ) -> anyhow::Result<(Batch, u64, String)> {
+        // Actual Core classification determines primary/riders and exact windows.
+        r.core.try_deliver(target).await?;
+        r.drain().await;
+        let inflight = r
+            .core
+            .live
+            .get(target)
+            .and_then(|l| l.inflight.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("actual Core did not expose an inflight body"))?;
+        let id = inflight
+            .delivery
+            .ok_or_else(|| anyhow::anyhow!("actual command has not been sent"))?;
+        let body = if id == crewd_exec::session::BRIEF_DELIVERY_ID {
+            r.exec
+                .launches(target)
+                .last()
+                .and_then(|l| l.initial.clone())
+        } else {
+            r.exec.sent(target).last().cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("actual executor body missing"))?;
+        Ok((inflight.batch.clone(), id, body))
+    }
+
+    async fn s42_family6_delivered(
+        r: &mut StopDbRig,
+        target: &str,
+        mut batch: Batch,
+        id: u64,
+    ) -> anyhow::Result<Batch> {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        r.exec.emit(
+            target,
+            SessionEvent::Delivery {
+                id,
+                subject: if id == BRIEF_DELIVERY_ID {
+                    Subject::Brief
+                } else {
+                    Subject::Steer
+                },
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        // StandIn emits through the real configured observer BEFORE broadcasting.
+        // Retain that original typed ticket for later duplicate-ack observation.
+        let lease = batch
+            .lease
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("actual original claim lease missing"))?;
+        match lease {
+            BatchLease::CausalDatabase { claimed, observed } => {
+                let p = &claimed.pending;
+                *observed = Some(Box::new(r.state.causal_fence.success(
+                    p,
+                    p.generation(),
+                    id,
+                )?));
+            }
+            _ => anyhow::bail!("actual causal Db lease required"),
+        }
+        r.drain().await;
+        Ok(batch)
+    }
+
+    async fn s42_family6_post(
+        r: &StopDbRig,
+        sender: collab::Sender,
+        text: &str,
+        target: &str,
+    ) -> Message {
+        post_as(&r.state, sender, "c-1/lobby", text, &[target]).await
+    }
+
+    #[tokio::test]
+    async fn s42_actual_core_fanout_reconvergence_preserves_per_key_max_not_global_or_sum() {
+        let mut r = StopDbRig::new().await;
+        let observed = s42_family6_catch(async {
+            let x = s42_family6_post(&r, collab::Sender::Human, "S42_F6_X", "w-1").await;
+            let y = s42_family6_post(&r, collab::Sender::Human, "S42_F6_Y", "w-1").await;
+            let fx = s42_family6_frontier(&r, &x).await?;
+            let fy = s42_family6_frontier(&r, &y).await?;
+            s42_family6_enqueue(&r, "w-1", &y).await?;
+            let (b, id, initial_body) = s42_family6_dispatch(&mut r, "w-1").await?;
+            s42_family6_delivered(&mut r, "w-1", b, id).await?;
+            let a1 = post_as(
+                &r.state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "S42_F6_A1",
+                &["w-2", "cap-1"],
+            )
+            .await;
+            // The same immutable A1 is actually rendered to both branch owners.
+            let mut branches = Vec::new();
+            for target in ["w-2", "cap-1"] {
+                // Persisted mentions include both branches. Use untouched actual
+                // committed facts/context and the production planner for each row.
+                s42_family6_enqueue(&r, target, &a1).await?;
+                let (b, id, body) = s42_family6_dispatch(&mut r, target).await?;
+                branches.push((target.to_string(), body));
+                s42_family6_delivered(&mut r, target, b, id).await?;
+            }
+            let b2 = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-2".into()),
+                "S42_F6_B2",
+                "w-1",
+            )
+            .await;
+            let c2 = s42_family6_post(
+                &r,
+                collab::Sender::Session("cap-1".into()),
+                "S42_F6_C2",
+                "w-2",
+            )
+            .await;
+            s42_family6_enqueue(&r, "w-2", &c2).await?;
+            let (b, id, _) = s42_family6_dispatch(&mut r, "w-2").await?;
+            s42_family6_delivered(&mut r, "w-2", b, id).await?;
+            let b3 = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-2".into()),
+                "S42_F6_B3",
+                "w-1",
+            )
+            .await;
+            let z =
+                s42_family6_post(&r, collab::Sender::Human, "S42_F6_Z_INDEPENDENT", "w-1").await;
+            let fz = s42_family6_frontier(&r, &z).await?;
+            s42_family6_enqueue(&r, "w-1", &b3).await?;
+            s42_family6_enqueue(&r, "w-1", &z).await?;
+            let (b, id, reconvergence_body) = s42_family6_dispatch(&mut r, "w-1").await?;
+            let targets = b.cursor_targets.clone();
+            s42_family6_delivered(&mut r, "w-1", b, id).await?;
+            let out = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-1".into()),
+                "S42_F6_RECONVERGED",
+                "cap-1",
+            )
+            .await;
+            Ok((
+                fx,
+                fy,
+                fz,
+                s42_family6_frontier(&r, &a1).await?,
+                s42_family6_frontier(&r, &b2).await?,
+                s42_family6_frontier(&r, &c2).await?,
+                s42_family6_frontier(&r, &b3).await?,
+                s42_family6_frontier(&r, &out).await?,
+                initial_body,
+                branches,
+                reconvergence_body,
+                targets,
+                z.seq,
+            ))
+        })
+        .await;
+        let observed = s42_family6_finish(r, observed).await;
+        let (fx, fy, fz, a1, b2, c2, b3, out, initial, branches, body, targets, zseq) =
+            observed.expect("closed fixture setup");
+        let mut expected = S42Family6Frontier::new();
+        for f in [fx, fy] {
+            for (key, hop) in f.expect("actual Human root") {
+                assert_eq!(hop, 0);
+                expected.insert(key, 1);
+            }
+        }
+        assert_eq!(
+            expected.len(),
+            2,
+            "two exact independent actual Human roots"
+        );
+        assert_eq!(a1, Some(expected.clone()));
+        for hop in expected.values_mut() {
+            *hop = 2;
+        }
+        assert_eq!(b2, Some(expected.clone()));
+        assert_eq!(c2, Some(expected.clone()));
+        for hop in expected.values_mut() {
+            *hop = 3;
+        }
+        assert_eq!(b3, Some(expected.clone()));
+        for hop in expected.values_mut() {
+            *hop = 4;
+        }
+        for (key, hop) in fz.expect("actual independent Z root") {
+            assert_eq!(hop, 0);
+            expected.insert(key, 1);
+        }
+        assert_eq!(
+            out,
+            Some(expected),
+            "actual reconvergence is component-wise max+1, never sum or globalmax"
+        );
+        assert!(initial.contains("S42_F6_X") && initial.contains("S42_F6_Y"));
+        assert_eq!(branches.len(), 2);
+        assert!(branches.iter().all(|(_, t)| t.contains("S42_F6_A1")));
+        assert!(
+            body.contains("S42_F6_B2")
+                && body.contains("S42_F6_C2")
+                && body.contains("S42_F6_B3")
+                && body.contains("S42_F6_Z_INDEPENDENT")
+        );
+        assert!(targets.contains(&("c-1/lobby".into(), zseq)));
+    }
+
+    #[tokio::test]
+    async fn s42_actual_core_released_rider_activates_only_its_later_own_output() {
+        let mut r = StopDbRig::new().await;
+        let observed = s42_family6_catch(async {
+            let mut fillers = Vec::new();
+            // Real production cap, not a lowered test renderer/window. Byte budget
+            // may make the first actual window shorter; observations use its exact end.
+            for index in 0..collab::cursors::UNREAD_CAP {
+                fillers.push(
+                    s42_family6_post(
+                        &r,
+                        collab::Sender::Human,
+                        &format!("S42_F6_FILL_{index:03}"),
+                        "w-1",
+                    )
+                    .await,
+                );
+            }
+            let rider =
+                s42_family6_post(&r, collab::Sender::Human, "S42_F6_DISTINCT_RIDER", "w-1").await;
+            let rider_root = s42_family6_frontier(&r, &rider).await?;
+            let primary_id = s42_family6_enqueue(&r, "w-1", &fillers[0]).await?;
+            let rider_id = s42_family6_enqueue(&r, "w-1", &rider).await?;
+            let (first, id, first_body) = s42_family6_dispatch(&mut r, "w-1").await?;
+            let first_primary = first.wakes.iter().map(|w| w.id).collect::<Vec<_>>();
+            let first_riders = first.riders.iter().map(|w| w.id).collect::<Vec<_>>();
+            let first_targets = first.cursor_targets.clone();
+            let first = s42_family6_delivered(&mut r, "w-1", first, id).await?;
+            let primary_after = r.row(primary_id).await;
+            let rider_after = r.row(rider_id).await;
+            let first_post = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-1".into()),
+                "S42_F6_AFTER_PRIMARY_ONLY",
+                "cap-1",
+            )
+            .await;
+            let first_cause = s42_family6_frontier(&r, &first_post).await?;
+            let mut windows = Vec::new();
+            let mut early = None;
+            let mut replay = None;
+            let mut delivered_rider = false;
+            for _ in 0..(collab::cursors::UNREAD_CAP + 4) {
+                let row = r.row(rider_id).await;
+                if row.state == cw::WakeState::Delivered {
+                    delivered_rider = true;
+                    break;
+                }
+                // A genuine ordinary post before the new candidate is queued
+                // witnesses the previous successful nonempty canonical basis.
+                let prior_message = s42_family6_post(
+                    &r,
+                    collab::Sender::Session("w-1".into()),
+                    "S42_F6_REAL_PRIOR_BASIS_CONTROL",
+                    "cap-1",
+                )
+                .await;
+                let prior_basis = s42_family6_frontier(&r, &prior_message).await?;
+                let (next, next_id, text) = s42_family6_dispatch(&mut r, "w-1").await?;
+                let ids = next.wakes.iter().map(|w| w.id).collect::<Vec<_>>();
+                let riders = next.riders.iter().map(|w| w.id).collect::<Vec<_>>();
+                let targets = next.cursor_targets.clone();
+                if ids.contains(&rider_id) {
+                    // This post occurs before the new output's accepted producer.
+                    // Existing nonempty basis is legal and must remain exactly
+                    // unchanged; the new rider parent must never be retroactive.
+                    let message = s42_family6_post(
+                        &r,
+                        collab::Sender::Session("w-1".into()),
+                        "S42_F6_QUEUED_RIDER_PARENT",
+                        "cap-1",
+                    )
+                    .await;
+                    let before = s42_family6_frontier(&r, &message).await?;
+                    let stamp_before = s42_boot_stamp(&r, &message).await;
+                    let owner_before = r.core.live["w-1"].inflight.as_ref().unwrap().batch.clone();
+                    let meta_before = s42_boot_meta(&r).await;
+                    let cursor_before = r.port.cursor("w-1", "c-1/lobby").await?;
+                    let ack = r
+                        .port
+                        .ack(
+                            &first,
+                            Ack::Delivered {
+                                riders: Riders::Release,
+                            },
+                        )
+                        .await?;
+                    let meta_after = s42_boot_meta(&r).await;
+                    let cursor_after = r.port.cursor("w-1", "c-1/lobby").await?;
+                    let owner_after = r.core.live["w-1"].inflight.as_ref().unwrap().batch.clone();
+                    replay = Some((
+                        ack.stale,
+                        meta_before == meta_after,
+                        cursor_before == cursor_after,
+                        owner_before.lease == owner_after.lease,
+                        owner_before.ids() == owner_after.ids(),
+                    ));
+                    early = Some((message, before, prior_basis, stamp_before));
+                }
+                windows.push((ids, riders, targets, text));
+                s42_family6_delivered(&mut r, "w-1", next, next_id).await?;
+            }
+            // The bounded loop's last iteration can commit the row; re-read actual
+            // terminal state rather than infer success from timeout/loop exhaustion.
+            let rider_final = r.row(rider_id).await;
+            delivered_rider |= rider_final.state == cw::WakeState::Delivered;
+            let early_after = match &early {
+                Some((m, _, _, _)) => s42_family6_frontier(&r, m).await?,
+                None => None,
+            };
+            let early_stamp_after = match &early {
+                Some((m, _, _, _)) => Some(s42_boot_stamp(&r, m).await),
+                None => None,
+            };
+            let after = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-1".into()),
+                "S42_F6_AFTER_RIDER_OWN_OUTPUT",
+                "cap-1",
+            )
+            .await;
+            let after_cause = s42_family6_frontier(&r, &after).await?;
+            let repeat = s42_family6_post(
+                &r,
+                collab::Sender::Session("w-1".into()),
+                "S42_F6_AFTER_RIDER_REPEAT",
+                "cap-1",
+            )
+            .await;
+            let repeat_cause = s42_family6_frontier(&r, &repeat).await?;
+            Ok((
+                rider_root,
+                primary_id,
+                rider_id,
+                rider.seq,
+                first_primary,
+                first_riders,
+                first_targets,
+                first_body,
+                primary_after,
+                rider_after,
+                first_cause,
+                windows,
+                early,
+                replay,
+                early_after,
+                early_stamp_after,
+                delivered_rider,
+                rider_final,
+                after_cause,
+                repeat_cause,
+            ))
+        })
+        .await;
+        let observed = s42_family6_finish(r, observed).await;
+        let (
+            root,
+            primary_id,
+            rider_id,
+            rider_seq,
+            first_primary,
+            first_riders,
+            targets,
+            body,
+            primary_after,
+            rider_after,
+            first_cause,
+            windows,
+            early,
+            replay,
+            early_after,
+            early_stamp_after,
+            delivered_rider,
+            rider_final,
+            after_cause,
+            repeat_cause,
+        ) = observed.expect("closed fixture setup");
+        let root = root.expect("actual distinct Human rider root");
+        assert_eq!(root.len(), 1);
+        let (key, hop) = root.into_iter().next().unwrap();
+        assert_eq!(hop, 0);
+        assert_eq!(first_primary, vec![primary_id]);
+        assert_eq!(
+            first_riders,
+            vec![rider_id],
+            "actual Core.render_fitted classifies the unshown row as rider"
+        );
+        let end = targets.iter().find(|(ch, _)| ch == "c-1/lobby").unwrap().1;
+        assert!(end < rider_seq);
+        assert!(!body.contains("S42_F6_DISTINCT_RIDER"));
+        assert_eq!(primary_after.state, cw::WakeState::Delivered);
+        assert_eq!(
+            rider_after.state,
+            cw::WakeState::Pending,
+            "original ack releases, does not deliver, rider"
+        );
+        assert!(
+            !first_cause
+                .expect("primary actual output basis")
+                .contains_key(&key),
+            "unshown released rider cannot activate its cause"
+        );
+        assert!(delivered_rider);
+        assert_eq!(rider_final.state, cw::WakeState::Delivered);
+        assert_eq!(
+            rider_after.attempts, 0,
+            "released rider refunds its unshown claim attempt"
+        );
+        assert_eq!(
+            rider_final.attempts, 1,
+            "only its actual delivered own claim remains counted"
+        );
+        let shown = windows
+            .iter()
+            .filter(|(ids, _, _, _)| ids.contains(&rider_id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown.len(),
+            1,
+            "one actual owned output finally represents rider"
+        );
+        assert!(shown[0].3.contains("S42_F6_DISTINCT_RIDER"));
+        assert!(
+            shown[0]
+                .2
+                .iter()
+                .any(|(ch, end)| ch == "c-1/lobby" && *end >= rider_seq)
+        );
+        assert!(!shown[0].1.contains(&rider_id));
+        let (_, early_before, prior_basis, stamp_before) =
+            early.expect("actual queued-own-output post observed");
+        assert!(
+            prior_basis.as_ref().is_some_and(|f| !f.is_empty()),
+            "the real previous successful output has a nonempty basis"
+        );
+        assert_eq!(
+            early_before, prior_basis,
+            "queued output preserves exact actual old basis"
+        );
+        assert!(
+            !early_before.as_ref().unwrap().contains_key(&key),
+            "unwritten/unconfirmed new rider cannot enter previous basis"
+        );
+        assert_eq!(
+            early_after, prior_basis,
+            "later ack cannot retroactively assign a new parent"
+        );
+        assert_eq!(
+            early_stamp_after,
+            Some(stamp_before),
+            "immutable original post tuple/candidate/resolution remains unchanged"
+        );
+        let (_stale, meta, cursor, lease, ids) =
+            replay.expect("original receipt retried during newer exact owner");
+        assert!(
+            meta && cursor && lease && ids,
+            "duplicate old receipt cannot disturb new owner or frontier"
+        );
+        assert_eq!(
+            after_cause.as_ref().and_then(|f| f.get(&key)),
+            Some(&1),
+            "rider activates only after its own actual receipt, exactly hop1"
+        );
+        assert_eq!(
+            repeat_cause, after_cause,
+            "same receipt does not repeatedly advance ordinary output"
+        );
+    }
+
     #[tokio::test]
     async fn s44_zero_id_starting_actual_failed_future_releases_exact_owner() {
         zero_id_starting_terminal_case(ZeroStarting::Failed).await;
@@ -4071,5 +6194,728 @@ mod stop_provenance_tests {
         tokio::task::spawn_blocking(move || db.shutdown())
             .await
             .unwrap();
+    }
+}
+
+// Production Task + real fence + real DB post. Controlled owned child only; not actor/serve.
+#[cfg(test)]
+mod s42_task_fence_db_windows {
+    use super::fixture::{post_as, seeded};
+    use super::*;
+    use crewd_exec::{
+        driver::{
+            ClaudeStart, DeliverySuccessObserver, DriverConfig, SessionHandle, UntrustedContext,
+            start_claude,
+        },
+        launch::ClaudeSpec,
+        registry::ProcessRegistry,
+        session::{DeliveryOutcome, ExitStatusKind, SessionEvent, sanitize_text},
+    };
+    use serde_json::{Value, json};
+    use std::{
+        any::Any,
+        collections::BTreeMap,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+        sync::{
+            Condvar, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+    use tokio::{sync::mpsc, time::timeout};
+    const LIMIT: Duration = Duration::from_secs(5);
+
+    struct EmissionGate {
+        released: Mutex<bool>,
+        release: Condvar,
+        expired: AtomicBool,
+        inner: Arc<dyn DeliverySuccessObserver>,
+        entered: mpsc::UnboundedSender<u64>,
+    }
+    impl EmissionGate {
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.release.notify_all();
+        }
+    }
+    impl DeliverySuccessObserver for EmissionGate {
+        fn emitted(&self, id: u64) {
+            // Only production Task invokes this. Real fence publishes before fixture pause.
+            self.inner.emitted(id);
+            // Hand the Tokio worker core back before waking the receiver and blocking.
+            // The true fence publication remains above and owns no lock across this wait.
+            tokio::task::block_in_place(|| {
+                let _ = self.entered.send(id);
+                let released = self.released.lock().unwrap();
+                let (released, _) = self
+                    .release
+                    .wait_timeout_while(released, Duration::from_secs(3), |released| !*released)
+                    .unwrap();
+                if !*released {
+                    self.expired.store(true, Ordering::SeqCst);
+                }
+            });
+        }
+    }
+    struct TaskOwner {
+        handle: SessionHandle,
+        events: mpsc::UnboundedReceiver<SessionEvent>,
+        gate: Arc<EmissionGate>,
+        registry: Arc<ProcessRegistry>,
+        runtime: PathBuf,
+        agent_id: String,
+        normal: bool,
+    }
+    impl Drop for TaskOwner {
+        fn drop(&mut self) {
+            self.gate.release();
+            if !self.normal {
+                eprintln!("S42 Task fixture fallback stop; not normal accepted cleanup");
+                let _ = self.handle.stop();
+            }
+        }
+    }
+    struct ChildProtocol {
+        dir: PathBuf,
+        marker: Vec<u8>,
+        frame: u64,
+    }
+    impl ChildProtocol {
+        async fn receipt(&self, name: &str) {
+            timeout(LIMIT, async {
+                loop {
+                    assert!(
+                        !self.dir.join("fixture.error").exists(),
+                        "fixture error: {name}"
+                    );
+                    if self.dir.join(name).exists() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .expect("owned child protocol receipt");
+        }
+        async fn screen(&mut self, text: &str) {
+            let n = self.frame;
+            self.frame += 1;
+            let bytes = format!(
+                "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+            );
+            std::fs::write(self.dir.join(format!("screen-{n}.bin")), bytes).unwrap();
+            std::fs::write(self.dir.join(format!("screen-{n}.request")), []).unwrap();
+            self.receipt(&format!("screen-{n}.written")).await;
+            // Task alone reads and drains. File receipt is output-written, not parser proof.
+        }
+        async fn capture(&self, wanted: &[u8]) -> Vec<u8> {
+            timeout(LIMIT, async {
+                loop {
+                    let got = std::fs::read(self.dir.join("capture.bin")).unwrap_or_default();
+                    if got == wanted {
+                        return got;
+                    }
+                    assert!(
+                        wanted.starts_with(&got),
+                        "unexpected actual child capture: {got:?}"
+                    );
+                    assert!(!self.dir.join("fixture.error").exists());
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .expect("exact real PTY body / submit capture")
+        }
+    }
+    fn quote(path: &Path) -> String {
+        format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"))
+    }
+    async fn start_owned(
+        state: &AppState,
+        port: &DbPort,
+        dir: &Path,
+        generation: u64,
+    ) -> (TaskOwner, ChildProtocol, mpsc::UnboundedReceiver<u64>) {
+        let child_dir = dir.join("physical-child");
+        std::fs::create_dir(&child_dir).unwrap();
+        std::fs::set_permissions(&child_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let marker = format!("S42_CLOSE_{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        std::fs::write(child_dir.join("marker.bin"), &marker).unwrap();
+        let debug = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let fake = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .map(|p| p.join("debug/fake_claude"))
+            .filter(|p| p.is_file())
+            .unwrap_or_else(|| debug.join("fake_claude"));
+        assert!(
+            fake.is_file(),
+            "root must build fresh fake_claude: {fake:?}"
+        );
+        let wrapper = dir.join("owned-fake-guarded.sh");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexec {} --guarded-write-fixture {} \"$@\"\n",
+                quote(&fake),
+                quote(&child_dir)
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = dir.join("physical-home");
+        for name in ["", "cache", "config", "tmp"] {
+            std::fs::create_dir_all(home.join(name)).unwrap();
+        }
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = dir.join("physical-runtime");
+        let registry =
+            Arc::new(ProcessRegistry::load(&dir.join("physical-registry.json")).unwrap());
+        let (entered, ready) = mpsc::unbounded_channel();
+        let gate = Arc::new(EmissionGate {
+            released: Mutex::new(false),
+            release: Condvar::new(),
+            expired: AtomicBool::new(false),
+            inner: state.causal_fence.observer("w-1", generation),
+            entered,
+        });
+        let mut config = DriverConfig::new(runtime.clone());
+        config.registry = Some(registry.clone());
+        config.claude_projects_dir = None;
+        config.delivery_observer = Some(gate.clone());
+        let env: BTreeMap<String, String> = [
+            ("HOME", home.clone()),
+            ("XDG_CACHE_HOME", home.join("cache")),
+            ("CLAUDE_CONFIG_DIR", home.join("config")),
+            ("TMPDIR", home.join("tmp")),
+        ]
+        .into_iter()
+        .map(|(k, p)| (k.into(), p.to_str().unwrap().into()))
+        .collect();
+        let (handle, events) = start_claude(
+            ClaudeStart {
+                session_id: "w-1".into(),
+                program: wrapper,
+                child_path: "/usr/bin:/bin".into(),
+                spec: ClaudeSpec {
+                    workdir: dir.into(),
+                    additional_env: env,
+                    ..Default::default()
+                },
+                ledger: port.ledger("w-1"),
+            },
+            config,
+        )
+        .await
+        .unwrap();
+        let mut task = TaskOwner {
+            handle,
+            events,
+            gate,
+            registry,
+            runtime,
+            agent_id: String::new(),
+            normal: false,
+        };
+        let spawned = timeout(LIMIT, task.events.recv()).await.unwrap().unwrap();
+        let SessionEvent::Spawned {
+            pid,
+            agent_session_id,
+            resumed,
+        } = spawned
+        else {
+            panic!("actual Spawned required")
+        };
+        assert!(pid > 0 && !resumed);
+        task.agent_id = agent_session_id;
+        let protocol = ChildProtocol {
+            dir: child_dir,
+            marker,
+            frame: 0,
+        };
+        protocol.receipt("slave-ready").await;
+        let ready_text = std::fs::read_to_string(protocol.dir.join("slave-ready")).unwrap();
+        assert!(
+            ready_text.contains("raw_no_echo=1") && ready_text.contains("stdin_reader_started=0")
+        );
+        (task, protocol, ready)
+    }
+    async fn parser_row(task: &TaskOwner, wanted: &str) {
+        timeout(LIMIT, async {
+            loop {
+                if task
+                    .handle
+                    .screen_text(25)
+                    .await
+                    .unwrap()
+                    .contains(&format!("❯ {wanted}"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("real Task parsed requested screen");
+    }
+    fn drain_delivered(task: &mut TaskOwner, id: u64, retained: &mut Vec<u64>) -> usize {
+        let mut delivered = 0;
+        while let Ok(event) = task.events.try_recv() {
+            eprintln!("S42 observed pre-release event: {event:?}");
+            if let SessionEvent::Delivery {
+                id: actual,
+                outcome: DeliveryOutcome::Delivered,
+                ..
+            } = event
+            {
+                retained.push(actual);
+                if actual == id {
+                    delivered += 1;
+                }
+            }
+        }
+        delivered
+    }
+    #[derive(Debug, PartialEq)]
+    struct DbSnapshot {
+        wake: WakeRow,
+        cursor: i64,
+        meta: Vec<(String, String)>,
+    }
+    async fn db_snapshot(state: &AppState, wake: i64) -> DbSnapshot {
+        state.db.call(move |s| {
+            let wake = cw::by_ids(s.conn(), &[wake]).unwrap().remove(0);
+            let cursor = collab::cursors::cursor(s.conn(), "w-1", "c-1/lobby").unwrap().unwrap_or(0);
+            let mut q = s.conn().prepare("SELECT key,value FROM meta WHERE substr(key,1,7)='causal.' OR substr(key,1,22)='cursor.reservation.v1.' ORDER BY key").unwrap();
+            let meta = q.query_map([], |r| Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            DbSnapshot { wake, cursor, meta }
+        }).await.unwrap()
+    }
+    #[derive(Debug, PartialEq)]
+    struct PostSnapshot {
+        actual: Message,
+        stamp: String,
+        resolved: Option<Value>,
+    }
+    async fn post_snapshot(state: &AppState, message: &Message) -> PostSnapshot {
+        let id = message.id.clone();
+        state.db.call(move |s| {
+            let actual = collab::messages::get(s.conn(), &id).unwrap();
+            let stamp = crewd_store::meta_get(s.conn(), &format!("causal.message.v1.{id}")).unwrap().unwrap();
+            let resolved = match collab::causal::read_message(s.conn(), &actual).unwrap() {
+                collab::causal::MessageCause::Resolved(f) => Some(serde_json::to_value(f).unwrap()),
+                collab::causal::MessageCause::Unresolved { .. } => None,
+            };
+            eprintln!("S42 actual post snapshot: message={actual:?} stamp={stamp} resolved={resolved:?}");
+            PostSnapshot { actual, stamp, resolved }
+        }).await.unwrap()
+    }
+    async fn output_value(state: &AppState, key: &str) -> Value {
+        let key = format!("causal.output.v1.{key}");
+        state
+            .db
+            .call(move |s| {
+                serde_json::from_str::<Value>(
+                    &crewd_store::meta_get(s.conn(), &key).unwrap().unwrap(),
+                )
+                .unwrap()["value"]
+                    .clone()
+            })
+            .await
+            .unwrap()
+    }
+    async fn catch<F: std::future::Future>(future: F) -> Result<F::Output, Box<dyn Any + Send>> {
+        let mut future = Box::pin(future);
+        std::future::poll_fn(move |cx| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                future.as_mut().poll(cx)
+            })) {
+                Ok(std::task::Poll::Ready(v)) => std::task::Poll::Ready(Ok(v)),
+                Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+                Err(e) => std::task::Poll::Ready(Err(e)),
+            }
+        })
+        .await
+    }
+    async fn close_owned(task: &mut TaskOwner, protocol: &ChildProtocol) -> (Vec<u8>, String) {
+        task.gate.release();
+        task.handle.raw(protocol.marker.clone()).unwrap();
+        protocol.receipt("capture.closed").await;
+        let capture = std::fs::read(protocol.dir.join("capture.bin")).unwrap();
+        let receipt = std::fs::read_to_string(protocol.dir.join("capture.closed")).unwrap();
+        let log = std::fs::read_to_string(protocol.dir.join("protocol.log")).unwrap();
+        eprintln!("S42 full protocol:\n{log}\nclosed: {receipt}\nactual capture: {capture:?}");
+        let mut exit = None;
+        timeout(LIMIT, async {
+            while let Some(event) = task.events.recv().await {
+                eprintln!("S42 cleanup event: {event:?}");
+                if let SessionEvent::Exited(info) = event {
+                    exit = Some(info);
+                }
+            }
+        })
+        .await
+        .expect("actual Task Exited and event stream EOF");
+        assert!(
+            matches!(exit, Some(info) if info.status == ExitStatusKind::Code(0) && !info.stopped_by_user)
+        );
+        assert!(task.handle.is_closed());
+        assert!(
+            !task
+                .runtime
+                .join(format!("claude-{}", task.agent_id))
+                .exists()
+        );
+        assert!(task.registry.entries().is_empty());
+        task.normal = true;
+        (capture, receipt)
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn s42_actual_task_real_fence_three_posts_resolve_only_emitted_success() {
+        let (state, port, dir) = seeded().await;
+        let root = post_as(
+            &state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            "S42_PHYSICAL_EXACT_HUMAN",
+            &[],
+        )
+        .await;
+        let wake = port
+            .enqueue(NewWake {
+                session: "w-1".into(),
+                kind: WakeKind::Message,
+                source: cw::source::message(&root.id),
+                priority: Priority::Human,
+                not_before: Ms(0),
+                note: None,
+                origin: HUMAN.into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let wakes = port.pending("w-1").await.unwrap();
+        let rendered = port.render_wake("w-1", &wakes).await.unwrap();
+        let body = sanitize_text(&rendered.text);
+        let mut batch = Batch {
+            session: "w-1".into(),
+            wakes,
+            cursor_targets: rendered.cursor_targets,
+            prepared: rendered.prepared,
+            ..Default::default()
+        };
+        let generation = 1;
+        let cr::Decision::Applied(lease) = port.claim_reserved(&batch, generation).await.unwrap()
+        else {
+            panic!("real causal claim required")
+        };
+        batch.lease = Some(lease);
+        let pending = match batch.lease.as_ref().unwrap() {
+            BatchLease::CausalDatabase { claimed, .. } => claimed.pending.clone(),
+            _ => panic!("real causal output required"),
+        };
+        let before_output = output_value(&state, pending.stable_key()).await;
+        let (mut task, mut protocol, mut emitted) =
+            start_owned(&state, &port, dir.path(), generation).await;
+        let observation = catch(async {
+            let binding = state.causal_fence.binder(&pending, generation).unwrap();
+            let id = task
+                .handle
+                .send_bound(
+                    rendered.text.clone(),
+                    UntrustedContext::default(),
+                    binding.as_ref(),
+                )
+                .unwrap();
+            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.receipt("filler-drained").await;
+            let queued_capture = std::fs::read(protocol.dir.join("capture.bin")).unwrap();
+            // Preserve every actual success, including a counterfactual premature broadcast.
+            let mut retained_delivered = Vec::new();
+            let queued_events = drain_delivered(&mut task, id, &mut retained_delivered);
+            let queued_success = state.causal_fence.success(&pending, generation, id).is_ok();
+            let q = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "S42_PHYSICAL_QUEUED",
+                &[],
+            )
+            .await;
+            let q_before = post_snapshot(&state, &q).await;
+            protocol.screen("").await;
+            let body_capture = protocol.capture(body.as_bytes()).await;
+            let body_events = drain_delivered(&mut task, id, &mut retained_delivered);
+            let body_success = state.causal_fence.success(&pending, generation, id).is_ok();
+            let b = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "S42_PHYSICAL_BODY_ONLY",
+                &[],
+            )
+            .await;
+            let b_before = post_snapshot(&state, &b).await;
+            let paste = format!("[Pasted text #1 +{} lines]", body.lines().count());
+            protocol.screen(&paste).await;
+            parser_row(&task, &paste).await;
+            let mut submitted = body.as_bytes().to_vec();
+            submitted.extend_from_slice(b" \x7f\r");
+            protocol.capture(&submitted).await;
+            protocol.screen("").await;
+            let emission = timeout(LIMIT, emitted.recv()).await.unwrap().unwrap();
+            let premature_broadcast = drain_delivered(&mut task, id, &mut retained_delivered);
+            let e = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "S42_PHYSICAL_EMITTED_PRE_ACK",
+                &[],
+            )
+            .await;
+            let e_before = post_snapshot(&state, &e).await;
+            let before_ack = db_snapshot(&state, wake).await;
+            let success = state
+                .causal_fence
+                .success(&pending, generation, id)
+                .unwrap();
+            task.gate.release();
+            // Reuse the real already-received success. A wrong producer ordering must
+            // reach the post-cleanup premature-broadcast oracle, not wait for a second event.
+            let delivered = if let Some(actual) = retained_delivered.first().copied() {
+                actual
+            } else {
+                timeout(LIMIT, async {
+                    while let Some(event) = task.events.recv().await {
+                        eprintln!("S42 post-release actual event: {event:?}");
+                        if let SessionEvent::Delivery {
+                            id: actual,
+                            outcome: DeliveryOutcome::Delivered,
+                            ..
+                        } = event
+                        {
+                            retained_delivered.push(actual);
+                            return actual;
+                        }
+                    }
+                    panic!("actual Delivered missing")
+                })
+                .await
+                .unwrap()
+            };
+            if let Some(BatchLease::CausalDatabase { observed, .. }) = batch.lease.as_mut() {
+                *observed = Some(Box::new(success.clone()));
+            }
+            let ack = port
+                .ack(
+                    &batch,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let after_ack = db_snapshot(&state, wake).await;
+            let q_after = post_snapshot(&state, &q).await;
+            let b_after = post_snapshot(&state, &b).await;
+            let e_after = post_snapshot(&state, &e).await;
+            let after_output = output_value(&state, pending.stable_key()).await;
+            let duplicate = port
+                .ack(
+                    &batch,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let after_duplicate = db_snapshot(&state, wake).await;
+            let ticket_same = state
+                .causal_fence
+                .success(&pending, generation, id)
+                .unwrap()
+                == success;
+            (
+                id,
+                emission,
+                delivered,
+                retained_delivered,
+                queued_capture,
+                queued_events,
+                queued_success,
+                body_capture,
+                body_events,
+                body_success,
+                premature_broadcast,
+                q_before,
+                q_after,
+                b_before,
+                b_after,
+                e_before,
+                e_after,
+                before_ack,
+                after_ack,
+                after_duplicate,
+                after_output,
+                ack.stale,
+                duplicate.stale,
+                ticket_same,
+            )
+        })
+        .await;
+        let cleanup = catch(close_owned(&mut task, &protocol)).await;
+        if cleanup.is_err() {
+            task.gate.release();
+            let _ = task.handle.stop();
+            let stopped = timeout(LIMIT, async {
+                while let Some(event) = task.events.recv().await {
+                    eprintln!("S42 fallback stop drain: {event:?}");
+                }
+            })
+            .await;
+            eprintln!(
+                "S42 failed normal cleanup, fallback owned stop EOF={}",
+                stopped.is_ok()
+            );
+        }
+        let expired = task.gate.expired.load(Ordering::SeqCst);
+        drop(task);
+        drop(emitted);
+        drop(port);
+        let db = state.db.clone();
+        drop(state);
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        let (capture, receipt) = match cleanup {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("S42 normal cleanup failed; no accepted semantic tail");
+                if let Err(original) = observation {
+                    std::panic::resume_unwind(original);
+                }
+                std::panic::resume_unwind(e)
+            }
+        };
+        let (
+            id,
+            emission,
+            delivered,
+            retained_delivered,
+            queued_capture,
+            queued_events,
+            queued_success,
+            body_capture,
+            body_events,
+            body_success,
+            premature_broadcast,
+            q_before,
+            q_after,
+            b_before,
+            b_after,
+            e_before,
+            e_after,
+            before_ack,
+            after_ack,
+            after_duplicate,
+            after_output,
+            stale,
+            duplicate_stale,
+            ticket_same,
+        ) = match observation {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        };
+        // Main semantic oracles only after real child/Task EOF, files/registry and DB cleanup.
+        assert!(!expired, "test gate deadline is not producer-order proof");
+        assert_eq!(queued_capture, b"");
+        assert_eq!((queued_events, queued_success), (0, false));
+        assert_eq!(body_capture, body.as_bytes());
+        assert_eq!((body_events, body_success), (0, false));
+        assert_eq!(
+            premature_broadcast, 0,
+            "real fence publication must precede broadcast; gate still held"
+        );
+        assert_eq!((emission, delivered), (id, id));
+        assert_eq!(
+            retained_delivered,
+            vec![id],
+            "exact one original actual success event, including retained early arrivals"
+        );
+        assert_eq!(
+            q_before, q_after,
+            "queued child history must never retroactively activate"
+        );
+        assert_eq!(
+            b_before, b_after,
+            "body-only child history must never retroactively activate"
+        );
+        for saved in [&q_before, &b_before] {
+            assert!(saved.resolved.is_none());
+            let stamp: Value = serde_json::from_str(&saved.stamp).unwrap();
+            assert_eq!(stamp["value"]["candidate"], pending.stable_key());
+            assert_eq!(stamp["value"]["resolution"]["kind"], "unresolved");
+            assert_eq!(stamp["value"]["resolution"]["previous"], json!([]));
+        }
+        let eligible: Value = serde_json::from_str(&e_before.stamp).unwrap();
+        assert!(e_before.resolved.is_none());
+        assert_eq!(eligible["value"]["candidate"], pending.stable_key());
+        assert_eq!(eligible["value"]["resolution"]["kind"], "eligible");
+        assert_eq!(
+            eligible["value"]["resolution"]["output"],
+            pending.stable_key()
+        );
+        assert_eq!(e_before.actual, e_after.actual);
+        assert_eq!(
+            e_before.stamp, e_after.stamp,
+            "eligible history immutable, receipt state resolves read"
+        );
+        let expected = json!([{"key":{"root":{"kind":"message","id":root.id,"seq":root.seq},"reset":{"kind":"initial"}},"hop":1}]);
+        assert_eq!(e_after.resolved, Some(expected.clone()));
+        assert_eq!(eligible["value"]["resolution"]["frontier"], expected);
+        assert_eq!(
+            eligible["value"]["resolution"]["success"]["receipt"], before_output["receipt"],
+            "exact original receipt/generation/capture, not any success"
+        );
+        assert_eq!(before_ack.wake.state, cw::WakeState::Inflight);
+        assert_eq!(
+            before_ack.cursor, 0,
+            "success publication and actual post do not acknowledge DB prefix"
+        );
+        assert_eq!(after_ack.wake.state, cw::WakeState::Delivered);
+        assert_eq!((before_ack.wake.attempts, after_ack.wake.attempts), (1, 1));
+        assert_eq!(
+            after_ack.cursor, root.seq,
+            "later posts not included in original captured prefix"
+        );
+        assert_eq!(
+            after_ack, after_duplicate,
+            "same original same-fate duplicate is inert"
+        );
+        assert!(!stale && !duplicate_stale && ticket_same);
+        assert_eq!(before_output["status"], "pending");
+        assert_eq!(after_output["status"], "committed");
+        assert_eq!(before_output["receipt"], after_output["receipt"]);
+        assert_eq!(
+            after_output["success"],
+            eligible["value"]["resolution"]["success"]
+        );
+        assert_eq!(
+            before_output["receipt"]["capture"]["tuples"],
+            json!([{"id":root.id,"channel":root.channel_id,"seq":root.seq,"kind":root.sender_kind,"sender":root.sender_session_id}])
+        );
+        let mut expected_capture = body.as_bytes().to_vec();
+        expected_capture.extend_from_slice(b" \x7f\r");
+        assert_eq!(
+            capture, expected_capture,
+            "exact complete actual rendered body and one submit"
+        );
+        assert!(receipt.lines().any(|line| line == "trailing_bytes=0"));
     }
 }

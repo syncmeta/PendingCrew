@@ -75,7 +75,7 @@ pub struct Rescue {
     pub after: Vec<QueuedWake>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MemState {
     pub faults: BTreeSet<MemFault>,
     pub fault_hits: Vec<FaultHit>,
@@ -311,17 +311,71 @@ fn note_error(st: &mut MemState, id: i64, error: &str) {
     }
 }
 
+#[path = "testkit/mem_causal.rs"]
+mod mem_causal;
 pub struct MemPort {
     pub st: Mutex<MemState>,
+    causal: Mutex<mem_causal::MemCausal>,
 }
 
 impl MemPort {
     pub fn new() -> Self {
         Self {
             st: Mutex::new(MemState::default()),
+            causal: Mutex::new(mem_causal::MemCausal::new().expect("isolated real collab Store")),
         }
     }
 
+    /// Only new model posts use causal output capabilities; legacy fixture rows stay imports.
+    pub fn post_causal(
+        &self,
+        sender: crewd_collab::Sender,
+        post: crewd_collab::messages::NewPost,
+    ) -> Result<(crewd_proto::Message, Vec<crewd_collab::Change>)> {
+        let mut st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        model.sync(&st)?;
+        let (message, next, changes) = model.post_memory(&st, sender, post, st.now.0)?;
+        *st = next;
+        Ok((message, changes))
+    }
+    pub fn causal_local_ref(&self, m: &crewd_proto::Message) -> Result<MessageRef> {
+        self.causal.lock().expect("model lock").local_ref(m)
+    }
+    pub fn causal_fact(&self, change: &crewd_collab::Change) -> Result<Option<CollabFact>> {
+        super::db::fact_of(change)
+            .map(|fact| self.causal.lock().expect("model lock").project_fact(fact))
+            .transpose()
+    }
+    pub fn progress_causal(
+        &self,
+        session: &str,
+        kind: crewd_collab::ProgressKind,
+    ) -> Result<Vec<crewd_collab::Change>> {
+        let mut st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        model.sync(&st)?;
+        let (next, changes) = model.progress_memory(&st, session, kind, st.now.0)?;
+        *st = next;
+        Ok(changes)
+    }
+    fn causal_preparation(
+        &self,
+        st: &MemState,
+        session: &str,
+        targets: &[(String, i64)],
+    ) -> Result<PreparedSnapshot> {
+        let mut prepared = memory_preparation(st, session, targets);
+        let mut model = self.causal.lock().expect("model lock");
+        if model.enabled {
+            model.sync(st)?;
+            let captured = model.capture(session, targets, st.now.0)?;
+            if let PreparedSnapshot::Memory { causal, .. } = &mut prepared {
+                *causal = Some(Box::new(captured));
+            }
+        }
+        Ok(prepared)
+    }
     pub fn fail_next(&self, fault: MemFault) {
         self.lock().faults.insert(fault);
     }
@@ -705,7 +759,8 @@ impl Port for MemPort {
 
     /// 同 collab 的一个事务：停止状态、单调取消水位、pending 作废全有或全无。
     async fn human_stop(&self, session: &str) -> Result<Vec<QueuedWake>> {
-        let mut st = self.lock();
+        let mut live = self.lock();
+        let mut st = live.clone();
         if let Some(e) = &st.patch_error {
             anyhow::bail!("{e}");
         }
@@ -741,6 +796,14 @@ impl Port for MemPort {
             note_error(&mut st, w.id, crewd_collab::wakes::HUMAN_STOP_ERROR);
         }
         mark_settled(&mut st);
+        {
+            let mut model = self.causal.lock().expect("model lock");
+            model.sync(&live)?;
+            if model.enabled {
+                model.cancel(session, live.now.0)?;
+            }
+        }
+        *live = st;
         Ok(pending)
     }
 
@@ -772,6 +835,7 @@ impl Port for MemPort {
             bases,
             surface,
             messages,
+            causal,
         }) = &b.prepared
         else {
             anyhow::bail!("missing memory preparation");
@@ -833,20 +897,45 @@ impl Port for MemPort {
             return Ok(Decision::Stale);
         }
         let floors = st.human_stop_floors.clone();
+        let mut claimed_rows = st.wakes.clone();
         apply_with_stop_floors(
-            &mut st.wakes,
+            &mut claimed_rows,
             &floors,
             &b.ids(),
             lifecycle::WakeEvent::Claim,
         )?;
-        st.next_reservation = st
+        let next_token = st
             .next_reservation
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("lease exhausted"))?;
+        let claimed = if let Some((snapshot, causes)) = causal.as_deref() {
+            let mut model = self.causal.lock().expect("model lock");
+            model.sync(&st)?;
+            match model.claim(
+                (snapshot, causes),
+                &b.cursor_targets,
+                &b.wakes.iter().map(|w| w.id).collect::<Vec<_>>(),
+                &b.riders.iter().map(|w| w.id).collect::<Vec<_>>(),
+                generation,
+                st.now.0,
+            )? {
+                Decision::Applied(claimed) => Some(Box::new(claimed)),
+                Decision::Busy => return Ok(Decision::Busy),
+                Decision::Stale => return Ok(Decision::Stale),
+            }
+        } else {
+            None
+        };
+        // No remaining fallible step after actual sidecar commit.
+        st.wakes = claimed_rows;
+
+        st.next_reservation = next_token;
         let lease = BatchLease::Memory {
             session: session.clone(),
             token: st.next_reservation,
             generation,
+            claimed,
+            observed: None,
         };
         let mut held = b.clone();
         held.lease = Some(lease.clone());
@@ -863,7 +952,15 @@ impl Port for MemPort {
         let mut st = self.lock();
         let held = match &b.lease {
             Some(BatchLease::Memory { session, .. }) => match st.reservations.get(session) {
-                Some(held) if held.lease == b.lease => held.clone(),
+                Some(held)
+                    if held
+                        .lease
+                        .as_ref()
+                        .zip(b.lease.as_ref())
+                        .is_some_and(|(a, b)| a.same_memory_owner(b)) =>
+                {
+                    held.clone()
+                }
                 _ => return Ok(Decision::Stale),
             },
             _ => {
@@ -873,7 +970,29 @@ impl Port for MemPort {
         };
         injected(&mut st, MemFault::Settle, &held.ids())?;
         let floors = st.human_stop_floors.clone();
-        apply_with_stop_floors(&mut st.wakes, &floors, &held.ids(), fate.event())?;
+        let mut staged = st.wakes.clone();
+        apply_with_stop_floors(&mut staged, &floors, &held.ids(), fate.event())?;
+        if let Some(claimed) = held.lease.as_ref().and_then(BatchLease::causal_claimed) {
+            let mut model = self.causal.lock().expect("model lock");
+            let terminal = match &fate {
+                Settle::Requeue => crewd_collab::cursor_reservations::Terminal::Requeue,
+                Settle::Dropped { error } => {
+                    crewd_collab::cursor_reservations::Terminal::Dropped(error)
+                }
+                Settle::Delivered => {
+                    anyhow::bail!("actual causal success requires exact observed receipt")
+                }
+            };
+            let (decision, projected) = model.settle(&st, claimed, terminal, st.now.0)?;
+            match decision {
+                Decision::Applied(()) => {
+                    staged = projected.expect("Applied projection").wakes;
+                }
+                Decision::Busy => return Ok(Decision::Busy),
+                Decision::Stale => return Ok(Decision::Stale),
+            }
+        }
+        st.wakes = staged;
         mark_settled(&mut st);
         if let Settle::Dropped { error } = &fate {
             for id in held.ids() {
@@ -921,8 +1040,18 @@ impl Port for MemPort {
         let held;
         let b = if let Some(BatchLease::Memory { session, .. }) = &b.lease {
             match st.reservations.get(session) {
-                Some(current) if current.lease == b.lease => {
-                    held = current.clone();
+                Some(current)
+                    if current
+                        .lease
+                        .as_ref()
+                        .zip(b.lease.as_ref())
+                        .is_some_and(|(a, b)| a.same_memory_owner(b)) =>
+                {
+                    held = {
+                        let mut original = current.clone();
+                        original.lease = b.lease.clone();
+                        original
+                    };
                     &held
                 }
                 _ => {
@@ -989,6 +1118,36 @@ impl Port for MemPort {
                         .or_insert(0);
                     *c = (*c).max(*seq);
                 }
+                if let Some(claimed) = b.lease.as_ref().and_then(BatchLease::causal_claimed) {
+                    let observed = match &b.lease {
+                        Some(BatchLease::Memory {
+                            observed: Some(success),
+                            ..
+                        }) => success,
+                        _ => anyhow::bail!("missing exact emitted success"),
+                    };
+                    let mut model = self.causal.lock().expect("model lock");
+                    let fate = match &riders {
+                        Riders::Release => crewd_collab::wakes::Riders::Release,
+                        Riders::Drop(why) => crewd_collab::wakes::Riders::Drop(why),
+                    };
+                    let (decision, projected) =
+                        model.ack_delivered(&st, claimed, observed, fate, st.now.0)?;
+                    match decision {
+                        Decision::Applied(_) => {
+                            let next = projected.expect("Applied projection");
+                            wakes = next.wakes;
+                            cursors = next.cursors;
+                        }
+                        Decision::Stale => {
+                            return Ok(Acked {
+                                stale: true,
+                                ..Default::default()
+                            });
+                        }
+                        Decision::Busy => anyhow::bail!("successful original fate still busy"),
+                    }
+                }
                 st.wakes = wakes;
                 st.cursors = cursors;
                 if b.lease.is_some() {
@@ -1049,6 +1208,28 @@ impl Port for MemPort {
                     match retry {
                         Some(t) => out.retried.push((id, t)),
                         None => out.gave_up.push(id),
+                    }
+                }
+                if let Some(claimed) = b.lease.as_ref().and_then(BatchLease::causal_claimed) {
+                    let mut model = self.causal.lock().expect("model lock");
+                    let (decision, projected) = model.ack_failed(
+                        &st,
+                        claimed,
+                        &error,
+                        |n| crewd_wake::queue::after_failure(n, now, jitter).map(|t| t.0),
+                        now.0,
+                    )?;
+                    match decision {
+                        Decision::Applied(_) => {
+                            wakes = projected.expect("Applied projection").wakes;
+                        }
+                        Decision::Stale => {
+                            return Ok(Acked {
+                                stale: true,
+                                ..Default::default()
+                            });
+                        }
+                        Decision::Busy => anyhow::bail!("failed original fate still busy"),
                     }
                 }
                 st.wakes = wakes;
@@ -1129,6 +1310,20 @@ impl Port for MemPort {
                     row.last_error = Some(error.to_string());
                     out.gave_up.push(row.clone());
                 }
+            }
+        }
+        {
+            let mut model = self.causal.lock().expect("model lock");
+            if model.enabled {
+                model.sync(&st)?;
+                wakes = model
+                    .reset(
+                        &st,
+                        error,
+                        |n| crewd_wake::queue::after_restart(n, now).map(|t| t.0),
+                        now.0,
+                    )?
+                    .wakes;
             }
         }
         st.wakes = wakes;
@@ -1215,6 +1410,59 @@ impl Port for MemPort {
         Ok(v)
     }
 
+    fn causal_fence(&self) -> Option<Arc<crate::causal_fence::CausalFence>> {
+        Some(self.causal.lock().expect("model lock").fence.clone())
+    }
+    async fn prepare_causal_admission(&self, session: &str, now: Ms) -> Result<()> {
+        let mut st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        if !model.enabled {
+            return Ok(());
+        }
+        model.sync(&st)?;
+        let next = model.prepare_memory(&st, session, now.0)?;
+        *st = next;
+        Ok(())
+    }
+    async fn causal_diagnostics(
+        &self,
+        session: &str,
+        now: Ms,
+    ) -> Result<Vec<(String, crewd_wake::explain::CausalBlockage)>> {
+        let st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        if !model.enabled {
+            return Ok(Vec::new());
+        } // Legacy fixtures contain no new causal stamps.
+        model.sync(&st)?;
+        Ok(crate::causal_fence::diagnostic_values(
+            model.diagnostics(session, now.0)?,
+        ))
+    }
+    async fn causal_holds(
+        &self,
+        target: Option<&str>,
+    ) -> Result<Vec<crewd_collab::causal::ChainHold>> {
+        let st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        if !model.enabled {
+            return model.holds(target);
+        } // Empty legacy store, not a causal-policy stub.
+        model.sync(&st)?;
+        model.holds(target)
+    }
+    async fn recover_chain(
+        &self,
+        chain: &str,
+        from: &str,
+        target: &str,
+        action: &crewd_collab::causal::HumanRecoveryAction,
+    ) -> Result<bool> {
+        let st = self.lock();
+        let mut model = self.causal.lock().expect("model lock");
+        model.sync(&st)?;
+        model.recover(chain, from, target, action, st.now.0)
+    }
     async fn latches(&self) -> Result<Vec<Latch>> {
         Ok(self.lock().latches.clone())
     }
@@ -1436,13 +1684,14 @@ impl Port for MemPort {
     }
 
     async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
-        let mut st = self.lock();
-        st.renders += 1;
+        let mut live = self.lock();
+        live.renders += 1;
         injected(
-            &mut st,
+            &mut live,
             MemFault::RenderWake,
             &batch.iter().map(|w| w.id).collect::<Vec<_>>(),
         )?;
+        let mut st = live.clone();
         if let Some(e) = st
             .render_error
             .as_ref()
@@ -1450,6 +1699,24 @@ impl Port for MemPort {
         {
             anyhow::bail!("{e}");
         }
+        {
+            let mut model = self.causal.lock().expect("model lock");
+            if model.enabled {
+                model.sync(&st)?;
+                let (next, rendered) = model.render_memory(&st, session, batch, st.now.0)?;
+                *live = next;
+                return Ok(rendered);
+            }
+        }
+        // Existing pure Mem fixtures have no real causal posts/receipts. Keep their
+        // intentional partial substrate and legacy renderer; do not invent SQL FK rows.
+        let blocked = BTreeSet::<String>::new();
+        let safe_batch = batch
+            .iter()
+            .filter(|w| w.msg.as_ref().is_none_or(|m| !blocked.contains(&m.channel)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let batch = safe_batch.as_slice();
         let already: Vec<_> = batch
             .iter()
             .filter(|w| w.kind == WakeKind::Message && w.state == WakeState::Pending)
@@ -1540,7 +1807,8 @@ impl Port for MemPort {
             st.rendered_windows
                 .push((batch.iter().map(|w| w.id).collect(), deferred.clone()));
             let targets: Vec<_> = tops.into_iter().collect();
-            let prepared = memory_preparation(&st, session, &targets);
+            let prepared = self.causal_preparation(&st, session, &targets)?;
+            *live = st;
             return Ok(Rendered {
                 prepared: Some(prepared),
                 text: parts.join("\n---\n"),
@@ -1555,7 +1823,14 @@ impl Port for MemPort {
             .map(|w| w.id)
             .collect();
         let shown: Vec<&QueuedWake> = batch.iter().filter(|w| !st.defer.contains(&w.id)).collect();
-        let backlog = st.backlog.get(session).cloned().unwrap_or_default();
+        let backlog = st
+            .backlog
+            .get(session)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(ch, _)| !blocked.contains(ch))
+            .collect::<Vec<_>>();
         let mut parts: Vec<String> = backlog
             .iter()
             .map(|(ch, seq)| format!("backlog {ch}#{seq}"))
@@ -1588,7 +1863,8 @@ impl Port for MemPort {
             *top = (*top).max(seq);
         }
         let targets: Vec<_> = tops.into_iter().collect();
-        let prepared = memory_preparation(&st, session, &targets);
+        let prepared = self.causal_preparation(&st, session, &targets)?;
+        *live = st;
         Ok(Rendered {
             prepared: Some(prepared),
             text: parts.join("\n---\n"),
@@ -1639,6 +1915,7 @@ fn memory_preparation(st: &MemState, session: &str, targets: &[(String, i64)]) -
             .map(|(ch, _)| (ch.clone(), memory_eligible(st, session, ch)))
             .collect(),
         messages,
+        causal: None,
     }
 }
 
@@ -1694,6 +1971,8 @@ pub struct StandInState {
     pub hang_on_stop: BTreeSet<String>,
     pub cleared_quota: Vec<String>,
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
+    /// Synthetic accepted-final producer seam, distinct from a real PTY proof.
+    pub delivery_observers: BTreeMap<String, Arc<dyn crewd_exec::driver::DeliverySuccessObserver>>,
     pub transcripts: BTreeMap<String, PathBuf>,
     pub next_id: u64,
     /// 驱动层的影子状态（同 M2b `session.rs` 的 tracker）：还没终局的投递号（含开场正文 `BRIEF_DELIVERY_ID`）、
@@ -1750,6 +2029,15 @@ impl StandInState {
                 }
             }
             _ => {}
+        }
+        if let SessionEvent::Delivery {
+            id,
+            outcome: DeliveryOutcome::Delivered,
+            ..
+        } = &e
+            && let Some(observer) = self.delivery_observers.get(session)
+        {
+            observer.emitted(*id);
         }
         if let Some(tx) = self.events.get(session) {
             let _ = tx.send(e);
@@ -1988,6 +2276,12 @@ impl Executor for StandIn {
                 resumed: false,
             })
             .expect("刚建的通道");
+            if let Some(observer) = req.delivery_observer {
+                s.delivery_observers
+                    .insert(req.session_id.clone(), observer);
+            } else {
+                s.delivery_observers.remove(&req.session_id);
+            }
             s.events.insert(req.session_id.clone(), tx);
             *s.process_counts.entry(req.session_id.clone()).or_default() += 1;
             s.running.insert(req.session_id.clone());
@@ -2021,19 +2315,26 @@ impl StandInHandle {
     }
 }
 
-impl ExecHandle for StandInHandle {
-    fn accepts_context(&self) -> bool {
-        self.lock().context_sessions.contains(&self.session)
-    }
-
-    fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
+impl StandInHandle {
+    fn send_inner(
+        &self,
+        text: String,
+        context: &Context,
+        binding: Option<&dyn crewd_exec::driver::DeliveryBinding>,
+    ) -> Result<u64, ExecSendError> {
         check_context(self.accepts_context(), context)?;
         if text.trim().is_empty() {
             return Err(SendError::EmptyText.into());
         }
         let mut s = self.lock();
-        s.next_id += 1;
-        let id = s.next_id;
+        let id = s
+            .next_id
+            .checked_add(1)
+            .ok_or(SendError::DeliveryIdExhausted)?;
+        if let Some(binding) = binding {
+            binding.register(id)?;
+        }
+        s.next_id = id;
         s.sent_contexts
             .push((self.session.clone(), id, context.clone()));
         s.sends
@@ -2050,6 +2351,24 @@ impl ExecHandle for StandInHandle {
             .or_default()
             .push(format!("send:{}", last.unwrap_or_default()));
         Ok(id)
+    }
+}
+
+impl ExecHandle for StandInHandle {
+    fn accepts_context(&self) -> bool {
+        self.lock().context_sessions.contains(&self.session)
+    }
+
+    fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
+        self.send_inner(text, context, None)
+    }
+    fn send_bound(
+        &self,
+        text: String,
+        context: &Context,
+        binding: &dyn crewd_exec::driver::DeliveryBinding,
+    ) -> Result<u64, ExecSendError> {
+        self.send_inner(text, context, Some(binding))
     }
 
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {
@@ -2405,6 +2724,35 @@ impl Rig {
 }
 
 impl Rig {
+    /// Genuine new-post contract: actual collab Tx returns the Changes; the same
+    /// db::fact_of bridge used in production feeds Core, never a fabricated on_post.
+    pub async fn post_causal(
+        &mut self,
+        sender: crewd_collab::Sender,
+        post: crewd_collab::messages::NewPost,
+    ) -> Result<crewd_proto::Message> {
+        let (message, changes) = self.port.post_causal(sender, post)?;
+        for change in changes {
+            if let Some(f) = self.port.causal_fact(&change)? {
+                self.core.handle(Input::Collab(f)).await;
+            }
+        }
+        self.settle().await;
+        Ok(message)
+    }
+    pub async fn progress_causal(
+        &mut self,
+        session: &str,
+        kind: crewd_collab::ProgressKind,
+    ) -> Result<()> {
+        for change in self.port.progress_causal(session, kind)? {
+            if let Some(fact) = self.port.causal_fact(&change)? {
+                self.core.handle(Input::Collab(fact)).await;
+            }
+        }
+        self.settle().await;
+        Ok(())
+    }
     /// 往群里落一条消息（时间 = 现在），再把 `MessageAppended` 交给 actor。
     pub async fn post(
         &mut self,
@@ -2482,6 +2830,9 @@ impl Rig {
 }
 
 #[cfg(test)]
+#[path = "testkit/mem_causal_contracts.rs"]
+mod mem_causal_contracts;
+
 mod self_tests {
     use super::*;
     use crewd_wake::queue;
@@ -3092,6 +3443,7 @@ mod self_tests {
 
     fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            delivery_observer: None,
             session_id: session.into(),
             crew_id: "c1".into(),
             workdir: PathBuf::from("/nonexistent/wd"),
@@ -3185,6 +3537,7 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
+                delivery_observer: None,
                 session_id: "s1".into(),
                 crew_id: "c1".into(),
                 workdir: PathBuf::from("/nonexistent/wd"),

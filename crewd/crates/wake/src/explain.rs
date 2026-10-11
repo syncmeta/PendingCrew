@@ -77,9 +77,55 @@ impl Default for TargetFacts {
     }
 }
 
+/// Durable holds, readonly budget candidates and unresolved ancestry remain distinct.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CausalChainHold {
+    pub chain_id: String,
+    pub from: String,
+    pub target: String,
+    pub hop: u32,
+    pub reason: String,
+    pub at_ms: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CausalChainCandidate {
+    pub chain_id: String,
+    pub from: String,
+    pub target: String,
+    pub hop: u32,
+    pub reason: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CausalUnresolved {
+    pub message_id: String,
+    pub seq: i64,
+    pub from: String,
+    pub target: String,
+    pub output_id: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CausalBlockage {
+    /// Readonly scanner found no persistent cursor; no unread cause is asserted.
+    pub cursor_unknown: bool,
+    pub holds: Vec<CausalChainHold>,
+    pub unresolved: Vec<CausalUnresolved>,
+    pub hold_candidates: Vec<CausalChainCandidate>,
+}
+impl CausalBlockage {
+    pub fn is_empty(&self) -> bool {
+        !self.cursor_unknown
+            && self.holds.is_empty()
+            && self.unresolved.is_empty()
+            && self.hold_candidates.is_empty()
+    }
+}
+
 /// 没叫醒的原因。`code()` 是线上的词（`wake.list` 的 `blocker.code`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Blocker {
+    Causal {
+        blockage: CausalBlockage,
+    },
     ShuttingDown,
     /// 机组已被移除：不拉起，下一次尝试把这几行作废。
     CrewRemoved,
@@ -121,6 +167,17 @@ pub enum Blocker {
 impl Blocker {
     pub fn code(&self) -> &'static str {
         match self {
+            Blocker::Causal { blockage } => {
+                if !blockage.holds.is_empty() {
+                    "held"
+                } else if !blockage.unresolved.is_empty() {
+                    "causal_unresolved"
+                } else if !blockage.hold_candidates.is_empty() {
+                    "causal_budget"
+                } else {
+                    "causal_cursor_unknown"
+                }
+            }
             Blocker::ShuttingDown => "shutting_down",
             Blocker::CrewRemoved => "crew_removed",
             Blocker::Starting => "starting",
@@ -203,6 +260,18 @@ pub fn why_not_woken(
     held: Option<&Latch>,
     now: Ms,
 ) -> Option<Blocker> {
+    why_not_woken_with_causal(w, top_due, t, held, None, now)
+}
+
+/// The same causal facts serve selection and readonly diagnostics, after existing readiness.
+pub fn why_not_woken_with_causal(
+    w: &QueuedWake,
+    top_due: Option<Priority>,
+    t: &TargetFacts,
+    held: Option<&Latch>,
+    causal: Option<&CausalBlockage>,
+    now: Ms,
+) -> Option<Blocker> {
     if t.shutting_down {
         return Some(Blocker::ShuttingDown);
     }
@@ -221,6 +290,11 @@ pub fn why_not_woken(
         return Some(Blocker::Held {
             scope: l.scope,
             id: l.id.clone(),
+        });
+    }
+    if let Some(blockage) = causal.filter(|b| !b.is_empty()) {
+        return Some(Blocker::Causal {
+            blockage: blockage.clone(),
         });
     }
     if top_due.is_some_and(|top| w.priority < top) {
@@ -643,5 +717,155 @@ mod tests {
             ..stopped()
         };
         assert_eq!(live_blocker(&not_running), None);
+    }
+
+    #[test]
+    fn s42_cursor_unknown_keeps_real_readiness_and_cause_precedence() {
+        let w = due(Priority::Auto);
+        let mut b = CausalBlockage {
+            cursor_unknown: true,
+            ..Default::default()
+        };
+        assert!(!b.is_empty());
+        assert!(b.holds.is_empty() && b.unresolved.is_empty() && b.hold_candidates.is_empty());
+        let reason = |b: &CausalBlockage| {
+            why_not_woken_with_causal(&w, None, &running(), None, Some(b), NOW)
+                .unwrap()
+                .code()
+        };
+        assert_eq!(reason(&b), "causal_cursor_unknown");
+        for (target, expected) in [
+            (
+                TargetFacts {
+                    shutting_down: true,
+                    ..running()
+                },
+                "shutting_down",
+            ),
+            (
+                TargetFacts {
+                    starting: true,
+                    ..running()
+                },
+                "starting",
+            ),
+            (
+                TargetFacts {
+                    inflight: true,
+                    ..running()
+                },
+                "inflight",
+            ),
+            (
+                TargetFacts {
+                    decision: true,
+                    ..running()
+                },
+                "decision",
+            ),
+        ] {
+            assert_eq!(
+                why_not_woken_with_causal(&w, None, &target, None, Some(&b), NOW)
+                    .unwrap()
+                    .code(),
+                expected
+            );
+        }
+        let future = wake(Priority::Auto, Ms(NOW.0 + 1));
+        assert_eq!(
+            why_not_woken_with_causal(&future, None, &running(), None, Some(&b), NOW),
+            Some(Blocker::NotDue {
+                until: future.not_before
+            })
+        );
+        let legacy = latch();
+        assert_eq!(
+            why_not_woken_with_causal(&w, None, &running(), Some(&legacy), Some(&b), NOW),
+            Some(Blocker::Held {
+                scope: legacy.scope,
+                id: legacy.id
+            })
+        );
+        b.hold_candidates.push(CausalChainCandidate {
+            chain_id: "actual-candidate".into(),
+            from: "a".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+        });
+        assert_eq!(reason(&b), "causal_budget");
+        b.unresolved.push(CausalUnresolved {
+            message_id: "actual-message".into(),
+            seq: 7,
+            from: "a".into(),
+            target: "b".into(),
+            output_id: None,
+        });
+        assert_eq!(reason(&b), "causal_unresolved");
+        b.holds.push(CausalChainHold {
+            chain_id: "actual-hold".into(),
+            from: "a".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+            at_ms: 9,
+        });
+        assert_eq!(reason(&b), "held");
+    }
+
+    #[test]
+    fn causal_blockage_preserves_readiness_and_distinct_diagnostic_facts() {
+        let w = wake(Priority::Human, NOW);
+        let mut b = CausalBlockage::default();
+        assert_eq!(
+            why_not_woken_with_causal(&w, None, &running(), None, Some(&b), NOW),
+            None
+        );
+        b.hold_candidates.push(CausalChainCandidate {
+            chain_id: "root-1".into(),
+            from: "a".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+        });
+        assert_eq!(
+            why_not_woken_with_causal(&w, None, &running(), None, Some(&b), NOW)
+                .unwrap()
+                .code(),
+            "causal_budget",
+            "Human priority alone does not prove an actual Human row"
+        );
+        let busy = TargetFacts {
+            inflight: true,
+            ..running()
+        };
+        assert_eq!(
+            why_not_woken_with_causal(&w, None, &busy, None, Some(&b), NOW),
+            Some(Blocker::Inflight)
+        );
+        b.unresolved.push(CausalUnresolved {
+            message_id: "m1".into(),
+            seq: 1,
+            from: "a".into(),
+            target: "b".into(),
+            output_id: None,
+        });
+        assert_eq!(
+            why_not_woken_with_causal(&w, None, &running(), None, Some(&b), NOW)
+                .unwrap()
+                .code(),
+            "causal_unresolved"
+        );
+        b.holds.push(CausalChainHold {
+            chain_id: "root-2".into(),
+            from: "c".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+            at_ms: 1,
+        });
+        let result = why_not_woken_with_causal(&w, None, &running(), None, Some(&b), NOW).unwrap();
+        assert_eq!(result.code(), "held");
+        assert_eq!(result, Blocker::Causal { blockage: b });
     }
 }

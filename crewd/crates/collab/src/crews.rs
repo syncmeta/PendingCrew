@@ -665,7 +665,8 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
         ));
     }
     refuse_running(conn, id)?;
-    crate::cursor_reservations::guard_crew(conn, id)
+    crate::cursor_reservations::guard_crew(conn, id)?;
+    crate::causal::guard_crew(conn, id)
 }
 
 /// 永久删除（`crew.purge`，N4 的快照之后跑；只收已归档的机组，见 `check_purgeable`）。子机组的父边随之消失；
@@ -690,6 +691,7 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     // even when the source session was purged; only actual orphan messages lose their markers.
     crate::message_provenance::prune_orphans(tx)?;
     crate::cursor_reservations::prune_orphan_readers(tx)?;
+    crate::causal::prune_after_cascade(tx)?;
     for channel_id in cascaded {
         tx.note(Change::ChannelRemoved { channel_id });
     }

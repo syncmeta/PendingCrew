@@ -32,6 +32,7 @@ pub struct LaunchRequest {
     /// helper 用来 `agent.attach` 的 token（M3b）。
     pub token: String,
     pub ledger: Arc<dyn AgentIdLedger>,
+    pub delivery_observer: Option<Arc<dyn crewd_exec::driver::DeliverySuccessObserver>>,
 }
 
 #[derive(Debug)]
@@ -115,6 +116,16 @@ pub type AnswerSteps = Vec<(Vec<u8>, Option<usize>)>;
 pub trait ExecHandle: Send + Sync {
     /// `context` 只能在 `accepts_context()` 为真时非空，否则回 `ContextUnsupported`（见 [`check_context`]）。
     fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError>;
+    fn send_bound(
+        &self,
+        _text: String,
+        _context: &Context,
+        _binding: &dyn crewd_exec::driver::DeliveryBinding,
+    ) -> Result<u64, ExecSendError> {
+        Err(ExecSendError::Send(
+            crewd_exec::driver::SendError::BindingRejected,
+        ))
+    }
     fn accepts_context(&self) -> bool {
         false
     }
@@ -150,6 +161,21 @@ impl ExecHandle for SessionHandle {
     fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
         check_context(self.accepts_context(), context)?;
         Ok(SessionHandle::send(self, text)?)
+    }
+
+    fn send_bound(
+        &self,
+        text: String,
+        context: &Context,
+        binding: &dyn crewd_exec::driver::DeliveryBinding,
+    ) -> Result<u64, ExecSendError> {
+        check_context(self.accepts_context(), context)?;
+        Ok(SessionHandle::send_bound(
+            self,
+            text,
+            context.clone(),
+            binding,
+        )?)
     }
 
     fn raw(&self, bytes: Vec<u8>) -> Result<(), Closed> {

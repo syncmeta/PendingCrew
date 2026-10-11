@@ -27,6 +27,14 @@ crewd 重启打断了你上一轮的工作。先核对现状（git status、你�
 ## loop.tripped.human
 疑似唤醒环路：「{origin}」在 {minutes} 分钟内叫醒「{target}」{count} 次，期间「{target}」没有新产出（没调工具、没动工作项、回话只是回给叫它的人）。已只停这一条：之后「{origin}」不会再自动叫醒「{target}」，人的消息照常送达。确认没问题的话，在客户端对这条熔断点「恢复」。
 
+## loop.chain.tripped.human
+
+已暂停 {origin} → {target} 的这条消息因果链：第 {hop} 跳超过当前工程上限 {limit}。链标识：{chain}。其他独立链仍可继续；只有人可以针对这条链和这一路径恢复。
+
+## loop.chain.unresolved.human
+
+已暂停 {origin} → {target} 的这条消息因果链：尚不能确认它所依赖的投递已成功。链标识：{chain}。其他独立链仍可继续；只有人可以针对这条链和这一路径恢复。
+
 ## origin.system
 系统
 

@@ -558,6 +558,19 @@ pub enum Cmd {
         id: String,
         reply: Reply<bool>,
     },
+    /// Distinct causal route scope; never reinterpret an Edge/Session latch ID.
+    CausalHolds {
+        target: Option<String>,
+        reply: Reply<Vec<crewd_collab::causal::ChainHold>>,
+    },
+    /// Capability supplied only by the human client RPC path, once per request.
+    RecoverChain {
+        chain_id: String,
+        from: String,
+        target: String,
+        action: crewd_collab::causal::HumanRecoveryAction,
+        reply: Reply<bool>,
+    },
     /// 此刻的环路熔断（`loop.list`）。
     Latches {
         reply: Reply<Vec<Latch>>,
@@ -690,7 +703,17 @@ struct TerminalObligation {
 #[derive(Clone)]
 enum TerminalFate {
     Settle(Settle),
-    Failed { error: String, now: Ms, jitter: f64 },
+    Failed {
+        error: String,
+        now: Ms,
+        jitter: f64,
+    },
+    KnownDelivered {
+        riders: Riders,
+        now: Ms,
+        generation: u64,
+        delivery: u64,
+    },
 }
 
 pub struct Core<P: Port> {
@@ -1016,6 +1039,28 @@ impl<P: Port> Core<P> {
             Cmd::Recover { scope, id, reply } => {
                 let r = self.recover(scope, &id).await;
                 let _ = reply.send(r);
+            }
+            Cmd::CausalHolds { target, reply } => {
+                let result = self
+                    .port
+                    .causal_holds(target.as_deref())
+                    .await
+                    .map_err(ControlError::from_port);
+                let _ = reply.send(result);
+            }
+            Cmd::RecoverChain {
+                chain_id,
+                from,
+                target,
+                action,
+                reply,
+            } => {
+                let result = self
+                    .port
+                    .recover_chain(&chain_id, &from, &target, &action)
+                    .await
+                    .map_err(ControlError::from_port);
+                let _ = reply.send(result);
             }
             Cmd::Latches { reply } => {
                 let mut v = self.breaker.latches();
@@ -1485,18 +1530,40 @@ impl<P: Port> Core<P> {
                     });
                     return Ok(());
                 }
-                Write::Deliver { text, extras } => match l.handle.send(text, &extras) {
-                    Ok(id) => {
-                        if let Some(f) = l.inflight.as_mut() {
-                            f.delivery = Some(id);
+                Write::Deliver { text, extras } => {
+                    let binding = match l
+                        .inflight
+                        .as_ref()
+                        .and_then(|f| f.batch.lease.as_ref())
+                        .and_then(BatchLease::causal_claimed)
+                    {
+                        Some(claimed) => {
+                            let fence = self
+                                .port
+                                .causal_fence()
+                                .ok_or_else(|| anyhow::anyhow!("missing causal fence"))?;
+                            Some(fence.binder(&claimed.pending, l.generator)?)
+                        }
+                        _ => None,
+                    };
+                    let sent = if let Some(binding) = binding {
+                        l.handle.send_bound(text, &extras, binding.as_ref())
+                    } else {
+                        l.handle.send(text, &extras)
+                    };
+                    match sent {
+                        Ok(id) => {
+                            if let Some(f) = l.inflight.as_mut() {
+                                f.delivery = Some(id);
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(inf) = l.inflight.take() {
+                                self.fail_batch(inf.batch, &e.to_string()).await?;
+                            }
                         }
                     }
-                    Err(e) => {
-                        if let Some(inf) = l.inflight.take() {
-                            self.fail_batch(inf.batch, &e.to_string()).await?;
-                        }
-                    }
-                },
+                }
             }
         }
     }
@@ -1589,6 +1656,31 @@ impl<P: Port> Core<P> {
         self.next_generator = generator;
         let token = self.port.mint_token(&row.id);
         let session = row.id.clone();
+        let delivery_observer = self
+            .port
+            .causal_fence()
+            .map(|fence| fence.observer(&row.id, generator));
+        let registration =
+            if let Some(claimed) = batch.lease.as_ref().and_then(BatchLease::causal_claimed) {
+                (|| -> anyhow::Result<()> {
+                    let fence = self
+                        .port
+                        .causal_fence()
+                        .ok_or_else(|| anyhow::anyhow!("missing causal fence"))?;
+                    fence
+                        .binder(&claimed.pending, generator)?
+                        .register(BRIEF_DELIVERY_ID)?;
+                    Ok(())
+                })()
+            } else {
+                Ok(())
+            };
+        if let Err(error) = registration {
+            self.port.revoke_token(&row.id);
+            // No Task started: preserve the original claim's requeue obligation on SQL Err.
+            self.settle_terminal(batch, Settle::Requeue).await?;
+            return Err(error);
+        }
         let req = LaunchRequest {
             session_id: row.id.clone(),
             crew_id: row.crew_id.clone(),
@@ -1599,6 +1691,7 @@ impl<P: Port> Core<P> {
             initial_prompt: text.clone(),
             token,
             ledger: self.port.ledger(&row.id),
+            delivery_observer,
         };
         self.starting.insert(
             session.clone(),
@@ -1856,6 +1949,38 @@ impl<P: Port> Core<P> {
         self.retry_terminal(&session).await
     }
 
+    pub(crate) async fn remember_delivered(
+        &mut self,
+        batch: Batch,
+        riders: Riders,
+        generation: u64,
+        delivery: u64,
+    ) -> anyhow::Result<()> {
+        let session = batch.session.clone();
+        let now = self.now();
+        // The physical fate is irreversible even if the trusted ticket is unavailable.
+        self.remember_terminal(
+            batch,
+            TerminalFate::KnownDelivered {
+                riders,
+                now,
+                generation,
+                delivery,
+            },
+        )?;
+        self.retry_terminal(&session).await
+    }
+
+    fn retire_causal_binding(&self, batch: &Batch) -> anyhow::Result<()> {
+        if let Some(claimed) = batch.lease.as_ref().and_then(BatchLease::causal_claimed) {
+            self.port
+                .causal_fence()
+                .ok_or_else(|| anyhow::anyhow!("missing causal fence"))?
+                .retire(&claimed.pending)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn terminal_sessions(&self) -> Vec<String> {
         self.terminal_obligations.keys().cloned().collect()
     }
@@ -1863,9 +1988,35 @@ impl<P: Port> Core<P> {
     // Exactly one attempt per caller/tick. On Err the original lease and policy remain;
     // never infer a terminal from desired/phase and never clear metadata separately.
     pub(crate) async fn retry_terminal(&mut self, session: &str) -> anyhow::Result<()> {
-        let Some(held) = self.terminal_obligations.get(session).cloned() else {
+        let Some(mut held) = self.terminal_obligations.get(session).cloned() else {
             return Ok(());
         };
+        // Look up only the already-emitted original ticket. Errors leave KnownDelivered
+        // locked; Exit/StreamEnded must not turn actual success into a failed/replayable fate.
+        if let TerminalFate::KnownDelivered {
+            generation,
+            delivery,
+            ..
+        } = &held.fate
+            && let Some((claimed, observed)) = held
+                .batch
+                .lease
+                .as_mut()
+                .and_then(BatchLease::causal_witness_mut)
+            && observed.is_none()
+        {
+            let fence = self.port.causal_fence().ok_or_else(|| {
+                anyhow::anyhow!("missing causal fence for known physical success")
+            })?;
+            *observed = Some(Box::new(fence.success(
+                &claimed.pending,
+                *generation,
+                *delivery,
+            )?));
+            // Keep the immutable witness with the exact debt before entering SQL.
+            self.terminal_obligations
+                .insert(session.to_string(), held.clone());
+        }
         let acked = match &held.fate {
             TerminalFate::Settle(fate) => {
                 match self
@@ -1876,6 +2027,7 @@ impl<P: Port> Core<P> {
                 {
                     super::port::Decision::Applied(()) => {}
                     super::port::Decision::Stale => {
+                        self.retire_causal_binding(&held.batch)?;
                         self.terminal_obligations.remove(session);
                         return Ok(()); // retire only old receipt; no row-change success event
                     }
@@ -1885,6 +2037,17 @@ impl<P: Port> Core<P> {
                 }
                 None
             }
+            TerminalFate::KnownDelivered { riders, .. } => Some(
+                self.due
+                    .touch(&self.port)
+                    .ack(
+                        &held.batch,
+                        Ack::Delivered {
+                            riders: riders.clone(),
+                        },
+                    )
+                    .await?,
+            ),
             TerminalFate::Failed { error, now, jitter } => Some(
                 self.due
                     .touch(&self.port)
@@ -1899,6 +2062,12 @@ impl<P: Port> Core<P> {
                     .await?,
             ),
         };
+        if acked.as_ref().is_some_and(|a| a.stale) {
+            self.retire_causal_binding(&held.batch)?;
+            self.terminal_obligations.remove(session);
+            return Ok(());
+        }
+        self.retire_causal_binding(&held.batch)?;
         self.terminal_obligations.remove(session);
         if let Some(acked) = acked {
             if acked.stale {
@@ -1917,6 +2086,24 @@ impl<P: Port> Core<P> {
                 .collect();
             if let TerminalFate::Failed { error, .. } = &held.fate {
                 self.alert_gave_up(session, &gave_up, error).await?;
+            }
+            if let TerminalFate::KnownDelivered {
+                now, generation, ..
+            } = &held.fate
+            {
+                for origin in &acked.origins {
+                    self.breaker.record(session, origin, *now);
+                }
+                if let Some(l) = self
+                    .live
+                    .get_mut(session)
+                    .filter(|l| l.generator == *generation)
+                {
+                    l.worked = true;
+                    if !held.batch.wakes.is_empty() {
+                        l.last_wakes = held.batch.wakes.clone();
+                    }
+                }
             }
         }
         self.port.publish(wake_changed(
@@ -3505,6 +3692,7 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            delivery_observer: None,
             session_id: "cap".into(),
             crew_id: "c1".into(),
             workdir: PathBuf::from("/nonexistent/wd"),

@@ -3,6 +3,7 @@
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
 pub mod asks;
+pub mod causal;
 pub mod channels;
 pub mod crews;
 pub mod cursor_reservations;
@@ -188,13 +189,37 @@ impl Sender {
 }
 
 /// 一个 SQLite 事务 + 调用方给的时间 + 这次产生的变更。
+#[derive(Clone, Default)]
+pub struct TxContext {
+    post_observations: Option<std::sync::Arc<dyn causal::PostObservationSource>>,
+}
+impl TxContext {
+    pub fn new(source: std::sync::Arc<dyn causal::PostObservationSource>) -> Self {
+        Self {
+            post_observations: Some(source),
+        }
+    }
+}
+
 pub struct Tx<'a> {
     conn: &'a Connection,
     now_ms: i64,
     changes: Vec<Change>,
+    context: TxContext,
 }
 
 impl<'a> Tx<'a> {
+    pub(crate) fn post_observation(
+        &self,
+        session: &str,
+    ) -> Result<Option<causal::PostObservation>> {
+        self.context
+            .post_observations
+            .as_ref()
+            .map(|source| source.observe(session))
+            .transpose()
+    }
+
     pub fn conn(&self) -> &'a Connection {
         self.conn
     }
@@ -218,12 +243,22 @@ pub fn run<T>(
     now_ms: i64,
     f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
 ) -> Result<(T, Vec<Change>)> {
+    run_with_context(store, now_ms, TxContext::default(), f)
+}
+
+pub fn run_with_context<T>(
+    store: &mut Store,
+    now_ms: i64,
+    context: TxContext,
+    f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
+) -> Result<(T, Vec<Change>)> {
     let t = store.conn().unchecked_transaction()?;
     let (v, changes) = {
         let mut tx = Tx {
             conn: &t,
             now_ms,
             changes: Vec::new(),
+            context,
         };
         let v = f(&mut tx)?;
         (v, tx.changes)

@@ -151,6 +151,7 @@ pub struct Prepared {
     /// Per channel, the highest seq that is really in `context` (shown or announced).
     advance_to: Vec<(String, i64)>,
     snapshot: crewd_collab::cursor_reservations::Snapshot,
+    causes: crewd_collab::causal::CausalSnapshot,
 }
 
 pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared>> {
@@ -158,6 +159,7 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
     let cap = st.agent.config.inject_cap_chars;
     let captured = port::prepare_injection(st, &me.session_id).await?;
     let snapshot = captured.snapshot;
+    let causes = captured.causes;
     let unread = captured.blocks;
     if unread.iter().all(|(_, v)| v.is_empty()) {
         return Ok(None);
@@ -230,10 +232,11 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
         return Ok(Some(Prepared {
             context: None,
             advance_to: vec![],
+            causes: causes.select(&[])?,
             snapshot,
         }));
     }
-    let advance_to = runs
+    let advance_to: Vec<(String, i64)> = runs
         .iter()
         .zip(&fitted.kept)
         .filter(|(_, k)| **k > 0)
@@ -241,6 +244,7 @@ pub async fn prepare(st: &AppState, me: &Identity) -> PortResult<Option<Prepared
         .collect();
     Ok(Some(Prepared {
         context: Some(fitted.context),
+        causes: causes.select(&advance_to)?,
         advance_to,
         snapshot,
     }))
@@ -448,7 +452,7 @@ pub async fn commit(
     _me: &Identity,
     p: &Prepared,
 ) -> PortResult<crewd_collab::cursor_reservations::Decision<()>> {
-    port::commit_injection(st, &p.snapshot, p.advance_to.clone()).await
+    port::commit_injection(st, &p.snapshot, &p.causes, p.advance_to.clone()).await
 }
 
 /// `agent.hook {event: post-tool-use}`; also serves `PostToolUseFailure` (same helper command,
@@ -474,6 +478,8 @@ async fn post_tool_use_since(
     // same unread messages.
     let lock = st.agent.session_lock(&me.session_id);
     let _held = lock.lock().await;
+    #[cfg(feature = "testkit")]
+    let observed_call = crate::agent::testkit::begin_injection_observation(st);
     for attempt in 0..2 {
         let prepared = match prepare(st, me).await {
             Ok(Some(p)) => p,
@@ -522,7 +528,40 @@ async fn post_tool_use_since(
             );
             return HookResult { stdout: None };
         }
-        match commit(st, me, &prepared).await {
+        let committed = commit(st, me, &prepared).await;
+        #[cfg(feature = "testkit")]
+        if let Some(call) = observed_call {
+            use crate::agent::testkit::{InjectionAttempt, InjectionCommitOutcome};
+            let outcome = match &committed {
+                Ok(crewd_collab::cursor_reservations::Decision::Applied(())) => {
+                    InjectionCommitOutcome::Applied
+                }
+                Ok(crewd_collab::cursor_reservations::Decision::Stale) => {
+                    InjectionCommitOutcome::Stale
+                }
+                Ok(crewd_collab::cursor_reservations::Decision::Busy) => {
+                    InjectionCommitOutcome::Busy
+                }
+                Err(_) => InjectionCommitOutcome::InternalError,
+            };
+            let event = match payload["hook_event_name"].as_str() {
+                Some("PostToolUseFailure") => "PostToolUseFailure",
+                _ => "PostToolUse",
+            };
+            crate::agent::testkit::record_injection_attempt(
+                st,
+                observed_call,
+                InjectionAttempt {
+                    call,
+                    session: me.session_id.clone(),
+                    event: event.into(),
+                    attempt,
+                    targets: prepared.advance_to.clone(),
+                    outcome,
+                },
+            );
+        }
+        match committed {
             Ok(crewd_collab::cursor_reservations::Decision::Applied(())) => {
                 let event = match payload.get("hook_event_name").and_then(Value::as_str) {
                     Some("PostToolUseFailure") => "PostToolUseFailure",
@@ -1008,12 +1047,13 @@ mod tests {
         let l = lobby(&f).await;
         let m = f.human_post(&l, "示例：原子", vec![]).await;
         let me = f.me(&f.worker).await;
+        let captured = port::prepare_injection(&f.state, &me.session_id)
+            .await
+            .unwrap();
         let p = Prepared {
             context: None,
-            snapshot: port::prepare_injection(&f.state, &me.session_id)
-                .await
-                .unwrap()
-                .snapshot,
+            snapshot: captured.snapshot,
+            causes: captured.causes,
             advance_to: vec![(l.clone(), m.seq), ("no-such-channel".into(), 1)],
         };
         let err = commit(&f.state, &me, &p).await;

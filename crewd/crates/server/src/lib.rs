@@ -1,6 +1,7 @@
 //! crewd 服务端：Unix socket 上的 NDJSON RPC。
 pub mod agent;
 pub mod build_info;
+pub mod causal_fence;
 pub(crate) mod conn;
 pub mod control;
 pub mod dispatch;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub hub: Hub,
     pub sessions: Arc<dyn control::SessionControl>,
     pub tokens: token::TokenTable,
+    pub causal_fence: Arc<causal_fence::CausalFence>,
     /// M3b 的 agent 面运行时（配置、attach 表）。M3a 只放占位，M3b 换掉 `agent/runtime.rs` 的内容（G9）。
     pub agent: agent::AgentRuntime,
     /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
@@ -46,6 +48,7 @@ impl AppState {
             hub: Hub::new(),
             sessions: Arc::new(control::NoSessions),
             tokens: token::TokenTable::default(),
+            causal_fence: Arc::new(causal_fence::CausalFence::default()),
             agent: agent::AgentRuntime::default(),
             orchestra: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -67,6 +70,7 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
+        let context = crewd_collab::TxContext::new(self.causal_fence.clone());
         #[cfg(test)]
         let barrier = self.test_db_write_barrier.clone();
         self.db
@@ -78,7 +82,7 @@ impl AppState {
                 }
                 // 在库线程上取时间：库线程串行执行，时间戳顺序 = 提交顺序（排队期间不会被后来者超过）。
                 let now = crewd_store::now_ms();
-                let (v, changes) = crewd_collab::run(s, now, f)?;
+                let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;
                 hub.emit(s.conn(), &changes);
                 Ok(v)
             })
@@ -98,11 +102,12 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
+        let context = crewd_collab::TxContext::new(self.causal_fence.clone());
         self.db
             .call(move |s| {
                 let (v, _snapshot) = s.snapshot_then(&what, check, |s| {
                     let now = crewd_store::now_ms();
-                    let (v, changes) = crewd_collab::run(s, now, f)?;
+                    let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;
                     hub.emit(s.conn(), &changes);
                     Ok::<T, crewd_collab::CollabError>(v)
                 })?;

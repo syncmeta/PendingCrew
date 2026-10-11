@@ -128,6 +128,17 @@ fn receipt_state(s: WakeState) -> ReceiptStateView {
 /// crewd-wake 的原因 → 线上词。词逐字相同（`blocker_codes_match_the_wire_words` 钉住）。
 pub(crate) fn blocker_view(b: &Blocker) -> WakeBlocker {
     let code = match b {
+        Blocker::Causal { blockage } => {
+            if !blockage.holds.is_empty() {
+                BlockerCodeView::Held
+            } else if !blockage.unresolved.is_empty() {
+                BlockerCodeView::CausalUnresolved
+            } else if !blockage.hold_candidates.is_empty() {
+                BlockerCodeView::CausalBudget
+            } else {
+                BlockerCodeView::CausalCursorUnknown
+            }
+        }
         Blocker::ShuttingDown => BlockerCodeView::ShuttingDown,
         Blocker::CrewRemoved => BlockerCodeView::CrewRemoved,
         Blocker::Starting => BlockerCodeView::Starting,
@@ -153,9 +164,58 @@ pub(crate) fn blocker_view(b: &Blocker) -> WakeBlocker {
         _ => None,
     };
     WakeBlocker {
+        causal: match b {
+            Blocker::Causal { blockage } => Some(causal_blockage_view(blockage)),
+            _ => None,
+        },
         code,
         until_ms: b.until().map(|t| t.0),
         detail,
+    }
+}
+
+fn causal_blockage_view(
+    b: &crewd_wake::explain::CausalBlockage,
+) -> crewd_proto::orchestra::CausalBlockageView {
+    use crewd_proto::orchestra::{
+        CausalBlockageView, CausalChainCandidateView, CausalChainHoldView, CausalUnresolvedView,
+    };
+    CausalBlockageView {
+        cursor_unknown: b.cursor_unknown,
+        holds: b
+            .holds
+            .iter()
+            .map(|h| CausalChainHoldView {
+                chain_id: h.chain_id.clone(),
+                from: h.from.clone(),
+                target_session_id: h.target.clone(),
+                hop: h.hop,
+                reason: h.reason.clone(),
+                at_ms: h.at_ms,
+            })
+            .collect(),
+        unresolved: b
+            .unresolved
+            .iter()
+            .map(|u| CausalUnresolvedView {
+                message_id: u.message_id.clone(),
+                seq: u.seq,
+                from: u.from.clone(),
+                target_session_id: u.target.clone(),
+                output_id: u.output_id.clone(),
+            })
+            .collect(),
+        hold_candidates: b
+            .hold_candidates
+            .iter()
+            .map(|h| CausalChainCandidateView {
+                chain_id: h.chain_id.clone(),
+                from: h.from.clone(),
+                target_session_id: h.target.clone(),
+                hop: h.hop,
+                reason: h.reason.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -180,6 +240,14 @@ fn wake_view(w: &ListedWake) -> WakeView {
 
 fn target_view(t: &TargetSummary) -> TargetView {
     TargetView {
+        causal_diagnostics: t
+            .causal_diagnostics
+            .iter()
+            .map(|(channel, b)| crewd_proto::orchestra::CausalChannelView {
+                channel_id: channel.clone(),
+                blockage: causal_blockage_view(b),
+            })
+            .collect(),
         session_id: t.session.clone(),
         running: t.running,
         inflight_wake_ids: t.inflight_wake_ids.clone(),
@@ -202,6 +270,7 @@ fn latch_view(l: &Latch) -> LatchView {
             scope: LatchScopeView::Session,
             target_session_id: l.id.clone(),
             from: None,
+            chain_id: None,
             reason: l.reason.clone(),
             at_ms: l.at.0,
         },
@@ -211,6 +280,7 @@ fn latch_view(l: &Latch) -> LatchView {
                 scope: LatchScopeView::Edge,
                 target_session_id: to.to_string(),
                 from: Some(from.to_string()),
+                chain_id: None,
                 reason: l.reason.clone(),
                 at_ms: l.at.0,
             }
@@ -361,17 +431,61 @@ pub async fn call(
         }
         methods::LOOP_LIST => {
             parse_no_params(params)?;
-            let v: Vec<LatchView> = h
+            let mut v: Vec<LatchView> = h
                 .latches()
                 .await
                 .map_err(rpc_err)?
                 .iter()
                 .map(latch_view)
                 .collect();
+            v.extend(
+                h.causal_holds(None)
+                    .await
+                    .map_err(rpc_err)?
+                    .into_iter()
+                    .map(|hold| LatchView {
+                        scope: LatchScopeView::Chain,
+                        target_session_id: hold.target,
+                        from: Some(hold.from),
+                        chain_id: Some(hold.chain_id),
+                        reason: hold.reason,
+                        at_ms: hold.at_ms,
+                    }),
+            );
             to_value(v)
         }
         methods::LOOP_RECOVER => {
             let p: LoopRecoverParams = parse_params(params)?;
+            if p.scope == LatchScopeView::Chain {
+                let (Some(chain_id), Some(from)) = (p.chain_id, p.from) else {
+                    return Err(rpc_err(ControlError::Invalid(Refusal::new(
+                        Code::LoopChainNeedsIdentity,
+                    ))));
+                };
+                if chain_id.trim().is_empty()
+                    || from.trim().is_empty()
+                    || p.target_session_id.trim().is_empty()
+                {
+                    return Err(rpc_err(ControlError::Invalid(Refusal::new(
+                        Code::LoopChainNeedsIdentity,
+                    ))));
+                }
+                let recovered = h
+                    .recover_chain(
+                        chain_id,
+                        from,
+                        p.target_session_id,
+                        crewd_collab::causal::HumanRecoveryAction::new(),
+                    )
+                    .await
+                    .map_err(rpc_err)?;
+                return to_value(LoopRecovered { recovered });
+            }
+            if p.chain_id.is_some() {
+                return Err(rpc_err(ControlError::Invalid(Refusal::new(
+                    Code::LoopUnexpectedChainId,
+                ))));
+            }
             let (scope, id) = match (p.scope, p.from) {
                 (LatchScopeView::Session, _) => (LatchScope::Session, p.target_session_id),
                 (LatchScopeView::Edge, Some(from)) => {
@@ -382,6 +496,7 @@ pub async fn call(
                         Code::LoopEdgeNeedsFrom,
                     ))));
                 }
+                (LatchScopeView::Chain, _) => unreachable!("chain scope handled above"),
             };
             let recovered = h.recover(scope, id).await.map_err(rpc_err)?;
             to_value(LoopRecovered { recovered })
@@ -1070,6 +1185,52 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn s42_human_recovery_rpc_rejects_incomplete_chain_identity_and_preserves_legacy() {
+        let (h, actor, _x) = handle(Arc::new(MemPort::new())).await;
+        let st = state();
+        let mut results = Vec::new();
+        for params in [
+            json!({"scope":"chain","targetSessionId":"w1","from":"cap"}),
+            json!({"scope":"chain","targetSessionId":"w1","chainId":"c1:opaque"}),
+            json!({"scope":"chain","targetSessionId":"w1","from":"cap","chainId":" "}),
+            json!({"scope":"chain","targetSessionId":"w1","from":" ","chainId":"c1:opaque"}),
+            json!({"scope":"chain","targetSessionId":" ","from":"cap","chainId":"c1:opaque"}),
+        ] {
+            results.push((
+                rpc(&h, &st, methods::LOOP_RECOVER, params).await,
+                "loop.chain_needs_identity",
+            ));
+        }
+        for scope in ["edge", "session"] {
+            results.push((rpc(&h, &st, methods::LOOP_RECOVER,
+                json!({"scope":scope,"targetSessionId":"w1","from":"cap","chainId":"c1:opaque"})).await,
+                "loop.unexpected_chain_id"));
+        }
+        let legacy = rpc(
+            &h,
+            &st,
+            methods::LOOP_RECOVER,
+            json!({"scope":"session","targetSessionId":"w1","from":"ignored"}),
+        )
+        .await;
+        // This checks real human RPC validation, not successful durable chain recovery.
+        let stopped = h.shutdown(Duration::from_secs(5)).await;
+        let joined = tokio::time::timeout(Duration::from_secs(5), actor.finished()).await;
+        let db = st.db.clone();
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        assert!(stopped, "owned empty actor must shut down normally");
+        assert!(matches!(joined, Ok(Ok(()))), "actor cleanup: {joined:?}");
+        for (result, refusal) in results {
+            let err = result.unwrap_err();
+            assert_eq!(err.code, RpcError::INVALID_PARAMS);
+            assert_eq!(err.data.map(|d| d.refusal).as_deref(), Some(refusal));
+        }
+        assert_eq!(legacy.unwrap(), json!({"recovered":false}));
+    }
+
     /// S49：`settings.set` 键不在 = 不改、`null` = 清掉、数 = 设成它；坏值带码、什么都不改。
     #[tokio::test]
     async fn settings_round_trip_with_absent_null_and_values() {
@@ -1199,6 +1360,7 @@ mod tests {
         assert_eq!(
             w.blocker,
             Some(WakeBlocker {
+                causal: None,
                 code: BlockerCodeView::NotDue,
                 until_ms: Some(later.0),
                 detail: None
@@ -1208,6 +1370,7 @@ mod tests {
         assert_eq!(
             r.targets,
             [TargetView {
+                causal_diagnostics: vec![],
                 session_id: "w1".into(),
                 running: false,
                 inflight_wake_ids: vec![],
@@ -1527,5 +1690,231 @@ mod tests {
         assert_eq!(prose_in_control_errors(old).len(), 1);
         let ok = "let e = ControlError::CrewNoWorkdir(c.clone()); // 机组没有工作目录\n#[cfg(test)]\nmod tests {\n    ControlError::Worktree(\"合成\".into())\n}";
         assert!(prose_in_control_errors(ok).is_empty());
+    }
+
+    #[test]
+    fn s42_cursor_unknown_wire_has_no_fabricated_cause_and_preserves_legacy_defaults() {
+        use crewd_proto::orchestra::CausalBlockageView;
+        use crewd_wake::explain::CausalBlockage;
+        let empty = causal_blockage_view(&CausalBlockage::default());
+        assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
+        let old: CausalBlockageView = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(old, empty);
+        let flag = CausalBlockage {
+            cursor_unknown: true,
+            ..Default::default()
+        };
+        let blocker = blocker_view(&Blocker::Causal { blockage: flag });
+        assert_eq!(blocker.code, BlockerCodeView::CausalCursorUnknown);
+        let wire = serde_json::to_value(&blocker).unwrap();
+        assert_eq!(wire["causal"], serde_json::json!({"cursorUnknown":true}));
+        assert_eq!(wire["code"], "causal_cursor_unknown");
+        assert!(wire.get("detail").is_none());
+        assert_eq!(
+            serde_json::from_value::<WakeBlocker>(wire).unwrap(),
+            blocker
+        );
+    }
+
+    #[test]
+    fn causal_wire_distinguishes_persisted_holds_candidates_and_unresolved_without_legacy_fields() {
+        use crewd_wake::explain::{
+            CausalBlockage, CausalChainCandidate, CausalChainHold, CausalUnresolved,
+        };
+        let candidate = CausalChainCandidate {
+            chain_id: "root-budget".into(),
+            from: "a".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+        };
+        let mut b = CausalBlockage {
+            hold_candidates: vec![candidate],
+            ..Default::default()
+        };
+        let candidate_wire = serde_json::to_value(blocker_view(&Blocker::Causal {
+            blockage: b.clone(),
+        }))
+        .unwrap();
+        assert_eq!(candidate_wire["code"], "causal_budget");
+        assert!(
+            candidate_wire["causal"]["holdCandidates"][0]
+                .get("atMs")
+                .is_none(),
+            "readonly candidate is not a persisted episode"
+        );
+        assert_eq!(
+            candidate_wire["causal"]["holdCandidates"][0]["targetSessionId"],
+            "b"
+        );
+        b.unresolved.push(CausalUnresolved {
+            message_id: "m1".into(),
+            seq: 1,
+            from: "c".into(),
+            target: "b".into(),
+            output_id: None,
+        });
+        assert_eq!(
+            blocker_view(&Blocker::Causal {
+                blockage: b.clone()
+            })
+            .code,
+            BlockerCodeView::CausalUnresolved
+        );
+        b.holds.push(CausalChainHold {
+            chain_id: "root-held".into(),
+            from: "d".into(),
+            target: "b".into(),
+            hop: 17,
+            reason: "budget".into(),
+            at_ms: 123,
+        });
+        let mixed = blocker_view(&Blocker::Causal { blockage: b });
+        assert_eq!(mixed.code, BlockerCodeView::Held);
+        let wire = serde_json::to_value(&mixed).unwrap();
+        assert_eq!(wire["causal"]["holds"][0]["atMs"], 123);
+        assert_eq!(wire["causal"]["unresolved"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            wire["causal"]["holdCandidates"].as_array().unwrap().len(),
+            1
+        );
+        assert!(
+            wire.get("detail").is_none(),
+            "never manufacture a legacy latch identity"
+        );
+        assert_eq!(serde_json::from_value::<WakeBlocker>(wire).unwrap(), mixed);
+        let legacy = serde_json::json!({"code":"not_due", "untilMs":123});
+        assert_eq!(
+            serde_json::to_value(serde_json::from_value::<WakeBlocker>(legacy.clone()).unwrap())
+                .unwrap(),
+            legacy
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_causal_episode_persists_one_honest_bilingual_notice_in_actual_transaction() {
+        let mut observations = Vec::new();
+        for locale in [crewd_collab::Locale::Zh, crewd_collab::Locale::En] {
+            let f = crate::agent::testkit::Fixture::new().await;
+            let db = f.state.db.clone();
+            let crew = f.crew.clone();
+            let sender = f.captain.clone();
+            let target = f.worker.clone();
+            let observed = db
+                .call(move |s| -> anyhow::Result<_> {
+                    use crewd_collab::{causal, cursor_reservations as cr, messages};
+                    let now = crewd_store::now_ms();
+                    let channel = format!("{crew}/lobby");
+                    crewd_collab::run(s, now, |tx| {
+                        crewd_collab::settings::set_locale(tx, locale)?;
+                        messages::post(
+                            tx,
+                            crewd_collab::Sender::Human,
+                            messages::NewPost {
+                                channel_id: channel.clone(),
+                                text: "synthetic parent not yet successful".into(),
+                                ..Default::default()
+                            },
+                        )
+                    })?;
+                    let (claimed, _) = crewd_collab::run(s, now, |tx| {
+                        let prepared = cr::prepare_causal_unread(tx, &sender)?;
+                        let ends = prepared
+                            .blocks
+                            .iter()
+                            .filter_map(|(ch, ms)| ms.last().map(|m| (ch.clone(), m.seq)))
+                            .collect::<Vec<_>>();
+                        let causes = prepared.causes.select(&ends)?;
+                        let windows = prepared.snapshot.windows_for(&ends)?;
+                        cr::claim_output(
+                            tx,
+                            &prepared.snapshot,
+                            &causes,
+                            &windows,
+                            &[],
+                            &[],
+                            cr::Owner::new(1)?,
+                        )
+                    })?;
+                    let claimed = match claimed {
+                        cr::Decision::Applied(c) => c,
+                        other => anyhow::bail!("owned pending fixture did not claim: {other:?}"),
+                    };
+                    let (child, _) = crewd_collab::run(s, now, |tx| {
+                        messages::post(
+                            tx,
+                            crewd_collab::Sender::Session(sender.clone()),
+                            messages::NewPost {
+                                channel_id: channel.clone(),
+                                text: "synthetic post before parent success".into(),
+                                ..Default::default()
+                            },
+                        )
+                    })?;
+                    let child_unresolved = matches!(
+                        causal::read_message(s.conn(), &child.message)?,
+                        causal::MessageCause::Unresolved { .. }
+                    );
+                    for _ in 0..2 {
+                        crewd_collab::run(s, now, |tx| {
+                            let prepared = cr::prepare_causal_unread(tx, &target)?;
+                            crate::causal_fence::blocked_channels(tx, &prepared.causes)
+                        })?;
+                    }
+                    let holds = causal::holds(s.conn(), Some(&target))?;
+                    let home = crewd_collab::crews::home_of(s.conn(), &crew)?;
+                    let human = format!("{home}/human");
+                    let notices = messages::list(s.conn(), &human, None, None, 100)?;
+                    let success = claimed.pending.observe_success(
+                        1,
+                        claimed.pending.generation(),
+                        &uuid::Uuid::new_v4().to_string(),
+                        1,
+                    )?;
+                    crewd_collab::run(s, now, |tx| {
+                        cr::ack_output_delivered(
+                            tx,
+                            &claimed,
+                            &success,
+                            crewd_collab::wakes::Riders::Release,
+                        )
+                    })?;
+                    Ok((locale, child_unresolved, holds, notices))
+                })
+                .await;
+            tokio::task::spawn_blocking(move || db.shutdown())
+                .await
+                .unwrap();
+            drop(f);
+            observations.push(observed);
+        }
+        for observation in observations {
+            let (locale, unknown, holds, notices) = observation.unwrap().unwrap();
+            assert!(unknown, "actual stored pre-success child is unresolved");
+            assert_eq!(holds.len(), 1, "one actual diagnostic episode");
+            assert_eq!(holds[0].hop, 0);
+            let notices = notices
+                .iter()
+                .filter(|m| m.text.contains(&holds[0].chain_id))
+                .collect::<Vec<_>>();
+            assert_eq!(notices.len(), 1, "repeat prepare has one durable notice");
+            let text = &notices[0].text;
+            match locale {
+                crewd_collab::Locale::Zh => {
+                    assert!(text.contains("尚不能确认"));
+                    assert!(!text.contains("超过"));
+                }
+                crewd_collab::Locale::En => {
+                    assert!(text.contains("has not been established"));
+                    assert!(!text.contains("exceeds"));
+                }
+            }
+            assert!(
+                notices[0]
+                    .mentions
+                    .iter()
+                    .any(|m| m.kind == crewd_proto::MentionKind::Human)
+            );
+        }
     }
 }

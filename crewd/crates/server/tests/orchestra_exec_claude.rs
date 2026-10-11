@@ -26,6 +26,7 @@ fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
 
 fn request(session: &str, workdir: &Path) -> LaunchRequest {
     LaunchRequest {
+        delivery_observer: None,
         session_id: session.into(),
         crew_id: "c1".into(),
         workdir: workdir.to_path_buf(),

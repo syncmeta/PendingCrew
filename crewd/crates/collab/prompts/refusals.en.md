@@ -328,6 +328,12 @@ The nudge input is empty. crewd will not press a bare Enter for you (that would 
 ## loop.edge_needs_from
 scope=edge needs from (the source that woke it: a session id or system). To release the session's own latch, use scope=session.
 
+## loop.chain_needs_identity
+scope=chain needs a nonempty chain_id, from and target to identify the causal chain and its delivery route.
+
+## loop.unexpected_chain_id
+chain_id is only valid with scope=chain. Omit it when recovering an edge or session.
+
 ## system.api_incompatible
 The client's API version {client} is too old: this crewd supports {min} to {current}. Update the client and connect again.
 

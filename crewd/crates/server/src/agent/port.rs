@@ -1187,10 +1187,21 @@ pub async fn sender_label(st: &AppState, m: &Message, loc: Locale) -> PortResult
 pub async fn prepare_injection(
     st: &AppState,
     session: &str,
-) -> PortResult<crewd_collab::cursor_reservations::PreparedUnread> {
+) -> PortResult<crewd_collab::cursor_reservations::PreparedCausalUnread> {
     let session = session.to_string();
     write(st, move |tx| {
-        crewd_collab::cursor_reservations::prepare_unread(tx, &session)
+        let mut captured = crewd_collab::cursor_reservations::prepare_causal_unread(tx, &session)?;
+        let blocked = crate::causal_fence::blocked_channels(tx, &captured.causes)?;
+        captured
+            .blocks
+            .retain(|(channel, _)| !blocked.contains(channel));
+        let targets = captured
+            .blocks
+            .iter()
+            .filter_map(|(channel, ms)| ms.last().map(|m| (channel.clone(), m.seq)))
+            .collect::<Vec<_>>();
+        captured.causes = captured.causes.select(&targets)?;
+        Ok(captured)
     })
     .await
 }
@@ -1198,11 +1209,28 @@ pub async fn prepare_injection(
 pub async fn commit_injection(
     st: &AppState,
     prepared: &crewd_collab::cursor_reservations::Snapshot,
+    causes: &crewd_collab::causal::CausalSnapshot,
     targets: Vec<(String, i64)>,
 ) -> PortResult<crewd_collab::cursor_reservations::Decision<()>> {
     let prepared = prepared.clone();
+    let causes = causes.clone();
     write(st, move |tx| {
-        crewd_collab::cursor_reservations::commit_hook(tx, &prepared, &targets)
+        // A hook has an operation identity, never a fabricated executor generation.
+        Ok(
+            match crewd_collab::cursor_reservations::commit_hook_output(
+                tx, &prepared, &causes, &targets,
+            )? {
+                crewd_collab::cursor_reservations::Decision::Applied(_) => {
+                    crewd_collab::cursor_reservations::Decision::Applied(())
+                }
+                crewd_collab::cursor_reservations::Decision::Stale => {
+                    crewd_collab::cursor_reservations::Decision::Stale
+                }
+                crewd_collab::cursor_reservations::Decision::Busy => {
+                    crewd_collab::cursor_reservations::Decision::Busy
+                }
+            },
+        )
     })
     .await
 }

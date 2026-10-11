@@ -305,6 +305,14 @@
       "description": "pending 的唤醒此刻为什么还没出去（crewd-wake `explain::Blocker::code`，词逐字相同）。",
       "oneOf": [
         {
+          "enum": [
+            "causal_cursor_unknown",
+            "causal_unresolved",
+            "causal_budget"
+          ],
+          "type": "string"
+        },
+        {
           "const": "shutting_down",
           "description": "crewd 在停机 / 休眠。",
           "type": "string"
@@ -451,6 +459,141 @@
       "required": [
         "text",
         "isError"
+      ],
+      "type": "object"
+    },
+    "CausalBlockageView": {
+      "properties": {
+        "cursorUnknown": {
+          "description": "Missing cursor means the readonly scanner cannot establish an unread prefix.",
+          "type": "boolean"
+        },
+        "holdCandidates": {
+          "items": {
+            "$ref": "#/$defs/CausalChainCandidateView"
+          },
+          "type": "array"
+        },
+        "holds": {
+          "items": {
+            "$ref": "#/$defs/CausalChainHoldView"
+          },
+          "type": "array"
+        },
+        "unresolved": {
+          "items": {
+            "$ref": "#/$defs/CausalUnresolvedView"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "CausalChainCandidateView": {
+      "properties": {
+        "chainId": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "hop": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "targetSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chainId",
+        "from",
+        "targetSessionId",
+        "hop",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CausalChainHoldView": {
+      "properties": {
+        "atMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "chainId": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "hop": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "targetSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chainId",
+        "from",
+        "targetSessionId",
+        "hop",
+        "reason",
+        "atMs"
+      ],
+      "type": "object"
+    },
+    "CausalChannelView": {
+      "properties": {
+        "blockage": {
+          "$ref": "#/$defs/CausalBlockageView"
+        },
+        "channelId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId",
+        "blockage"
+      ],
+      "type": "object"
+    },
+    "CausalUnresolvedView": {
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "outputId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "targetSessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "seq",
+        "from",
+        "targetSessionId"
       ],
       "type": "object"
     },
@@ -1644,6 +1787,11 @@
           "const": "session",
           "description": "目标的非 session 来源（系统、它自己的定时）。",
           "type": "string"
+        },
+        {
+          "const": "chain",
+          "description": "一条因果链在精确来源与目标之间的熔断。",
+          "type": "string"
         }
       ]
     },
@@ -1654,8 +1802,15 @@
           "format": "int64",
           "type": "integer"
         },
+        "chainId": {
+          "description": "`chain` 的不透明持久身份；旧两级省略。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "from": {
-          "description": "`edge` 的来源（session id，或 `system`）；`session` 级的没有。",
+          "description": "`edge` 或 `chain` 的来源（session id，或 `system`）；`session` 级的没有。",
           "type": [
             "string",
             "null"
@@ -1698,9 +1853,16 @@
     "LoopRecoverParams": {
       "additionalProperties": false,
       "properties": {
+        "chainId": {
+          "description": "`chain` 必填，须与持久熔断的来源和目标精确匹配；旧两级不接受它。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "from": {
           "default": null,
-          "description": "`edge` 的来源（session id，或 `system`）；`edge` 不给 = -32602 `loop.edge_needs_from`。",
+          "description": "`edge` 或 `chain` 的来源（session id，或 `system`）；缺失由服务端拒绝。",
           "type": [
             "string",
             "null"
@@ -2888,6 +3050,12 @@
     "TargetView": {
       "description": "`wake.list` 里一个目标的近况（R9）。",
       "properties": {
+        "causalDiagnostics": {
+          "items": {
+            "$ref": "#/$defs/CausalChannelView"
+          },
+          "type": "array"
+        },
         "deliveryId": {
           "format": "uint64",
           "minimum": 0,
@@ -3130,6 +3298,16 @@
     "WakeBlocker": {
       "description": "pending 的唤醒此刻为什么还没出去。没有它（`WakeView.blocker` 缺省 / null）= 此刻就有资格出去：已经从别处读到\n（游标越过）的会在下一次投递时直接记 delivered，同一档超过一批上限的排在下一批——这两种都在下一轮里结掉，\n不在这里报。",
       "properties": {
+        "causal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CausalBlockageView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "code": {
           "$ref": "#/$defs/BlockerCodeView"
         },

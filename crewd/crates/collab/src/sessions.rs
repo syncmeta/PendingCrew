@@ -199,6 +199,7 @@ pub fn register(tx: &mut Tx<'_>, n: NewSession) -> Result<Session> {
         ..Default::default()
     };
     crewd_store::sessions::upsert(conn, &s, None)?;
+    crate::causal::initialize(tx, &s.id)?;
     if n.role == Role::Captain {
         crews::point_captain_at(tx, &crew.id, &s.id)?;
     }
@@ -323,6 +324,7 @@ pub fn note_progress(tx: &mut Tx<'_>, id: &str, kind: ProgressKind) -> Result<()
         params![id, now],
         false,
     )?;
+    crate::causal::note_work(tx, id, kind)?;
     tx.note(Change::Progress {
         session_id: id.into(),
         kind,

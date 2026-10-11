@@ -358,6 +358,31 @@ impl Handle {
         self.call(|reply| Cmd::Latches { reply }).await
     }
 
+    pub async fn causal_holds(
+        &self,
+        target: Option<String>,
+    ) -> Result<Vec<crewd_collab::causal::ChainHold>, ControlError> {
+        self.call(|reply| Cmd::CausalHolds { target, reply }).await
+    }
+
+    /// 人的精确链恢复动作在本次请求内固定，重试不生成另一个动作。
+    pub async fn recover_chain(
+        &self,
+        chain_id: String,
+        from: String,
+        target: String,
+        action: crewd_collab::causal::HumanRecoveryAction,
+    ) -> Result<bool, ControlError> {
+        self.call(|reply| Cmd::RecoverChain {
+            chain_id,
+            from,
+            target,
+            action,
+            reply,
+        })
+        .await
+    }
+
     /// 设置（`settings.get`）。
     pub async fn settings(&self) -> Result<SettingsView, ControlError> {
         self.call(|reply| Cmd::Settings { reply }).await

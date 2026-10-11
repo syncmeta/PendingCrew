@@ -101,6 +101,9 @@ impl From<&Message> for Identity {
 }
 
 impl Snapshot {
+    pub(crate) fn causal_session(&self) -> &str {
+        &self.session
+    }
     /// Outer None means channel was not captured; Some(None) means captured without a cursor.
     pub fn cursor_base(&self, channel: &str) -> Option<Option<i64>> {
         self.bases.get(channel).copied()
@@ -382,6 +385,21 @@ pub fn commit_hook(
     prepared: &Snapshot,
     actual_targets: &[(String, i64)],
 ) -> Result<Decision<()>> {
+    let causes = crate::causal::capture(tx.conn(), prepared, actual_targets)?;
+    Ok(
+        match commit_hook_output(tx, prepared, &causes, actual_targets)? {
+            Decision::Applied(_) => Decision::Applied(()),
+            Decision::Stale => Decision::Stale,
+            Decision::Busy => Decision::Busy,
+        },
+    )
+}
+
+fn commit_hook_inner(
+    tx: &mut Tx<'_>,
+    prepared: &Snapshot,
+    actual_targets: &[(String, i64)],
+) -> Result<Decision<()>> {
     let windows = prepared.windows_for(actual_targets)?;
     if !validate_prepared(tx, prepared, &windows)? {
         return Ok(Decision::Stale);
@@ -495,6 +513,25 @@ pub fn ack_reserved_delivered(
     lease: &Lease,
     riders: wakes::Riders<'_>,
 ) -> Result<Decision<()>> {
+    if crate::causal::pending_for(
+        tx.conn(),
+        &lease.session,
+        &lease.incarnation,
+        &lease.token,
+        lease.executor_generation,
+    )?
+    .is_some()
+    {
+        return Err(invalid("causal output requires exact successful witness"));
+    }
+    ack_reserved_delivered_inner(tx, lease, riders)
+}
+
+fn ack_reserved_delivered_inner(
+    tx: &mut Tx<'_>,
+    lease: &Lease,
+    riders: wakes::Riders<'_>,
+) -> Result<Decision<()>> {
     let Some((_, active)) = exact(tx.conn(), lease)? else {
         return Ok(Decision::Stale);
     };
@@ -531,6 +568,15 @@ pub fn ack_reserved_failed(
         .copied()
         .collect::<Vec<_>>();
     let failed = wakes::ack_failed(tx, &ids, error, decide)?;
+    if let Some(p) = crate::causal::pending_for(
+        tx.conn(),
+        &lease.session,
+        &lease.incarnation,
+        &lease.token,
+        lease.executor_generation,
+    )? {
+        crate::causal::terminal(tx, &p)?;
+    }
     clear(tx, lease)?;
     Ok(Decision::Applied(failed))
 }
@@ -563,6 +609,15 @@ pub fn settle_reserved(
             }
         }
     }
+    if let Some(p) = crate::causal::pending_for(
+        tx.conn(),
+        &lease.session,
+        &lease.incarnation,
+        &lease.token,
+        lease.executor_generation,
+    )? {
+        crate::causal::terminal(tx, &p)?;
+    }
     clear(tx, lease)?;
     Ok(Decision::Applied(()))
 }
@@ -583,6 +638,15 @@ pub fn release_reserved(tx: &mut Tx<'_>, lease: &Lease) -> Result<Decision<()>> 
     let rows = wakes::by_ids(tx.conn(), &ids)?;
     if rows.len() != ids.len() || rows.iter().any(|r| r.state == wakes::WakeState::Inflight) {
         return Err(invalid("release before owned row fate"));
+    }
+    if let Some(p) = crate::causal::pending_for(
+        tx.conn(),
+        &lease.session,
+        &lease.incarnation,
+        &lease.token,
+        lease.executor_generation,
+    )? {
+        crate::causal::terminal(tx, &p)?;
     }
     clear(tx, lease)?;
     Ok(Decision::Applied(()))
@@ -611,6 +675,7 @@ pub fn reset_inflight_and_reservations(
     let states = all_states(tx.conn())?;
     guard_prune(tx.conn())?;
     let failed = wakes::reset_inflight(tx, error, decide)?;
+    crate::causal::reset_pending(tx)?;
     for mut state in states {
         if state.active.take().is_some() {
             bump(&mut state)?;
@@ -746,6 +811,200 @@ pub(crate) fn guard_prune(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedCausalUnread {
+    pub snapshot: Snapshot,
+    pub blocks: Vec<(String, Vec<Message>)>,
+    pub causes: crate::causal::CausalSnapshot,
+}
+pub fn prepare_causal_unread(tx: &mut Tx<'_>, session: &str) -> Result<PreparedCausalUnread> {
+    let prepared = prepare_unread(tx, session)?;
+    let ends = prepared
+        .blocks
+        .iter()
+        .filter_map(|(ch, ms)| ms.last().map(|m| (ch.clone(), m.seq)))
+        .collect::<Vec<_>>();
+    let causes = crate::causal::capture(tx.conn(), &prepared.snapshot, &ends)?;
+    Ok(PreparedCausalUnread {
+        snapshot: prepared.snapshot,
+        blocks: prepared.blocks,
+        causes,
+    })
+}
+pub fn claim_output(
+    tx: &mut Tx<'_>,
+    prepared: &Snapshot,
+    causes: &crate::causal::CausalSnapshot,
+    windows: &[Window],
+    ids: &[i64],
+    riders: &[i64],
+    owner: Owner,
+) -> Result<Decision<crate::causal::ClaimedOutput>> {
+    if causes.unresolved() {
+        return Ok(Decision::Busy);
+    }
+    if !causes.matches_windows(tx.conn(), prepared, windows)? {
+        return Ok(Decision::Stale);
+    }
+    if crate::causal::inspect_admission(
+        tx.conn(),
+        causes,
+        crate::causal::CAUSAL_HOP_MAX,
+        tx.now_ms(),
+    )?
+    .blocked()
+    {
+        return Ok(Decision::Busy);
+    }
+    match claim_reserved(tx, prepared, windows, ids, riders, owner)? {
+        Decision::Applied(lease) => {
+            let pending = crate::causal::register_pending(
+                tx,
+                &lease.session,
+                &lease.incarnation,
+                &lease.token,
+                lease.executor_generation,
+                causes,
+                ids,
+            )?;
+            Ok(Decision::Applied(crate::causal::ClaimedOutput {
+                lease,
+                pending,
+            }))
+        }
+        Decision::Stale => Ok(Decision::Stale),
+        Decision::Busy => Ok(Decision::Busy),
+    }
+}
+/// A missing success witness may only be ignored for an already retired,
+/// receipt. It remains Stale even after an earlier witnessed commit: an unwitnessed
+/// replay must not report a new Applied. Keep owner inspection inside collab.
+pub fn output_receipt_retired(tx: &Tx<'_>, claimed: &crate::causal::ClaimedOutput) -> Result<bool> {
+    let current = crate::causal::pending_for(
+        tx.conn(),
+        &claimed.lease.session,
+        &claimed.lease.incarnation,
+        &claimed.lease.token,
+        claimed.lease.executor_generation,
+    )?;
+    Ok(current.as_ref() != Some(&claimed.pending))
+}
+pub fn ack_output_delivered(
+    tx: &mut Tx<'_>,
+    claimed: &crate::causal::ClaimedOutput,
+    success: &crate::causal::ObservedSuccess,
+    riders: wakes::Riders<'_>,
+) -> Result<Decision<crate::causal::OutputCommit>> {
+    if success.pending() != claimed.pending {
+        return Err(invalid("successful output does not own claimed receipt"));
+    }
+    if crate::causal::committed(tx.conn(), &claimed.pending)? {
+        return Ok(Decision::Applied(crate::causal::finalize(
+            tx,
+            &claimed.pending,
+            success,
+        )?));
+    }
+    let p = crate::causal::pending_for(
+        tx.conn(),
+        &claimed.lease.session,
+        &claimed.lease.incarnation,
+        &claimed.lease.token,
+        claimed.lease.executor_generation,
+    )?;
+    if p.as_ref() != Some(&claimed.pending) {
+        return Ok(Decision::Stale);
+    }
+    match ack_reserved_delivered_inner(tx, &claimed.lease, riders)? {
+        Decision::Applied(()) => Ok(Decision::Applied(crate::causal::finalize(
+            tx,
+            &claimed.pending,
+            success,
+        )?)),
+        Decision::Stale => Ok(Decision::Stale),
+        Decision::Busy => Ok(Decision::Busy),
+    }
+}
+pub fn ack_output_failed(
+    tx: &mut Tx<'_>,
+    claimed: &crate::causal::ClaimedOutput,
+    error: &str,
+    decide: impl Fn(u32) -> Option<i64>,
+) -> Result<Decision<Vec<wakes::Failed>>> {
+    if crate::causal::pending_for(
+        tx.conn(),
+        &claimed.lease.session,
+        &claimed.lease.incarnation,
+        &claimed.lease.token,
+        claimed.lease.executor_generation,
+    )?
+    .as_ref()
+        != Some(&claimed.pending)
+    {
+        return Ok(Decision::Stale);
+    }
+    ack_reserved_failed(tx, &claimed.lease, error, decide)
+}
+pub fn settle_output(
+    tx: &mut Tx<'_>,
+    claimed: &crate::causal::ClaimedOutput,
+    fate: Terminal<'_>,
+) -> Result<Decision<()>> {
+    if crate::causal::pending_for(
+        tx.conn(),
+        &claimed.lease.session,
+        &claimed.lease.incarnation,
+        &claimed.lease.token,
+        claimed.lease.executor_generation,
+    )?
+    .as_ref()
+        != Some(&claimed.pending)
+    {
+        return Ok(Decision::Stale);
+    }
+    settle_reserved(tx, &claimed.lease, fate)
+}
+pub fn commit_hook_output(
+    tx: &mut Tx<'_>,
+    prepared: &Snapshot,
+    causes: &crate::causal::CausalSnapshot,
+    targets: &[(String, i64)],
+) -> Result<Decision<crate::causal::HookCommit>> {
+    let windows = prepared.windows_for(targets)?;
+    if causes.unresolved() {
+        return Ok(Decision::Busy);
+    }
+    if !causes.matches_windows(tx.conn(), prepared, &windows)? {
+        return Ok(Decision::Stale);
+    }
+    if crate::causal::inspect_admission(
+        tx.conn(),
+        causes,
+        crate::causal::CAUSAL_HOP_MAX,
+        tx.now_ms(),
+    )?
+    .blocked()
+    {
+        return Ok(Decision::Busy);
+    }
+    match commit_hook_inner(tx, prepared, targets)? {
+        Decision::Applied(()) => {
+            if windows.is_empty() {
+                return Ok(Decision::Applied(crate::causal::HookCommit {
+                    output: None,
+                }));
+            }
+            let pending = crate::causal::hook_pending(tx, &prepared.session, causes)?;
+            crate::causal::finalize_hook(tx, &pending)?;
+            Ok(Decision::Applied(crate::causal::HookCommit {
+                output: Some(pending.stable_key().into()),
+            }))
+        }
+        Decision::Stale => Ok(Decision::Stale),
+        Decision::Busy => Ok(Decision::Busy),
+    }
 }
 
 #[cfg(test)]

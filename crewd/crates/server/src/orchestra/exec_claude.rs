@@ -115,6 +115,7 @@ impl Executor for ClaudeExecutor {
             self.check_launch()?;
             let mut config = DriverConfig::new(self.runtime_dir.clone());
             config.registry = self.registry.clone();
+            config.delivery_observer = req.delivery_observer.clone();
             config.claude_projects_dir = self.projects_dir.clone();
             let comms = comms_for(
                 &self.helper,
@@ -198,6 +199,7 @@ mod tests {
 
     fn request(session: &str, workdir: &Path) -> LaunchRequest {
         LaunchRequest {
+            delivery_observer: None,
             session_id: session.into(),
             crew_id: "c1".into(),
             workdir: workdir.to_path_buf(),

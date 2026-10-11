@@ -91,6 +91,56 @@ pub(crate) fn record_injection_completion(
         });
 }
 
+/// A REAL commit return, before the unchanged retry/termination decision.
+/// Empty preparation and deadline-before-commit produce no attempt row.
+#[cfg(feature = "testkit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InjectionCommitOutcome {
+    Applied,
+    Stale,
+    Busy,
+    InternalError,
+}
+#[cfg(feature = "testkit")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InjectionAttempt {
+    pub call: u64,
+    pub session: String,
+    pub event: String,
+    /// Zero-based actual bounded handler attempt (0 or 1).
+    pub attempt: usize,
+    /// Actual prepared cursor targets, without bodies, tokens or user transcripts.
+    pub targets: Vec<(String, i64)>,
+    pub outcome: InjectionCommitOutcome,
+}
+#[cfg(feature = "testkit")]
+#[derive(Debug, Default)]
+pub(crate) struct InjectionAttemptJournal {
+    next_call: u64,
+    rows: Vec<InjectionAttempt>,
+}
+#[cfg(feature = "testkit")]
+pub(crate) fn begin_injection_observation(st: &AppState) -> Option<u64> {
+    let mut slot = st.agent.injection_attempts.lock().unwrap();
+    let journal = slot.as_mut()?;
+    journal.next_call = journal
+        .next_call
+        .checked_add(1)
+        .expect("fixture call ID exhausted");
+    Some(journal.next_call)
+}
+#[cfg(feature = "testkit")]
+pub(crate) fn record_injection_attempt(st: &AppState, call: Option<u64>, row: InjectionAttempt) {
+    if let Some(call) = call {
+        let mut slot = st.agent.injection_attempts.lock().unwrap();
+        let journal = slot
+            .as_mut()
+            .expect("armed fixture journal cannot disappear");
+        assert_eq!(row.call, call);
+        journal.rows.push(row);
+    }
+}
+
 /// Single-use pauses at actual caller stages. Absent outside feature=testkit and idle by default.
 #[cfg(feature = "testkit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -176,6 +226,33 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// Arm once before the observed caller. No global storage or public wire selector.
+    /// Rows are owned by this AgentRuntime and destroyed with its final Arc.
+    #[cfg(feature = "testkit")]
+    pub fn observe_injection_attempts(&self) {
+        let mut slot = self.state.agent.injection_attempts.lock().unwrap();
+        assert!(slot.is_none(), "fixture journal already armed");
+        *slot = Some(InjectionAttemptJournal::default());
+    }
+
+    #[cfg(feature = "testkit")]
+    pub fn injection_attempts(&self, session: &str) -> Vec<InjectionAttempt> {
+        self.state
+            .agent
+            .injection_attempts
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|journal| {
+                journal
+                    .rows
+                    .iter()
+                    .filter(|r| r.session == session)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
     #[cfg(feature = "testkit")]
     pub fn caller_gate(&self, session: &str, stage: CallerStage) -> CallerGate {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -247,6 +324,14 @@ impl Fixture {
     /// Real orchestra adapter; default fixtures retain FakeSessionControl.
     pub async fn with_orchestra(cell: Arc<std::sync::OnceLock<crate::orchestra::Handle>>) -> Self {
         Self::build(AgentRuntime::new(AgentConfig::default()), Some(cell)).await
+    }
+
+    /// Real orchestra adapter with an existing explicit post-clock runtime.
+    pub async fn with_orchestra_runtime(
+        cell: Arc<std::sync::OnceLock<crate::orchestra::Handle>>,
+        runtime: AgentRuntime,
+    ) -> Self {
+        Self::build(runtime, Some(cell)).await
     }
 
     async fn build(
@@ -662,6 +747,7 @@ struct RelayExecSession {
     working: bool,
     hold_stop: bool,
     stop_requests: usize,
+    delivery_observer: Option<Arc<dyn crewd_exec::driver::DeliverySuccessObserver>>,
 }
 impl RelayExecSession {
     fn emit(&mut self, event: crewd_exec::session::SessionEvent) {
@@ -673,6 +759,15 @@ impl RelayExecSession {
             }
             SessionEvent::Exited(_) => self.running = false,
             _ => {}
+        }
+        if let SessionEvent::Delivery {
+            id,
+            outcome: crewd_exec::session::DeliveryOutcome::Delivered,
+            ..
+        } = &event
+            && let Some(observer) = &self.delivery_observer
+        {
+            observer.emitted(*id);
         }
         self.tx.send(event).expect("relay actor event stream");
     }
@@ -764,6 +859,7 @@ impl crate::orchestra::exec::Executor for RelayStandIn {
                 working: false,
                 hold_stop: false,
                 stop_requests: 0,
+                delivery_observer: req.delivery_observer,
             };
             if req.initial_prompt.is_some() {
                 session
@@ -789,11 +885,12 @@ struct RelayExecHandle {
     id: String,
     state: Arc<std::sync::Mutex<RelayExecState>>,
 }
-impl crate::orchestra::exec::ExecHandle for RelayExecHandle {
-    fn send(
+impl RelayExecHandle {
+    fn send_inner(
         &self,
         text: String,
         context: &crate::orchestra::exec::Context,
+        binding: Option<&dyn crewd_exec::driver::DeliveryBinding>,
     ) -> Result<u64, crate::orchestra::exec::ExecSendError> {
         use crewd_exec::driver::SendError;
         crate::orchestra::exec::check_context(false, context)?;
@@ -804,12 +901,36 @@ impl crate::orchestra::exec::ExecHandle for RelayExecHandle {
         if !state.sessions.get(&self.id).is_some_and(|s| s.running) {
             return Err(SendError::Closed.into());
         }
-        state.next_id += 1;
-        let id = state.next_id;
+        let id = state
+            .next_id
+            .checked_add(1)
+            .ok_or(SendError::DeliveryIdExhausted)?;
+        if let Some(binding) = binding {
+            binding.register(id)?;
+        }
+        state.next_id = id;
         let session = state.sessions.get_mut(&self.id).unwrap();
         session.sends.push((id, text));
         session.outstanding.insert(id);
         Ok(id)
+    }
+}
+
+impl crate::orchestra::exec::ExecHandle for RelayExecHandle {
+    fn send(
+        &self,
+        text: String,
+        context: &crate::orchestra::exec::Context,
+    ) -> Result<u64, crate::orchestra::exec::ExecSendError> {
+        self.send_inner(text, context, None)
+    }
+    fn send_bound(
+        &self,
+        text: String,
+        context: &crate::orchestra::exec::Context,
+        binding: &dyn crewd_exec::driver::DeliveryBinding,
+    ) -> Result<u64, crate::orchestra::exec::ExecSendError> {
+        self.send_inner(text, context, Some(binding))
     }
     fn raw(&self, _bytes: Vec<u8>) -> Result<(), crewd_exec::driver::Closed> {
         Err(crewd_exec::driver::Closed)

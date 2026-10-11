@@ -24,6 +24,14 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
         "loop.tripped.human",
         &["target", "origin", "count", "minutes"],
     ),
+    (
+        "loop.chain.tripped.human",
+        &["target", "origin", "chain", "hop", "limit"],
+    ),
+    (
+        "loop.chain.unresolved.human",
+        &["target", "origin", "chain"],
+    ),
     ("origin.system", &[]),
     ("captain.changed.new", &[]),
     ("captain.changed.old", &["name"]),

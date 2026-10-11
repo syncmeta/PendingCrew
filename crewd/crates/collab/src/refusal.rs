@@ -95,6 +95,8 @@ refusal_codes! {
     DirectoryNoSuchExtension = "directory.no_such_extension" ["number", "ext"],
     // loop（环路熔断，M3c 的 `loop.recover`）
     LoopEdgeNeedsFrom = "loop.edge_needs_from" [],
+    LoopChainNeedsIdentity = "loop.chain_needs_identity" [],
+    LoopUnexpectedChainId = "loop.unexpected_chain_id" [],
     // message
     MessageNotFound = "message.not_found" ["message"],
     MessageSeqNotFound = "message.seq_not_found" ["seq"],

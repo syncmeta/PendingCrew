@@ -1445,6 +1445,25 @@ async fn reservation_receipt_is_exact_and_old_receipt_cannot_ack_next<W: World>(
     let rows = w.port().list_wakes(Some("w-1")).await.unwrap();
     assert_eq!(rows[0].state, WakeState::Inflight);
     assert_eq!(rows[0].attempts, 1);
+    // Internal Port contract stimulus, not proof of a physical executor emission.
+    // New causal leases need their exact observed success before positive Delivered.
+    if let Some(lease) = next.lease.as_mut()
+        && let Some((claimed, observed)) = lease.causal_witness_mut()
+    {
+        let fence = w.port().causal_fence().expect("actual causal lease fence");
+        let generation = claimed.pending.generation();
+        fence
+            .binder(&claimed.pending, generation)
+            .unwrap()
+            .register(7)
+            .unwrap();
+        fence
+            .observer(claimed.pending.session(), generation)
+            .emitted(7);
+        *observed = Some(Box::new(
+            fence.success(&claimed.pending, generation, 7).unwrap(),
+        ));
+    }
     assert!(
         !w.port()
             .ack(

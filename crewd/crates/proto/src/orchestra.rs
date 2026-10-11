@@ -169,6 +169,8 @@ pub enum LatchScopeView {
     Edge,
     /// 目标的非 session 来源（系统、它自己的定时）。
     Session,
+    /// 一条因果链在精确来源与目标之间的熔断。
+    Chain,
 }
 
 /// `loop.list` 的一行：一条环路熔断。
@@ -177,9 +179,12 @@ pub enum LatchScopeView {
 pub struct LatchView {
     pub scope: LatchScopeView,
     pub target_session_id: String,
-    /// `edge` 的来源（session id，或 `system`）；`session` 级的没有。
+    /// `edge` 或 `chain` 的来源（session id，或 `system`）；`session` 级的没有。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// `chain` 的不透明持久身份；旧两级省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_id: Option<String>,
     /// 诊断短码（如 `no-progress:9/10min`）。
     pub reason: String,
     pub at_ms: i64,
@@ -190,9 +195,12 @@ pub struct LatchView {
 pub struct LoopRecoverParams {
     pub scope: LatchScopeView,
     pub target_session_id: String,
-    /// `edge` 的来源（session id，或 `system`）；`edge` 不给 = -32602 `loop.edge_needs_from`。
+    /// `edge` 或 `chain` 的来源（session id，或 `system`）；缺失由服务端拒绝。
     #[serde(default)]
     pub from: Option<String>,
+    /// `chain` 必填，须与持久熔断的来源和目标精确匹配；旧两级不接受它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_id: Option<String>,
 }
 
 /// `loop.recover` 的结果：`false` = 本来就没有这条熔断（不算错）。
@@ -363,6 +371,9 @@ pub enum WakeStateView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockerCodeView {
+    CausalCursorUnknown,
+    CausalUnresolved,
+    CausalBudget,
     /// crewd 在停机 / 休眠。
     ShuttingDown,
     /// 机组已被移除：不拉起，下一次尝试把它作废。
@@ -405,12 +416,67 @@ pub enum BlockerCodeView {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalChainHoldView {
+    pub chain_id: String,
+    pub from: String,
+    pub target_session_id: String,
+    pub hop: u32,
+    pub reason: String,
+    pub at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalChainCandidateView {
+    pub chain_id: String,
+    pub from: String,
+    pub target_session_id: String,
+    pub hop: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalUnresolvedView {
+    pub message_id: String,
+    pub seq: i64,
+    pub from: String,
+    pub target_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalBlockageView {
+    /// Missing cursor means the readonly scanner cannot establish an unread prefix.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cursor_unknown: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holds: Vec<CausalChainHoldView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved: Vec<CausalUnresolvedView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hold_candidates: Vec<CausalChainCandidateView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CausalChannelView {
+    pub channel_id: String,
+    pub blockage: CausalBlockageView,
+}
+
 /// pending 的唤醒此刻为什么还没出去。没有它（`WakeView.blocker` 缺省 / null）= 此刻就有资格出去：已经从别处读到
 /// （游标越过）的会在下一次投递时直接记 delivered，同一档超过一批上限的排在下一批——这两种都在下一轮里结掉，
 /// 不在这里报。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WakeBlocker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal: Option<CausalBlockageView>,
     pub code: BlockerCodeView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_ms: Option<i64>,
@@ -447,6 +513,8 @@ pub struct WakeView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetView {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub causal_diagnostics: Vec<CausalChannelView>,
     pub session_id: String,
     pub running: bool,
     /// 在途那一批拿着的唤醒（在跑的投递，或正在起的那批）。
@@ -597,6 +665,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn chain_recovery_wire_is_additive_and_legacy_requests_omit_chain_identity() {
+        let legacy = json!({"scope":"edge","targetSessionId":"w1","from":"cap"});
+        let p: LoopRecoverParams = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(p).unwrap(), legacy);
+        let chain =
+            json!({"scope":"chain","targetSessionId":"w1","from":"cap","chainId":"c1:opaque"});
+        let p: LoopRecoverParams = serde_json::from_value(chain.clone()).unwrap();
+        assert_eq!(p.scope, LatchScopeView::Chain);
+        assert_eq!(serde_json::to_value(p).unwrap(), chain);
+        // Parsing alone grants no authority: identity and route are checked by the human RPC.
+        assert!(
+            serde_json::from_value::<LoopRecoverParams>(json!({
+                "scope":"chain","targetSessionId":"w1","from":"cap",
+                "chainId":"c1:opaque","trusted":true
+            }))
+            .is_err()
+        );
+        let legacy_hold =
+            json!({"scope":"session","targetSessionId":"w1","reason":"held","atMs":7});
+        let hold: LatchView = serde_json::from_value(legacy_hold.clone()).unwrap();
+        assert_eq!(serde_json::to_value(hold).unwrap(), legacy_hold);
+    }
+
     /// S9：服务端给客户端的 M3c 词表，没见过的词读成 `Unknown`（旧客户端不至于整条解析失败）；契约里没有 `Unknown`。
     #[test]
     fn unknown_server_words_decode_to_unknown_and_the_contract_does_not_list_it() {
@@ -645,7 +737,7 @@ mod tests {
         ] {
             let text = s.to_string();
             assert!(
-                !text.contains("unknown"),
+                !text.contains("\"unknown\""),
                 "{name} 的契约里不能有 Unknown：{text}"
             );
             assert!(text.contains('"'), "{name}: {text}");

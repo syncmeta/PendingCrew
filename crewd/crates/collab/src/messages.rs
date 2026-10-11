@@ -122,12 +122,12 @@ pub fn search(conn: &Connection, q: &Search) -> Result<Vec<Message>> {
 }
 
 pub fn post(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
-    post_with(tx, sender, p, false)
+    post_with(tx, sender, p, false, None)
 }
 
 /// collab 自己的公告（问、重启询问）：跳过发言者成员检查，其余规则同 `post`。
 pub(crate) fn post_internal(tx: &mut Tx<'_>, sender: Sender, p: NewPost) -> Result<Posted> {
-    post_with(tx, sender, p, true)
+    post_with(tx, sender, p, true, None)
 }
 
 /// 给人的待确认公告（问 / 重启询问）的唯一一处（R14）：发到 `home`（总机组 / 顶层机组）的人类群（懒建 / 解档，同
@@ -261,7 +261,22 @@ pub fn resolve_reply(
     })
 }
 
-fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Result<Posted> {
+pub(crate) fn post_stop_relay(
+    tx: &mut Tx<'_>,
+    source: &str,
+    sender: Sender,
+    p: NewPost,
+) -> Result<Posted> {
+    post_with(tx, sender, p, false, Some(source))
+}
+
+fn post_with(
+    tx: &mut Tx<'_>,
+    sender: Sender,
+    p: NewPost,
+    internal: bool,
+    relay_source: Option<&str>,
+) -> Result<Posted> {
     let conn = tx.conn();
     // R1：人类群懒建；现在是 home（总机组 / 顶层机组）的机组，它的人类群发言前一律过一遍 ensure（幂等：不存在就建、
     // 已归档就解档、钉机长游标、记 ChannelChanged），同一个 Tx。更深的机组没有人类群，指路到它的 home。
@@ -425,6 +440,7 @@ fn post_with(tx: &mut Tx<'_>, sender: Sender, p: NewPost, internal: bool) -> Res
         Sender::Session(id) => sessions::note_output(tx, id)?,
         Sender::System => {}
     }
+    crate::causal::stamp_post(tx, &message, relay_source)?;
     let human_mention = message
         .mentions
         .iter()

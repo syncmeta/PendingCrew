@@ -136,6 +136,10 @@ impl Settle {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparedSnapshot {
     Database(crewd_collab::cursor_reservations::Snapshot),
+    CausalDatabase {
+        reservation: crewd_collab::cursor_reservations::Snapshot,
+        causes: crewd_collab::causal::CausalSnapshot,
+    },
     #[cfg(test)]
     Memory {
         session: String,
@@ -143,17 +147,78 @@ pub enum PreparedSnapshot {
         bases: Vec<(String, i64)>,
         surface: Vec<(String, bool)>,
         messages: Vec<(MsgFacts, String)>,
+        causal: Option<
+            Box<(
+                crewd_collab::cursor_reservations::Snapshot,
+                crewd_collab::causal::CausalSnapshot,
+            )>,
+        >,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BatchLease {
     Database(crewd_collab::cursor_reservations::Lease),
+    CausalDatabase {
+        claimed: Box<crewd_collab::causal::ClaimedOutput>,
+        observed: Option<Box<crewd_collab::causal::ObservedSuccess>>,
+    },
     #[cfg(test)]
     Memory {
         session: String,
         token: u64,
         generation: u64,
+        claimed: Option<Box<crewd_collab::causal::ClaimedOutput>>,
+        observed: Option<Box<crewd_collab::causal::ObservedSuccess>>,
     },
+}
+impl BatchLease {
+    #[cfg(test)]
+    pub(crate) fn same_memory_owner(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Memory {
+                    session: a,
+                    token: at,
+                    generation: ag,
+                    claimed: ac,
+                    ..
+                },
+                Self::Memory {
+                    session: b,
+                    token: bt,
+                    generation: bg,
+                    claimed: bc,
+                    ..
+                },
+            ) => a == b && at == bt && ag == bg && ac == bc,
+            _ => false,
+        }
+    }
+    pub(crate) fn causal_claimed(&self) -> Option<&crewd_collab::causal::ClaimedOutput> {
+        match self {
+            Self::CausalDatabase { claimed, .. } => Some(claimed),
+            #[cfg(test)]
+            Self::Memory { claimed, .. } => claimed.as_deref(),
+            _ => None,
+        }
+    }
+    pub(crate) fn causal_witness_mut(
+        &mut self,
+    ) -> Option<(
+        &crewd_collab::causal::ClaimedOutput,
+        &mut Option<Box<crewd_collab::causal::ObservedSuccess>>,
+    )> {
+        match self {
+            Self::CausalDatabase { claimed, observed } => Some((claimed, observed)),
+            #[cfg(test)]
+            Self::Memory {
+                claimed: Some(claimed),
+                observed,
+                ..
+            } => Some((claimed, observed)),
+            _ => None,
+        }
+    }
 }
 pub use crewd_collab::cursor_reservations::Decision;
 
@@ -339,6 +404,9 @@ pub trait Port: Send + Sync + 'static {
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger>;
     fn worldview(&self, session: &str) -> impl Future<Output = Result<String>> + Send;
     fn mint_token(&self, session: &str) -> String;
+    fn causal_fence(&self) -> Option<Arc<crate::causal_fence::CausalFence>> {
+        None
+    }
     /// 进程退出（含人停掉）后作废它的 helper 令牌（M3a `TokenTable::revoke`）：旧配置文件里的 token 不能再 attach。
     fn revoke_token(&self, session: &str);
     // —— 唤醒队列与熔断
@@ -391,6 +459,38 @@ pub trait Port: Send + Sync + 'static {
         &self,
         message_id: &str,
     ) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
+    /// Readiness has already passed; install exact new episodes and notice atomically.
+    fn prepare_causal_admission(
+        &self,
+        _session: &str,
+        _now: Ms,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { anyhow::bail!("causal preparation model is unavailable") }
+    }
+    /// Read only current surface/unread causes: never initialize cursors or install episodes.
+    fn causal_diagnostics(
+        &self,
+        _session: &str,
+        _now: Ms,
+    ) -> impl Future<Output = Result<Vec<(String, crewd_wake::explain::CausalBlockage)>>> + Send
+    {
+        async { anyhow::bail!("causal diagnostic model is unavailable") }
+    }
+    fn causal_holds(
+        &self,
+        _target: Option<&str>,
+    ) -> impl Future<Output = Result<Vec<crewd_collab::causal::ChainHold>>> + Send {
+        async { anyhow::bail!("causal hold model is unavailable") }
+    }
+    fn recover_chain(
+        &self,
+        _chain: &str,
+        _from: &str,
+        _target: &str,
+        _action: &crewd_collab::causal::HumanRecoveryAction,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        async { anyhow::bail!("causal recovery model is unavailable") }
+    }
     fn latches(&self) -> impl Future<Output = Result<Vec<Latch>>> + Send;
     fn put_latch(&self, l: &Latch) -> impl Future<Output = Result<()>> + Send;
     fn clear_latch(&self, scope: LatchScope, id: &str) -> impl Future<Output = Result<()>> + Send;

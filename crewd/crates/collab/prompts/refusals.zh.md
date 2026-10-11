@@ -328,6 +328,12 @@ nudge 的输入是空的；不会替它按一个裸回车（那会选中当前�
 ## loop.edge_needs_from
 scope=edge 要给 from（叫醒它的来源：session id 或 system）；要解这个 session 的整体熔断，用 scope=session
 
+## loop.chain_needs_identity
+scope=chain 要同时给非空的 chain_id、from 和 target，指定要恢复的因果链及其投递路径
+
+## loop.unexpected_chain_id
+chain_id 只用于 scope=chain；恢复 edge 或 session 时不要给 chain_id
+
 ## system.api_incompatible
 客户端的 API 版本 {client} 太旧：这台 crewd 支持 {min} 到 {current}；更新客户端后再连
 

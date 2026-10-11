@@ -33,7 +33,7 @@ use crate::session::{
 };
 
 /// 驱动层参数。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DriverConfig {
     pub core: CoreConfig,
     pub screen: ScreenConfig,
@@ -48,6 +48,27 @@ pub struct DriverConfig {
     pub auth_poll: Duration,
     /// 孤儿登记表；`None` = 不登记。
     pub registry: Option<Arc<ProcessRegistry>>,
+    /// Trusted final outcome observation, called before event broadcast; no IO/await.
+    pub delivery_observer: Option<Arc<dyn DeliverySuccessObserver>>,
+}
+
+impl std::fmt::Debug for DriverConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriverConfig")
+            .field("core", &self.core)
+            .field("screen", &self.screen)
+            .field("tick", &self.tick)
+            .field("stop_grace", &self.stop_grace)
+            .field("runtime_dir", &self.runtime_dir)
+            .field("claude_projects_dir", &self.claude_projects_dir)
+            .field("auth_poll", &self.auth_poll)
+            .field("registry", &self.registry)
+            .field(
+                "delivery_observer",
+                &self.delivery_observer.as_ref().map(|_| "<opaque>"),
+            )
+            .finish()
+    }
 }
 
 impl DriverConfig {
@@ -61,6 +82,7 @@ impl DriverConfig {
             claude_projects_dir: None,
             auth_poll: AUTH_POLL_INTERVAL,
             registry: None,
+            delivery_observer: None,
         }
     }
 }
@@ -123,6 +145,9 @@ pub enum SendError {
     Closed,
     /// 正文是空的（或只有空白）：投进去什么也不会发生，不占投递编号。
     EmptyText,
+    /// Exact trusted output ownership could not be registered; nothing was enqueued.
+    BindingRejected,
+    DeliveryIdExhausted,
 }
 
 impl From<Closed> for SendError {
@@ -136,11 +161,39 @@ impl std::fmt::Display for SendError {
         match self {
             Self::Closed => write!(f, "会话已经结束"),
             Self::EmptyText => write!(f, "正文是空的"),
+            Self::BindingRejected => write!(f, "exact delivery binding rejected"),
+            Self::DeliveryIdExhausted => write!(f, "delivery identifier exhausted"),
         }
     }
 }
 
 impl std::error::Error for SendError {}
+
+/// Internal synchronous authority, registered before the send command can run.
+pub trait DeliveryBinding: Send + Sync {
+    fn register(&self, delivery_id: u64) -> Result<(), SendError>;
+    fn cancelled(&self, delivery_id: u64);
+}
+/// Accepted final outcome only. Body write progress is not successful submission.
+pub trait DeliverySuccessObserver: Send + Sync {
+    fn emitted(&self, delivery_id: u64);
+}
+fn emit_session_event(
+    observer: Option<&Arc<dyn DeliverySuccessObserver>>,
+    tx: &mpsc::UnboundedSender<SessionEvent>,
+    event: SessionEvent,
+) {
+    if let SessionEvent::Delivery {
+        id,
+        outcome: crate::session::DeliveryOutcome::Delivered,
+        ..
+    } = &event
+        && let Some(observer) = observer
+    {
+        observer.emitted(*id);
+    }
+    let _ = tx.send(event);
+}
 
 /// 某一时刻的会话状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,8 +325,40 @@ impl SessionHandle {
         if text.trim().is_empty() {
             return Err(SendError::EmptyText);
         }
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.cmd(Command::Send { id, text, context })?;
+        self.enqueue_bound_text(text, context, None)
+    }
+
+    pub fn send_bound(
+        &self,
+        text: String,
+        context: UntrustedContext,
+        binding: &dyn DeliveryBinding,
+    ) -> Result<u64, SendError> {
+        if text.trim().is_empty() {
+            return Err(SendError::EmptyText);
+        }
+        self.enqueue_bound_text(text, context, Some(binding))
+    }
+
+    fn enqueue_bound_text(
+        &self,
+        text: String,
+        context: UntrustedContext,
+        binding: Option<&dyn DeliveryBinding>,
+    ) -> Result<u64, SendError> {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| SendError::DeliveryIdExhausted)?;
+        if let Some(binding) = binding {
+            binding.register(id)?;
+        }
+        if self.cmd(Command::Send { id, text, context }).is_err() {
+            if let Some(binding) = binding {
+                binding.cancelled(id);
+            }
+            return Err(SendError::Closed);
+        }
         Ok(id)
     }
 
@@ -1204,7 +1289,7 @@ fn dispatch(t: &mut Task, actions: Vec<Action>) -> bool {
             }
             Action::Event(e) => {
                 refused |= matches!(e, SessionEvent::ResumeRefused { .. });
-                let _ = t.ev_tx.send(e);
+                emit_session_event(t.config.delivery_observer.as_ref(), &t.ev_tx, e);
             }
             // `None`（会话停了 / 退了）= 丢掉回执，等的一方拿到 `Closed`。
             Action::AnswerDone { id, outcome } => {
@@ -1319,6 +1404,7 @@ mod context_tests {
 mod output_drain_tests {
     use super::*;
     use crate::pty::PtyProcess;
+    use crate::session::DeliveryOutcome;
     use crewd_term::blocking_dialog;
 
     fn menu(prompt: &str, selected: usize) -> Vec<u8> {
@@ -3189,5 +3275,197 @@ mod output_drain_tests {
             "确认排空后才按：{log:?}"
         );
         stop(p).await;
+    }
+    #[test]
+    fn s42_bound_send_registers_before_the_real_command_and_cancels_closed_enqueue() {
+        struct Binding {
+            events: Mutex<Vec<(u64, bool)>>,
+            receiver: Mutex<Option<mpsc::UnboundedReceiver<Command>>>,
+        }
+        impl DeliveryBinding for Binding {
+            fn register(&self, id: u64) -> Result<(), SendError> {
+                if let Some(receiver) = self.receiver.lock().unwrap().as_mut() {
+                    // This exact production channel must still be empty INSIDE register.
+                    // Moving registration after cmd enqueue fails here, before send returns.
+                    assert!(
+                        matches!(receiver.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+                        "send command was visible before binding registration"
+                    );
+                }
+                self.events.lock().unwrap().push((id, true));
+                Ok(())
+            }
+            fn cancelled(&self, id: u64) {
+                self.events.lock().unwrap().push((id, false));
+            }
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let binding = Binding {
+            events: Mutex::new(Vec::new()),
+            receiver: Mutex::new(Some(rx)),
+        };
+        let handle = SessionHandle::new(tx);
+        let id = handle
+            .send_bound("S42".into(), UntrustedContext::new(), &binding)
+            .unwrap();
+        assert_eq!(*binding.events.lock().unwrap(), vec![(id, true)]);
+        assert!(
+            matches!(binding.receiver.lock().unwrap().as_mut().unwrap().try_recv().unwrap(), Command::Send{id:i,..} if i==id)
+        );
+        drop(binding.receiver.lock().unwrap().take());
+        assert_eq!(
+            handle.send_bound("S42-CLOSED".into(), UntrustedContext::new(), &binding),
+            Err(SendError::Closed)
+        );
+        assert_eq!(
+            *binding.events.lock().unwrap(),
+            vec![(id, true), (id + 1, true), (id + 1, false)]
+        );
+    }
+
+    #[test]
+    fn s42_final_outcome_observer_precedes_actual_event_broadcast_and_excludes_non_success() {
+        struct Observer(std::sync::atomic::AtomicU64);
+        impl DeliverySuccessObserver for Observer {
+            fn emitted(&self, id: u64) {
+                self.0.store(id, Ordering::SeqCst);
+            }
+        }
+        let observer = Arc::new(Observer(AtomicU64::new(0)));
+        let erased: Arc<dyn DeliverySuccessObserver> = observer.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        emit_session_event(
+            Some(&erased),
+            &tx,
+            SessionEvent::Delivery {
+                id: 7,
+                subject: Subject::Steer,
+                outcome: crate::session::DeliveryOutcome::Blocked("held".into()),
+            },
+        );
+        assert_eq!(observer.0.load(Ordering::SeqCst), 0);
+        rx.try_recv().unwrap();
+        emit_session_event(
+            Some(&erased),
+            &tx,
+            SessionEvent::Delivery {
+                id: 7,
+                subject: Subject::Steer,
+                outcome: crate::session::DeliveryOutcome::Delivered,
+            },
+        );
+        let event = rx.try_recv().unwrap();
+        assert_eq!(
+            observer.0.load(Ordering::SeqCst),
+            7,
+            "S42 producer success before broadcast"
+        );
+        assert!(matches!(
+            event,
+            SessionEvent::Delivery {
+                outcome: crate::session::DeliveryOutcome::Delivered,
+                ..
+            }
+        ));
+    }
+
+    /// Real production Task + synthetic owned PTY, not a hand-built Delivery event.
+    #[tokio::test]
+    async fn s42_actual_task_final_delivered_observes_before_broadcast_not_body_completion() {
+        struct Witness(Arc<Mutex<Vec<u64>>>);
+        impl DeliverySuccessObserver for Witness {
+            fn emitted(&self, id: u64) {
+                self.0.lock().unwrap().push(id);
+            }
+        }
+        struct Binding(Arc<Mutex<Vec<u64>>>);
+        impl DeliveryBinding for Binding {
+            fn register(&self, id: u64) -> Result<(), SendError> {
+                self.0.lock().unwrap().push(id);
+                Ok(())
+            }
+            fn cancelled(&self, _id: u64) {}
+        }
+        let mut fixture = GuardedFixture::new().await;
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), now).await;
+        core.take_actions();
+        let (handle, mut events, _writes, mut task) = prepare_public_fixture(&mut fixture, core);
+        let successes = Arc::new(Mutex::new(Vec::new()));
+        let registrations = Arc::new(Mutex::new(Vec::new()));
+        task.config.delivery_observer = Some(Arc::new(Witness(successes.clone())));
+        let mut owner = OwnedTask {
+            pid: task.running.pid,
+            join: Some(tokio::spawn(run(task))),
+        };
+        fixture.release(0).await;
+        let id = handle
+            .send_bound(
+                "BOT".into(),
+                UntrustedContext::default(),
+                &Binding(registrations.clone()),
+            )
+            .unwrap();
+        captured_prefix(&fixture, b"BOT").await;
+        let after_body = successes.lock().unwrap().clone();
+        // The actual CLI fixture draws its owned body; Task performs real submit beats.
+        public_fixture_frame(&mut fixture, &input_box("BOT")).await;
+        captured_prefix(&fixture, b"BOT \x7f\r").await;
+        let before_confirmation = successes.lock().unwrap().clone();
+        public_fixture_frame(&mut fixture, &input_box("")).await;
+        let delivered = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(event) = events.recv().await {
+                if let SessionEvent::Delivery {
+                    id: actual,
+                    outcome: DeliveryOutcome::Delivered,
+                    ..
+                } = event
+                    && actual == id
+                {
+                    return Some(successes.lock().unwrap().clone());
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        // Complete normal owned child/Task cleanup before causal functional assertions.
+        handle.raw(GUARDED_CAPTURE_MARKER.to_vec()).unwrap();
+        fixture.receipt("capture.closed").await;
+        let receipt = std::fs::read_to_string(fixture.dir.path().join("capture.closed")).unwrap();
+        let capture = std::fs::read(fixture.dir.path().join("capture.bin")).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), owner.join.as_mut().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        owner.join.take();
+        assert_eq!(
+            registrations.lock().unwrap().as_slice(),
+            &[id],
+            "S42 actual command registration"
+        );
+        assert!(
+            after_body.is_empty(),
+            "body completion cannot mint causal success"
+        );
+        assert!(
+            before_confirmation.is_empty(),
+            "submit keys alone cannot mint causal success"
+        );
+        assert_eq!(
+            delivered,
+            Some(vec![id]),
+            "S42 actual accepted Delivered producer observed before broadcast"
+        );
+        assert_eq!(capture, b"BOT \x7f\r");
+        assert!(receipt.contains("trailing_bytes=0"));
     }
 }

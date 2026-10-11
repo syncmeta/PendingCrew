@@ -157,6 +157,15 @@ pub struct Mcp {
     pending: Vec<Value>,
 }
 
+/// Owned MCP helper cleanup observation; no process identifiers or content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Shared fixture: only callers requiring observed normal EOF use this receipt.
+pub struct McpCloseReceipt {
+    pub normal: bool,
+    pub exit_code: Option<i32>,
+    pub forced_kill: bool,
+}
+
 impl Mcp {
     pub async fn start(cfg: &Value) -> Self {
         Self::start_with_home(cfg, None).await
@@ -262,6 +271,27 @@ impl Mcp {
             v["result"]["content"][0]["text"].as_str().unwrap().into(),
             v["result"]["isError"].as_bool().unwrap_or(false),
         )
+    }
+    /// Close stdin, observe the actual exit, and reap only this owned child on timeout.
+    #[allow(dead_code)] // Other integration binaries retain the existing close helper.
+    pub async fn close_observed(mut self) -> McpCloseReceipt {
+        drop(self.input);
+        let (status, forced_kill) =
+            match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
+                Ok(status) => (status.expect("owned MCP helper wait"), false),
+                Err(_) => {
+                    self.child.kill().await.expect("kill only owned MCP helper");
+                    (
+                        self.child.wait().await.expect("reap owned MCP helper"),
+                        true,
+                    )
+                }
+            };
+        McpCloseReceipt {
+            normal: !forced_kill && status.success(),
+            exit_code: status.code(),
+            forced_kill,
+        }
     }
     pub async fn close(mut self) {
         drop(self.input);

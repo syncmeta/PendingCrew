@@ -21,6 +21,18 @@ use super::exec::Context;
 use super::hooks::ArbiterQuestion;
 use super::port::*;
 
+/// Message wake diagnostics apply to its actual channel, never a session-wide synthetic latch.
+fn causal_for<'a>(
+    w: &QueuedWake,
+    diagnostics: &'a [(String, explain::CausalBlockage)],
+) -> Option<&'a explain::CausalBlockage> {
+    let message = w.msg.as_ref()?;
+    diagnostics
+        .iter()
+        .find(|(channel, _)| channel == &message.channel)
+        .map(|(_, b)| b)
+}
+
 /// 不需要正文的唤醒（`restart` 且没有附言）与其余的分开：前者只要「人在跑」就算送到，不依赖渲染结果是否为空。
 fn split_silent(batch: Vec<QueuedWake>) -> (Vec<QueuedWake>, Vec<QueuedWake>) {
     batch
@@ -66,6 +78,7 @@ pub struct TargetSummary {
     pub writes_queued: usize,
     /// 最近一次投递回执的种类（[`outcome_name`]）。
     pub last_outcome: Option<&'static str>,
+    pub causal_diagnostics: Vec<(String, explain::CausalBlockage)>,
 }
 
 /// `message.receipts` 的一行（[`Core::receipts`]）。
@@ -245,7 +258,26 @@ impl<P: Port> Core<P> {
             if !pending.iter().any(|w| queue::is_due(w, now)) {
                 return Ok(false);
             }
-            let top = self.top_due(session, &pending, now);
+            let preliminary_top = self.top_due(session, &pending, now);
+            let preliminary = self
+                .target_facts(session, &pending, preliminary_top, &[], now)
+                .await?;
+            if explain::live_blocker(&preliminary).is_none()
+                && !preliminary.crew_removed
+                && pending.iter().any(|w| {
+                    queue::is_due(w, now) && self.breaker.held(session, &w.origin).is_none()
+                })
+            {
+                // Actual preparation precedes readonly causal filtering, so a new episode is durable.
+                self.port.prepare_causal_admission(session, now).await?;
+            }
+            let diagnostics = self.port.causal_diagnostics(session, now).await?;
+            let eligible = pending
+                .iter()
+                .filter(|w| causal_for(w, &diagnostics).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            let top = self.top_due(session, &eligible, now);
             let mut facts = self.target_facts(session, &pending, top, &[], now).await?;
             self.clear_quota_if_due(session, &facts);
             let mut origins: BTreeMap<i64, String> = BTreeMap::new();
@@ -253,7 +285,14 @@ impl<P: Port> Core<P> {
             // 退避中的不会到点（退避就是库里的 `not_before`），`why_not_woken` 报 `not_due`。
             for w in &pending {
                 let held = self.breaker.held(session, &w.origin);
-                match explain::why_not_woken(w, top, &facts, held, now) {
+                match explain::why_not_woken_with_causal(
+                    w,
+                    top,
+                    &facts,
+                    held,
+                    causal_for(w, &diagnostics),
+                    now,
+                ) {
                     Some(b) if !b.is_launch_gate() => {}
                     _ => {
                         origins.insert(w.id, w.origin.clone());
@@ -786,7 +825,6 @@ impl<P: Port> Core<P> {
         if !delivery_settles_inflight(&outcome) {
             return Ok(());
         }
-        let now = self.now();
         let Some(l) = self.live.get_mut(session) else {
             return Ok(());
         };
@@ -800,6 +838,9 @@ impl<P: Port> Core<P> {
         if !delivered && (l.stopping || l.halting) {
             return Ok(());
         }
+        // A producer Delivered event is physical success even if its causal fence faults.
+        // Take ownership and lock that fate before any ticket/SQL operation can fail.
+        let generation = l.generator;
         let inf = l.inflight.take().expect("上面查过");
         if !delivered {
             return self.fail_batch(inf.batch, &format!("{outcome:?}")).await;
@@ -811,32 +852,9 @@ impl<P: Port> Core<P> {
         } else {
             Riders::Release
         };
-        // M3a R6：游标推到渲染时报回的 `cursor_targets`（批里实际带上的最大 seq），**不是**排队行里最大的 seq——随批行
-        // 比它新，推过去就把它们越过、永远不投了。跟行的确认同一个事务（游标是消息唤醒的幂等键）。
-        // 出错 = 什么都没改：这几行仍是 inflight、没人拿着，由重启时的回收接走（记日志，不在这里重试）。
-        let acked = self
-            .due
-            .touch(&self.port)
-            .ack(&inf.batch, Ack::Delivered { riders })
+        // The original KnownDelivered fate is retained BEFORE DB await and retried exactly.
+        self.remember_delivered(inf.batch, riders, generation, id)
             .await?;
-        if acked.stale {
-            return Ok(());
-        }
-        if let Some(l) = self.live.get_mut(session) {
-            l.worked = true;
-            if !inf.batch.wakes.is_empty() {
-                l.last_wakes = inf.batch.wakes.clone();
-            }
-        }
-        // 环路熔断只数投进去了的（评审 (2)）、而且只在确认提交之后：一次投递、每个来源记一次（同一批里同一来源的几条
-        // 合并成一次唤醒）。随批行没投进去，不记；只有积压的批没有唤醒，什么都不记。
-        for o in &acked.origins {
-            self.breaker.record(session, o, now);
-        }
-        self.port.publish(wake_changed(
-            session,
-            inf.batch.wakes.iter().chain(&inf.batch.riders),
-        ));
         Ok(())
     }
 
@@ -908,14 +926,28 @@ impl<P: Port> Core<P> {
     /// （pending 行本来就不是 inflight）。同一个 `why_not_woken`，问的是「换一个随时可投的目标，它出不出去」。
     async fn deliverable_now(&self, session: &str, now: Ms) -> anyhow::Result<bool> {
         let pending = self.port.pending(session).await?;
-        let top = self.top_due(session, &pending, now);
+        let diagnostics = self.port.causal_diagnostics(session, now).await?;
+        let eligible = pending
+            .iter()
+            .filter(|w| causal_for(w, &diagnostics).is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        let top = self.top_due(session, &eligible, now);
         let ready = TargetFacts {
             running: true,
             ..TargetFacts::default()
         };
         Ok(pending.iter().any(|w| {
             let held = self.breaker.held(session, &w.origin);
-            explain::why_not_woken(w, top, &ready, held, now).is_none()
+            explain::why_not_woken_with_causal(
+                w,
+                top,
+                &ready,
+                held,
+                causal_for(w, &diagnostics),
+                now,
+            )
+            .is_none()
         }))
     }
 
@@ -933,6 +965,11 @@ impl<P: Port> Core<P> {
             None => sessions.extend(self.live.keys().chain(self.starting.keys()).cloned()),
         }
         let mut blockers: BTreeMap<i64, Option<Blocker>> = BTreeMap::new();
+        let mut diagnostics_by_session = BTreeMap::new();
+        for s in &sessions {
+            diagnostics_by_session.insert(s.clone(), self.port.causal_diagnostics(s, now).await?);
+        }
+
         for s in &sessions {
             if !rows
                 .iter()
@@ -941,17 +978,37 @@ impl<P: Port> Core<P> {
                 continue;
             }
             let pending = self.port.pending(s).await?;
-            let top = self.top_due(s, &pending, now);
+            let diagnostics = &diagnostics_by_session[s];
+            let eligible = pending
+                .iter()
+                .filter(|w| causal_for(w, diagnostics).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            let top = self.top_due(s, &eligible, now);
             let due: Vec<QueuedWake> = pending
                 .iter()
-                .filter(|w| queue::is_due(w, now) && self.breaker.held(s, &w.origin).is_none())
+                .filter(|w| {
+                    queue::is_due(w, now)
+                        && self.breaker.held(s, &w.origin).is_none()
+                        && causal_for(w, diagnostics).is_none()
+                })
                 .cloned()
                 .collect();
             let called = queue::select_batch(&due, now, &self.cfg.batch);
             let facts = self.target_facts(s, &pending, top, &called, now).await?;
             for w in &pending {
                 let held = self.breaker.held(s, &w.origin);
-                blockers.insert(w.id, explain::why_not_woken(w, top, &facts, held, now));
+                blockers.insert(
+                    w.id,
+                    explain::why_not_woken_with_causal(
+                        w,
+                        top,
+                        &facts,
+                        held,
+                        causal_for(w, diagnostics),
+                        now,
+                    ),
+                );
             }
         }
         let wakes = rows
@@ -978,6 +1035,7 @@ impl<P: Port> Core<P> {
                 } else if let Some(st) = self.starting.get(&s) {
                     t.inflight_wake_ids = st.batch.ids();
                 }
+                t.causal_diagnostics = diagnostics_by_session.remove(&s).unwrap_or_default();
                 t.session = s;
                 t
             })
