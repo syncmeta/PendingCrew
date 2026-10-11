@@ -1190,6 +1190,24 @@ pub fn forward_collab(
     tokio::spawn(pump_collab(rx, move |f| handle.collab(f)))
 }
 
+/// Test-only single-use failure on the same spawned pump future; no alternate dispatch.
+#[cfg(test)]
+pub(crate) fn forward_collab_with_fault(
+    rx: broadcast::Receiver<CollabEvent>,
+    handle: Handle,
+    fault: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> tokio::task::JoinHandle<()> {
+    match fault {
+        None => forward_collab(rx, handle),
+        Some(fault) => tokio::spawn(async move {
+            tokio::select! {
+                _ = pump_collab(rx, move |f| handle.collab(f)) => {},
+                result = fault => { if result.is_ok() { panic!("S5 owned Hub bridge fault"); } }
+            }
+        }),
+    }
+}
+
 /// 测试夹具：真库（磁盘上的临时文件，账本要开自己的连接）+ `AppState` + `DbPort`，全用固定 id（C17）。
 /// ```text
 /// chief（总机组 = 管理机组）  chief-1（worker）

@@ -503,11 +503,27 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
 
 #[path = "fake_claude/s1_fixture.rs"]
 mod s1_fixture;
+#[path = "fake_claude/s5_fixture.rs"]
+mod s5_fixture;
+
 #[path = "fake_claude/s1_wire_client.rs"]
 mod s1_wire_client;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Opt-in owned S5 kernel-enrolled Agent; no default provider/fake path is affected.
+    if std::env::var("FAKE_CLAUDE_MODE").as_deref() == Ok("s5-agent") {
+        let dir = std::env::var("S5_AGENT_FIXTURE_DIR").expect("owned S5 fixture directory");
+        if let Err(e) = s5_fixture::run(std::path::Path::new(&dir), &args) {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("fixture.error"),
+                e.to_string(),
+            );
+            eprintln!("synthetic S5 Agent: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let value_of = |flag: &str| {
         args.iter()
             .position(|a| a == flag)

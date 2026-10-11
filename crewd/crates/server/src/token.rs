@@ -16,7 +16,10 @@ impl TokenTable {
     /// Fixture cardinality only; never exposes token values or a production RPC.
     #[cfg(test)]
     pub(crate) fn test_len(&self) -> usize {
-        self.inner.lock().expect("token table poisoned").len()
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// 给 session 发一个新令牌（替换旧的）。64 个十六进制字符。
@@ -28,7 +31,7 @@ impl TokenTable {
         );
         self.inner
             .lock()
-            .expect("token table poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(session.to_string(), t.clone());
         t
     }
@@ -36,7 +39,7 @@ impl TokenTable {
     pub fn verify(&self, session: &str, token: &str) -> bool {
         self.inner
             .lock()
-            .expect("token table poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(session)
             .is_some_and(|t| ct_eq(t.as_bytes(), token.as_bytes()))
     }
@@ -44,7 +47,7 @@ impl TokenTable {
     pub fn revoke(&self, session: &str) {
         self.inner
             .lock()
-            .expect("token table poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
     }
 }
@@ -66,5 +69,28 @@ mod tests {
         assert!(t.verify("w-1", &b));
         t.revoke("w-1");
         assert!(!t.verify("w-1", &b));
+    }
+    #[test]
+    fn poisoned_valid_table_retains_tokens_and_all_operations_recover() {
+        let table = TokenTable::default();
+        let original = table.mint("existing");
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = table.inner.lock().unwrap();
+            panic!("owned poison fault");
+        }));
+        assert!(poisoned.is_err());
+        assert!(table.verify("existing", &original));
+        assert!(!table.verify("other", &original));
+        assert!(!table.verify("existing", "wrong"));
+        let fresh = table.mint("new");
+        assert!(table.verify("new", &fresh));
+        assert_eq!(table.test_len(), 2);
+        let replacement = table.mint("existing");
+        assert!(!table.verify("existing", &original));
+        assert!(table.verify("existing", &replacement));
+        table.revoke("existing");
+        assert!(!table.verify("existing", &replacement));
+        assert!(table.verify("new", &fresh));
+        assert_eq!(table.test_len(), 1);
     }
 }

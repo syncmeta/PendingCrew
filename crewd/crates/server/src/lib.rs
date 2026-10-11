@@ -37,6 +37,10 @@ pub struct AppState {
     /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
     pub(crate) peer_policy: std::sync::OnceLock<Arc<peer::PeerPolicy>>,
+    #[cfg(any(test, feature = "testkit"))]
+    s5_request_fault: Arc<std::sync::Mutex<Option<u64>>>,
+    #[cfg(test)]
+    s5_after_route_fault: std::sync::Mutex<Option<u64>>,
     #[cfg(test)]
     test_db_write_barrier: Arc<std::sync::Mutex<Option<DbWriteBarrier>>>,
     #[cfg(test)]
@@ -54,6 +58,10 @@ impl AppState {
             agent: agent::AgentRuntime::default(),
             orchestra: std::sync::OnceLock::new(),
             peer_policy: std::sync::OnceLock::new(),
+            #[cfg(any(test, feature = "testkit"))]
+            s5_request_fault: Default::default(),
+            #[cfg(test)]
+            s5_after_route_fault: Default::default(),
             #[cfg(test)]
             test_db_write_barrier: Default::default(),
             #[cfg(test)]
@@ -205,6 +213,36 @@ type ServeReady = Box<dyn FnOnce(Arc<AppState>, Option<tokio::task::AbortHandle>
 #[cfg(test)]
 type ServeStorageClosed = Box<dyn FnOnce(PathBuf) + Send>;
 
+/// Owned synthetic request-fault control; no identity or authorization input.
+/// Absent from ordinary non-testkit builds and never a wire method.
+#[cfg(any(test, feature = "testkit"))]
+#[derive(Clone)]
+pub struct S5RequestFaultControl {
+    selected: Arc<std::sync::Mutex<Option<u64>>>,
+}
+#[cfg(any(test, feature = "testkit"))]
+impl S5RequestFaultControl {
+    /// Arms the existing single-use before-route fault for one exact request ID.
+    pub fn arm(&self, id: u64) -> Result<(), String> {
+        let mut selected = self
+            .selected
+            .lock()
+            .map_err(|_| "owned S5 fault lock poisoned".to_owned())?;
+        if selected.is_some() {
+            return Err("owned S5 fault already armed".into());
+        }
+        *selected = Some(id);
+        Ok(())
+    }
+    /// Observes the same slot consumed by production request_step's testkit seam.
+    pub fn armed(&self) -> Result<Option<u64>, String> {
+        self.selected
+            .lock()
+            .map(|selected| *selected)
+            .map_err(|_| "owned S5 fault lock poisoned".to_owned())
+    }
+}
+
 /// Optional orchestration. Library callers retain the no-session default.
 #[cfg(feature = "testkit")]
 pub type TestRegistryReady = Box<dyn FnOnce(Arc<ProcessRegistry>) -> std::io::Result<()> + Send>;
@@ -216,10 +254,15 @@ pub struct ServeOptions {
     /// Read-only test witness; not a wire method or caller authority input.
     #[cfg(any(test, feature = "testkit"))]
     pub test_subscriptions_ready: Option<Box<dyn FnOnce(hub::SubscriptionCreations) + Send>>,
+    /// Shares only the existing fault slot after bind; never exports AppState or peer policy.
+    #[cfg(any(test, feature = "testkit"))]
+    pub test_s5_fault_ready: Option<Box<dyn FnOnce(S5RequestFaultControl) + Send>>,
     #[cfg(test)]
     test_ready: Option<ServeReady>,
     #[cfg(test)]
     test_storage_closed: Option<ServeStorageClosed>,
+    #[cfg(test)]
+    test_bridge_fault: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 pub struct OrchestraServe {
@@ -377,7 +420,15 @@ async fn serve_with_hooks_inner(
             Ok((h, a)) => {
                 let _ = cell.set(h.clone());
                 let _ = state.orchestra.set(h.clone());
-                forwarder = Some(orchestra::db::forward_collab(rx, h.clone()));
+                #[cfg(test)]
+                let bridge = orchestra::db::forward_collab_with_fault(
+                    rx,
+                    h.clone(),
+                    opts.test_bridge_fault.take(),
+                );
+                #[cfg(not(test))]
+                let bridge = orchestra::db::forward_collab(rx, h.clone());
+                forwarder = Some(bridge);
                 handle = Some(h);
                 actor = Some(a);
             }
@@ -412,6 +463,12 @@ async fn serve_with_hooks_inner(
         Err(e) => fatal = Some(anyhow::Error::from(e)),
         Ok(listener) => {
             #[cfg(any(test, feature = "testkit"))]
+            if let Some(ready) = opts.test_s5_fault_ready.take() {
+                ready(S5RequestFaultControl {
+                    selected: state.s5_request_fault.clone(),
+                });
+            }
+            #[cfg(any(test, feature = "testkit"))]
             if let Some(ready) = opts.test_subscriptions_ready.take() {
                 ready(state.hub.subscription_creations());
             }
@@ -441,6 +498,14 @@ async fn serve_with_hooks_inner(
                             Ok(()) if *exit.borrow() => reason = "hibernate",
                             Ok(()) => fatal = Some(orchestra::ActorDied("actor ended without hibernate".into()).into()),
                         }
+                        break;
+                    }
+                    bridge_result = async { forwarder.as_mut().expect("guarded bridge").await }, if forwarder.is_some() => {
+                        // Either panic/cancellation or an unexpected normal end loses routing.
+                        // Retain no raw panic payload on the public error path.
+                        forwarder.take();
+                        let _ = bridge_result;
+                        fatal = Some(anyhow::anyhow!("critical collab bridge ended unexpectedly"));
                         break;
                     }
                     _ = conns.join_next(), if !conns.is_empty() => {},
@@ -751,6 +816,60 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn collab_bridge_panic_shuts_down_storage_socket_and_lock() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (fault_tx, fault_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let mut opts = t11_options(&data);
+        opts.test_bridge_fault = Some(fault_rx);
+        opts.test_ready = Some(Box::new(move |state, _| {
+            ready_tx.send(state).ok();
+        }));
+        let mut task = tokio::spawn(serve_with(data.clone(), opts, async {
+            let _ = stop_rx.await;
+        }));
+        let ready = tokio::time::timeout(Duration::from_secs(5), ready_rx).await;
+        let state = match ready {
+            Ok(Ok(state)) => Some(state),
+            _ => None,
+        };
+        let signalled = fault_tx.send(()).is_ok();
+        let early = tokio::time::timeout(Duration::from_secs(2), &mut task).await;
+        let fatal = matches!(&early, Ok(Ok(Err(_))));
+        // Old implementation keeps serving: ask it to stop, then assert the observed failure.
+        let _ = stop_tx.send(());
+        let cleaned = if early.is_err() {
+            match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
+                Ok(_) => true,
+                Err(_) => {
+                    task.abort();
+                    let _ = task.await;
+                    false
+                }
+            }
+        } else {
+            true
+        };
+        let db_closed = match state {
+            Some(state) => state.db.call(|_| ()).await.is_err(),
+            None => false,
+        };
+        let socket_absent = !data.join("crewd.sock").exists();
+        let lock_released = lock_data_dir(&data).is_ok();
+        assert!(
+            cleaned && db_closed && socket_absent && lock_released,
+            "owned serve must close storage/socket/lock before the main oracle"
+        );
+        assert!(
+            signalled && fatal,
+            "actual critical Hub pump panic must trigger orderly serve failure"
+        );
     }
 
     #[tokio::test]
