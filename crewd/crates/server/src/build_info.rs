@@ -59,9 +59,60 @@ pub fn build_info() -> crewd_proto::BuildInfo {
     }
 }
 
+/// Compare declared compiled commits conservatively; copied paths/inodes are not equality.
+/// Missing, unknown or dirty metadata cannot prove these artifacts are the same build.
+/// This function never authorizes a caller, mutates state, retries, or restarts anything.
+pub fn compare_helper_build(
+    daemon: &crewd_proto::BuildInfo,
+    helper: Option<&crewd_proto::BuildInfo>,
+) -> crewd_proto::agent::HelperBuildStatus {
+    use crewd_proto::agent::HelperBuildStatus;
+    let known_clean = |build: &crewd_proto::BuildInfo| {
+        !build.dirty && !build.git_sha.trim().is_empty() && build.git_sha != "unknown"
+    };
+    let Some(helper) = helper else {
+        return HelperBuildStatus::Unknown;
+    };
+    if !known_clean(daemon) || !known_clean(helper) {
+        return HelperBuildStatus::Unknown;
+    }
+    if daemon.git_sha == helper.git_sha {
+        HelperBuildStatus::Same
+    } else {
+        HelperBuildStatus::Skew
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s6_build_comparison_is_conservative_and_independent_of_exe_path() {
+        use crewd_proto::agent::HelperBuildStatus::{Same, Skew, Unknown};
+        let daemon = crewd_proto::BuildInfo {
+            git_sha: "a".into(),
+            dirty: false,
+            exe: "/synthetic/daemon".into(),
+            exe_still_on_disk: true,
+        };
+        let mut helper = daemon.clone();
+        helper.exe = "/different/copied/helper".into();
+        helper.exe_still_on_disk = false;
+        assert_eq!(compare_helper_build(&daemon, Some(&helper)), Same);
+        helper.git_sha = "b".into();
+        assert_eq!(compare_helper_build(&daemon, Some(&helper)), Skew);
+        assert_eq!(compare_helper_build(&daemon, None), Unknown);
+        for (sha, dirty) in [("unknown", false), ("", false), (" ", false), ("a", true)] {
+            let unqualified = crewd_proto::BuildInfo {
+                git_sha: sha.into(),
+                dirty,
+                ..daemon.clone()
+            };
+            assert_eq!(compare_helper_build(&unqualified, Some(&helper)), Unknown);
+            assert_eq!(compare_helper_build(&daemon, Some(&unqualified)), Unknown);
+        }
+    }
 
     /// 测的是比对本身（临时文件，不碰真的可执行文件）：记下 → 还在；写一个新文件改名盖过去 → 不是它了；删了 → 不在了。
     #[test]

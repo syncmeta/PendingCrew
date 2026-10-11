@@ -104,6 +104,15 @@ async fn route(
             label: me.label,
             instructions: crate::agent::text::get(loc, "instructions").into(),
             surface_hash: crate::agent::surface::hash(loc),
+            build_check: Some({
+                let status = crate::build_info::compare_helper_build(
+                    &crate::build_info::build_info(),
+                    p.helper_build.as_ref(),
+                );
+                let warning = (status == crewd_proto::agent::HelperBuildStatus::Skew)
+                    .then(|| crate::agent::text::get(loc, "r.helper_build_skew").to_string());
+                crewd_proto::agent::HelperBuildCheck { status, warning }
+            }),
         });
     }
     let Some(session) = conn.session.clone() else {
@@ -205,6 +214,7 @@ fn spawn_watcher(
 
 #[cfg(test)]
 mod tests {
+    mod s6_build_tests;
     mod s72_tests;
 
     use std::time::Duration;
@@ -275,7 +285,8 @@ mod tests {
             a,
             json!({"role": "worker", "crewId": f.crew, "label": "示例 worker",
                 "instructions": text::get(Locale::Zh, "instructions"),
-                "surfaceHash": crate::agent::surface::hash(Locale::Zh)})
+                "surfaceHash": crate::agent::surface::hash(Locale::Zh),
+                "buildCheck": {"status":"unknown"}})
         );
         assert_eq!(
             w.call(methods::TOOLS, json!(null))

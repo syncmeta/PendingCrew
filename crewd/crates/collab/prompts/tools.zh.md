@@ -908,3 +908,6 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 
 ## r.released_to
 「{child}」已从「{from}」下摘出，改挂到「{to}」名下、排在末尾。接着做手上的事。
+
+## r.helper_build_skew
+helper 与 crewd daemon 的构建不同；本次调用仍可继续。请通知人，由人选择更新、休眠与重启时机，不要自行重启。

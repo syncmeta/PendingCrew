@@ -170,6 +170,17 @@
     "AttachParams": {
       "additionalProperties": false,
       "properties": {
+        "helperBuild": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Declared build diagnostics only; never session or Human authority."
+        },
         "sessionId": {
           "type": "string"
         },
@@ -185,6 +196,17 @@
     },
     "AttachResult": {
       "properties": {
+        "buildCheck": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelperBuildCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent on older daemons. New clients must not infer Same from absence."
+        },
         "crewId": {
           "type": "string"
         },
@@ -1628,6 +1650,33 @@
         "object",
         "null"
       ]
+    },
+    "HelperBuildCheck": {
+      "description": "Additive server output deliberately tolerates future fields.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/HelperBuildStatus"
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "HelperBuildStatus": {
+      "description": "Conservative diagnostic status, not executable authentication or permission.\nUnknown is a real emitted status and also tolerates future server vocabulary.",
+      "enum": [
+        "same",
+        "skew",
+        "unknown"
+      ],
+      "type": "string"
     },
     "HibernateParams": {
       "additionalProperties": false,

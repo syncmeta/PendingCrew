@@ -28,6 +28,9 @@ pub struct ToolsChanged {
 pub struct AttachParams {
     pub session_id: String,
     pub token: String,
+    /// Declared build diagnostics only; never session or Human authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper_build: Option<crate::BuildInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +44,41 @@ pub struct AttachResult {
     pub instructions: String,
     /// Stable public surface fingerprint, appended to MCP serverInfo.version.
     pub surface_hash: String,
+    /// Absent on older daemons. New clients must not infer Same from absence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_check: Option<HelperBuildCheck>,
+}
+
+/// Conservative diagnostic status, not executable authentication or permission.
+/// Unknown is a real emitted status and also tolerates future server vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HelperBuildStatus {
+    Same,
+    Skew,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Additive server output deliberately tolerates future fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HelperBuildCheck {
+    pub status: HelperBuildStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+impl AttachResult {
+    /// Only the recognized Skew status permits its localized warning to be shown.
+    /// Future/Unknown statuses cannot accidentally turn arbitrary warning text into Skew.
+    pub fn skew_warning(&self) -> Option<&str> {
+        self.build_check
+            .as_ref()
+            .filter(|check| check.status == HelperBuildStatus::Skew)
+            .and_then(|check| check.warning.as_deref())
+            .filter(|warning| !warning.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -185,6 +223,58 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.to_string().contains("unknown field"), "{e}");
+    }
+
+    #[test]
+    fn s6_optional_helper_build_preserves_strict_outer_params() {
+        let old: AttachParams =
+            serde_json::from_value(json!({"sessionId":"s", "token":"t"})).unwrap();
+        assert_eq!(old.helper_build, None);
+        assert_eq!(
+            serde_json::to_value(old).unwrap(),
+            json!({"sessionId":"s", "token":"t"})
+        );
+        let build =
+            json!({"gitSha":"a", "dirty":false, "exe":"/synthetic/helper", "exeStillOnDisk":true});
+        let new: AttachParams =
+            serde_json::from_value(json!({"sessionId":"s", "token":"t", "helperBuild":build}))
+                .unwrap();
+        assert_eq!(new.helper_build.unwrap().git_sha, "a");
+        assert!(serde_json::from_value::<AttachParams>(json!({"sessionId":"s", "token":"t", "helperBuild":build, "callerAuthority":"human"})).is_err());
+        assert!(
+            serde_json::from_value::<AttachParams>(
+                json!({"sessionId":"s", "token":"t", "helperBuild":[]})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn s6_old_and_future_results_do_not_manufacture_skew() {
+        let old = json!({"role":"worker", "crewId":"c", "label":"w", "instructions":"i", "surfaceHash":"h"});
+        let legacy: AttachResult = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(legacy.build_check, None);
+        assert_eq!(legacy.skew_warning(), None);
+        for (wire, expected) in [
+            ("same", HelperBuildStatus::Same),
+            ("skew", HelperBuildStatus::Skew),
+            ("unknown", HelperBuildStatus::Unknown),
+            ("future-s6-status", HelperBuildStatus::Unknown),
+        ] {
+            let mut v = old.clone();
+            v["buildCheck"] =
+                json!({"status":wire, "warning":"synthetic warning", "futureField":7});
+            let result: AttachResult = serde_json::from_value(v).unwrap();
+            assert_eq!(result.build_check.as_ref().unwrap().status, expected);
+            assert_eq!(
+                result.skew_warning(),
+                if expected == HelperBuildStatus::Skew {
+                    Some("synthetic warning")
+                } else {
+                    None
+                }
+            );
+        }
     }
 
     #[test]

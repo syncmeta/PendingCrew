@@ -70,6 +70,7 @@ impl AgentClient {
                 serde_json::to_value(AttachParams {
                     session_id: session.to_string(),
                     token,
+                    helper_build: Some(crewd_server::build_info::build_info()),
                 })?,
             )
             .await?;

@@ -130,11 +130,17 @@ pub async fn run(data_dir: &Path, args: McpArgs) -> anyhow::Result<()> {
         "crewd mcp: attached {} ({:?}) in {} surface {}",
         args.session, who.role, who.crew_id, who.surface_hash
     );
+    // Keep the original instructions and public tool surface. Only recognized Skew
+    // appends the daemon's localized warning; old/future/Unknown checks do not.
+    let instructions = match who.skew_warning() {
+        Some(warning) => format!("{}\n\n{warning}", who.instructions),
+        None => who.instructions.clone(),
+    };
     let client = Arc::new(client);
     let mut events = client.take_events().expect("events taken once");
     let service = Bridge {
         client,
-        instructions: who.instructions,
+        instructions,
         version: format!("{}+{}", env!("CARGO_PKG_VERSION"), who.surface_hash),
     }
     .serve(rmcp::transport::stdio())

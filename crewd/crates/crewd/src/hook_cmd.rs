@@ -102,7 +102,10 @@ pub async fn run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
         }
     };
     let work = async {
-        let (client, _) = AgentClient::connect(data_dir, &args.session, &args.token_file).await?;
+        let (client, who) = AgentClient::connect(data_dir, &args.session, &args.token_file).await?;
+        if let Some(warning) = who.skew_warning() {
+            eprintln!("crewd hook: {warning}");
+        }
         Ok::<_, anyhow::Error>(
             client
                 .call::<HookResult>(methods::HOOK, json!({"event": kind, "payload": payload}))

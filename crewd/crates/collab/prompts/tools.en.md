@@ -908,3 +908,6 @@ Parent crew "{crew}" (number {number}) was created with "{child}" under it, but 
 
 ## r.released_to
 "{child}" was moved from "{from}" to "{to}", at the end of its children. Carry on with your work.
+
+## r.helper_build_skew
+The helper and crewd daemon were built from different commits; this call may continue. Notify the human to choose an update, hibernate and restart time; do not restart automatically.
