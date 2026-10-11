@@ -245,7 +245,27 @@ pub async fn serve(data_dir: PathBuf, shutdown: impl Future<Output = ()>) -> any
 
 pub async fn serve_with(
     data_dir: PathBuf,
+    opts: ServeOptions,
+    shutdown: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    serve_with_hooks_inner(data_dir, opts, orchestra::hooks::Hooks::default(), shutdown).await
+}
+
+/// Synthetic library lifecycle instrumentation; ordinary CLI defaults unchanged.
+#[cfg(feature = "testkit")]
+pub async fn serve_with_test_hooks(
+    data_dir: PathBuf,
+    opts: ServeOptions,
+    hooks: orchestra::hooks::Hooks,
+    shutdown: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    serve_with_hooks_inner(data_dir, opts, hooks, shutdown).await
+}
+
+async fn serve_with_hooks_inner(
+    data_dir: PathBuf,
     mut opts: ServeOptions,
+    hooks: orchestra::hooks::Hooks,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     // A missing explicit program fails before binding or creating storage.
@@ -314,7 +334,7 @@ pub async fn serve_with(
                 data_dir.join(crewd_store::DB_FILE),
             )),
             orchestra::exec::Executors::new().with("claude", Arc::new(executor)),
-            orchestra::hooks::Hooks::default(),
+            hooks,
             Arc::new(orchestra::clock::SystemClock),
             o.config,
         )

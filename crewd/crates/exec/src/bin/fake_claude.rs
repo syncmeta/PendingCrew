@@ -15,6 +15,7 @@
 //!   「No conversation found with session ID: <id>」后 exit 1；不带则同 `ready`）。
 //! - `FAKE_CLAUDE_READY_DELAY_MS`：先只画横幅，这段时间收到的按键全部吞掉（真 claude 首屏重绘就这样吞字）。
 //! - `FAKE_CLAUDE_REPLAY`：开场先原样回放这份录制字节（如 `tui-claude-trust.bin`）。
+//! - `FAKE_CLAUDE_C13_GATE` + `FAKE_CLAUDE_C13_WITNESS`: opt-in ready-only 30s real heartbeat/release and per-generation actual-submit JSONL; synthetic owned paths only.
 //! - `FAKE_CLAUDE_LOG`：每次提交往这个文件追加一行（正文里的换行写成 `\n`）。
 //!
 //! 粘贴判定照 claude（Swift 版在真 daemon 上实测到的行为）：同一次 read 里收到多个字节 = 粘贴，
@@ -52,7 +53,164 @@ struct Fake {
     pasting: bool,
 }
 
+/// C13-only controller. A generation is a fixture identity, not a Claude conversation id.
+/// Receipts follow completed real IO; default fake modes never consult these files.
+struct C13 {
+    start: Instant,
+    gate: std::path::PathBuf,
+    witness: std::path::PathBuf,
+    session: String,
+    agent: String,
+    generation: String,
+}
+static C13_FIXTURE: std::sync::OnceLock<C13> = std::sync::OnceLock::new();
+impl C13 {
+    fn check(&self) {
+        if self.start.elapsed() >= Duration::from_secs(30) {
+            let _ = std::fs::write(self.gate.join("fixture.error"), b"C13 30s deadline");
+            eprintln!("C13 owned fixture expired");
+            std::process::exit(2);
+        }
+    }
+    fn record(&self, mut value: serde_json::Value) {
+        self.check();
+        value["session_id"] = self.session.clone().into();
+        value["agent_id"] = self.agent.clone().into();
+        value["generation"] = self.generation.clone().into();
+        value["pid"] = std::process::id().into();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.witness)
+            .expect("C13 owned witness");
+        let bytes = format!("{value}\n");
+        assert!(bytes.len() <= 8 * 1024 * 1024, "bounded synthetic witness");
+        file.write_all(bytes.as_bytes())
+            .expect("C13 complete witness append");
+        file.flush().expect("C13 witness flush");
+    }
+    fn write(&self, bytes: &[u8]) {
+        // This flag may be shared with stdin: the opt-in reader handles EAGAIN below.
+        let fd = libc::STDOUT_FILENO;
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0);
+        let mut offset = 0;
+        while offset < bytes.len() {
+            self.check();
+            let end = (offset + 4096).min(bytes.len());
+            let n = unsafe { libc::write(fd, bytes[offset..end].as_ptr().cast(), end - offset) };
+            if n > 0 {
+                offset += n as usize;
+                continue;
+            }
+            if n == 0 {
+                panic!("C13 stdout made no progress");
+            }
+            let e = std::io::Error::last_os_error();
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) {
+                std::thread::sleep(Duration::from_millis(2));
+            } else {
+                panic!("C13 actual stdout error: {e}");
+            }
+        }
+    }
+}
+fn c13_init(fake: &Fake, args: &[String]) {
+    let Ok(root) = std::env::var("FAKE_CLAUDE_C13_GATE") else {
+        return;
+    };
+    assert_eq!(
+        fake.mode, "ready",
+        "C13 opt-in is independent of recorded/menu modes"
+    );
+    assert!(!fake.session.is_empty() && fake.session.len() <= 256);
+    assert!(
+        fake.session
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+    );
+    let config = args
+        .windows(2)
+        .find(|w| w[0] == "--mcp-config")
+        .expect("actual generated mcp argv");
+    let mcp: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config[1]).unwrap()).unwrap();
+    let helper_args = mcp["mcpServers"]["crew"]["args"].as_array().unwrap();
+    let session = helper_args
+        .windows(2)
+        .find(|w| w[0] == "--session")
+        .and_then(|w| w[1].as_str())
+        .expect("actual helper --session identity")
+        .to_owned();
+    let generation = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let gate = std::path::PathBuf::from(root)
+        .join(&fake.session)
+        .join(&generation);
+    std::fs::create_dir_all(&gate).unwrap();
+    let witness_root = std::path::PathBuf::from(
+        std::env::var_os("FAKE_CLAUDE_C13_WITNESS").expect("C13 owned witness directory"),
+    );
+    std::fs::create_dir_all(&witness_root).unwrap();
+    // One writer per generation: regular-file partial writes cannot interleave sessions.
+    let witness = witness_root.join(format!("{generation}.jsonl"));
+    C13_FIXTURE
+        .set(C13 {
+            start: Instant::now(),
+            gate,
+            witness,
+            session,
+            agent: fake.session.clone(),
+            generation,
+        })
+        .ok()
+        .expect("one fixture initialization");
+    let c = C13_FIXTURE.get().unwrap();
+    c.record(serde_json::json!({"event":"launch", "resumed":fake.resumed,
+        "mcp":config[1], "gate":c.gate}));
+}
+fn c13_next(fake: &Fake, rx: &mpsc::Receiver<Vec<u8>>, released: &mut bool) -> Option<Vec<u8>> {
+    let Some(c) = C13_FIXTURE.get() else {
+        return rx.recv().ok();
+    };
+    loop {
+        c.check();
+        if c.gate.join("arm").is_file() && !*released {
+            if c.gate.join("release").is_file() {
+                fake.draw_box();
+                std::fs::write(c.gate.join("released"), b"ready frame actually written").unwrap();
+                *released = true;
+            } else {
+                fake.draw_box();
+                if !c.gate.join("busy-written").exists() {
+                    std::fs::write(c.gate.join("busy-written"), b"heartbeat actually written")
+                        .unwrap();
+                }
+            }
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => return Some(chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
 fn out(bytes: &[u8]) {
+    if let Some(c) = C13_FIXTURE.get() {
+        c.write(bytes);
+        return;
+    }
     let mut o = std::io::stdout();
     let _ = o.write_all(bytes);
     let _ = o.flush();
@@ -97,6 +255,9 @@ impl Fake {
     fn submit(&mut self) {
         let text = std::mem::take(&mut self.input);
         self.submits += 1;
+        if let Some(c) = C13_FIXTURE.get() {
+            c.record(serde_json::json!({"event":"submit", "submission":self.submits,"body":text}));
+        }
         if let Some(path) = &self.log {
             let mut f = std::fs::OpenOptions::new()
                 .create(true)
@@ -372,6 +533,8 @@ fn main() {
         pasting: false,
     };
 
+    c13_init(&fake, &args);
+
     if fake.mode == "refuse" && fake.resumed {
         out(format!(
             "No conversation found with session ID: {}\r\n",
@@ -407,7 +570,24 @@ fn main() {
         let mut buf = [0u8; 4096];
         let mut input = std::io::stdin();
         let mut seq = 0u64;
-        while let Ok(n) = input.read(&mut buf) {
+        loop {
+            if let Some(c) = C13_FIXTURE.get() {
+                c.check();
+            }
+            let n = match input.read(&mut buf) {
+                Ok(n) => n,
+                Err(e)
+                    if C13_FIXTURE.get().is_some()
+                        && matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) =>
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(_) => return,
+            };
             seq += 1;
             if let Some(trace) = &reader_trace {
                 trace.record(format_args!(
@@ -482,7 +662,8 @@ fn main() {
     );
     let mut partial: Vec<u8> = Vec::new();
     let mut consume_seq = 0u64;
-    while let Ok(chunk) = rx.recv() {
+    let mut c13_released = false;
+    while let Some(chunk) = c13_next(&fake, &rx, &mut c13_released) {
         if !chunk_delay.is_zero() {
             std::thread::sleep(chunk_delay);
         }
