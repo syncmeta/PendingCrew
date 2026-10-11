@@ -362,6 +362,10 @@ struct Capture {
     session: String,
     epoch: u64,
     applied: u64,
+    // Exact canonical output identity at capture, independent of Work epoch.
+    // Old envelopes omit this field; they remain conservative after a known newer output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_output: Option<String>,
     tuples: Vec<Tuple>,
     parts: Vec<Frontier>,
     windows: Vec<Window>,
@@ -611,6 +615,9 @@ fn validate_receipt(r: &Receipt) -> Result<()> {
 }
 fn validate_capture(c: &Capture) -> Result<()> {
     nonempty(&c.session)?;
+    if let Some(id) = &c.previous_output {
+        uuid(id)?;
+    }
     if c.applied > c.epoch {
         return Err(invalid("future applied capture epoch"));
     }
@@ -895,6 +902,7 @@ pub fn capture(
         session: session.into(),
         epoch: st.epoch,
         applied: st.applied,
+        previous_output: st.last_output,
         tuples,
         parts,
         windows,
@@ -1603,7 +1611,10 @@ pub(crate) fn finalize(
         s.basis = p.0.capture.frontier.reset(p.session(), s.epoch);
         s.applied = s.epoch;
         installed = true;
-    } else if s.epoch == p.0.capture.epoch && s.applied == p.0.capture.applied {
+    } else if s.epoch == p.0.capture.epoch
+        && s.applied == p.0.capture.applied
+        && s.last_output == p.0.capture.previous_output
+    {
         s.basis = p.0.capture.frontier.successor()?;
         installed = true;
     }

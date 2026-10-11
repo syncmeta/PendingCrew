@@ -6045,6 +6045,112 @@ mod tests {
             "snapshot recovery does not modify source"
         );
     }
+    // Minimal actual Core debt observer: never attempts a new owner after the SQL fault.
+    // Original broad case stays unchanged; this keeps its first debt oracle reachable under K1.
+    #[tokio::test]
+    async fn s42_actual_core_known_delivered_sql_fault_keeps_debt_through_normal_cleanup() {
+        use crewd_exec::{
+            delivery::Subject,
+            session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+        };
+        let mut r = StopDbRig::new().await;
+        let collected=s42_family6_catch(async {
+            r.state.collab(|tx|collab::cursors::pin_to_end(tx,"w-1","c-1/lobby")).await?;
+            let input=post_as(&r.state,collab::Sender::Human,"c-1/lobby","S42_K1_ORIGINAL_ACTUAL_MESSAGE",&[]).await;
+            let id=r.port.enqueue(new_wake("w-1",WakeKind::Message,source::message(&input.id),Priority::Human,HUMAN)).await?.unwrap();
+            r.core.handle(super::super::core::Input::Collab(super::super::core::CollabFact::WakeEnqueued{session:"w-1".into()})).await;
+            r.drain().await;
+            let original=r.core.live["w-1"].inflight.as_ref().expect("original real body before fault").batch.clone();
+            let (pending,generation)=match original.lease.as_ref().unwrap() {
+                BatchLease::CausalDatabase{claimed,..}=>(claimed.pending.clone(),claimed.pending.generation()),
+                other=>panic!("actual shared causal receipt required: {other:?}"),
+            };
+            let capture=s42_boot_meta(&r).await;
+            let before=r.row(id).await;let cursor_before=r.port.cursor("w-1","c-1/lobby").await?;
+            r.state.db.call(move|s|s.conn().execute_batch(&format!("CREATE TRIGGER s42_k1_small_delivered_abort BEFORE UPDATE OF state ON wakes WHEN OLD.id={id} AND NEW.state='delivered' BEGIN SELECT RAISE(ABORT,'S42 K1 small exact Delivered SQL abort'); END;"))).await??;
+            r.exec.emit("w-1",SessionEvent::Delivery{id:BRIEF_DELIVERY_ID,subject:Subject::Brief,outcome:DeliveryOutcome::Delivered});
+            let actual_ticket=r.state.causal_fence.success(&pending,generation,BRIEF_DELIVERY_ID)?;
+            let before_ack=s42_boot_meta(&r).await;
+            r.drain().await;
+            let debt_after_error=r.core.terminal_sessions();
+            let after_ack=s42_boot_meta(&r).await;let failed_row=r.row(id).await;
+            let failed_cursor=r.port.cursor("w-1","c-1/lobby").await?;
+            // Save the result instead of unwrap. Missing debt under K1 must reach final oracle.
+            let repeat_fault=r.core.retry_terminal("w-1").await.map_err(|e|e.to_string());
+            let debt_after_repeat=r.core.terminal_sessions();
+            let repeat_row=r.row(id).await;
+            r.state.db.call(|s|s.conn().execute_batch("DROP TRIGGER s42_k1_small_delivered_abort")).await??;
+            let repaired=r.core.retry_terminal("w-1").await.map_err(|e|e.to_string());
+            let debt_after_repair=r.core.terminal_sessions();let committed_row=r.row(id).await;
+            let committed_cursor=r.port.cursor("w-1","c-1/lobby").await?;
+            let basis=s42_boot_state(&r).await;let after_repair=s42_boot_meta(&r).await;
+            let mut exact=original.clone();
+            if let Some(BatchLease::CausalDatabase{observed,..})=exact.lease.as_mut(){*observed=Some(Box::new(actual_ticket));}
+            // Repeated exact original ack has no new owner / binding / launch helper.
+            let duplicate=r.port.ack(&exact,Ack::Delivered{riders:Riders::Release}).await.map_err(|e|e.to_string());
+            let after_duplicate=s42_boot_meta(&r).await;let duplicate_row=r.row(id).await;
+            Ok::<_,anyhow::Error>((input,id,original.ids(),capture,before,cursor_before,before_ack,debt_after_error,
+                after_ack,failed_row,failed_cursor,repeat_fault,debt_after_repeat,repeat_row,repaired,
+                debt_after_repair,committed_row,committed_cursor,basis,after_repair,duplicate,after_duplicate,duplicate_row))
+        }).await;
+        let observed = s42_family6_finish(r, collected)
+            .await
+            .expect("normal owned Core and Db shutdown before debt oracles");
+        let (
+            input,
+            id,
+            ids,
+            _capture,
+            before,
+            cursor_before,
+            before_ack,
+            debt_after_error,
+            after_ack,
+            failed_row,
+            failed_cursor,
+            repeat_fault,
+            debt_after_repeat,
+            repeat_row,
+            repaired,
+            debt_after_repair,
+            committed_row,
+            committed_cursor,
+            basis,
+            after_repair,
+            duplicate,
+            after_duplicate,
+            duplicate_row,
+        ) = observed;
+        assert_eq!(
+            debt_after_error,
+            vec!["w-1"],
+            "S42 actual known Delivered SQL fault must retain exact Core debt before any new owner; after normal cleanup"
+        );
+        assert_eq!(ids, vec![id]);
+        assert_eq!(before.source, source::message(&input.id));
+        assert_eq!(before.state, cw::WakeState::Inflight);
+        assert_eq!(before_ack, after_ack);
+        assert_eq!(failed_row, before);
+        assert_eq!(failed_cursor, cursor_before);
+        assert!(
+            repeat_fault
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.contains("S42 K1 small exact Delivered SQL abort")),
+            "real exact retry must still hit original SQL fault: {repeat_fault:?}"
+        );
+        assert_eq!(debt_after_repeat, vec!["w-1"]);
+        assert_eq!(repeat_row, before);
+        assert!(repaired.is_ok());
+        assert!(debt_after_repair.is_empty());
+        assert_eq!(committed_row.state, cw::WakeState::Delivered);
+        assert_eq!(committed_row.attempts, before.attempts);
+        assert_eq!(committed_cursor, input.seq);
+        assert!(!basis["basis"].as_array().unwrap().is_empty());
+        assert!(duplicate.is_ok());
+        assert_eq!(after_repair, after_duplicate);
+        assert_eq!(duplicate_row, committed_row);
+    }
 }
 
 #[cfg(test)]
@@ -6917,5 +7023,658 @@ mod s42_task_fence_db_windows {
             "exact complete actual rendered body and one submit"
         );
         assert!(receipt.lines().any(|line| line == "trailing_bytes=0"));
+    }
+
+    // Supplemental actual Task/fence/DbPort callers. Reuse the accepted owned PTY protocol.
+    async fn gdl_claim_human(
+        state: &AppState,
+        port: &DbPort,
+        text: &str,
+    ) -> (Message, Batch, String, collab::causal::PendingOutput) {
+        let m = post_as(state, collab::Sender::Human, "c-1/lobby", text, &[]).await;
+        port.enqueue(NewWake {
+            session: "w-1".into(),
+            kind: WakeKind::Message,
+            source: cw::source::message(&m.id),
+            priority: Priority::Human,
+            not_before: Ms(0),
+            note: None,
+            origin: HUMAN.into(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let wakes = port.pending("w-1").await.unwrap();
+        let rendered = port.render_wake("w-1", &wakes).await.unwrap();
+        let mut batch = Batch {
+            session: "w-1".into(),
+            wakes,
+            cursor_targets: rendered.cursor_targets,
+            prepared: rendered.prepared,
+            ..Default::default()
+        };
+        let cr::Decision::Applied(lease) = port.claim_reserved(&batch, 1).await.unwrap() else {
+            panic!("gdl real actual claim required")
+        };
+        batch.lease = Some(lease);
+        let pending = match batch.lease.as_ref().unwrap() {
+            BatchLease::CausalDatabase { claimed, .. } => claimed.pending.clone(),
+            _ => panic!("gdl actual causal receipt required"),
+        };
+        (m, batch, rendered.text, pending)
+    }
+    async fn gdl_physical_emit(
+        task: &TaskOwner,
+        protocol: &mut ChildProtocol,
+        emitted: &mut mpsc::UnboundedReceiver<u64>,
+        text: &str,
+        prefix: &[u8],
+    ) -> (u64, Vec<u8>) {
+        let body = sanitize_text(text);
+        protocol.screen("").await;
+        let mut capture = prefix.to_vec();
+        capture.extend_from_slice(body.as_bytes());
+        protocol.capture(&capture).await;
+        let paste = format!("[Pasted text #1 +{} lines]", body.lines().count());
+        protocol.screen(&paste).await;
+        parser_row(task, &paste).await;
+        capture.extend_from_slice(b" \x7f\r");
+        protocol.capture(&capture).await;
+        protocol.screen("").await;
+        let id = timeout(LIMIT, emitted.recv()).await.unwrap().unwrap();
+        (id, capture)
+    }
+    async fn gdl_receive_success(task: &mut TaskOwner, retained: &mut Vec<u64>) -> u64 {
+        if let Some(id) = retained.first().copied() {
+            return id;
+        }
+        timeout(LIMIT, async {
+            while let Some(event) = task.events.recv().await {
+                eprintln!("GDL actual event: {event:?}");
+                if let SessionEvent::Delivery {
+                    id,
+                    outcome: DeliveryOutcome::Delivered,
+                    ..
+                } = event
+                {
+                    retained.push(id);
+                    return id;
+                }
+            }
+            panic!("gdl actual Delivered missing")
+        })
+        .await
+        .unwrap()
+    }
+    fn gdl_witness(batch: &mut Batch, success: collab::causal::ObservedSuccess) {
+        if let Some(BatchLease::CausalDatabase { observed, .. }) = batch.lease.as_mut() {
+            *observed = Some(Box::new(success));
+        } else {
+            panic!("gdl original claimed batch required");
+        }
+    }
+    async fn gdl_session_value(state: &AppState) -> Value {
+        state
+            .db
+            .call(|s| {
+                serde_json::from_str::<Value>(
+                    &crewd_store::meta_get(s.conn(), "causal.session.v1.w-1")
+                        .unwrap()
+                        .unwrap(),
+                )
+                .unwrap()["value"]
+                    .clone()
+            })
+            .await
+            .unwrap()
+    }
+    async fn gdl_cleanup(
+        task: &mut TaskOwner,
+        protocol: &ChildProtocol,
+    ) -> Result<(Vec<u8>, String), Box<dyn Any + Send>> {
+        let result = catch(close_owned(task, protocol)).await;
+        if result.is_err() {
+            task.gate.release();
+            let _ = task.handle.stop();
+            let stopped = timeout(LIMIT, async {
+                while let Some(e) = task.events.recv().await {
+                    eprintln!("GDL failed normal cleanup fallback: {e:?}");
+                }
+            })
+            .await;
+            eprintln!(
+                "GDL normal cleanup failed, owned fallback EOF={}",
+                stopped.is_ok()
+            );
+        }
+        result
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn s42_actual_task_exact_success_queries_reject_wrong_generation_receipt_and_unpublished_candidate()
+     {
+        let (state, port, dir) = seeded().await;
+        let (root1, mut first, text1, p1) =
+            gdl_claim_human(&state, &port, "GDL_FIRST_ACTUAL_ROOT").await;
+        let (mut task, mut protocol, mut emitted) = start_owned(&state, &port, dir.path(), 1).await;
+        let observation = catch(async {
+            let b1 = state.causal_fence.binder(&p1, 1).unwrap();
+            let id1 = task
+                .handle
+                .send_bound(text1.clone(), UntrustedContext::default(), b1.as_ref())
+                .unwrap();
+            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.receipt("filler-drained").await;
+            let (e1, capture1) =
+                gdl_physical_emit(&task, &mut protocol, &mut emitted, &text1, &[]).await;
+            let s1 = state.causal_fence.success(&p1, 1, id1).unwrap();
+            let mut early1 = Vec::new();
+            let premature1 = drain_delivered(&mut task, id1, &mut early1);
+            task.gate.release();
+            let received1 = gdl_receive_success(&mut task, &mut early1).await;
+            gdl_witness(&mut first, s1);
+            let first_ack = port
+                .ack(
+                    &first,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            // Real original output is now committed; retirement is the direct owner protocol,
+            // not a release while unresolved. No Core/actor lifecycle claim is made.
+            state.causal_fence.retire(&p1).unwrap();
+            *task.gate.released.lock().unwrap() = false;
+            let (root2, mut second, text2, p2) =
+                gdl_claim_human(&state, &port, "GDL_SECOND_ACTUAL_ROOT").await;
+            let b2 = state.causal_fence.binder(&p2, 1).unwrap();
+            let id2 = task
+                .handle
+                .send_bound(text2.clone(), UntrustedContext::default(), b2.as_ref())
+                .unwrap();
+            let unpublished_accepted = state.causal_fence.success(&p2, 1, id2).is_ok();
+            let queued = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "GDL_QUEUED_SECOND_STILL_FIRST_BASIS",
+                &[],
+            )
+            .await;
+            let queued_before = post_snapshot(&state, &queued).await;
+            let (e2, capture2) =
+                gdl_physical_emit(&task, &mut protocol, &mut emitted, &text2, &capture1).await;
+            // Save Results; invalid capabilities must reach after-cleanup functional oracles.
+            let wrong_generation = state.causal_fence.success(&p2, 2, id2).is_ok();
+            let wrong_delivery = state.causal_fence.success(&p2, 1, id2 + 1).is_ok();
+            let wrong_receipt = state.causal_fence.success(&p1, 1, id2).is_ok();
+            let s2 = state.causal_fence.success(&p2, 1, id2).unwrap();
+            let mut early2 = Vec::new();
+            let premature2 = drain_delivered(&mut task, id2, &mut early2);
+            task.gate.release();
+            let received2 = gdl_receive_success(&mut task, &mut early2).await;
+            gdl_witness(&mut second, s2);
+            let second_ack = port
+                .ack(
+                    &second,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let queued_after = post_snapshot(&state, &queued).await;
+            let new_child = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "GDL_TRUE_SECOND_OUTPUT_CHILD",
+                &[],
+            )
+            .await;
+            let child = post_snapshot(&state, &new_child).await;
+            (
+                root2,
+                id1,
+                id2,
+                e1,
+                e2,
+                received1,
+                received2,
+                premature1,
+                premature2,
+                early1,
+                early2,
+                unpublished_accepted,
+                wrong_generation,
+                wrong_delivery,
+                wrong_receipt,
+                queued_before,
+                queued_after,
+                child,
+                capture2,
+                first_ack.stale,
+                second_ack.stale,
+            )
+        })
+        .await;
+        let cleanup = gdl_cleanup(&mut task, &protocol).await;
+        let expired = task.gate.expired.load(Ordering::SeqCst);
+        drop(task);
+        drop(emitted);
+        drop(port);
+        let db = state.db.clone();
+        drop(state);
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        let (capture, receipt) = cleanup.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        let (
+            root2,
+            id1,
+            id2,
+            e1,
+            e2,
+            r1,
+            r2,
+            pre1,
+            pre2,
+            events1,
+            events2,
+            unpublished,
+            wrong_generation,
+            wrong_delivery,
+            wrong_receipt,
+            q_before,
+            q_after,
+            child,
+            expected_capture,
+            stale1,
+            stale2,
+        ) = observation.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert!(!expired);
+        assert_eq!((pre1, pre2), (0, 0));
+        assert_eq!((e1, r1, e2, r2), (id1, id1, id2, id2));
+        assert_eq!(events1, vec![id1]);
+        assert_eq!(events2, vec![id2]);
+        assert!(
+            !wrong_generation,
+            "G exact success query must reject wrong positive generation"
+        );
+        assert!(
+            !wrong_delivery,
+            "G exact success query must reject wrong delivery ID"
+        );
+        assert!(
+            !wrong_receipt,
+            "G exact success query must reject old actual receipt against new published owner"
+        );
+        assert!(
+            !unpublished,
+            "G new registered candidate must not borrow previous committed success"
+        );
+        assert_eq!(
+            q_before, q_after,
+            "G registered but unconfirmed second candidate cannot retroactivate old post"
+        );
+        assert_eq!(
+            q_before.resolved,
+            Some(
+                json!([{"key":{"root":{"kind":"message","id":root1.id,"seq":root1.seq},"reset":{"kind":"initial"}},"hop":1}])
+            )
+        );
+        assert_eq!(
+            child.resolved,
+            Some(
+                json!([{"key":{"root":{"kind":"message","id":root2.id,"seq":root2.seq},"reset":{"kind":"initial"}},"hop":1}])
+            )
+        );
+        assert!(!stale1 && !stale2);
+        assert_eq!(capture, expected_capture);
+        assert!(receipt.contains("trailing_bytes=0"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn s42_actual_task_duplicate_success_callback_and_ack_keep_one_ticket_and_one_hop() {
+        let (state, port, dir) = seeded().await;
+        let (root, mut batch, text, pending) =
+            gdl_claim_human(&state, &port, "GDL_DUP_ACTUAL_ROOT").await;
+        let (mut task, mut protocol, mut emitted) = start_owned(&state, &port, dir.path(), 1).await;
+        let observation = catch(async {
+            let binding = state.causal_fence.binder(&pending, 1).unwrap();
+            let id = task
+                .handle
+                .send_bound(text.clone(), UntrustedContext::default(), binding.as_ref())
+                .unwrap();
+            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.receipt("filler-drained").await;
+            let (emission, wanted) =
+                gdl_physical_emit(&task, &mut protocol, &mut emitted, &text, &[]).await;
+            let original = state.causal_fence.success(&pending, 1, id).unwrap();
+            // First emission was genuine production Task. Repeat the exact callback on
+            // its original trusted adapter capability; this is not a second PTY submit.
+            task.gate.inner.emitted(id);
+            let duplicate_ticket = state.causal_fence.success(&pending, 1, id).unwrap();
+            let mut early = Vec::new();
+            let premature = drain_delivered(&mut task, id, &mut early);
+            task.gate.release();
+            let delivered = gdl_receive_success(&mut task, &mut early).await;
+            gdl_witness(&mut batch, original.clone());
+            let first = port
+                .ack(
+                    &batch,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let before = db_snapshot(&state, batch.wakes[0].id).await;
+            let first_post = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "GDL_DUP_FIRST_CHILD",
+                &[],
+            )
+            .await;
+            let first_cause = post_snapshot(&state, &first_post).await;
+            let pre_duplicate = db_snapshot(&state, batch.wakes[0].id).await;
+            let second = port
+                .ack(
+                    &batch,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let after = db_snapshot(&state, batch.wakes[0].id).await;
+            let repeat_post = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                "c-1/lobby",
+                "GDL_DUP_REPEAT_CHILD",
+                &[],
+            )
+            .await;
+            let repeat = post_snapshot(&state, &repeat_post).await;
+            (
+                id,
+                emission,
+                delivered,
+                premature,
+                early,
+                original == duplicate_ticket,
+                wanted,
+                before,
+                pre_duplicate,
+                after,
+                first_cause.resolved,
+                repeat.resolved,
+                first.stale,
+                second.stale,
+            )
+        })
+        .await;
+        let cleanup = gdl_cleanup(&mut task, &protocol).await;
+        let expired = task.gate.expired.load(Ordering::SeqCst);
+        drop(task);
+        drop(emitted);
+        drop(port);
+        let db = state.db.clone();
+        drop(state);
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        let (capture, receipt) = cleanup.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        let (
+            id,
+            emission,
+            delivered,
+            premature,
+            events,
+            ticket_same,
+            wanted,
+            before,
+            pre_duplicate,
+            after,
+            first,
+            repeat,
+            stale1,
+            stale2,
+        ) = observation.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert!(!expired);
+        assert_eq!(premature, 0);
+        assert_eq!((emission, delivered), (id, id));
+        assert_eq!(events, vec![id]);
+        assert!(
+            ticket_same,
+            "D duplicate exact producer callback must not issue a new serial/ticket"
+        );
+        assert_eq!(
+            pre_duplicate, after,
+            "D duplicate exact DB ack cannot advance durable frontier/row/cursor/attempts"
+        );
+        let expected = Some(
+            json!([{"key":{"root":{"kind":"message","id":root.id,"seq":root.seq},"reset":{"kind":"initial"}},"hop":1}]),
+        );
+        assert_eq!(first, expected);
+        assert_eq!(
+            repeat, expected,
+            "D duplicate same-fate ack cannot add a second inherited hop"
+        );
+        assert_eq!(before.wake.state, cw::WakeState::Delivered);
+        assert!(!stale1 && !stale2);
+        assert_eq!(capture, wanted);
+        assert!(receipt.contains("trailing_bytes=0"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn s42_actual_task_pending_old_first_ack_preserves_new_committed_independent_hook_basis()
+    {
+        let (state, port, dir) = seeded().await;
+        let (_root_a, mut old, text, pending) =
+            gdl_claim_human(&state, &port, "GDL_L_PHYSICAL_OLD_A").await;
+        // Genuine member DM, not an injected cursor/lease. Establish its empty baseline
+        // before the new Human message. The old A exact receipt remains active throughout.
+        let channel_b = state
+            .collab(|tx| {
+                let (channel, _) = collab::channels::ensure_dm(
+                    tx,
+                    "c-1",
+                    &crewd_proto::MemberRef::session("w-1"),
+                    &crewd_proto::MemberRef::session("cap-1"),
+                )?;
+                collab::cursors::pin_to_end(tx, "w-1", &channel.id)?;
+                Ok(channel.id)
+            })
+            .await
+            .unwrap();
+        let (mut task, mut protocol, mut emitted) = start_owned(&state, &port, dir.path(), 1).await;
+        let observation = catch(async {
+            let binder = state.causal_fence.binder(&pending, 1).unwrap();
+            let id = task
+                .handle
+                .send_bound(text.clone(), UntrustedContext::default(), binder.as_ref())
+                .unwrap();
+            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.receipt("filler-drained").await;
+            let (emission, wanted) =
+                gdl_physical_emit(&task, &mut protocol, &mut emitted, &text, &[]).await;
+            let success = state.causal_fence.success(&pending, 1, id).unwrap();
+            let before_old = output_value(&state, pending.stable_key()).await;
+            let initial_session = gdl_session_value(&state).await;
+            let b = post_as(
+                &state,
+                collab::Sender::Human,
+                &channel_b,
+                "GDL_L_NEW_INDEPENDENT_B",
+                &[],
+            )
+            .await;
+            let b_id = channel_b.clone();
+            let b_seq = b.seq;
+            let (hook, a_held, a_omitted) = state
+                .collab(move |tx| {
+                    let prepared = cr::prepare_causal_unread(tx, "w-1")?;
+                    let a_held = prepared.snapshot.blocks_channel("c-1/lobby");
+                    let a_omitted = !prepared.blocks.iter().any(|(ch, _)| ch == "c-1/lobby");
+                    let targets = vec![(b_id, b_seq)];
+                    let causes = prepared.causes.select(&targets)?;
+                    Ok((
+                        cr::commit_hook_output(tx, &prepared.snapshot, &causes, &targets)?,
+                        a_held,
+                        a_omitted,
+                    ))
+                })
+                .await
+                .unwrap();
+            // Save the real outcome; do not turn Busy/Stale into successful fixture output.
+            let hook_key = match &hook {
+                cr::Decision::Applied(v) => v.output.clone(),
+                _ => None,
+            };
+            let new_output = match &hook_key {
+                Some(k) => Some(output_value(&state, k).await),
+                None => None,
+            };
+            let after_new_session = gdl_session_value(&state).await;
+            let still_old = output_value(&state, pending.stable_key()).await;
+            let b_cursor_before = port.cursor("w-1", &channel_b).await.unwrap();
+            let mut early = Vec::new();
+            let premature = drain_delivered(&mut task, id, &mut early);
+            task.gate.release();
+            let delivered = gdl_receive_success(&mut task, &mut early).await;
+            gdl_witness(&mut old, success);
+            let first_ack = port
+                .ack(
+                    &old,
+                    Ack::Delivered {
+                        riders: Riders::Release,
+                    },
+                )
+                .await
+                .unwrap();
+            let old_done = output_value(&state, pending.stable_key()).await;
+            let after_old_session = gdl_session_value(&state).await;
+            let b_cursor_after = port.cursor("w-1", &channel_b).await.unwrap();
+            let after = post_as(
+                &state,
+                collab::Sender::Session("w-1".into()),
+                &channel_b,
+                "GDL_L_AFTER_OLD_FIRST_ACK",
+                &[],
+            )
+            .await;
+            let descendant = post_snapshot(&state, &after).await;
+            (
+                b,
+                id,
+                emission,
+                delivered,
+                premature,
+                early,
+                wanted,
+                hook_key,
+                a_held,
+                a_omitted,
+                before_old,
+                initial_session,
+                new_output,
+                after_new_session,
+                still_old,
+                b_cursor_before,
+                first_ack.stale,
+                old_done,
+                after_old_session,
+                b_cursor_after,
+                descendant.resolved,
+            )
+        })
+        .await;
+        let cleanup = gdl_cleanup(&mut task, &protocol).await;
+        let expired = task.gate.expired.load(Ordering::SeqCst);
+        drop(task);
+        drop(emitted);
+        drop(port);
+        let db = state.db.clone();
+        drop(state);
+        tokio::task::spawn_blocking(move || db.shutdown())
+            .await
+            .unwrap();
+        let (capture, receipt) = cleanup.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        let (
+            b,
+            id,
+            emission,
+            delivered,
+            premature,
+            events,
+            wanted,
+            hook_key,
+            a_held,
+            a_omitted,
+            before_old,
+            initial_session,
+            new_output,
+            after_new_session,
+            still_old,
+            b_before,
+            stale,
+            old_done,
+            after_old_session,
+            b_after,
+            descendant,
+        ) = observation.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        assert!(!expired);
+        assert_eq!(premature, 0);
+        assert_eq!((emission, delivered), (id, id));
+        assert_eq!(events, vec![id]);
+        assert!(
+            a_held && a_omitted,
+            "L ordinary hook must exclude genuinely held A and preserve its ownership"
+        );
+        let hook_key = hook_key
+            .expect("L genuine independent B hook must actually Applied with nonempty output");
+        assert_eq!(before_old["status"], "pending");
+        assert_eq!(still_old["status"], "pending");
+        assert_eq!(initial_session["active"], pending.stable_key());
+        assert_eq!(
+            after_new_session["active"],
+            pending.stable_key(),
+            "L independent hook does not retire or overwrite A ownership"
+        );
+        assert_eq!(new_output.unwrap()["status"], "committed");
+        assert_eq!(after_new_session["last_output"], hook_key);
+        assert_eq!(initial_session["epoch"], after_new_session["epoch"]);
+        assert_eq!(
+            initial_session["applied"], after_new_session["applied"],
+            "L distinct actual output, not a new Work epoch"
+        );
+        assert_eq!(b_before, b.seq);
+        assert_eq!(b_after, b.seq);
+        assert!(!stale);
+        assert_eq!(
+            old_done["status"], "committed",
+            "L true old first same-fate acknowledgement still succeeds"
+        );
+        assert_eq!(
+            after_old_session["basis"], after_new_session["basis"],
+            "L OLDpending then NEWcommitted then OLDfirstAck cannot overwrite actual newer basis"
+        );
+        assert_eq!(
+            after_old_session["last_output"], hook_key,
+            "L canonical last output stays genuinely newer committed B"
+        );
+        assert_eq!(
+            descendant,
+            Some(
+                json!([{"key":{"root":{"kind":"message","id":b.id,"seq":b.seq},"reset":{"kind":"initial"}},"hop":1}])
+            )
+        );
+        assert_eq!(capture, wanted);
+        assert!(receipt.contains("trailing_bytes=0"));
     }
 }

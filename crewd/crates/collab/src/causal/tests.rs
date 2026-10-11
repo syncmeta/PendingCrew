@@ -785,3 +785,161 @@ fn retired_receipt_query_keeps_live_and_witnessed_retry_semantics() {
     assert!(!ack(&mut s, &next, &success).newly_committed);
     assert_eq!(durable(&s), committed, "exact witnessed same-fate retry unchanged");
 }
+
+// Private-envelope compatibility controls. Actual Store/shared receipt APIs with
+// the existing synthetic qualified observer; not physical Task/provider tests.
+#[test]
+fn capture_after_committed_b_can_install_ordinary_c_on_its_own_success() {
+    let (mut s, _) = fixture();
+    let a = claim(&mut s, READER, 1);
+    let a_success = witness(&a);
+    let a_ack = ack(&mut s, &a, &a_success);
+    let b = post(&mut s, Sender::Human, "FRESHNESS_B_REAL_HUMAN");
+    let b_claim = claim(&mut s, READER, 2);
+    let b_success = witness(&b_claim);
+    let b_ack = ack(&mut s, &b_claim, &b_success);
+    let b_state = state(s.conn(), READER).unwrap();
+    let c = post(&mut s, Sender::Human, "FRESHNESS_C_REAL_HUMAN");
+    let c_claim = claim(&mut s, READER, 3);
+    let captured_previous = c_claim.pending.0.capture.previous_output.clone();
+    let c_success = witness(&c_claim);
+    let c_ack = ack(&mut s, &c_claim, &c_success);
+    let after = state(s.conn(), READER).unwrap();
+    let child = observed_post(&mut s, &c_claim, Some(&c_success), "actual ordinary C descendant");
+    let child_basis = frontier(&s, &child);
+    let expected_b = frontier(&s, &b).successor().unwrap();
+    let expected_c = frontier(&s, &c).successor().unwrap();
+    let repeated = ack(&mut s, &c_claim, &c_success);
+    let after_repeat = state(s.conn(), READER).unwrap();
+    let c_output = output(s.conn(), c_claim.pending.stable_key()).unwrap();
+    drop(s); // owned synchronous Store closes before main semantic oracles
+    assert!(a_ack.newly_committed && b_ack.newly_committed && c_ack.newly_committed);
+    assert_eq!(b_state.basis, expected_b);
+    assert_eq!(b_state.last_output.as_deref(), Some(b_claim.pending.stable_key()));
+    assert_eq!(captured_previous.as_deref(), Some(b_claim.pending.stable_key()));
+    assert_eq!(after.basis, expected_c, "fresh capture after B really installs C, not permanent freeze");
+    assert_eq!(after.last_output.as_deref(), Some(c_claim.pending.stable_key()));
+    assert_eq!(child_basis, expected_c);
+    assert_eq!((after.epoch, after.applied), (b_state.epoch, b_state.applied));
+    assert_eq!(c_output.status, OutputStatus::Committed);
+    assert!(!repeated.newly_committed);
+    assert_eq!(after_repeat.basis, after.basis);
+    assert_eq!(after_repeat.last_output, after.last_output);
+}
+
+#[test]
+fn legacy_missing_previous_output_settles_old_exact_row_without_replacing_b() {
+    let (mut s, _) = fixture();
+    let prior = claim(&mut s, READER, 1);
+    ack(&mut s, &prior, &witness(&prior));
+    let channel = ok(&mut s, |tx| {
+        let (channel, _) = crate::channels::ensure_dm(tx, "crew-a",
+            &crewd_proto::MemberRef::session(READER), &crewd_proto::MemberRef::session("w-a2"))?;
+        crate::cursors::pin_to_end(tx, READER, &channel.id)?;
+        Ok(channel.id)
+    });
+    let a = post(&mut s, Sender::Human, "LEGACY_A_ORIGINAL_BODY");
+    let row = match ok(&mut s, |tx| crate::wakes::enqueue(tx, crate::wakes::WakeRequest {
+        session: READER.into(), kind: crate::wakes::WakeKind::Message,
+        source: crate::wakes::source::message(&a.id), priority: crate::wakes::WakePriority::System,
+        not_before_ms: None, note: None, origin: None,
+    })) { crate::wakes::Enqueued::New(id) => id, other => panic!("actual original row {other:?}") };
+    let mut old = ok(&mut s, |tx| {
+        let prepared = cr::prepare_causal_unread(tx, READER)?;
+        let ends = vec![(CH.into(), a.seq)];
+        let causes = prepared.causes.select(&ends)?;
+        let windows = prepared.snapshot.windows_for(&ends)?;
+        Ok(applied(cr::claim_output(tx, &prepared.snapshot, &causes, &windows,
+            &[row], &[], cr::Owner::new(2)?)?))
+    });
+    let original_lease = old.lease.clone();
+    let original_receipt = old.pending.0.clone();
+    let key = format!("{OUTPUT}{}", old.pending.stable_key());
+    let raw = crewd_store::meta_get(s.conn(), &key).unwrap().unwrap();
+    let mut envelope: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let omitted = envelope["value"]["receipt"]["capture"].as_object_mut().unwrap()
+        .remove("previous_output").expect("setup real A capture must remember prior committed output");
+    // Exact legacy-format omission only. No identity/window/owner/success is injected.
+    crewd_store::meta_set(s.conn(), &key, &serde_json::to_string(&envelope).unwrap()).unwrap();
+    let decoded = output(s.conn(), old.pending.stable_key()).unwrap();
+    old.pending = PendingOutput(decoded.receipt.clone()); // load original owned legacy receipt
+    let old_success = witness(&old);
+    let b = ok(&mut s, |tx| messages::post(tx, Sender::Human, messages::NewPost {
+        channel_id: channel.clone(), text: "LEGACY_NEW_REAL_B_HOOK".into(), ..Default::default()
+    })).message;
+    let (hook, held, omitted_a) = ok(&mut s, |tx| {
+        let prepared = cr::prepare_causal_unread(tx, READER)?;
+        let held = prepared.snapshot.blocks_channel(CH);
+        let omitted_a = !prepared.blocks.iter().any(|(ch, _)| ch == CH);
+        let ends = vec![(channel.clone(), b.seq)];
+        let causes = prepared.causes.select(&ends)?;
+        Ok((applied(cr::commit_hook_output(tx, &prepared.snapshot, &causes, &ends)?), held, omitted_a))
+    });
+    let before = state(s.conn(), READER).unwrap();
+    let b_cursor = crate::cursors::cursor(s.conn(), READER, &channel).unwrap();
+    let settled = ack(&mut s, &old, &old_success);
+    let after = state(s.conn(), READER).unwrap();
+    let old_record = output(s.conn(), old.pending.stable_key()).unwrap();
+    let fate = crate::wakes::by_ids(s.conn(), &[row]).unwrap()[0].clone();
+    let a_cursor = crate::cursors::cursor(s.conn(), READER, CH).unwrap();
+    let b_cursor_after = crate::cursors::cursor(s.conn(), READER, &channel).unwrap();
+    let child = post(&mut s, Sender::Session(READER.into()), "after legacy first exact ack");
+    let child_basis = frontier(&s, &child);
+    let b_basis = frontier(&s, &b).successor().unwrap();
+    let repeated = ack(&mut s, &old, &old_success);
+    let after_repeat = state(s.conn(), READER).unwrap();
+    drop(s);
+    assert_eq!(omitted, serde_json::Value::String(prior.pending.stable_key().into()));
+    let mut expected_legacy = original_receipt;
+    expected_legacy.capture.previous_output = None;
+    assert_eq!(decoded.receipt, expected_legacy, "only missing optional capture field defaults");
+    assert_eq!(old.lease, original_lease);
+    assert!(held && omitted_a, "independent genuine hook respects A reservation");
+    assert_eq!(before.active.as_deref(), Some(old.pending.stable_key()));
+    assert_eq!(before.last_output, hook.output);
+    assert_eq!(before.basis, b_basis);
+    assert!(settled.newly_committed, "old original exact row fate still commits");
+    assert_eq!(old_record.status, OutputStatus::Committed);
+    assert_eq!(fate.state, crate::wakes::WakeState::Delivered);
+    assert_eq!(a_cursor, Some(a.seq));
+    assert_eq!(b_cursor, Some(b.seq));
+    assert_eq!(b_cursor_after, b_cursor);
+    assert_eq!(after.basis, before.basis, "legacy missing predecessor stays conservative after B");
+    assert_eq!(after.last_output, before.last_output);
+    assert!(after.active.is_none());
+    assert_eq!(child_basis, b_basis);
+    assert!(!repeated.newly_committed);
+    assert_eq!(after_repeat.basis, b_basis);
+    assert_eq!(after_repeat.last_output, before.last_output);
+}
+
+#[test]
+fn present_malformed_previous_output_rejects_read_and_exact_ack_without_writes() {
+    let (mut s, _) = fixture();
+    let old = claim(&mut s, READER, 1);
+    let success = witness(&old);
+    let key = format!("{OUTPUT}{}", old.pending.stable_key());
+    let raw = crewd_store::meta_get(s.conn(), &key).unwrap().unwrap();
+    let mut observations = Vec::new();
+    for bad in [serde_json::json!("not-a-uuid"), serde_json::json!([]), serde_json::json!({"id":"fake"}), serde_json::json!(7)] {
+        let mut envelope: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        envelope["value"]["receipt"]["capture"]["previous_output"] = bad;
+        crewd_store::meta_set(s.conn(), &key, &serde_json::to_string(&envelope).unwrap()).unwrap();
+        let before = lifecycle_db(&s);
+        let read_error = output(s.conn(), old.pending.stable_key()).is_err();
+        let ack_error = crate::run(&mut s, NOW, |tx|
+            cr::ack_output_delivered(tx, &old, &success, crate::wakes::Riders::Release)).is_err();
+        let after = lifecycle_db(&s);
+        observations.push((read_error, ack_error, before, after));
+    }
+    crewd_store::meta_set(s.conn(), &key, &raw).unwrap();
+    let restored = ack(&mut s, &old, &success);
+    let committed = output(s.conn(), old.pending.stable_key()).unwrap().status;
+    drop(s);
+    for (read_error, ack_error, before, after) in observations {
+        assert!(read_error && ack_error, "present malformed freshness identity is fail loud, not legacy None");
+        assert_eq!(before, after, "invalid identity cannot change rows/cursors/receipt state");
+    }
+    assert!(restored.newly_committed);
+    assert_eq!(committed, OutputStatus::Committed);
+}

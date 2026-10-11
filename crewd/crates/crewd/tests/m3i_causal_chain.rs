@@ -2938,3 +2938,194 @@ async fn s42_thirty_actual_active_work_chains_are_independent_and_not_globally_t
         );
     }
 }
+
+// Actual generated ancestry first, then an owned file snapshot isolates DbPort Tx rollback
+// from the otherwise-live actor. No private ancestry/hop/root is inserted by this fixture.
+async fn s42_notice_all_tables(state: &AppState) -> Vec<(String, Vec<String>)> {
+    state.db.call(|s| {
+        let c=s.conn();
+        let mut names=c.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_stat%' ORDER BY name").unwrap();
+        let names=names.query_map([],|row|row.get::<_,String>(0)).unwrap()
+            .collect::<Result<Vec<_>,_>>().unwrap();
+        let mut dump=Vec::new();
+        for name in names {
+            let quoted=name.replace('"',"\"\"");
+            let mut q=c.prepare(&format!("SELECT * FROM \"{quoted}\"")).unwrap();
+            let width=q.column_count();
+            let mut rows=q.query_map([],|row| {
+                let mut values=Vec::new();
+                for col in 0..width {values.push(format!("{:?}",row.get_ref(col)?));}
+                Ok(format!("{values:?}"))
+            }).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+            rows.sort();dump.push((name,rows));
+        }
+        dump
+    }).await.unwrap()
+}
+async fn s42_notice_count(state: &AppState, channel: &str) -> i64 {
+    let channel = channel.to_owned();
+    state
+        .db
+        .call(move |s| {
+            s.conn()
+                .query_row(
+                    "SELECT count(*) FROM messages WHERE channel_id=?1",
+                    [channel],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+        })
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn s42_actual_dbport_safe_human_notice_insert_failure_rolls_back_hold_and_whole_tx() {
+    use crewd_server::orchestra::port::Port as _;
+    let mut rig = Rig::new().await;
+    let snapshot_dir = tempfile::tempdir().unwrap();
+    let snapshot_path = snapshot_dir
+        .path()
+        .join("actual-causal16-before-notice.sqlite");
+    let setup = catch_setup(async {
+        rig.warmup().await;
+        let channel = rig.channel.clone();
+        let (root, records) = rig
+            .cycle_variant(&channel, "S42_NOTICE_REAL_CHAIN", 16)
+            .await;
+        let safe16 = records.last().unwrap().0.clone();
+        let (read, error) = rig.clients[2]
+            .call("read_channel", json!({"channel":channel,"limit":200}))
+            .await;
+        assert!(!error && read.contains(&safe16.text));
+        let actual_cursor = port::cursor(rig.state(), &rig.ids[2], &channel)
+            .await
+            .unwrap();
+        assert_eq!(actual_cursor, Some(safe16.seq));
+        let path = snapshot_path.to_str().unwrap().to_owned();
+        rig.state()
+            .db
+            .call(move |s| s.conn().execute("VACUUM INTO ?1", [path]))
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            root,
+            records,
+            rig.ids[1].clone(),
+            rig.ids[2].clone(),
+            channel,
+            safe16.seq,
+        )
+    })
+    .await;
+    // All original helpers/actor/controlled sessions close normally before isolated fault work.
+    let (root, records, from, target, channel, safe_cursor) = close_variant(rig, setup).await;
+    let state = Arc::new(AppState::new(
+        crewd_store::Db::spawn(crewd_store::Store::open(&snapshot_path).unwrap()).unwrap(),
+    ));
+    let dbport = DbPort::new(state.clone(), snapshot_path.clone());
+    let observed=catch_setup(async {
+        let target_for_home=target.clone();
+        let human=state.collab(move|tx| {
+            let reader=crewd_collab::sessions::get(tx.conn(),&target_for_home)?;
+            let home=crewd_collab::crews::home_of(tx.conn(),&reader.crew_id)?;
+            Ok(crewd_collab::channels::ensure_human_channel(tx,&home)?.id)
+        }).await.unwrap();
+        let from_post=from.clone();let channel_post=channel.clone();
+        let row17=state.collab(move|tx|Ok(messages::post(tx,crewd_collab::Sender::Session(from_post),messages::NewPost {
+            channel_id:channel_post,text:"S42_NOTICE_REAL_SUCCESSOR_17".into(),..Default::default()
+        })?.message)).await.unwrap();
+        let before_holds=state.db.call(|s|causal::holds(s.conn(),None)).await.unwrap().unwrap();
+        let before=s42_notice_all_tables(&state).await;
+        let before_notice=s42_notice_count(&state,&human).await;
+        let mut receipts=state.hub.subscribe_collab();
+        let human_sql=human.replace('\'',"''");
+        state.db.call(move|s|s.conn().execute_batch(&format!("CREATE TEMP TRIGGER s42_notice_insert_abort BEFORE INSERT ON messages WHEN NEW.channel_id='{human_sql}' BEGIN SELECT RAISE(ABORT,'S42 exact safe human notice INSERT abort'); END;"))).await.unwrap().unwrap();
+        let failed=dbport.prepare_causal_admission(&target,Ms(crewd_store::now_ms())).await.err().map(|e|e.to_string());
+        let after_abort=s42_notice_all_tables(&state).await;
+        let abort_holds=state.db.call(|s|causal::holds(s.conn(),None)).await.unwrap().unwrap();
+        let after_notice=s42_notice_count(&state,&human).await;
+        let mut abort_receipts=Vec::new();loop {match receipts.try_recv(){Ok(f)=>abort_receipts.push(format!("{f:?}")),Err(tokio::sync::broadcast::error::TryRecvError::Empty)=>break,Err(e)=>panic!("actual notice Hub observer failed: {e}")}}
+        state.db.call(|s|s.conn().execute_batch("DROP TRIGGER s42_notice_insert_abort")).await.unwrap().unwrap();
+        let retry=dbport.prepare_causal_admission(&target,Ms(crewd_store::now_ms())).await.map_err(|e|e.to_string());
+        let retry_holds=state.db.call(|s|causal::holds(s.conn(),None)).await.unwrap().unwrap();
+        let retry_notice=s42_notice_count(&state,&human).await;
+        let retry_tables=s42_notice_all_tables(&state).await;
+        let mut retry_receipts=Vec::new();loop {match receipts.try_recv(){Ok(f)=>retry_receipts.push(format!("{f:?}")),Err(tokio::sync::broadcast::error::TryRecvError::Empty)=>break,Err(e)=>panic!("actual notice Hub observer failed: {e}")}}
+        let second=dbport.prepare_causal_admission(&target,Ms(crewd_store::now_ms())).await.map_err(|e|e.to_string());
+        let second_tables=s42_notice_all_tables(&state).await;
+        let second_notice=s42_notice_count(&state,&human).await;
+        let mut duplicate_receipts=Vec::new();loop {match receipts.try_recv(){Ok(f)=>duplicate_receipts.push(format!("{f:?}")),Err(tokio::sync::broadcast::error::TryRecvError::Empty)=>break,Err(e)=>panic!("actual notice Hub observer failed: {e}")}}
+        let cursor=dbport.cursor(&target,&channel).await.unwrap();
+        (row17,before_holds,before,failed,after_abort,abort_holds,before_notice,after_notice,
+            abort_receipts,retry,retry_holds,retry_notice,retry_tables,retry_receipts,second,second_tables,
+            second_notice,duplicate_receipts,cursor)
+    }).await;
+    drop(dbport);
+    let db = state.db.clone();
+    drop(state);
+    tokio::task::spawn_blocking(move || db.shutdown())
+        .await
+        .unwrap();
+    let (
+        row17,
+        before_holds,
+        before,
+        failed,
+        after_abort,
+        abort_holds,
+        before_notice,
+        after_notice,
+        abort_receipts,
+        retry,
+        retry_holds,
+        retry_notice,
+        retry_tables,
+        retry_receipts,
+        second,
+        second_tables,
+        second_notice,
+        duplicate_receipts,
+        cursor,
+    ) = observed.unwrap_or_else(|e| std::panic::resume_unwind(e));
+    assert_eq!(
+        before, after_abort,
+        "S42 notice INSERT failure rolls back exact hold and every durable table, including sqlite_sequence"
+    );
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|e| e.contains("S42 exact safe human notice INSERT abort")),
+        "must be genuine notice INSERT failure, got {failed:?}"
+    );
+    assert_eq!(before_holds, abort_holds);
+    assert_eq!(before_notice, after_notice);
+    assert!(
+        abort_receipts.is_empty(),
+        "failed actual Tx must not publish any collab fact: {abort_receipts:?}"
+    );
+    assert!(retry.is_ok() && second.is_ok());
+    assert_eq!(retry_holds.len(), before_holds.len() + 1);
+    let hold = retry_holds
+        .iter()
+        .find(|h| h.from == from && h.target == target)
+        .expect("actual new exact inherited chain hold");
+    assert_eq!(hold.hop, 17);
+    assert_eq!(hold.chain_id, records[0].1.as_ref().unwrap()[0].0);
+    assert_eq!(records.len(), 16);
+    assert!(records.iter().all(|(_, _, _, sent)| *sent));
+    assert_eq!(root.sender_kind, crewd_proto::SenderKind::Human);
+    assert_eq!(retry_notice, before_notice + 1);
+    assert_eq!(second_notice, retry_notice);
+    assert!(
+        !retry_receipts.is_empty(),
+        "successful real Tx publishes safe notice receipt"
+    );
+    assert_eq!(
+        retry_tables, second_tables,
+        "repeated exact preparation does not create another hold/notice"
+    );
+    assert!(duplicate_receipts.is_empty());
+    assert_eq!(cursor, safe_cursor);
+    assert!(row17.seq > safe_cursor);
+}
