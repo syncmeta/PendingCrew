@@ -33,6 +33,11 @@ pub(crate) async fn run_draining(
     stream: UnixStream,
     mut drain: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
+    let policy = match state.peer_policy.get() {
+        Some(p) => p.clone(),
+        None => Arc::new(crate::peer::PeerPolicy::new(None)?),
+    };
+    let peer = policy.accept(&stream)?;
     let (rd, mut wr) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let writer = tokio::spawn(async move {
@@ -58,6 +63,7 @@ pub(crate) async fn run_draining(
         &mut forwarder,
         &mut forward_guard,
         &mut drain,
+        &peer,
     )
     .await;
 
@@ -84,6 +90,7 @@ async fn read_loop(
     forwarder: &mut Option<JoinHandle<()>>,
     forward_guard: &mut Option<AbortOnDrop>,
     drain: &mut watch::Receiver<bool>,
+    peer: &crate::peer::ConnectionPeer,
 ) -> anyhow::Result<()> {
     let mut rd = BufReader::new(rd);
     let mut buf: Vec<u8> = Vec::new();
@@ -128,8 +135,19 @@ async fn read_loop(
         if line.trim().is_empty() {
             continue;
         }
-        let frame = match serde_json::from_str::<Request>(&line) {
+        let parsed = serde_json::from_str::<Request>(&line);
+        let denied = match parsed.as_ref() {
+            Ok(req) => peer
+                .authorize_after_enrollment(&req.method, drain)
+                .await
+                .err(),
+            Err(_) => None,
+        };
+        let frame = match parsed {
             Err(e) => parse_error(&format!("无法解析请求: {e}")),
+            Ok(req) if denied.is_some() => {
+                ServerFrame::Response(Response::err(req.id, denied.expect("checked denial")))
+            }
             Ok(req) if req.method == methods::SUBSCRIBE => {
                 let id = req.id;
                 let p = match parse_params::<SubscribeParams>(req.params)

@@ -8,6 +8,7 @@ pub mod dispatch;
 pub mod hub;
 pub mod ledger;
 pub mod orchestra;
+pub(crate) mod peer;
 pub mod token;
 pub(crate) mod wake_adapter;
 
@@ -35,6 +36,7 @@ pub struct AppState {
     pub agent: agent::AgentRuntime,
     /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
+    pub(crate) peer_policy: std::sync::OnceLock<Arc<peer::PeerPolicy>>,
     #[cfg(test)]
     test_db_write_barrier: Arc<std::sync::Mutex<Option<DbWriteBarrier>>>,
     #[cfg(test)]
@@ -51,6 +53,7 @@ impl AppState {
             causal_fence: Arc::new(causal_fence::CausalFence::default()),
             agent: agent::AgentRuntime::default(),
             orchestra: std::sync::OnceLock::new(),
+            peer_policy: std::sync::OnceLock::new(),
             #[cfg(test)]
             test_db_write_barrier: Default::default(),
             #[cfg(test)]
@@ -203,9 +206,16 @@ type ServeReady = Box<dyn FnOnce(Arc<AppState>, Option<tokio::task::AbortHandle>
 type ServeStorageClosed = Box<dyn FnOnce(PathBuf) + Send>;
 
 /// Optional orchestration. Library callers retain the no-session default.
+#[cfg(feature = "testkit")]
+pub type TestRegistryReady = Box<dyn FnOnce(Arc<ProcessRegistry>) -> std::io::Result<()> + Send>;
 #[derive(Default)]
 pub struct ServeOptions {
     pub orchestra: Option<OrchestraServe>,
+    #[cfg(feature = "testkit")]
+    pub test_registry_ready: Option<TestRegistryReady>,
+    /// Read-only test witness; not a wire method or caller authority input.
+    #[cfg(any(test, feature = "testkit"))]
+    pub test_subscriptions_ready: Option<Box<dyn FnOnce(hub::SubscriptionCreations) + Send>>,
     #[cfg(test)]
     test_ready: Option<ServeReady>,
     #[cfg(test)]
@@ -277,12 +287,35 @@ async fn serve_with_hooks_inner(
             o.helper = Some(std::env::current_exe()?);
         }
     }
+    let sock = data_dir.join("crewd.sock");
+    use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+    #[cfg(target_os = "macos")]
+    let path_capacity = 104;
+    #[cfg(not(target_os = "macos"))]
+    let path_capacity = 108;
+    let socket_bytes = sock.as_os_str().as_bytes();
+    if socket_bytes.contains(&0) {
+        return Err(anyhow::anyhow!("local socket path contains NUL"));
+    }
+    if socket_bytes
+        .len()
+        .checked_add(1)
+        .is_none_or(|n| n > path_capacity)
+    {
+        return Err(anyhow::anyhow!(
+            "local socket path exceeds platform byte limit"
+        ));
+    }
     ensure_data_dir(&data_dir)?;
     let lock = lock_data_dir(&data_dir)?;
     let _ = build_info::exe();
     let (registry, reports) = reap_orphans(&data_dir)?;
     log_reap_reports(&reports);
-    let sock = data_dir.join("crewd.sock");
+    #[cfg(feature = "testkit")]
+    if let Some(ready) = opts.test_registry_ready.take() {
+        ready(registry.clone())?;
+    }
+    let peer_policy = Arc::new(peer::PeerPolicy::new(Some(registry.clone()))?);
     let _ = std::fs::remove_file(&sock);
     if let Some(o) = &opts.orchestra {
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
@@ -311,6 +344,7 @@ async fn serve_with_hooks_inner(
     } else {
         Arc::new(AppState::new(db.clone()))
     };
+    let _ = state.peer_policy.set(peer_policy);
     let mut handle = None;
     let mut actor = None;
     let mut forwarder = None;
@@ -321,7 +355,7 @@ async fn serve_with_hooks_inner(
                 program: o.claude,
                 data_dir: data_dir.clone(),
                 helper: o.helper.expect("captured helper"),
-                registry: Some(registry),
+                registry: Some(registry.clone()),
                 extra_env: o.claude_env,
                 projects_dir: o.claude_projects_dir,
                 runtime_dir: o.runtime_dir,
@@ -365,7 +399,10 @@ async fn serve_with_hooks_inner(
     let mut exit = handle
         .as_ref()
         .map_or(no_exit, orchestra::Handle::exit_requested);
-    let listener = UnixListener::bind(&sock);
+    let listener = UnixListener::bind(&sock).and_then(|listener| {
+        std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))?;
+        Ok(listener)
+    });
     let mut fatal = None;
     let mut ended = false;
     let mut reason = "stop";
@@ -374,6 +411,10 @@ async fn serve_with_hooks_inner(
     match listener {
         Err(e) => fatal = Some(anyhow::Error::from(e)),
         Ok(listener) => {
+            #[cfg(any(test, feature = "testkit"))]
+            if let Some(ready) = opts.test_subscriptions_ready.take() {
+                ready(state.hub.subscription_creations());
+            }
             #[cfg(test)]
             if let Some(ready) = opts.test_ready.take() {
                 ready(state.clone(), abort.clone());

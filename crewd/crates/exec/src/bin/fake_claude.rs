@@ -501,6 +501,11 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+#[path = "fake_claude/s1_fixture.rs"]
+mod s1_fixture;
+#[path = "fake_claude/s1_wire_client.rs"]
+mod s1_wire_client;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let value_of = |flag: &str| {
@@ -509,6 +514,42 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
+    if let Some(dir) = value_of("--s1-stage3-wire-client") {
+        if let Err(e) = s1_wire_client::run(std::path::Path::new(&dir)) {
+            eprintln!("synthetic S1 Stage3 wire client: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if let Some(dir) = value_of("--s1-peer-intermediate") {
+        if let Err(e) = s1_fixture::run_intermediate(std::path::Path::new(&dir)) {
+            eprintln!("synthetic S1 intermediate: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if let Some(dir) = value_of("--s1-peer-orphan") {
+        if let Err(e) = s1_fixture::run_orphan(std::path::Path::new(&dir)) {
+            eprintln!("synthetic S1 orphan: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if let Some(dir) = value_of("--s1-peer-child") {
+        if let Err(e) = s1_fixture::run(std::path::Path::new(&dir), true, &args) {
+            eprintln!("synthetic S1 child: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if std::env::var("FAKE_CLAUDE_MODE").as_deref() == Ok("s1-peer") {
+        let dir = std::env::var("S1_PEER_FIXTURE_DIR").expect("owned S1 fixture directory");
+        if let Err(e) = s1_fixture::run(std::path::Path::new(&dir), false, &args) {
+            eprintln!("synthetic S1 root: {e}");
+            std::process::exit(2);
+        }
+        return;
+    }
     if let Some(dir) = value_of("--guarded-write-fixture") {
         let path = std::path::Path::new(&dir);
         if let Err(error) = guarded_write_fixture(path) {

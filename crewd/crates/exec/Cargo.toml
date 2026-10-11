@@ -17,3 +17,7 @@ uuid = { version = "1.27.0", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[features]
+# Explicit synthetic enrollment observations; absent from ordinary production builds.
+testkit = []

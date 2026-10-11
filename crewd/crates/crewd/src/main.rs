@@ -162,6 +162,17 @@ async fn run() -> anyhow::Result<()> {
                     runtime_dir: Some(runtime),
                     ..Default::default()
                 }),
+                ..Default::default()
+            };
+            #[cfg(feature = "testkit")]
+            let opts = {
+                let mut opts = opts;
+                if let Some(path) = std::env::var_os("CREWD_S1_ENROLLMENT_CONTROL_DIR") {
+                    opts.test_registry_ready = Some(Box::new(move |registry| {
+                        registry.test_configure_enrollment_control(PathBuf::from(path))
+                    }));
+                }
+                opts
             };
             crewd_server::serve_with(dir, opts, shutdown_signal()).await?;
         }

@@ -260,6 +260,9 @@ pub fn apply_with(
 pub struct ProcessRegistry {
     path: PathBuf,
     entries: Mutex<BTreeMap<String, ProcessIdentity>>,
+    authority: Mutex<AuthoritySnapshot>,
+    #[cfg(feature = "testkit")]
+    test_enrollment_control: Mutex<Option<PathBuf>>,
 }
 
 impl ProcessRegistry {
@@ -283,13 +286,32 @@ impl ProcessRegistry {
         Ok(Self {
             path: path.to_path_buf(),
             entries: Mutex::new(entries),
+            authority: Mutex::new(AuthoritySnapshot::default()),
+            #[cfg(feature = "testkit")]
+            test_enrollment_control: Mutex::new(None),
         })
     }
 
     pub fn record(&self, session_id: &str, identity: ProcessIdentity) -> io::Result<()> {
+        // Runtime restrictive provenance is published before any fallible orphan-file IO.
+        self.restrict_birth(session_id, identity.clone())?;
         let mut entries = self.entries.lock().expect("登记表锁中毒");
         entries.insert(session_id.to_string(), identity);
         self.persist(&entries)
+    }
+
+    /// Actual kernel birth only; this restrictive history is never removed by forget.
+    pub fn restrict_birth(&self, session_id: &str, identity: ProcessIdentity) -> io::Result<()> {
+        let mut authority = self
+            .authority
+            .lock()
+            .map_err(|_| io::Error::other("authority registry unavailable"))?;
+        authority.revision = authority
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("registry revision exhausted"))?;
+        authority.spawned.push((session_id.to_string(), identity));
+        Ok(())
     }
 
     pub fn forget(&self, session_id: &str) -> io::Result<()> {
@@ -726,4 +748,275 @@ mod tests {
         assert!(msg.contains("挪"), "要告诉人怎么办：{msg}");
         assert!(msg.contains("不相干的进程"), "要说清为什么拒绝启动：{msg}");
     }
+}
+
+/// Runtime-only restrictive kernel births, published before orphan-file persistence.
+/// Orphan file contents do not confer request authority; retired spawned births
+/// remain restricted for this daemon lifetime so forget does not elevate helpers.
+#[derive(Clone, Debug, Default)]
+pub struct AuthoritySnapshot {
+    pub revision: u64,
+    pub enrolling: u32,
+    pub spawned: Vec<(String, ProcessIdentity)>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParentProbe {
+    Found {
+        identity: ProcessIdentity,
+        parent: i32,
+    },
+    Missing,
+    Unreadable(i32),
+}
+#[cfg(target_os = "macos")]
+pub fn parent(pid: i32) -> ParentProbe {
+    if pid <= 0 {
+        return ParentProbe::Missing;
+    }
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if n != size {
+        let code = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        return if code == libc::ESRCH {
+            ParentProbe::Missing
+        } else {
+            ParentProbe::Unreadable(code)
+        };
+    }
+    let info = unsafe { info.assume_init() };
+    ParentProbe::Found {
+        identity: ProcessIdentity {
+            pid,
+            pgid: info.pbi_pgid as i32,
+            start_time: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+            boot_id: String::new(),
+            command: String::new(),
+        },
+        parent: info.pbi_ppid as i32,
+    }
+}
+#[cfg(target_os = "linux")]
+pub fn parent(pid: i32) -> ParentProbe {
+    if pid <= 0 {
+        return ParentProbe::Missing;
+    }
+    let body = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(v) => v,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return ParentProbe::Missing,
+        Err(e) => return ParentProbe::Unreadable(e.raw_os_error().unwrap_or(0)),
+    };
+    let Some(close) = body.rfind(')') else {
+        return ParentProbe::Unreadable(0);
+    };
+    let fields: Vec<_> = body[close + 1..].split_whitespace().collect();
+    let Some(ppid) = fields.get(1).and_then(|v| v.parse::<i32>().ok()) else {
+        return ParentProbe::Unreadable(0);
+    };
+    let Some((pgid, start_time, command)) = parse_proc_stat(&body) else {
+        return ParentProbe::Unreadable(0);
+    };
+    let boot_id = match std::fs::read_to_string("/proc/sys/kernel/random/boot_id") {
+        Ok(v) => v.trim().to_string(),
+        Err(e) => return ParentProbe::Unreadable(e.raw_os_error().unwrap_or(0)),
+    };
+    ParentProbe::Found {
+        identity: ProcessIdentity {
+            pid,
+            pgid,
+            start_time,
+            boot_id,
+            command,
+        },
+        parent: ppid,
+    }
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn parent(_: i32) -> ParentProbe {
+    ParentProbe::Unreadable(libc::ENOSYS)
+}
+impl ProcessRegistry {
+    pub fn authority_snapshot(&self) -> io::Result<AuthoritySnapshot> {
+        self.authority
+            .lock()
+            .map(|s| s.clone())
+            .map_err(|_| io::Error::other("authority registry unavailable"))
+    }
+}
+
+pub struct Enrollment {
+    registry: std::sync::Arc<ProcessRegistry>,
+    // A spawned child is an obligation until successful registration or raw OS terminal proof.
+    owned_unresolved: bool,
+}
+impl Enrollment {
+    /// Call immediately after spawn succeeds, before the first await.
+    pub(crate) fn arm_owned(&mut self) {
+        self.owned_unresolved = true;
+    }
+    pub(crate) fn settle(&mut self) {
+        self.owned_unresolved = false;
+    }
+}
+impl ProcessRegistry {
+    pub fn begin_enrollment(self: &std::sync::Arc<Self>) -> io::Result<Enrollment> {
+        let mut s = self
+            .authority
+            .lock()
+            .map_err(|_| io::Error::other("authority registry unavailable"))?;
+        let enrolling = s
+            .enrolling
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("enrollment count exhausted"))?;
+        let revision = s
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("registry revision exhausted"))?;
+        s.enrolling = enrolling;
+        s.revision = revision;
+        Ok(Enrollment {
+            registry: self.clone(),
+            owned_unresolved: false,
+        })
+    }
+}
+impl Drop for Enrollment {
+    fn drop(&mut self) {
+        // Cancellation, unreadable birth, wait error and timeout cannot release this barrier.
+        // It is deliberately retained for this daemon lifetime; time/count alone is no proof.
+        if self.owned_unresolved {
+            return;
+        }
+        if let Ok(mut s) = self.registry.authority.lock() {
+            s.enrolling = s.enrolling.saturating_sub(1);
+            // If exhausted retain enrolling>0 so no ordinary request can become Human.
+            if let Some(next) = s.revision.checked_add(1) {
+                s.revision = next;
+            } else {
+                s.enrolling = 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod s1_enrollment_controls {
+    use super::*;
+    #[test]
+    fn s1_unresolved_owned_enrollment_drop_remains_restrictive() {
+        let d = tempfile::tempdir().unwrap();
+        let r = std::sync::Arc::new(ProcessRegistry::load(&d.path().join("r.json")).unwrap());
+        let mut guard = r.begin_enrollment().unwrap();
+        guard.arm_owned();
+        drop(guard);
+        assert_eq!(r.authority_snapshot().unwrap().enrolling, 1);
+        let ordinary = r.begin_enrollment().unwrap();
+        drop(ordinary);
+        assert_eq!(
+            r.authority_snapshot().unwrap().enrolling,
+            1,
+            "other settled enrollment cannot release unresolved obligation"
+        );
+    }
+    #[test]
+    fn s1_explicit_settlement_preserves_original_balanced_enrollment() {
+        let d = tempfile::tempdir().unwrap();
+        let r = std::sync::Arc::new(ProcessRegistry::load(&d.path().join("r.json")).unwrap());
+        let mut guard = r.begin_enrollment().unwrap();
+        guard.arm_owned();
+        guard.settle();
+        drop(guard);
+        assert_eq!(r.authority_snapshot().unwrap().enrolling, 0);
+        drop(r.begin_enrollment().unwrap());
+        assert_eq!(r.authority_snapshot().unwrap().enrolling, 0);
+    }
+}
+
+// Exists only in explicitly feature-enabled synthetic builds.
+#[cfg(feature = "testkit")]
+impl ProcessRegistry {
+    pub fn test_configure_enrollment_control(&self, path: PathBuf) -> io::Result<()> {
+        let path = std::fs::canonicalize(path)?;
+        if !path.is_dir() {
+            return Err(io::Error::other(
+                "synthetic control must be an existing directory",
+            ));
+        }
+        *self
+            .test_enrollment_control
+            .lock()
+            .map_err(|_| io::Error::other("synthetic control unavailable"))? = Some(path.clone());
+        test_write_receipt(
+            &path.join("configured.json"),
+            &serde_json::json!({"daemonPid":std::process::id()}),
+        )
+    }
+    // True driver Found branch before record, with the actual Enrollment still held.
+    pub(crate) fn test_pause_before_record(&self, identity: &ProcessIdentity) -> io::Result<()> {
+        let path = self
+            .test_enrollment_control
+            .lock()
+            .map_err(|_| io::Error::other("synthetic control unavailable"))?
+            .clone();
+        let Some(path) = path else { return Ok(()) };
+        let snapshot = self.authority_snapshot()?;
+        test_write_receipt(
+            &path.join("held-birth.json"),
+            &serde_json::json!({
+                "identity":identity,"enrolling":snapshot.enrolling,"revision":snapshot.revision,"daemonPid":std::process::id()
+            }),
+        )?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !path.join("release").is_file() {
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "synthetic enrollment release missing",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    }
+    // Passive parsed-request receipt: no changes to roots, enrollment, role, token or allowlist.
+    pub fn test_observe_enrollment_pending(&self, peer: &ProcessIdentity, method: &str) {
+        let Ok(control) = self.test_enrollment_control.lock() else {
+            return;
+        };
+        let Some(path) = control.as_ref() else { return };
+        // Method comes from the wire: encode it rather than allow path traversal.
+        let tag = method
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let _ = test_write_receipt(
+            &path.join(format!("pending-{}-{tag}.json", peer.pid)),
+            &serde_json::json!({"identity":peer,"method":method,"currentParent":match parent(peer.pid) {
+                ParentProbe::Found { identity, parent } if identity.pid==peer.pid && identity.start_time==peer.start_time && identity.boot_id==peer.boot_id => Some(parent),
+                _ => None,
+            }}),
+        );
+    }
+}
+#[cfg(feature = "testkit")]
+fn test_write_receipt(path: &Path, value: &serde_json::Value) -> io::Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
+    let tmp = path.with_extension("receipt.tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    io::Write::write_all(&mut f, &bytes)?;
+    f.sync_all()?;
+    std::fs::rename(tmp, path)
 }

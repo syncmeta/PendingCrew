@@ -618,6 +618,12 @@ async fn launch(
         cols: config.screen.cols as u16,
         lines: config.screen.lines as u16,
     };
+    let mut enrollment = config
+        .registry
+        .as_ref()
+        .map(|r| r.begin_enrollment())
+        .transpose()
+        .map_err(StartError::Registry)?;
     let proc = spawn_pty(&spec).map_err(|source| {
         let underlying = format!("{}: {source}", start.program.display());
         let health = launch_failure(
@@ -628,6 +634,10 @@ async fn launch(
         .expect("SpawnFailed 一定有说明");
         StartError::Spawn { health, source }
     })?;
+    // No await between actual spawn and owning the unresolved enrollment obligation.
+    if let Some(guard) = enrollment.as_mut() {
+        guard.arm_owned();
+    }
     let master = Arc::new(proc.master);
     let mut child = proc.child;
     if let Some(registry) = &config.registry {
@@ -636,12 +646,18 @@ async fn launch(
             // 只登记自成进程组的（setsid 后 pgid == pid）：回收时按组杀，组号不对会杀错人。
             let r = match probe(pid as i32) {
                 ProbeResult::Found(identity) if identity.pgid == pid as i32 => {
+                    #[cfg(feature = "testkit")]
+                    registry.test_pause_before_record(&identity)?;
                     registry.record(&session_id, identity)
                 }
-                ProbeResult::Found(identity) => Err(io::Error::other(format!(
-                    "刚起的进程 {pid} 不是自己进程组的组长（pgid {}），不登记",
-                    identity.pgid
-                ))),
+                ProbeResult::Found(identity) => {
+                    let pgid = identity.pgid;
+                    // Mismatched PGID prevents safe group registration, not birth restriction.
+                    registry.restrict_birth(&session_id, identity)?;
+                    Err(io::Error::other(format!(
+                        "刚起的进程 {pid} 不是自己进程组的组长（pgid {pgid}），不登记"
+                    )))
+                }
                 other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
             };
             if r.is_err() {
@@ -653,13 +669,22 @@ async fn launch(
         .await;
         if let Err(e) = recorded {
             kill_group(proc.pid);
-            let e = match reap_killed(&mut child, &master, REAP_LIMIT).await {
-                Ok(_) => e,
+            let e = match reap_failed_launch(&mut child, &master, REAP_LIMIT).await {
+                Ok(_) => {
+                    if let Some(guard) = enrollment.as_mut() {
+                        guard.settle();
+                    }
+                    e
+                }
                 Err(reap) => io::Error::other(format!("{e}；杀掉刚起的进程后{reap}")),
             };
             return Err(StartError::Registry(e));
         }
     }
+    if let Some(guard) = enrollment.as_mut() {
+        guard.settle();
+    }
+    drop(enrollment); // successful birth registration precedes external fresh classification
     let auth_task = config.claude_projects_dir.clone().map(|projects_dir| {
         let probe = AuthProbe {
             session_id: agent.id().to_string(),
@@ -805,6 +830,29 @@ async fn reap_killed(
                     format!("{}ms 内没能收尸", limit.as_millis()),
                 ));
             }
+        }
+    }
+}
+
+// Failed first launch needs a genuine terminal receipt: wait errors must not decode to Code(-1).
+// Keep established running-session event/decode semantics unchanged.
+async fn reap_failed_launch(
+    child: &mut tokio::process::Child,
+    master: &PtyMaster,
+    limit: Duration,
+) -> io::Result<std::process::ExitStatus> {
+    let deadline = tokio::time::Instant::now() + limit;
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut reading = true;
+    loop {
+        tokio::select! {
+            status = child.wait() => return status,
+            r = master.read(&mut buf), if reading => {
+                if !matches!(r, Ok(n) if n > 0) { reading = false; }
+            }
+            _ = tokio::time::sleep_until(deadline) => return Err(io::Error::new(
+                io::ErrorKind::TimedOut, format!("{}ms 内没能确认刚起进程收尸", limit.as_millis())
+            )),
         }
     }
 }
@@ -1533,10 +1581,18 @@ mod output_drain_tests {
         async fn receipt(&self, name: &str) {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
-                    assert!(
-                        !self.dir.path().join("fixture.error").exists(),
-                        "synthetic fixture error while waiting for {name}"
-                    );
+                    let error = self.dir.path().join("fixture.error");
+                    if error.exists() {
+                        let detail = std::fs::read_to_string(&error)
+                            .unwrap_or_else(|e| format!("error marker read failed: {e}"));
+                        let protocol = std::fs::read_to_string(self.dir.path().join("protocol.log"))
+                            .unwrap_or_else(|e| format!("protocol read failed: {e}"));
+                        let lines: Vec<_> = protocol.lines().collect();
+                        let tail = lines[lines.len().saturating_sub(16)..].join("\n");
+                        panic!(
+                            "synthetic fixture error while waiting for {name}: {detail}; protocol tail:\n{tail}"
+                        );
+                    }
                     if self.dir.path().join(name).exists() {
                         break;
                     }
@@ -1601,11 +1657,10 @@ mod output_drain_tests {
         }
 
         async fn release(&self, accepted_before_capture: usize) {
-            std::fs::write(
-                self.dir.path().join("release-input"),
-                accepted_before_capture.to_string(),
-            )
-            .unwrap();
+            // Publish only the complete count: exists() is the child's readiness witness.
+            let temporary = self.dir.path().join("release-input.tmp");
+            std::fs::write(&temporary, accepted_before_capture.to_string()).unwrap();
+            std::fs::rename(&temporary, self.dir.path().join("release-input")).unwrap();
             self.receipt("filler-drained").await;
         }
 

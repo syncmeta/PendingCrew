@@ -19,8 +19,16 @@ serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "signal", "io-std", "io-util", "net", "sync", "time"] }
 
 [dev-dependencies]
+# Direct dependency for exact owned PID signals; cached workspace version.
+libc = "0.2.190"
+# Read-only observation of the disposable live fixture; version already in the workspace lock.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 crewd-wake = { path = "../wake" }
 crewd-collab = { path = "../collab" }
 crewd-server = { path = "../server", features = ["testkit"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["process", "macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
+
+[features]
+# Owned synthetic process observations; no caller authority override.
+testkit = ["crewd-server/testkit", "crewd-exec/testkit"]

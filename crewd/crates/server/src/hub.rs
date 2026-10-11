@@ -8,10 +8,22 @@ use tokio::sync::broadcast;
 /// spec §22.5 的 `CollabEvent`：类型定义在 crewd-collab（裁定 3），这里是它在服务层的名字。
 pub use crewd_collab::Change as CollabEvent;
 
+#[cfg(any(test, feature = "testkit"))]
+#[derive(Clone)]
+pub struct SubscriptionCreations(std::sync::Arc<std::sync::atomic::AtomicU64>);
+#[cfg(any(test, feature = "testkit"))]
+impl SubscriptionCreations {
+    pub fn count(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 #[derive(Clone)]
 pub struct Hub {
     tx: broadcast::Sender<Event>,
     collab: broadcast::Sender<CollabEvent>,
+    #[cfg(any(test, feature = "testkit"))]
+    subscription_creations: SubscriptionCreations,
 }
 
 impl Hub {
@@ -19,6 +31,8 @@ impl Hub {
         Self {
             tx: broadcast::channel(1024).0,
             collab: broadcast::channel(4096).0,
+            #[cfg(any(test, feature = "testkit"))]
+            subscription_creations: SubscriptionCreations(Default::default()),
         }
     }
     pub fn publish(&self, e: Event) {
@@ -26,7 +40,16 @@ impl Hub {
         let _ = self.tx.send(e);
     }
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.tx.subscribe()
+        let receiver = self.tx.subscribe();
+        #[cfg(any(test, feature = "testkit"))]
+        self.subscription_creations
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        receiver
+    }
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn subscription_creations(&self) -> SubscriptionCreations {
+        self.subscription_creations.clone()
     }
     pub fn subscribe_collab(&self) -> broadcast::Receiver<CollabEvent> {
         self.collab.subscribe()
