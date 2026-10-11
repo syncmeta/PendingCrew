@@ -6388,13 +6388,42 @@ mod s42_task_fence_db_windows {
         frame: u64,
     }
     impl ChildProtocol {
+        fn release_input(&self) {
+            // The child polls existence before parsing the command. Publish only
+            // complete bytes: create/truncate of the visible file is not atomic.
+            let pending = self.dir.join("release-input.pending");
+            std::fs::write(&pending, "0").unwrap();
+            std::fs::rename(pending, self.dir.join("release-input")).unwrap();
+        }
+        fn diagnostic(&self, name: &str) -> String {
+            use std::io::Read;
+            const CAP: u64 = 64 * 1024;
+            let file = match std::fs::File::open(self.dir.join(name)) {
+                Ok(file) => file,
+                Err(error) => return format!("read {name}: {error}"),
+            };
+            let mut bytes = Vec::new();
+            if let Err(error) = file.take(CAP + 1).read_to_end(&mut bytes) {
+                return format!("read {name}: {error}");
+            }
+            let truncated = bytes.len() > CAP as usize;
+            bytes.truncate(CAP as usize);
+            let mut text = String::from_utf8_lossy(&bytes).into_owned();
+            if truncated {
+                text.push_str("\n[diagnostic truncated at 64KiB]");
+            }
+            text
+        }
         async fn receipt(&self, name: &str) {
             timeout(LIMIT, async {
                 loop {
-                    assert!(
-                        !self.dir.join("fixture.error").exists(),
-                        "fixture error: {name}"
-                    );
+                    if self.dir.join("fixture.error").exists() {
+                        let error = self.diagnostic("fixture.error");
+                        let protocol = self.diagnostic("protocol.log");
+                        panic!(
+                            "fixture error: {name}; actual error={error:?}; protocol={protocol:?}"
+                        );
+                    }
                     if self.dir.join(name).exists() {
                         break;
                     }
@@ -6739,7 +6768,7 @@ mod s42_task_fence_db_windows {
                     binding.as_ref(),
                 )
                 .unwrap();
-            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.release_input();
             protocol.receipt("filler-drained").await;
             let queued_capture = std::fs::read(protocol.dir.join("capture.bin")).unwrap();
             // Preserve every actual success, including a counterfactual premature broadcast.
@@ -7163,7 +7192,7 @@ mod s42_task_fence_db_windows {
                 .handle
                 .send_bound(text1.clone(), UntrustedContext::default(), b1.as_ref())
                 .unwrap();
-            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.release_input();
             protocol.receipt("filler-drained").await;
             let (e1, capture1) =
                 gdl_physical_emit(&task, &mut protocol, &mut emitted, &text1, &[]).await;
@@ -7347,7 +7376,7 @@ mod s42_task_fence_db_windows {
                 .handle
                 .send_bound(text.clone(), UntrustedContext::default(), binding.as_ref())
                 .unwrap();
-            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.release_input();
             protocol.receipt("filler-drained").await;
             let (emission, wanted) =
                 gdl_physical_emit(&task, &mut protocol, &mut emitted, &text, &[]).await;
@@ -7499,7 +7528,7 @@ mod s42_task_fence_db_windows {
                 .handle
                 .send_bound(text.clone(), UntrustedContext::default(), binder.as_ref())
                 .unwrap();
-            std::fs::write(protocol.dir.join("release-input"), "0").unwrap();
+            protocol.release_input();
             protocol.receipt("filler-drained").await;
             let (emission, wanted) =
                 gdl_physical_emit(&task, &mut protocol, &mut emitted, &text, &[]).await;
