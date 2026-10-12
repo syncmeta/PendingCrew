@@ -60,6 +60,7 @@
 - Mac app、iOS app：纯客户端，经同一 API。Mac 本机走 Unix socket，iOS 走配对后的加密直连。
 
 ### 3.3 构建顺序（全 Rust，无过渡桥）**[人 已定 2026-10-05]**
+**2026-10-12 交付顺序更新**：先交付 Codex + 本机 Mac 的可共事骨架，用新版 PendingCrew 开发自身。Claude 优先兼容 ACP，不再以原始 TUI 完整体验阻塞首版；工作账本、移动端与远程能力分阶段接续。当前决定与首版验收范围见 §27，下列里程碑保留为原工程分解。
 不做「crewd ↔ Swift 执行器」的桥（白写、双常驻进程）。crewd 独立开发到主路径对等后一次性切换；期间现有 Swift 版照用、只修 bug。
 - **M1 地基**：Rust workspace、SQLite 存储、旧 JSON 只读导入、客户端 API（Unix socket）+ 契约 schema。
 - **M2 执行器**：PTY（rustix-openpty 手写 + tokio，选型见 §18）+ alacritty_terminal 无头终端（屏幕文本、快照、对话框识别）、claude 启动参数与 hooks、codex app-server 客户端、孤儿回收、会话恢复（--resume）。
@@ -1097,3 +1098,39 @@ M5b（切换之后）只需换掉 `Arbiter` 的实现（Jev + 别名层，见 §
 | N1 自己的测试 `collab/src/crews.rs:1840` 与 `:1879` 调 `wakes::mark_inflight` | M3c 把它换成 `claim`（**合并后编不过**） | 改成 `wakes::claim(tx, &[id]).map(\|_\| ())` |
 | `hibernate.rs:73` 与 wakes「坏行 → `Store(Invalid)`」那几行 | collab 的文字扫描测试连 `Store(Invalid(format!(…)))` 里的中文也报 | 写英文，或进 `LOG_ONLY` 白名单（同 `restart.rs:28` 的做法） |
 | `dispatch.rs` 里 M3c 加的方法若构造 `CollabError` 字符串 | 变体装 `Refusal` | 用码（`collab::refusal::Code`）；`dispatch::collab_err` 会带上 `data.refusal` |
+
+## 27. Codex 优先的本机首版与质量成本改进
+
+2026-10-12 人类决定：主要使用 Codex，尽快用上新版 PendingCrew，并用 PendingCrew 开发 PendingCrew。Claude Code 优先研究通过 ACP 兼容；开发过程持续总结同时提高质量、效率并降低 token 消耗的方法，沉淀到产品设计。具体接线与验收顺序见 [本机首版实施范围](../plans/2026-10-12-codex-first-self-development.md)。
+
+### 27.1 首版范围
+
+首版交付 Codex app-server 执行器、现有协作与持久编排、本机 Mac 客户端：能创建机组和 session，发任务、看消息与工具进展、处理 runner 真实权限请求、停止/打断/恢复，并能在隔离工程目录完成一次实现、审查和验证闭环。人的权限答复只回传 runner，不新增 PendingCrew 审批策略。已有停止、投递、恢复与数据安全契约继续有效。
+
+首版不依赖完整自由表/本体、Jev 自动派活、行政自动化、iPhone/iPad、跨网配对、Linux 安装更新或 Claude 原始 TUI attach。它们保留为后续工程；先提供可持久化的任务摘要、负责人、阻断、下一步与成果引用，避免为提前上线再造一套与工作账本冲突的对象模型。已接受的基础模块不重写，当前在途修补先收束完整单元。
+
+### 27.2 Claude 经 ACP 接入并保留交互式 PTY
+
+**人类 2026-10-12 补充约束**：Claude 经 ACP 也必须运行交互式 Claude Code PTY。crewd 作为 ACP client，外部适配器作为 agent 子进程，适配器内部持有真实 PTY；复用同一 Executor 生命周期、会话登记、通信权限和编排层。优先核查 [claude-code-cli-acp](https://github.com/moabualruz/claude-code-cli-acp) 和 [claude-agent-tui](https://github.com/zeo-workspace/claude-agent-tui) 的源码与兼容范围。基于 Claude Agent SDK 执行回合的 claude-agent-acp 不符合该约束，不作为选定方案；适配器不得为凑齐能力静默切到 SDK 或 `claude -p` 执行模型回合。账户行为按实际版本验证，不依赖第三方计费宣传。
+
+按 [ACP 能力协商](https://agentclientprotocol.com/protocol/v1/overview) 验证 initialize、session/new、prompt/update、MCP 配置、permission、cancel 与退出。load/resume、模型配置、usage、工具终端与子 session 只在双方明确支持时启用。cancel 的通知不等于进程退出，也不等于已经停止外部副作用；会话重放不是再次投递。权限请求交人并回传原始选项，未知/过期请求不默许。PTY 为执行方式必需；Mac 是否同时提供原始 TUI attach 是独立 UI 能力，不从 ACP 的工具终端功能推断。旧 §16 拒绝 Claude ACP 的限制由本节替代。保留已经完成的 PTY 实现与测试，按现有安全契约验收桥接能力。
+
+Codex 首版继续直接使用官方 app-server；另核查 [codex-acp](https://github.com/agentclientprotocol/codex-acp) 的映射作为通用 ACP 路线参考，是否替换按迁移成本和能力对等决定。协议桥接不应新增模型调用；ACP 负责客户端控制与事件，MCP 负责工具/资源，A2A 是后续跨服务 agent 任务协议，三者不混作同一接口。
+
+### 27.3 产品中的质量与 token 成本反馈
+
+把当前 PendingCrew 工程作为首个持续案例，按完整工作单元记录：任务/阶段/角色、模型与版本、原始 usage 字段、缓存读写、产物与验收范围、失败及返工原因、经过时间。缺失 usage 显示 unknown；重试、缓存复用和会话累计快照去重，禁止把累计快照反复求和。共享协调开销独立记录，不强行分摊到某个实现模块；费用仅在已知对应价格与计费规则时计算。
+
+每个工作单元显示短当前状态，原始日志、历史讨论和成果保留为按需引用。机械验证交脚本，返回完整覆盖清单、异常和可追溯证据；模型负责测试有效性、状态机、权限、迁移和竞态等语义判断。任务负责人仍自主标记完成，证据与成本视图不变成产品强制审批或完成凭据闸。
+
+工程流程采用定向回归、冻结单元完整门禁和受影响跨层组合验证。独立审查覆盖真实需求与代码质量；修补后审增量和影响面。源码、依赖、工具链、feature、配置、测试/生成物或运行条件变化时，相关旧证据失效；相同代码字节的 Git 提交不自动要求重跑全部同一验证。原始证据保存，关键失败、恢复和安全边界不能只靠计数/哈希判为正确。
+
+每次流程改进记录假设、适用范围、比较基准、token/时间变化、实际抓出的缺陷、漏检与后续回归。以缺陷发现、返工、上线故障与完成时间共同判断质量，测试数量和更少 token 都不能单独证明改进。小范围验证有效后推广，发现质量退化就回退；不强加僵硬 token 上限或未完成自动停止规则。
+
+### 27.4 token 消耗审计与接线要求
+
+[2026-10-12 协议与 token 审计](../../internal/2026-10-12-protocol-and-token-audit.md) 区分现有 Swift 源码、crewd 整合源码和未实施设计；它不是线上浪费量测。首版上下文要求：身份/权限等关键事实完整保留，工作摘要与消息正文不在多个通道重复注入；启动/恢复/压缩是明确的上下文重建边界。消息摘要必须携带原始 seq 范围和可读回的引用，不能用摘要推进未宣告消息或遗漏人工答复与真实阻断。
+
+唤醒正文与 hook 应共用安全的降噪分类；无关进度/ack 可摘要，人的输入、派活、实际阻断和直接回复保留语义。DM 与收听的现行默认语义不在本次审计中静默改变；先记录每次唤醒的源消息、理由、合并批次、因果链、上下文规模和实际 usage，再验证无动作 ack 等降噪策略。默认无全局启动上限的既有决定保留；显示扇出与成本，避免“权限范围广”自动变成“上下文与叫醒范围广”。
+
+Jev 与工作跟进接线采用确定性规则优先、有效状态变化触发、同负责人合并、已有待办复用和无效重复检查合并。尚未接入的轮询/每成员判断不能被描述为当前模型调用。Codex 压缩先与上游策略对照，采集压缩次数、成本及信息恢复质量后校准，不能靠降低阈值或频繁压缩声称省 token。
