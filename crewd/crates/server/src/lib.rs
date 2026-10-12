@@ -85,7 +85,7 @@ impl AppState {
         #[cfg(test)]
         let barrier = self.test_db_write_barrier.clone();
         self.db
-            .call(move |s| {
+            .call_result(move |s| {
                 #[cfg(test)]
                 if let Some(b) = barrier.lock().unwrap().take() {
                     let _ = b.entered.send(());
@@ -115,7 +115,7 @@ impl AppState {
         let hub = self.hub.clone();
         let context = crewd_collab::TxContext::new(self.causal_fence.clone());
         self.db
-            .call(move |s| {
+            .call_result(move |s| {
                 let (v, _snapshot) = s.snapshot_then(&what, check, |s| {
                     let now = crewd_store::now_ms();
                     let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;

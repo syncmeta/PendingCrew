@@ -130,6 +130,18 @@ impl CollabError {
     }
 }
 
+impl crewd_store::db_health::DbFaultSource for CollabError {
+    fn db_fault_kind(&self) -> Option<crewd_store::db_health::DbFaultKind> {
+        match self {
+            CollabError::Store(error) => {
+                crewd_store::db_health::DbFaultSource::db_fault_kind(error)
+            }
+            // Work and rule refusals are not evidence of a DB/storage fault.
+            _ => None,
+        }
+    }
+}
+
 impl From<rusqlite::Error> for CollabError {
     fn from(e: rusqlite::Error) -> Self {
         // 经 StoreError 的 From 归类：磁盘满 / I/O / 损坏 / 只读 / 打不开不落成普通 SQL 错（S26）。

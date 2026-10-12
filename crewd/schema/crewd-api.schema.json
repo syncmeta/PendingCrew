@@ -1224,6 +1224,90 @@
       ],
       "type": "object"
     },
+    "DaemonHealth": {
+      "description": "Historical latest DB failure; absence does not assert that the daemon is healthy.",
+      "properties": {
+        "lastDbError": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DbFaultView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DbFaultKindView": {
+      "enum": [
+        "db_closed",
+        "db_job_panicked",
+        "sql",
+        "storage",
+        "integrity",
+        "unclassified"
+      ],
+      "type": "string"
+    },
+    "DbFaultStageView": {
+      "enum": [
+        "enqueue",
+        "receive",
+        "job",
+        "finish"
+      ],
+      "type": "string"
+    },
+    "DbFaultView": {
+      "description": "Payload-free projection of the store-owned fault snapshot. No SQL, paths or messages.",
+      "properties": {
+        "atMs": {
+          "description": "Actual observation time, Unix epoch milliseconds; successful jobs do not erase it.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/DbFaultKindView"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stage": {
+          "$ref": "#/$defs/DbFaultStageView"
+        },
+        "storageKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DbStorageKindView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stage",
+        "kind",
+        "atMs",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "DbStorageKindView": {
+      "enum": [
+        "disk_full",
+        "io",
+        "corrupt",
+        "read_only",
+        "cant_open"
+      ],
+      "type": "string"
+    },
     "DecisionKindView": {
       "enum": [
         "terminal",
@@ -1591,6 +1675,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "daemonHealth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonHealth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "S4: optional DB-independent fault history; old replies and no-fault replies omit it."
         },
         "minApiVersion": {
           "default": 0,

@@ -635,6 +635,7 @@ mod tests {
                 exe_still_on_disk: true,
             },
             capabilities: vec!["orchestra".into()],
+            daemon_health: None,
         };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["minApiVersion"], MIN_API_VERSION);
@@ -644,6 +645,22 @@ mod tests {
             serde_json::from_value(json!({"server":"crewd","version":"0.1.0","apiVersion":3}))
                 .unwrap();
         assert_eq!((old.min_api_version, old.capabilities.len()), (0, 0));
+        assert!(old.daemon_health.is_none());
+        assert!(
+            v.get("daemonHealth").is_none(),
+            "empty additive field stays omitted"
+        );
+        let mut future = v.clone();
+        future["daemonHealth"] = json!({"lastDbError":{
+            "stage":"future_stage", "kind":"future_kind", "storageKind":"future_storage",
+            "atMs":123, "sequence":7, "futureField":true
+        },"futureField":true});
+        let decoded: Hello = serde_json::from_value(future).unwrap();
+        let fault = decoded.daemon_health.unwrap().last_db_error.unwrap();
+        assert_eq!(fault.stage, DbFaultStageView::Unknown);
+        assert_eq!(fault.kind, DbFaultKindView::Unknown);
+        assert_eq!(fault.storage_kind, Some(DbStorageKindView::Unknown));
+        assert_eq!((fault.at_ms, fault.sequence), (123, 7));
         const { assert!(MIN_API_VERSION <= API_VERSION) };
     }
 

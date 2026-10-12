@@ -17,6 +17,69 @@ pub struct Hello {
     /// 这个 crewd 此刻开着的能力（客户端据此显示 / 隐藏功能）。没有会话管理（没配 agent 执行器）时是空的。
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// S4: optional DB-independent fault history; old replies and no-fault replies omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_health: Option<DaemonHealth>,
+}
+
+/// Historical latest DB failure; absence does not assert that the daemon is healthy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonHealth {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_db_error: Option<DbFaultView>,
+}
+
+/// Payload-free projection of the store-owned fault snapshot. No SQL, paths or messages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DbFaultView {
+    pub stage: DbFaultStageView,
+    pub kind: DbFaultKindView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_kind: Option<DbStorageKindView>,
+    /// Actual observation time, Unix epoch milliseconds; successful jobs do not erase it.
+    pub at_ms: i64,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DbFaultStageView {
+    Enqueue,
+    Receive,
+    Job,
+    Finish,
+    #[serde(other)]
+    #[schemars(skip)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DbFaultKindView {
+    DbClosed,
+    DbJobPanicked,
+    Sql,
+    Storage,
+    Integrity,
+    Unclassified,
+    #[serde(other)]
+    #[schemars(skip)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DbStorageKindView {
+    DiskFull,
+    Io,
+    Corrupt,
+    ReadOnly,
+    CantOpen,
+    #[serde(other)]
+    #[schemars(skip)]
+    Unknown,
 }
 
 /// crewd 二进制的构建身份（U1 / S6）。

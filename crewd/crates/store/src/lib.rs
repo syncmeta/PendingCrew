@@ -4,6 +4,7 @@ pub mod backup;
 pub mod channels;
 pub mod crews;
 pub mod db;
+pub mod db_health;
 pub mod fsutil;
 pub mod messages;
 pub mod schema;

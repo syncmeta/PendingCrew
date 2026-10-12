@@ -17,6 +17,7 @@ enum Msg {
 pub struct Db {
     tx: mpsc::Sender<Msg>,
     database_thread_id: std::thread::ThreadId,
+    health: crate::db_health::DbHealth,
     /// 线程句柄由所有克隆共享；`shutdown` 取走它来 join。
     thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -25,6 +26,8 @@ impl Db {
     /// 把 `store` 交给库线程；之后只能经 `call` 用它。
     pub fn spawn(store: Store) -> std::io::Result<Db> {
         let (tx, rx) = mpsc::channel::<Msg>();
+        let health = crate::db_health::DbHealth::default();
+        let thread_health = health.clone();
         let handle = std::thread::Builder::new()
             .name("crewd-db".into())
             .spawn(move || {
@@ -34,6 +37,7 @@ impl Db {
                 }
                 // 收尾（S16）：optimize + 把 WAL 折回主库并截断，之后连接随 store 一起关。
                 if let Err(e) = store.finish() {
+                    thread_health.finish_error(&e);
                     eprintln!("crewd: 关库收尾没做完：{e}");
                 }
             })?;
@@ -41,8 +45,32 @@ impl Db {
         Ok(Db {
             tx,
             database_thread_id,
+            health,
             thread: Arc::new(Mutex::new(Some(handle))),
         })
+    }
+
+    /// Independent last fault snapshot; never queries or queues work on SQLite.
+    pub fn health(&self) -> crate::db_health::DbHealth {
+        self.health.clone()
+    }
+
+    /// Observe typed nested DB results in their actual FIFO job, preserving result and Tx semantics.
+    pub async fn call_result<T, E, F>(&self, f: F) -> Result<std::result::Result<T, E>>
+    where
+        T: Send + 'static,
+        E: crate::db_health::DbFaultSource + Send + 'static,
+        F: FnOnce(&mut Store) -> std::result::Result<T, E> + Send + 'static,
+    {
+        let health = self.health.clone();
+        self.call(move |s| {
+            let result = f(s);
+            if let Err(error) = &result {
+                health.observe(crate::db_health::DbFaultStage::Job, error);
+            }
+            result
+        })
+        .await
     }
 
     /// 关库：已入队的任务先跑完，然后线程退出并被 join（库连接随之关闭）。其它克隆此后的 `call` 得
@@ -54,6 +82,23 @@ impl Db {
         if let Some(h) = handle {
             let _ = h.join();
         }
+    }
+
+    /// Blocking counterpart: same FIFO/reentry contract, explicit typed nested-result observation.
+    pub fn call_result_blocking<T, E, F>(&self, f: F) -> Result<std::result::Result<T, E>>
+    where
+        T: Send + 'static,
+        E: crate::db_health::DbFaultSource + Send + 'static,
+        F: FnOnce(&mut Store) -> std::result::Result<T, E> + Send + 'static,
+    {
+        let health = self.health.clone();
+        self.call_blocking(move |s| {
+            let result = f(s);
+            if let Err(error) = &result {
+                health.observe(crate::db_health::DbFaultStage::Job, error);
+            }
+            result
+        })
     }
 
     /// Run a synchronous driver's ledger job on the same FIFO database thread.
@@ -71,14 +116,31 @@ impl Db {
             ));
         }
         let (done, wait) = mpsc::channel();
+        let health = self.health.clone();
         let job: Job = Box::new(move |s| {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(s)));
-            let _ = done.send(r.map_err(|_| StoreError::DbJobPanicked));
+            let _ = done.send(r.map_err(|_| {
+                health.record(
+                    crate::db_health::DbFaultStage::Job,
+                    crate::db_health::DbFaultKind::JobPanicked,
+                );
+                StoreError::DbJobPanicked
+            }));
         });
-        self.tx
-            .send(Msg::Job(job))
-            .map_err(|_| StoreError::DbClosed)?;
-        wait.recv().map_err(|_| StoreError::DbClosed)?
+        self.tx.send(Msg::Job(job)).map_err(|_| {
+            self.health.record(
+                crate::db_health::DbFaultStage::Enqueue,
+                crate::db_health::DbFaultKind::Closed,
+            );
+            StoreError::DbClosed
+        })?;
+        wait.recv().map_err(|_| {
+            self.health.record(
+                crate::db_health::DbFaultStage::Receive,
+                crate::db_health::DbFaultKind::Closed,
+            );
+            StoreError::DbClosed
+        })?
     }
 
     /// 在库线程上跑 `f`（与其它调用串行）。`call` 是惰性的：任务在返回的 future
@@ -89,14 +151,31 @@ impl Db {
         F: FnOnce(&mut Store) -> T + Send + 'static,
     {
         let (done, wait) = tokio::sync::oneshot::channel::<Result<T>>();
+        let health = self.health.clone();
         let job: Job = Box::new(move |s| {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(s)));
-            let _ = done.send(r.map_err(|_| StoreError::DbJobPanicked));
+            let _ = done.send(r.map_err(|_| {
+                health.record(
+                    crate::db_health::DbFaultStage::Job,
+                    crate::db_health::DbFaultKind::JobPanicked,
+                );
+                StoreError::DbJobPanicked
+            }));
         });
-        self.tx
-            .send(Msg::Job(job))
-            .map_err(|_| StoreError::DbClosed)?;
-        wait.await.map_err(|_| StoreError::DbClosed)?
+        self.tx.send(Msg::Job(job)).map_err(|_| {
+            self.health.record(
+                crate::db_health::DbFaultStage::Enqueue,
+                crate::db_health::DbFaultKind::Closed,
+            );
+            StoreError::DbClosed
+        })?;
+        wait.await.map_err(|_| {
+            self.health.record(
+                crate::db_health::DbFaultStage::Receive,
+                crate::db_health::DbFaultKind::Closed,
+            );
+            StoreError::DbClosed
+        })?
     }
 }
 
@@ -386,5 +465,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    // Append inside store::db::tests. Genuine owned transaction blocks WAL checkpoint.
+    #[tokio::test]
+    async fn s4_h1_real_finish_error_keeps_original_phase_and_single_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crewd.db");
+        let db = Db::spawn(Store::open(&path).unwrap()).unwrap();
+        let health = db.health();
+        let setup = db
+            .call(|s| {
+                s.conn().busy_timeout(Duration::ZERO)?;
+                s.conn().execute_batch(
+                    "CREATE TABLE s4_finish(v INTEGER); INSERT INTO s4_finish VALUES(1)",
+                )
+            })
+            .await;
+        // A real SQL BEGIN deliberately remains open on the actual connection through finish().
+        // Unlike a Rust Transaction guard it is not rolled back on returning this job.
+        let held = db
+            .call(|s| {
+                s.conn()
+                    .execute_batch("BEGIN IMMEDIATE; INSERT INTO s4_finish VALUES(2)")
+            })
+            .await;
+        let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        let observed = health.snapshot();
+        // Connection close rolls back the deliberately unfinished SQL transaction.
+        let reopened = rusqlite::Connection::open(&path);
+        let committed = reopened.as_ref().ok().map(|r| {
+            r.query_row("SELECT SUM(v) FROM s4_finish", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        });
+        drop(reopened);
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "owned DB thread joined before semantic oracle"
+        );
+        assert!(
+            setup.is_ok_and(|r| r.is_ok()) && held.is_ok_and(|r| r.is_ok()),
+            "genuine held-transaction setup"
+        );
+        assert_eq!(
+            committed.unwrap().unwrap(),
+            1,
+            "connection close preserves committed data and rolls back held write"
+        );
+        let fault = observed.expect("actual held transaction makes finish checkpoint fail");
+        assert_eq!(
+            fault.sequence, 1,
+            "one actual finish SQL failure records once"
+        );
+        assert_eq!(
+            fault.stage,
+            crate::db_health::DbFaultStage::Finish,
+            "finish phase never overwritten by cause observation"
+        );
+        assert_eq!(
+            fault.kind,
+            crate::db_health::DbFaultKind::Sql,
+            "real finish SQL cause retained separately from stage"
+        );
     }
 }

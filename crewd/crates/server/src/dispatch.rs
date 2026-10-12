@@ -112,6 +112,45 @@ async fn read<T: Serialize + Send + 'static>(
     to_value(v)
 }
 
+/// Only read the independent in-memory history. Never queue a DB job to report its failure.
+fn current_db_health(state: &AppState) -> Option<DaemonHealth> {
+    use crewd_store::db_health::{DbFaultKind, DbFaultStage};
+    state.db.health().snapshot().map(|fault| {
+        let stage = match fault.stage {
+            DbFaultStage::Enqueue => DbFaultStageView::Enqueue,
+            DbFaultStage::Receive => DbFaultStageView::Receive,
+            DbFaultStage::Job => DbFaultStageView::Job,
+            DbFaultStage::Finish => DbFaultStageView::Finish,
+        };
+        let (kind, storage_kind) = match fault.kind {
+            DbFaultKind::Closed => (DbFaultKindView::DbClosed, None),
+            DbFaultKind::JobPanicked => (DbFaultKindView::DbJobPanicked, None),
+            DbFaultKind::Sql => (DbFaultKindView::Sql, None),
+            DbFaultKind::Integrity => (DbFaultKindView::Integrity, None),
+            DbFaultKind::Unclassified => (DbFaultKindView::Unclassified, None),
+            DbFaultKind::Storage(kind) => {
+                let kind = match kind {
+                    crewd_store::StorageKind::DiskFull => DbStorageKindView::DiskFull,
+                    crewd_store::StorageKind::Io => DbStorageKindView::Io,
+                    crewd_store::StorageKind::Corrupt => DbStorageKindView::Corrupt,
+                    crewd_store::StorageKind::ReadOnly => DbStorageKindView::ReadOnly,
+                    crewd_store::StorageKind::CantOpen => DbStorageKindView::CantOpen,
+                };
+                (DbFaultKindView::Storage, Some(kind))
+            }
+        };
+        DaemonHealth {
+            last_db_error: Some(DbFaultView {
+                stage,
+                kind,
+                storage_kind,
+                at_ms: fault.at_ms,
+                sequence: fault.sequence,
+            }),
+        }
+    })
+}
+
 async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
     let p = req.params;
     match req.method.as_str() {
@@ -154,6 +193,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 min_api_version: MIN_API_VERSION,
                 build: crate::build_info::build_info(),
                 capabilities,
+                daemon_health: current_db_health(state),
             })
         }
         methods::CREW_LIST => {
@@ -579,4 +619,5 @@ mod tests {
             e.message
         );
     }
+    mod s4_health;
 }
