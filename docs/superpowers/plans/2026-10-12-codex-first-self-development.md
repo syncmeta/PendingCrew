@@ -1,0 +1,94 @@
+# PendingCrew Codex 本机首版与自身开发实施范围
+
+先交付能在 Mac 上用 Codex 共事的新版 PendingCrew，再在新版内推进完整工作模型、调度与其他端。2026-10-12 用户已决定这一顺序，并明确 Claude 经 ACP 也必须使用交互式 PTY，持续将提高质量与降低 token 消耗的经验纳入产品。本文落实 spec §29；它不代替当前在途单元的完整验收标准。
+
+**产品定位（2026-10-12 人类补充）**：PendingCrew 主要面向个人，目标是一个“专业可靠，又了解我”的私人团队。本体、记忆、知识与表服务于个人交代工作、团队协作和持续学习，不以企业化管理为默认目标。Codex 本机首版先可用；这些后续能力由新版 PendingCrew 来开发，不增加 C1 至 C3 的前置工作。
+
+## 当前接线缺口
+
+### 2026-10-12 推进记录
+
+- 按人类授权，降噪改动单独移植到 main，`d3cb5b23` 已推送并核实远端；该基线通过格式、lint 和 1115 项离线测试。整合树另外 207 个提交未随降噪带入 main，共享目录中既有未跟踪 ACP 资料保留。
+- Jev 多后端仅保留[讨论方案](../specs/2026-10-12-decision-provider-options.md)，不继续实现。
+- Codex 首个接线单元保存为独立候选 `codex/codex-orchestra-20261012@36f2ac81`：新增独立 Executor 适配器，传递世界观、模型/effort、MCP、持久 thread、上下文、因果绑定和停止/续跑；成功投递复用已有观察函数，在 app-server 确认接受后、广播事件前登记。回归先在未接观察器时失败，再验证修复及超时不计成功；候选源码通过格式、lint 和 2320 项离线测试（8 项活测试未运行）。此处不是生产或真实 Codex 验收。
+- 首版候选已推进为 `codex/codex-orchestra-20261012@eeb24dca`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建；合成窗口已验证新建、发消息、原生审批/答复、恢复与停止。用户随后授权独立首版真实任务，现有 Codex 登录已完成一次隔离自我开发回归，群内报告与红/绿测试已核查。未安装、未迁移日常数据，也尚未将候选代码纳入共享 main。本机运行产物对应 bec60f86，eeb24dca 仅增加回归测试。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
+- 下一步按这个顺序串行推进：核对并纳入已接受后端整合输入；完成 Codex 生产事件与待请求链；接通 Mac 本机候选并验证恢复路径。完整自由表、Jev 自动调度、其他端与 Claude ACP 不抢占这条路径。
+
+最初只读核查的基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元；当时共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`。这是历史核查快照，不能把两个源码状态混作同一构建证据；本次进展见上面的推进记录。
+
+- M2a 八项终端核心任务和 M2b 十二项 Claude 会话驱动任务已有交付；后续安全按键、持久 human-stop 与编排接线已有范围受限的接受记录。Mac 终端消费与安装态完整验收仍有缺口。
+- 最初基线的 `serve` 只登记 Claude；候选现已登记独立 Codex Executor。共享 main 与候选仍是不同源码状态；不能把候选验证写成 main 或已安装应用的运行事实。
+- 最初基线对人工 Approval/requestUserInput 使用兜底拒绝；候选现已保留原始请求并提供精确答复入口。尚不支持的通用 MCP 表单有明确拒绝与通知；真实账户、窗口实际操作及日常迁移继续单独验收。
+- 候选新增 crewd 原生 Mac 入口和独立数据空间，原始 Swift/Mac 日常入口与旧数据保持现状。上述范围区分源码、合成验收与实际运行；真实 Codex 的首个隔离任务及窗口操作现已验收，安装和旧数据迁移仍未完成。
+
+## 按依赖推进的四个单元
+
+### C1 Codex 进入生产编排
+
+复用现有 start_codex 与 SessionHandle，新增 Codex Executor 并登记 `codex`。对齐现有 Executor 契约：世界观和 MCP 参数、登记先于就绪、持久 thread ID、send_bound 的因果来源与成功投递观察、Item/TurnEnded/Profile、打断、停止与进程收尾、续跑失败的诚实状态。不得把 Send 入队或正文写入当作 Delivered，也不得编造传输不支持的逐消息回执。
+
+先用 fake_codex 和真实 Core/DbPort/serve 接线验证新建、消息、上下文、工具通信、停止后重启不复活、恢复同一 thread、迟到事件和来源绑定；再跑受影响的共享执行器、游标预留、因果链和生命周期回归。真实 Codex 验收是后续独立阶段。
+
+### C2 Codex 待请求与 Mac 操作路径
+
+保留 runner 请求 ID、session/turn 身份和原始选项，统一呈现权限、工具提问及支持的 elicitation。人答复只能回到对应仍有效请求；断线、cancel、turn 终结、超时与重复答复有明确状态。保持 runner 的真实权限边界，不自动批准，也不将未知请求永久悬挂。
+
+Mac 先实现机组/session 导航、消息与结构化工具进展、发任务、待请求、停止/打断/恢复、连接健康和后端版本提示。通过 crewd API/事件流访问数据，沿用单一写者；连接丢事件须能重新同步。首版不把 Claude 屏幕/按键分支作为前置条件。
+
+### C3 安全候选与自身开发验收
+
+完成当前在途单元，串行整合已接受输入，生成组合 schema，再构建本机候选。迁移先用合成数据/明确授权副本验证快照、幂等、回滚、缺库与身份检查。授权后才切换真实应用与数据；隔离开发实例不能与日常实例同时写同一数据根。
+
+首个真实验收任务使用小而实际有价值的改动：人在新版发任务，Codex 调用机组 MCP、实现改动，独立审查与验证，回报产物和剩余边界。验收同时覆盖人工权限答复、停止/恢复、客户端重连、后台失败的可见性和不重复投递。保留旧应用与数据恢复路径；一次成功任务不等于全部工程或所有故障场景完成。
+
+### C4 工作与成本视图逐步进入产品
+
+先让已有任务、计划、消息和产物有稳定引用，展示负责人、当前结论、阻断、下一步和证据链接；后续接统一工作账本与对象模型，不建临时第二本权威账。
+
+每次开发单元采集 provider 原始 token 字段，区分新输入、缓存创建、缓存读取、输出、reasoning 与未知值。分别记录实现、审查、验证解释、协调和返工。以“完成并接受的单元”对比成本，不以会话忙闲或测试总数衡量产出。
+
+第一批改进实验：机器生成完整证据索引与异常摘要；短当前状态配历史按需读取；修后独立审查增量；按影响范围选择定向/跨层测试；相同证据一次保存多处引用。每个实验同时检查缺陷捕获、漏检、返工和持续时间；成功经验进入 spec 与产品上下文管理，失败经验保留适用边界。独立审查、原始日志、最终完整门禁和敏感边界验证继续保留。
+
+## Claude ACP 的并行兼容范围
+
+先核查 [claude-code-cli-acp](https://github.com/moabualruz/claude-code-cli-acp) 与 [claude-agent-tui](https://github.com/zeo-workspace/claude-agent-tui)，固定通过核查的发布版本，本地注册为 `acp:<adapter-id>`。crewd 做通用 ACP client，适配器必须在真实 PTY 中运行交互式 Claude CLI；不能以基于 SDK 的 claude-agent-acp 或 `claude -p` 静默替代实际执行。PTY 桥本身不增加模型调用，结构化内容优先取 Claude hooks/transcript，屏幕判据用于确实缺乏事件的交互。
+
+用假 ACP agent 验证 JSON-RPC 双向请求、能力协商、MCP、流式更新、permission 回传、cancel/迟到完成、外部进程断开和恢复。loadSession 不支持就显示能力缺失，不假报已恢复；重放消息不得再次触发投递/唤醒。usage、终端、配置与子 session 能力分别协商，不能因“支持 ACP”就推断全支持。
+
+选定版本的源码/协议审计和离线契约通过后，再做实际 Claude CLI/账户/工作区验证。必须复测人工输入保护、迟到回执、stop/resume、退出后的子进程收尾与版本漂移；ACP 名称本身不能替代这些验收。PTY 必须保留，原始 TUI attach 的客户端展示另按需要实现。ACP 不阻塞 C1 至 C3，也不要求先完成所有通用扩展。
+
+Codex 优先沿用现有 app-server 驱动，并核查 [codex-acp](https://github.com/agentclientprotocol/codex-acp) 对 permission、usage、模型/effort/fast、MCP 与子 session 的映射；是否改为 ACP 根据能力与迁移成本决定，不因统一协议就重写已接受基础。更详细的分层与成本风险见 [协议与 token 审计](../../internal/2026-10-12-protocol-and-token-audit.md)。
+
+## 首版与后续工程的边界
+
+完整自由表、本体、自动 Jev 调度、行政巡检、移动端、跨网配对、Linux 安装更新继续保留，但不阻塞本机 Codex 首版。基本权限隔离、消息可靠性、人工停止、恢复语义、数据库耐久性和明确错误提示属于首版必需质量。
+
+文档中的发布顺序决定已经生效，功能仍按上面单元实现和验收。main 合并、push、正式发布、安装、运行实例和真实数据切换分别记录授权与证据，不从“尽快用上”推断所有外部动作均已完成或获批。
+
+## 新版可用后的私人团队研究候选
+
+以下为文档与部分源码调研，不是选型定案或运行验收；先用新版开展小范围比较，不提前实现新记忆后端。来源核查日期为 2026-10-12，实际试用应固定版本。
+
+- **Engram**：单 Go 程序、SQLite/FTS5、MCP，agent 主动保存精选经验，先搜短结果再读全文。优先比较跨 runner 的轻量持久记忆。其 Codex hooks/runtime 身份接入不能直接当成 PendingCrew app-server 已兼容；先核对裸 MCP 与身份契约。[架构](https://github.com/Gentleman-Programming/engram/blob/main/docs/ARCHITECTURE.md)
+- **QMD**：本地全文、语义检索与重排，适合作为资料查找组件；先关键词，确有需要时再用本地模型。默认嵌入模型偏英语，中文/中英混合资料需与多语言模型比较，记录下载大小、内存、延迟和索引更新行为。[项目](https://github.com/tobi/qmd)
+- **Basic Memory**：Markdown 笔记与关系，适合用户查看、修订、迁移自己的知识；与 Engram 比较写入体验和读回质量，不同时启用两套重复摘要/注入链。[项目](https://github.com/basicmachines-co/basic-memory)
+- **OpenViking**：重点借鉴摘要/概览/原文三级加载、个人/成员记忆和资料/技能的统一入口；完整运行需要 embedding 与 VLM 等处理，不从分层读取推断整体省 token。[项目](https://github.com/volcengine/OpenViking)
+- **Hindsight、Mem0、claude-mem**：保留自动提取/反思路线，先测新增模型调用能否换来更少纠正、返工和历史重读，不默认逐消息或逐工具调用整理记忆。[Hindsight](https://github.com/vectorize-io/hindsight)、[Mem0](https://github.com/mem0ai/mem0)、[claude-mem](https://github.com/thedotmack/claude-mem)
+- **Grist、Graphiti、Cognee、Letta、OpenSPG/KAG 等**：按出现的实际需求借鉴自建表、关系与时间、代码知识和成员持续学习；完整平台与图数据库不成为私人团队或 Codex 首版的必要依赖。
+
+私人团队首先需要记住用户明确偏好、理解正在做的工作、积累可复用经验，并在依据不足或方案有问题时诚实指出。个人偏好、工作现状、经验教训和推测分别标明；新决定替代旧决定，原始来源可读回，用户可查看、修订和删除。知识来源与验证状态是辅助信息，不变成负责人标完成的门禁，也不新增产品审批。可复用的工作流程逐步成为 skill。
+
+试验至少覆盖：明确偏好跨会话保持、旧决定被替代、中文/中英混合检索、多个成员同时更新、无关项目不被误带入，以及删除后的检索与同步副本处理。比较原生记忆基线与新增组件，记录正确/错误回忆、需要用户重复解释与纠正的次数、完成质量、返工、总 token、索引/摘要/检索耗时。检索找到了相似文字不代表记忆正确；了解用户不等于迎合用户。
+
+## 通用 agent 通信优先，厂商内部协作延期
+
+2026-10-12 用户明确补充：先不做 Codex 内部通信，先以通用通信为主，预留不同厂商 agent 之间的协作。此前对原生子 agent 的研究只是资料，不进入当前实施范围；不把 spawn/message/wait 映射加入首版前置。
+
+- PendingCrew 的 session ID 是成员身份，crew/channel/message ID、回复关系、提问、投递记录、停止和恢复属于 crewd 的通用契约；runner 的 thread/turn ID 只保存在执行器绑定及原始证据中，不能替代团队成员身份。
+- 成员通过现有 crew MCP 发帖、提问和读取团队消息。接收由通用唤醒/投递链按 session 路由；每种适配器只转换自己的输入、权限请求、进展和结束事件。消息层不能要求双方同厂商或共享同一厂商代理树。
+- 沿用现有来源、因果绑定、去重、投递观察和故障恢复规则，不新建第二本通信账。不把入队、写入、runner 接受和工作完成合成一个成功状态；能力不支持须明确返回，不能模拟厂商回执。
+- 后续 Claude ACP/PTY 和其他厂商仍接这条公共链。协议适配与厂商原生临时子 agent 的管理分别演进；目前不额外引入通信协议或模型中转服务。
+
+候选已补同一 crew 下假 Claude/PTy 与假 Codex/app-server 的实际驱动混合验收：通用 message.post 按指定 session 投递，未指定成员不被唤醒，接收者的投递记录收敛，客户端断开重连后消息不重复、两种执行器不重复提交，停止后自有进程登记清空。Codex/Claude 的七个集成回归通过，固定 Rust 1.94.0 格式和 lint 通过；注入重复消息的临时坏例失败，原始测试恢复后通过。此项证明混合执行器的通用接收与路由；消息来源为测试客户端，不能声称已经完成两个真实厂商 agent 经 MCP 双向对话的验收。日志见 `/private/tmp/pcw-mixed-executor-{replay-red,restored-green,clippy-final,final-check}.log`。共享夹具原有无效默认更新语句在固定工具链 lint 中报错，已移除并复验；初次失败日志 `pcw-mixed-executor-clippy.log` 保留。
+
+首版下一项仍优先验证后台失败/重启后的可见状态与恢复，不扩展记忆、Jev 或厂商内部通信。已完成的真实任务和窗口验收记录见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
