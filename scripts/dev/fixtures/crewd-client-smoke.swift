@@ -16,6 +16,11 @@ import Foundation
         let created = await workspace.perform("crew.create",.object(["title":.string("Swift synthetic client"),"workingDirectory":.string(root.deletingLastPathComponent().appendingPathComponent("work").path)]))
         precondition(created)
         precondition(!workspace.crewID.isEmpty && workspace.crewID != "pendingcrew-chief")
+        for _ in 0..<100 {
+            if !workspace.channelID.isEmpty { break }
+            try await Task.sleep(for:.milliseconds(20))
+        }
+        precondition(!workspace.channelID.isEmpty, "channel.list summaries must provide selectable channels")
         let started = await workspace.perform("session.start",.object(["crewId":.string(workspace.crewID),"role":.string("captain"),"executor":.string("codex"),"brief":.string("SWIFT_NATIVE_REQUEST"),"isolation":.bool(false)]))
         precondition(started)
         precondition(!workspace.sessionID.isEmpty)
@@ -35,13 +40,25 @@ import Foundation
         do { _=try await client.call("session.answer",.object(["sessionId":id,"fingerprint":approval["fingerprint"],"choice":.number(0)])); fatalError("stale reply accepted") } catch {}
         let submitted=try await client.call("session.respondRunnerRequest",.object(["sessionId":id,"fingerprint":question["fingerprint"],"response":.object(["answers":.object(["task":.object(["answers":.array([.string("SYNTHETIC_TASK")])])])])]))
         precondition(submitted["cleared"] == .bool(true))
+        let channel = CrewdValue.string(workspace.channelID)
+        let posted = await workspace.perform("message.post", .object(["channelId":channel,"text":.string("SYNTHETIC_CHAT_MESSAGE"),"mentions":.array([.object(["kind":.string("session"),"targetId":id])])]))
+        precondition(posted)
+        let nextApproval = try await request("item/commandExecution/requestApproval")
+        precondition(nextApproval["fingerprint"] != approval["fingerprint"])
+        _ = try await client.call("session.answer",.object(["sessionId":id,"fingerprint":nextApproval["fingerprint"],"choice":.number(0)]))
+        let nextQuestion = try await request("item/tool/requestUserInput")
+        _ = try await client.call("session.respondRunnerRequest",.object(["sessionId":id,"fingerprint":nextQuestion["fingerprint"],"response":.object(["answers":.object(["task":.object(["answers":.array([.string("SYNTHETIC_TASK")])])])])]))
+        let messages = try await client.call("message.list",.object(["channelId":channel]))
+        precondition(messages.array.contains(where: {$0["text"].string == "SYNTHETIC_CHAT_MESSAGE"}))
         _=try await client.call("session.stop",.object(["sessionId":id,"reason":.string("synthetic Swift probe complete")]))
         precondition(events.contains("session.changed"))
         // A reconnect only resubscribes and reads. It never repeats the approval.
-        try await client.connect(path:root.appendingPathComponent("crewd.sock").path)
+        await workspace.connect()
+        precondition(client.connected)
         _=try await client.call("crew.list")
+        FileHandle.standardError.write(Data("stage: hibernate after message and reconnect\n".utf8))
         _=try await client.call("crewd.hibernate")
         client.disconnect()
-        print("PASS: native Swift/Unix NDJSON, events, approval, free input, stale reply, reconnect")
+        print("PASS: native Swift/Unix NDJSON, channels, message wake, events, approval, free input, stale reply, reconnect")
     }
 }

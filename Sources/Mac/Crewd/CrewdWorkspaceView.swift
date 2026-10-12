@@ -112,7 +112,7 @@ struct CrewdWorkspaceView: View {
                 }
             }.disabled(workspace.busy)
             if !workspace.sessionID.isEmpty {
-                Label(workspace.inspection["runnerRequest"] != .null ? "等待你的答复" : workspace.inspection["live"]["working"] == .bool(true) ? "正在工作" : workspace.inspection["live"]["running"] == .bool(true) ? "等待下一步" : "会话已停止", systemImage: workspace.inspection["live"]["working"] == .bool(true) ? "gearshape" : "circle")
+                Label(workspace.inspection["runnerRequest"] != .null ? "等待你的答复" : workspace.inspection["live"]["working"] == .bool(true) ? "正在工作" : workspace.inspection["live"]["running"] == .bool(true) ? "等待下一步" : "会话尚未运行", systemImage: workspace.inspection["live"]["working"] == .bool(true) ? "gearshape" : "circle")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let row = workspace.sessions.first(where: {$0["id"].string == workspace.sessionID}) {
@@ -222,7 +222,7 @@ private struct CrewdHumanRequestView: View {
                     send(method: "session.respondRunnerRequest", extra: ["response": response])
                 }.disabled(workspace.busy || request["params"]["questions"].array.contains(where: { (answers[$0["id"].string ?? ""] ?? "").isEmpty }))
             } else {
-                Text(decision["summary"].string ?? "请确认当前请求").textSelection(.enabled)
+                Text(decision["summary"].string ?? "请确认当前请求").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 ForEach(decision["options"].array.indices, id: \.self) { i in
                     Button(decision["options"].array[i].string ?? "选项") { send(method: "session.answer", extra: ["choice": .number(Double(i))]) }.disabled(workspace.busy)
                 }

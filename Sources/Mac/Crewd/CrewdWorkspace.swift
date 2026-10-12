@@ -147,7 +147,7 @@ final class CrewdWorkspace: ObservableObject {
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
         guard current == generation, selected == selection, crewID == crew else { again = true; return }
-        sessions = newSessions.array; channels = newChannels.array
+        sessions = newSessions.array; channels = newChannels.array.map { $0["channel"] }
         if !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = channels.first(where: {$0["kind"].string == "human"})?["id"].string ?? channels.first?["id"].string ?? "" }
         let session = sessionID, channel = channelID
