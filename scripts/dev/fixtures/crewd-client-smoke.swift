@@ -41,21 +41,54 @@ import Foundation
         let submitted=try await client.call("session.respondRunnerRequest",.object(["sessionId":id,"fingerprint":question["fingerprint"],"response":.object(["answers":.object(["task":.object(["answers":.array([.string("SYNTHETIC_TASK")])])])])]))
         precondition(submitted["cleared"] == .bool(true))
         let channel = CrewdValue.string(workspace.channelID)
-        let posted = await workspace.perform("message.post", .object(["channelId":channel,"text":.string("SYNTHETIC_CHAT_MESSAGE"),"mentions":.array([.object(["kind":.string("session"),"targetId":id])])]))
+        let marker = "SYNTHETIC_CHAT_MESSAGE_" + UUID().uuidString
+        let posted = await workspace.perform("message.post", .object(["channelId":channel,"text":.string(marker),"mentions":.array([.object(["kind":.string("session"),"targetId":id])])]))
         precondition(posted)
         let nextApproval = try await request("item/commandExecution/requestApproval")
         precondition(nextApproval["fingerprint"] != approval["fingerprint"])
         _ = try await client.call("session.answer",.object(["sessionId":id,"fingerprint":nextApproval["fingerprint"],"choice":.number(0)]))
         let nextQuestion = try await request("item/tool/requestUserInput")
         _ = try await client.call("session.respondRunnerRequest",.object(["sessionId":id,"fingerprint":nextQuestion["fingerprint"],"response":.object(["answers":.object(["task":.object(["answers":.array([.string("SYNTHETIC_TASK")])])])])]))
-        let messages = try await client.call("message.list",.object(["channelId":channel]))
-        precondition(messages.array.contains(where: {$0["text"].string == "SYNTHETIC_CHAT_MESSAGE"}))
+        // Keep the runner alive and idle: stopping it first would hide a replayed wake.
+        var idle = false
+        for _ in 0..<100 {
+            let view = try await client.call("session.inspect", .object(["sessionId":id]))
+            if view["live"]["running"] == .bool(true), view["live"]["working"] == .bool(false),
+               view["screen"].string?.contains("GOT: ") == true,
+               view["screen"].string?.contains(marker) == true {
+                idle = true; break
+            }
+            try await Task.sleep(for:.milliseconds(30))
+        }
+        precondition(idle, "message turn must finish before reconnect")
+        func turnStarts() throws -> [CrewdValue] {
+            let log = try String(contentsOfFile:CommandLine.arguments[2], encoding:.utf8)
+            return try log.split(separator:"\n").map { line in
+                try JSONDecoder().decode(CrewdValue.self, from:Data(line.utf8))
+            }.filter { $0["method"].string == "turn/start" }
+        }
+        func assertSingleMessage() async throws {
+            let messages = try await client.call("message.list", .object(["channelId":channel]))
+            precondition(messages.array.filter { $0["text"].string == marker }.count == 1,
+                         "reconnect must not replay the posted message")
+        }
+        try await assertSingleMessage()
+        let turnsBefore = try turnStarts()
+        precondition(turnsBefore.count == 2, "probe must exercise the initial and message turns")
+        client.disconnect()
+        precondition(!client.connected)
+        await workspace.connect()
+        precondition(client.connected && workspace.error == nil)
+        // Observe asynchronous wakes too; a replay starts a turn and blocks on approval.
+        for _ in 0..<50 {
+            try await assertSingleMessage()
+            let turnsAfter = try turnStarts()
+            precondition(turnsAfter == turnsBefore, "reconnect must not start another runner turn")
+            try await Task.sleep(for:.milliseconds(20))
+        }
+        print("PASS: reconnect retained one marked message and \(turnsBefore.count) runner turns")
         _=try await client.call("session.stop",.object(["sessionId":id,"reason":.string("synthetic Swift probe complete")]))
         precondition(events.contains("session.changed"))
-        // A reconnect only resubscribes and reads. It never repeats the approval.
-        await workspace.connect()
-        precondition(client.connected)
-        _=try await client.call("crew.list")
         FileHandle.standardError.write(Data("stage: hibernate after message and reconnect\n".utf8))
         _=try await client.call("crewd.hibernate")
         client.disconnect()

@@ -6,7 +6,8 @@ target=${CARGO_TARGET_DIR:-$root/crewd/target}
 (cd "$root/crewd" && cargo build --locked -p crewd -p crewd-exec --bins)
 fixture=$(mktemp -d /private/tmp/pcw-swift-client.XXXXXX)
 mkdir -p "$fixture/home" "$fixture/work" "$fixture/cache" "$fixture/data"
-xcrun swiftc -parse-as-library "$root/Sources/Mac/Crewd/CrewdClient.swift" \
+echo "Full synthetic logs: $fixture"
+xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library "$root/Sources/Mac/Crewd/CrewdClient.swift" \
     "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" "$root/scripts/dev/fixtures/crewd-client-smoke.swift" -o "$fixture/client-test"
 python3 - "$target" "$fixture" <<'PY'
 import os, pathlib, subprocess, sys, time
@@ -25,7 +26,7 @@ with open(fixture/'server.log','w') as log:
             if (fixture/'data/crewd.sock').exists(): break
             if server.poll() is not None: raise RuntimeError('synthetic server exited')
             time.sleep(.05)
-        subprocess.run([str(fixture/'client-test'),str(fixture/'data')],env=env,check=True,timeout=60)
+        subprocess.run([str(fixture/'client-test'),str(fixture/'data'),str(fixture/'rpc.log')],env=env,check=True,timeout=60)
         server.wait(timeout=20)
         if server.returncode: raise RuntimeError('synthetic server exit '+str(server.returncode))
     finally:
@@ -33,5 +34,4 @@ with open(fixture/'server.log','w') as log:
             server.terminate()
             try: server.wait(timeout=10)
             except subprocess.TimeoutExpired: server.kill(); server.wait()
-print('Full synthetic logs: '+str(fixture))
 PY
