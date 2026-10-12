@@ -4,7 +4,15 @@
 
 ## 当前接线缺口
 
-只读基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元。共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`，不能把两个源码状态混作同一构建证据。
+### 2026-10-12 推进记录
+
+- 按人类授权，降噪改动单独移植到 main，`d3cb5b23` 已推送并核实远端；该基线通过格式、lint 和 1115 项离线测试。整合树另外 207 个提交未随降噪带入 main，共享目录中既有未跟踪 ACP 资料保留。
+- Jev 多后端仅保留[讨论方案](../specs/2026-10-12-decision-provider-options.md)，不继续实现。
+- Codex 首个接线单元保存为独立候选 `codex/codex-orchestra-20261012@36f2ac81`：新增独立 Executor 适配器，传递世界观、模型/effort、MCP、持久 thread、上下文、因果绑定和停止/续跑；成功投递复用已有观察函数，在 app-server 确认接受后、广播事件前登记。回归先在未接观察器时失败，再验证修复及超时不计成功；候选源码通过格式、lint 和 2320 项离线测试（8 项活测试未运行）。此处不是生产或真实 Codex 验收。
+- 生产 `serve` 仍不登记 Codex，C1 尚未整体完成：先补 Item/TurnEnded/Profile/Notice 的消费与真实 Core/DbPort/serve 验收，再完成 C2 的人工待请求与 Mac 客户端。不能用执行器测试通过代替新版应用可用。
+- 下一步按这个顺序串行推进：核对并纳入已接受后端整合输入；完成 Codex 生产事件与待请求链；接通 Mac 本机候选并验证恢复路径。完整自由表、Jev 自动调度、其他端与 Claude ACP 不抢占这条路径。
+
+最初只读核查的基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元；当时共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`。这是历史核查快照，不能把两个源码状态混作同一构建证据；本次进展见上面的推进记录。
 
 - M2a 八项终端核心任务和 M2b 十二项 Claude 会话驱动任务已有交付；后续安全按键、持久 human-stop 与编排接线已有范围受限的接受记录。Mac 终端消费与安装态完整验收仍有缺口。
 - `crewd/crates/exec/src/codex` 已有 app-server 驱动；`server/src/lib.rs` 的生产 Executors 登记当前只有 `claude`，`orchestra/exec_claude.rs` 是现有生产适配器。Codex CLI 驱动通过不等于生产机组可以运行 Codex。
