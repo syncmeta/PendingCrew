@@ -86,7 +86,6 @@ impl Fixture {
                 config: Default::default(),
                 shutdown_limit: Duration::from_secs(10),
             }),
-            ..Default::default()
         }
     }
     pub fn count(&self, needle: &str) -> usize {

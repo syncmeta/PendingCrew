@@ -273,3 +273,133 @@ async fn human_answers_native_request_through_real_serve_without_a_key_fallback(
     server.await.unwrap().unwrap();
     assert!(registry(&fixture.data).is_empty());
 }
+
+/// A provider-neutral channel must route by session identity, not executor name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mixed_executors_route_mentions_and_reconnect_without_replaying() {
+    let fixture = Fixture::new();
+    let codex_log = fixture.root.path().join("codex-rpc.log");
+    let mut options = fixture.options("ready");
+    let orchestra = options.orchestra.as_mut().unwrap();
+    orchestra.codex = CodexProgram::Path(artifact("fake_codex"));
+    orchestra.codex_env = BTreeMap::from([
+        ("HOME".into(), fixture.home.display().to_string()),
+        ("SHELL".into(), "/usr/bin/false".into()),
+        ("FAKE_CODEX_LOG".into(), codex_log.display().to_string()),
+    ]);
+    let count_codex = || {
+        std::fs::read_to_string(&codex_log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|call| call["method"] == "turn/start")
+            .count()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let mut server = tokio::spawn(crewd_server::serve_with(
+        fixture.data.clone(),
+        options,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
+    let mut client = tokio::select! {
+        result = &mut server => panic!("serve exited: {result:?}"),
+        client = Client::connect(&fixture.data) => client,
+    };
+    let crew = client
+        .call(
+            "crew.create",
+            json!({"title":"Mixed executor crew","workingDirectory":fixture.work}),
+        )
+        .await
+        .unwrap();
+    let cid = crew["id"].as_str().unwrap();
+    let claude = client.call("session.start", json!({"crewId":cid,"role":"captain","executor":"claude","brief":"MIXED_CLAUDE_BOOT","isolation":false})).await.unwrap();
+    let codex = client.call("session.start", json!({"crewId":cid,"role":"worker","executor":"codex","brief":"MIXED_CODEX_BOOT","isolation":false})).await.unwrap();
+    let claude_id = claude["id"].as_str().unwrap();
+    let codex_id = codex["id"].as_str().unwrap();
+    wait("mixed executor initial turns", || {
+        fixture.count("MIXED_CLAUDE_BOOT") == 1 && count_codex() == 1
+    })
+    .await;
+    let channel = format!("{cid}/lobby");
+    client.call("message.post", json!({"channelId":channel,"text":"MIXED_TO_CODEX","mentions":[{"kind":"session","targetId":codex_id}]})).await.unwrap();
+    wait("Codex recipient", || count_codex() == 2).await;
+    assert_eq!(
+        fixture.count("MIXED_TO_CODEX"),
+        0,
+        "unmentioned Claude must not be submitted the Codex wake"
+    );
+    client.call("message.post", json!({"channelId":channel,"text":"MIXED_TO_CLAUDE","mentions":[{"kind":"session","targetId":claude_id}]})).await.unwrap();
+    wait("Claude recipient", || fixture.count("MIXED_TO_CLAUDE") == 1).await;
+    for sid in [claude_id, codex_id] {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let wakes = client
+                .call("wake.list", json!({"sessionId":sid}))
+                .await
+                .unwrap();
+            if wakes["wakes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|w| !matches!(w["state"].as_str(), Some("pending" | "inflight")))
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "unsettled wake: {wakes}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    drop(client);
+    let mut client = Client::connect(&fixture.data).await;
+    for _ in 0..20 {
+        let messages = client
+            .call("message.list", json!({"channelId":channel}))
+            .await
+            .unwrap();
+        for text in ["MIXED_TO_CODEX", "MIXED_TO_CLAUDE"] {
+            assert_eq!(
+                messages
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|m| m["text"] == text)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            count_codex(),
+            2,
+            "read-only reconnect must not submit another Codex turn"
+        );
+        assert_eq!(
+            fixture.count("MIXED_TO_CLAUDE"),
+            1,
+            "read-only reconnect must not submit another Claude wake"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    for sid in [claude_id, codex_id] {
+        client
+            .call(
+                "session.stop",
+                json!({"sessionId":sid,"reason":"synthetic mixed executor acceptance"}),
+            )
+            .await
+            .unwrap();
+        client.stopped(sid).await;
+    }
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(registry(&fixture.data).is_empty());
+}
