@@ -9,7 +9,7 @@
 //!   `ResumeRefused` → `Spawned { 新号, resumed: false }`（同一个 pid）——每条 `ResumeRefused`
 //!   后面都跟一条 `Spawned`。三条在就绪那一刻一起发，叫停只可能发生在就绪之后，所以「叫停之后
 //!   不再报 `ResumeRefused`」在结构上成立。
-//! - **每一条服务端请求都回**（[`proto::answer_server_request`]），代拒的发 `Notice`（每种方法一次）。
+//! - 人工请求保留原始身份与表单，等待精确答复；其他请求由 [`proto::answer_server_request`] 回复。
 //! - **回合**：一次只开一个；有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队。
 //! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 / 登录态 health。
 //! - **每个请求都有期限**（[`Rpc::expire`]），到期按失败处理，会话不挂。
@@ -17,11 +17,14 @@ use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::human::{Form, RunnerRequest};
+use crewd_term::{DecisionEvent, PendingDecision};
 use serde_json::Value;
 
 use crate::codex::proto::{self, Reply, ThreadOptions};
 use crate::codex::rpc::{
-    Incoming, ParseError, Rpc, RpcFailure, error_line, notification_line, parse_line, response_line,
+    Incoming, ParseError, RequestId, Rpc, RpcFailure, error_line, notification_line, parse_line,
+    response_line,
 };
 use crate::codex::turns::{Signals, Transcript, TurnTracker};
 use crate::delivery::Subject;
@@ -29,7 +32,8 @@ use crate::driver::{Control, ControlOutcome, UntrustedContext};
 use crate::health::{Health, HealthKind, LaunchVerdict};
 use crate::resume::valid_agent_session_id;
 use crate::session::{
-    DeliveryOutcome, DerivedState, ExitInfo, ExitStatusKind, Profile, SessionEvent, preview,
+    AnswerOutcome, DeliveryOutcome, DerivedState, ExitInfo, ExitStatusKind, Profile, SessionEvent,
+    preview,
 };
 
 /// 期限与上限。
@@ -104,6 +108,10 @@ pub enum CodexAction {
     /// 把 thread id 落账，结果用 [`CodexCore::on_recorded`] 交回。
     Record(String),
     /// 一次 [`Control`] 的结果（`ticket` 是驱动层给的编号）。
+    AnswerDone {
+        ticket: u64,
+        outcome: AnswerOutcome,
+    },
     ControlDone {
         ticket: u64,
         outcome: ControlOutcome,
@@ -175,6 +183,7 @@ pub struct CodexCore {
     working: bool,
     stopped_by_user: bool,
     notified: BTreeSet<String>,
+    human: VecDeque<(RequestId, Form)>,
     early: Vec<SessionEvent>,
     actions: Vec<CodexAction>,
 }
@@ -215,6 +224,7 @@ impl CodexCore {
             working: false,
             stopped_by_user: false,
             notified: BTreeSet::new(),
+            human: VecDeque::new(),
             early: Vec::new(),
             actions: Vec::new(),
         };
@@ -281,11 +291,155 @@ impl CodexCore {
                 DerivedState::Error
             };
         }
+        if !self.human.is_empty() {
+            return DerivedState::AwaitingDecision;
+        }
         if self.working {
             DerivedState::Working
         } else {
             DerivedState::Idle
         }
+    }
+
+    pub fn report_answer(&mut self, ticket: u64, outcome: AnswerOutcome) {
+        self.actions
+            .push(CodexAction::AnswerDone { ticket, outcome });
+    }
+    pub fn pending_decision(&self) -> Option<&PendingDecision> {
+        self.human.front().map(|(_, f)| &f.decision)
+    }
+
+    pub fn runner_request(&self) -> Option<RunnerRequest> {
+        self.human.front().map(|(_, f)| f.info())
+    }
+
+    /// Answer only the currently displayed request. No key fallback, retries or
+    /// implicit grants. A fresh opaque fingerprint prevents reuse across restarts.
+    pub fn answer_choice(&mut self, expect: &str, choice: usize, now: Instant) -> AnswerOutcome {
+        let response = self
+            .human
+            .front()
+            .and_then(|(_, f)| f.choices.get(choice))
+            .cloned();
+        let Some(response) = response else {
+            return AnswerOutcome::Conflict {
+                now: self.pending_decision().cloned(),
+            };
+        };
+        self.respond_request(expect, response, now)
+    }
+
+    pub fn respond_request(
+        &mut self,
+        expect: &str,
+        response: Value,
+        now: Instant,
+    ) -> AnswerOutcome {
+        let Some((_, form)) = self.human.front() else {
+            return AnswerOutcome::Conflict { now: None };
+        };
+        if !self.is_running()
+            || self.stopped_by_user
+            || form.decision.fingerprint() != expect
+            || !form.valid_response(&response)
+        {
+            return AnswerOutcome::Conflict {
+                now: self.pending_decision().cloned(),
+            };
+        }
+        let before = self.pending_decision().cloned();
+        let (id, _) = self.human.pop_front().expect("checked pending request");
+        self.actions
+            .push(CodexAction::Write(response_line(&id, &response)));
+        self.human_changed(before);
+        self.after_input(now);
+        AnswerOutcome::Answered {
+            cleared: true,
+            now: self.pending_decision().cloned(),
+        }
+    }
+
+    fn hold_human(&mut self, id: &RequestId, method: &str, params: &Value) -> bool {
+        let Some(form) = Form::new(method, params) else {
+            return false;
+        };
+        if self.phase != Phase::Ready
+            || self.stopped_by_user
+            || params.get("threadId").and_then(Value::as_str) != self.thread_id.as_deref()
+            || params
+                .get("turnId")
+                .and_then(Value::as_str)
+                .is_some_and(|turn| Some(turn) != self.tracker.active_turn())
+        {
+            self.actions.push(CodexAction::Write(error_line(
+                id,
+                -32602,
+                "request no longer belongs to this active thread/turn",
+            )));
+            return true;
+        }
+        if let Some((_, old)) = self.human.iter().find(|(request, _)| request == id) {
+            if old.method != method || old.params != *params {
+                let before = self.pending_decision().cloned();
+                self.human.retain(|(request, _)| request != id);
+                self.human_changed(before);
+                self.actions.push(CodexAction::Write(error_line(
+                    id,
+                    -32602,
+                    "request ID reused with different contents",
+                )));
+            }
+            return true;
+        }
+        if self.human.len() >= 32 {
+            self.actions.push(CodexAction::Write(error_line(
+                id,
+                -32000,
+                "too many pending human requests",
+            )));
+            self.event(SessionEvent::Notice(
+                "Codex 人工待请求过多，新请求未被接受。".into(),
+            ));
+            return true;
+        }
+        let before = self.pending_decision().cloned();
+        self.human.push_back((id.clone(), form));
+        self.human_changed(before);
+        true
+    }
+
+    fn human_changed(&mut self, before: Option<PendingDecision>) {
+        let after = self.pending_decision().cloned();
+        if before == after {
+            return;
+        }
+        if before.is_some() {
+            self.event(SessionEvent::Decision(DecisionEvent::Cleared));
+        }
+        if let Some(decision) = after {
+            self.event(SessionEvent::Decision(DecisionEvent::Appeared(decision)));
+        }
+    }
+
+    fn clear_human(&mut self, turn: Option<&str>) {
+        let before = self.pending_decision().cloned();
+        let mut removed = Vec::new();
+        self.human.retain(|(id, f)| {
+            let remove = turn
+                .is_none_or(|turn| f.params.get("turnId").and_then(Value::as_str) == Some(turn));
+            if remove {
+                removed.push(id.clone());
+            }
+            !remove
+        });
+        for id in removed {
+            self.actions.push(CodexAction::Write(error_line(
+                &id,
+                -32000,
+                "human request cancelled",
+            )));
+        }
+        self.human_changed(before);
     }
 
     /// 结构化记录的文本（`screen_text` 的 codex 版）。
@@ -305,6 +459,10 @@ impl CodexCore {
                 }
             }
             Ok(Incoming::Request { id, method, params }) => {
+                if self.hold_human(&id, &method, &params) {
+                    self.after_input(now);
+                    return;
+                }
                 let unix = self.unix_at_created
                     + now.saturating_duration_since(self.created).as_secs() as i64;
                 let outcome = proto::answer_server_request(&method, &params, unix);
@@ -419,14 +577,16 @@ impl CodexCore {
 
     /// 打断进行中的回合（没有就什么都不做）。
     pub fn interrupt(&mut self, now: Instant) {
-        if self.phase != Phase::Ready {
+        if self.phase != Phase::Ready || self.stopped_by_user {
             return;
         }
         let (Some(thread), Some(turn)) = (self.thread_id.clone(), self.tracker.active_turn())
         else {
             return;
         };
-        let params = proto::turn_interrupt_params(&thread, turn);
+        let turn = turn.to_string();
+        self.clear_human(Some(&turn));
+        let params = proto::turn_interrupt_params(&thread, &turn);
         let timeout = self.config.request_timeout;
         self.request(Tag::Interrupt, "turn/interrupt", &params, now, timeout);
     }
@@ -517,6 +677,7 @@ impl CodexCore {
         if !self.is_running() {
             return;
         }
+        self.clear_human(None);
         self.stopped_by_user = true;
         self.abandon("session 被停掉", false, now);
         self.after_input(now);
@@ -527,6 +688,7 @@ impl CodexCore {
         if matches!(self.phase, Phase::Exited | Phase::Failed) {
             return;
         }
+        self.clear_human(None);
         let ready = self.phase == Phase::Ready;
         for (tag, _method, _) in self.rpc.fail_all() {
             match tag {
@@ -823,13 +985,32 @@ impl CodexCore {
         if self.thread_id.is_none() {
             return;
         }
+        if method == "serverRequest/resolved"
+            && let Some(id) = params.get("requestId").and_then(RequestId::from_value)
+        {
+            let before = self.pending_decision().cloned();
+            self.human.retain(|(request, _)| request != &id);
+            self.human_changed(before);
+        }
+        if method == "turn/completed"
+            && let Some(turn) = params.pointer("/turn/id").and_then(Value::as_str)
+        {
+            self.clear_human(Some(turn));
+        }
         let s: Signals = self.tracker.on_notification(method, params);
         if let Some((turn_id, item)) = s.item {
-            self.transcript.push(turn_id.clone(), item.clone());
+            if method == "item/completed" {
+                self.transcript.push(turn_id.clone(), item.clone());
+            }
             self.event(SessionEvent::Item { turn_id, item });
         }
         if let Some(last) = s.turn_ended {
             self.event(SessionEvent::TurnEnded {
+                turn_id: params
+                    .pointer("/turn/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 last_agent_message: last,
             });
         }
@@ -919,7 +1100,12 @@ impl CodexCore {
     }
 
     fn start_next(&mut self, now: Instant) {
-        if self.phase != Phase::Ready || self.in_flight || self.tracker.is_busy() {
+        if self.phase != Phase::Ready
+            || self.stopped_by_user
+            || !self.human.is_empty()
+            || self.in_flight
+            || self.tracker.is_busy()
+        {
             return;
         }
         let Some(next) = self.queue.pop_front() else {
@@ -1060,6 +1246,219 @@ pub fn launch_health(verdict: LaunchVerdict, underlying: &str) -> Health {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn human_approval_waits_for_the_person_instead_of_being_rejected() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1", "turn":{"id":"human-turn"}}),
+        );
+        let before = t.sent.len();
+        t.line(
+            json!({"id":"native-approval", "method":"item/commandExecution/requestApproval",
+            "params":{"threadId":"thr-1", "turnId":"human-turn", "itemId":"cmd-1",
+                "startedAtMs":1,"command":"git status", "cwd":"/repo", "reason":"read state"}}),
+            1.0,
+        );
+        assert_eq!(t.core.state(), DerivedState::AwaitingDecision);
+        assert_eq!(
+            t.sent.len(),
+            before,
+            "no automatic answer while waiting for the person"
+        );
+    }
+
+    fn approval(t: &mut T, id: Value, turn: &str) {
+        t.line(json!({"id":id,"method":"item/fileChange/requestApproval","params":{"threadId":"thr-1","turnId":turn,"itemId":"file-1","reason":"edit source"}}),1.0);
+    }
+
+    #[test]
+    fn human_reply_keeps_wire_id_is_single_use_and_cannot_cross_sessions() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"human"}}),
+        );
+        approval(&mut t, json!(44), "human");
+        approval(&mut t, json!("second"), "human");
+        let fingerprint = t.core.pending_decision().unwrap().fingerprint();
+        let mut other = T::ready(None);
+        other.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"human"}}),
+        );
+        approval(&mut other, json!(44), "human");
+        assert!(matches!(
+            other.core.answer_choice(&fingerprint, 0, other.at(2.0)),
+            AnswerOutcome::Conflict { .. }
+        ));
+        assert!(matches!(
+            t.core.answer_choice(&fingerprint, 0, t.at(2.0)),
+            AnswerOutcome::Answered { .. }
+        ));
+        t.pump();
+        assert!(
+            t.sent
+                .iter()
+                .any(|v| v["id"] == 44 && v["result"]["decision"] == "accept")
+        );
+        assert!(matches!(
+            t.core.answer_choice(&fingerprint, 0, t.at(2.1)),
+            AnswerOutcome::Conflict { .. }
+        ));
+        let second = t.core.pending_decision().unwrap().fingerprint();
+        assert!(matches!(
+            t.core.answer_choice(&second, 2, t.at(2.2)),
+            AnswerOutcome::Answered { .. }
+        ));
+        t.pump();
+        assert!(
+            t.sent
+                .iter()
+                .any(|v| v["id"] == "second" && v["result"]["decision"] == "decline")
+        );
+        assert_eq!(
+            t.sent
+                .iter()
+                .filter(|v| v.get("result").is_some() && v["id"] == 44)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn human_free_text_requires_original_question_ids_and_preserves_form() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"human"}}),
+        );
+        let params = json!({"threadId":"thr-1","turnId":"human","itemId":"question","isBlocking":true,"questions":[
+            {"id":"name","header":"Name","question":"Name?","isSecret":true},
+            {"id":"color","header":"Color","question":"Color?","options":[{"label":"Blue","description":"cool"}],"isOther":false}]});
+        t.line(
+            json!({"id":"ask-name","method":"item/tool/requestUserInput","params":params}),
+            1.0,
+        );
+        let request = t.core.runner_request().unwrap();
+        assert_eq!(request.params, params);
+        assert!(matches!(
+            t.core.respond_request(
+                &request.fingerprint,
+                json!({"answers":{"wrong":{"answers":["Blue"]}}}),
+                t.at(2.0)
+            ),
+            AnswerOutcome::Conflict { .. }
+        ));
+        let response = json!({"answers":{"name":{"answers":["SYNTHETIC_SECRET"]},"color":{"answers":["Blue"]}}});
+        assert!(matches!(
+            t.core
+                .respond_request(&request.fingerprint, response.clone(), t.at(2.1)),
+            AnswerOutcome::Answered { .. }
+        ));
+        t.pump();
+        assert!(
+            t.sent
+                .iter()
+                .any(|v| v["id"] == "ask-name" && v["result"] == response)
+        );
+        assert!(!t.core.transcript_text(100).contains("SYNTHETIC_SECRET"));
+        assert!(!format!("{:?}", t.events).contains("SYNTHETIC_SECRET"));
+    }
+
+    #[test]
+    fn human_request_resolved_completed_and_stop_invalidate_old_answers() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"human"}}),
+        );
+        approval(&mut t, json!(1), "human");
+        let first = t.core.pending_decision().unwrap().fingerprint();
+        t.notify(
+            "serverRequest/resolved",
+            json!({"threadId":"foreign","requestId":1}),
+        );
+        assert!(t.core.pending_decision().is_some());
+        t.notify(
+            "serverRequest/resolved",
+            json!({"threadId":"thr-1","requestId":1}),
+        );
+        assert!(t.core.pending_decision().is_none());
+        assert!(matches!(
+            t.core.answer_choice(&first, 0, t.at(2.0)),
+            AnswerOutcome::Conflict { .. }
+        ));
+        approval(&mut t, json!(2), "human");
+        t.notify(
+            "turn/completed",
+            json!({"threadId":"thr-1","turn":{"id":"older","status":"completed"}}),
+        );
+        assert!(t.core.pending_decision().is_some());
+        t.notify(
+            "turn/completed",
+            json!({"threadId":"thr-1","turn":{"id":"human","status":"interrupted"}}),
+        );
+        assert!(t.core.pending_decision().is_none());
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"next"}}),
+        );
+        approval(&mut t, json!(3), "next");
+        let last = t.core.pending_decision().unwrap().fingerprint();
+        t.core.stop(t.at(4.0));
+        assert!(matches!(
+            t.core.answer_choice(&last, 0, t.at(4.1)),
+            AnswerOutcome::Conflict { .. }
+        ));
+    }
+
+    #[test]
+    fn human_permission_response_cannot_expand_requested_scope() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"human"}}),
+        );
+        t.line(json!({"id":"permissions","method":"item/permissions/requestApproval","params":{"threadId":"thr-1","turnId":"human","permissions":{"fileSystem":{"write":["/repo/file"]}}}}),1.0);
+        let fp = t.core.pending_decision().unwrap().fingerprint();
+        assert!(matches!(
+            t.core.respond_request(
+                &fp,
+                json!({"permissions":{"fileSystem":{"write":["/"]}},"scope":"session"}),
+                t.at(2.0)
+            ),
+            AnswerOutcome::Conflict { .. }
+        ));
+        assert!(matches!(
+            t.core.answer_choice(&fp, 0, t.at(2.1)),
+            AnswerOutcome::Answered { .. }
+        ));
+        t.pump();
+        assert!(t.sent.iter().any(|v| v["id"] == "permissions"
+            && v["result"]["scope"] == "turn"
+            && v["result"]["permissions"]["fileSystem"]["write"] == json!(["/repo/file"])));
+    }
+
+    #[test]
+    fn native_started_tool_is_visible_without_claiming_completed_history() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"progress"}}),
+        );
+        let item = json!({"id":"cmd-live","type":"commandExecution","command":"synthetic long test","status":"inProgress"});
+        t.notify(
+            "item/started",
+            json!({"threadId":"thr-1","turnId":"progress","item":item}),
+        );
+        assert!(t.events.iter().any(|e|matches!(e,SessionEvent::Item{turn_id,item:got} if turn_id=="progress" && got==&item)));
+        assert!(!t.core.transcript_text(100).contains("synthetic long test"));
+        assert_eq!(t.core.state(), DerivedState::Working);
+        t.notify("item/completed", json!({"threadId":"thr-1","turnId":"progress","item":{"id":"cmd-live","type":"commandExecution","command":"synthetic long test","status":"completed","exitCode":0}}));
+        assert!(t.core.transcript_text(100).contains("synthetic long test"));
+    }
 
     const PID: u32 = 4242;
 
@@ -1648,7 +2047,9 @@ mod tests {
             .events
             .iter()
             .filter_map(|e| match e {
-                SessionEvent::TurnEnded { last_agent_message } => Some(last_agent_message.clone()),
+                SessionEvent::TurnEnded {
+                    last_agent_message, ..
+                } => Some(last_agent_message.clone()),
                 _ => None,
             })
             .collect();
@@ -1667,6 +2068,7 @@ mod tests {
         t.turn("t1", "开场做完了");
         let ev = t.take_events();
         assert!(ev.contains(&SessionEvent::TurnEnded {
+            turn_id: "t1".into(),
             last_agent_message: "开场做完了".into()
         }));
         assert!(

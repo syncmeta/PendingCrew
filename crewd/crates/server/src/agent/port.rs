@@ -1533,14 +1533,24 @@ pub fn resolve_title(title: Option<&str>, brief: Option<&str>) -> PortResult<Str
     Ok(crewd_collab::sessions::resolve_title(title, brief)?)
 }
 
-/// `executor` 缺省 = 机组的 `captain_executor`，再缺省 "claude"。返回新 session 的 id。
+/// `executor` 缺省 = 显式机组默认、当前机长的 runner；都没有才用历史默认 claude。返回新 session 的 id。
 pub async fn start_session(st: &AppState, r: StartReq) -> PortResult<String> {
     let executor = match r.executor {
         Some(e) => e,
-        None => crew(st, &r.crew_id)
+        None => {
+            let crew_id = r.crew_id.clone();
+            read(st, move |conn| {
+                let c = crewd_collab::crews::get(conn, &crew_id)?;
+                if let Some(default) = c.captain_executor {
+                    return Ok(default);
+                }
+                match crewd_collab::crews::captain_of(conn, &crew_id)? {
+                    Some(captain) => Ok(crewd_collab::sessions::get(conn, &captain)?.executor),
+                    None => Ok("claude".to_string()),
+                }
+            })
             .await?
-            .and_then(|c| c.captain_executor)
-            .unwrap_or_else(|| "claude".to_string()),
+        }
     };
     let req = crate::control::StartRequest {
         crew_id: r.crew_id,

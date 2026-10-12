@@ -1,0 +1,123 @@
+{
+  "codexVersion": "0.162.1",
+  "experimental": true,
+  "methodParams": {
+    "initialize": [
+      "capabilities",
+      "clientInfo"
+    ],
+    "thread/start": [
+      "allowProviderModelFallback",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "daybreakEnabled",
+      "developerInstructions",
+      "dynamicTools",
+      "environments",
+      "ephemeral",
+      "experimentalRawEvents",
+      "historyMode",
+      "mockExperimentalField",
+      "model",
+      "modelProvider",
+      "multiAgentMode",
+      "permissions",
+      "personality",
+      "projectId",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "selectedCapabilityRoots",
+      "serviceName",
+      "serviceTier",
+      "sessionStartSource",
+      "threadSource"
+    ],
+    "thread/resume": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "excludeTurns",
+      "history",
+      "initialTurnsPage",
+      "model",
+      "modelProvider",
+      "path",
+      "permissions",
+      "personality",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "serviceTier",
+      "threadId"
+    ],
+    "thread/settings/update": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "collaborationMode",
+      "cwd",
+      "disabledPluginIds",
+      "effort",
+      "model",
+      "multiAgentMode",
+      "permissions",
+      "personality",
+      "sandboxPolicy",
+      "serviceTier",
+      "summary",
+      "threadId"
+    ],
+    "thread/compact/start": [
+      "threadId"
+    ],
+    "turn/start": [
+      "additionalContext",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "clientUserMessageId",
+      "collaborationMode",
+      "cwd",
+      "cyberAccessProgram",
+      "disabledPluginIds",
+      "effort",
+      "environments",
+      "input",
+      "model",
+      "multiAgentMode",
+      "outputSchema",
+      "parentTurnId",
+      "permissions",
+      "personality",
+      "responsesapiClientMetadata",
+      "rootTurnId",
+      "runtimeWorkspaceRoots",
+      "sandboxPolicy",
+      "serviceTier",
+      "serviceTierForTurn",
+      "summary",
+      "threadId",
+      "toolOutput",
+      "turnTrigger"
+    ],
+    "turn/interrupt": [
+      "threadId",
+      "turnId"
+    ]
+  },
+  "initializeCapabilities": [
+    "experimentalApi",
+    "explicitGatewayOauth",
+    "extensions",
+    "mcpServerOpenaiFormElicitation",
+    "optOutNotificationMethods",
+    "requestAttestation"
+  ],
+  "additionalContextEntry": [
+    "kind",
+    "value"
+  ]
+}

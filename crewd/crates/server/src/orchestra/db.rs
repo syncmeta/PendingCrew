@@ -1100,8 +1100,29 @@ impl Port for DbPort {
         })
     }
 
+    async fn runner_turn_end(&self, session: &str, turn_id: &str, text: &str) -> Result<()> {
+        let (session, turn_id, text) = (session.to_string(), turn_id.to_string(), text.to_string());
+        self.write(move |tx| {
+            crewd_collab::turn_trace::on_turn_end(tx, &session, &turn_id, &text)?;
+            Ok(())
+        })
+        .await
+    }
+
     fn publish(&self, e: OrchestraEvent) {
         let event = match e {
+            OrchestraEvent::RunnerItem {
+                session,
+                turn_id,
+                item,
+            } => crewd_proto::Event {
+                event: crewd_proto::orchestra::events::SESSION_RUNNER_ITEM.into(),
+                data: serde_json::json!({"sessionId":session,"turnId":turn_id,"item":item}),
+            },
+            OrchestraEvent::RunnerProfile { session, profile } => crewd_proto::Event {
+                event: crewd_proto::orchestra::events::SESSION_RUNNER_PROFILE.into(),
+                data: serde_json::json!({"sessionId":session,"model":profile.model,"effort":profile.effort,"fast":profile.fast}),
+            },
             OrchestraEvent::SessionChanged(v) => crewd_proto::Event {
                 event: crewd_proto::events::SESSION_CHANGED.into(),
                 data: serde_json::to_value(super::control::live_to_proto(&v)).unwrap_or_default(),
@@ -1319,6 +1340,69 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn codex_turn_end_uses_real_collab_question_and_replay_rules() {
+        let (state, port, _dir) = seeded().await;
+        let count = || {
+            state.db.call(|store| {
+                store.conn().query_row(
+                    "SELECT count(*) FROM messages WHERE channel_id='c-1/lobby'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+        };
+        let before = count().await.unwrap().unwrap();
+        port.runner_turn_end("w-1", "codex-turn-1", "Please choose the next step?")
+            .await
+            .unwrap();
+        assert_eq!(
+            port.session("w-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .awaiting_question
+                .as_deref(),
+            Some("Please choose the next step?")
+        );
+        let after = count().await.unwrap().unwrap();
+        assert_eq!(after, before + 1, "real Stop relay reaches the crew");
+        port.runner_turn_end("w-1", "codex-turn-1", "Please choose the next step?")
+            .await
+            .unwrap();
+        assert_eq!(
+            count().await.unwrap().unwrap(),
+            after,
+            "same turn is not another question"
+        );
+        port.runner_turn_end("w-1", "codex-turn-2", "Completed the task.")
+            .await
+            .unwrap();
+        assert_eq!(
+            port.session("w-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .awaiting_question,
+            None
+        );
+        assert_eq!(count().await.unwrap().unwrap(), after);
+        let mut rx = state.hub.subscribe();
+        port.publish(OrchestraEvent::RunnerItem {
+            session: "w-1".into(),
+            turn_id: "original-turn".into(),
+            item: serde_json::json!({"id":"original-item","type":"agentMessage","text":"result"}),
+        });
+        let event = rx.recv().await.unwrap();
+        assert_eq!(
+            event.event,
+            crewd_proto::orchestra::events::SESSION_RUNNER_ITEM
+        );
+        assert_eq!(event.data["sessionId"], "w-1");
+        assert_eq!(event.data["turnId"], "original-turn");
+        assert_eq!(event.data["item"]["id"], "original-item");
+    }
 
     #[tokio::test]
     async fn s4_read_owner_orchestra_real_sql_records_once_before_mapping() {

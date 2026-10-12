@@ -574,6 +574,49 @@ mod tests {
             .unwrap()
     }
 
+    #[tokio::test]
+    async fn start_session_without_runner_inherits_the_actual_codex_captain() {
+        let f = Fixture::new().await;
+        let captain = f.captain.clone();
+        f.state
+            .collab(move |tx| {
+                let mut row = crewd_collab::sessions::get(tx.conn(), &captain)?;
+                row.executor = "codex".into();
+                crewd_store::sessions::upsert(tx.conn(), &row, None)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let r = run(
+            &f,
+            &f.captain,
+            "start_session",
+            json!({"brief":"synthetic Codex work", "isolation":false}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(
+            calls_of(&f, "Start(")
+                .last()
+                .unwrap()
+                .contains("executor: \"codex\"")
+        );
+        let r = run(
+            &f,
+            &f.captain,
+            "start_session",
+            json!({"brief":"explicit runner", "isolation":false,"runner":"claude"}),
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        assert!(
+            calls_of(&f, "Start(")
+                .last()
+                .unwrap()
+                .contains("executor: \"claude\"")
+        );
+    }
+
     /// C8 isolation as given; the title is collab's rule (S80, Q2), checked before anything starts.
     #[tokio::test]
     async fn start_session_passes_isolation_and_resolved_title() {

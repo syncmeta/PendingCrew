@@ -161,6 +161,15 @@ impl Fake {
             }
             std::mem::forget(child);
         }
+        if self.has("human_requests") {
+            let response=self.ask(json!(200),"item/commandExecution/requestApproval",json!({"threadId":self.thread,"turnId":turn,"itemId":"cmd-human","startedAtMs":1,"command":"git status","cwd":"/synthetic","reason":"read repository"}));
+            assert_eq!(response["result"]["decision"], "accept");
+            let response=self.ask(json!("question-human"),"item/tool/requestUserInput",json!({"threadId":self.thread,"turnId":turn,"itemId":"question-human","isBlocking":true,"questions":[{"id":"task","header":"Task","question":"What should I do?","isSecret":false}]}));
+            assert_eq!(
+                response["result"]["answers"]["task"]["answers"][0],
+                "SYNTHETIC_TASK"
+            );
+        }
         if self.has("server_requests") {
             self.server_requests(&turn);
         }
@@ -290,6 +299,9 @@ impl Fake {
                         "platformFamily": "unix", "platformOs": "macos" } }));
                 }
                 "thread/start" => {
+                    if self.has("crew_mcp") {
+                        exercise_crew_mcp(&params);
+                    }
                     self.thread = format!("thr-{}", std::process::id());
                     self.emit(json!({ "id": id, "result": {
                         "thread": { "id": self.thread }, "model": "fake-model",
@@ -371,6 +383,81 @@ extern "C" fn on_term(_: libc::c_int) {
             libc::write(fd, b"T".as_ptr().cast(), 1);
         }
     }
+}
+
+/// 仅显式 fixture 模式启动配置里的真实 helper，验证 stdio MCP 与内核来源接线。
+fn exercise_crew_mcp(params: &Value) {
+    use std::process::{Command, Stdio};
+    let server = &params["config"]["mcp_servers"]["crew"];
+    let args = server["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect::<Vec<_>>();
+    let mut child = Command::new(server["command"].as_str().unwrap())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut transcript = Vec::new();
+    let read_response = |wanted: i64,
+                         output: &mut std::io::BufReader<std::process::ChildStdout>,
+                         transcript: &mut Vec<Value>| {
+        loop {
+            let mut line = String::new();
+            assert!(
+                output.read_line(&mut line).unwrap() > 0,
+                "helper closed before response"
+            );
+            let value: Value = serde_json::from_str(&line).unwrap();
+            transcript.push(value.clone());
+            if value["id"] == wanted {
+                return value;
+            }
+        }
+    };
+    writeln!(input, "{}", json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"synthetic-codex","version":"0"}}})).unwrap();
+    input.flush().unwrap();
+    let initialized = read_response(1, &mut output, &mut transcript);
+    assert!(initialized.get("result").is_some(), "{initialized}");
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+    )
+    .unwrap();
+    input.flush().unwrap();
+    let listed = read_response(2, &mut output, &mut transcript);
+    assert!(
+        listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "directory")
+    );
+    writeln!(input, "{}", json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"directory","arguments":{}}})).unwrap();
+    input.flush().unwrap();
+    let called = read_response(3, &mut output, &mut transcript);
+    assert!(
+        called.get("result").is_some() && called["result"]["isError"] != true,
+        "{called}"
+    );
+    if let Ok(path) = std::env::var("FAKE_CODEX_MCP_LOG") {
+        std::fs::write(path, serde_json::to_vec(&transcript).unwrap()).unwrap();
+    }
+    drop(input);
+    child.wait().unwrap();
 }
 
 fn main() {

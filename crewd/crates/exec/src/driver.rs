@@ -252,6 +252,19 @@ pub fn with_untrusted_context(context: &UntrustedContext, text: &str) -> String 
 
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
+    AnswerChoice {
+        expect: String,
+        choice: usize,
+        reply: oneshot::Sender<AnswerOutcome>,
+    },
+    RespondRequest {
+        expect: String,
+        response: serde_json::Value,
+        reply: oneshot::Sender<AnswerOutcome>,
+    },
+    RunnerRequest {
+        reply: oneshot::Sender<Option<crate::codex::human::RunnerRequest>>,
+    },
     Send {
         id: u64,
         text: String,
@@ -402,6 +415,48 @@ impl SessionHandle {
             sent?;
             rx.await.map_err(|_| Closed)
         }
+    }
+
+    pub fn answer_choice(
+        &self,
+        expect: String,
+        choice: usize,
+    ) -> impl std::future::Future<Output = Result<AnswerOutcome, Closed>> + Send + 'static {
+        let (reply, rx) = oneshot::channel();
+        let sent = self.cmd(Command::AnswerChoice {
+            expect,
+            choice,
+            reply,
+        });
+        async move {
+            sent?;
+            rx.await.map_err(|_| Closed)
+        }
+    }
+
+    pub fn respond_request(
+        &self,
+        expect: String,
+        response: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<AnswerOutcome, Closed>> + Send + 'static {
+        let (reply, rx) = oneshot::channel();
+        let sent = self.cmd(Command::RespondRequest {
+            expect,
+            response,
+            reply,
+        });
+        async move {
+            sent?;
+            rx.await.map_err(|_| Closed)
+        }
+    }
+
+    pub async fn runner_request(
+        &self,
+    ) -> Result<Option<crate::codex::human::RunnerRequest>, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::RunnerRequest { reply })?;
+        rx.await.map_err(|_| Closed)
     }
 
     /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
@@ -1150,6 +1205,12 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             t.next_answer += 1;
             t.answers.insert(id, reply);
             t.core.queue_answer(id, expect, steps, now);
+        }
+        Command::AnswerChoice { reply, .. } | Command::RespondRequest { reply, .. } => {
+            let _ = reply.send(AnswerOutcome::Unsupported);
+        }
+        Command::RunnerRequest { reply } => {
+            let _ = reply.send(None);
         }
         Command::Status { reply } => {
             let _ = reply.send(SessionStatus {

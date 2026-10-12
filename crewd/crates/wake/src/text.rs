@@ -44,6 +44,7 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
     ("decision.first", &["name"]),
     ("decision.howto", &[]),
     ("notice.recovered", &["name"]),
+    ("notice.runner", &["name", "detail"]),
     ("notice.give_up.crew", &["sessions", "error"]),
     ("notice.quota.captain", &["name", "executor"]),
     ("notice.binary_replaced", &[]),

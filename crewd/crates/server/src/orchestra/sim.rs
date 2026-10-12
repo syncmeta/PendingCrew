@@ -1670,6 +1670,7 @@ impl Walk {
                         item: serde_json::json!({"type":"sim"}),
                     },
                     Op::TurnEnded => SessionEvent::TurnEnded {
+                        turn_id: "sim-turn".into(),
                         last_agent_message: "sim end".into(),
                     },
                     Op::Notice => SessionEvent::Notice("sim notice".into()),

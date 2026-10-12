@@ -133,6 +133,17 @@ impl TurnTracker {
                 self.working = true;
             }
             "turn/completed" => self.on_completed(params, &mut s),
+            "item/started" => {
+                self.note_item_activity(params);
+                if let Some(item) = params.get("item") {
+                    let turn = params
+                        .get("turnId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    s.item = Some((turn, item.clone()));
+                }
+            }
             "item/completed" => {
                 self.note_item_activity(params);
                 if let Some(item) = params.get("item") {

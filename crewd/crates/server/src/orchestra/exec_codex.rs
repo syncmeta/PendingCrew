@@ -1,4 +1,4 @@
-//! Codex 编排适配器。生产登记等待待请求、事件消费和端到端验收，不提前宣告可用。
+//! Codex 编排适配器。库入口默认 Disabled，CLI 可指定路径或发现程序；真实应用验收独立进行。
 use super::exec::{
     AnswerSteps, BoxFut, Context, ExecHandle, ExecSendError, Executor, LaunchError, LaunchRequest,
     Launched,
@@ -69,6 +69,9 @@ impl CodexExecutor {
 }
 impl Executor for CodexExecutor {
     fn check_launch(&self) -> Result<(), LaunchError> {
+        if self.config.program == CodexProgram::Disabled {
+            return Err(LaunchError::NotConfigured("codex is disabled".into()));
+        }
         if crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk) {
             Ok(())
         } else {
@@ -145,6 +148,25 @@ impl ExecHandle for CodexHandle {
         _steps: AnswerSteps,
     ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
         Box::pin(async { Ok(AnswerOutcome::Unsupported) })
+    }
+    fn answer_choice(
+        &self,
+        expect: String,
+        choice: usize,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        Box::pin(self.0.answer_choice(expect, choice))
+    }
+    fn respond_request(
+        &self,
+        expect: String,
+        response: serde_json::Value,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        Box::pin(self.0.respond_request(expect, response))
+    }
+    fn runner_request(
+        &self,
+    ) -> BoxFut<'_, Result<Option<crewd_exec::codex::human::RunnerRequest>, Closed>> {
+        Box::pin(self.0.runner_request())
     }
     fn stop(&self) -> Result<(), Closed> {
         self.0.stop()

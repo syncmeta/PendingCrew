@@ -73,6 +73,8 @@ impl Fixture {
         env.insert("FAKE_CLAUDE_MODE".into(), mode.into());
         crewd_server::ServeOptions {
             orchestra: Some(crewd_server::OrchestraServe {
+                codex: Default::default(),
+                codex_env: Default::default(),
                 claude: crewd_server::orchestra::exec_claude::ClaudeProgram::Path(artifact(
                     "fake_claude",
                 )),

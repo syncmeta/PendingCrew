@@ -88,3 +88,6 @@ Delivery to "{name}" has waited ten minutes: human input was detected, but the i
 
 ## brief.undelivered
 The opening brief for "{name}" was not delivered. Re-dispatch the brief.
+
+## notice.runner
+Runner notice for {name}: {detail}

@@ -266,6 +266,8 @@ pub struct ServeOptions {
 }
 
 pub struct OrchestraServe {
+    pub codex: orchestra::exec_codex::CodexProgram,
+    pub codex_env: std::collections::BTreeMap<String, String>,
     pub claude: orchestra::exec_claude::ClaudeProgram,
     pub claude_env: std::collections::BTreeMap<String, String>,
     pub helper: Option<PathBuf>,
@@ -280,6 +282,8 @@ pub struct OrchestraServe {
 impl Default for OrchestraServe {
     fn default() -> Self {
         Self {
+            codex: orchestra::exec_codex::CodexProgram::default(),
+            codex_env: Default::default(),
             claude: orchestra::exec_claude::ClaudeProgram::default(),
             claude_env: Default::default(),
             helper: None,
@@ -323,6 +327,9 @@ async fn serve_with_hooks_inner(
 ) -> anyhow::Result<()> {
     // A missing explicit program fails before binding or creating storage.
     if let Some(o) = &mut opts.orchestra {
+        if let orchestra::exec_codex::CodexProgram::Path(p) = &mut o.codex {
+            *p = std::fs::canonicalize(&*p)?;
+        }
         if let orchestra::exec_claude::ClaudeProgram::Path(p) = &mut o.claude {
             *p = std::fs::canonicalize(&*p)?;
         }
@@ -393,6 +400,19 @@ async fn serve_with_hooks_inner(
     let mut forwarder = None;
     if let Some(o) = opts.orchestra {
         let rx = state.hub.subscribe_collab(); // subscribe before boot
+        let codex =
+            orchestra::exec_codex::CodexExecutor::new(orchestra::exec_codex::CodexExecutorConfig {
+                program: o.codex,
+                data_dir: data_dir.clone(),
+                helper: o.helper.clone().expect("captured helper"),
+                registry: Some(registry.clone()),
+                extra_env: o.codex_env,
+                runtime_dir: o
+                    .runtime_dir
+                    .clone()
+                    .unwrap_or_else(|| data_dir.join("run")),
+                child_path: o.child_path.clone(),
+            });
         let executor = orchestra::exec_claude::ClaudeExecutor::new(
             orchestra::exec_claude::ClaudeExecutorConfig {
                 program: o.claude,
@@ -410,7 +430,9 @@ async fn serve_with_hooks_inner(
                 state.clone(),
                 data_dir.join(crewd_store::DB_FILE),
             )),
-            orchestra::exec::Executors::new().with("claude", Arc::new(executor)),
+            orchestra::exec::Executors::new()
+                .with("claude", Arc::new(executor))
+                .with("codex", Arc::new(codex)),
             hooks,
             Arc::new(orchestra::clock::SystemClock),
             o.config,

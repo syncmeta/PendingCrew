@@ -88,3 +88,6 @@ crewd 二进制已替换；请重启 crewd 后再启动新会话。
 
 ## brief.undelivered
 「{name}」的开场任务未送达，请重新派发。
+
+## notice.runner
+{name} 的执行器通知：{detail}

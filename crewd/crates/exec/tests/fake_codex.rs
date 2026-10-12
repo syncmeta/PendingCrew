@@ -227,6 +227,7 @@ async fn fresh_start_records_the_thread_and_runs_the_brief_with_its_context() {
         outcome: DeliveryOutcome::Delivered,
     }));
     assert!(events.contains(&SessionEvent::TurnEnded {
+        turn_id: "turn-1".into(),
         last_agent_message: "GOT: 开场任务".into()
     }));
     assert!(events.contains(&SessionEvent::Profile(Profile {
@@ -432,9 +433,28 @@ async fn every_server_request_is_answered_and_the_turn_finishes() {
     )
     .await
     .unwrap();
+    until(&mut rx, |e| {
+        matches!(
+            e,
+            SessionEvent::Decision(crewd_term::DecisionEvent::Appeared(_))
+        )
+    })
+    .await;
+    let request = h.status().await.unwrap().pending_decision.unwrap();
+    assert_eq!(
+        h.answer_choice(request.fingerprint(), 2).await.unwrap(),
+        crewd_exec::session::AnswerOutcome::Answered {
+            cleared: true,
+            now: None
+        }
+    );
     let events = until(&mut rx, |e| matches!(e, SessionEvent::TurnEnded { .. })).await;
     assert!(h.screen_text(50).await.unwrap().contains("answered 6"));
-    assert_eq!(env.reply_to(100.into())["error"]["code"], -32000);
+    assert_eq!(env.reply_to(100.into())["result"]["decision"], "decline");
+    assert!(matches!(
+        h.answer_choice(request.fingerprint(), 0).await.unwrap(),
+        crewd_exec::session::AnswerOutcome::Conflict { .. }
+    ));
     assert_eq!(
         env.reply_to("elicit-tool".into())["result"]["action"],
         "accept"

@@ -210,6 +210,8 @@ pub enum SessionEvent {
     /// codex：一个回合正常结束，附本回合最后一条 agent 正文（没有就是空串）。
     /// claude 的对应物是 Stop hook（M3 经 helper 送进来），不走执行器。
     TurnEnded {
+        /// 原始 app-server 回合号；协议缺失时为空，不编造身份。
+        turn_id: String,
         last_agent_message: String,
     },
     /// 执行器替 agent 做了一个人应该知道的决定（代拒了一个表单、丢了一段原始按键……）。

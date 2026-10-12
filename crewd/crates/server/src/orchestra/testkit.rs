@@ -96,6 +96,7 @@ pub struct MemState {
     pub listens: BTreeMap<String, Vec<Listen>>,
     pub posts: Vec<(Audience, String)>,
     pub events: Vec<OrchestraEvent>,
+    pub runner_ends: Vec<(String, String, String)>,
     pub max_live: Option<usize>,
     pub restarts: Vec<Vec<String>>,
     /// 每次 `open_restart` 的 reason（与 `restarts` 一一对应）。
@@ -1872,6 +1873,20 @@ impl Port for MemPort {
             deferred,
             cursor_targets: targets,
         })
+    }
+
+    async fn runner_turn_end(&self, session: &str, turn_id: &str, text: &str) -> Result<()> {
+        let mut state = self.lock();
+        state
+            .runner_ends
+            .push((session.to_string(), turn_id.to_string(), text.to_string()));
+        if let Some(row) = state.sessions.get_mut(session) {
+            row.awaiting_question = crewd_collab::turn_trace::trailing_question(
+                text,
+                crewd_collab::turn_trace::QUESTION_LIMIT,
+            );
+        }
+        Ok(())
     }
 
     fn publish(&self, e: OrchestraEvent) {

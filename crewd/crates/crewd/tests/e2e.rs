@@ -11,6 +11,7 @@ fn crewd(data: &Path) -> Command {
     c.env("CREWD_DATA_DIR", data)
         .env_remove("PENDINGCREW_DATA_DIR")
         .env("CREWD_CLAUDE", "/usr/bin/false")
+        .env_remove("CREWD_CODEX")
         .env("SHELL", "/usr/bin/false")
         .env("HOME", TEST_HOME.path())
         .env("XDG_CACHE_HOME", TEST_HOME.path().join("cache"))
@@ -418,8 +419,8 @@ fn rpc_drives_every_client_method() {
             Ok,
         ),
         ("events.subscribe", r#"{"topics":["message"]}"#, Ok),
-        // M3c is active in CLI serve. Synthetic imported Codex sessions cannot
-        // launch; read-only methods and stopping still reach the real actor.
+        // CLI serve does not enable Codex without --codex/CREWD_CODEX.
+        // This offline fixture must never discover a real account runner.
         (
             "session.start",
             r#"{"crewId":"local-aaaa","role":"worker","executor":"codex","brief":"x","isolation":false}"#,
@@ -445,6 +446,16 @@ fn rpc_drives_every_client_method() {
         (
             "session.answer",
             r#"{"sessionId":"worker-2222bbbb","fingerprint":"synthetic","choice":0}"#,
+            Code(-32009),
+        ),
+        (
+            "session.respondRunnerRequest",
+            r#"{"sessionId":"worker-2222bbbb","fingerprint":"synthetic","response":{"decision":"decline"}}"#,
+            Code(-32009),
+        ),
+        (
+            "session.interrupt",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
             Code(-32009),
         ),
         ("decision.list", "null", Ok),

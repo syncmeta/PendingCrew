@@ -149,6 +149,18 @@ pub trait ExecHandle: Send + Sync {
     ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
         Box::pin(async { Ok(AnswerOutcome::Unsupported) })
     }
+    fn respond_request(
+        &self,
+        _expect: String,
+        _response: serde_json::Value,
+    ) -> BoxFut<'_, Result<AnswerOutcome, Closed>> {
+        Box::pin(async { Ok(AnswerOutcome::Unsupported) })
+    }
+    fn runner_request(
+        &self,
+    ) -> BoxFut<'_, Result<Option<crewd_exec::codex::human::RunnerRequest>, Closed>> {
+        Box::pin(async { Ok(None) })
+    }
     fn stop(&self) -> Result<(), Closed>;
     fn clear_quota_health(&self) -> Result<(), Closed>;
     fn screen_text(&self, max_lines: usize) -> BoxFut<'_, Result<String, Closed>>;

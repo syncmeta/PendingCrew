@@ -230,7 +230,7 @@ pub struct ServerRequestOutcome {
     pub auth_required: bool,
 }
 
-/// 决定怎么回一条服务端请求。`now_unix` = 现在的 Unix 秒（`currentTime/read` 用）。
+/// 非人工或不受支持的请求的兜底处理；受支持的人工请求先由 CodexCore 挂起。`now_unix` = 现在的 Unix 秒（`currentTime/read` 用）。
 pub fn answer_server_request(method: &str, params: &Value, now_unix: i64) -> ServerRequestOutcome {
     let unsupported = |notice: bool| ServerRequestOutcome {
         reply: Reply::Error {

@@ -341,6 +341,17 @@ pub struct SettingsUpdate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestraEvent {
     SessionChanged(LiveView),
+    /// Codex 已完成的结构化条目，保持原始字段。
+    RunnerItem {
+        session: String,
+        turn_id: String,
+        item: serde_json::Value,
+    },
+    /// 服务端确认的档位；None 表示本次没有提供该字段。
+    RunnerProfile {
+        session: String,
+        profile: crewd_exec::session::Profile,
+    },
     /// 这个 session 的唤醒行变了：这一次改到的行（入队 / 拿走 / 送到 / 失败 / 作废）与它们的消息（S54）。
     WakeChanged {
         session: String,
@@ -549,6 +560,13 @@ pub trait Port: Send + Sync + 'static {
         session: &str,
         batch: &[QueuedWake],
     ) -> impl Future<Output = Result<Rendered>> + Send;
+    /// 与 Claude Stop hook 共用收尾规则，回合号用于事务内重放去重。
+    fn runner_turn_end(
+        &self,
+        session: &str,
+        turn_id: &str,
+        text: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn publish(&self, e: OrchestraEvent);
 }
 

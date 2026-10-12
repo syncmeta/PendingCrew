@@ -50,13 +50,30 @@ pub struct CodexProcessSpec {
     pub cwd: PathBuf,
 }
 
+pub enum WriterMessage {
+    Line(String),
+    /// Completes after all preceding lines have been written and flushed.
+    Barrier(tokio::sync::oneshot::Sender<()>),
+}
+impl From<String> for WriterMessage {
+    fn from(line: String) -> Self {
+        Self::Line(line)
+    }
+}
+
+impl From<&str> for WriterMessage {
+    fn from(line: &str) -> Self {
+        Self::Line(line.into())
+    }
+}
+
 /// 起好的 app-server。
 pub struct CodexProcess {
     pub child: Child,
     pub pid: u32,
     pub stdout: LineReader<tokio::io::BufReader<ChildStdout>>,
     /// 往 stdin 写一行（不含换行）。写任务按顺序写，写失败就停。
-    pub writer: mpsc::UnboundedSender<String>,
+    pub writer: mpsc::UnboundedSender<WriterMessage>,
     pub writer_task: JoinHandle<()>,
     pub stderr: StderrTail,
     pub stderr_task: JoinHandle<()>,
@@ -99,9 +116,16 @@ pub fn spawn_codex(spec: &CodexProcessSpec) -> io::Result<CodexProcess> {
     let stdout = child.stdout.take().expect("stdout 是 piped");
     let mut stderr = child.stderr.take().expect("stderr 是 piped");
 
-    let (writer, mut lines) = mpsc::unbounded_channel::<String>();
+    let (writer, mut lines) = mpsc::unbounded_channel::<WriterMessage>();
     let writer_task = tokio::spawn(async move {
-        while let Some(mut line) = lines.recv().await {
+        while let Some(message) = lines.recv().await {
+            let mut line = match message {
+                WriterMessage::Line(line) => line,
+                WriterMessage::Barrier(reply) => {
+                    let _ = reply.send(());
+                    continue;
+                }
+            };
             line.push('\n');
             if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                 break;
@@ -399,9 +423,24 @@ mod tests {
             p.stdout.next_line().await.unwrap(),
             Some(Line::Text("{\"id\":1}".into()))
         );
+        let (barrier, written) = tokio::sync::oneshot::channel();
+        p.writer.send(WriterMessage::Barrier(barrier)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), written)
+            .await
+            .unwrap()
+            .unwrap();
         p.child.wait().await.unwrap();
         // 对端已经退出：继续写不会把我们打死（EPIPE 只是让写任务停下）。
         let _ = p.writer.send("{\"id\":2}".into());
+        let (barrier, written) = tokio::sync::oneshot::channel();
+        let _ = p.writer.send(WriterMessage::Barrier(barrier));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), written)
+                .await
+                .unwrap()
+                .is_err(),
+            "failed write cannot satisfy a barrier"
+        );
         assert!(
             tokio::time::timeout(Duration::from_secs(2), &mut p.writer_task)
                 .await

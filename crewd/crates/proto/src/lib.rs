@@ -113,6 +113,8 @@ pub mod methods {
         crate::orchestra::methods::SESSION_LIVE,
         crate::orchestra::methods::SESSION_INSPECT,
         crate::orchestra::methods::SESSION_ANSWER,
+        crate::orchestra::methods::SESSION_RESPOND_REQUEST,
+        crate::orchestra::methods::SESSION_INTERRUPT,
         crate::orchestra::methods::DECISION_LIST,
         crate::orchestra::methods::CREW_SET_CAPTAIN,
         crate::orchestra::methods::WAKE_LIST,

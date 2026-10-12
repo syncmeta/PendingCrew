@@ -27,6 +27,10 @@ struct Cli {
 enum Cmd {
     /// 前台运行服务
     Serve {
+        #[arg(long, env = "CREWD_CODEX")]
+        codex: Option<PathBuf>,
+        #[arg(long = "codex-env", value_name = "K=V", hide = true)]
+        codex_env: Vec<String>,
         #[arg(long, env = "CREWD_CLAUDE")]
         claude: Option<PathBuf>,
         #[arg(long = "claude-env", value_name = "K=V", hide = true)]
@@ -135,13 +139,25 @@ async fn run() -> anyhow::Result<()> {
         (Err(e), _) => return Err(e),
     };
     match &cli.cmd {
-        Cmd::Serve { claude, claude_env } => {
+        Cmd::Serve {
+            claude,
+            claude_env,
+            codex,
+            codex_env,
+        } => {
             let mut extra = std::collections::BTreeMap::new();
             for kv in claude_env {
                 let (k, v) = kv
                     .split_once('=')
                     .with_context(|| format!("--claude-env must be K=V: {kv}"))?;
                 extra.insert(k.to_string(), v.to_string());
+            }
+            let mut codex_extra = std::collections::BTreeMap::new();
+            for kv in codex_env {
+                let (key, value) = kv
+                    .split_once('=')
+                    .with_context(|| format!("--codex-env must be K=V: {kv}"))?;
+                codex_extra.insert(key.to_string(), value.to_string());
             }
             crewd_server::ensure_data_dir(&dir)?;
             let runtime = runtime_dir(&dir)?;
@@ -151,6 +167,13 @@ async fn run() -> anyhow::Result<()> {
                 .map(|d| d.join("projects"));
             let opts = crewd_server::ServeOptions {
                 orchestra: Some(crewd_server::OrchestraServe {
+                    codex: match codex {
+                        Some(path) => {
+                            crewd_server::orchestra::exec_codex::CodexProgram::Path(path.clone())
+                        }
+                        None => crewd_server::orchestra::exec_codex::CodexProgram::Disabled,
+                    },
+                    codex_env: codex_extra,
                     claude: match claude {
                         Some(p) => {
                             crewd_server::orchestra::exec_claude::ClaudeProgram::Path(p.clone())

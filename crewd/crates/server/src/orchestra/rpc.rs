@@ -370,9 +370,40 @@ pub async fn call(
                 .inspect(&p.session_id, p.max_lines.unwrap_or(60).min(400) as usize)
                 .await
                 .map_err(rpc_err)?;
+            let runner_request = h
+                .runner_request(&p.session_id)
+                .await
+                .map_err(rpc_err)?
+                .filter(|request| {
+                    live.pending_decision
+                        .as_ref()
+                        .is_some_and(|d| d.fingerprint() == request.fingerprint)
+                })
+                .map(|request| crewd_proto::orchestra::RunnerRequestView {
+                    fingerprint: request.fingerprint,
+                    method: request.method,
+                    params: request.params,
+                });
             to_value(crewd_proto::orchestra::SessionInspection {
                 live: live_to_proto(&live),
                 screen,
+                runner_request,
+            })
+        }
+        methods::SESSION_INTERRUPT => {
+            let p: SessionIdParams = parse_params(params)?;
+            h.interrupt(&p.session_id).await.map_err(rpc_err)?;
+            to_value(Empty {})
+        }
+        methods::SESSION_RESPOND_REQUEST => {
+            let p: crewd_proto::orchestra::SessionRespondRequestParams = parse_params(params)?;
+            let r = h
+                .respond_request(&p.session_id, &p.fingerprint, p.response)
+                .await
+                .map_err(rpc_err)?;
+            to_value(crewd_proto::orchestra::SessionAnswerResult {
+                cleared: r.cleared,
+                decision: r.now.as_ref().map(decision_view),
             })
         }
         methods::SESSION_ANSWER => {
@@ -1695,6 +1726,7 @@ mod tests {
             json!([
                 "orchestra",
                 "session.answer",
+                "session.respondRunnerRequest",
                 "crewd.hibernate",
                 "wake.explain",
                 "message.receipts",

@@ -529,6 +529,16 @@ pub enum Cmd {
         choice: usize,
         reply: Reply<AnswerReport>,
     },
+    Interrupt {
+        session: String,
+        reply: Reply<()>,
+    },
+    RespondRequest {
+        session: String,
+        fingerprint: String,
+        response: serde_json::Value,
+        reply: Reply<AnswerReport>,
+    },
     Decisions {
         reply: Reply<Vec<crewd_proto::orchestra::PendingDecisionView>>,
     },
@@ -662,6 +672,7 @@ impl AnswerReply {
 pub enum AnswerAction {
     Terminal(AnswerSteps),
     Choice(usize),
+    Response(serde_json::Value),
 }
 
 /// 写队列的一项（[`Live::writes`]）。
@@ -977,6 +988,30 @@ impl<P: Port> Core<P> {
                     eprintln!("crewd: 编排：{e:#}");
                 }
             }
+            Cmd::Interrupt { session, reply } => {
+                let result = match self.writable(&session) {
+                    Some(l) if l.working || l.decision.is_some() => l
+                        .handle
+                        .interrupt()
+                        .map_err(|_| ControlError::NotRunning(session.clone())),
+                    Some(_) => Err(ControlError::NothingToInterrupt(session.clone())),
+                    None => Err(ControlError::NotRunning(session.clone())),
+                };
+                let _ = reply.send(result);
+            }
+            Cmd::RespondRequest {
+                session,
+                fingerprint,
+                response,
+                reply,
+            } => {
+                if let Err(e) = self
+                    .respond_request(&session, &fingerprint, response, reply)
+                    .await
+                {
+                    eprintln!("crewd: 编排：{e:#}");
+                }
+            }
             Cmd::Decisions { reply } => {
                 let mut rows: Vec<_> = self
                     .live
@@ -1142,7 +1177,7 @@ impl<P: Port> Core<P> {
             .execs
             .get(&req.executor)
             .map_err(|_| ControlError::Unsupported(req.executor.clone()))?;
-        self.check_launch(&exec, &req.crew_id)?;
+        self.check_launch(&exec, &req.crew_id, &req.executor)?;
         // 已移除的机组只读（§26.7）：什么都不建、不写、不起。
         if self
             .port
@@ -1218,7 +1253,8 @@ impl<P: Port> Core<P> {
             .execs
             .get(&req.executor)
             .map_err(|_| kept(ControlError::Unsupported(req.executor.clone())))?;
-        self.check_launch(&exec, &req.crew_id).map_err(kept)?;
+        self.check_launch(&exec, &req.crew_id, &req.executor)
+            .map_err(kept)?;
         // 建 worktree 期间机长指针可能变了（换机长）：再查一次。
         if worktree.is_some()
             && req.captain
@@ -1279,7 +1315,7 @@ impl<P: Port> Core<P> {
             .execs
             .get(&row.executor)
             .map_err(|_| ControlError::Unsupported(row.executor.clone()))?;
-        self.check_launch(&exec, &row.crew_id)?;
+        self.check_launch(&exec, &row.crew_id, &row.executor)?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
@@ -1440,6 +1476,40 @@ impl<P: Port> Core<P> {
         self.pump_writes(session).await
     }
 
+    async fn respond_request(
+        &mut self,
+        session: &str,
+        fingerprint: &str,
+        response: serde_json::Value,
+        reply: Reply<AnswerReport>,
+    ) -> anyhow::Result<()> {
+        let Some(l) = self.writable(session) else {
+            let _ = reply.send(Err(ControlError::NotRunning(session.into())));
+            return Ok(());
+        };
+        let Some(d) = l.decision.clone() else {
+            let _ = reply.send(Err(ControlError::NoDecision(session.into())));
+            return Ok(());
+        };
+        if d.fingerprint() != fingerprint {
+            let _ = reply.send(Err(ControlError::DecisionChanged {
+                session: session.into(),
+                now: Some(d),
+            }));
+            return Ok(());
+        }
+        if !matches!(d.kind, crewd_term::DecisionKind::RunnerRequest { .. }) {
+            let _ = reply.send(Err(ControlError::Unsupported(l.executor.clone())));
+            return Ok(());
+        }
+        l.writes.push_back(Write::Answer {
+            expect: fingerprint.into(),
+            action: AnswerAction::Response(response),
+            reply: AnswerReply(reply),
+        });
+        self.pump_writes(session).await
+    }
+
     /// 按收下的先后写这个会话的写队列，直到队列空、或一串键交给了派生任务（它写完以 `Input::WriteDone` 回来）。
     /// 投递（`Write::Deliver`）在 actor 里直接 `send`（不阻塞：驱动层只是收下），编号当场记进 `inflight`，
     /// 所以它的回执不可能先于编号到达。
@@ -1506,6 +1576,9 @@ impl<P: Port> Core<P> {
                             AnswerAction::Choice(choice) => {
                                 handle.answer_choice(expect, choice).await
                             }
+                            AnswerAction::Response(response) => {
+                                handle.respond_request(expect, response).await
+                            }
                         };
                         let r = match outcome {
                             Ok(AnswerOutcome::Answered { cleared, now }) => {
@@ -1516,6 +1589,11 @@ impl<P: Port> Core<P> {
                                     session: session.clone(),
                                     now,
                                 })
+                            }
+                            Ok(AnswerOutcome::NeedsTerminal) if executor == "codex" => {
+                                Err(ControlError::internal(
+                                    "Codex human response write could not be confirmed; check session state",
+                                ))
                             }
                             Ok(AnswerOutcome::NeedsTerminal) => {
                                 Err(ControlError::NeedsTerminal(session.clone()))
@@ -1581,7 +1659,12 @@ impl<P: Port> Core<P> {
 
     // —— 拉起
 
-    fn check_launch(&self, exec: &Arc<dyn Executor>, crew: &str) -> Result<(), ControlError> {
+    fn check_launch(
+        &self,
+        exec: &Arc<dyn Executor>,
+        crew: &str,
+        executor: &str,
+    ) -> Result<(), ControlError> {
         if self.binary_replaced {
             return Err(ControlError::BinaryReplaced);
         }
@@ -1590,6 +1673,7 @@ impl<P: Port> Core<P> {
                 let _ = self.inbox.send(Input::BinaryReplaced { crew: crew.into() });
                 ControlError::BinaryReplaced
             }
+            LaunchError::NotConfigured(_) => ControlError::Unsupported(executor.into()),
             other => ControlError::internal(other),
         })
     }
@@ -1630,7 +1714,7 @@ impl<P: Port> Core<P> {
             return Err(ControlError::AlreadyRunning(row.id).into());
         }
         self.retry_terminal(&row.id).await?;
-        self.check_launch(&exec, &row.crew_id)?;
+        self.check_launch(&exec, &row.crew_id, &row.executor)?;
         let now = self.now();
         let workdir = row
             .workdir
@@ -2251,14 +2335,56 @@ impl<P: Port> Core<P> {
             SessionEvent::Delivery { id, outcome, .. } => {
                 log_err(self.on_delivery(session, id, outcome).await)
             }
-            // M2c 合进 main 后 `SessionEvent` 多了这四个（main@e66be68 起；claude 执行器不发它们，codex 发）。M3c 只接了
-            // claude，先不处理；接 codex 执行器时：`TurnEnded` → `crewd_collab::turn_trace::on_turn_end`（M3b）、
-            // `Notice` → 群里一条（M2c 的代拒去重是**按方法**的：同一个 MCP server 的多种拒绝要按 server 汇总再报）、
-            // `Profile` → 落库、`Item` → M2d 回放。
-            SessionEvent::Item { .. }
-            | SessionEvent::TurnEnded { .. }
-            | SessionEvent::Notice(_)
-            | SessionEvent::Profile(_) => {}
+            SessionEvent::Item { turn_id, item } => {
+                self.port.publish(OrchestraEvent::RunnerItem {
+                    session: session.into(),
+                    turn_id,
+                    item,
+                });
+            }
+            SessionEvent::TurnEnded {
+                turn_id,
+                last_agent_message,
+            } => {
+                self.port
+                    .runner_turn_end(session, &turn_id, &last_agent_message)
+                    .await?;
+            }
+            SessionEvent::Profile(profile) => {
+                self.port
+                    .patch_session(
+                        session,
+                        SessionPatch {
+                            model: profile.model.clone(),
+                            effort: profile.effort.clone(),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                self.port.publish(OrchestraEvent::RunnerProfile {
+                    session: session.into(),
+                    profile,
+                });
+            }
+            SessionEvent::Notice(detail) => {
+                let row = self.port.session(session).await?;
+                if let Some(row) = row {
+                    let notice = text::render(
+                        self.lang(),
+                        "notice.runner",
+                        &[("name", &safe_name(&row.name())), ("detail", &detail)],
+                    );
+                    self.port
+                        .post_system(
+                            Audience::HumanChannel {
+                                crew: row.crew_id,
+                                mention_human: false,
+                            },
+                            notice,
+                        )
+                        .await?;
+                }
+            }
             // 执行器挡着一笔投递、输入框里有草稿（T10d）：记下（`input_draft` 挡后面的投递、`session.changed` 带给客户端）；
             // 清掉了就再试一次投递。
             SessionEvent::InputDraft(draft) => {
@@ -2756,6 +2882,128 @@ mod tests {
             numbered: true,
             selected: Some(0),
         }
+    }
+
+    #[tokio::test]
+    async fn codex_confirmed_profile_and_runner_notice_are_consumed() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        rig.emit(
+            "cap",
+            SessionEvent::Profile(crewd_exec::session::Profile {
+                model: Some("actual-model".into()),
+                effort: Some("high".into()),
+                fast: Some(true),
+            }),
+        )
+        .await;
+        assert_eq!(rig.port.row("cap").model.as_deref(), Some("actual-model"));
+        assert_eq!(rig.port.row("cap").effort.as_deref(), Some("high"));
+        rig.emit("cap", SessionEvent::Profile(Default::default()))
+            .await;
+        assert_eq!(
+            rig.port.row("cap").model.as_deref(),
+            Some("actual-model"),
+            "unknown is not clearing the confirmed model"
+        );
+        rig.emit("cap", SessionEvent::Notice("Runner refused a form".into()))
+            .await;
+        assert!(
+            rig.port
+                .lock()
+                .posts
+                .iter()
+                .any(|(_, text)| text.contains("Runner refused a form")),
+            "runner notice must be visible"
+        );
+        let before = rig.port.lock().posts.len();
+        let old_generation = rig.live("cap").unwrap().generator + 1;
+        rig.core
+            .on_exec(
+                "cap",
+                old_generation,
+                SessionEvent::Notice("stale notice".into()),
+            )
+            .await
+            .unwrap();
+        rig.core
+            .on_exec(
+                "cap",
+                old_generation,
+                SessionEvent::Profile(crewd_exec::session::Profile {
+                    model: Some("stale".into()),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rig.port.lock().posts.len(), before);
+        assert_eq!(rig.port.row("cap").model.as_deref(), Some("actual-model"));
+    }
+
+    #[tokio::test]
+    async fn codex_items_and_turn_end_keep_identity_and_reject_old_generation() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let item = serde_json::json!({"id":"item-original", "type":"agentMessage", "text":"Need your choice?"});
+        rig.emit(
+            "cap",
+            SessionEvent::Item {
+                turn_id: "turn-original".into(),
+                item: item.clone(),
+            },
+        )
+        .await;
+        assert!(rig.port.lock().events.iter().any(|event| matches!(event,
+            OrchestraEvent::RunnerItem { session, turn_id, item: body } if session == "cap" && turn_id == "turn-original" && body == &item)));
+        rig.emit(
+            "cap",
+            SessionEvent::TurnEnded {
+                turn_id: "turn-original".into(),
+                last_agent_message: "Need your choice?".into(),
+            },
+        )
+        .await;
+        assert_eq!(
+            rig.port.lock().runner_ends,
+            vec![(
+                "cap".into(),
+                "turn-original".into(),
+                "Need your choice?".into()
+            )]
+        );
+        assert_eq!(
+            rig.port.row("cap").awaiting_question.as_deref(),
+            Some("Need your choice?")
+        );
+        let generation = rig.live("cap").unwrap().generator + 1;
+        let count = rig.port.lock().events.len();
+        rig.core
+            .on_exec(
+                "cap",
+                generation,
+                SessionEvent::Item {
+                    turn_id: "old".into(),
+                    item,
+                },
+            )
+            .await
+            .unwrap();
+        rig.core
+            .on_exec(
+                "cap",
+                generation,
+                SessionEvent::TurnEnded {
+                    turn_id: "old".into(),
+                    last_agent_message: "Old question?".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(rig.port.lock().events.len(), count);
+        assert_eq!(rig.port.lock().runner_ends.len(), 1);
     }
 
     fn start(executor: &str) -> StartSession {

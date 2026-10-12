@@ -25,7 +25,7 @@ pub enum RequestId {
 }
 
 impl RequestId {
-    fn from_value(v: &Value) -> Option<Self> {
+    pub(crate) fn from_value(v: &Value) -> Option<Self> {
         match v {
             Value::Number(n) => n.as_i64().map(Self::Int),
             Value::String(s) => Some(Self::Str(s.clone())),

@@ -1620,6 +1620,38 @@
             "data"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/RunnerItem"
+            },
+            "event": {
+              "const": "session.runnerItem",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/RunnerProfile"
+            },
+            "event": {
+              "const": "session.runnerProfile",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2675,6 +2707,69 @@
       ],
       "type": "object"
     },
+    "RunnerItem": {
+      "properties": {
+        "item": true,
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "turnId",
+        "item"
+      ],
+      "type": "object"
+    },
+    "RunnerProfile": {
+      "properties": {
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fast": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "RunnerRequestView": {
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "fingerprint",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
     "SenderKind": {
       "enum": [
         "human",
@@ -2913,6 +3008,16 @@
         "live": {
           "$ref": "#/$defs/SessionLive"
         },
+        "runnerRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunnerRequestView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "screen": {
           "type": "string"
         }
@@ -3001,6 +3106,24 @@
         "sessionId",
         "running",
         "working"
+      ],
+      "type": "object"
+    },
+    "SessionRespondRequestParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        },
+        "response": true,
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "fingerprint",
+        "response"
       ],
       "type": "object"
     },
@@ -3737,6 +3860,12 @@
     "session.changed": {
       "$ref": "#/$defs/SessionLive"
     },
+    "session.runnerItem": {
+      "$ref": "#/$defs/RunnerItem"
+    },
+    "session.runnerProfile": {
+      "$ref": "#/$defs/RunnerProfile"
+    },
     "system.shutdown": {
       "$ref": "#/$defs/SystemShutdown"
     },
@@ -4086,6 +4215,14 @@
         "$ref": "#/$defs/SessionInspection"
       }
     },
+    "session.interrupt": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
     "session.list": {
       "params": {
         "$ref": "#/$defs/SessionListParams"
@@ -4103,6 +4240,14 @@
       },
       "result": {
         "$ref": "#/$defs/SessionLive"
+      }
+    },
+    "session.respondRunnerRequest": {
+      "params": {
+        "$ref": "#/$defs/SessionRespondRequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionAnswerResult"
       }
     },
     "session.resume": {

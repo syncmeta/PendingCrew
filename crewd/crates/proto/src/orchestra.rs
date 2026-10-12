@@ -13,6 +13,8 @@ pub mod methods {
     pub const SESSION_STOP: &str = "session.stop";
     pub const SESSION_RESUME: &str = "session.resume";
     pub const SESSION_INSPECT: &str = "session.inspect";
+    pub const SESSION_INTERRUPT: &str = "session.interrupt";
+    pub const SESSION_RESPOND_REQUEST: &str = "session.respondRunnerRequest";
     pub const SESSION_ANSWER: &str = "session.answer";
     pub const DECISION_LIST: &str = "decision.list";
     pub const SESSION_LIVE: &str = "session.live";
@@ -38,6 +40,8 @@ pub mod methods {
         SESSION_LIVE,
         SESSION_INSPECT,
         SESSION_ANSWER,
+        SESSION_RESPOND_REQUEST,
+        SESSION_INTERRUPT,
         DECISION_LIST,
         CREW_SET_CAPTAIN,
         WAKE_LIST,
@@ -54,6 +58,7 @@ pub mod methods {
 pub const CAPABILITIES: &[&str] = &[
     "orchestra",
     "session.answer",
+    "session.respondRunnerRequest",
     "crewd.hibernate",
     "wake.explain",
     "message.receipts",
@@ -61,9 +66,27 @@ pub const CAPABILITIES: &[&str] = &[
 ];
 
 pub mod events {
+    pub const SESSION_RUNNER_ITEM: &str = "session.runnerItem";
+    pub const SESSION_RUNNER_PROFILE: &str = "session.runnerProfile";
     /// 某个 session 的唤醒行变了（`WakeChanged`）。主题 = `wake`。
     pub const WAKE_CHANGED: &str = "wake.changed";
     pub const TOPIC_WAKE: &str = "wake";
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunnerItem {
+    pub session_id: String,
+    pub turn_id: String,
+    pub item: serde_json::Value,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunnerProfile {
+    pub session_id: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub fast: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -85,9 +108,27 @@ pub struct SessionAnswerParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct RunnerRequestView {
+    pub fingerprint: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionRespondRequestParams {
+    pub session_id: String,
+    pub fingerprint: String,
+    pub response: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInspection {
     pub live: crate::SessionLive,
     pub screen: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_request: Option<RunnerRequestView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -554,6 +595,17 @@ pub(crate) fn schema_entries(g: &mut schemars::SchemaGenerator) -> (Entries, Ent
     use crate::{m, many, sub};
     let methods = vec![
         (
+            methods::SESSION_INTERRUPT,
+            m(sub::<SessionIdParams>(g), sub::<crate::Empty>(g)),
+        ),
+        (
+            methods::SESSION_RESPOND_REQUEST,
+            m(
+                sub::<SessionRespondRequestParams>(g),
+                sub::<SessionAnswerResult>(g),
+            ),
+        ),
+        (
             methods::SESSION_INSPECT,
             m(sub::<SessionInspectParams>(g), sub::<SessionInspection>(g)),
         ),
@@ -617,7 +669,11 @@ pub(crate) fn schema_entries(g: &mut schemars::SchemaGenerator) -> (Entries, Ent
             m(sub::<MessageReceiptsParams>(g), many(sub::<Receipt>(g))),
         ),
     ];
-    let events = vec![(events::WAKE_CHANGED, sub::<WakeChanged>(g))];
+    let events = vec![
+        (events::WAKE_CHANGED, sub::<WakeChanged>(g)),
+        (events::SESSION_RUNNER_ITEM, sub::<RunnerItem>(g)),
+        (events::SESSION_RUNNER_PROFILE, sub::<RunnerProfile>(g)),
+    ];
     (methods, events)
 }
 

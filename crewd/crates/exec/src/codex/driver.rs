@@ -264,6 +264,7 @@ pub async fn start_codex(
         ev_tx,
         ready: Some(ready_tx),
         controls: HashMap::new(),
+        answers: HashMap::new(),
         next_ticket: 0,
         live,
         files,
@@ -301,6 +302,7 @@ struct Task {
     /// 还没告诉 `start_codex` 结果（`Some`）= 还在启动。
     ready: Option<oneshot::Sender<Result<(), StartError>>>,
     controls: HashMap<u64, oneshot::Sender<ControlOutcome>>,
+    answers: HashMap<u64, oneshot::Sender<AnswerOutcome>>,
     next_ticket: u64,
     /// 占着的 thread id（本进程里同一个 thread 只能跑一个）。
     live: Option<LiveId>,
@@ -452,7 +454,7 @@ fn execute(
     for action in actions {
         match action {
             CodexAction::Write(line) => {
-                let _ = t.proc.writer.send(line);
+                let _ = t.proc.writer.send(line.into());
             }
             CodexAction::Record(thread) => {
                 let (ledger, tx) = (t.start.ledger.clone(), record_tx.clone());
@@ -463,6 +465,31 @@ fn execute(
                         .and_then(|r| r.map_err(|e| e.to_string()));
                     let _ = tx.send(result);
                 });
+            }
+            CodexAction::AnswerDone { ticket, outcome } => {
+                if let Some(reply) = t.answers.remove(&ticket) {
+                    if matches!(outcome, AnswerOutcome::Answered { .. }) {
+                        let (written, rx) = oneshot::channel();
+                        let queued = t
+                            .proc
+                            .writer
+                            .send(super::transport::WriterMessage::Barrier(written))
+                            .is_ok();
+                        let deadline = t.config.core.request_timeout;
+                        tokio::spawn(async move {
+                            let result = if queued
+                                && matches!(tokio::time::timeout(deadline, rx).await, Ok(Ok(())))
+                            {
+                                outcome
+                            } else {
+                                AnswerOutcome::NeedsTerminal
+                            };
+                            let _ = reply.send(result);
+                        });
+                    } else {
+                        let _ = reply.send(outcome);
+                    }
+                }
             }
             CodexAction::ControlDone { ticket, outcome } => {
                 if let Some(reply) = t.controls.remove(&ticket) {
@@ -520,12 +547,37 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         Command::Snapshot { reply } => {
             let _ = reply.send(None);
         }
+        Command::AnswerChoice {
+            expect,
+            choice,
+            reply,
+        } => {
+            let ticket = t.next_ticket;
+            t.next_ticket += 1;
+            t.answers.insert(ticket, reply);
+            let outcome = t.core.answer_choice(&expect, choice, now);
+            t.core.report_answer(ticket, outcome);
+        }
+        Command::RespondRequest {
+            expect,
+            response,
+            reply,
+        } => {
+            let ticket = t.next_ticket;
+            t.next_ticket += 1;
+            t.answers.insert(ticket, reply);
+            let outcome = t.core.respond_request(&expect, response, now);
+            t.core.report_answer(ticket, outcome);
+        }
+        Command::RunnerRequest { reply } => {
+            let _ = reply.send(t.core.runner_request());
+        }
         Command::Status { reply } => {
             let _ = reply.send(SessionStatus {
                 state: t.core.state(),
                 working: t.core.is_working(),
                 health: t.core.health().cloned(),
-                pending_decision: None,
+                pending_decision: t.core.pending_decision().cloned(),
                 pid: t.proc.pid,
                 agent_session_id: t.core.thread_id().unwrap_or_default().to_string(),
             });

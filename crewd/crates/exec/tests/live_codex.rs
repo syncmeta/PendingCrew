@@ -145,7 +145,10 @@ async fn live_codex_turn_sees_the_untrusted_whiteboard_context() {
     let answer = tokio::time::timeout(Duration::from_secs(180), async {
         while let Some(e) = rx.recv().await {
             eprintln!("{e:?}");
-            if let SessionEvent::TurnEnded { last_agent_message } = e {
+            if let SessionEvent::TurnEnded {
+                last_agent_message, ..
+            } = e
+            {
                 return Some(last_agent_message);
             }
         }

@@ -287,6 +287,46 @@ impl Handle {
         .await
     }
 
+    pub async fn interrupt(&self, session: &str) -> Result<(), ControlError> {
+        self.call(|reply| Cmd::Interrupt {
+            session: session.into(),
+            reply,
+        })
+        .await
+    }
+    pub async fn respond_request(
+        &self,
+        session: &str,
+        fingerprint: &str,
+        response: serde_json::Value,
+    ) -> Result<AnswerReport, ControlError> {
+        let (session, fingerprint) = (session.to_string(), fingerprint.to_string());
+        self.call(|reply| Cmd::RespondRequest {
+            session,
+            fingerprint,
+            response,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn runner_request(
+        &self,
+        session: &str,
+    ) -> Result<Option<crewd_exec::codex::human::RunnerRequest>, ControlError> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::Handle {
+                session: session.into(),
+                reply: tx,
+            }))
+            .map_err(|_| stopped())?;
+        match rx.await.map_err(|_| stopped())? {
+            Some(h) => h.runner_request().await.map_err(|_| stopped()),
+            None => Ok(None),
+        }
+    }
+
     /// 实时状态 + 屏幕文本（屏幕在 actor 之外读，不卡 actor）。
     pub async fn inspect(
         &self,
