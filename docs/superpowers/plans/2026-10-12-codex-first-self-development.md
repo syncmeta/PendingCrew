@@ -11,7 +11,7 @@
 - 按人类授权，降噪改动单独移植到 main，`d3cb5b23` 已推送并核实远端；该基线通过格式、lint 和 1115 项离线测试。整合树另外 207 个提交未随降噪带入 main，共享目录中既有未跟踪 ACP 资料保留。
 - Jev 多后端仅保留[讨论方案](../specs/2026-10-12-decision-provider-options.md)，不继续实现。
 - Codex 首个接线单元保存为独立候选 `codex/codex-orchestra-20261012@36f2ac81`：新增独立 Executor 适配器，传递世界观、模型/effort、MCP、持久 thread、上下文、因果绑定和停止/续跑；成功投递复用已有观察函数，在 app-server 确认接受后、广播事件前登记。回归先在未接观察器时失败，再验证修复及超时不计成功；候选源码通过格式、lint 和 2320 项离线测试（8 项活测试未运行）。此处不是生产或真实 Codex 验收。
-- 首版候选已推进为 `codex/codex-orchestra-20261012@bec60f86`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建；合成窗口已验证新建、发消息、原生审批/答复、恢复与停止。未安装、未调用真实模型、未迁移日常数据，也尚未将候选代码纳入共享 main。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
+- 首版候选已推进为 `codex/codex-orchestra-20261012@eeb24dca`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建；合成窗口已验证新建、发消息、原生审批/答复、恢复与停止。用户随后授权独立首版真实任务，现有 Codex 登录已完成一次隔离自我开发回归，群内报告与红/绿测试已核查。未安装、未迁移日常数据，也尚未将候选代码纳入共享 main。本机运行产物对应 bec60f86，eeb24dca 仅增加回归测试。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
 - 下一步按这个顺序串行推进：核对并纳入已接受后端整合输入；完成 Codex 生产事件与待请求链；接通 Mac 本机候选并验证恢复路径。完整自由表、Jev 自动调度、其他端与 Claude ACP 不抢占这条路径。
 
 最初只读核查的基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元；当时共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`。这是历史核查快照，不能把两个源码状态混作同一构建证据；本次进展见上面的推进记录。
