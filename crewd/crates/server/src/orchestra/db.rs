@@ -46,7 +46,7 @@ impl DbPort {
         &self,
         f: impl FnOnce(&rusqlite::Connection) -> collab::Result<T> + Send + 'static,
     ) -> Result<T> {
-        Ok(self.state.db.call(move |s| f(s.conn())).await??)
+        Ok(self.state.db.call_result(move |s| f(s.conn())).await??)
     }
 
     async fn write<T: Send + 'static>(
@@ -1319,6 +1319,122 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn s4_read_owner_orchestra_real_sql_records_once_before_mapping() {
+        let (state, port, dir) = seeded().await;
+        let db = state.db.clone();
+        let health = db.health();
+        let control = db
+            .call(|s| {
+                s.conn()
+                    .query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+            })
+            .await;
+        let before = health.snapshot();
+        let failed = port
+            .read(|conn| {
+                conn.query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(Into::into)
+            })
+            .await;
+        let observed = health.snapshot();
+        let recovered = port
+            .read(|conn| {
+                conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                    .map_err(Into::into)
+            })
+            .await;
+        let later = health.snapshot();
+        drop(port);
+        drop(state);
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(dir);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(&control, Ok(Err(rusqlite::Error::SqliteFailure(f, _))) if f.extended_code == rusqlite::ffi::SQLITE_ERROR),
+            "real raw SQLite missing-table control"
+        );
+        assert!(
+            before.is_none(),
+            "plain value-return Db call does not observe nested SQL result"
+        );
+        assert!(
+            matches!(failed.as_ref().err().and_then(|e| e.downcast_ref::<collab::CollabError>()), Some(collab::CollabError::Store(crewd_store::StoreError::Sql(rusqlite::Error::SqliteFailure(f, _)))) if f.extended_code == rusqlite::ffi::SQLITE_ERROR),
+            "known owning Collab SQL error preserved in original anyhow result"
+        );
+        assert_eq!(recovered.unwrap(), 42);
+        assert_eq!(
+            observed, later,
+            "successful FIFO read retains history without another incident"
+        );
+        // First intended functional target; kind/stage are NOTREACHED if this fails.
+        assert_eq!(
+            observed.as_ref().map(|f| f.sequence),
+            Some(1),
+            "one actual owning read SQL failure observed before error mapping"
+        );
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_read_owner_orchestra_business_not_found_adds_no_fault() {
+        let (state, port, dir) = seeded().await;
+        let db = state.db.clone();
+        let health = db.health();
+        let before = health.snapshot();
+        let refused = port
+            .read(|conn| crewd_collab::crews::get(conn, "s4-read-owner-no-such-crew"))
+            .await;
+        let after = health.snapshot();
+        let recovered = port
+            .read(|conn| {
+                conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                    .map_err(Into::into)
+            })
+            .await;
+        let later = health.snapshot();
+        drop(port);
+        drop(state);
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(dir);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(
+                refused
+                    .as_ref()
+                    .err()
+                    .and_then(|e| e.downcast_ref::<collab::CollabError>()),
+                Some(collab::CollabError::NotFound(_))
+            ),
+            "known owning business NotFound preserved in original anyhow result"
+        );
+        assert_eq!(recovered.unwrap(), 42);
+        assert!(
+            before.is_none(),
+            "fresh owned fixture starts without fault history"
+        );
+        assert_eq!(
+            before, after,
+            "business refusal does not record a database incident"
+        );
+        assert_eq!(
+            after, later,
+            "successful FIFO read does not add a database incident"
+        );
+    }
     use super::fixture::{post_as, seeded};
     use super::*;
     use crewd_wake::breaker;

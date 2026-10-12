@@ -105,7 +105,7 @@ impl AgentIdLedger for DbLedger {
     fn recorded(&self) -> io::Result<Option<String>> {
         let session = self.session_id.clone();
         self.db
-            .call_blocking(move |s| sessions::agent_session_id(s.conn(), &session))
+            .call_result_blocking(move |s| sessions::agent_session_id(s.conn(), &session))
             .map_err(to_io)?
             .map_err(to_io)
     }
@@ -115,7 +115,7 @@ impl AgentIdLedger for DbLedger {
         let session = self.session_id.clone();
         let id = agent_session_id.to_owned();
         self.db
-            .call_blocking(move |s| sessions::set_agent_session_id(s.conn(), &session, &id))
+            .call_result_blocking(move |s| sessions::set_agent_session_id(s.conn(), &session, &id))
             .map_err(to_io)?
             .map_err(to_io)
     }
@@ -183,6 +183,10 @@ mod tests {
         assert_eq!(
             missing.record("synthetic-id").unwrap_err().kind(),
             io::ErrorKind::NotFound
+        );
+        assert!(
+            db.health().snapshot().is_none(),
+            "valid operations and invalid/missing-session business errors add no DB fault"
         );
         db.shutdown();
         assert_eq!(ledger.recorded().unwrap_err().kind(), io::ErrorKind::Other);
@@ -276,5 +280,127 @@ mod tests {
             Some("claude-uuid"),
             "claude 的会话号原样留着"
         );
+    }
+
+    #[test]
+    fn s4_ledger_nested_recorded_sql_observes_once_before_io_conversion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seeded(dir.path());
+        let db = crewd_store::Db::spawn(Store::open(&path).unwrap()).unwrap();
+        let health = db.health();
+        let ledger = DbLedger::new(db.clone(), "w-1");
+        // Actual owned schema rename leaves the real ledger SELECT unable to find its table.
+        let setup = db.call_blocking(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE sessions RENAME TO s4_ledger_held_sessions")
+        });
+        // Original raw owning query, not a handcrafted error value. Plain call must not observe nested results.
+        let control = db.call_blocking(|s| sessions::agent_session_id(s.conn(), "w-1"));
+        let before = health.snapshot();
+        let failed = ledger.recorded();
+        let observed = health.snapshot();
+        let restored = db.call_blocking(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE s4_ledger_held_sessions RENAME TO sessions")
+        });
+        let recovered = ledger.recorded();
+        let later = health.snapshot();
+        drop(ledger);
+        db.shutdown();
+        drop(dir);
+        assert!(
+            setup.is_ok_and(|r| r.is_ok()) && restored.is_ok_and(|r| r.is_ok()),
+            "actual owned schema setup/restore before semantics"
+        );
+        assert!(
+            matches!(&control, Ok(Err(StoreError::Sql(rusqlite::Error::SqliteFailure(f, _)))) if f.extended_code == rusqlite::ffi::SQLITE_ERROR),
+            "real owning SQLite missing-table control"
+        );
+        assert!(
+            before.is_none(),
+            "plain Db call does not observe its nested result"
+        );
+        assert!(
+            matches!(&failed, Err(e) if e.kind() == io::ErrorKind::Other),
+            "original ledger SQL-to-I/O vocabulary stays unchanged"
+        );
+        assert!(
+            matches!(recovered, Ok(None)),
+            "same FIFO ledger recovers after owned schema restore"
+        );
+        assert_eq!(observed, later, "successful ledger read retains history");
+        // First intended missing-mechanism target on the structural health floor.
+        assert_eq!(
+            observed.as_ref().map(|f| f.sequence),
+            Some(1),
+            "one real ledger read SQL failure observed before I/O conversion"
+        );
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+    }
+
+    #[test]
+    fn s4_ledger_nested_record_sql_observes_once_and_preserves_prior_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = seeded(dir.path());
+        let db = crewd_store::Db::spawn(Store::open(&path).unwrap()).unwrap();
+        let health = db.health();
+        let ledger = DbLedger::new(db.clone(), "w-1");
+        let initial = ledger.record("s4-original-id");
+        let setup = db.call_blocking(|s| s.conn().execute_batch(
+            "CREATE TRIGGER s4_ledger_reject BEFORE UPDATE OF agent_session_id ON sessions BEGIN SELECT RAISE(ABORT,'S4_LEDGER_SQL_TRIGGER'); END"
+        ));
+        let control =
+            db.call_blocking(|s| sessions::set_agent_session_id(s.conn(), "w-1", "s4-control-id"));
+        let before = health.snapshot();
+        let failed = ledger.record("s4-failed-id");
+        let observed = health.snapshot();
+        let unchanged = ledger.recorded();
+        let restored =
+            db.call_blocking(|s| s.conn().execute_batch("DROP TRIGGER s4_ledger_reject"));
+        let next = ledger.record("s4-next-id");
+        let recovered = ledger.recorded();
+        let later = health.snapshot();
+        drop(ledger);
+        db.shutdown();
+        drop(dir);
+        assert!(
+            initial.is_ok() && setup.is_ok_and(|r| r.is_ok()) && restored.is_ok_and(|r| r.is_ok()),
+            "real owned trigger setup/removal before semantics"
+        );
+        assert!(
+            matches!(&control, Ok(Err(StoreError::Sql(rusqlite::Error::SqliteFailure(f, Some(message))))) if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER && message == "S4_LEDGER_SQL_TRIGGER"),
+            "real SQLite1811 control, not fabricated error"
+        );
+        assert!(before.is_none());
+        assert!(
+            matches!(&failed, Err(e) if e.kind() == io::ErrorKind::Other),
+            "original ledger I/O error preserved"
+        );
+        assert_eq!(
+            unchanged.unwrap().as_deref(),
+            Some("s4-original-id"),
+            "failed ledger update cannot overwrite prior committed id"
+        );
+        assert!(next.is_ok());
+        assert_eq!(
+            recovered.unwrap().as_deref(),
+            Some("s4-next-id"),
+            "same FIFO ledger recovers once trigger removed"
+        );
+        assert_eq!(
+            observed, later,
+            "successful writes/read do not erase/add fault"
+        );
+        // First intended target. Later kind/stage are NOTREACHED if this fails.
+        assert_eq!(
+            observed.as_ref().map(|f| f.sequence),
+            Some(1),
+            "one actual ledger update SQL failure observed before I/O conversion"
+        );
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
     }
 }

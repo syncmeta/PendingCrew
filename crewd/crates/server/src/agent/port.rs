@@ -141,7 +141,7 @@ where
     T: Send + 'static,
     F: FnOnce(&Connection) -> crewd_collab::Result<T> + Send + 'static,
 {
-    Ok(st.db.call(move |s| f(s.conn())).await??)
+    Ok(st.db.call_result(move |s| f(s.conn())).await??)
 }
 
 /// 写：一个事务，提交后事件进 Hub（`AppState::collab`）。
@@ -1658,6 +1658,110 @@ pub async fn handoff_captain(st: &AppState, crew: &str, session: &str) -> PortRe
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn s4_read_owner_agent_real_sql_records_once_before_mapping() {
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let db = fixture.state.db.clone();
+        let health = db.health();
+        let control = db
+            .call(|s| {
+                s.conn()
+                    .query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+            })
+            .await;
+        let before = health.snapshot();
+        let failed = read(&fixture.state, |conn| {
+            conn.query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(Into::into)
+        })
+        .await;
+        let observed = health.snapshot();
+        let recovered = read(&fixture.state, |conn| {
+            conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                .map_err(Into::into)
+        })
+        .await;
+        let later = health.snapshot();
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(fixture);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(&control, Ok(Err(rusqlite::Error::SqliteFailure(f, _))) if f.extended_code == rusqlite::ffi::SQLITE_ERROR),
+            "real raw SQLite missing-table control"
+        );
+        assert!(
+            before.is_none(),
+            "plain value-return Db call does not observe nested SQL result"
+        );
+        assert!(
+            matches!(&failed, Err(PortError::Internal(_))),
+            "original PortError variant stays unchanged"
+        );
+        assert_eq!(recovered.unwrap(), 42);
+        assert_eq!(
+            observed, later,
+            "successful FIFO read retains history without another incident"
+        );
+        // First intended functional target; kind/stage are NOTREACHED if this fails.
+        assert_eq!(
+            observed.as_ref().map(|f| f.sequence),
+            Some(1),
+            "one actual owning read SQL failure observed before error mapping"
+        );
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_read_owner_agent_business_not_found_adds_no_fault() {
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let db = fixture.state.db.clone();
+        let health = db.health();
+        let before = health.snapshot();
+        let refused = read(&fixture.state, |conn| {
+            crewd_collab::crews::get(conn, "s4-read-owner-no-such-crew")
+        })
+        .await;
+        let after = health.snapshot();
+        let recovered = read(&fixture.state, |conn| {
+            conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                .map_err(Into::into)
+        })
+        .await;
+        let later = health.snapshot();
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(fixture);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(&refused, Err(PortError::NotFound(_))),
+            "real business NotFound mapping unchanged"
+        );
+        assert_eq!(recovered.unwrap(), 42);
+        assert!(
+            before.is_none(),
+            "fresh owned fixture starts without fault history"
+        );
+        assert_eq!(
+            before, after,
+            "business refusal does not record a database incident"
+        );
+        assert_eq!(
+            after, later,
+            "successful FIFO read does not add a database incident"
+        );
+    }
     use super::*;
     use crate::agent::Role;
     use crate::agent::testkit::Fixture;
@@ -2478,6 +2582,131 @@ mod tests {
                 })
                 .await
                 .unwrap()
+        }
+
+        #[tokio::test]
+        async fn s4_prediction_real_sql_records_typed_cause_before_original_port_mapping() {
+            use crewd_store::db_health::{DbFaultKind, DbFaultStage};
+            let f = Fixture::new().await;
+            let message = directed(&f, "S4_PREDICTION_REAL_MESSAGE").await;
+            let captain = f.captain.clone();
+            let db = f.state.db.clone();
+            let health = db.health();
+            let before_surface = snapshot(&f).await;
+            db.call(|s| {
+                s.conn()
+                    .execute_batch("ALTER TABLE messages RENAME TO s4_prediction_held_messages")
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let id = message.id.clone();
+            let cause = db
+                .call(move |s| crewd_collab::messages::get(s.conn(), &id))
+                .await
+                .unwrap();
+            let before = health.snapshot();
+            let result = predict_wakes(
+                &f.state,
+                &f.worker,
+                std::slice::from_ref(&message),
+                Locale::Zh,
+            )
+            .await;
+            let observed = health.snapshot();
+            db.call(|s| {
+                s.conn()
+                    .execute_batch("ALTER TABLE s4_prediction_held_messages RENAME TO messages")
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            let recovered = predict_wakes(&f.state, &f.worker, &[message], Locale::Zh).await;
+            let after_surface = snapshot(&f).await;
+            let later = health.snapshot();
+            let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+            drop(f);
+            assert!(
+                joined.is_ok(),
+                "owned DB cleanup before prediction history oracle"
+            );
+            assert!(matches!(cause, Err(crewd_collab::CollabError::Store(
+                crewd_store::StoreError::Sql(rusqlite::Error::SqliteFailure(ref e, _)))) if e.extended_code == 1));
+            assert!(
+                before.is_none(),
+                "plain raw control does not observe nested result"
+            );
+            assert!(
+                matches!(result, Err(PortError::Internal(_))),
+                "original public mapping retained"
+            );
+            let recovered = recovered.unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].session, captain);
+            assert!(!recovered[0].label.is_empty());
+            assert_eq!(
+                before_surface, after_surface,
+                "same readonly prediction surface as S72"
+            );
+            assert_eq!(
+                observed, later,
+                "healthy prediction does not erase error history"
+            );
+            // First intended missing-mechanism oracle. Later kind/stage NOTREACHED on RED.
+            assert_eq!(observed.as_ref().map(|fault| fault.sequence), Some(1));
+            let fault = observed.unwrap();
+            assert_eq!(fault.kind, DbFaultKind::Sql);
+            assert_eq!(fault.stage, DbFaultStage::Job);
+        }
+
+        #[tokio::test]
+        async fn s4_prediction_real_not_found_and_identity_internal_keep_no_db_history() {
+            let f = Fixture::new().await;
+            let message = directed(&f, "S4_PREDICTION_POSITIVE_MESSAGE").await;
+            let captain = f.captain.clone();
+            let db = f.state.db.clone();
+            let health = db.health();
+            let before_surface = snapshot(&f).await;
+            let cause = db
+                .call(|s| crewd_collab::messages::get(s.conn(), "s4-prediction-no-such-message"))
+                .await
+                .unwrap();
+            let before = health.snapshot();
+            let mut missing = message.clone();
+            missing.id = "s4-prediction-no-such-message".into();
+            let not_found = predict_wakes(&f.state, &f.worker, &[missing], Locale::Zh).await;
+            let after_not_found = health.snapshot();
+            let mut mismatch = message.clone();
+            mismatch.seq += 1;
+            let internal = predict_wakes(&f.state, &f.worker, &[mismatch], Locale::Zh).await;
+            let after_internal = health.snapshot();
+            let recovered = predict_wakes(&f.state, &f.worker, &[message], Locale::Zh).await;
+            let later = health.snapshot();
+            let after_surface = snapshot(&f).await;
+            let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+            drop(f);
+            assert!(
+                joined.is_ok(),
+                "owned DB cleanup before non-DB error assertions"
+            );
+            assert!(
+                matches!(cause, Err(crewd_collab::CollabError::NotFound(ref r))
+                if r.code == crewd_collab::refusal::Code::MessageNotFound)
+            );
+            assert!(matches!(not_found, Err(PortError::NotFound(_))));
+            assert!(matches!(internal, Err(PortError::Internal(ref text))
+                if text == "committed message identity mismatch"));
+            let recovered = recovered.unwrap();
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].session, captain);
+            assert_eq!(before_surface, after_surface);
+            assert!(before.is_none());
+            assert!(after_not_found.is_none());
+            assert!(
+                after_internal.is_none(),
+                "Internal(String) is not evidence of SQL/storage"
+            );
+            assert!(later.is_none());
         }
 
         #[tokio::test]

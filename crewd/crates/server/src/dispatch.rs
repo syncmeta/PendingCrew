@@ -105,7 +105,7 @@ async fn read<T: Serialize + Send + 'static>(
 ) -> Result<Value, RpcError> {
     let v = state
         .db
-        .call(move |s| f(s.conn()))
+        .call_result(move |s| f(s.conn()))
         .await
         .map_err(internal)?
         .map_err(collab_err)?;
@@ -479,6 +479,110 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn s4_read_owner_dispatch_real_sql_records_once_before_mapping() {
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let db = fixture.state.db.clone();
+        let health = db.health();
+        let control = db
+            .call(|s| {
+                s.conn()
+                    .query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+            })
+            .await;
+        let before = health.snapshot();
+        let failed = read(&fixture.state, |conn| {
+            conn.query_row("SELECT v FROM s4_read_owner_missing_table", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(Into::into)
+        })
+        .await;
+        let observed = health.snapshot();
+        let recovered = read(&fixture.state, |conn| {
+            conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                .map_err(Into::into)
+        })
+        .await;
+        let later = health.snapshot();
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(fixture);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(&control, Ok(Err(rusqlite::Error::SqliteFailure(f, _))) if f.extended_code == rusqlite::ffi::SQLITE_ERROR),
+            "real raw SQLite missing-table control"
+        );
+        assert!(
+            before.is_none(),
+            "plain value-return Db call does not observe nested SQL result"
+        );
+        assert!(
+            matches!(&failed, Err(e) if e.code == RpcError::INTERNAL && e.message.contains('#') && !e.message.contains("s4_read_owner_missing_table")),
+            "original numbered generic RPC error stays unchanged"
+        );
+        assert_eq!(recovered.unwrap(), serde_json::json!(42));
+        assert_eq!(
+            observed, later,
+            "successful FIFO read retains history without another incident"
+        );
+        // First intended functional target; kind/stage are NOTREACHED if this fails.
+        assert_eq!(
+            observed.as_ref().map(|f| f.sequence),
+            Some(1),
+            "one actual owning read SQL failure observed before error mapping"
+        );
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_read_owner_dispatch_business_not_found_adds_no_fault() {
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let db = fixture.state.db.clone();
+        let health = db.health();
+        let before = health.snapshot();
+        let refused = read(&fixture.state, |conn| {
+            crewd_collab::crews::get(conn, "s4-read-owner-no-such-crew")
+        })
+        .await;
+        let after = health.snapshot();
+        let recovered = read(&fixture.state, |conn| {
+            conn.query_row("SELECT 42", [], |row| row.get::<_, i64>(0))
+                .map_err(Into::into)
+        })
+        .await;
+        let later = health.snapshot();
+        let closed = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(fixture);
+        assert!(
+            closed.is_ok(),
+            "original owned DB shutdown task completed before semantics"
+        );
+        assert!(
+            matches!(&refused, Err(e) if e.code == RpcError::NOT_FOUND),
+            "real business NotFound mapping unchanged"
+        );
+        assert_eq!(recovered.unwrap(), serde_json::json!(42));
+        assert!(
+            before.is_none(),
+            "fresh owned fixture starts without fault history"
+        );
+        assert_eq!(
+            before, after,
+            "business refusal does not record a database incident"
+        );
+        assert_eq!(
+            after, later,
+            "successful FIFO read does not add a database incident"
+        );
+    }
     use super::*;
     use crewd_store::StoreError;
     use crewd_work::{AskId, EntryNo, Rejected, Violation, WorkId};

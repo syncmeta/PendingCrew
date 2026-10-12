@@ -343,6 +343,19 @@ fn receipt_view(r: &ReceiptRow) -> Receipt {
     }
 }
 
+// Owning read after the accepted start completes; mapping remains outside the FIFO job.
+async fn read_started_session(
+    state: &AppState,
+    id: String,
+) -> Result<crewd_proto::Session, RpcError> {
+    state
+        .db
+        .call_result(move |s| crewd_collab::sessions::get(s.conn(), &id))
+        .await
+        .map_err(dispatch::internal)?
+        .map_err(dispatch::collab_err)
+}
+
 /// 一个 M3c 方法（[`handles`] 已核过）。
 pub async fn call(
     h: &Handle,
@@ -391,12 +404,7 @@ pub async fn call(
                 isolation: p.isolation,
             };
             let row = h.start(req, Origin::Human).await.map_err(rpc_err)?;
-            let s = state
-                .db
-                .call(move |s| crewd_collab::sessions::get(s.conn(), &row.id))
-                .await
-                .map_err(dispatch::internal)?
-                .map_err(dispatch::collab_err)?;
+            let s = read_started_session(state, row.id).await?;
             to_value(s)
         }
         methods::SESSION_STOP => {
@@ -538,6 +546,163 @@ pub async fn call(
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn s4_rpc_started_session_real_sql_history() {
+        let (st, port, dir) = crate::orchestra::db::fixture::seeded().await;
+        let db = st.db.clone();
+        let health = db.health();
+        let exec = StandIn::default();
+        let (h, actor) = spawn(
+            Arc::new(port),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        // Genuine successful RPC/real DbPort/StandIn start before touching schema.
+        let value = rpc(&h, &st, methods::SESSION_START, json!({
+            "crewId":"c-1", "role":"worker", "executor":"claude", "brief":"synthetic S4 postread",
+            "title":"S4 postread", "isolation":false
+        })).await.unwrap();
+        let started: crewd_proto::Session = serde_json::from_value(value).unwrap();
+        let launched = exec.lock().launches.iter().any(|l| l.session == started.id);
+        let abort = actor.abort_handle();
+        let stopped = h.shutdown(Duration::from_secs(3)).await;
+        if !stopped {
+            abort.abort();
+        }
+        let joined_actor = tokio::time::timeout(Duration::from_secs(3), actor.finished()).await;
+        drop(h);
+        // Extracted owning postread after actor close; not a same-start-call fault E2E.
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE sessions RENAME TO s4_rpc_held_sessions")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let id = started.id.clone();
+        let cause = db
+            .call(move |s| crewd_collab::sessions::get(s.conn(), &id))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = read_started_session(&st, started.id.clone()).await;
+        let observed = health.snapshot();
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE s4_rpc_held_sessions RENAME TO sessions")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let recovered = read_started_session(&st, started.id.clone()).await;
+        let later = health.snapshot();
+        drop(st);
+        let joined_db = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(dir);
+        assert!(
+            stopped,
+            "aborted actor is fallback cleanup, not normal lifecycle proof"
+        );
+        assert!(
+            matches!(joined_actor, Ok(Ok(()))),
+            "owned actor join: {joined_actor:?}"
+        );
+        assert!(joined_db.is_ok(), "owned DB cleanup before history oracle");
+        assert!(
+            launched,
+            "actual stand-in launch of successfully returned session"
+        );
+        assert_eq!(recovered.unwrap().id, started.id);
+        assert!(matches!(cause, Err(crewd_collab::CollabError::Store(
+            crewd_store::StoreError::Sql(rusqlite::Error::SqliteFailure(ref e, _)))) if e.extended_code == 1));
+        let error = original.unwrap_err();
+        assert_eq!(error.code, RpcError::INTERNAL);
+        assert!(!error.message.contains("s4_rpc_held_sessions"));
+        assert!(before.is_none());
+        assert_eq!(observed, later);
+        // First intended missing-observation oracle. Later stage/kind are NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|f| f.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crewd_store::db_health::DbFaultStage::Job);
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_rpc_started_session_business_refusal_keeps_no_history() {
+        let (st, port, dir) = crate::orchestra::db::fixture::seeded().await;
+        let db = st.db.clone();
+        let health = db.health();
+        let exec = StandIn::default();
+        let (h, actor) = spawn(
+            Arc::new(port),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        // Genuine successful RPC/real DbPort/StandIn start before touching schema.
+        let value = rpc(&h, &st, methods::SESSION_START, json!({
+            "crewId":"c-1", "role":"worker", "executor":"claude", "brief":"synthetic S4 postread",
+            "title":"S4 postread", "isolation":false
+        })).await.unwrap();
+        let started: crewd_proto::Session = serde_json::from_value(value).unwrap();
+        let launched = exec.lock().launches.iter().any(|l| l.session == started.id);
+        let abort = actor.abort_handle();
+        let stopped = h.shutdown(Duration::from_secs(3)).await;
+        if !stopped {
+            abort.abort();
+        }
+        let joined_actor = tokio::time::timeout(Duration::from_secs(3), actor.finished()).await;
+        drop(h);
+        // Extracted owning postread after actor close; not a same-start-call fault E2E.
+        let cause = db
+            .call(|s| crewd_collab::sessions::get(s.conn(), "s4-rpc-no-such-session"))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = read_started_session(&st, "s4-rpc-no-such-session".into()).await;
+        let observed = health.snapshot();
+
+        let recovered = read_started_session(&st, started.id.clone()).await;
+        let later = health.snapshot();
+        drop(st);
+        let joined_db = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(dir);
+        assert!(
+            stopped,
+            "aborted actor is fallback cleanup, not normal lifecycle proof"
+        );
+        assert!(
+            matches!(joined_actor, Ok(Ok(()))),
+            "owned actor join: {joined_actor:?}"
+        );
+        assert!(joined_db.is_ok(), "owned DB cleanup before history oracle");
+        assert!(
+            launched,
+            "actual stand-in launch of successfully returned session"
+        );
+        assert_eq!(recovered.unwrap().id, started.id);
+        assert!(
+            matches!(cause, Err(crewd_collab::CollabError::NotFound(ref r))
+            if r.code == Code::SessionNotFound)
+        );
+        let error = original.unwrap_err();
+        assert_eq!(error.code, RpcError::NOT_FOUND);
+        assert_eq!(
+            error.data.map(|d| d.refusal).as_deref(),
+            Some("session.not_found")
+        );
+        assert!(before.is_none());
+        assert!(observed.is_none());
+        assert!(later.is_none());
+    }
     use super::*;
     use crate::orchestra::core::{Cmd, Origin, StartSession};
     use crate::orchestra::testkit::Rig;

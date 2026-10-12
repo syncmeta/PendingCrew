@@ -215,6 +215,48 @@ pub(crate) fn set_prediction_test_control(
     }
 }
 
+// Private typed owner boundary. Existing Port strings/refusals are not DB evidence.
+#[derive(Debug)]
+enum PredictionError {
+    Collab(collab::CollabError),
+    Store(crewd_store::StoreError),
+    Port(PortError),
+}
+impl From<collab::CollabError> for PredictionError {
+    fn from(error: collab::CollabError) -> Self {
+        Self::Collab(error)
+    }
+}
+impl From<crewd_store::StoreError> for PredictionError {
+    fn from(error: crewd_store::StoreError) -> Self {
+        Self::Store(error)
+    }
+}
+impl From<PortError> for PredictionError {
+    fn from(error: PortError) -> Self {
+        Self::Port(error)
+    }
+}
+impl crewd_store::db_health::DbFaultSource for PredictionError {
+    fn db_fault_kind(&self) -> Option<crewd_store::db_health::DbFaultKind> {
+        match self {
+            Self::Collab(error) => crewd_store::db_health::DbFaultSource::db_fault_kind(error),
+            Self::Store(error) => crewd_store::db_health::DbFaultSource::db_fault_kind(error),
+            Self::Port(_) => None,
+        }
+    }
+}
+impl PredictionError {
+    fn into_port(self) -> PortError {
+        match self {
+            Self::Collab(error) => error.into(),
+            Self::Store(error) => error.into(),
+            Self::Port(error) => error,
+        }
+    }
+}
+type PredictionResult<T> = Result<T, PredictionError>;
+
 /// One read-only DB job, one time snapshot, actual committed identities only.
 pub async fn predict_wakes(
     st: &AppState,
@@ -237,7 +279,7 @@ pub async fn predict_wakes(
     #[cfg(test)]
     let controls = st.s72_prediction_tests.clone();
     st.db
-        .call(move |s| {
+        .call_result(move |s| {
             #[cfg(test)]
             let control = { controls.lock().unwrap().remove(&poster) };
             let now = crewd_wake::Ms(crewd_store::now_ms());
@@ -246,26 +288,23 @@ pub async fn predict_wakes(
             let messages = committed_messages(s.conn(), &poster, &refs)?;
             #[cfg(test)]
             if control.as_ref().is_some_and(|c| c.fail_read) {
-                return Err(PortError::Internal(
-                    "synthetic prediction read failure".into(),
-                ));
+                return Err(PortError::Internal("synthetic prediction read failure".into()).into());
             }
             predict_messages(s.conn(), &messages, loc, now)
         })
         .await?
+        .map_err(PredictionError::into_port)
 }
 
 fn committed_messages(
     conn: &Connection,
     poster: &str,
     refs: &[CommittedRef],
-) -> PortResult<Vec<Message>> {
+) -> PredictionResult<Vec<Message>> {
     let mut out = Vec::with_capacity(refs.len());
     for r in refs {
         if r.id.is_empty() || r.channel.is_empty() || r.seq <= 0 {
-            return Err(PortError::Internal(
-                "invalid committed message identity".into(),
-            ));
+            return Err(PortError::Internal("invalid committed message identity".into()).into());
         }
         let m = crewd_collab::messages::get(conn, &r.id)?;
         if m.id != r.id
@@ -277,9 +316,7 @@ fn committed_messages(
             )
             || m.sender_session_id.as_deref() != Some(poster)
         {
-            return Err(PortError::Internal(
-                "committed message identity mismatch".into(),
-            ));
+            return Err(PortError::Internal("committed message identity mismatch".into()).into());
         }
         out.push(m);
     }
@@ -291,7 +328,7 @@ fn predict_messages(
     messages: &[Message],
     loc: Locale,
     now: crewd_wake::Ms,
-) -> PortResult<Vec<PredictedWake>> {
+) -> PredictionResult<Vec<PredictedWake>> {
     let mut out: Vec<PredictedWake> = Vec::new();
     for m in messages {
         let facts = crate::wake_adapter::message_facts(conn, m, now)?;
@@ -302,9 +339,7 @@ fn predict_messages(
                 continue;
             }
             if crewd_store::sessions::get(conn, &target.session)?.is_none() {
-                return Err(PortError::Internal(
-                    "planned target session is missing".into(),
-                ));
+                return Err(PortError::Internal("planned target session is missing".into()).into());
             }
             let label = crewd_collab::render::target_label(conn, loc, &target.session)?;
             out.push(PredictedWake {

@@ -31,7 +31,7 @@ impl OrchestraControl {
     async fn locale(&self) -> Locale {
         match self
             .db
-            .call(|s| crewd_collab::settings::locale(s.conn()))
+            .call_result(|s| crewd_collab::settings::locale(s.conn()))
             .await
         {
             Ok(Ok(l)) => l,
@@ -66,7 +66,7 @@ impl OrchestraControl {
 
     async fn session(&self, id: String) -> Result<Session, M3aError> {
         self.db
-            .call(move |s| crewd_collab::sessions::get(s.conn(), &id))
+            .call_result(move |s| crewd_collab::sessions::get(s.conn(), &id))
             .await
             .map_err(|e| M3aError::Failed(e.to_string()))?
             .map_err(|e| match e {
@@ -259,6 +259,177 @@ pub fn decision_view(d: &PendingDecision) -> DecisionView {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn s4_control_locale_real_sql_history() {
+        use crewd_store::db_health::{DbFaultKind, DbFaultStage};
+        let f = crate::agent::testkit::Fixture::new().await;
+        let db = f.state.db.clone();
+        let health = db.health();
+        let control = OrchestraControl::new(Arc::new(OnceLock::new()), db.clone());
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE meta RENAME TO s4_control_held_meta")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let cause = db
+            .call(move |s| crewd_collab::settings::locale(s.conn()))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = control.locale().await;
+        let observed = health.snapshot();
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE s4_control_held_meta RENAME TO meta")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let recovered = control.locale().await;
+        let later = health.snapshot();
+        drop(control);
+        let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(f);
+        assert!(joined.is_ok(), "owned DB cleanup before health oracle");
+        assert!(matches!(cause, Err(crewd_collab::CollabError::Store(
+            crewd_store::StoreError::Sql(rusqlite::Error::SqliteFailure(ref e, _)))) if e.extended_code == 1));
+        assert!(
+            before.is_none(),
+            "raw control must not observe nested result"
+        );
+        assert_eq!(original, Locale::Zh);
+        assert_eq!(recovered, Locale::Zh);
+        assert_eq!(observed, later, "healthy recovery preserves prior fault");
+        // First intended missing-observation oracle; later kind/stage NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|f| f.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, DbFaultStage::Job);
+        assert_eq!(fault.kind, DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_control_locale_business_refusal_keeps_no_history() {
+        let f = crate::agent::testkit::Fixture::new().await;
+        let db = f.state.db.clone();
+        let health = db.health();
+        let control = OrchestraControl::new(Arc::new(OnceLock::new()), db.clone());
+        db.call(|s| crewd_store::meta_set(s.conn(), "locale", "s4-invalid-locale"))
+            .await
+            .unwrap()
+            .unwrap();
+        let cause = db
+            .call(|s| crewd_collab::settings::locale(s.conn()))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = control.locale().await;
+        let observed = health.snapshot();
+        db.call(|s| s.conn().execute("DELETE FROM meta WHERE key='locale'", []))
+            .await
+            .unwrap()
+            .unwrap();
+        let recovered = control.locale().await;
+        let later = health.snapshot();
+        drop(control);
+        let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(f);
+        assert!(joined.is_ok(), "owned DB cleanup before history assertions");
+        assert!(
+            matches!(cause, Err(crewd_collab::CollabError::Invalid(ref r))
+            if r.code == Code::SettingsBadLocale)
+        );
+        assert_eq!(original, Locale::Zh);
+        assert_eq!(recovered, Locale::Zh);
+        assert!(before.is_none());
+        assert!(observed.is_none());
+        assert!(later.is_none());
+    }
+
+    #[tokio::test]
+    async fn s4_control_session_real_sql_history() {
+        use crewd_store::db_health::{DbFaultKind, DbFaultStage};
+        let f = crate::agent::testkit::Fixture::new().await;
+        let db = f.state.db.clone();
+        let health = db.health();
+        let control = OrchestraControl::new(Arc::new(OnceLock::new()), db.clone());
+        let worker = f.worker.clone();
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE sessions RENAME TO s4_control_held_sessions")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let id = f.worker.clone();
+        let cause = db
+            .call(move |s| crewd_collab::sessions::get(s.conn(), &id))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = control.session(f.worker.clone()).await;
+        let observed = health.snapshot();
+        db.call(|s| {
+            s.conn()
+                .execute_batch("ALTER TABLE s4_control_held_sessions RENAME TO sessions")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let recovered = control.session(f.worker.clone()).await;
+        let later = health.snapshot();
+        drop(control);
+        let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(f);
+        assert!(joined.is_ok(), "owned DB cleanup before health oracle");
+        assert!(matches!(cause, Err(crewd_collab::CollabError::Store(
+            crewd_store::StoreError::Sql(rusqlite::Error::SqliteFailure(ref e, _)))) if e.extended_code == 1));
+        assert!(
+            before.is_none(),
+            "raw control must not observe nested result"
+        );
+        assert!(matches!(original, Err(M3aError::Failed(_))));
+        assert_eq!(recovered.unwrap().id, worker);
+        assert_eq!(observed, later, "healthy recovery preserves prior fault");
+        // First intended missing-observation oracle; later kind/stage NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|f| f.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, DbFaultStage::Job);
+        assert_eq!(fault.kind, DbFaultKind::Sql);
+    }
+
+    #[tokio::test]
+    async fn s4_control_session_business_refusal_keeps_no_history() {
+        let f = crate::agent::testkit::Fixture::new().await;
+        let db = f.state.db.clone();
+        let health = db.health();
+        let control = OrchestraControl::new(Arc::new(OnceLock::new()), db.clone());
+        let cause = db
+            .call(|s| crewd_collab::sessions::get(s.conn(), "s4-control-no-such-session"))
+            .await
+            .unwrap();
+        let before = health.snapshot();
+        let original = control.session("s4-control-no-such-session".into()).await;
+        let observed = health.snapshot();
+
+        let recovered = control.session(f.worker.clone()).await;
+        let later = health.snapshot();
+        drop(control);
+        let joined = tokio::task::spawn_blocking(move || db.shutdown()).await;
+        drop(f);
+        assert!(joined.is_ok(), "owned DB cleanup before history assertions");
+        assert!(
+            matches!(cause, Err(crewd_collab::CollabError::NotFound(ref r))
+            if r.code == Code::SessionNotFound)
+        );
+        assert!(matches!(original, Err(M3aError::NotFound(_))));
+        assert!(recovered.is_ok());
+        assert!(before.is_none());
+        assert!(observed.is_none());
+        assert!(later.is_none());
+    }
     use super::*;
     use crewd_exec::health::Health;
     use crewd_term::PendingDecision;
