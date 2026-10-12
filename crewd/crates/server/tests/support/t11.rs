@@ -68,6 +68,8 @@ impl Fixture {
             ("FAKE_CLAUDE_LOG".into(), self.log.display().to_string()),
         ])
     }
+    // Extra fields appear when the workspace unifies the testkit feature.
+    #[allow(clippy::needless_update)]
     pub fn options(&self, mode: &str) -> crewd_server::ServeOptions {
         let mut env = self.child_env();
         env.insert("FAKE_CLAUDE_MODE".into(), mode.into());
@@ -86,6 +88,7 @@ impl Fixture {
                 config: Default::default(),
                 shutdown_limit: Duration::from_secs(10),
             }),
+            ..Default::default()
         }
     }
     pub fn count(&self, needle: &str) -> usize {

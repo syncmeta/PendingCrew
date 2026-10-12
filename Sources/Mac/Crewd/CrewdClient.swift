@@ -93,7 +93,7 @@ final class CrewdClient: ObservableObject {
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
             guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
-            _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "system"].map(CrewdValue.string))]))
+            _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "restart", "system"].map(CrewdValue.string))]))
             lastError = nil
         } catch { deadline.cancel(); fail(error.localizedDescription, notify: false); throw error }
     }

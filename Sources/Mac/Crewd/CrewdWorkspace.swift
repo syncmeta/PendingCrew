@@ -9,6 +9,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var sessions: [CrewdValue] = []
     @Published var channels: [CrewdValue] = []
     @Published var pendingAsks: [CrewdValue] = []
+    @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
     @Published var crewID = ""
     @Published var sessionID = ""
@@ -40,6 +41,7 @@ final class CrewdWorkspace: ObservableObject {
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
                 self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel()
+                self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
@@ -116,6 +118,7 @@ final class CrewdWorkspace: ObservableObject {
     func selectChannel(_ id: String) { selection = UUID(); channelID = id; messages = []; scheduleSync() }
 
     func scheduleSync(recoverHistory: Bool = false) {
+        guard !sleeping, client.connected else { return }
         again = true
         if recoverHistory { recoverNeeded = true; runnerItems = []; history = "" }
         guard sync == nil else { return }
@@ -126,40 +129,45 @@ final class CrewdWorkspace: ObservableObject {
                 self.again = false
                 let recover = self.recoverNeeded; self.recoverNeeded = false
                 do { try await self.refresh(recoverHistory: recover) }
-                catch { if self.generation == current { self.error = error.localizedDescription } }
-            } while self.again && self.generation == current && !Task.isCancelled
+                catch { if self.generation == current && !self.sleeping && !Task.isCancelled { self.error = error.localizedDescription } }
+            } while self.again && !self.sleeping && self.generation == current && !Task.isCancelled
             if self.generation == current { self.sync = nil }
         }
     }
 
     private func refresh(recoverHistory: Bool) async throws {
+        guard !sleeping, !Task.isCancelled else { return }
         let current = generation, selected = selection
         let newCrews = try await client.call("crew.list")
-        guard current == generation else { return }
+        guard current == generation, !sleeping, !Task.isCancelled else { return }
         guard selected == selection else { again = true; return }
         crews = newCrews.array
         let asks = try await client.call("ask.list")
-        guard current == generation, selected == selection else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection else { again = true; return }
         pendingAsks = asks.array
+        let restart = try await client.call("restart.pending")
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection else { again = true; return }
+        restartPrompt = restart
         if !crews.contains(where: {$0["id"].string == crewID}) { crewID = crews.first?["id"].string ?? "" }
         let crew = crewID
         guard !crew.isEmpty else { return }
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
-        guard current == generation, selected == selection, crewID == crew else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
         sessions = newSessions.array; channels = newChannels.array.map { $0["channel"] }
         if !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = channels.first(where: {$0["kind"].string == "human"})?["id"].string ?? channels.first?["id"].string ?? "" }
         let session = sessionID, channel = channelID
         if !session.isEmpty {
             let view = try await client.call("session.inspect", .object(["sessionId": .string(session), "maxLines": .number(200)]))
-            guard current == generation, selected == selection, sessionID == session else { again = true; return }
+            guard !sleeping, !Task.isCancelled, current == generation, selected == selection, sessionID == session else { again = true; return }
             inspection = view
             if recoverHistory || runnerItems.isEmpty { history = view["screen"].string ?? "" }
         }
         if !channel.isEmpty {
             let rows = try await client.call("message.list", .object(["channelId": .string(channel), "limit": .number(200)]))
-            guard current == generation, selected == selection, channelID == channel else { again = true; return }
+            guard !sleeping, !Task.isCancelled, current == generation, selected == selection, channelID == channel else { again = true; return }
             messages = rows.array
         }
     }

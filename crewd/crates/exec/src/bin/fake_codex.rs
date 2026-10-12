@@ -80,7 +80,8 @@ impl Fake {
                 std::process::exit(0);
             };
             if let Some(f) = &mut self.log {
-                writeln!(f, "{line}").unwrap();
+                // One append write per record: multiple synthetic sessions may share a log.
+                f.write_all(format!("{line}\n").as_bytes()).unwrap();
             }
             if !line.trim().is_empty() {
                 return serde_json::from_str(&line).expect("客户端发来的不是 JSON");

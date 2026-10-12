@@ -31,6 +31,7 @@ struct CrewdWorkspaceView: View {
             }
         } detail: {
             VStack(spacing: 0) {
+                if workspace.restartPrompt != .null { restartQuestion }
                 if let error = workspace.error {
                     HStack { Image(systemName: "exclamationmark.triangle"); Text(error).textSelection(.enabled); Spacer(); Button("关闭") { workspace.error = nil } }
                         .padding(10).background(.orange.opacity(0.12))
@@ -45,6 +46,32 @@ struct CrewdWorkspaceView: View {
         .frame(minWidth: 1050, minHeight: 680)
         .sheet(isPresented: $creatingCrew) { crewForm }
         .task { if autoConnect { await workspace.connect() } }
+    }
+
+    private var restartQuestion: some View {
+        let prompt = workspace.restartPrompt
+        let count = prompt["sessionIds"].array.count
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(prompt["reason"].string == "hibernate" ? "后台已从休眠启动" : "后台已重新启动", systemImage: "arrow.clockwise")
+                .font(.headline)
+            Text("上次运行的 \(count) 个会话正在等待恢复；尚未自动启动。")
+            if !prompt["interrupted"].array.isEmpty {
+                Text("其中 \(prompt["interrupted"].array.count) 个会话的工作曾被打断，恢复后请核对结果。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("恢复这些会话") { answerRestart(prompt, "resume") }
+                Button("暂不恢复") { answerRestart(prompt, "later") }
+                    .disabled(prompt["answer"].string == "later")
+                if prompt["answer"].string == "later" {
+                    Text("已暂缓，你可以稍后恢复。") .font(.caption).foregroundStyle(.secondary)
+                }
+            }.disabled(workspace.busy || !workspace.client.connected)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(12).background(.blue.opacity(0.08))
+    }
+
+    private func answerRestart(_ prompt: CrewdValue, _ answer: String) {
+        Task { _ = await workspace.perform("restart.answer", .object(["id": prompt["id"], "answer": .string(answer)])) }
     }
 
     private var conversation: some View {
