@@ -11,15 +11,15 @@
 - 按人类授权，降噪改动单独移植到 main，`d3cb5b23` 已推送并核实远端；该基线通过格式、lint 和 1115 项离线测试。整合树另外 207 个提交未随降噪带入 main，共享目录中既有未跟踪 ACP 资料保留。
 - Jev 多后端仅保留[讨论方案](../specs/2026-10-12-decision-provider-options.md)，不继续实现。
 - Codex 首个接线单元保存为独立候选 `codex/codex-orchestra-20261012@36f2ac81`：新增独立 Executor 适配器，传递世界观、模型/effort、MCP、持久 thread、上下文、因果绑定和停止/续跑；成功投递复用已有观察函数，在 app-server 确认接受后、广播事件前登记。回归先在未接观察器时失败，再验证修复及超时不计成功；候选源码通过格式、lint 和 2320 项离线测试（8 项活测试未运行）。此处不是生产或真实 Codex 验收。
-- 生产 `serve` 仍不登记 Codex，C1 尚未整体完成：先补 Item/TurnEnded/Profile/Notice 的消费与真实 Core/DbPort/serve 验收，再完成 C2 的人工待请求与 Mac 客户端。不能用执行器测试通过代替新版应用可用。
+- 首版候选已推进为 `codex/codex-orchestra-20261012@d1990345`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建，未安装、未调用真实模型、未迁移日常数据，也尚未将候选代码纳入共享 main。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
 - 下一步按这个顺序串行推进：核对并纳入已接受后端整合输入；完成 Codex 生产事件与待请求链；接通 Mac 本机候选并验证恢复路径。完整自由表、Jev 自动调度、其他端与 Claude ACP 不抢占这条路径。
 
 最初只读核查的基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元；当时共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`。这是历史核查快照，不能把两个源码状态混作同一构建证据；本次进展见上面的推进记录。
 
 - M2a 八项终端核心任务和 M2b 十二项 Claude 会话驱动任务已有交付；后续安全按键、持久 human-stop 与编排接线已有范围受限的接受记录。Mac 终端消费与安装态完整验收仍有缺口。
-- `crewd/crates/exec/src/codex` 已有 app-server 驱动；`server/src/lib.rs` 的生产 Executors 登记当前只有 `claude`，`orchestra/exec_claude.rs` 是现有生产适配器。Codex CLI 驱动通过不等于生产机组可以运行 Codex。
-- `exec/src/codex/proto.rs::answer_server_request` 仍对漏到客户端的 Approval 返回错误、对部分 elicitation 返回 decline，并将 requestUserInput 归为 Unsupported。Codex 首版需要真实可操作的待请求链，不能把通知替代权限答复入口。
-- 原始 Swift/Mac 客户端尚未切换到 crewd。上述判断来自源码；真实 Codex、GUI、安装和旧数据迁移不在本次只读核查内。
+- 最初基线的 `serve` 只登记 Claude；候选现已登记独立 Codex Executor。共享 main 与候选仍是不同源码状态；不能把候选验证写成 main 或已安装应用的运行事实。
+- 最初基线对人工 Approval/requestUserInput 使用兜底拒绝；候选现已保留原始请求并提供精确答复入口。尚不支持的通用 MCP 表单有明确拒绝与通知；真实账户、窗口实际操作及日常迁移继续单独验收。
+- 候选新增 crewd 原生 Mac 入口和独立数据空间，原始 Swift/Mac 日常入口与旧数据保持现状。上述范围区分源码、合成验收与实际运行；真实 Codex、窗口操作、安装和旧数据迁移尚未作为完成事实。
 
 ## 按依赖推进的四个单元
 
@@ -79,3 +79,7 @@ Codex 优先沿用现有 app-server 驱动，并核查 [codex-acp](https://githu
 私人团队首先需要记住用户明确偏好、理解正在做的工作、积累可复用经验，并在依据不足或方案有问题时诚实指出。个人偏好、工作现状、经验教训和推测分别标明；新决定替代旧决定，原始来源可读回，用户可查看、修订和删除。知识来源与验证状态是辅助信息，不变成负责人标完成的门禁，也不新增产品审批。可复用的工作流程逐步成为 skill。
 
 试验至少覆盖：明确偏好跨会话保持、旧决定被替代、中文/中英混合检索、多个成员同时更新、无关项目不被误带入，以及删除后的检索与同步副本处理。比较原生记忆基线与新增组件，记录正确/错误回忆、需要用户重复解释与纠正的次数、完成质量、返工、总 token、索引/摘要/检索耗时。检索找到了相似文字不代表记忆正确；了解用户不等于迎合用户。
+
+## 原生 Codex 通信的复用范围
+
+2026-10-12 补充核查：Codex 自带任务内多 agent 通信，桌面 app 另有跨聊天的产品 MCP 工具；app-server 提供原生 thread/turn 和实验上下文入口。这些能力的任务身份、代理树、权限与生命周期范围不同，不能把它们直接当作所有独立 PendingCrew session 的可靠消息总线。首版继续由 crewd 管长期成员的消息/提问/投递/恢复，底层使用原生 app-server；临时子 agent 协作的映射作为新版自我开发候选，避免重复实现原生 spawn/message/wait。详见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)的原生通信与成本章节。记忆、知识和 Jev 的延期安排不变。
