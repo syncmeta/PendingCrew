@@ -8,6 +8,7 @@ pub mod db;
 pub mod deliver;
 pub mod exec;
 pub mod exec_claude;
+pub mod exec_codex;
 pub mod hibernate;
 pub mod hooks;
 mod notify;

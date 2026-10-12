@@ -1110,3 +1110,74 @@ async fn restarting_right_after_a_failed_start_keeps_the_new_registry_entry() {
     assert_eq!(entries[0].1.pid, new_pid);
     stop(&h, &mut rx).await;
 }
+
+#[tokio::test]
+async fn codex_success_is_observed_before_delivery_broadcast_and_only_after_acceptance() {
+    use crewd_exec::driver::{DeliveryBinding, DeliverySuccessObserver, SendError};
+    use std::sync::Mutex;
+    #[derive(Default)]
+    struct Witness {
+        registered: Mutex<Vec<u64>>,
+        successes: Mutex<Vec<u64>>,
+    }
+    impl DeliveryBinding for Witness {
+        fn register(&self, id: u64) -> Result<(), SendError> {
+            self.registered.lock().unwrap().push(id);
+            Ok(())
+        }
+        fn cancelled(&self, id: u64) {
+            self.registered.lock().unwrap().retain(|x| *x != id);
+        }
+    }
+    impl DeliverySuccessObserver for Witness {
+        fn emitted(&self, id: u64) {
+            assert!(
+                self.registered.lock().unwrap().contains(&id),
+                "success without exact source"
+            );
+            self.successes.lock().unwrap().push(id);
+        }
+    }
+    for mode in ["", "turn_hangs"] {
+        let env = Env::new();
+        let witness = Arc::new(Witness::default());
+        let mut config = env.config();
+        config.delivery_observer = Some(witness.clone());
+        let (handle, mut events) = start_codex(
+            env.start(mode, Arc::new(MemoryLedger::default()), None),
+            config,
+        )
+        .await
+        .unwrap();
+        let id = handle
+            .send_bound("bound task".into(), BTreeMap::new(), &*witness)
+            .unwrap();
+        let result = until(
+            &mut events,
+            |e| matches!(e, SessionEvent::Delivery { id: delivered, .. } if *delivered == id),
+        )
+        .await;
+        let SessionEvent::Delivery { outcome, .. } = result.last().unwrap() else {
+            unreachable!()
+        };
+        if mode.is_empty() {
+            assert_eq!(outcome, &DeliveryOutcome::Delivered);
+            assert_eq!(
+                *witness.successes.lock().unwrap(),
+                vec![id],
+                "observer must run before the delivered event is visible"
+            );
+        } else {
+            assert!(matches!(outcome, DeliveryOutcome::Undelivered(_)));
+            assert!(
+                witness.successes.lock().unwrap().is_empty(),
+                "queueing, stdin write or timeout must not count as success"
+            );
+        }
+        stop(&handle, &mut events).await;
+        assert_eq!(
+            witness.successes.lock().unwrap().len(),
+            usize::from(mode.is_empty())
+        );
+    }
+}

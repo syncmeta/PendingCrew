@@ -178,7 +178,7 @@ pub trait DeliveryBinding: Send + Sync {
 pub trait DeliverySuccessObserver: Send + Sync {
     fn emitted(&self, delivery_id: u64);
 }
-fn emit_session_event(
+pub(crate) fn emit_session_event(
     observer: Option<&Arc<dyn DeliverySuccessObserver>>,
     tx: &mpsc::UnboundedSender<SessionEvent>,
     event: SessionEvent,

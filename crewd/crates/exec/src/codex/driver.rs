@@ -76,7 +76,7 @@ pub struct CodexStart {
 }
 
 /// 驱动层参数。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CodexConfig {
     pub core: CodexCoreConfig,
     /// 定时节拍。
@@ -87,9 +87,28 @@ pub struct CodexConfig {
     pub registry: Option<Arc<ProcessRegistry>>,
     /// `initialize.clientInfo.version`。
     pub client_version: String,
+    /// 与 Claude 相同：成功投递在广播事件前登记因果来源。
+    pub delivery_observer: Option<Arc<dyn crate::driver::DeliverySuccessObserver>>,
     /// 启动临时文件（token 文件）的运行目录：`<runtime_dir>/codex-<session_id>/`。
     /// 与 claude 的 `DriverConfig.runtime_dir` 同一处（M3c 起由会话给数据目录下的运行目录）。
     pub runtime_dir: PathBuf,
+}
+
+impl std::fmt::Debug for CodexConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexConfig")
+            .field("core", &self.core)
+            .field("tick", &self.tick)
+            .field("stop_grace", &self.stop_grace)
+            .field("registry", &self.registry)
+            .field("client_version", &self.client_version)
+            .field("runtime_dir", &self.runtime_dir)
+            .field(
+                "delivery_observer",
+                &self.delivery_observer.as_ref().map(|_| "<opaque>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for CodexConfig {
@@ -100,6 +119,7 @@ impl Default for CodexConfig {
             stop_grace: Duration::from_secs(2),
             registry: None,
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            delivery_observer: None,
             runtime_dir: std::env::temp_dir().join("crewd-codex"),
         }
     }
@@ -468,11 +488,15 @@ fn execute(
                 if matches!(e, SessionEvent::Spawned { .. })
                     && let Some(ready) = t.ready.take()
                 {
-                    let _ = t.ev_tx.send(e);
+                    crate::driver::emit_session_event(
+                        t.config.delivery_observer.as_ref(),
+                        &t.ev_tx,
+                        e,
+                    );
                     let _ = ready.send(Ok(()));
                     continue;
                 }
-                let _ = t.ev_tx.send(e);
+                crate::driver::emit_session_event(t.config.delivery_observer.as_ref(), &t.ev_tx, e);
             }
         }
     }
