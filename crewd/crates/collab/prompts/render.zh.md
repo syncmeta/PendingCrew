@@ -94,3 +94,9 @@ crewd 重启打断了你上一轮的工作。先核对当前状态（工作区�
 
 ## wake.note
 附言：{note}
+
+## wake.background_progress
+背景进度更新，全文见 #{seq}。
+
+## wake.background_ack
+背景确认消息，全文见 #{seq}。

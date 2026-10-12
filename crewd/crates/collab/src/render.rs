@@ -161,12 +161,34 @@ pub(crate) fn member_label(conn: &Connection, l: Locale, m: &MemberRef) -> Resul
     })
 }
 
-/// 未读（或唤醒带的消息）→ 按群分块，标出 @ 了谁（读者本人 = `line.at.you`）与回复对象。
+/// One classification for hook digests and wake references. Direct work and humans stay whole.
+pub fn is_background_update(me: &str, m: &Message, replied_sender: Option<&str>) -> bool {
+    let peer = matches!(m.sender_kind, SenderKind::Session | SenderKind::Captain)
+        && m.sender_session_id.as_deref().is_some_and(|s| s != me);
+    peer && matches!(m.category.as_deref(), Some("progress" | "ack"))
+        && !m
+            .mentions
+            .iter()
+            .any(|x| x.target_id.as_deref() == Some(me))
+        && replied_sender != Some(me)
+}
+
+/// 未读消息按群分块，保留全文、提及对象和回复对象。
 pub fn blocks_for(
     conn: &Connection,
     session: &str,
     l: Locale,
     unread: &[(String, Vec<Message>)],
+) -> Result<Vec<ChannelBlock>> {
+    blocks_for_mode(conn, session, l, unread, false)
+}
+
+fn blocks_for_mode(
+    conn: &Connection,
+    session: &str,
+    l: Locale,
+    unread: &[(String, Vec<Message>)],
+    short_background: bool,
 ) -> Result<Vec<ChannelBlock>> {
     let mut out = Vec::new();
     for (ch_id, msgs) in unread {
@@ -194,18 +216,44 @@ pub fn blocks_for(
                     mentions.push(label);
                 }
             }
-            let reply_to = match &m.in_reply_to {
-                None => None,
-                Some(rid) => match crewd_store::messages::get(conn, rid)? {
-                    Some(r) => Some(sender_label(conn, &r, l)?),
-                    None => None,
-                },
+            let replied = m
+                .in_reply_to
+                .as_ref()
+                .map(|rid| crewd_store::messages::get(conn, rid))
+                .transpose()?
+                .flatten();
+            let reply_to = replied
+                .as_ref()
+                .map(|r| sender_label(conn, r, l))
+                .transpose()?;
+            let body = if short_background
+                && ch.kind != ChannelKind::Dm
+                && is_background_update(
+                    session,
+                    m,
+                    replied
+                        .as_ref()
+                        .and_then(|r| r.sender_session_id.as_deref()),
+                ) {
+                let key = if m.category.as_deref() == Some("ack") {
+                    "wake.background_ack"
+                } else {
+                    "wake.background_progress"
+                };
+                let reference = fill(render_file(l).get(key), &[("seq", &m.seq.to_string())]);
+                if reference.chars().count() < m.text.chars().count() {
+                    reference
+                } else {
+                    m.text.clone()
+                }
+            } else {
+                m.text.clone()
             };
             lines.push(MsgLine {
                 seq: m.seq,
                 at: m.created_at.clone(),
                 sender: sender_label(conn, m, l)?,
-                text: m.text.clone(),
+                text: body,
                 mentions,
                 reply_to,
             });
@@ -627,7 +675,7 @@ pub fn build_batch(
             ends.push((ch.clone(), end));
             msgs.push((ch, window));
         }
-        let mut blocks = blocks_for(conn, session, l, &msgs)?;
+        let mut blocks = blocks_for_mode(conn, session, l, &msgs, true)?;
         for (ch, last) in fit_budget(l, &mut blocks) {
             if let Some(e) = ends.iter_mut().find(|(c, _)| *c == ch) {
                 e.1 = last;
@@ -2393,5 +2441,188 @@ mod tests {
             },
         );
         assert!(!wake.contains("[2026-"), "{wake}");
+    }
+
+    #[test]
+    fn wake_references_keep_dm_and_short_messages_whole() {
+        for loc in [Locale::Zh, Locale::En] {
+            let mut s = store();
+            let (dm, _) = ok(&mut s, |tx| {
+                crate::channels::ensure_dm(
+                    tx,
+                    "crew-a",
+                    &MemberRef::session("w-a1"),
+                    &MemberRef::session("w-a2"),
+                )
+            });
+            for (channel, text) in [
+                (&dm.id, "Private progress detail ".repeat(180)),
+                (&"crew-a/lobby".to_string(), "ok".to_string()),
+            ] {
+                let m = ok(&mut s, |tx| {
+                    post(
+                        tx,
+                        Sender::Session("w-a2".into()),
+                        NewPost {
+                            channel_id: channel.clone(),
+                            text: text.clone(),
+                            category: Some("progress".into()),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .message;
+                let shown =
+                    blocks_for_mode(s.conn(), "w-a1", loc, &[(channel.clone(), vec![m])], true)
+                        .unwrap();
+                assert_eq!(shown[0].lines[0].text, text);
+            }
+        }
+    }
+
+    #[test]
+    fn wake_background_updates_are_short_references_without_losing_direct_work() {
+        for loc in [Locale::Zh, Locale::En] {
+            let mut s = store();
+            let mine = say(
+                &mut s,
+                Sender::Session("w-a1".into()),
+                "crew-a/lobby",
+                "My question",
+                vec![],
+                None,
+            );
+            let background = "background detail ".repeat(180);
+            let posted = |s: &mut crewd_store::Store,
+                          sender: Sender,
+                          text: &str,
+                          category: Option<&str>,
+                          mentions: Vec<Mention>,
+                          reply: Option<String>| {
+                ok(s, |tx| {
+                    post(
+                        tx,
+                        sender,
+                        NewPost {
+                            channel_id: "crew-a/lobby".into(),
+                            text: text.into(),
+                            category: category.map(str::to_string),
+                            mentions,
+                            in_reply_to: reply,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .message
+            };
+            let progress = posted(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                &background,
+                Some("progress"),
+                vec![],
+                None,
+            );
+            let ack = posted(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                &background,
+                Some("ack"),
+                vec![],
+                None,
+            );
+            let human = posted(
+                &mut s,
+                Sender::Human,
+                "Human instruction remains whole",
+                Some("progress"),
+                vec![],
+                None,
+            );
+            let direct = posted(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                "Direct assignment remains whole",
+                Some("progress"),
+                vec![Mention {
+                    kind: MentionKind::Session,
+                    target_id: Some("w-a1".into()),
+                }],
+                None,
+            );
+            let reply = posted(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                "Answer to me remains whole",
+                Some("ack"),
+                vec![],
+                Some(mine.id),
+            );
+            let blocked = posted(
+                &mut s,
+                Sender::Session("w-a2".into()),
+                "Actual blocker remains whole",
+                Some("blocked"),
+                vec![],
+                None,
+            );
+            let trigger = say(
+                &mut s,
+                Sender::Human,
+                "crew-a/lobby",
+                "Please work now",
+                vec![],
+                None,
+            );
+            wake_msg(&mut s, "w-a1", &trigger.id);
+            let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
+            let batch = build_batch(s.conn(), "w-a1", loc, &rows, NOW).unwrap();
+            let text = wake_text(loc, &batch);
+            assert!(
+                !text.contains(&background),
+                "unrelated progress/ack should not consume the wake context"
+            );
+            for m in [&human, &direct, &reply, &blocked, &trigger] {
+                assert!(text.contains(&m.text), "lost required work");
+            }
+            let WakeBody::Messages(blocks) = &batch.items[0].body else {
+                panic!("missing message body")
+            };
+            for m in [&progress, &ack] {
+                let shown = blocks
+                    .iter()
+                    .flat_map(|b| &b.lines)
+                    .find(|l| l.seq == m.seq)
+                    .unwrap();
+                assert!(shown.text.contains(&format!("#{}", m.seq)));
+                assert_eq!(
+                    crewd_store::messages::get(s.conn(), &m.id)
+                        .unwrap()
+                        .unwrap()
+                        .text,
+                    background
+                );
+            }
+            assert_eq!(
+                batch.cursor_targets(),
+                vec![("crew-a/lobby".into(), trigger.seq)]
+            );
+            assert!(batch.deferred.is_empty());
+            let raw = blocks_for(
+                s.conn(),
+                "w-a1",
+                loc,
+                &[("crew-a/lobby".into(), vec![progress, ack])],
+            )
+            .unwrap();
+            assert!(
+                raw[0].lines.iter().all(|l| l.text == background),
+                "explicit reading must retain full originals"
+            );
+            assert!(
+                text.len() < background.len() / 2,
+                "references should reduce rather than expand the context"
+            );
+        }
     }
 }

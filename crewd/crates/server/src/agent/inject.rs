@@ -25,7 +25,6 @@ use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::agent::Identity;
-use crate::agent::catalog::{CAT_ACK, CAT_PROGRESS};
 use crate::agent::port::{self, PortResult};
 use crate::agent::text::{self, Locale};
 use crate::agent::tools::channel_label_for;
@@ -53,8 +52,6 @@ pub fn counts_as_progress(tool_name: &str) -> bool {
     }
 }
 
-/// Categories folded into the digest when another session posts them (S62, Q1).
-const FOLDED_CATEGORIES: &[&str] = &[CAT_PROGRESS, CAT_ACK];
 /// A digest line names at most this many senders.
 const DIGEST_SENDERS: usize = 5;
 /// Joins sender names in a digest line (no prose: the same in both locales).
@@ -64,19 +61,7 @@ const NAME_SEP: &str = ", ";
 /// ack that does not @ me and is not a reply to one of my messages. `replied_sender` = the sender
 /// session of the message it replies to.
 fn folds(me: &str, m: &crewd_proto::Message, replied_sender: Option<&str>) -> bool {
-    use crewd_proto::SenderKind;
-    let by_peer = matches!(m.sender_kind, SenderKind::Session | SenderKind::Captain)
-        && m.sender_session_id.as_deref().is_some_and(|s| s != me);
-    let at_me = m
-        .mentions
-        .iter()
-        .any(|x| x.target_id.as_deref() == Some(me));
-    by_peer
-        && m.category
-            .as_deref()
-            .is_some_and(|c| FOLDED_CATEGORIES.contains(&c))
-        && !at_me
-        && replied_sender != Some(me)
+    crewd_collab::render::is_background_update(me, m, replied_sender)
 }
 
 /// One unread message of a channel's run: a full line (`folded: None`) or folded into the
