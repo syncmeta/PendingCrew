@@ -105,6 +105,8 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("line.reply", &["reply"]),
     ("wake.header", &[]),
     ("wake.message", &[]),
+    ("wake.background_progress", &["seq"]),
+    ("wake.background_ack", &["seq"]),
     ("wake.timer", &[]),
     ("wake.ask_answer", &["ask", "question", "answer"]),
     ("wake.ask_defaulted", &["ask", "question", "answer"]),

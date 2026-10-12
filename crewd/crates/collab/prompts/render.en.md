@@ -88,3 +88,9 @@ Before stopping, make sure every work item you own has a next step.
 
 ## wake.note
 Note: {note}
+
+## wake.background_progress
+Background progress update; full text at #{seq}.
+
+## wake.background_ack
+Background acknowledgement; full text at #{seq}.
