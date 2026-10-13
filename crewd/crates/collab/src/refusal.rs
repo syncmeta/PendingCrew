@@ -187,6 +187,7 @@ refusal_codes! {
 pub struct Refusal {
     pub code: Code,
     pub args: Vec<(&'static str, String)>,
+    pub current_work: Option<Box<crewd_proto::WorkConflictFacts>>,
 }
 
 impl Refusal {
@@ -194,6 +195,7 @@ impl Refusal {
         Refusal {
             code,
             args: Vec::new(),
+            current_work: None,
         }
     }
 

@@ -464,10 +464,37 @@ pub fn update(
     });
     // The revision comparison and command run inside the same single-writer transaction.
     let current = asks::load(tx.conn(), &r.crew_id)?;
-    if current.item(local).is_none_or(|i| i.revision != revision) {
-        return Err(CollabError::Conflict(
-            Refusal::new(Code::WorkRevisionConflict).arg("id", &p.id),
-        ));
+    let item = current
+        .item(local)
+        .ok_or_else(|| invalid("plan reference has no authoritative item"))?;
+    if item.revision != revision {
+        let note = item
+            .last_report
+            .as_ref()
+            .map(|n| n.text.chars().take(256).collect::<String>());
+        let note_truncated = item
+            .last_report
+            .as_ref()
+            .is_some_and(|n| n.text.chars().nth(256).is_some());
+        let mut refusal = Refusal::new(Code::WorkRevisionConflict).arg("id", &p.id);
+        refusal.current_work = Some(Box::new(crewd_proto::WorkConflictFacts {
+            id: p.id.clone(),
+            revision: item.revision.to_string(),
+            owner: item.owner.as_ref().map(ToString::to_string),
+            status: match item.status {
+                Status::Open => "open",
+                Status::Active => "active",
+                Status::Blocked => "blocked",
+                Status::Done => "done",
+                Status::Dropped => "dropped",
+            }
+            .into(),
+            next_check_at: item.next_check_at.map(|t| crewd_store::ts_from_ms(t.0)),
+            blocker_count: item.blocked_on.len(),
+            note,
+            note_truncated,
+        }));
+        return Err(CollabError::Conflict(refusal));
     }
     let (released, ready) = asks::with_book(tx, &r.crew_id, |b, now| {
         if !done || p.note.is_some() {
@@ -766,6 +793,54 @@ mod action_tests {
             2
         );
     }
+    #[test]
+    fn revision_conflict_captures_bounded_unicode_facts_without_writing() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let mut args = input();
+        args.goal = "LONG_GOAL_PRIVATE".repeat(1000);
+        args.acceptance = "LONG_ACCEPTANCE_PRIVATE".repeat(1000);
+        let p = ok(&mut s, |tx| create(tx, &by, args));
+        let active = ok(&mut s, |tx| {
+            update(
+                tx,
+                &by,
+                WorkUpdateParams {
+                    id: p.id.clone(),
+                    expected_revision: p.revision.clone(),
+                    status: Some(WorkUpdateStatus::Active),
+                    next_check_at: Some(crewd_store::ts_from_ms(NOW + 60_000)),
+                    note: Some("下一步🙂".repeat(400)),
+                    ..Default::default()
+                },
+            )
+        });
+        let error = err(&mut s, |tx| update(tx, &by, finish(&p)));
+        let CollabError::Conflict(r) = error else {
+            panic!("stale CAS must be a conflict")
+        };
+        assert_eq!(r.code, Code::WorkRevisionConflict);
+        let facts = r.current_work.unwrap();
+        assert_eq!(facts.id, p.id);
+        assert_eq!(facts.revision, active.revision);
+        assert_eq!(facts.owner, active.owner);
+        assert_eq!(facts.status, "active");
+        assert_eq!(facts.next_check_at, active.next_check_at);
+        assert_eq!(facts.note.as_ref().unwrap().chars().count(), 256);
+        assert!(facts.note_truncated);
+        let encoded = serde_json::to_string(&facts).unwrap();
+        assert!(encoded.len() < 4096);
+        assert!(!encoded.contains("LONG_GOAL"));
+        assert!(!encoded.contains("LONG_ACCEPTANCE"));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), active);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
     #[test]
     fn owner_pages_span_crews_filter_finished_and_do_not_hide_missing_books() {
         let mut s = store();

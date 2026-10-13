@@ -416,7 +416,7 @@ git worktree add 失败: {path}. {detail}
 修订号须使用 work.get 返回的当前修订字符串。
 
 ## work.revision_conflict
-计划 {id} 已变化，请读取最新修订后再更新。
+计划 {id} 已变化，本次未写入。请核对回复中的当前事实，再决定是否更新；需要详情时读取计划。
 
 ## work.actor_forbidden
 此调用者不能执行公开工作命令。

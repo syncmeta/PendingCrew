@@ -524,6 +524,16 @@ async fn work_tools_use_real_helper_and_shared_transactions_without_echoing_full
     );
     let (text,error)=m.call("work_item_update",json!({"id":created["id"],"expected_revision":created["revision"],"note":"stale change"})).await;
     assert!(error, "{text}");
+    assert!(
+        text.contains("currentWork"),
+        "missing current facts: {text}"
+    );
+    assert!(text.contains("\"status\":\"done\""));
+    assert!(text.contains(&format!(
+        "\"revision\":\"{}\"",
+        completed["revision"].as_str().unwrap()
+    )));
+    assert!(!text.contains("large detail"), "conflict echoed long goal");
     let (text, error) = m
         .call("work_item_create", json!({"title":"spoof","actor":"human"}))
         .await;

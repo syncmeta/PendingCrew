@@ -191,6 +191,8 @@ pub struct RpcErrorData {
     /// `decision.changed`：此刻屏上的那个框（没有框了 = 不在）。客户端据它重新问人（M3c T10d）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<Box<DecisionView>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_work: Option<Box<WorkConflictFacts>>,
 }
 
 impl RpcError {
@@ -220,6 +222,7 @@ impl RpcError {
         self.data = Some(RpcErrorData {
             refusal: code.to_string(),
             decision: None,
+            current_work: None,
         });
         self
     }

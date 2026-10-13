@@ -162,3 +162,17 @@ pub struct WorkChanged {
     pub crew_id: String,
     pub id: String,
 }
+
+/// Bounded current facts accompanying a rejected revision; never a write result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkConflictFacts {
+    pub id: String,
+    pub revision: String,
+    pub owner: Option<String>,
+    pub status: String,
+    pub next_check_at: Option<String>,
+    pub blocker_count: usize,
+    pub note: Option<String>,
+    pub note_truncated: bool,
+}

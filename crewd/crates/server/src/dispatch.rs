@@ -41,7 +41,13 @@ pub(crate) fn internal(detail: impl std::fmt::Display) -> RpcError {
 
 /// 规则拒绝 → RPC 错误：message 是中文缺省，`data.refusal` 是稳定码，客户端按码本地化。
 pub(crate) fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError {
-    RpcError::new(code, r.to_string()).with_refusal(r.code.as_str())
+    let mut error = RpcError::new(code, r.to_string()).with_refusal(r.code.as_str());
+    error
+        .data
+        .as_mut()
+        .expect("with_refusal has data")
+        .current_work = r.current_work;
+    error
 }
 
 /// collab 错误 → RPC 错误码（M3b 的 agent RPC 复用同一张表）。
@@ -611,6 +617,31 @@ mod tests {
 
     fn code(e: CollabError) -> i32 {
         collab_err(e).code
+    }
+
+    #[test]
+    fn work_revision_conflict_exposes_typed_current_facts_in_error_data() {
+        let mut r =
+            crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::WorkRevisionConflict)
+                .arg("id", "W9");
+        r.current_work = Some(Box::new(crewd_proto::WorkConflictFacts {
+            id: "W9".into(),
+            revision: "9007199254740993".into(),
+            owner: None,
+            status: "done".into(),
+            next_check_at: None,
+            blocker_count: 0,
+            note: None,
+            note_truncated: false,
+        }));
+        let error = collab_err(CollabError::Conflict(r));
+        assert_eq!(error.code, RpcError::CONFLICT);
+        let json = serde_json::to_value(error).unwrap();
+        assert_eq!(json["data"]["refusal"], "work.revision_conflict");
+        assert_eq!(json["data"]["currentWork"]["revision"], "9007199254740993");
+        assert_eq!(json["data"]["currentWork"]["status"], "done");
+        let old:RpcError=serde_json::from_value(serde_json::json!({"code":RpcError::CONFLICT,"message":"old refusal","data":{"refusal":"work.revision_conflict"}})).unwrap();
+        assert!(old.data.unwrap().current_work.is_none());
     }
 
     #[test]

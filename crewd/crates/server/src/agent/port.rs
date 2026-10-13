@@ -49,7 +49,14 @@ impl Reason {
     /// 按 agent 的语言渲染（`Text` 原样）。
     pub fn text(&self, l: Locale) -> String {
         match self {
-            Self::Rule(r) => r.text(l),
+            Self::Rule(r) => match &r.current_work {
+                Some(current) => format!(
+                    "{}\n{}",
+                    r.text(l),
+                    serde_json::json!({"currentWork":current})
+                ),
+                None => r.text(l),
+            },
             Self::Text(s) => s.clone(),
         }
     }

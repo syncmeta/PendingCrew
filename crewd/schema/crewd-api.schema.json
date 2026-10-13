@@ -2702,6 +2702,16 @@
     "RpcErrorData": {
       "description": "`RpcError.data`：规则拒绝带的机器可读部分。",
       "properties": {
+        "currentWork": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkConflictFacts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "decision": {
           "anyOf": [
             {
@@ -3811,6 +3821,54 @@
       "required": [
         "crewId",
         "id"
+      ],
+      "type": "object"
+    },
+    "WorkConflictFacts": {
+      "description": "Bounded current facts accompanying a rejected revision; never a write result.",
+      "properties": {
+        "blockerCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nextCheckAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "noteTruncated": {
+          "type": "boolean"
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "status",
+        "blockerCount",
+        "noteTruncated"
       ],
       "type": "object"
     },

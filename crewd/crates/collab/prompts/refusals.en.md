@@ -416,7 +416,7 @@ Work page limit must be between 1 and 200.
 Expected revision must be the exact current revision string from work.get.
 
 ## work.revision_conflict
-Plan {id} changed; read its latest revision before updating.
+Plan {id} changed; nothing was written. Review the current facts in this reply before deciding whether to update; read the plan if more detail is needed.
 
 ## work.actor_forbidden
 This actor cannot issue a public work command.
