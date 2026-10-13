@@ -24,6 +24,7 @@ struct CrewdWorkPanels: View {
     @Binding var planDrafts: CrewdPlanDrafts
     @Binding var humanDrafts: CrewdHumanDrafts
     var members:[CrewdValue]
+    var crews:[CrewdValue]=[]
     var progressOnly = false
     var compact = false
     @State private var collapsed:Set<String>=[]
@@ -108,8 +109,8 @@ struct CrewdWorkPanels: View {
                         ForEach(store.humanTasks.keys.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
                             let ask=store.humanTasks[id]?["ask"] ?? .null
                             Text("\(id.raw)  \(ask["question"].string ?? "")").textSelection(.enabled)
-                            Text(ask["item"].string ?? ask["crewId"].string ?? "").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                            if let crew=ask["crewId"].string {Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw))}}
+                            Text(ask["item"].string.map{"关联计划："+$0} ?? ("所属机组："+(crews.first(where:{$0["id"] == ask["crewId"]})?["title"].string ?? "机组资料尚未加载"))).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                            if let crew=ask["crewId"].string {Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw),crewTitle:crews.first(where:{$0["id"].string == crew})?["title"].string)}}
                         }
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)

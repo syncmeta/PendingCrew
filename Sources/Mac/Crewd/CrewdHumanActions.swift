@@ -28,6 +28,7 @@ struct CrewdHumanDrafts {
 }
 struct CrewdHumanTarget:Identifiable {
     let key:CrewdHumanDrafts.Key
+    var crewTitle:String?=nil
     var id:String {key.scope+":"+key.crew+":"+key.ask}
 }
 struct CrewdHumanActions:View {
@@ -47,7 +48,7 @@ struct CrewdHumanActions:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text(key.ask+" · 待你处理").font(.title2)
-            Text("所属机组："+key.crew).font(.caption).foregroundStyle(.secondary)
+            Text("所属机组："+(target.crewTitle ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
             Text(ask["question"].string ?? "此问题已不在当前待处理收件箱，请刷新核对。").textSelection(.enabled)
             if let item=ask["item"].string {Text("关联计划："+item).font(.caption)}
             if let original=ask["default"]["text"].string {Text("预设答复："+original).font(.caption).textSelection(.enabled)}
