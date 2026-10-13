@@ -100,3 +100,12 @@ M6 source-only接线首次被自动审查以持续网络暴露/具体授权不�
 根实际观察 Swift watcher91790 terminal exit0，并以 API 再核对 run38479786399 terminal success、headSha fe68022f。Mac 主工程实际3202总计/15既有skip/0failure（3187通过，既有HelperBuildPerMember单列CI排除），iOS实际 BUILD SUCCEEDED；工程同步job115579275642通过。完整原始日志 `/private/tmp/pcw-M3-main-swift-ci-fe68022f.log`。此前同 main Rust run38479786302已实际Linux/Mac全绿并保存原日志。所有本次main组合运行已terminal，不再重复调度或轮询这些handles。
 
 该结果关闭本次源整合与平台CI关口，配对正常helper/GUI产物独验也已通过；受影响normal-runtime typed组合由质量线接续。实际GUI点击、真实账号任务、安装/日常数据切换及持续自用分别仍待完成；不以本次CI把整个M3或全工程宣布完成。M4原生真实PTY/ACP与M6可信远程/移动端并行继续。
+
+
+## 2026-10-14：正常配套运行验收与新窗口材料
+
+- 质量线整块新normal packaged helper＋固定fe68022f typed客户端验收已通过，原提交ba39cee4已接为27d85118。实际群/#W/H、真实MCP身份、只读重连与旧UUID不重关联均GREEN。新增物理proxy在真实已提交todo.create成功后截住回执并shutdown连接，保留原unknown UUID/完整草稿；只读reconnect零自动写重放；显式原UUID确认只保留一份权威需求且不清新稿。根核对两个实际日志及集中记录，没有复跑稳定单元或模型。
+- 实际签名helper SHA238bad7f35e707e21e4c31cebb76d0569de2405baf025f025f41b62283fa02dc；正常源码/配置来源为已验收2eee，与旧b064分开。证据 `/private/tmp/pcw-M3-fe680-channel-normal-independent-02.log`、`pcw-M3-fe680-committed-eof-independent-02.log`；完整自有DB/日志/请求留在各临时evidence目录。
+- 根核对既有实际fake copy SHA0e75fcbc0ff7e9f8bdb59bc41e8b937d3631317cb6dcba23581eaf64909e3d3e，使用已接受prepare工具为新fe680完整候选准备独立窗口材料：`/private/tmp/pcw-visible-gui.cd9aj8ec/session.json` 与待启动脚本。fresh home/work/data、固定GUI/helper/fake hashes；只prepare，没有launch或App控制。旧a9暂停窗口及全部证据保留。
+- 新正常运行/源整合/全平台CI/配套产物关口已接受；实际新窗口点击、真实provider任务、安装/日常迁移仍待完成，不缩减M3或全工程范围。
+- M6正式服务源码检查点d17766af已默认features定向check/proto通过，并合入公共2eee；QA接实际临时loopback生产路由整链，根不提前合main。客户端继续Native配对/Keychain/TLS/Root，后台继续M4，不等待离线用户窗口权限。
