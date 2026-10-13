@@ -25,6 +25,7 @@ final class CrewdWorkspace: ObservableObject {
     private var selection = UUID()
     private var sync: Task<Void, Never>?
     private var reconnect: Task<Void, Never>?
+    private var reconnectID: UUID?
     private var backend: Process?
     private var again = false
     private var recoverNeeded = false
@@ -40,21 +41,23 @@ final class CrewdWorkspace: ObservableObject {
                 if let id = item["id"].string, let index = self.runnerItems.firstIndex(where: {$0["id"].string == id}) { self.runnerItems[index] = item }
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
-                self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel()
+                self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
-            guard let self, !self.booting, !self.sleeping else { return }
+            guard let self, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
+            let attempt = UUID(); self.reconnectID = attempt
             self.reconnect = Task { [weak self] in
+                defer { if self?.reconnectID == attempt { self?.reconnectID = nil } }
                 for delay in [1, 2, 4, 8, 8] {
                     try? await Task.sleep(for: .seconds(delay))
-                    guard !Task.isCancelled, let self else { return }
+                    guard !Task.isCancelled, let self, self.reconnectID == attempt else { return }
                     do { try await self.connectOnly(); return } catch { self.error = error.localizedDescription }
                 }
-                self?.status = "连接已中断"
+                if self?.reconnectID == attempt { self?.status = "连接已中断" }
             }
         }
     }
@@ -63,7 +66,7 @@ final class CrewdWorkspace: ObservableObject {
     func connect() async {
         guard !booting else { return }
         booting = true; defer { booting = false }
-        reconnect?.cancel(); sleeping = false; error = nil; status = "正在连接"
+        reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
         let legacy = ProcessInfo.processInfo.environment["PENDINGCREW_DATA_DIR"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew")
         let candidatePath = dataDirectory.standardizedFileURL.resolvingSymlinksInPath().path
         let legacyPath = legacy.standardizedFileURL.resolvingSymlinksInPath().path
@@ -71,6 +74,9 @@ final class CrewdWorkspace: ObservableObject {
             error = "首版试用须使用独立数据目录，不能与旧版共用。"; status = "连接未建立"; return
         }
         do { try await connectOnly(); return } catch {
+            if let failure = error as? CrewdClientError, failure.kind == .backendHandshake {
+                self.error = failure.localizedDescription; status = "后台协议连接失败"; return
+            }
             guard backend?.isRunning != true else { self.error = error.localizedDescription; status = "后台连接失败"; return }
         }
         do {
