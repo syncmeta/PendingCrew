@@ -23,6 +23,55 @@ fn ts(t: Ts) -> String {
     crewd_store::ts_from_ms(t.0)
 }
 
+// References witness identity; they never replace missing authoritative state.
+fn verify_book_references(conn: &Connection, crew: &str, state: Option<&BookState>) -> Result<()> {
+    let mut legacy = conn.prepare("SELECT ask FROM ask_meta WHERE crew_id=?1")?;
+    let rows = legacy.query_map([crew], |r| r.get::<_, String>(0))?;
+    for row in rows {
+        let key = row?;
+        if !state.is_some_and(|st| {
+            key.parse::<AskId>()
+                .is_ok_and(|id| st.asks.contains_key(&id))
+        }) {
+            return Err(crewd_store::StoreError::Invalid(
+                "work book is missing a legacy question identity".into(),
+            )
+            .into());
+        }
+    }
+    let mut statement = conn.prepare(
+        "SELECT kind,source_id FROM object_refs WHERE crew_id=?1 AND substr(source_id,1,5)='work:'",
+    )?;
+    let rows = statement.query_map([crew], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (kind, source) = row?;
+        let alias = source
+            .strip_prefix("work:")
+            .expect("SQL selected the exact namespace");
+        let valid = state.is_some_and(|st| match kind.as_str() {
+            "human_task" => alias
+                .parse::<AskId>()
+                .is_ok_and(|id| st.asks.contains_key(&id)),
+            "plan" => alias
+                .parse::<crewd_work::WorkId>()
+                .is_ok_and(|id| st.items.contains_key(&id)),
+            "requirement" => alias
+                .parse::<crewd_work::EntryNo>()
+                .is_ok_and(|id| st.entries.contains_key(&id)),
+            _ => false,
+        });
+        if !valid {
+            return Err(crewd_store::StoreError::Invalid(
+                "work book is missing an issued object identity".into(),
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
     let state: Option<String> = conn
         .query_row(
@@ -32,10 +81,20 @@ fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
         )
         .optional()?;
     match state {
-        None => Ok(WorkBook::new(CrewId::new(crew), Config::default())),
+        None => {
+            verify_book_references(conn, crew, None)?;
+            Ok(WorkBook::new(CrewId::new(crew), Config::default()))
+        }
         Some(s) => {
             let st: BookState = serde_json::from_str(&s)?;
+            if st.crew.as_str() != crew {
+                return Err(crewd_store::StoreError::Invalid(
+                    "work book crew identity mismatch".into(),
+                )
+                .into());
+            }
             // 读回来不合法 = 服务端的错（同账本不变式，终审 M4）：映射成 -32603，细节只进日志，不给客户端。
+            verify_book_references(conn, crew, Some(&st))?;
             WorkBook::restore(st, Config::default())
                 .map_err(|v| CollabError::Work(Rejected::Invariant(v)))
         }
@@ -66,7 +125,25 @@ pub fn with_book<R>(
     let mut book = load(tx.conn(), crew)?;
     let before = book.state().clone();
     let r = f(&mut book, Ts(tx.now_ms())).map_err(|e| rejected(crew, e))?;
-    let _ = book.take_log();
+    let after = book.state();
+    if after.crew.as_str() != crew
+        || after.last_ask < before.last_ask
+        || after.last_item < before.last_item
+        || after.last_seq < before.last_seq
+        || before.items.keys().any(|id| !after.items.contains_key(id))
+        || before.asks.keys().any(|id| !after.asks.contains_key(id))
+        || before
+            .entries
+            .keys()
+            .any(|id| !after.entries.contains_key(id))
+    {
+        return Err(crewd_store::StoreError::Invalid(
+            "work command retired an issued identity".into(),
+        )
+        .into());
+    }
+    verify_book_references(tx.conn(), crew, Some(after))?;
+    let events = book.take_log();
     if *book.state() == before {
         return Ok(r);
     }
@@ -75,6 +152,28 @@ pub fn with_book<R>(
          ON CONFLICT(crew_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
         params![crew, serde_json::to_string(book.state())?, tx.now_ts()],
     )?;
+    // Identity metadata commits with the authoritative state, never as a second
+    // copy of status. Legacy local aliases remain valid during staged M4b cutover.
+    for event in events {
+        use crewd_store::object_refs::{self, ObjectKind};
+        let reference = match event.kind {
+            EventKind::EntryRegistered { entry } => {
+                Some((ObjectKind::Requirement, entry.to_string()))
+            }
+            EventKind::ItemCreated { id, .. } => Some((ObjectKind::Plan, id.to_string())),
+            EventKind::AskOpened { ask, .. } => Some((ObjectKind::HumanTask, ask.to_string())),
+            _ => None,
+        };
+        if let Some((kind, source)) = reference {
+            object_refs::bind(
+                tx.conn(),
+                kind,
+                crew,
+                &format!("work:{source}"),
+                &tx.now_ts(),
+            )?;
+        }
+    }
     Ok(r)
 }
 
@@ -1067,6 +1166,248 @@ mod tests {
         assert!(
             matches!(e, CollabError::Work(Rejected::Invariant(_))),
             "{e:?}"
+        );
+    }
+    #[test]
+    fn new_asks_get_global_references_without_changing_local_aliases() {
+        use crewd_store::object_refs::{self, ObjectKind};
+        let mut s = store();
+        let a = ok(&mut s, |tx| open(tx, "w-a1", q("synthetic A")));
+        let b = ok(&mut s, |tx| open(tx, "w-b1", q("synthetic B")));
+        assert_eq!(a.ask, "H1");
+        assert_eq!(b.ask, "H1");
+        let ra = object_refs::resolve(
+            s.conn(),
+            ObjectKind::HumanTask,
+            &a.crew_id,
+            &format!("work:{}", &a.ask),
+        )
+        .unwrap()
+        .expect("new ask must have a durable global reference");
+        let rb = object_refs::resolve(
+            s.conn(),
+            ObjectKind::HumanTask,
+            &b.crew_id,
+            &format!("work:{}", &b.ask),
+        )
+        .unwrap()
+        .expect("other crew must have a durable global reference");
+        assert_ne!(ra.number, rb.number);
+        ok(&mut s, |tx| {
+            answer(tx, &a.crew_id, &a.ask, "synthetic answer")
+        });
+        assert_eq!(
+            object_refs::resolve(
+                s.conn(),
+                ObjectKind::HumanTask,
+                &a.crew_id,
+                &format!("work:{}", &a.ask)
+            )
+            .unwrap(),
+            Some(ra)
+        );
+    }
+    #[test]
+    fn reference_write_failure_rolls_back_book_and_question_side_effects() {
+        let mut s = store();
+        let before: i64 = s
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_reference BEFORE INSERT ON object_refs BEGIN SELECT RAISE(ABORT,'synthetic reference fault'); END;").unwrap();
+        let refused = err(&mut s, |tx| {
+            open(tx, "w-a1", q("must not escape transaction"))
+        });
+        assert!(matches!(refused, CollabError::Store(_)));
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM work_books WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM object_refs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn a_book_stored_under_another_crew_is_refused_without_rebinding_or_resetting() {
+        let mut s = store();
+        let foreign =
+            serde_json::to_string(WorkBook::new(CrewId::new("crew-b"), Config::default()).state())
+                .unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO work_books(crew_id,state,updated_at) VALUES('crew-a',?1,'t')",
+                [&foreign],
+            )
+            .unwrap();
+        let before: i64 = s
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        let refused = err(&mut s, |tx| {
+            open(tx, "w-a1", q("wrong book must stay closed"))
+        });
+        assert!(matches!(refused, CollabError::Store(_)));
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            foreign
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM object_refs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn issued_work_references_prevent_a_missing_book_from_being_guessed_empty() {
+        use crewd_store::object_refs::{self, ObjectKind};
+        let mut s = store();
+        let old = ok(&mut s, |tx| open(tx, "w-a1", q("original identity")));
+        let reference = object_refs::resolve(
+            s.conn(),
+            ObjectKind::HumanTask,
+            "crew-a",
+            &format!("work:{}", &old.ask),
+        )
+        .unwrap()
+        .unwrap();
+        let before: i64 = s
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        s.conn()
+            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .unwrap();
+        s.conn()
+            .execute("DELETE FROM ask_meta WHERE crew_id='crew-a'", [])
+            .unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| open(
+                tx,
+                "w-a1",
+                q("must not reuse original alias")
+            )),
+            CollabError::Store(_)
+        ));
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM work_books WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            object_refs::resolve(
+                s.conn(),
+                ObjectKind::HumanTask,
+                "crew-a",
+                &format!("work:{}", &old.ask)
+            )
+            .unwrap(),
+            Some(reference)
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn replacing_a_book_cannot_retire_issued_identity_counters() {
+        let mut s = store();
+        ok(&mut s, |tx| open(tx, "w-a1", q("original")));
+        let before: String = s
+            .conn()
+            .query_row(
+                "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| with_book(tx, "crew-a", |b, _| {
+                *b = WorkBook::new(CrewId::new("crew-a"), Config::default());
+                Ok(())
+            })),
+            CollabError::Store(_)
+        ));
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            before
+        );
+    }
+    #[test]
+    fn legacy_question_metadata_also_prevents_empty_book_guessing() {
+        let mut s = store();
+        ok(&mut s, |tx| open(tx, "w-a1", q("legacy original")));
+        s.conn()
+            .execute("DELETE FROM object_refs WHERE crew_id='crew-a'", [])
+            .unwrap();
+        s.conn()
+            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| open(tx, "w-a1", q("must stay missing"))),
+            CollabError::Store(_)
+        ));
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM work_books WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM ask_meta WHERE crew_id='crew-a'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
         );
     }
 }

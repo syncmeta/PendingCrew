@@ -97,3 +97,18 @@ Codex 优先沿用现有 app-server 驱动，并核查 [codex-acp](https://githu
 ## 2026-10-13 持续推进检查点
 
 Codex 首版已补后台重启人工恢复入口与休眠后停止快照读取；正常/强制退出、人工停止、同 thread 恢复、五个同步边界及实际合成窗口按钮已验收。候选与 main 已接受降噪/方案已在隔离树整合，保留有界批处理与双方交付记录。完整门禁、首次失败、稳定产物及工具阻塞记录在候选记录；候选仍不是安装或日常迁移。2026-10-13 已将 `29e72bb3` 快进合入共享 main，既有 README 未提交改动按哈希核对原样保留，ACP 未跟踪研究资料保留。下一步核对 M4b 工作账本持久化/工具/编排接线缺口；Jev/记忆继续讨论先行，厂商内部通信延期。
+## 2026-10-13 M4b 工作身份基础
+
+工作引用基础位于 codex/work-identity-20261013。数据库 v5 增加全组织唯一的对象引用编号、类型、所属机组和源定位；只持久化身份，不复制工作状态。前缀沿用原始需求 #、计划 W、待人事项 H，以及已约定的 D/L/R/O/T。对外需要显式文本 ID DTO，不能把 i64 编号当 JavaScript number 传输。
+
+新需求/计划/问题创建的真实账本事务会绑定 work: 命名空间的源引用；旧本地别名保持兼容。绑定失败与账本/公告一起回滚。已有公开引用、旧问题元数据不能替代丢失的账本；身份不一致、已发号计数回退、既有对象被命令静默移除都拒绝，不自动清空或重绑。机组移除后保留读取，永久删除随机组级联清除对象引用；提交过的编号由持久单调序列保留，不因最高号删除而复用。编号耗尽明确拒绝，不绕回。
+
+先红后绿：pcw-work-identity-red-01.log 捕获普通主键复用最高号；pcw-work-ref-ask-red-01.log 捕获未接入的实际创建事务；pcw-work-ref-identity-scope-red-01.log 捕获另一机组账本被错误接受；pcw-work-ref-missing-book-red-01.log 捕获缺账被猜成新账本。8 项存储身份/迁移边界、27 项问题规则定向回归已通过。v4 迁移前快照保留，既有源状态不改写，失败仍是 v4。部分旧测试固定版本 4，已改为当前版本并保留数据断言与迁移前版本校验。
+
+完整门禁过程中发现既有真实 PTY 测试设置阶段偶发失败。新增“回执先可见、字节后到”的确定性反例捕获了旧夹具提前认定屏幕到达；夹具现在确认实际解析字节到齐，逻辑时钟一致。生产私有排空路径继续使用真实时钟，不向 RPC 或权限策略开放时钟/观察接口；25 项反压/安全写入回归通过。日志 pcw-pty-frame-witness-{red,green}-01.log；初次全量失败及定向结果分别保存在 pcw-work-identity-backend-check-02.log、pcw-work-identity-pty-focused-01.log。
+
+这只是 M4b 基础，不是完整全局工作模型、工具面或界面已交付。历史对象引用补齐、可读代号/永久旧别名、工作动作 API/MCP、检查点/停下即检查接线、工作视图继续推进。已发现 mark_done 仍要求 evidence，而人已决定完成凭据可选；下一单元对齐该规则，保持负责人权限及图不变量。所有日志位于 /private/tmp，不运行活测试，不开始 Jev/记忆实现，不安装或迁移日常数据。
+
+经验：用实际身份、实际字节和事务提交做见证，避免“进程写完/忙闲/有文件/已入队”充当完成证据。确定性反例先把不可靠前提固定下来，再复验完整门禁；不靠反复重跑或降低阈值放行。
+
+Final offline gate: 2349 passed, 0 failed, 8 ignored; fmt/clippy passed. Evidence: /private/tmp/pcw-work-identity-final-check-03.log. Runtime migration/source-reference changes remain on codex/work-identity-20261013 until the next integration checkpoint.

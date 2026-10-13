@@ -7,6 +7,7 @@ pub mod db;
 pub mod db_health;
 pub mod fsutil;
 pub mod messages;
+pub mod object_refs;
 pub mod schema;
 pub mod sessions;
 pub mod testing;

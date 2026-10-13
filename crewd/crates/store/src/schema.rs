@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -609,6 +609,21 @@ pub fn backfill_v4(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+// Global stable identity only: source data remains in its existing authoritative store.
+fn migrate_v5(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("CREATE TABLE object_refs(
+        number INTEGER PRIMARY KEY AUTOINCREMENT CHECK(number > 0),
+        kind TEXT NOT NULL CHECK(kind IN ('requirement','plan','human_task','decision','lesson','risk','custom_row','table')),
+        crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL CHECK(length(trim(source_id)) > 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(kind,crew_id,source_id)
+    ); CREATE INDEX object_refs_by_source_crew ON object_refs(crew_id,source_id); PRAGMA user_version = 5;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
 }
@@ -642,6 +657,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 4 {
         migrate_v4(conn)?;
+    }
+    if v < 5 {
+        migrate_v5(conn)?;
     }
     Ok(())
 }
@@ -1334,14 +1352,14 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     /// N1 × N4：v3 → v4 走 `open_data_dir` 的守卫链——迁移前先在 backups/ 拍一份 v3 快照（审批表、
     /// builtin 列都还在），再在一个事务里升到 v4。没身份的旧库与 N4 之后带身份的库各一遍。
     #[test]
-    fn a_v3_data_dir_is_snapshotted_then_migrated_to_v4_through_the_guarded_open() {
+    fn a_v3_data_dir_is_snapshotted_then_migrated_to_current_through_the_guarded_open() {
         for stamped in [false, true] {
             let d = tempfile::tempdir().unwrap();
             v3_data_dir(d.path(), stamped);
             let s = crate::Store::open_data_dir(d.path()).unwrap();
             assert_eq!(
                 one::<i64>(s.conn(), "PRAGMA user_version"),
-                4,
+                SCHEMA_VERSION,
                 "stamped={stamped}"
             );
             assert_eq!(
@@ -1365,7 +1383,10 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
             let snaps = snapshots(&d.path().join(crate::backup::BACKUPS_DIR));
             assert_eq!(snaps.len(), 1, "stamped={stamped}: {snaps:?}");
             let name = snaps[0].file_name().unwrap().to_string_lossy().into_owned();
-            assert!(name.starts_with("crewd-v3-pre-v4-"), "{name}");
+            assert!(
+                name.starts_with(&format!("crewd-v3-pre-v{SCHEMA_VERSION}-")),
+                "{name}"
+            );
             let snap = Connection::open(&snaps[0]).unwrap();
             assert_eq!(one::<i64>(&snap, "PRAGMA user_version"), 3);
             assert_eq!(
@@ -1483,7 +1504,7 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
      {
         let c = v3_db();
         migrate(&c).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), SCHEMA_VERSION);
         assert_eq!(
             rows(&c, "SELECT id FROM crews WHERE management=1"),
             ["chief"]
@@ -1638,10 +1659,10 @@ INSERT INTO wakes(session_id,kind,source,priority,not_before,state,attempts,crea
     }
 
     #[test]
-    fn fresh_database_is_v4_and_has_no_management_crew_until_a_crew_exists() {
+    fn fresh_database_is_current_and_has_no_management_crew_until_a_crew_exists() {
         let c = Connection::open_in_memory().unwrap();
         migrate(&c).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 4);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), SCHEMA_VERSION);
         assert_eq!(
             one::<i64>(&c, "SELECT COUNT(*) FROM crews"),
             0,
