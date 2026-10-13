@@ -234,7 +234,7 @@ mod tests {
             )
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE work_stop_checks; DROP TABLE work_events; DROP TABLE object_refs; PRAGMA user_version=4;")
+            .execute_batch("DROP TABLE runner_usage; DROP TABLE work_stop_checks; DROP TABLE work_events; DROP TABLE object_refs; PRAGMA user_version=4;")
             .unwrap();
         let backups = dir.path().join("backups");
         crate::schema::migrate_guarded(s.conn(), Some(&backups)).unwrap();

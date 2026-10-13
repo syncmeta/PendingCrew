@@ -1130,6 +1130,30 @@ impl Port for DbPort {
         .await
     }
 
+    async fn record_usage(
+        &self,
+        session: &str,
+        snapshot: crewd_exec::session::RunnerUsageSnapshot,
+        observed_at: Ms,
+    ) -> Result<()> {
+        let session = session.to_owned();
+        self.write(move |tx| {
+            crewd_store::runner_usage::append(
+                tx.conn(),
+                &session,
+                crewd_store::runner_usage::Snapshot {
+                    provider: &snapshot.provider,
+                    thread_id: &snapshot.thread_id,
+                    turn_id: snapshot.turn_id.as_deref(),
+                    token_usage_json: &snapshot.token_usage_json,
+                },
+                observed_at.0,
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
     fn publish(&self, e: OrchestraEvent) {
         let event = match e {
             OrchestraEvent::RunnerItem {
@@ -3781,6 +3805,255 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    // Provider notification -> actual Codex Core -> SessionEvent -> real Core/DbPort/SQLite.
+    fn usage_from_provider_core(
+        thread: &str,
+        values: &[serde_json::Value],
+    ) -> Vec<crewd_exec::session::SessionEvent> {
+        use crewd_exec::codex::{
+            proto::ThreadOptions,
+            session::{CodexAction, CodexCore, CodexCoreConfig, Opening},
+        };
+        let now = std::time::Instant::now();
+        let mut core = CodexCore::new(
+            Opening {
+                pid: 42,
+                cwd: std::path::PathBuf::from("/tmp/synthetic-usage"),
+                options: ThreadOptions::default(),
+                recorded: None,
+                client_version: "fixture".into(),
+                brief: None,
+                unix_now: 0,
+            },
+            CodexCoreConfig::default(),
+            now,
+        );
+        for (method, result) in [
+            ("initialize", serde_json::json!({"userAgent":"fixture"})),
+            ("thread/start", serde_json::json!({"thread":{"id":thread}})),
+        ] {
+            let id = core
+                .take_actions()
+                .into_iter()
+                .find_map(|a| {
+                    let CodexAction::Write(line) = a else {
+                        return None;
+                    };
+                    let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    (v["method"] == method).then(|| v["id"].clone())
+                })
+                .unwrap();
+            core.on_line(
+                &serde_json::json!({"id":id,"result":result}).to_string(),
+                now,
+            );
+        }
+        core.on_recorded(Ok(()), now);
+        core.take_actions();
+        let mut out = Vec::new();
+        for params in values {
+            core.on_line(
+                &serde_json::json!({"method":"thread/tokenUsage/updated","params":params})
+                    .to_string(),
+                now,
+            );
+            out.extend(core.take_actions().into_iter().filter_map(|a| match a {
+                CodexAction::Event(e @ crewd_exec::session::SessionEvent::Usage(_)) => Some(e),
+                _ => None,
+            }));
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn usage_evidence_real_core_db_retains_provider_snapshots_without_wakes_or_progress() {
+        use super::super::core::Input;
+        use crewd_exec::session::SessionEvent;
+        let mut rig = StopDbRig::new().await;
+        rig.wake("usage-fixture-start").await;
+        let generation = rig.core.live["w-1"].generator;
+        let thread = rig.core.live["w-1"].agent_session_id.clone();
+        let before_progress = rig
+            .port
+            .session("w-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .last_progress_at;
+        let before = rig
+            .port
+            .read(|c| {
+                Ok((
+                    c.query_row("SELECT count(*) FROM wakes", [], |r| r.get::<_, i64>(0))?,
+                    c.query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, i64>(0))?,
+                ))
+            })
+            .await
+            .unwrap();
+        let raw = serde_json::json!({"last":{"inputTokens":10,"cachedInputTokens":3,"outputTokens":5,"reasoningOutputTokens":2,"totalTokens":15},
+            "total":{"totalTokens":9007199254740993u64},"future":{"kept":"yes"}});
+        let one = serde_json::json!({"threadId":thread,"tokenUsage":raw});
+        let two = serde_json::json!({"threadId":thread,"turnId":"provider-turn","tokenUsage":{"total":{"totalTokens":9007199254740994u64},"last":{"cacheWriteInputTokens":0}}});
+        let events = usage_from_provider_core(
+            &thread,
+            &[
+                serde_json::json!({"threadId":"foreign","tokenUsage":raw}),
+                one.clone(),
+                one.clone(),
+                two,
+            ],
+        );
+        assert_eq!(events.len(), 3, "foreign thread must not reach persistence");
+        let mut observer = rig.state.hub.subscribe();
+        let stale = events[0].clone();
+        rig.core
+            .handle(Input::Exec {
+                session: "w-1".into(),
+                generator: generation + 1,
+                event: stale,
+            })
+            .await;
+        for event in events {
+            rig.core
+                .handle(Input::Exec {
+                    session: "w-1".into(),
+                    generator: generation,
+                    event,
+                })
+                .await;
+        }
+        let page = rig
+            .port
+            .read(|c| Ok(crewd_store::runner_usage::list(c, "w-1", 0, 200)?))
+            .await
+            .unwrap();
+        assert_eq!(
+            page.items.len(),
+            2,
+            "exact repeats do not create more evidence"
+        );
+        assert_eq!(page.items[0].turn_id, None);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&page.items[0].token_usage_json).unwrap(),
+            raw
+        );
+        assert!(
+            !page.items[0]
+                .token_usage_json
+                .contains("cacheWriteInputTokens")
+        );
+        assert!(
+            page.items[1]
+                .token_usage_json
+                .contains("\"cacheWriteInputTokens\":0")
+        );
+        assert_eq!(page.items[1].turn_id.as_deref(), Some("provider-turn"));
+        let after = rig
+            .port
+            .read(|c| {
+                Ok((
+                    c.query_row("SELECT count(*) FROM wakes", [], |r| r.get::<_, i64>(0))?,
+                    c.query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, i64>(0))?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "usage must not schedule, notify, or fabricate progress"
+        );
+        assert!(
+            matches!(
+                observer.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "telemetry must not publish live-refresh events"
+        );
+        assert_eq!(
+            rig.port
+                .session("w-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .last_progress_at,
+            before_progress
+        );
+        assert_eq!(rig.exec.launches("w-1").len(), 1);
+        // First provider observation remains a snapshot; no derived aggregate is stored.
+        assert_eq!(page.items[0].provider, "codex");
+        assert!(rig.state.db.health().snapshot().is_none());
+        assert!(matches!(
+            usage_from_provider_core(&thread, &[one])[0],
+            SessionEvent::Usage(_)
+        ));
+        let durable_dir = std::mem::replace(&mut rig.dir, tempfile::tempdir().unwrap());
+        let durable_path = durable_dir.path().join("crewd.db");
+        rig.close().await;
+        let reopened = crewd_store::Store::open(&durable_path).unwrap();
+        let after_restart =
+            crewd_store::runner_usage::list(reopened.conn(), "w-1", 0, 200).unwrap();
+        assert_eq!(
+            after_restart, page,
+            "actual Core/DbPort evidence survives orderly backend shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_evidence_persist_failure_is_visible_without_runner_restart_or_fake_receipt() {
+        use super::super::core::Input;
+        let mut rig = StopDbRig::new().await;
+        rig.wake("usage-storage-refusal").await;
+        let generation = rig.core.live["w-1"].generator;
+        let thread = rig.core.live["w-1"].agent_session_id.clone();
+        rig.state.db.call(|s| s.conn().execute_batch("CREATE TRIGGER usage_refusal BEFORE INSERT ON runner_usage BEGIN SELECT RAISE(ABORT,'synthetic usage storage refusal'); END;")).await.unwrap().unwrap();
+        let event = usage_from_provider_core(
+            &thread,
+            &[serde_json::json!({"threadId":thread,"tokenUsage":{"total":{"totalTokens":17}}})],
+        )
+        .remove(0);
+        let before = rig
+            .port
+            .session("w-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .last_progress_at;
+        rig.core
+            .handle(Input::Exec {
+                session: "w-1".into(),
+                generator: generation,
+                event,
+            })
+            .await;
+        let fault = rig
+            .state
+            .db
+            .health()
+            .snapshot()
+            .expect("real persistence failure is recorded");
+        assert_eq!(fault.kind, crewd_store::db_health::DbFaultKind::Sql);
+        assert!(
+            rig.port
+                .read(|c| Ok(crewd_store::runner_usage::list(c, "w-1", 0, 50)?))
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert_eq!(
+            rig.port
+                .session("w-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .last_progress_at,
+            before
+        );
+        assert_eq!(rig.exec.launches("w-1").len(), 1);
+        assert!(rig.core.live.contains_key("w-1"));
+        rig.close().await;
     }
 
     // All cases below use real SQLite reservations and actual Core dispatch, with

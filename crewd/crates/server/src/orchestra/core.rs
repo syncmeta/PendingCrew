@@ -2363,6 +2363,13 @@ impl<P: Port> Core<P> {
                     .runner_turn_end(session, &turn_id, &last_agent_message)
                     .await?;
             }
+            SessionEvent::Usage(snapshot) => {
+                if snapshot.thread_id != l.agent_session_id {
+                    return Ok(());
+                }
+                // Telemetry is persisted only: no live refresh, model wake, or progress.
+                return self.port.record_usage(session, snapshot, now).await;
+            }
             SessionEvent::Profile(profile) => {
                 self.port
                     .patch_session(
@@ -2896,6 +2903,41 @@ mod tests {
             numbered: true,
             selected: Some(0),
         }
+    }
+
+    #[tokio::test]
+    async fn usage_evidence_rejects_old_runner_generation_and_wrong_thread_without_progress() {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let live = rig.live("cap").unwrap();
+        let generation = live.generator;
+        let thread = live.agent_session_id.clone();
+        let sample = crewd_exec::session::RunnerUsageSnapshot {
+            provider: "codex".into(),
+            thread_id: thread,
+            turn_id: None,
+            token_usage_json: "{}".into(),
+        };
+        let before = rig.port.row("cap").last_progress_at;
+        rig.core
+            .on_exec("cap", generation + 1, SessionEvent::Usage(sample.clone()))
+            .await
+            .unwrap();
+        let mut wrong = sample.clone();
+        wrong.thread_id = "old-provider-thread".into();
+        rig.core
+            .on_exec("cap", generation, SessionEvent::Usage(wrong))
+            .await
+            .unwrap();
+        assert!(rig.port.lock().runner_usage.is_empty());
+        rig.core
+            .on_exec("cap", generation, SessionEvent::Usage(sample.clone()))
+            .await
+            .unwrap();
+        assert_eq!(rig.port.lock().runner_usage.len(), 1);
+        assert_eq!(rig.port.lock().runner_usage[0].1, sample);
+        assert_eq!(rig.port.row("cap").last_progress_at, before);
     }
 
     #[tokio::test]

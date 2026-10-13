@@ -219,7 +219,9 @@ mod tests {
             .query_row("SELECT count(*) FROM object_refs", [], |r| r.get(0))
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE work_stop_checks; PRAGMA user_version=6;")
+            .execute_batch(
+                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; PRAGMA user_version=6;",
+            )
             .unwrap();
         crate::schema::migrate(s.conn()).unwrap();
         let budget = get(s.conn(), "worker").unwrap().unwrap();
@@ -270,7 +272,9 @@ mod tests {
             )
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE work_stop_checks; PRAGMA user_version=6;")
+            .execute_batch(
+                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; PRAGMA user_version=6;",
+            )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
         assert_eq!(

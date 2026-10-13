@@ -449,6 +449,40 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: WorkHistoryParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::history(c, p)).await
         }
+        methods::SESSION_USAGE => {
+            let p: RunnerUsageParams = parse_params(p)?;
+            let limit = p.limit.unwrap_or(50);
+            if !(1..=200).contains(&limit) {
+                return Err(RpcError::new(
+                    RpcError::INVALID_PARAMS,
+                    "usage page limit must be 1..200",
+                )
+                .with_refusal("session.usage_bad_limit"));
+            }
+            let after = match p.after.as_deref() {
+                None => 0,
+                Some(v) => match v.parse::<i64>() {
+                    Ok(n) if n > 0 && n.to_string() == v => n,
+                    _ => {
+                        return Err(RpcError::new(
+                            RpcError::INVALID_PARAMS,
+                            "invalid usage record cursor",
+                        )
+                        .with_refusal("session.usage_bad_cursor"));
+                    }
+                },
+            };
+            read(state, move |c| {
+                sessions::get(c, &p.session_id)?;
+                Ok(crewd_store::runner_usage::list(
+                    c,
+                    &p.session_id,
+                    after,
+                    limit,
+                )?)
+            })
+            .await
+        }
         methods::WORK_PATROL => {
             let p: WorkPatrolParams = parse_params_or_default(p)?;
             let now = crewd_store::now_ms();

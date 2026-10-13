@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -650,6 +650,13 @@ fn migrate_v7(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v8(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("CREATE TABLE runner_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE CHECK(length(CAST(session_id AS BLOB)) BETWEEN 1 AND 4096),provider TEXT NOT NULL CHECK(length(provider)>0 AND length(CAST(provider AS BLOB))<=128),thread_id TEXT NOT NULL CHECK(length(thread_id)>0 AND length(CAST(thread_id AS BLOB))<=4096),turn_id_json TEXT NOT NULL CHECK(json_valid(turn_id_json) AND json_type(turn_id_json) IN ('text','null') AND length(CAST(turn_id_json AS BLOB))<=24578),token_usage_json TEXT NOT NULL CHECK(json_valid(token_usage_json) AND json_type(token_usage_json)='object' AND length(CAST(token_usage_json AS BLOB))<=65536),observed_at TEXT NOT NULL,UNIQUE(session_id,provider,thread_id,turn_id_json,token_usage_json)); CREATE INDEX runner_usage_by_session_id ON runner_usage(session_id,id); PRAGMA user_version=8;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
 }
@@ -692,6 +699,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 7 {
         migrate_v7(conn)?;
+    }
+    if v < 8 {
+        migrate_v8(conn)?;
     }
     Ok(())
 }

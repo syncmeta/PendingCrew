@@ -19,6 +19,8 @@ pub mod work;
 pub use work::*;
 pub mod work_patrol;
 pub use work_patrol::*;
+pub mod runner_usage;
+pub use runner_usage::*;
 /// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
 pub mod wake_lifecycle;
 
@@ -64,6 +66,7 @@ pub mod methods {
     pub const MESSAGE_POST: &str = "message.post";
     pub const MESSAGE_SEARCH: &str = "message.search";
     pub const READ_MARK: &str = "read.mark";
+    pub const SESSION_USAGE: &str = "session.usage";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_GET: &str = "session.get";
     pub const WORK_CREATE: &str = "work.create";
@@ -107,6 +110,7 @@ pub mod methods {
         MESSAGE_POST,
         MESSAGE_SEARCH,
         READ_MARK,
+        SESSION_USAGE,
         SESSION_LIST,
         SESSION_GET,
         WORK_CREATE,
@@ -562,6 +566,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_HISTORY,
             m(sub::<WorkHistoryParams>(g), sub::<WorkHistoryPage>(g)),
+        ),
+        (
+            methods::SESSION_USAGE,
+            m(sub::<RunnerUsageParams>(g), sub::<RunnerUsagePage>(g)),
         ),
         (
             methods::WORK_PATROL,

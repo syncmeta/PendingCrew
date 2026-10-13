@@ -96,6 +96,7 @@ pub struct MemState {
     pub listens: BTreeMap<String, Vec<Listen>>,
     pub posts: Vec<(Audience, String)>,
     pub events: Vec<OrchestraEvent>,
+    pub runner_usage: Vec<(String, crewd_exec::session::RunnerUsageSnapshot, Ms)>,
     pub runner_ends: Vec<(String, String, String)>,
     pub max_live: Option<usize>,
     pub restarts: Vec<Vec<String>>,
@@ -1886,6 +1887,18 @@ impl Port for MemPort {
                 crewd_collab::turn_trace::QUESTION_LIMIT,
             );
         }
+        Ok(())
+    }
+
+    async fn record_usage(
+        &self,
+        session: &str,
+        snapshot: crewd_exec::session::RunnerUsageSnapshot,
+        observed_at: Ms,
+    ) -> Result<()> {
+        self.lock()
+            .runner_usage
+            .push((session.into(), snapshot, observed_at));
         Ok(())
     }
 
