@@ -394,8 +394,12 @@ struct PendingCrewNextApp: App {
         let directory = explicit.map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNext")
         _workspace = StateObject(wrappedValue: CrewdWorkspace(dataDirectory: directory))
     }
+    private var candidateTitle:String {
+        let ref=Bundle.main.object(forInfoDictionaryKey:"PendingCrewSourceRef") as? String
+        return "PendingCrew · 开发候选" + (ref.map{" · " + String($0.prefix(8))} ?? "")
+    }
     var body: some Scene {
-        WindowGroup("PendingCrew · Codex 首版") { CrewdWorkspaceView(workspace: workspace) }
+        WindowGroup(candidateTitle) { CrewdWorkspaceView(workspace: workspace) }
         .commands { CommandGroup(replacing: .help) { Text("Codex 首版使用独立数据目录，旧版数据保留。") } }
     }
 }
