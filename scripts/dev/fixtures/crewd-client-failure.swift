@@ -30,6 +30,18 @@ import Foundation
         }
         try require(workspace.client.connected && workspace.error == nil, "initial connection failed")
         let sent = await workspace.perform("message.post", .object(["channelId": .string("synthetic-channel"), "text": .string("DO_NOT_REPLAY")]))
+        if ["final_reply", "eof", "truncated"].contains(mode) {
+            if mode == "final_reply" {
+                try require(sent && workspace.error == nil, "complete final mutation reply was lost")
+                try require(workspace.status == "后台已休眠", "final shutdown event was lost")
+            } else {
+                try require(!sent && workspace.error != nil, "EOF or truncated response manufactured success")
+            }
+            // This terminal transport check ends after observing the operation outcome.
+            // The retry scenario separately proves no replay across actual reconnections.
+            print("PASS: terminal " + mode + " produced the correct mutation outcome")
+            return
+        }
         try require(!sent && workspace.error != nil, "lost mutation result must be unknown, never a success")
         // Real backoff: 1+2+4+8+8 seconds, with up to five seconds per connection.
         // No clock or retry-count seam and no shorter policy is imposed by this test.

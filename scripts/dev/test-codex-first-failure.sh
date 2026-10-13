@@ -10,8 +10,9 @@ xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
     "$root/scripts/dev/fixtures/crewd-client-failure.swift" -o "$fixture/probe"
 python3 - "$fixture" "$mode" <<'PYTHON'
 import json,os,pathlib,socket,subprocess,sys,threading,time
-base=pathlib.Path(sys.argv[1]); modes=['startup','incompatible','retry'] if sys.argv[2]=='all' else [sys.argv[2]]
-assert all(m in ['startup','incompatible','retry'] for m in modes)
+base=pathlib.Path(sys.argv[1]); terminal=['final_reply','eof','truncated']; available=['startup','incompatible','retry']+terminal
+modes=available if sys.argv[2]=='all' else terminal if sys.argv[2]=='transport' else [sys.argv[2]]
+assert all(m in available for m in modes)
 failures=[]
 for mode in modes:
     root=base/mode;root.mkdir();path=str(root/'crewd.sock');calls=[];errors=[];ready=threading.Event();active=[];second_dropped=False;second_serving=False
@@ -30,7 +31,14 @@ for mode in modes:
                         elif method=='events.subscribe':result={'topics':[]}
                         elif method in ['crew.list','ask.list']:result=[]
                         elif method=='restart.pending':result=None
-                        elif method=='message.post' and drop:break # received once, result is deliberately lost
+                        elif method=='message.post':
+                            wire=json.dumps({'id':req['id'],'result':{'id':'synthetic-post'}})
+                            if drop or mode=='eof':break # received once, result deliberately lost
+                            if mode=='truncated':conn.sendall(wire[:len(wire)//2].encode());break
+                            if mode=='final_reply':
+                                shutdown=json.dumps({'event':'system.shutdown','data':{'reason':'hibernate'}})
+                                conn.sendall((wire+'\n'+shutdown+'\n').encode());break
+                            raise AssertionError('unexpected mutation')
                         else:raise AssertionError('unexpected request '+method)
                         conn.sendall((json.dumps({'id':req['id'],'result':result})+'\n').encode())
         except BaseException as e:errors.append(repr(e))
@@ -62,7 +70,7 @@ for mode in modes:
     (root/'calls.json').write_text(json.dumps(calls,indent=2));(root/'peer-errors.json').write_text(json.dumps(errors))
     methods=[r['method'] for r in calls]
     mutation_count=methods.count('message.post')
-    ok=code==0 and not errors and mutation_count==(1 if mode=='retry' else 0)
+    ok=code==0 and not errors and mutation_count==(1 if mode in ['retry']+terminal else 0)
     if mode=='incompatible':ok=ok and methods==['system.hello']
     if mode=='retry':ok=ok and methods.count('system.hello')==3 and second_dropped and second_serving
     print(mode,'PASS' if ok else 'FAIL','exit',code,'mutations',mutation_count,'calls',methods,flush=True)
