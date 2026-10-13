@@ -129,3 +129,13 @@ Optional-evidence gate: 2352 passed, 0 failed, 8 ignored; fmt/clippy passed. Ful
 实际问题创建命令的旧实现未留下事件，反例失败记录 pcw-work-history-integration-red-01.log。定向存储与问题集成分别通过 pcw-work-history-store-green-02.log、pcw-work-history-integration-green-02.log；补充分页、重复序号整笔回滚、记录身份篡改和后段迁移失败后完整门禁通过 pcw-work-history-full-check-01.log：2361 passed、0 failed、8 ignored，格式/lint 通过。首次编译和旧版本夹具错误保留，不算行为反例。日志位于 /private/tmp。
 
 此单元仍位于 codex/work-identity-20261013，不代表 M4b 全部完成：公开工作 API/MCP、进展检查点、空闲挂钩和工作视图仍待接线。没有新增真实模型调用、安装、发布或日常数据迁移；Jev/记忆继续仅保留方案。
+
+## 2026-10-13 M4b 全局计划读取接口
+
+增加 work.list/work.get 客户端 RPC、严格参数与生成的 v3 增量契约。列表支持全组织或单机组，默认 50 项、最多 200 项，稳定全局编号游标分页；同页同机组账本只恢复一次。移除的机组照样可读，账本缺失或身份不一致拒绝，不猜空工作。编号/修订在线上使用字符串，父项、依赖、原始需求和卡点都转换为全局对象引用；机组内别名不充当公开编号。新增稳定拒绝码与中英文文案。
+
+列表只返回工作摘要，长目标、验收标准和凭据从 work.get 按需读取。实际 Unix socket 验收确认分页、全局父项、摘要不夹带完整目标、详情保留目标，以及错误参数的拒绝码。故意把链接投影成局部 W1 的坏例在期待 W9007199254740993 处失败，日志 pcw-work-query-local-link-red-01.log；恢复后定向通过 pcw-work-query-focused-03.log，摘要改动后通过 focused-04.log 与 socket-01.log。
+
+查询接线完整后端门禁 pcw-work-query-full-check-01.log：2364 passed、0 failed、8 ignored。之后摘要投影与新增 socket 夹具的最终变更以格式、全 workspace lint、proto 全测试、全部 socket 测试及 CLI 全方法端到端复验，日志 pcw-work-query-final-01.log；没有把改动前的全量数冒充改动后的完整重跑。首次两次编译错误是工作目录/夹具类型错误，不计作行为反例，原始日志保留。
+
+当前接口仅为计划读取，不代表原始需求/待人事项全量视图、操作命令、MCP、跨机组关系、可读代号、自建表、检查点和注入已经完成。下一单元接工作操作与 agent 工具，沿用同一账本、全局引用及事务。没有新增真实模型调用、安装、发布或日常数据迁移。

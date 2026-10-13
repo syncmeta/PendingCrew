@@ -7,7 +7,11 @@ use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 
 async fn start(dir: &Path) -> oneshot::Sender<()> {
+    start_with_setup(dir, |_| {}).await
+}
+async fn start_with_setup(dir: &Path, setup: impl FnOnce(&Path)) -> oneshot::Sender<()> {
     seed(dir);
+    setup(dir);
     let (tx, rx) = oneshot::channel::<()>();
     let d = dir.to_path_buf();
     tokio::spawn(async move {
@@ -1249,4 +1253,53 @@ async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
         "{:?}",
         pre_delete_snapshots(dir.path())
     );
+}
+
+#[tokio::test]
+async fn work_queries_read_committed_plans_over_the_actual_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = start_with_setup(dir.path(), |dir| {
+        let mut store = crewd_store::Store::open(&dir.join("crewd.db")).unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            crewd_collab::asks::with_book(tx, "a", |book, now| {
+                let mut input = crewd_work::NewItem::titled("parent");
+                input.body.goal = "Long source goal retained only in the detail".into();
+                book.create_item(&crewd_work::Actor::Human, now, input)?;
+                book.create_item(
+                    &crewd_work::Actor::Human,
+                    now,
+                    crewd_work::NewItem::titled("child")
+                        .under(crewd_work::ItemRef::Id(crewd_work::WorkId(1))),
+                )
+            })
+        })
+        .unwrap();
+    })
+    .await;
+    let mut client = Client::connect(dir.path()).await;
+    let first = client.call(1, "work.list", json!({"limit":1})).await;
+    let parent = first["items"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(first["items"][0]["title"], "parent");
+    assert!(first["items"][0].get("goal").is_none());
+    assert_eq!(first["nextAfter"], parent);
+    let second = client
+        .call(2, "work.list", json!({"after":parent,"limit":1}))
+        .await;
+    assert_eq!(second["items"][0]["parent"], parent);
+    assert!(second["nextAfter"].is_null());
+    let detail = client.call(3, "work.get", json!({"id":parent})).await;
+    assert_eq!(
+        detail["goal"],
+        "Long source goal retained only in the detail"
+    );
+    let bad = client
+        .call_rpc_err(4, "work.get", json!({"id":"W01"}))
+        .await;
+    assert_eq!(bad.code, -32602);
+    assert_eq!(bad.data.unwrap().refusal, "work.bad_id");
+    assert_eq!(
+        client.call_err(5, "work.list", json!({"limit":201})).await,
+        -32602
+    );
+    let _ = stop.send(());
 }

@@ -3781,6 +3781,244 @@
         "attempts"
       ],
       "type": "object"
+    },
+    "WorkEvidence": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "WorkGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "WorkListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WorkPage": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkSummary"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "WorkPlan": {
+      "properties": {
+        "acceptance": {
+          "type": "string"
+        },
+        "blockedOn": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "dependsOn": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "nextCheckAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "goal",
+        "level",
+        "acceptance",
+        "status",
+        "dependsOn",
+        "sources",
+        "blockedOn",
+        "revision",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "WorkSummary": {
+      "description": "Lists carry working context; long goals and evidence are fetched with work.get.",
+      "properties": {
+        "blockedOn": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nextCheckAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "status",
+        "blockedOn",
+        "revision"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4315,6 +4553,22 @@
       },
       "result": {
         "$ref": "#/$defs/WakeListResult"
+      }
+    },
+    "work.get": {
+      "params": {
+        "$ref": "#/$defs/WorkGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.list": {
+      "params": {
+        "$ref": "#/$defs/WorkListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPage"
       }
     }
   },

@@ -394,6 +394,8 @@ fn rpc_drives_every_client_method() {
         ),
         ("session.list", "null", Ok),
         ("session.get", r#"{"sessionId":"captain-1111aaaa"}"#, Ok),
+        ("work.list", "{}", Ok),
+        ("work.get", r#"{"id":"W999"}"#, Code(-32004)),
         ("ask.list", "null", Ok),
         // R11（控制者裁定 h）：号码格式对、夹具的账本里没有 = 不存在（-32004），不是参数错。
         (

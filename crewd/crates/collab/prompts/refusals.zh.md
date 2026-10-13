@@ -402,3 +402,12 @@ git worktree add 失败: {path}. {detail}
 
 ## session.worktree.task_failed
 新建 worktree 任务失败: {path}. {detail}
+
+## work.bad_id
+全局计划编号格式不正确：{input}。
+
+## work.not_found
+计划 {id} 不存在。
+
+## work.bad_limit
+工作列表每页须为 1 到 200 项。

@@ -22,6 +22,10 @@ macro_rules! refusal_codes {
 }
 
 refusal_codes! {
+    // work
+    WorkBadId = "work.bad_id" ["input"],
+    WorkNotFound = "work.not_found" ["id"],
+    WorkBadLimit = "work.bad_limit" [],
     // ask
     AskIdNotFound = "ask.id_not_found" ["crew", "id"],
     AskBadId = "ask.bad_id" ["input"],

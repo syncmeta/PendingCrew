@@ -72,7 +72,7 @@ fn verify_book_references(conn: &Connection, crew: &str, state: Option<&BookStat
     Ok(())
 }
 
-fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
+pub(crate) fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
     let state: Option<String> = conn
         .query_row(
             "SELECT state FROM work_books WHERE crew_id=?1",

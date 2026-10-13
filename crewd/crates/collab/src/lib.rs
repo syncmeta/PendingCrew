@@ -24,6 +24,7 @@ mod testkit;
 pub mod todos;
 pub mod turn_trace;
 pub mod wakes;
+pub mod work;
 pub mod worldview;
 
 use crate::refusal::Refusal;

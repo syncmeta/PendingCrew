@@ -15,6 +15,8 @@ mod model;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
 mod params;
+pub mod work;
+pub use work::*;
 /// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
 pub mod wake_lifecycle;
 
@@ -62,6 +64,8 @@ pub mod methods {
     pub const READ_MARK: &str = "read.mark";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_GET: &str = "session.get";
+    pub const WORK_LIST: &str = "work.list";
+    pub const WORK_GET: &str = "work.get";
     pub const ASK_LIST: &str = "ask.list";
     pub const ASK_ANSWER: &str = "ask.answer";
     pub const ASK_WITHDRAW: &str = "ask.withdraw";
@@ -98,6 +102,8 @@ pub mod methods {
         READ_MARK,
         SESSION_LIST,
         SESSION_GET,
+        WORK_LIST,
+        WORK_GET,
         ASK_LIST,
         ASK_ANSWER,
         ASK_WITHDRAW,
@@ -522,6 +528,14 @@ pub fn api_schema() -> Value {
         (
             methods::SESSION_GET,
             m(sub::<SessionGetParams>(g), sub::<Session>(g)),
+        ),
+        (
+            methods::WORK_LIST,
+            m(sub::<WorkListParams>(g), sub::<WorkPage>(g)),
+        ),
+        (
+            methods::WORK_GET,
+            m(sub::<WorkGetParams>(g), sub::<WorkPlan>(g)),
         ),
         (
             methods::ASK_LIST,

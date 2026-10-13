@@ -402,3 +402,12 @@ Cannot wait for git: {path}. {detail}
 
 ## session.worktree.task_failed
 The worktree task failed: {path}. {detail}
+
+## work.bad_id
+Invalid global plan ID: {input}.
+
+## work.not_found
+Plan {id} does not exist.
+
+## work.bad_limit
+Work page limit must be between 1 and 200.
