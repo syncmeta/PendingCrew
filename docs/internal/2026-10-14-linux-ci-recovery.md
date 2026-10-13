@@ -42,3 +42,23 @@ Local follow-up:
 - `/private/tmp/pcw-linux-ci-clippy-02.log` and `pcw-linux-ci-fmt-02.log`: strict workspace clippy and format passed.
 
 These are macOS evidence only. Root still owns the next exact-source remote two-platform gate and subsequent main decision.
+
+## Native submission consumption and the remaining macOS CI failure
+
+Exact `1b0c85fe` remote Linux job `115520579160` passed all 2535 tests (eight skipped; one leaky classification), while macOS job `115520578965` failed the delayed-chunk 68000-byte brief. Original evidence remains in `/private/tmp/pcw-M3-linux-ci-1b0c85fe-green.log` and `/private/tmp/pcw-M3-macos-ci-1b0c85fe-failure.log`. Retry success is not counted as repairing that gate.
+
+The new real slow-consumer trace exposed a second necessary condition: the first collapsed paste redraw can describe only a prefix of the queued body. Its public line count must match the complete sanitized body before starting the submission beats. Space and Backspace now each require the corresponding native-painted input-cursor change, rather than an elapsed gap or arbitrary output. The witness is scoped to the actual prompt and wrapped input region (or owned body tail); VT cursor visibility/movement and unchanged redraws do not qualify. Exact multiline collapsed-count expansion/restoration is accepted, with the same paste identity. A missing consumption witness expires within the existing verification budget, without resending the body or submit beats. Only actual completed final Enter plus fresh post-completion output can confirm delivery. Terminal reports revoke all remaining submission keys; late completion/echo cannot revive them.
+
+These tests are synthetic native TUI evidence, not a paid-provider compatibility claim. Fake peers now paint the native inverse cursor explicitly. The original business assertions for drafts, placeholders, long-body tails, unanswered dialogs, raw collisions, stale empty frames, pending final bytes, and actor receipts remain intact. Their positive fixtures explicitly draw each consumed key; completion helpers do not invent output. The two original unstyled/unknown-input negative fixtures remain unstyled and still deny writes.
+
+Evidence retained:
+
+- `pcw-ci-submit-echo-physical-red-01.log`: real held-reader PTY demonstrates elapsed-gap-only Backspace was issued too early.
+- `pcw-ci-submission-independent-red-01.log` and immutable same-name source directory: independent cursor-noise false acknowledgement and missing bounded terminal failure.
+- `pcw-ci-huge-native-echo-01.log`: preserved slow-consumer RED and actual read/consume boundaries; `pcw-ci-huge-native-echo-02.log`: complete-body consumption gate then 68000-byte exact-once GREEN.
+- `pcw-ci-submit-echo-lib-01.log`: 22 old positive fixtures lacked consumed-key frames; `pcw-ci-submit-echo-lib-03.log`: 294 passed, two unstyled preconditions identified and retained explicitly.
+- `pcw-ci-submit-echo-exec-full-02.log`: complete exec module passed: 371 tests, three ignored, including all 19 real synthetic CLI workflows and the four independent Core cases. A prior full-01 RED retains the three older synthetic peer cursor omissions.
+- `pcw-ci-submission-independent-green-02.log`: independent four-case Core proof includes cursor-only/unchanged output denial, no-echo bounded terminal outcome, completed-Enter/fresh-frame receipt, and native input wrapping at columns 77/97.
+- `pcw-ci-submit-native-noecho-physical-01.log`: actual held-reader capture is exact `BOT ` after expiry and late echo, with no BS/CR/body retry/cleanup bytes. Injected Core clock is explicit; actual byte writes and reader capture are real.
+
+Final workspace and strict lint gates and the next exact-source two-platform CI remain separate acceptance layers. No M4 source, main, daily data, model launch or package installation is included in this repair.

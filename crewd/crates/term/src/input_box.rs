@@ -146,7 +146,59 @@ fn trim_cells(cells: &[Cell]) -> &[Cell] {
     &cells[start..end.max(start)]
 }
 
+/// Native-painted cursor witness, scoped to the authoritative input row or body tail.
+/// VT cursor coordinates alone are not evidence that an input key was consumed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputEcho {
+    pub prefix: String,
+    pub column: usize,
+}
+
 impl Screen {
+    pub fn input_echo(&self, body: &str) -> Option<InputEcho> {
+        let rows = normalize(&self.screen_rows());
+        if blocking_dialog(&rows).is_some() {
+            return None;
+        }
+        let input = input_row_index(&rows);
+        let start = input.or_else(|| {
+            rows.iter()
+                .position(|text| body_tail_visible(body, std::slice::from_ref(text)))
+        })?;
+        let end = if input.is_some() {
+            rows.iter()
+                .enumerate()
+                .skip(start + 1)
+                .take(INPUT_SCAN_DEPTH)
+                .find(|(_, r)| r.trim_start().starts_with(LOWER_EDGE_CHARS))
+                .map_or(start + 1, |(i, _)| i)
+        } else {
+            start + 1
+        };
+        let mut found = None;
+        let mut prefix = String::new();
+        let grid = self.term().grid();
+        for line in start..end {
+            let row = &grid[Line(line as i32)];
+            for column in 0..grid.columns() {
+                let cell = &row[Column(column)];
+                if cell.flags.contains(Flags::INVERSE) {
+                    if !cell.c.is_whitespace() || found.is_some() {
+                        return None;
+                    }
+                    found = Some(InputEcho {
+                        prefix: prefix.clone(),
+                        column: (line - start) * grid.columns() + column,
+                    });
+                }
+                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    prefix.push(if cell.c == '\0' { ' ' } else { cell.c });
+                }
+            }
+        }
+        found
+    }
+
     /// 输入框里的草稿（[`InputDraft`]）。输入行同 [`input_row`]；输入行下面、到输入框下沿（[`LOWER_EDGE_CHARS`]
     /// 开头的那一行）之前的行算折行 / 多行草稿；往下 [`INPUT_SCAN_DEPTH`] 行内找不到下沿就只看输入行。
     ///

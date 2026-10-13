@@ -229,13 +229,21 @@ impl Fake {
         let shown = if self.input.is_empty() {
             format!("\x1b[2m{HINT}\x1b[22m")
         } else if self.input.contains('\n') || self.input.chars().count() > 60 {
-            format!("[Pasted text #1 +{} lines]", self.input.lines().count())
+            format!(
+                "[Pasted text #1 +{} lines]{}",
+                self.input.lines().count(),
+                if self.input.ends_with(' ') && !self.input.trim_end_matches(' ').ends_with('\n') {
+                    " "
+                } else {
+                    ""
+                }
+            )
         } else {
             self.input.clone()
         };
         let rule = "─".repeat(40);
         out(format!(
-            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\r\n{rule}\r\n\x1b[2m  ? for shortcuts\x1b[22m",
+            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\x1b[7m \x1b[27m\r\n{rule}\r\n\x1b[2m  ? for shortcuts\x1b[22m",
             self.banner(),
             self.last
         )

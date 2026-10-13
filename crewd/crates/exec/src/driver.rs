@@ -1997,6 +1997,16 @@ mod output_drain_tests {
             .await;
         core.take_actions();
         for (at, expected) in [(820, b" ".as_slice()), (930, &[0x7f][..])] {
+            if at == 930 {
+                fixture
+                    .screen(
+                        &mut core,
+                        &input_box("BOT "),
+                        now + Duration::from_millis(870),
+                    )
+                    .await;
+                core.take_actions();
+            }
             core.on_tick(now + Duration::from_millis(at));
             let actions = core.take_actions();
             assert_eq!(
@@ -2012,6 +2022,14 @@ mod output_drain_tests {
                 now + Duration::from_millis(at),
             );
         }
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                now + Duration::from_millis(980),
+            )
+            .await;
+        core.take_actions();
         core.on_tick(now + Duration::from_millis(1040));
         let enter = core.take_actions();
         assert_eq!(writes(&enter), vec![b"\r".as_slice()]);
@@ -2137,6 +2155,189 @@ mod output_drain_tests {
     }
 
     #[tokio::test]
+    async fn missing_native_key_echo_expires_without_physical_retries_or_late_bytes() {
+        let mut fixture = GuardedFixture::new().await;
+        let base = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            base,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), base).await;
+        core.take_actions();
+        core.on_tick(base + Duration::from_millis(310));
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(310)
+            ),
+            3
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(900),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(900)
+            ),
+            1
+        );
+        core.on_tick(base + Duration::from_millis(3500));
+        let terminal = core.take_actions();
+        assert!(
+            terminal.iter().any(|a| matches!(
+                a,
+                Action::Event(SessionEvent::Delivery {
+                    id: 1,
+                    outcome: DeliveryOutcome::Unsubmitted(_),
+                    ..
+                })
+            )),
+            "original verify budget must terminate unconfirmed physical submission"
+        );
+        assert!(writes(&terminal).is_empty());
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT "),
+                base + Duration::from_millis(3600),
+            )
+            .await;
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "late echo cannot revive cancelled beats"
+        );
+        fixture.release(0).await;
+        assert_eq!(
+            fixture.capture(&mut core, queue).await,
+            b"BOT ",
+            "real reader sees no BS, CR, body retry or cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_beats_wait_for_actual_post_write_echo_not_elapsed_gap_alone() {
+        let mut fixture = GuardedFixture::new().await;
+        let base = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            base,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), base).await;
+        core.take_actions();
+        core.on_tick(base + Duration::from_millis(310));
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(310)
+            ),
+            3
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(900),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(900)
+            ),
+            1
+        );
+        // The physical reader is still held: no output after the actual Space.
+        core.on_tick(base + Duration::from_millis(1050));
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "elapsed gap alone cannot queue Backspace before native echo"
+        );
+        for noise in [b"\x1b[?25h".to_vec(), input_box("BOT")] {
+            fixture
+                .screen(&mut core, &noise, base + Duration::from_millis(1075))
+                .await;
+            assert!(
+                writes(&core.take_actions()).is_empty(),
+                "unrelated physical redraw cannot consume Space"
+            );
+        }
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT "),
+                base + Duration::from_millis(1100),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(1100)
+            ),
+            1
+        );
+        core.on_tick(base + Duration::from_millis(1250));
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "elapsed gap alone cannot queue Enter before native echo"
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(1300),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(1300)
+            ),
+            1
+        );
+        fixture.release(0).await;
+        assert_eq!(fixture.capture(&mut core, queue).await, b"BOT \x7f\r");
+    }
+
+    #[tokio::test]
     async fn every_queued_delivery_phase_checks_real_new_dialog_and_missing_input_authority() {
         for beat in 0..=3 {
             for missing_row in [false, true] {
@@ -2182,6 +2383,14 @@ mod output_drain_tests {
                         &mut queue,
                         now + Duration::from_millis(900),
                     );
+                    fixture
+                        .screen(
+                            &mut core,
+                            &input_box("BOT "),
+                            now + Duration::from_millis(950),
+                        )
+                        .await;
+                    core.take_actions();
                     core.on_tick(now + Duration::from_millis(1000));
                     enqueue_actions(&mut queue, &core.take_actions());
                 }
@@ -2192,6 +2401,14 @@ mod output_drain_tests {
                         &mut queue,
                         now + Duration::from_millis(1000),
                     );
+                    fixture
+                        .screen(
+                            &mut core,
+                            &input_box("BOT"),
+                            now + Duration::from_millis(1050),
+                        )
+                        .await;
+                    core.take_actions();
                     core.on_tick(now + Duration::from_millis(1100));
                     enqueue_actions(&mut queue, &core.take_actions());
                 }
@@ -2934,7 +3151,7 @@ mod output_drain_tests {
             );
             let screen = |text| {
                 format!(
-                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
                 )
             };
             core.on_output(screen("").as_bytes(), now);
@@ -2949,11 +3166,15 @@ mod output_drain_tests {
             }
             if beat > 1 {
                 complete_actions(&mut core, &actions, now + Duration::from_millis(900));
+                core.on_output(screen("BOT ").as_bytes(), now + Duration::from_millis(950));
+                core.take_actions();
                 core.on_tick(now + Duration::from_millis(1000));
                 actions = core.take_actions();
             }
             if beat > 2 {
                 complete_actions(&mut core, &actions, now + Duration::from_millis(1000));
+                core.on_output(screen("BOT").as_bytes(), now + Duration::from_millis(1050));
+                core.take_actions();
                 core.on_tick(now + Duration::from_millis(1100));
                 actions = core.take_actions();
             }
@@ -3245,7 +3466,7 @@ mod output_drain_tests {
 
     fn input_box(text: &str) -> Vec<u8> {
         format!(
-            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
         )
         .into_bytes()
     }
@@ -3608,6 +3829,10 @@ mod output_drain_tests {
         captured_prefix(&fixture, b"BOT").await;
         let after_body = successes.lock().unwrap().clone();
         // The actual CLI fixture draws its owned body; Task performs real submit beats.
+        public_fixture_frame(&mut fixture, &input_box("BOT")).await;
+        captured_prefix(&fixture, b"BOT ").await;
+        public_fixture_frame(&mut fixture, &input_box("BOT ")).await;
+        captured_prefix(&fixture, b"BOT \x7f").await;
         public_fixture_frame(&mut fixture, &input_box("BOT")).await;
         captured_prefix(&fixture, b"BOT \x7f\r").await;
         let before_confirmation = successes.lock().unwrap().clone();

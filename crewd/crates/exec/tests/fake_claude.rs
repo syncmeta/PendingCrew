@@ -470,7 +470,18 @@ async fn huge_brief_with_delayed_chunk_echo_is_submitted_exactly_once() {
         .map(|i| format!("{i:05} 白板条目，带点中文\n"))
         .collect();
     assert!(brief.len() > 60_000);
-    let r = start(&[("FAKE_CLAUDE_CHUNK_DELAY_MS", "10")], Some(&brief)).await;
+    let trace = SlowTrace {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let trace_path = trace.dir.path().join("read-boundaries.log");
+    let r = start(
+        &[
+            ("FAKE_CLAUDE_CHUNK_DELAY_MS", "10"),
+            ("FAKE_CLAUDE_TRACE", trace_path.to_str().unwrap()),
+        ],
+        Some(&brief),
+    )
+    .await;
     let pid = r.h.status().await.unwrap().pid;
     let mut r = EchoRun {
         r,
@@ -644,7 +655,7 @@ echoed = False
 paused = False
 def draw():
     body = value.decode(errors='replace') if value else '\x1b[2mTry x\x1b[22m'
-    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + body + '\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m').encode())
+    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + body + '\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m').encode())
 draw()
 while True:
     if not pause_body and not echoed and (root / 'show-echo').exists():
