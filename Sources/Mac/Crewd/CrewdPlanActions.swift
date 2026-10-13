@@ -17,10 +17,11 @@ struct CrewdPlanDrafts {
     private struct Entry {var fields:Fields;var version:UUID}
     private var entries:[Key:Entry]=[:]
     private var pending:[Key:UUID]=[:]
-    private var unknown:[Key:Set<UUID>]=[:]
+    private var unknown:[Key:[UUID:Snapshot]]=[:]
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
     func busy(_ key:Key)->Bool {pending[key] != nil}
-    func uncertain(_ key:Key)->Bool {!(unknown[key] ?? []).isEmpty}
+    func uncertain(_ key:Key)->Bool {!(unknown[key] ?? [:]).isEmpty}
+    func unknownSnapshots(_ key:Key)->[Snapshot] {(unknown[key] ?? [:]).values.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if entries[key]?.fields != fields {entries[key]=Entry(fields:fields,version:UUID())}}
     mutating func begin(_ key:Key)->Snapshot? {
         guard !busy(key) else {return nil}
@@ -30,7 +31,7 @@ struct CrewdPlanDrafts {
     }
     mutating func finish(_ snapshot:Snapshot,accepted:Bool,uncertain:Bool=false) {
         if pending[snapshot.key] == snapshot.version {pending[snapshot.key]=nil}
-        if uncertain {unknown[snapshot.key,default:[]].insert(snapshot.version)} else if accepted {unknown[snapshot.key]?.remove(snapshot.version)}
+        if uncertain {unknown[snapshot.key,default:[:]][snapshot.version]=snapshot} else if accepted {unknown[snapshot.key]?[snapshot.version]=nil}
         if accepted && entries[snapshot.key]?.version == snapshot.version {entries[snapshot.key]=nil}
     }
 }
@@ -109,7 +110,19 @@ struct CrewdPlanActions:View {
             }
             if let failure {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             if drafts.uncertain(key) {
-                Text("提交结果未确认。请先核对当前计划与关联事项；不会自动重复提交。原草稿仍保留。").font(.caption).foregroundStyle(.orange)
+                Text("提交结果未确认。请先核对当前计划与关联事项；不会自动重复提交。以下原始提交内容保留供核对，当前编辑不会覆盖它。").font(.caption).foregroundStyle(.orange)
+                DisclosureGroup("查看此前未确认的提交") {
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:8) {
+                ForEach(drafts.unknownSnapshots(key),id:\.version){snapshot in
+                    VStack(alignment:.leading,spacing:3){
+                        Text(snapshot.key.object.isEmpty ? "此前创建计划："+snapshot.fields.title:"此前操作："+snapshot.fields.action.rawValue).font(.caption).bold()
+                        Text(unknownPayload(snapshot.fields)).font(.caption).textSelection(.enabled)
+                    }
+                }
+                        }.frame(maxWidth:.infinity,alignment:.leading)
+                    }.frame(maxHeight:120)
+                }.font(.caption)
                 Button("读取当前状态") {Task {do {try await store.refresh();if !key.object.isEmpty {await load()}} catch {failure=describe(error)}}}
                 Toggle("我已核对当前计划与关联事项，再继续提交",isOn:$reviewedUnknown).font(.caption)
             }
@@ -162,6 +175,15 @@ struct CrewdPlanActions:View {
             }
             Text("已加载的真实成员，不代表完整组织名册。").font(.caption).foregroundStyle(.secondary)
         }
+    }
+    private func unknownPayload(_ f:CrewdPlanDrafts.Fields)->String {
+        var lines:[String]=[]
+        for (label,value) in [("目标",f.goal),("验收",f.acceptance),("负责人",f.owner),("父计划",f.parent),("说明",f.note),("凭据",f.evidence),("问题",f.question),("可推进部分",f.splitTitle)] {
+            if !value.isEmpty {lines.append(label+"："+value)}
+        }
+        if !key.object.isEmpty,f.action == .report {lines.append("状态："+CrewdWorkStatusLabel.display(f.reportStatus));if f.checkpoint {lines.append("检查点："+f.nextCheck.formatted())}}
+        if !key.object.isEmpty,f.action == .block {lines.append(f.split ? "拆出独立推进部分":"其余暂不能推进")}
+        return lines.joined(separator:"\n")
     }
     private func load() async {
         guard let id=CrewdWorkID(key.object,kind:.plan) else {return}

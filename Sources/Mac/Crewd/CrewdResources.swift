@@ -34,6 +34,7 @@ struct CrewdFolderSnapshot {
     typealias Call=(String,CrewdValue)async throws->CrewdValue
     @Published private(set) var crew=""
     @Published private(set) var capabilities:Set<String>=[]
+    @Published private(set) var activationEpoch=UUID()
     @Published private(set) var documents:[String:CrewdDocument]=[:]
     @Published private(set) var documentIDs:[String]=[]
     @Published private(set) var documentListLoaded=false
@@ -51,7 +52,7 @@ struct CrewdFolderSnapshot {
     init(call:@escaping Call){self.call=call}
     func selectCrew(_ value:String){guard crew != value else{return};refreshTask?.cancel();generation=UUID();crew=value;documentIDs=[];documentListLoaded=false;lastActivation=nil;folders=[:];failure=nil;detailQueries=[:];folderQueries=[:]}
     func configureCapabilities(_ value:Set<String>){capabilities=value}
-    func invalidateConnection(){refreshTask?.cancel();generation=UUID();capabilities=[];documentListLoaded=false;lastActivation=nil;detailQueries=[:];folderQueries=[:]}
+    func invalidateConnection(){refreshTask?.cancel();generation=UUID();activationEpoch=UUID();capabilities=[];documentListLoaded=false;lastActivation=nil;detailQueries=[:];folderQueries=[:]}
     func activate(_ view:CrewdResourceView,force:Bool=false)async {
         activeView=view
         let key=crew+":"+view.rawValue+":"+capabilities.sorted().joined(separator:",")
@@ -60,9 +61,12 @@ struct CrewdFolderSnapshot {
         if view == .documents,capabilities.contains("documents"){do{try await refreshDocuments()}catch{record(error)}}
     }
     func handleEvent(_ name:String,_ value:CrewdValue){
-        guard value["crewId"] == .string(crew),let view=activeView else{return}
-        guard name == "document.changed" || (name == "viewFolder.changed" && value["view"] == .string(view.rawValue)) else{return}
-        if name == "document.changed",view != .documents{return}
+        guard let view=activeView else{return}
+        if name != "events.lagged" {
+            guard value["crewId"] == .string(crew) else{return}
+            guard name == "document.changed" || (name == "viewFolder.changed" && value["view"] == .string(view.rawValue)) else{return}
+            if name == "document.changed",view != .documents{return}
+        }
         refreshTask?.cancel();let token=generation
         refreshTask=Task{[weak self] in
             try? await Task.sleep(for:.milliseconds(150))

@@ -35,7 +35,7 @@ struct CrewdFolderControls:View {
             if let snapshot=store.folders[view],selection != "all",selection != "none",!snapshot.folders.contains(where:{$0["id"] == .string(selection)}){Text("所选文件夹已不在当前目录，请重新选择。").font(.caption).foregroundStyle(.orange)}
         }}.onChange(of:store.crew){_,_ in managing=false;classifying=false}.sheet(isPresented:$managing){CrewdFolderEditor(store:store,drafts:$drafts,view:view)}
         .sheet(isPresented:$classifying){if let object{CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}}
-        .task(id:store.crew+view.rawValue+store.capabilities.sorted().joined(separator:",")){await store.activate(view)}
+        .task(id:store.crew+view.rawValue+store.capabilities.sorted().joined(separator:",")+store.activationEpoch.uuidString){await store.activate(view)}
     }
 }
 struct CrewdFolderAssignmentButton:View {
