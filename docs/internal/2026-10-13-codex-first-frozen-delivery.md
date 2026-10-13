@@ -1,5 +1,21 @@
 # Codex 首版冻结交付检查点
 
+## 当前冻结包（取代下方早期检查点）
+
+当前运行源码 fe9ef80e86c86206106cd6c164662d30a1727fe0；应用 /private/tmp/pendingcrew-codex-delivery-recovery-20261013/PendingCrew Codex First.app。此版本补齐握手错误保留、有界重连、旧连接代际保护、终止状态下实际回执排空及休眠初始化保护。后续提交只扩验收脚本/文档，运行 Sources/Mac/Crewd 无差异；不把这些后续 HEAD 冒称包内源码。
+
+直接诊断证明：旧版本 id128 的成功休眠回执和 shutdown 已到 Network receive 回调，但状态失败抢先清掉 generation/pending，使客户端丢弃该真实回执。仅改 FIFO 仍失败，最终修复让状态/发送失败统一等待在途读取排空，终止后拒绝新增调用；只有完整且匹配的真实响应才确认成功。首次失败及两次诊断 /private/tmp/pcw-first-delivery-packaged-client-{01,trace-01,trace-02,fixed-01}.log 均保留；不是把正常退出伪作 RPC 成功。
+
+最终证据（均为独立合成数据，假 runner，未调用真实模型）：
+
+- build /private/tmp/pcw-first-delivery-recovery-build-01.log；artifact check /private/tmp/pcw-first-delivery-recovery-artifact-01.log。包旁 source-head/empty patch/hashes 齐全。
+- 最终 Swift 四文件 typecheck /private/tmp/pcw-first-delivery-final-swift-typecheck-01.log；同一 package helper 消息、原生审批/输入、旧答复拒绝、重连、休眠 /private/tmp/pcw-first-delivery-recovery-packaged-client-01.log。
+- 同一 package helper 正常/SIGKILL 重启 /private/tmp/pcw-first-delivery-recovery-packaged-{graceful,crash}-01.log：人工 later/resume、原 thread、初始任务无重放、已人停成员不复活。
+- 六类真实 Swift/Unix peer 状态模型回归 /private/tmp/pcw-client-failure-all-six-final-04.log：后台启动失败、协议不兼容、有界重试耗尽→显式恢复→再次断线自动恢复、完整最终回执、无回执 EOF、截断尾帧。每场景消息只发一次。专用 test-codex-first-failure.sh 可复用；不强迫 Network 调度顺序，不宣称穷尽代际竞态。
+- 休眠五阶段 /private/tmp/pcw-first-delivery-shutdown-final-{crew.list,ask.list,restart.pending,session.list,channel.list}-01.log 通过；原窗口草稿验收仍只归属于下方 c230 的测试副本，新包没有追加 app 控制操作。
+
+首版基本使用与恢复链已达到本轮离线组合验收关口。当前未安装、发布、切日常数据或对新包启动真实账户任务；完整微信前端仍未实现。用户当前不急交接，保留此基线，继续整体工程。下方记录保留为早期产物与首次验收历史。
+
 本轮从已接受 main 派生 codex/codex-first-delivery-20261013，只纳入客户端草稿隔离、工程源引用及交付防错。完整工作跟进与巡检仍在 codex/work-identity-20261013；不会因首版冻结丢弃这些工程。
 
 ## 产物与证据
