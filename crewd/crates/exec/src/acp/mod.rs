@@ -7,3 +7,7 @@ pub mod terminal;
 pub mod transport;
 
 pub mod custody;
+
+pub mod ownership;
+
+pub mod bridge;

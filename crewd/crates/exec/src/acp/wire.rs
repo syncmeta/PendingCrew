@@ -32,7 +32,9 @@ pub struct NativeCapabilities {
     pub group_stop: bool,
 }
 impl NativeCapabilities {
-    pub fn supported() -> Self {
+    /// Explicit synthetic peer fixture only; not a production capability claim.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn synthetic_verified() -> Self {
         Self {
             version: EXTENSION_VERSION,
             controlling_pty: true,
@@ -400,7 +402,8 @@ mod tests {
             negotiate(&v),
             Err(WireError::CapabilityMissing(_))
         ));
-        v["agentCapabilities"]["_meta"] = json!({NATIVE_NAMESPACE:NativeCapabilities::supported()});
+        v["agentCapabilities"]["_meta"] =
+            json!({NATIVE_NAMESPACE:NativeCapabilities::synthetic_verified()});
         assert!(negotiate(&v).is_ok());
         v["agentCapabilities"]["_meta"][NATIVE_NAMESPACE]["groupStop"] = json!(false);
         assert_eq!(

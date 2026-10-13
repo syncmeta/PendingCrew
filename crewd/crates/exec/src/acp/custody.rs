@@ -6,6 +6,16 @@ use crate::registry::{
 };
 use std::{collections::BTreeMap, io, sync::Arc};
 
+/// Created only after Core verifies the old kernel birth is gone and clears
+/// its durable registry obligation. This cannot be reconstructed from RPC JSON.
+#[derive(Debug)]
+pub struct SettledNative {
+    pub(crate) session: String,
+    pub(crate) generation: String,
+    pub(crate) epoch: u64,
+    pub(crate) identity: ProcessIdentity,
+}
+
 pub struct NativeEnrollment {
     pub epoch: u64,
     pub identity: ProcessIdentity,
@@ -167,13 +177,27 @@ impl Custody {
     pub fn close_admission(&mut self) {
         self.closed = true;
     }
+    /// Canonical Core binding; never populate a native bridge expectation from
+    /// peer-supplied session/PID JSON. Enrollment has already committed this birth.
+    pub fn native_binding(&self, epoch: u64) -> io::Result<super::ownership::NativeBinding> {
+        let native = self
+            .natives
+            .get(&epoch)
+            .ok_or_else(|| denied("unknown enrolled native epoch"))?;
+        Ok(super::ownership::NativeBinding {
+            session: self.session.clone(),
+            generation: self.generation.to_string(),
+            epoch,
+            native: native.clone(),
+        })
+    }
     pub fn helper_identity(&self) -> &ProcessIdentity {
         &self.helper
     }
     pub fn native_identities(&self) -> impl Iterator<Item = (&u64, &ProcessIdentity)> {
         self.natives.iter()
     }
-    pub fn forget_reaped_native(&mut self, epoch: u64) -> io::Result<()> {
+    pub fn forget_reaped_native(&mut self, epoch: u64) -> io::Result<SettledNative> {
         let identity = self
             .natives
             .get(&epoch)
@@ -189,8 +213,16 @@ impl Custody {
         }
         .key()?;
         self.registry.forget(&key)?;
-        self.natives.remove(&epoch);
-        Ok(())
+        let identity = self
+            .natives
+            .remove(&epoch)
+            .expect("verified native retained");
+        Ok(SettledNative {
+            session: self.session.clone(),
+            generation: self.generation.to_string(),
+            epoch,
+            identity,
+        })
     }
     pub fn forget_reaped_helper(&mut self) -> io::Result<()> {
         if !self.closed || !self.natives.is_empty() {
@@ -364,12 +396,42 @@ os.close(master)
             "tty"
         );
         assert!(custody.forget_reaped_native(1).is_err());
+        use super::super::ownership::{Ownership, Phase};
+        let mut ownership = Ownership::default();
+        let request = uuid::Uuid::new_v4().to_string();
+        let binding = custody.native_binding(1).unwrap();
+        assert!(custody.native_binding(2).is_err());
+        ownership
+            .prepare(
+                &request,
+                binding.clone(),
+                "own pending input".into(),
+                |_| Ok(()),
+            )
+            .unwrap();
+        ownership.revoke_before_raw(&binding, |_| Ok(())).unwrap();
+        assert!(
+            ownership
+                .prepare(
+                    &uuid::Uuid::new_v4().to_string(),
+                    binding.clone(),
+                    "next".into(),
+                    |_| Ok(())
+                )
+                .is_err()
+        );
         custody.close_admission();
         assert!(custody.enroll_native(&duplicate_birth).is_err());
         assert!(custody.forget_reaped_helper().is_err());
         peer.channel.write_all(b"Q").unwrap();
         assert!(peer.child.wait().unwrap().success());
-        custody.forget_reaped_native(1).unwrap();
+        let settled = custody.forget_reaped_native(1).unwrap();
+        ownership.native_exited(&settled, |_| Ok(())).unwrap();
+        assert_eq!(
+            ownership.phase(&request),
+            Some(Phase::Failed),
+            "OS reaping is never model completion"
+        );
         custody.forget_reaped_helper().unwrap();
         assert!(registry.entries().is_empty());
         assert_eq!(
