@@ -152,6 +152,7 @@ fn trim_cells(cells: &[Cell]) -> &[Cell] {
 pub struct InputEcho {
     pub prefix: String,
     pub column: usize,
+    pub content: Option<String>,
 }
 
 impl Screen {
@@ -189,6 +190,10 @@ impl Screen {
                     found = Some(InputEcho {
                         prefix: prefix.clone(),
                         column: (line - start) * grid.columns() + column,
+                        content: match self.input_draft() {
+                            InputDraft::Text(text) => Some(text),
+                            _ => None,
+                        },
                     });
                 }
                 if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {

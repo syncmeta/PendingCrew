@@ -92,6 +92,9 @@ pub enum AnswerOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreConfig {
     pub delivery: Timing,
+    /// Trusted executor codec capability, not an environment/RPC/native-screen claim.
+    /// Default native providers remain unknown until their actual semantics/witness is verified.
+    pub verified_collapsed_paste_codec: bool,
     /// 距最后一次输出多久算「不在干活」。
     pub working_quiet: Duration,
     /// 提交三拍（空格 / 退格 / 回车）之间的间隔。
@@ -114,6 +117,7 @@ impl Default for CoreConfig {
     fn default() -> Self {
         Self {
             delivery: Timing::default(),
+            verified_collapsed_paste_codec: false,
             working_quiet: Duration::from_secs(1),
             submit_key_gap: Duration::from_millis(100),
             rate_limit_answer_gap: Duration::from_millis(250),
@@ -370,6 +374,7 @@ fn submit_echo_matches(
     before: &InputEcho,
     after: &InputEcho,
     purpose: DeliveryWritePurpose,
+    body: &str,
 ) -> bool {
     let expected = match purpose {
         DeliveryWritePurpose::Space { .. } => {
@@ -381,7 +386,19 @@ fn submit_echo_matches(
             .map(|p| (p.to_owned(), before.column.checked_sub(1))),
         _ => None,
     };
-    if expected.is_some_and(|(prefix, col)| prefix == after.prefix && col == Some(after.column)) {
+    let full_plain =
+        match purpose {
+            DeliveryWritePurpose::Space { .. } => before.prefix.ends_with(body),
+            DeliveryWritePurpose::Backspace { .. } => before
+                .prefix
+                .strip_suffix(' ')
+                .is_some_and(|p| p.ends_with(body)),
+            _ => false,
+        } || (!body.is_empty() && body.trim() == body && before.content.as_deref() == Some(body));
+    if full_plain
+        && !paste_placeholder(before.content.as_deref().unwrap_or(""))
+        && expected.is_some_and(|(prefix, col)| prefix == after.prefix && col == Some(after.column))
+    {
         return true;
     }
     // Native collapsed multiline paste expands by one line for Space and restores on BS.
@@ -403,6 +420,16 @@ fn submit_echo_matches(
         DeliveryWritePurpose::Backspace { .. } => lines.checked_sub(1),
         _ => None,
     };
+    if !body.ends_with('\n')
+        || lines
+            != match purpose {
+                DeliveryWritePurpose::Space { .. } => body.lines().count(),
+                DeliveryWritePurpose::Backspace { .. } => body.lines().count().saturating_add(1),
+                _ => return false,
+            }
+    {
+        return false;
+    }
     next.is_some_and(|n| {
         let expected = format!("{head} +{n} lines]");
         expected == after.prefix
@@ -1318,7 +1345,7 @@ impl Core {
             return;
         };
         let step = flight.machine.step(Observation {
-            // A partial collapsed body redraw is not the receipt for all queued body bytes.
+            // Total caption count is necessary readiness only; consumption is checked separately.
             input_row: row
                 .as_deref()
                 .filter(|r| paste_lines(r).is_none_or(|n| n == flight.body.lines().count())),
@@ -1354,6 +1381,17 @@ impl Core {
                 self.queue_delivery_write(bytes, DeliveryWritePurpose::Body, now);
             }
             Step::Submit { .. } => {
+                if row.as_deref().is_some_and(paste_placeholder)
+                    && !self.config.verified_collapsed_paste_codec
+                {
+                    // Opaque native display cannot self-authorize a codec. Preserve it
+                    // for explicit human clear/resume rather than replacing it with a queued job.
+                    self.foreign_input = Foreign::Conflicted;
+                    self.report(DeliveryOutcome::Unsubmitted(
+                        "折叠正文的内容确认能力尚未验证；未继续提交按键，请在真实终端人工确认。".into()
+                    ), now);
+                    return;
+                }
                 if flight.submit_key_needs_output {
                     self.report(
                         DeliveryOutcome::Unsubmitted(
@@ -1842,12 +1880,11 @@ impl Core {
                     flight.submit_echo.as_ref(),
                     self.screen.input_echo(&flight.body),
                     flight.submit_echo_purpose,
-                ) {
-                    if submit_echo_matches(before, &after, purpose) {
-                        flight.submit_key_needs_output = false;
-                        flight.submit_echo = None;
-                        flight.submit_echo_purpose = None;
-                    }
+                ) && submit_echo_matches(before, &after, purpose, &flight.body)
+                {
+                    flight.submit_key_needs_output = false;
+                    flight.submit_echo = None;
+                    flight.submit_echo_purpose = None;
                 }
             }
             self.observe_input_box();
@@ -2041,7 +2078,10 @@ mod tests {
             let t0 = Instant::now();
             Self {
                 core: Core::new(
-                    CoreConfig::default(),
+                    CoreConfig {
+                        verified_collapsed_paste_codec: true,
+                        ..CoreConfig::default()
+                    },
                     ScreenConfig::default(),
                     t0,
                     pending,
@@ -2179,7 +2219,7 @@ mod tests {
     /// （`+2 lines` → `+3 lines`），退格之后又变回去——那一帧不能当成回车被接受。
     #[test]
     fn row_change_mid_submit_sequence_is_not_success() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         let submit = t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
@@ -2198,7 +2238,7 @@ mod tests {
 
     #[test]
     fn submission_late_paste_redraw_is_not_an_acknowledgement() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
@@ -2218,7 +2258,7 @@ mod tests {
 
     #[test]
     fn submission_old_empty_screen_is_not_a_fresh_enter_acknowledgement() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
@@ -2397,7 +2437,7 @@ mod tests {
 
     #[test]
     fn pending_enter_cannot_use_late_empty_as_delivery_ack() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);

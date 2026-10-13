@@ -838,6 +838,12 @@ fn main() {
                 _ => {}
             }
         }
+        if let Some(trace) = &trace {
+            trace.record(format_args!(
+                "consume-result seq={consume_seq} input_bytes={} input_lines={} submitted={submitted}",
+                fake.input.len(), fake.input.lines().count(),
+            ));
+        }
         if submitted && fake.submits == 1 && fake.mode == "usage" {
             out(b"\r\nYou've reached your usage limit \xc2\xb7 resets 5pm\r\n");
             std::thread::sleep(Duration::from_millis(200));
