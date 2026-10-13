@@ -41,6 +41,29 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read one original requirement by its issued public # ID. Returns the unchanged human text and current derived lifecycle. Fetch only the relevant requirement rather than scanning all Todo rows.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Issued requirement ID, for example #7.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "todo_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
       "inputSchema": {
         "additionalProperties": false,
@@ -202,7 +225,7 @@
             "type": "string"
           },
           "next_check_at": {
-            "description": "RFC3339 check time, later than now and within work limits; not accepted for done.",
+            "description": "RFC3339 check time, later than now and within work limits; not accepted for done or dropped.",
             "type": "string"
           },
           "note": {
@@ -210,11 +233,12 @@
             "type": "string"
           },
           "status": {
-            "description": "open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.",
+            "description": "open/active/done/dropped; omitted updates only the note/check time. Dropped is a business decision and requires a nonblank reason in note; it cannot abandon work that still has live dependents. Blocking and transfer are separate actions.",
             "enum": [
               "open",
               "active",
-              "done"
+              "done",
+              "dropped"
             ],
             "type": "string"
           }
@@ -1468,6 +1492,29 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read one original requirement by its issued public # ID. Returns the unchanged human text and current derived lifecycle. Fetch only the relevant requirement rather than scanning all Todo rows.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Issued requirement ID, for example #7.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "todo_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
       "inputSchema": {
         "additionalProperties": false,
@@ -1629,7 +1676,7 @@
             "type": "string"
           },
           "next_check_at": {
-            "description": "RFC3339 check time, later than now and within work limits; not accepted for done.",
+            "description": "RFC3339 check time, later than now and within work limits; not accepted for done or dropped.",
             "type": "string"
           },
           "note": {
@@ -1637,11 +1684,12 @@
             "type": "string"
           },
           "status": {
-            "description": "open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.",
+            "description": "open/active/done/dropped; omitted updates only the note/check time. Dropped is a business decision and requires a nonblank reason in note; it cannot abandon work that still has live dependents. Blocking and transfer are separate actions.",
             "enum": [
               "open",
               "active",
-              "done"
+              "done",
+              "dropped"
             ],
             "type": "string"
           }

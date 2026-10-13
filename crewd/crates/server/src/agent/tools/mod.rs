@@ -156,6 +156,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     }
     match tool {
         "my_work_items" => work::mine(&cx, args).await,
+        "todo_get" => work::todo_get(&cx, args).await,
         "work_item_get" => work::get(&cx, args).await,
         "work_item_history" => work::history(&cx, args).await,
         "work_item_create" => work::create(&cx, args).await,
@@ -356,7 +357,7 @@ mod tests {
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 35);
+        assert_eq!(catalog::CATALOG.len(), 36);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

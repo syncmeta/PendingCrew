@@ -171,6 +171,13 @@ refusal_codes! {
     // system（握手）
     SystemApiIncompatible = "system.api_incompatible" ["client", "min", "current"],
     // todo
+    TodoHumanOnly = "todo.human_only" [],
+    TodoTextEmpty = "todo.text_empty" [],
+    TodoRequestInvalid = "todo.request_invalid" [],
+    TodoRequestConflict = "todo.request_conflict" ["request"],
+    TodoIdInvalid = "todo.id_invalid" [],
+    TodoStatusInvalid = "todo.status_invalid" [],
+    TodoStatusConflict = "todo.status_conflict" ["id","expected","actual"],
     TodoResponseEmpty = "todo.response_empty" [],
     TodoNotFound = "todo.not_found" ["number"],
     // wake

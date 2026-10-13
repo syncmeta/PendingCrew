@@ -973,10 +973,10 @@ RFC3339 检查时间；活跃状态的下一次检查必须满足工作规则。
 工作摘要或上一操作返回的 revision 字符串，原样传入。
 
 ## work_item_update.status
-open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。
+open/active/done/dropped；省略只更新进展备注或检查时间。dropped 是业务放弃，note 必须写非空理由；有活着的依赖或子项时会拒绝，不能替它们做决定。卡住和转交另有工作动作。
 
 ## work_item_update.next_check_at
-RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。
+RFC3339 检查时间，晚于现在且不超过工作规则上限；done 或 dropped 不接受此字段。
 
 ## work_item_update.note
 覆盖这一项的下一步/进展备注；非完成更新必填非空，完成时可选。
@@ -1036,3 +1036,11 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 ## work_item_block.can_continue
 
 必填：type 为 nothing，或 split 并提供 1 至 20 个 work_item_create 格式的项；不能另设 parent。
+
+## todo_get
+
+按已发放的全局 # 编号读取一条原始需求，返回不变的原文与当前派生状态。只取相关需求，不必反复扫描全部 Todo。
+
+## todo_get.id
+
+已发放的原始需求编号，例如 #7。

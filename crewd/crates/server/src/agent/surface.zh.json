@@ -41,6 +41,29 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "按已发放的全局 # 编号读取一条原始需求，返回不变的原文与当前派生状态。只取相关需求，不必反复扫描全部 Todo。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "已发放的原始需求编号，例如 #7。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "todo_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
       "inputSchema": {
         "additionalProperties": false,
@@ -202,7 +225,7 @@
             "type": "string"
           },
           "next_check_at": {
-            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。",
+            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 或 dropped 不接受此字段。",
             "type": "string"
           },
           "note": {
@@ -210,11 +233,12 @@
             "type": "string"
           },
           "status": {
-            "description": "open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。",
+            "description": "open/active/done/dropped；省略只更新进展备注或检查时间。dropped 是业务放弃，note 必须写非空理由；有活着的依赖或子项时会拒绝，不能替它们做决定。卡住和转交另有工作动作。",
             "enum": [
               "open",
               "active",
-              "done"
+              "done",
+              "dropped"
             ],
             "type": "string"
           }
@@ -1468,6 +1492,29 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "按已发放的全局 # 编号读取一条原始需求，返回不变的原文与当前派生状态。只取相关需求，不必反复扫描全部 Todo。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "已发放的原始需求编号，例如 #7。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "todo_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
       "inputSchema": {
         "additionalProperties": false,
@@ -1629,7 +1676,7 @@
             "type": "string"
           },
           "next_check_at": {
-            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。",
+            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 或 dropped 不接受此字段。",
             "type": "string"
           },
           "note": {
@@ -1637,11 +1684,12 @@
             "type": "string"
           },
           "status": {
-            "description": "open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。",
+            "description": "open/active/done/dropped；省略只更新进展备注或检查时间。dropped 是业务放弃，note 必须写非空理由；有活着的依赖或子项时会拒绝，不能替它们做决定。卡住和转交另有工作动作。",
             "enum": [
               "open",
               "active",
-              "done"
+              "done",
+              "dropped"
             ],
             "type": "string"
           }

@@ -19,6 +19,7 @@ pub mod messages;
 pub mod prompts;
 pub mod refusal;
 pub mod render;
+pub mod requirements;
 pub mod restart;
 pub mod sessions;
 pub mod settings;

@@ -221,6 +221,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("requirement-new:") {
+        return crate::requirements::followup_note(conn, row);
+    }
     if row.kind == crate::wakes::WakeKind::StopCheck {
         return crate::stop_checks::render_note(conn, row, now);
     }
@@ -560,8 +563,9 @@ pub fn update(
         .filter(|n| p.expected_revision == n.to_string())
         .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkBadRevision)))?;
     let done = p.status == Some(S::Done);
+    let dropped = p.status == Some(S::Dropped);
     if (!done && (p.evidence.is_some() || p.note.as_ref().is_none_or(|n| n.trim().is_empty())))
-        || (done && p.next_check_at.is_some())
+        || ((done || dropped) && p.next_check_at.is_some())
     {
         return Err(CollabError::Invalid(Refusal::new(Code::WorkBadUpdate)));
     }
@@ -578,6 +582,19 @@ pub fn update(
         .ok_or_else(|| invalid("plan reference has no authoritative item"))?;
     check_revision(item, &p.id, revision)?;
     let (released, ready) = asks::with_book(tx, &r.crew_id, |b, now| {
+        if dropped {
+            let ap = b.drop_item(
+                &actor,
+                now,
+                local,
+                crewd_work::DropReason {
+                    kind: crewd_work::DropKind::NotNeeded,
+                    note: p.note.unwrap_or_default(),
+                    evidence: None,
+                },
+            )?;
+            return Ok((ap.events, Vec::new()));
+        }
         if !done || p.note.is_some() {
             b.report(
                 &actor,

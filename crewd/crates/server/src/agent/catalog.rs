@@ -176,6 +176,7 @@ pub const CATALOG: &[ToolSpec] = &[
             p("include_removed", Bool, false),
         ],
     )),
+    ro(all("todo_get", &[p("id", Str, true)])),
     ro(all("work_item_get", &[p("id", Str, true)])),
     ro(all(
         "work_item_history",
@@ -205,7 +206,7 @@ pub const CATALOG: &[ToolSpec] = &[
         &[
             p("id", Str, true),
             p("expected_revision", Str, true),
-            c("status", false, &["open", "active", "done"]),
+            c("status", false, &["open", "active", "done", "dropped"]),
             p("next_check_at", Str, false),
             p("note", Str, false),
             p("evidence", Evidence, false),
@@ -610,7 +611,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 35);
+        assert_eq!(CATALOG.len(), 36);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -643,8 +644,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 24);
-        assert_eq!(captain.len(), 35);
+        assert_eq!(worker.len(), 25);
+        assert_eq!(captain.len(), 36);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -675,6 +676,7 @@ mod tests {
             with(|t| t.read_only),
             [
                 "my_work_items",
+                "todo_get",
                 "work_item_get",
                 "work_item_history",
                 "read_channel",
@@ -714,6 +716,7 @@ mod tests {
             with(ToolSpec::passive),
             [
                 "my_work_items",
+                "todo_get",
                 "work_item_get",
                 "work_item_history",
                 "post",

@@ -74,7 +74,7 @@ When the human really has to decide, use ask. {askBlock}
 - One question per ask, with options and your preference: "A / B, I lean A because …". Mid-task, always write resume_note.
 - For reversible, time-bound things add fallback_after_minutes and fallback.
 - If the question no longer applies, withdraw_ask it and say what changed.
-- Answer Agent Todo items (work the human gave the crew) with respond_todo: claim, progress, result.
+- Read original requirements by their public # IDs with todo_get. Link plans with work_item_create.sources; report completion or abandonment with work_item_update. respond_todo only appends a response and does not change the original text or derived requirement state.
 
 ### Quota
 

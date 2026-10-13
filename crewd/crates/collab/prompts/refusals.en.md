@@ -428,7 +428,7 @@ Cross-crew link {id} requires the global relation layer, which is not connected 
 Expected an RFC3339 timestamp: {value}.
 
 ## work.bad_update
-Progress needs a note. Evidence applies only to done, and done cannot schedule a next check.
+Progress and dropped work need a nonblank note. Evidence applies only to done; done and dropped cannot schedule a next check.
 
 ## work.history_cursor
 History cursor must be a positive canonical sequence string; use nextBefore returned by the previous page.
@@ -436,3 +436,32 @@ History cursor must be a positive canonical sequence string; use nextBefore retu
 ## crew.work_referenced
 
 Crew {crew} cannot be permanently deleted: {total} objects in other crews still refer to its work or sessions. References: {ids}. Resolve those relationships first; the removed crew remains read-only.
+
+
+## todo.human_only
+
+Only the human can create or close an original requirement.
+
+## todo.text_empty
+
+Original requirement text must not be blank.
+
+## todo.request_invalid
+
+requestId must be a UUID.
+
+## todo.request_conflict
+
+Request {request} already belongs to different requirement content.
+
+## todo.id_invalid
+
+Use an issued public requirement ID such as #1.
+
+## todo.status_invalid
+
+expectedStatus must name a requirement state.
+
+## todo.status_conflict
+
+Requirement {id} changed from {expected} to {actual}; refresh before closing.

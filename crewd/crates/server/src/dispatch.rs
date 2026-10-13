@@ -537,6 +537,24 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: DirectoryListParams = parse_params_or_default(p)?;
             read(state, move |c| directory::list(c, p.query.as_deref())).await
         }
+        methods::TODO_CREATE => {
+            let p: TodoCreateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::requirements::create(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::TODO_GET => {
+            let p: TodoGetParams = parse_params(p)?;
+            read(state, move |c| crewd_collab::requirements::get(c, &p.id)).await
+        }
+        methods::TODO_CLOSE => {
+            let p: TodoCloseParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::requirements::close(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::TODO_LIST => {
             let p: TodoListParams = parse_params(p)?;
             read(state, move |c| {

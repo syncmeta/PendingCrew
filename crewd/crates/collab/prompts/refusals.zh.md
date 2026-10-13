@@ -436,3 +436,32 @@ git worktree add 失败: {path}. {detail}
 ## crew.work_referenced
 
 机组 {crew} 不能永久删除：其他机组仍有 {total} 个对象引用它的工作或 session。引用：{ids}。请先处理这些关系；已移除机组继续只读。
+
+
+## todo.human_only
+
+只有人可以交代或裁定关闭原始需求。
+
+## todo.text_empty
+
+原始需求正文不能为空。
+
+## todo.request_invalid
+
+requestId 必须是 UUID。
+
+## todo.request_conflict
+
+请求 {request} 已对应另一份需求内容。
+
+## todo.id_invalid
+
+请使用已发放的全局原始需求编号，例如 #1。
+
+## todo.status_invalid
+
+expectedStatus 必须是原始需求状态。
+
+## todo.status_conflict
+
+原始需求 {id} 已从 {expected} 变成 {actual}；刷新后再裁定。

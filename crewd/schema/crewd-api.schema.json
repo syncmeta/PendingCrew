@@ -2544,6 +2544,103 @@
       ],
       "type": "object"
     },
+    "RequirementClosure": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "note",
+        "at"
+      ],
+      "type": "object"
+    },
+    "RequirementDetail": {
+      "description": "Existing Todo fields remain at the top level; closure is derived from organization authority.",
+      "properties": {
+        "attachments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "type": "array"
+        },
+        "closure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequirementClosure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "ledger": {
+          "$ref": "#/$defs/Ledger"
+        },
+        "number": {
+          "description": "账内编号 #N；软删除的行也占号。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "requirementId": {
+          "description": "Stable organization source reference; original per-crew number remains unchanged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "responses": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TodoResponse"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "Agent requirements derive \"unclaimed\" | \"in_progress\" | \"done\" | \"needs_ruling\" | \"closed\" from organization plans; legacy human rows retain their original vocabulary.",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "ledger",
+        "number",
+        "text",
+        "status",
+        "createdAt"
+      ],
+      "type": "object"
+    },
     "Response": {
       "description": "对一条请求的回复：恰好带 `result` 或 `error` 之一（控制者裁定 g）。`\"result\": null` 是「成功、值为 null」\n（例如 `restart.pending` 没有待答询问），与「没有 result」不同；两样都没有 / 都有的帧解析失败。",
       "oneOf": [
@@ -3552,6 +3649,58 @@
         "text",
         "status",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "TodoCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedStatus": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "note",
+        "expectedStatus"
+      ],
+      "type": "object"
+    },
+    "TodoCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "crewId",
+        "text"
+      ],
+      "type": "object"
+    },
+    "TodoGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -4952,7 +5101,8 @@
       "enum": [
         "open",
         "active",
-        "done"
+        "done",
+        "dropped"
       ],
       "type": "string"
     }
@@ -5481,6 +5631,30 @@
       },
       "result": {
         "$ref": "#/$defs/Hello"
+      }
+    },
+    "todo.close": {
+      "params": {
+        "$ref": "#/$defs/TodoCloseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementDetail"
+      }
+    },
+    "todo.create": {
+      "params": {
+        "$ref": "#/$defs/TodoCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementDetail"
+      }
+    },
+    "todo.get": {
+      "params": {
+        "$ref": "#/$defs/TodoGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementDetail"
       }
     },
     "todo.list": {

@@ -300,3 +300,11 @@ pub async fn block(cx: &Ctx<'_>, v: Value) -> CallResult {
         }),
     )
 }
+
+pub async fn todo_get(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: Get = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(cx, port::todo_get(cx.st, &a.id).await)
+}

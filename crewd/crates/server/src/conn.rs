@@ -266,6 +266,21 @@ async fn request_step(
             *forwarder = Some(task);
             return RequestStep::Continue;
         }
+        Ok(req)
+            if agent.is_attached()
+                && matches!(
+                    req.method.as_str(),
+                    methods::TODO_CREATE | methods::TODO_CLOSE
+                ) =>
+        {
+            ServerFrame::Response(Response::err(
+                req.id,
+                crate::dispatch::refused(
+                    RpcError::FORBIDDEN,
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::TodoHumanOnly),
+                ),
+            ))
+        }
         Ok(req) if req.method.starts_with("agent.") => {
             #[cfg(any(test, feature = "testkit"))]
             s5_poll_fault(state, req.id).await;

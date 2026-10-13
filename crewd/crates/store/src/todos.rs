@@ -1,6 +1,6 @@
 use crate::{Result, json_col};
 use crewd_proto::{Ledger, Todo, TodoResponse};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 /// 原子写入：todo 与其 responses 要么全进，要么全不进（自带 savepoint，可嵌在外层事务里）。
@@ -130,4 +130,29 @@ pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo
             .collect::<rusqlite::Result<Vec<_>>>()?;
     }
     Ok(todos)
+}
+
+/// Original source facts only; callers derive lifecycle from the organization authority.
+pub fn get_raw(conn: &Connection, id: &str) -> Result<Option<Todo>> {
+    let mut todo=conn.query_row("SELECT id,crew_id,ledger,number,text,status,created_at,updated_at,deleted_at,attachments FROM todos WHERE id=?1",[id],|r| {
+        let ledger:String=r.get(2)?;
+        Ok(Todo { requirement_id:None,id:r.get(0)?,crew_id:r.get(1)?,ledger:match ledger.as_str() { "agent"=>Ledger::Agent,"human"=>Ledger::Human,_=>return Err(rusqlite::Error::FromSqlConversionFailure(2,rusqlite::types::Type::Text,"invalid raw requirement ledger".into())) },number:r.get(3)?,text:r.get(4)?,status:r.get(5)?,created_at:r.get(6)?,updated_at:r.get(7)?,deleted_at:r.get(8)?,attachments:json_col(r,9)?,responses:vec![] })
+    }).optional()?;
+    if let Some(t) = &mut todo {
+        let mut q=conn.prepare("SELECT id,session_id,sender_name,text,status,attachments,created_at FROM todo_responses WHERE todo_id=?1 ORDER BY ord")?;
+        t.responses = q
+            .query_map([id], |r| {
+                Ok(TodoResponse {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    sender_name: r.get(2)?,
+                    text: r.get(3)?,
+                    status: r.get(4)?,
+                    attachments: json_col(r, 5)?,
+                    created_at: r.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    Ok(todo)
 }

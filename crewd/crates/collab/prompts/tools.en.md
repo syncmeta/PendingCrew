@@ -973,10 +973,10 @@ The global W plan ID.
 The revision string from a summary or the previous operation, passed unchanged.
 
 ## work_item_update.status
-open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.
+open/active/done/dropped; omitted updates only the note/check time. Dropped is a business decision and requires a nonblank reason in note; it cannot abandon work that still has live dependents. Blocking and transfer are separate actions.
 
 ## work_item_update.next_check_at
-RFC3339 check time, later than now and within work limits; not accepted for done.
+RFC3339 check time, later than now and within work limits; not accepted for done or dropped.
 
 ## work_item_update.note
 Overwrite this item's next-step/progress note; required and nonblank except for completion.
@@ -1036,3 +1036,11 @@ One to sixteen work/human/new_human blockers. New defaults use text and after_mi
 ## work_item_block.can_continue
 
 Required: type nothing, or type split with one to twenty work_item_create items; parent cannot be set.
+
+## todo_get
+
+Read one original requirement by its issued public # ID. Returns the unchanged human text and current derived lifecycle. Fetch only the relevant requirement rather than scanning all Todo rows.
+
+## todo_get.id
+
+Issued requirement ID, for example #7.

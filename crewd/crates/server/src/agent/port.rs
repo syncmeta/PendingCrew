@@ -3068,3 +3068,8 @@ mod tests {
         }
     }
 }
+
+pub async fn todo_get(st: &AppState, id: &str) -> PortResult<crewd_proto::RequirementDetail> {
+    let id = id.to_owned();
+    read(st, move |c| crewd_collab::requirements::get(c, &id)).await
+}

@@ -23,6 +23,12 @@ pub struct AgentConn {
     watcher: Option<JoinHandle<()>>,
 }
 
+impl AgentConn {
+    pub(crate) fn is_attached(&self) -> bool {
+        self.session.is_some()
+    }
+}
+
 impl Drop for AgentConn {
     fn drop(&mut self) {
         if let Some(w) = self.watcher.take() {
@@ -464,7 +470,7 @@ mod tests {
         assert_eq!(code, -32009);
         // Still the worker: the refused attach changed nothing.
         let n = c.call(methods::TOOLS, json!(null)).await.unwrap();
-        assert_eq!(n.as_array().unwrap().len(), 24);
+        assert_eq!(n.as_array().unwrap().len(), 25);
         let a = c
             .call(
                 methods::ATTACH,

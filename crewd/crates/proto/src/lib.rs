@@ -17,6 +17,8 @@ pub mod orchestra;
 mod params;
 pub mod work;
 pub use work::*;
+pub mod requirements;
+pub use requirements::*;
 pub mod work_patrol;
 pub use work_patrol::*;
 pub mod runner_usage;
@@ -83,6 +85,9 @@ pub mod methods {
     pub const RESTART_PENDING: &str = "restart.pending";
     pub const RESTART_ANSWER: &str = "restart.answer";
     pub const DIRECTORY_LIST: &str = "directory.list";
+    pub const TODO_CREATE: &str = "todo.create";
+    pub const TODO_GET: &str = "todo.get";
+    pub const TODO_CLOSE: &str = "todo.close";
     pub const TODO_LIST: &str = "todo.list";
     pub const SUBSCRIBE: &str = "events.subscribe";
     // M3b / M3c 的方法常量写在各自的段落里，并加进 ALL（契约 json 由后合者重新生成）。
@@ -128,6 +133,9 @@ pub mod methods {
         RESTART_PENDING,
         RESTART_ANSWER,
         DIRECTORY_LIST,
+        TODO_CREATE,
+        TODO_GET,
+        TODO_CLOSE,
         TODO_LIST,
         SUBSCRIBE,
         // M3c（编排，`crate::orchestra::methods`）。
@@ -612,6 +620,18 @@ pub fn api_schema() -> Value {
         (
             methods::DIRECTORY_LIST,
             m(sub::<DirectoryListParams>(g), many(sub::<DirectoryRow>(g))),
+        ),
+        (
+            methods::TODO_CREATE,
+            m(sub::<TodoCreateParams>(g), sub::<RequirementDetail>(g)),
+        ),
+        (
+            methods::TODO_GET,
+            m(sub::<TodoGetParams>(g), sub::<RequirementDetail>(g)),
+        ),
+        (
+            methods::TODO_CLOSE,
+            m(sub::<TodoCloseParams>(g), sub::<RequirementDetail>(g)),
         ),
         (
             methods::TODO_LIST,

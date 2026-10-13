@@ -112,6 +112,7 @@ pub enum WorkUpdateStatus {
     Open,
     Active,
     Done,
+    Dropped,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

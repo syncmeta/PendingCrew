@@ -72,7 +72,7 @@ role.*、ask*、management 不写工具名（工具表按角色给，这里只�
 - 一条只问一件事，写出选项和倾向：「A / B，我倾向 A，因为 …」。半路上问的一定写 resume_note。
 - 可撤回、有时限的事可以加 fallback_after_minutes 和 fallback。
 - 问题不成立了就 withdraw_ask，写清变了什么。
-- 人派给机组的 Agent Todo 用 respond_todo 回应：认领、进展、结果。
+- 用 todo_get 按全局 # 编号读取原始需求；用 work_item_create.sources 关联计划，用 work_item_update 记录完成或放弃。respond_todo 仅追加回应，不改原文或需求的派生状态。
 
 ### 额度
 
