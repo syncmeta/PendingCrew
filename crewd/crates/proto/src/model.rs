@@ -476,7 +476,7 @@ pub struct AskDefault {
     pub after_minutes: i64,
 }
 
-/// 一条人类待确认（H 号按机组发，§19 Q1）。
+/// 一条人类待确认；H 号全组织签发，旧机组编号仅保留为显式别名。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Ask {

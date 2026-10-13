@@ -42,8 +42,11 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 23);
-    assert_eq!(ct.len(), 34);
+    assert_eq!(wt.len(), 24);
+    assert_eq!(ct.len(), 35);
+    for tools in [&wt, &ct] {
+        assert!(tools.iter().any(|tool| tool["name"] == "work_item_block"));
+    }
     for t in wt.iter().chain(&ct) {
         assert_eq!(t["annotations"]["openWorldHint"], false);
         for k in ["readOnlyHint", "destructiveHint", "idempotentHint"] {
@@ -54,13 +57,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 34);
-    assert_eq!(cm.tools().await.len(), 23);
+    assert_eq!(wm.tools().await.len(), 35);
+    assert_eq!(cm.tools().await.len(), 24);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 23);
+    assert_eq!(wm.tools().await.len(), 24);
     wm.close().await;
     cm.close().await;
 }

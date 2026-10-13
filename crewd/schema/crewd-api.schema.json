@@ -1,7 +1,7 @@
 {
   "$defs": {
     "Ask": {
-      "description": "一条人类待确认（H 号按机组发，§19 Q1）。",
+      "description": "一条人类待确认；H 号全组织签发，旧机组编号仅保留为显式别名。",
       "properties": {
         "answer": {
           "type": [
@@ -3516,6 +3516,13 @@
           "format": "int64",
           "type": "integer"
         },
+        "requirementId": {
+          "description": "Stable organization source reference; original per-crew number remains unchanged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "responses": {
           "default": [],
           "items": {
@@ -3524,7 +3531,7 @@
           "type": "array"
         },
         "status": {
-          "description": "\"pending\" | \"in_progress\" | \"completed\" | \"blocked_on_human\" | \"dropped\"",
+          "description": "Agent requirements derive \"unclaimed\" | \"in_progress\" | \"done\" | \"needs_ruling\" | \"closed\" from organization plans; legacy human rows retain their original vocabulary.",
           "type": "string"
         },
         "text": {
@@ -3923,6 +3930,124 @@
       ],
       "type": "object"
     },
+    "WorkBlockOn": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AskDefault"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "question": {
+              "type": "string"
+            },
+            "type": {
+              "const": "new_human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "question"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkBlockParams": {
+      "additionalProperties": false,
+      "properties": {
+        "canContinue": {
+          "$ref": "#/$defs/WorkContinuation"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "on": {
+          "items": {
+            "$ref": "#/$defs/WorkBlockOn"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "on",
+        "canContinue"
+      ],
+      "type": "object"
+    },
+    "WorkBlockReply": {
+      "properties": {
+        "humanTasks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "item": {
+          "$ref": "#/$defs/WorkPlan"
+        },
+        "split": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "item",
+        "humanTasks",
+        "split"
+      ],
+      "type": "object"
+    },
     "WorkChanged": {
       "properties": {
         "crewId": {
@@ -3995,6 +4120,43 @@
         "noteTruncated"
       ],
       "type": "object"
+    },
+    "WorkContinuation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "nothing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/WorkCreateParams"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "split",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "WorkCreateParams": {
       "additionalProperties": false,
@@ -4501,7 +4663,11 @@
       "description": "Issued global identity plus the existing ask.get readback handle.",
       "properties": {
         "askId": {
-          "description": "Use ask.get({crewId: row.crewId, askId}) for detail; not the global ID.",
+          "description": "Public H identity; ask.get uses this wait's crewId and askId.",
+          "type": "string"
+        },
+        "crewId": {
+          "description": "The human task's crew, which may differ from the blocked work item's crew.",
           "type": "string"
         },
         "id": {
@@ -4510,6 +4676,7 @@
       },
       "required": [
         "id",
+        "crewId",
         "askId"
       ],
       "type": "object"
@@ -4702,6 +4869,14 @@
         },
         "revision": {
           "type": "string"
+        },
+        "sources": {
+          "default": [],
+          "description": "Stable requirement references permit lightweight linkage without fetching full plans.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "status": {
           "type": "string"
@@ -5333,6 +5508,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.block": {
+      "params": {
+        "$ref": "#/$defs/WorkBlockParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkBlockReply"
       }
     },
     "work.create": {

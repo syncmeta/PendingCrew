@@ -71,6 +71,9 @@ pub struct WorkSummary {
     pub owner: Option<String>,
     pub status: String,
     pub parent: Option<String>,
+    /// Stable requirement references permit lightweight linkage without fetching full plans.
+    #[serde(default)]
+    pub sources: Vec<String>,
     pub blocked_on: Vec<String>,
     pub next_check_at: Option<String>,
     pub revision: String,
@@ -86,6 +89,7 @@ impl From<WorkPlan> for WorkSummary {
             owner: p.owner,
             status: p.status,
             parent: p.parent,
+            sources: p.sources,
             blocked_on: p.blocked_on,
             next_check_at: p.next_check_at,
             revision: p.revision,
