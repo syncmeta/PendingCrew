@@ -1,6 +1,6 @@
 //! 谁能做什么（spec §4.2「只有负责人、机长、行政处能改状态」、§5 换负责人、§8.2 行政无业务决策权）。
 //! 一张表、一个函数；命令先问它，再做别的检查。
-use crate::ids::SessionId;
+use crate::ids::{CrewId, SessionId};
 use crate::model::{Actor, Role};
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +88,8 @@ impl std::fmt::Display for Action {
 /// 判定需要的上下文：被操作项当前的负责人、待接受的转交对象、被指派的人、建它的 session。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ctx<'a> {
+    pub crew: Option<&'a CrewId>,
+    pub organization: bool,
     pub owner: Option<&'a SessionId>,
     pub transfer_to: Option<&'a SessionId>,
     pub assignee: Option<&'a SessionId>,
@@ -116,7 +118,27 @@ pub fn allowed(actor: &Actor, action: Action, ctx: Ctx<'_>) -> bool {
             action,
             TransferRequest | TransferAccept | OpenAsk | ApplyDefault | RecordWake | NoteEscalation
         ),
+        Actor::ScopedSession { id, authority } => {
+            let Some(crew) = ctx.crew else { return false };
+            let role = authority.roles.get(crew).copied().unwrap_or(Role::Worker);
+            allowed(
+                &Actor::Session {
+                    id: id.clone(),
+                    role,
+                },
+                action,
+                Ctx {
+                    organization: false,
+                    ..ctx
+                },
+            )
+        }
         Actor::Session { id, role } => {
+            let role = if ctx.organization {
+                &Role::Worker
+            } else {
+                role
+            };
             let owns = ctx.owner == Some(id);
             match action {
                 TransferRequest => owns,

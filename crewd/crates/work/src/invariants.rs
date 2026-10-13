@@ -10,6 +10,7 @@ pub enum Violation {
     /// 表里的键和项自己的 id 不一致 / 号码计数器落后于已发出的号。
     KeyMismatch(WorkId),
     CounterBehind,
+    OrganizationOwnership,
     BlankTitle(WorkId),
     DuplicateRef(WorkId),
     UnknownItemRef {
@@ -89,6 +90,10 @@ impl std::fmt::Display for Violation {
         use Violation::*;
         match self {
             KeyMismatch(w) => write!(f, "item stored under {w} carries a different id"),
+            OrganizationOwnership => write!(
+                f,
+                "organization object ownership is missing, invalid, or has stray identities"
+            ),
             CounterBehind => write!(f, "a W/H counter is behind the numbers already issued"),
             BlankTitle(w) => write!(f, "{w} has a blank title"),
             DuplicateRef(w) => write!(f, "{w} lists the same reference twice"),
@@ -152,6 +157,23 @@ impl std::error::Error for Violation {}
 /// 结构不变量（与时间无关）：每条命令改完后、`WorkBook::restore` 读回时都跑。检查时间的上限不在这里——
 /// 它只约束这一次写入的值（见 `check_written`），所以调低上限不会让旧账本读不回来。
 pub fn check(s: &BookState) -> Result<(), Violation> {
+    if let Some(org) = &s.organization
+        && (s.max_parent_depth != Some(3)
+            || org.item_crews.len() != s.items.len()
+            || org.ask_crews.len() != s.asks.len()
+            || org.entry_crews.len() != s.entries.len()
+            || s.items.keys().any(|id| !org.item_crews.contains_key(id))
+            || s.asks.keys().any(|id| !org.ask_crews.contains_key(id))
+            || s.entries.keys().any(|id| !org.entry_crews.contains_key(id))
+            || org
+                .item_crews
+                .values()
+                .chain(org.ask_crews.values())
+                .chain(org.entry_crews.values())
+                .any(|c| c.as_str().trim().is_empty()))
+    {
+        return Err(Violation::OrganizationOwnership);
+    }
     if s.items
         .keys()
         .next_back()

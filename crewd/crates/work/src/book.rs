@@ -115,6 +115,14 @@ impl WorkBook {
         }
     }
 
+    /// Start the sole organization authority. Object ownership is explicit and parent depth is capped.
+    pub fn organization(cfg: Config) -> WorkBook {
+        let mut book = Self::new(CrewId::new("organization"), cfg);
+        book.state.organization = Some(crate::model::Organization::default());
+        book.state.max_parent_depth = Some(3);
+        book
+    }
+
     /// 从持久化读回（M4b）。整份跑一遍结构不变量，不合法就拒绝，不做任何修补。检查上限只管写入，
     /// 所以调低 `max_check_horizon_ms` 后读回旧账本不会失败。
     pub fn restore(state: BookState, cfg: Config) -> Result<WorkBook, Violation> {
@@ -242,9 +250,23 @@ impl WorkBook {
 
     /// crewd 收到一条新的入口 Todo（#N）时登记。重复登记不报错、不产出事件（重启后对账用）。
     pub fn register_entry(&mut self, now: Ts, no: EntryNo) -> Result<Applied<bool>, Rejected> {
+        self.register_entry_in(now, no, self.state.crew.clone())
+    }
+    pub fn register_entry_in(
+        &mut self,
+        now: Ts,
+        no: EntryNo,
+        crew: CrewId,
+    ) -> Result<Applied<bool>, Rejected> {
         self.transact(&Actor::System, now, |d| {
+            if no.0 <= 0 {
+                return Err(Rejected::Invalid("entry number must be positive"));
+            }
             if d.s.entries.contains_key(&no) {
                 return Ok(false);
+            }
+            if let Some(org) = &mut d.s.organization {
+                org.entry_crews.insert(no, crew);
             }
             d.s.entries.insert(
                 no,
@@ -269,7 +291,13 @@ impl WorkBook {
         items: Vec<NewItem>,
     ) -> Result<Applied<Vec<WorkId>>, Rejected> {
         self.transact(by, now, |d| {
-            d.permit(Action::ClaimEntry, Ctx::default())?;
+            d.permit(
+                Action::ClaimEntry,
+                Ctx {
+                    crew: d.s.entry_crew(entry),
+                    ..Ctx::default()
+                },
+            )?;
             let e =
                 d.s.entries
                     .get(&entry)
@@ -330,6 +358,11 @@ impl Draft {
     }
 
     pub(crate) fn permit(&self, action: Action, ctx: Ctx<'_>) -> Result<(), Rejected> {
+        let ctx = Ctx {
+            organization: self.s.organization.is_some(),
+            crew: ctx.crew.or_else(|| self.by.home()).or(Some(&self.s.crew)),
+            ..ctx
+        };
         if perm::allowed(&self.by, action, ctx) {
             Ok(())
         } else {
@@ -360,6 +393,8 @@ impl Draft {
         self.permit(
             action,
             Ctx {
+                crew: self.s.item_crew(id),
+                organization: self.s.organization.is_some(),
                 owner: it.owner.as_ref(),
                 transfer_to: it.pending_transfer.as_ref().map(|t| &t.to),
                 assignee: None,
@@ -380,6 +415,28 @@ impl Draft {
     ) -> Result<Vec<WorkId>, Rejected> {
         let mut ids: Vec<WorkId> = Vec::with_capacity(batch.len());
         for n in batch {
+            let crew = n
+                .crew_id
+                .clone()
+                .or_else(|| fixed_parent.and_then(|p| self.s.item_crew(p).cloned()))
+                .or_else(|| extra_source.and_then(|e| self.s.entry_crew(e).cloned()))
+                .or_else(|| self.by.home().cloned())
+                .unwrap_or_else(|| self.s.crew.clone());
+            if self.s.organization.is_none() && crew != self.s.crew {
+                return Err(Rejected::Invalid(
+                    "cross-crew work requires organization authority",
+                ));
+            }
+            if self.s.organization.is_some() && crew.as_str().trim().is_empty() {
+                return Err(Rejected::Invalid("organization work requires a crew"));
+            }
+            self.permit(
+                Action::CreateItem,
+                Ctx {
+                    crew: Some(&crew),
+                    ..Ctx::default()
+                },
+            )?;
             let title = n.title.trim().to_string();
             if title.is_empty() {
                 return Err(Rejected::Blank("title"));
@@ -402,6 +459,7 @@ impl Draft {
                 self.permit(
                     Action::CreateChild,
                     Ctx {
+                        crew: self.s.item_crew(p),
                         owner: owner.as_ref(),
                         ..Ctx::default()
                     },
@@ -427,6 +485,7 @@ impl Draft {
                 self.permit(
                     Action::Assign,
                     Ctx {
+                        crew: Some(&crew),
                         assignee: Some(o),
                         ..Ctx::default()
                     },
@@ -439,7 +498,11 @@ impl Draft {
                 Some(t) if t < self.now => return Err(Rejected::NextCheckNotFuture),
                 other => other,
             };
-            self.s.last_item += 1;
+            self.s.last_item = self
+                .s
+                .last_item
+                .checked_add(1)
+                .ok_or(Rejected::Invalid("work identity range exhausted"))?;
             let id = WorkId(self.s.last_item);
             let how = if self.by.session() == owner.as_ref() {
                 HowChanged::Claim
@@ -457,6 +520,9 @@ impl Draft {
                     at: self.now,
                 })
                 .collect();
+            if let Some(org) = &mut self.s.organization {
+                org.item_crews.insert(id, crew);
+            }
             self.s.items.insert(
                 id,
                 WorkItem {

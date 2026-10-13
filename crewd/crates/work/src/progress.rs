@@ -81,13 +81,10 @@ impl WorkBook {
             d.permit_on(Action::Done, id)?;
             // Administrative closure of another owner's work remains factual.
             if evidence.is_none()
-                && matches!(
-                    by,
-                    Actor::Session {
-                        role: crate::model::Role::Admin,
-                        ..
-                    }
-                )
+                && by.role_in(
+                    d.s.item_crew(id).unwrap_or(&d.s.crew),
+                    d.s.organization.is_some(),
+                ) == Some(crate::model::Role::Admin)
                 && d.item(id)?.owner.as_ref() != by.session()
             {
                 return Err(Rejected::Blank("evidence"));
@@ -166,6 +163,8 @@ impl WorkBook {
                 // 能在新父项上改链接的人（机长 / 人 / 行政处的事实修正、新父项自己的负责人）同样放行。
                 let owner = d.item(p)?.owner.clone();
                 let ctx = Ctx {
+                    crew: d.s.item_crew(p),
+                    organization: d.s.organization.is_some(),
                     owner: owner.as_ref(),
                     ..Ctx::default()
                 };
@@ -207,7 +206,13 @@ impl WorkBook {
             } else {
                 Action::CloseEntryDecision
             };
-            d.permit(action, Ctx::default())?;
+            d.permit(
+                action,
+                Ctx {
+                    crew: d.s.entry_crew(no),
+                    ..Ctx::default()
+                },
+            )?;
             let note = note.trim().to_string();
             if note.is_empty() {
                 return Err(Rejected::Blank("note"));

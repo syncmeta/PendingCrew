@@ -8,6 +8,7 @@ pub mod graph;
 pub mod ids;
 pub mod invariants;
 pub mod model;
+pub mod organization;
 pub mod owner;
 pub mod perm;
 pub mod progress;
@@ -24,10 +25,10 @@ pub use ids::{
 };
 pub use invariants::Violation;
 pub use model::{
-    Actor, AskState, Blocker, Body, BookState, Config, DefaultOption, DoneLevel, DropKind,
-    DropReason, EntryClosure, EntryTodo, Evidence, HowChanged, HumanAsk, ItemRef, NewItem, Note,
-    OwnerChange, PendingTransfer, Role, Status, StopKind, StopStreak, StopViolation, WaitTier,
-    WorkItem,
+    Actor, AskState, AuthorityScope, Blocker, Body, BookState, Config, DefaultOption, DoneLevel,
+    DropKind, DropReason, EntryClosure, EntryTodo, Evidence, HowChanged, HumanAsk, ItemRef,
+    NewItem, Note, Organization, OwnerChange, PendingTransfer, Role, Status, StopKind, StopStreak,
+    StopViolation, WaitTier, WorkItem,
 };
 pub use owner::WakeResult;
 pub use perm::Action;
@@ -36,3 +37,5 @@ pub use views::{CheckpointDue, EntryStatus, EntryView, LostCause, LostOwner, MyI
 pub use watch::{
     HumanWait, ItemPatrol, Patrol, StopDecision, advance_stop_streak, patrol_due, wait_tier,
 };
+
+pub use organization::{LegacyIdentityMap, LegacyMerge, MigrationError, merge_legacy_books};

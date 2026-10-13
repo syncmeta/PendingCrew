@@ -37,3 +37,11 @@ usage正在占schema8，本单元组织迁移拟schema9；本树基线暂不修�
 - actor：busy pending→idle投递、崩溃恢复、重连不重放、render后reassign/terminal不投旧正文，runner确认才Delivered。
 
 当前状态：仅启动实施，未达四层验收；完整范围与问题定位见 /private/tmp/pcw-global-work-flow-design-20261013.md。
+
+### Pure core checkpoint (2026-10-13)
+
+- Single organization state now carries exact object-to-crew attribution and three-level parent restriction. Trusted `ScopedSession` resolves captain/admin roles against the object crew; unscoped legacy session roles fall back to worker in organization mode.
+- Cross-crew parent/dependency/source and blocker operations use the same full graph. Splits/questions inherit the source object's crew even when the owner's home changes. Parent-waits-on-child remains legal; child-waits-on-ancestor and fourth parent level reject without mutation.
+- `merge_legacy_books` is a pure, deterministic conversion with explicit legacy W/H/# mapping. It preserves issued identity holes, original revisions/history/transfers/blockers/checks and clock; stop budgets merge by maximum rather than summing. It fabricates no events and retains original event sequence provenance separately. Persistence must consume this result in its one transaction; this is not a second authoritative ledger.
+- Pure gate: 147 tests passed (130 unit + 2 fuzz + 12 organization + 3 scenario), `/private/tmp/pcw-global-work-core-final-01.log`; all-target work clippy `/private/tmp/pcw-global-work-core-clippy-02.log`. Earlier compile/clippy failure logs remain preserved.
+- Still in flight: store schema 9 migration/identity lookup/wake rewrite, unique organization transaction, public RPC/MCP/context/checkpoint/idle/patrol/ask switch, and socket/actor end-to-end evidence. No production migration, model run, app installation, main merge or push.

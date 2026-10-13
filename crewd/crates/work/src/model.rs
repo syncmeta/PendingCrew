@@ -89,12 +89,45 @@ pub enum Actor {
         id: SessionId,
         role: Role,
     },
+    /// Trusted runtime evidence. Captain/admin privileges are resolved per object crew.
+    ScopedSession {
+        id: SessionId,
+        authority: AuthorityScope,
+    },
     Human,
     /// crewd 自己（调度层 Jev、计时器、迁移）。
     System,
 }
 
+/// Supplied by the trusted runtime, never parsed from worker RPC parameters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityScope {
+    pub home: CrewId,
+    pub roles: BTreeMap<CrewId, Role>,
+}
+
 impl Actor {
+    pub fn scoped(id: &str, authority: AuthorityScope) -> Actor {
+        Actor::ScopedSession {
+            id: SessionId::new(id),
+            authority,
+        }
+    }
+    pub fn home(&self) -> Option<&CrewId> {
+        match self {
+            Actor::ScopedSession { authority, .. } => Some(&authority.home),
+            _ => None,
+        }
+    }
+    pub fn role_in(&self, crew: &CrewId, organization: bool) -> Option<Role> {
+        match self {
+            Actor::ScopedSession { authority, .. } => {
+                Some(authority.roles.get(crew).copied().unwrap_or(Role::Worker))
+            }
+            Actor::Session { role, .. } => Some(if organization { Role::Worker } else { *role }),
+            _ => None,
+        }
+    }
     pub fn worker(id: &str) -> Actor {
         Actor::Session {
             id: SessionId::new(id),
@@ -115,7 +148,7 @@ impl Actor {
     }
     pub fn session(&self) -> Option<&SessionId> {
         match self {
-            Actor::Session { id, .. } => Some(id),
+            Actor::Session { id, .. } | Actor::ScopedSession { id, .. } => Some(id),
             _ => None,
         }
     }
@@ -308,9 +341,19 @@ pub struct StopStreak {
 }
 
 /// 一个机组的全部工作跟进状态。M4b 把它落库 / 读回（`WorkBook::restore` 会整份校验）。
+/// Object attribution lives inside the sole authoritative book, not a parallel ledger.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Organization {
+    pub item_crews: BTreeMap<WorkId, CrewId>,
+    pub ask_crews: BTreeMap<AskId, CrewId>,
+    pub entry_crews: BTreeMap<EntryNo, CrewId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookState {
     pub crew: CrewId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<Organization>,
     /// Organization migration pins this to 3. Legacy books omit it so their
     /// original authority can be diagnosed before an explicit migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -328,9 +371,31 @@ pub struct BookState {
 }
 
 impl BookState {
+    pub fn item_crew(&self, id: WorkId) -> Option<&CrewId> {
+        if let Some(org) = &self.organization {
+            org.item_crews.get(&id)
+        } else {
+            self.items.contains_key(&id).then_some(&self.crew)
+        }
+    }
+    pub fn ask_crew(&self, id: AskId) -> Option<&CrewId> {
+        if let Some(org) = &self.organization {
+            org.ask_crews.get(&id)
+        } else {
+            self.asks.contains_key(&id).then_some(&self.crew)
+        }
+    }
+    pub fn entry_crew(&self, id: EntryNo) -> Option<&CrewId> {
+        if let Some(org) = &self.organization {
+            org.entry_crews.get(&id)
+        } else {
+            self.entries.contains_key(&id).then_some(&self.crew)
+        }
+    }
     pub fn empty(crew: CrewId) -> BookState {
         BookState {
             crew,
+            organization: None,
             max_parent_depth: None,
             items: BTreeMap::new(),
             entries: BTreeMap::new(),
@@ -393,6 +458,8 @@ pub enum ItemRef {
 /// 建项参数（认领入口、建项、卡住拆分共用）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_id: Option<CrewId>,
     pub title: String,
     pub body: Body,
     pub parent: Option<ItemRef>,

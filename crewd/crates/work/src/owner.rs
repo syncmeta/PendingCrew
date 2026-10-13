@@ -101,6 +101,7 @@ impl WorkBook {
             d.permit(
                 Action::Assign,
                 Ctx {
+                    crew: d.s.item_crew(id),
                     owner: it.owner.as_ref(),
                     assignee: Some(&to),
                     ..Ctx::default()

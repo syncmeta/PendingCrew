@@ -194,6 +194,7 @@ impl WorkBook {
             d.permit(
                 Action::WithdrawAsk,
                 Ctx {
+                    crew: d.s.ask_crew(ask),
                     asker: asker.as_ref(),
                     ..Ctx::default()
                 },
@@ -243,8 +244,19 @@ impl Draft {
                 return Err(Rejected::Invalid("a default option needs a positive delay"));
             }
         }
-        self.s.last_ask += 1;
+        self.s.last_ask = self
+            .s
+            .last_ask
+            .checked_add(1)
+            .ok_or(Rejected::Invalid("ask identity range exhausted"))?;
         let h = AskId(self.s.last_ask);
+        let crew = item
+            .and_then(|id| self.s.item_crew(id).cloned())
+            .or_else(|| self.by.home().cloned())
+            .unwrap_or_else(|| self.s.crew.clone());
+        if let Some(org) = &mut self.s.organization {
+            org.ask_crews.insert(h, crew);
+        }
         self.s.asks.insert(
             h,
             HumanAsk {
