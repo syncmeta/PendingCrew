@@ -2523,6 +2523,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "remoteBinding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteHelloBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only on a mutually authenticated, durably granted remote connection."
+        },
         "server": {
           "type": "string"
         },
@@ -3303,6 +3314,326 @@
           "type": "string"
         }
       ]
+    },
+    "RemoteAcceptParams": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "responseEnvelope": {
+          "$ref": "#/$defs/RemoteSignedEnvelope"
+        }
+      },
+      "required": [
+        "requestId",
+        "responseEnvelope"
+      ],
+      "type": "object"
+    },
+    "RemoteAcceptResult": {
+      "properties": {
+        "grant": {
+          "$ref": "#/$defs/RemoteGrantSummary"
+        },
+        "receipt": {
+          "$ref": "#/$defs/RemoteSignedEnvelope"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "reused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requestId",
+        "reused",
+        "receipt",
+        "grant"
+      ],
+      "type": "object"
+    },
+    "RemoteConfiguration": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "listenHost": {
+          "type": "string"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision",
+        "enabled",
+        "listenHost",
+        "port"
+      ],
+      "type": "object"
+    },
+    "RemoteConfigureParams": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "listenHost": {
+          "type": "string"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "expectedRevision",
+        "enabled",
+        "listenHost",
+        "port"
+      ],
+      "type": "object"
+    },
+    "RemoteEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "port"
+      ],
+      "type": "object"
+    },
+    "RemoteGrantScope": {
+      "enum": [
+        "ownerWorkspace"
+      ],
+      "type": "string"
+    },
+    "RemoteGrantSummary": {
+      "properties": {
+        "clientSpkiSha256": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deviceLabel": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "revokeNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revokedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/RemoteGrantScope"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "deviceLabel",
+        "clientSpkiSha256",
+        "revision",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "RemoteHelloBinding": {
+      "description": "Constructed by the authenticated server adapter. Never accepted as request identity.",
+      "properties": {
+        "authorityId": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "grantId": {
+          "type": "string"
+        },
+        "grantRevision": {
+          "type": "string"
+        },
+        "runtimeBindingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityId",
+        "dbId",
+        "runtimeBindingId",
+        "grantId",
+        "grantRevision"
+      ],
+      "type": "object"
+    },
+    "RemoteInviteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "deviceLabel": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "RemotePublicIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityId": {
+          "type": "string"
+        },
+        "certificateDerBase64": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "spkiSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorityId",
+        "dbId",
+        "certificateDerBase64",
+        "spkiSha256"
+      ],
+      "type": "object"
+    },
+    "RemoteRevokeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "grantId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "grantId",
+        "expectedRevision",
+        "note"
+      ],
+      "type": "object"
+    },
+    "RemoteSignedEnvelope": {
+      "additionalProperties": false,
+      "description": "Signed exact decoded payload bytes. A signature never supplies caller permission.",
+      "properties": {
+        "format": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "payload",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "RemoteStatus": {
+      "description": "Actual listener outcome; persisted enabled intent is not proof of a bound socket.",
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/RemoteConfiguration"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemotePublicIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "listening": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "configuration",
+        "listening"
+      ],
+      "type": "object"
     },
     "Request": {
       "properties": {
@@ -6556,6 +6887,57 @@
       },
       "result": {
         "$ref": "#/$defs/ChannelSummary"
+      }
+    },
+    "remote.accept": {
+      "params": {
+        "$ref": "#/$defs/RemoteAcceptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RemoteAcceptResult"
+      }
+    },
+    "remote.configure": {
+      "params": {
+        "$ref": "#/$defs/RemoteConfigureParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RemoteConfiguration"
+      }
+    },
+    "remote.grants": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "items": {
+          "$ref": "#/$defs/RemoteGrantSummary"
+        },
+        "type": "array"
+      }
+    },
+    "remote.invite": {
+      "params": {
+        "$ref": "#/$defs/RemoteInviteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RemoteSignedEnvelope"
+      }
+    },
+    "remote.revoke": {
+      "params": {
+        "$ref": "#/$defs/RemoteRevokeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RemoteGrantSummary"
+      }
+    },
+    "remote.status": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RemoteStatus"
       }
     },
     "restart.answer": {

@@ -4,8 +4,9 @@ use crewd_proto::{
     methods, parse_params,
 };
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+#[cfg(test)]
 use tokio::net::unix::OwnedReadHalf;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -31,17 +32,85 @@ impl Drop for AbortOnDrop {
 pub(crate) async fn run_draining(
     state: Arc<AppState>,
     stream: UnixStream,
-    mut drain: watch::Receiver<bool>,
+    drain: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let policy = match state.peer_policy.get() {
         Some(p) => p.clone(),
         None => Arc::new(crate::peer::PeerPolicy::new(None)?),
     };
     let peer = policy.accept(&stream)?;
-    let (rd, mut wr) = stream.into_split();
+    let (rd, wr) = stream.into_split();
+    run_io(state, rd, wr, drain, Caller::Local(peer)).await
+}
+
+pub(crate) async fn run_remote(
+    state: Arc<AppState>,
+    stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    drain: watch::Receiver<bool>,
+    principal: crate::remote::Principal,
+) -> anyhow::Result<()> {
+    let (rd, wr) = tokio::io::split(stream);
+    run_io(state, rd, wr, drain, Caller::Remote(principal)).await
+}
+
+enum Caller {
+    Local(crate::peer::ConnectionPeer),
+    Remote(crate::remote::Principal),
+}
+impl Caller {
+    async fn authorize(
+        &self,
+        state: &Arc<AppState>,
+        method: &str,
+        drain: &mut watch::Receiver<bool>,
+    ) -> Result<(), RpcError> {
+        match self {
+            Self::Local(peer) => peer.authorize_after_enrollment(method, drain).await,
+            Self::Remote(principal) => principal.authorize(state, method).await,
+        }
+    }
+    fn remote(&self) -> Option<&crate::remote::Principal> {
+        match self {
+            Self::Remote(principal) => Some(principal),
+            _ => None,
+        }
+    }
+}
+
+async fn run_io<R, W>(
+    state: Arc<AppState>,
+    rd: R,
+    mut wr: W,
+    mut drain: watch::Receiver<bool>,
+    peer: Caller,
+) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let remote_writer = peer.remote().cloned();
+    let writer_state = state.clone();
+
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let writer = tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
+        let mut changes = remote_writer.as_ref().and_then(|p| p.changes().ok());
+        loop {
+            let frame = tokio::select! {
+                biased;
+                _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
+                    if let Some(principal) = &remote_writer {
+                        if principal.check_live(&writer_state).await.is_err() { let _ = wr.shutdown().await; break; }
+                    }
+                    continue;
+                },
+                frame = rx.recv() => match frame { Some(frame) => frame, None => break },
+            };
+            if let Some(principal) = &remote_writer {
+                if principal.check_live(&writer_state).await.is_err() {
+                    let _ = wr.shutdown().await;
+                    break;
+                }
+            }
             let mut line = match serde_json::to_vec(&frame) {
                 Ok(l) => l,
                 Err(_) => continue,
@@ -83,19 +152,24 @@ fn parse_error(msg: &str) -> ServerFrame {
     ServerFrame::Response(Response::err(0, RpcError::new(RpcError::PARSE, msg)))
 }
 
-async fn read_loop(
+async fn read_loop<R: AsyncRead + Unpin>(
     state: &Arc<AppState>,
-    rd: OwnedReadHalf,
+    rd: R,
     tx: &mpsc::Sender<ServerFrame>,
     forwarder: &mut Option<JoinHandle<()>>,
     forward_guard: &mut Option<AbortOnDrop>,
     drain: &mut watch::Receiver<bool>,
-    peer: &crate::peer::ConnectionPeer,
+    peer: &Caller,
 ) -> anyhow::Result<()> {
     let mut rd = BufReader::new(rd);
     let mut buf: Vec<u8> = Vec::new();
     // 同一条连接上的 agent.* 请求共享一份状态（attach 过没有、推送任务）；连接结束时随之 drop。
     let mut agent = crate::agent::rpc::AgentConn::default();
+    let mut changes = peer
+        .remote()
+        .map(|principal| principal.changes())
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("remote connection authorization expired"))?;
     loop {
         buf.clear();
         if *drain.borrow() {
@@ -107,6 +181,10 @@ async fn read_loop(
         let n = tokio::select! {
             biased;
             _ = drain.changed() => return Ok(()),
+            _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
+                if let Some(principal) = peer.remote() { principal.check_live(state).await.map_err(|_| anyhow::anyhow!("remote connection authorization expired"))?; }
+                continue;
+            },
             n = limited.read_until(b'\n', &mut buf) => n?,
         };
         if n == 0 {
@@ -205,7 +283,7 @@ async fn s5_poll_fault(state: &AppState, id: u64) {
 async fn request_step(
     state: &Arc<AppState>,
     parsed: Result<Request, serde_json::Error>,
-    peer: &crate::peer::ConnectionPeer,
+    peer: &Caller,
     agent: &mut crate::agent::rpc::AgentConn,
     tx: &mpsc::Sender<ServerFrame>,
     forwarding: (&mut Option<JoinHandle<()>>, &mut Option<AbortOnDrop>),
@@ -215,16 +293,23 @@ async fn request_step(
     // The exact kernel-captured peer remains the sole authority. This executes inside
     // the same request future that stage B catches on every poll, before any fault/effect.
     let denied = match parsed.as_ref() {
-        Ok(req) => peer
-            .authorize_after_enrollment(&req.method, drain)
-            .await
-            .err(),
+        Ok(req) => peer.authorize(state, &req.method, drain).await.err(),
         Err(_) => None,
     };
     let frame = match parsed {
         Err(e) => parse_error(&format!("无法解析请求: {e}")),
         Ok(req) if denied.is_some() => {
             ServerFrame::Response(Response::err(req.id, denied.expect("checked denial")))
+        }
+        Ok(req) if agent.is_attached() && req.method.starts_with("remote.") => {
+            ServerFrame::Response(Response::err(
+                req.id,
+                RpcError::new(
+                    RpcError::FORBIDDEN,
+                    "远程配对与设备管理只允许电脑上的人操作。",
+                )
+                .with_refusal("remote.local_human_only"),
+            ))
         }
         Ok(req) if req.method == methods::SUBSCRIBE => {
             #[cfg(any(test, feature = "testkit"))]
@@ -346,7 +431,21 @@ async fn request_step(
             #[cfg(any(test, feature = "testkit"))]
             s5_poll_fault(state, req.id).await;
             let id = req.id;
-            let response = crate::dispatch::handle(state, req).await;
+            let is_hello = req.method == methods::HELLO;
+            let mut response = crate::dispatch::handle(state, req).await;
+            if is_hello {
+                if let (Some(principal), crewd_proto::Outcome::Result(value)) =
+                    (peer.remote(), &mut response.outcome)
+                {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert(
+                            "remoteBinding".into(),
+                            serde_json::to_value(&principal.binding)
+                                .expect("finite authenticated binding"),
+                        );
+                    }
+                }
+            }
             #[cfg(test)]
             {
                 let armed = {
