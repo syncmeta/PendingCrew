@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture=$(mktemp -d /private/tmp/pcw-work-integration.XXXXXX)
 echo "Integration evidence: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library \
- "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" \
+ "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdPlanActions.swift" \
  "$root/scripts/dev/fixtures/crewd-work-store-integration.swift" -o "$fixture/client-test"
 if [ "${1:-}" = "--compile-only" ]; then echo "PASS: integration Swift fixture compiled only"; exit 0; fi
 : "${PENDINGCREW_TEST_CREWD_PROGRAM:?Set the absolute gated crewd binary path}"

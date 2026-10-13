@@ -26,7 +26,8 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
         for (name,scheme,appearance) in [("light",ColorScheme.light,NSAppearance.Name.aqua),("dark",ColorScheme.dark,NSAppearance.Name.darkAqua)] {
             NSApplication.shared.appearance=NSAppearance(named:appearance)
             let controller=NSHostingController(rootView:CrewdWorkspaceView(workspace:workspace,autoConnect:false).preferredColorScheme(scheme).environment(\.colorScheme,scheme).frame(width:1320,height:820))
-            let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:820),styleMask:[.titled],backing:.buffered,defer:false)
+            let windowStyle:NSWindow.StyleMask=ProcessInfo.processInfo.environment["PENDINGCREW_RENDER_BORDERLESS"] == "1" ? [.borderless]:[.titled]
+            let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:820),styleMask:windowStyle,backing:.buffered,defer:false)
             window.appearance=NSAppearance(named:appearance)
             window.contentViewController=controller
             controller.view.frame=NSRect(x:0,y:0,width:1320,height:820)
