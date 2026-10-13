@@ -19,3 +19,9 @@ A real Human-stop meta record plus desiredStopped pauses automatic work, includi
 - Full workspace **2525 passed, 0 failed, 8 ignored** (`/private/tmp/pcw-lost-workspace-01.log`), strict workspace all-target clippy and fmt PASS (`pcw-lost-{clippy,fmt}-01.log`).
 
 Earlier fixture/command failures remain: collab01 used the wrong synthetic wake table; schema01 used a nonexistent CLI option, corrected using the actual schema subcommand with an atomic output replacement. Neither is described as a product red. No real account/model/app, daily-data migration, main merge, installation or release was run. Documents and view-folder contracts are frozen for parallel client work; their backend implementation remains next.
+
+## Client and daemon combination accepted
+
+Independent QA commit `82188069` uses frozen client `c7651580` and a private copy of the backend `716712fe` binary. `/private/tmp/pcw-lost-daemon-qa-02.log` reports PASS for healthy-owner rejection, actual fake-runner thread-resume handshake failure, persisted `session.get.resumeFailedAt`, typed `reassignLost`, exact owner/Lost history, and read-only reconnect without command replay. The fixture waits for actual process termination after Human stop before attempting resume. The first fixture failure (`AlreadyRunning` caused by assuming asynchronous stop was already settled) remains retained and is not represented as a product failure.
+
+This closes the isolated typed-client/daemon M1 combination; visible-window interaction, real models, final packaged helper, installation and daily-data migration remain M3 gates. M2 documents/folders are not claimed by these results.
