@@ -115,7 +115,7 @@ final class CrewdClient: ObservableObject {
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
-        guard connected, let c = connection else { throw CrewdClientError(message: "后台尚未连接。") }
+        guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。") }
         let id = nextID; nextID += 1
         var data = try JSONEncoder().encode(CrewdValue.object(["id": .number(Double(id)), "method": .string(method), "params": params]))
         data.append(10)
@@ -131,7 +131,7 @@ final class CrewdClient: ObservableObject {
                 guard let error else { return }
                 DispatchQueue.main.async {
                     guard let self, self.generation == current else { return }
-                    self.fail(error.localizedDescription, notify: true)
+                    self.transportEnded(error.localizedDescription)
                 }
             })
         }
