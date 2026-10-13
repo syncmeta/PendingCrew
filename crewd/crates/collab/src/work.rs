@@ -187,6 +187,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.kind == crate::wakes::WakeKind::StopCheck {
+        return crate::stop_checks::render_note(conn, row, now);
+    }
     if row.kind == crate::wakes::WakeKind::Checkpoint {
         return crate::checkpoints::render_note(conn, row, now);
     }

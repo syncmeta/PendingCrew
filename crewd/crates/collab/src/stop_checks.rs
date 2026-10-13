@@ -7,7 +7,7 @@ use crewd_work::{
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Target {
     id: String,
@@ -133,7 +133,7 @@ pub fn accept(tx: &mut Tx<'_>, c: &Candidate) -> Result<Accepted> {
     if !budget::save(tx.conn(), &c.session, c.expected_epoch, &streak)? {
         return Ok(Accepted::Stale);
     }
-    let note = serde_json::json!({"stopWork":c.targets.iter().take(50).map(|t|serde_json::json!({"id":t.id,"kind":t.kind})).collect::<Vec<_>>(),"total":c.targets.len(),"partial":c.targets.len()>50});
+    let note = summary(&c.targets);
     match d {
         StopDecision::Clean => Ok(Accepted::Clean),
         StopDecision::Rewake(_) => {
@@ -170,6 +170,54 @@ pub fn accept(tx: &mut Tx<'_>, c: &Candidate) -> Result<Accepted> {
         }
         StopDecision::Suppressed(_) => unreachable!(),
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedNote {
+    summary: serde_json::Value,
+    #[serde(rename = "stopTargets")]
+    targets: Vec<Target>,
+}
+fn summary(targets: &[Target]) -> serde_json::Value {
+    serde_json::json!({"stopWork":targets.iter().take(50).map(|t|serde_json::json!({"id":t.id,"kind":t.kind})).collect::<Vec<_>>(),"total":targets.len(),"partial":targets.len()>50})
+}
+/// Reserved operational metadata never enters the model's prompt. Current
+/// revisions and violation kinds must still match the originally queued facts.
+pub(crate) fn render_note(
+    conn: &Connection,
+    row: &wakes::WakeRow,
+    now: i64,
+) -> Result<work::FollowupNote> {
+    if row.kind != wakes::WakeKind::StopCheck || !row.source.starts_with("work-stop:") {
+        return Ok(work::FollowupNote::Ordinary);
+    }
+    let saved: SavedNote = serde_json::from_str(row.note.as_deref().unwrap_or(""))
+        .map_err(|_| invalid("stop-check metadata is invalid"))?;
+    let mut keys = std::collections::BTreeSet::new();
+    for t in &saved.targets {
+        let key = (work::number(&t.id)?, t.kind);
+        if !keys.insert(key) || t.revision.parse::<u64>().is_err() {
+            return Err(invalid("stop-check target metadata is invalid"));
+        }
+    }
+    if saved.targets.is_empty() || saved.summary != summary(&saved.targets) {
+        return Err(invalid("stop-check summary is inconsistent"));
+    }
+    if !eligible(conn, &row.session)? {
+        return Ok(work::FollowupNote::Stale);
+    }
+    let current: std::collections::BTreeSet<_> =
+        targets(conn, &row.session, now)?.into_iter().collect();
+    let remaining: Vec<_> = saved
+        .targets
+        .into_iter()
+        .filter(|t| current.contains(t))
+        .collect();
+    if remaining.is_empty() {
+        return Ok(work::FollowupNote::Stale);
+    }
+    Ok(work::FollowupNote::Current(summary(&remaining).to_string()))
 }
 
 #[cfg(test)]
@@ -336,5 +384,192 @@ mod tests {
             )
             .unwrap();
         candidate(s.conn(), "w-a1", NOW).unwrap().unwrap()
+    }
+    fn queued_row(s: &crewd_store::Store) -> wakes::WakeRow {
+        wakes::list(s.conn(), Some("w-a1"), 100)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.state == wakes::WakeState::Pending)
+            .unwrap()
+    }
+    fn done(s: &mut crewd_store::Store, p: &crewd_proto::WorkPlan) {
+        ok(s, |tx| {
+            work::update(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkUpdateParams {
+                    id: p.id.clone(),
+                    expected_revision: p.revision.clone(),
+                    status: Some(WorkUpdateStatus::Done),
+                    ..Default::default()
+                },
+            )
+        });
+    }
+    #[test]
+    fn rendered_stop_reminder_hides_metadata_and_claim_rejects_changed_body() {
+        use crate::cursor_reservations as cr;
+        let mut s = store();
+        let a = seed(&mut s, "crew-a");
+        let b = seed(&mut s, "crew-b");
+        assert!(matches!(next(&mut s), Accepted::Rewake(_)));
+        let row = queued_row(&s);
+        let before = crate::render::build_batch(
+            s.conn(),
+            "w-a1",
+            crate::Locale::En,
+            std::slice::from_ref(&row),
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(before.items.len(), 1);
+        let body = before.items[0].note.as_ref().unwrap();
+        assert!(!body.contains("stopTargets"));
+        assert!(!body.contains("revision"));
+        assert!(body.contains(&a.id));
+        assert!(body.contains(&b.id));
+        let mut snap = cr::snapshot(s.conn(), "w-a1", &[], NOW).unwrap();
+        snap.capture_work_followups(s.conn(), std::slice::from_ref(&row), NOW)
+            .unwrap();
+        done(&mut s, &a);
+        let result = ok(&mut s, |tx| {
+            cr::claim_reserved(tx, &snap, &[], &[row.id], &[], cr::Owner::new(1).unwrap())
+        });
+        assert!(matches!(result, cr::Decision::Stale));
+        let unchanged = queued_row(&s);
+        assert_eq!(unchanged.attempts, 0);
+        let after = crate::render::build_batch(
+            s.conn(),
+            "w-a1",
+            crate::Locale::En,
+            std::slice::from_ref(&row),
+            NOW,
+        )
+        .unwrap();
+        let body = after.items[0].note.as_ref().unwrap();
+        assert!(!body.contains(&format!("\"{}\"", a.id)));
+        assert!(body.contains(&b.id));
+        let mut fresh = cr::snapshot(s.conn(), "w-a1", &[], NOW).unwrap();
+        fresh
+            .capture_work_followups(s.conn(), std::slice::from_ref(&row), NOW)
+            .unwrap();
+        assert!(matches!(
+            ok(&mut s, |tx| cr::claim_reserved(
+                tx,
+                &fresh,
+                &[],
+                &[row.id],
+                &[],
+                cr::Owner::new(1).unwrap()
+            )),
+            cr::Decision::Applied(_)
+        ));
+    }
+    #[test]
+    fn truncated_stop_targets_keep_the_unshown_item_and_all_stale_drop() {
+        let mut s = store();
+        let plans: Vec<_> = (0..51).map(|_| seed(&mut s, "crew-a")).collect();
+        assert!(matches!(next(&mut s), Accepted::Rewake(_)));
+        let row = queued_row(&s);
+        for p in plans.iter().take(50) {
+            done(&mut s, p);
+        }
+        let work::FollowupNote::Current(note) = render_note(s.conn(), &row, NOW).unwrap() else {
+            panic!("last target must survive")
+        };
+        let n: serde_json::Value = serde_json::from_str(&note).unwrap();
+        assert_eq!(n["total"], 1);
+        assert_eq!(n["partial"], false);
+        assert!(note.contains(&plans[50].id));
+        assert!(!note.contains("stopTargets"));
+        done(&mut s, &plans[50]);
+        assert!(matches!(
+            render_note(s.conn(), &row, NOW).unwrap(),
+            work::FollowupNote::Stale
+        ));
+        let batch =
+            crate::render::build_batch(s.conn(), "w-a1", crate::Locale::En, &[row], NOW).unwrap();
+        assert!(batch.items.is_empty());
+    }
+    #[test]
+    fn corrupt_reserved_notes_fail_closed_and_ordinary_stop_notes_stay_ordinary() {
+        let mut s = store();
+        seed(&mut s, "crew-a");
+        next(&mut s);
+        let mut row = queued_row(&s);
+        let original = row.note.clone();
+        row.note = Some("{}".into());
+        assert!(render_note(s.conn(), &row, NOW).is_err());
+        row.source = "synthetic ordinary stop".into();
+        assert!(matches!(
+            render_note(s.conn(), &row, NOW).unwrap(),
+            work::FollowupNote::Ordinary
+        ));
+        row.source = "work-stop:synthetic".into();
+        row.note = original;
+        s.conn()
+            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .unwrap();
+        assert!(render_note(s.conn(), &row, NOW).is_err());
+    }
+    #[test]
+    fn stop_reminder_rechecks_transfer_frozen_stop_and_new_report() {
+        for mode in ["transfer", "frozen", "stop", "report"] {
+            let mut s = store();
+            let p = seed(&mut s, "crew-a");
+            next(&mut s);
+            let row = queued_row(&s);
+            match mode {
+                "transfer" => {
+                    ok(&mut s, |tx| {
+                        asks::with_book(tx, "crew-a", |b, now| {
+                            b.assign(
+                                &crewd_work::Actor::Human,
+                                now,
+                                "W1".parse().unwrap(),
+                                SessionId::new("w-a2"),
+                                "synthetic transfer",
+                            )
+                        })
+                    });
+                }
+                "frozen" => {
+                    s.conn()
+                        .execute("UPDATE sessions SET desired='stopped' WHERE id='w-a1'", [])
+                        .unwrap();
+                    ok(&mut s, |tx| crews::archive(tx, "crew-b"));
+                    ok(&mut s, |tx| crews::archive(tx, "crew-a"));
+                }
+                "stop" => {
+                    s.conn()
+                        .execute("UPDATE sessions SET desired='stopped' WHERE id='w-a1'", [])
+                        .unwrap();
+                }
+                "report" => {
+                    ok(&mut s, |tx| {
+                        work::update(
+                            tx,
+                            &Sender::Session("w-a1".into()),
+                            WorkUpdateParams {
+                                id: p.id,
+                                expected_revision: p.revision,
+                                status: Some(WorkUpdateStatus::Active),
+                                next_check_at: Some(crewd_store::ts_from_ms(NOW + 60_000)),
+                                note: Some("next step reported".into()),
+                                ..Default::default()
+                            },
+                        )
+                    });
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    render_note(s.conn(), &row, NOW).unwrap(),
+                    work::FollowupNote::Stale
+                ),
+                "{mode}"
+            );
+        }
     }
 }

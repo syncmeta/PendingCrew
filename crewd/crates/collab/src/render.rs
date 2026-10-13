@@ -666,12 +666,22 @@ pub fn build_batch(
                     body: WakeBody::Checkpoint,
                 });
             }
-            WakeKind::StopCheck => items.push(WakeItem {
-                wake_ids: vec![r.id],
-                kind: r.kind,
-                note: r.note.clone(),
-                body: WakeBody::StopCheck,
-            }),
+            WakeKind::StopCheck => {
+                let note = match crate::stop_checks::render_note(conn, r, now_ms)? {
+                    crate::work::FollowupNote::Ordinary => r.note.clone(),
+                    crate::work::FollowupNote::Current(note) => Some(note),
+                    crate::work::FollowupNote::Stale => {
+                        unusable.push((r.id, "stop-check has no current target".into()));
+                        continue;
+                    }
+                };
+                items.push(WakeItem {
+                    wake_ids: vec![r.id],
+                    kind: r.kind,
+                    note,
+                    body: WakeBody::StopCheck,
+                });
+            }
         }
     }
     let mut deferred = Vec::new();
