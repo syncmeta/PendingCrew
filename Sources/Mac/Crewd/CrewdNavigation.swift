@@ -44,4 +44,17 @@ enum CrewdNavigation {
         return out
     }
 }
+/// Stable real participant identity, sharing the original PendingCrew/PendingBot pool.
+/// No membership inference and no padding to three fake actors.
+enum CrewdAvatarIdentity {
+    static func seed(_ member:CrewdValue)->String? {
+        if member["kind"].string == "human" {return "human"}
+        if member["kind"].string == "session",let id=member["id"].string,!id.isEmpty {return id}
+        return nil
+    }
+    static func group(_ members:[CrewdValue])->[String] {
+        Array(Set(members.compactMap(seed)).sorted().prefix(3))
+    }
+}
+
 #endif

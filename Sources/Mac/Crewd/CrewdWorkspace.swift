@@ -14,6 +14,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var sessions: [CrewdValue] = []
     @Published var channels: [CrewdValue] = []
     @Published private(set) var channelSummaries: [CrewdValue] = []
+    @Published private(set) var crewAvatarMembers: [String:[CrewdValue]] = [:]
     @Published private(set) var crewActivity: [String: CrewdValue] = [:]
     @Published private(set) var activityRead: Set<String> = []
     private var activityDirty = true
@@ -201,6 +202,7 @@ final class CrewdWorkspace: ObservableObject {
                     if !affected.isEmpty && !affected.contains(id) {continue}
                     let list = try await client.call("channel.list", .object(["crewId": .string(id)]))
                     guard current == generation, !Task.isCancelled else { activityDirty=true; return }
+                    if let lobby=list.array.first(where:{$0["channel"]["kind"].string == "lobby"}) {crewAvatarMembers[id]=lobby["members"].array}
                     var latest: CrewdValue?
                     for summary in list.array {
                         guard let channel = summary["channel"]["id"].string else { continue }

@@ -14,6 +14,11 @@ func v(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,fro
         let tree=CrewdNavigation.planTree(plans,collapsed:[])
         precondition(tree.map(\.depth)==[0,1,2,0] && tree.map(\.object)==["W1","W2","W3","W4"],"three-level parent tree retains foreign-parent reference as scoped root")
         precondition(CrewdNavigation.planTree(plans,collapsed:["W1"]).map(\.object)==["W1","W4"])
+        let members=[v("{\"kind\":\"session\",\"id\":\"real-b\"}"),v("{\"kind\":\"human\"}"),v("{\"kind\":\"session\",\"id\":\"real-a\"}")]
+        precondition(CrewdAvatarIdentity.group(members) == CrewdAvatarIdentity.group(members.reversed()),"group identity is order-stable")
+        precondition(CrewdAvatarIdentity.group(members).count == 3)
+        precondition(CrewdAvatarIdentity.group([members[0]]).count == 1 && CrewdAvatarIdentity.group([]).isEmpty,"never pad a group with invented members")
+        precondition(CrewdAvatarIdentity.seed(members[0]) == "real-b","emoji seed is actual session identity")
         precondition(CrewdNavigation.Tab.allCases.map(\.rawValue)==["消息","Todo","文档","进展"])
         precondition(CrewdNavigation.Sidebar.allCases.map(\.rawValue)==["通讯录","消息"])
         let snapshot:[String:Any]=["sidebarModes":CrewdNavigation.Sidebar.allCases.map(\.rawValue),"crewTabs":CrewdNavigation.Tab.allCases.map(\.rawValue),"directoryRows":rows.map { ["path":$0.id,"object":$0.object,"depth":$0.depth] as [String:Any]},"planRows":tree.map { ["id":$0.object,"depth":$0.depth] as [String:Any]}]
