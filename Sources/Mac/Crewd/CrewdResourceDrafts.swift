@@ -3,7 +3,8 @@ import Foundation
 
 /// Mutable window input, including immutable uncertain submission snapshots.
 struct CrewdResourceDrafts {
-    struct Key:Hashable {let crew:String;let view:CrewdResourceView;let object:String;let operation:String}
+    enum Domain:String,Hashable {case document,folder}
+    struct Key:Hashable {let crew:String;let view:CrewdResourceView;let object:String;let operation:String;var domain:Domain = .document}
     struct Fields:Equatable {var title="",body="",parent="",position=0,folder="",revision=""}
     struct Snapshot:Equatable {let key:Key;let fields:Fields;let request:UUID;let version:UUID}
     private var entries:[Key:Snapshot]=[:]

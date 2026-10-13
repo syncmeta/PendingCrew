@@ -11,7 +11,7 @@ struct CrewdDocumentsView:View {
     private func readDocument(_ id:String)async {let scope=store.crew;do{_ = try await store.document(id);if store.crew == scope{failure=nil}}catch{if store.crew == scope,!(error is CancellationError){failure=error.localizedDescription}}}
     var body:some View {
         VStack(alignment:.leading,spacing:10){
-            HStack{Text("文档").font(.headline);Spacer();Button("新建文档"){target = .init(key:.init(crew:store.crew,view:.documents,object:"",operation:"create"))}.disabled(!store.capabilities.contains("documents") || store.writing)}
+            HStack{Text("文档").font(.headline);Spacer();Button("新建文档"){target = .init(key:.init(crew:store.crew,view:.documents,object:"",operation:"create",domain:.document))}.disabled(!store.capabilities.contains("documents") || store.writing)}
             CrewdFolderControls(store:store,drafts:$drafts,selection:selection,view:.documents)
             if let error=store.failure{Text(error.localizedDescription).foregroundStyle(.orange).textSelection(.enabled)}
             if !store.capabilities.contains("documents"){Text("配套后台尚未开放文档，当前不能读取或编辑。").foregroundStyle(.secondary)}
@@ -26,7 +26,7 @@ struct CrewdDocumentsView:View {
                             Text(doc.summary["title"].string ?? "文档").font(.title2)
                             if doc.deleted{Text("已删除；原文和审计记录保留。").font(.caption).foregroundStyle(.secondary)}
                             CrewdFolderAssignmentButton(store:store,drafts:$drafts,view:.documents,object:CrewdFolderFilter.object("document",selected))
-                            HStack{Button("读取当前正文"){Task{await readDocument(selected)}};Button("编辑 / 删除"){target = .init(key:.init(crew:store.crew,view:.documents,object:selected,operation:"update"))}.disabled(doc.deleted || store.writing)}
+                            HStack{Button("读取当前正文"){Task{await readDocument(selected)}};Button("编辑 / 删除"){target = .init(key:.init(crew:store.crew,view:.documents,object:selected,operation:"update",domain:.document))}.disabled(doc.deleted || store.writing)}
                             if let body=doc.body {ScrollView{Text(body).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}}else{Text("正文尚未读取，或版本更新后需要重新读取。").foregroundStyle(.secondary)}
                         }.frame(maxWidth:.infinity,alignment:.leading)
                     }else{Text(!store.documentListLoaded ? "文档列表尚未成功读取":store.documentIDs.isEmpty ? "尚无文档":"选择文档读取正文").foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)}
@@ -48,7 +48,7 @@ struct CrewdDocumentEditor:View {
     @State private var submitting=false
     private var key:CrewdResourceDrafts.Key{target.key}
     private var fields:CrewdResourceDrafts.Fields{drafts.fields(key)}
-    private var deleteKey:CrewdResourceDrafts.Key{.init(crew:key.crew,view:.documents,object:key.object,operation:"delete")}
+    private var deleteKey:CrewdResourceDrafts.Key{.init(crew:key.crew,view:.documents,object:key.object,operation:"delete",domain:.document)}
     private func bind<T>(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,T>)->Binding<T>{Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View{
         VStack(alignment:.leading,spacing:12){

@@ -58,7 +58,7 @@ struct CrewdFolderEditor:View {
     @State private var reading=false
     @State private var confirmDelete=false
     @State private var submitting=false
-    private var key:CrewdResourceDrafts.Key{.init(crew:store.crew,view:view,object:object?["id"].string ?? (operation == "create" ? "":selected),operation:object == nil ? operation:"assign")}
+    private var key:CrewdResourceDrafts.Key{.init(crew:store.crew,view:view,object:object?["id"].string ?? (operation == "create" ? "":selected),operation:object == nil ? operation:"assign",domain:.folder)}
     private var fields:CrewdResourceDrafts.Fields{drafts.fields(key)}
     private var snapshot:CrewdFolderSnapshot?{store.folders[view]}
     private func bind<T>(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,T>)->Binding<T>{Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
