@@ -20,6 +20,7 @@ pub mod render;
 pub mod restart;
 pub mod sessions;
 pub mod settings;
+pub mod stop_checks;
 #[cfg(test)]
 mod testkit;
 pub mod todos;
