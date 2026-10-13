@@ -1949,6 +1949,7 @@ pub struct LaunchRecord {
     pub session: String,
     pub workdir: PathBuf,
     pub initial: Option<String>,
+    pub initial_context: Context,
     pub system_prompt: Option<String>,
     pub token: String,
 }
@@ -1960,6 +1961,7 @@ pub type HeldLaunch = (
 
 #[derive(Default)]
 pub struct StandInState {
+    pub accepts_initial_context: bool,
     pub launches: Vec<LaunchRecord>,
     pub launch_outcomes: Vec<(String, bool)>,
     /// 依次让下几次 launch 失败（原因）。
@@ -2248,6 +2250,9 @@ impl crate::orchestra::worktree::Worktrees for StandInWorktrees {
 }
 
 impl Executor for StandIn {
+    fn accepts_initial_context(&self) -> bool {
+        self.0.lock().unwrap().accepts_initial_context
+    }
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         let st = self.0.clone();
         Box::pin(async move {
@@ -2281,6 +2286,7 @@ impl Executor for StandIn {
                 session: req.session_id.clone(),
                 workdir: req.workdir.clone(),
                 initial: req.initial_prompt.clone(),
+                initial_context: req.initial_context.clone(),
                 system_prompt: req.system_prompt.clone(),
                 token: req.token.clone(),
             });
@@ -3466,6 +3472,7 @@ mod self_tests {
             effort: None,
             system_prompt: None,
             initial_prompt: initial.map(str::to_string),
+            initial_context: Default::default(),
             token: "tok".into(),
             ledger: Arc::new(MemoryLedger::default()),
         }
@@ -3560,6 +3567,7 @@ mod self_tests {
                 effort: None,
                 system_prompt: None,
                 initial_prompt: None,
+                initial_context: Default::default(),
                 token: "tok".into(),
                 ledger: Arc::new(MemoryLedger::default()),
             })

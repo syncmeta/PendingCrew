@@ -1951,6 +1951,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn first_launch_polls_context_only_for_capable_executor() {
+        for accepts in [true, false] {
+            let hook = Arc::new(S46Extras::default());
+            let mut rig = Rig::with(Hooks {
+                extras: hook.clone(),
+                ..Hooks::default()
+            })
+            .await;
+            crew_with(&mut rig, &["w1"], &[]).await;
+            rig.exec.0.lock().unwrap().accepts_initial_context = accepts;
+            rig.post(LOBBY, Rig::sender("cap"), at("w1"), "INITIAL_CONTEXT_BODY")
+                .await;
+            let launches = rig.exec.launches("w1");
+            assert_eq!(launches.len(), 1);
+            assert_eq!(
+                launches[0].initial_context,
+                if accepts {
+                    s46_context()
+                } else {
+                    Default::default()
+                }
+            );
+            assert_eq!(
+                *hook.0.lock().unwrap(),
+                if accepts {
+                    vec!["w1".to_string()]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn s46_context_extras_reaches_context_accepting_send() {
         for accepts in [true, false] {
             let hook = Arc::new(S46Extras::default());

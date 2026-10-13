@@ -169,3 +169,17 @@ full-check-04 捕获既有 S1 权限夹具的就绪发布竞态：文件已存�
 用户随后明确纠正前端：保留原来的设计与微信式形态，不做总览/早上好；左侧仅通讯录（原层级）与消息（原时间流）两种视图，选中机组后右侧消息（群聊/单聊）、Todo、文档、进展四视图。第一版仪表盘草图撤回为设计方向，仅保留历史文件、不覆盖用户可能的修改；同一前端子代理已按 owning Sources 重做微信布局版本。界面实现等用户设计对齐，后端继续。
 
 Final gate: 2375 passed, 0 failed, 8 ignored; fmt/workspace clippy passed, CARGO_INCREMENTAL=0.
+
+## 2026-10-13 M4b Codex 工作上下文接线
+
+生产 serve 默认 ContextExtras 已从空桩接到专用 Db 线程读取全局工作账本；显式 testkit hooks 保持调用方配置。只取当前 session 负责、未完成/未丢弃、未冻结机组的项，每页最多 20 项，渲染结果最多 4096 UTF-8 字节。标题/下一步/阻塞列表裁剪均自报，容量不足保留真实 nextAfter，修订号始终为文本。长目标、验收说明和证据不常驻；需要时使用现有工具读取。
+
+每个摘要使用稳定字段，不加入当前时钟；工作清空仍发送明确空列表，数据库关闭或账本损坏返回 unavailable，不伪装成无工作。当前沿用 Codex additionalContext keyed/untrusted 协议，未新增另一层客户端上下文缓存，也未测量真实模型总 token 节省比例。挂钩外层超时仍沿用编排既有回退规则，精确缓存/压缩后保留行为尚不能由合成 runner 证明。
+
+发现并修复首次启动缺口：旧挂钩只在已启动会话 send_batch 调用，首回合 LaunchRequest 没有上下文。新增执行器首回合能力判断和 initial_context；Codex 显式支持，首回合与后续回合都走相同不可信数据入口。其他执行器不主动收集这段上下文，Claude PTY 的 UserPromptSubmit 接入仍待后续。
+
+本机 codex app-server generate-json-schema --experimental 无模型调用生成的 schema 再次确认 additionalContext 与 kind/value 字段。真实模型已读白板的旧证据见主设计 §23，不把本轮合成协议请求扩称新的真实模型验收。首回合丢弃上下文反例准确失败，日志 pcw-work-context-adapter-red-01.log；恢复实现后首回合协议、编排能力判断、真实数据库负责人/完成/冻结筛选、UTF-8 容量/分页/修订号、稳定空列表与错误区分均通过。
+
+这一单元仍非完整 M4b：检查点/停下即检查、人回复与工作依赖放行的自动唤醒、跨机组关系、转派与全局工作模型继续推进。前端设计已交接独立 session「PendingCrew 前端设计」，保留微信式原结构，后端不越过用户设计讨论。无新增真实模型调用、安装、发布或日常数据迁移；Jev/记忆继续方案先行。
+
+完整 crewd/scripts/check.sh（Rust 1.94.0，offline，incremental=0）通过：2381 passed、0 failed、8 ignored；fmt 与 clippy 全目标通过。完整日志 /private/tmp/pcw-work-context-full-check-01.log；此 SHA 尚未合入共享 main，也未重建/安装桌面候选。

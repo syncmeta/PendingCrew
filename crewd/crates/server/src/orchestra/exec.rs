@@ -29,6 +29,7 @@ pub struct LaunchRequest {
     pub system_prompt: Option<String>,
     /// 开场正文（只走输入投递，绝不进 argv）。
     pub initial_prompt: Option<String>,
+    pub initial_context: Context,
     /// helper 用来 `agent.attach` 的 token（M3b）。
     pub token: String,
     pub ledger: Arc<dyn AgentIdLedger>,
@@ -62,6 +63,10 @@ impl std::error::Error for LaunchError {}
 pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
 
 pub trait Executor: Send + Sync {
+    /// Capability available before launching the first turn.
+    fn accepts_initial_context(&self) -> bool {
+        false
+    }
     /// Synchronous launch admission; must not enter the actor mailbox.
     fn check_launch(&self) -> Result<(), LaunchError> {
         Ok(())

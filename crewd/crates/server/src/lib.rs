@@ -305,7 +305,7 @@ pub async fn serve_with(
     opts: ServeOptions,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
-    serve_with_hooks_inner(data_dir, opts, orchestra::hooks::Hooks::default(), shutdown).await
+    serve_with_hooks_inner(data_dir, opts, None, shutdown).await
 }
 
 /// Synthetic library lifecycle instrumentation; ordinary CLI defaults unchanged.
@@ -316,13 +316,13 @@ pub async fn serve_with_test_hooks(
     hooks: orchestra::hooks::Hooks,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
-    serve_with_hooks_inner(data_dir, opts, hooks, shutdown).await
+    serve_with_hooks_inner(data_dir, opts, Some(hooks), shutdown).await
 }
 
 async fn serve_with_hooks_inner(
     data_dir: PathBuf,
     mut opts: ServeOptions,
-    hooks: orchestra::hooks::Hooks,
+    hooks: Option<orchestra::hooks::Hooks>,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     // A missing explicit program fails before binding or creating storage.
@@ -371,6 +371,10 @@ async fn serve_with_hooks_inner(
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
     }
     let db = Db::spawn(Store::open_data_dir(&data_dir)?)?;
+    let hooks = hooks.unwrap_or_else(|| orchestra::hooks::Hooks {
+        extras: Arc::new(orchestra::work_context::WorkContext(db.clone())),
+        ..Default::default()
+    });
     let backups = match crewd_store::backup::Ticker::start(
         data_dir.join(crewd_store::DB_FILE),
         std::time::Duration::from_secs(3600),

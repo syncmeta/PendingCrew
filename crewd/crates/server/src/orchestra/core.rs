@@ -1721,6 +1721,17 @@ impl<P: Port> Core<P> {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session {} 没有工作目录", row.id))?;
         let system_prompt = Some(self.port.worldview(&row.id).await?);
+        let initial_context = if text.is_some() && exec.accepts_initial_context() {
+            within(
+                self.cfg.hook_timeout,
+                "ContextExtras",
+                self.hooks.extras.extras(&row.id),
+            )
+            .await
+            .unwrap_or_default()
+        } else {
+            Default::default()
+        };
         let generator = self
             .next_generator
             .checked_add(1)
@@ -1773,6 +1784,7 @@ impl<P: Port> Core<P> {
             effort: row.effort.clone(),
             system_prompt,
             initial_prompt: text.clone(),
+            initial_context,
             token,
             ledger: self.port.ledger(&row.id),
             delivery_observer,
@@ -3948,6 +3960,7 @@ mod tests {
             effort: None,
             system_prompt: None,
             initial_prompt: None,
+            initial_context: Default::default(),
             token: "tok".into(),
             ledger: rig.port.ledger("cap"),
         };

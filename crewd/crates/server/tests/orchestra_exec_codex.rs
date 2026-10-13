@@ -41,6 +41,7 @@ fn request(root: &std::path::Path, ledger: Arc<MemoryLedger>) -> LaunchRequest {
         effort: Some("high".into()),
         system_prompt: Some("Synthetic crew worldview".into()),
         initial_prompt: None,
+        initial_context: Default::default(),
         token: "synthetic-test-token".into(),
         ledger,
         delivery_observer: None,
@@ -179,6 +180,46 @@ async fn codex_adapter_preserves_context_source_thread_and_stop_resume() {
     );
     resumed.stop().unwrap();
     tokio::time::timeout(deadline, async {
+        while !matches!(events.recv().await.unwrap(), SessionEvent::Exited(_)) {}
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn first_codex_turn_carries_work_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let exec = executor(
+        dir.path(),
+        CodexProgram::Path(support::artifact("fake_codex")),
+    );
+    assert!(exec.accepts_initial_context());
+    let mut req = request(dir.path(), Arc::new(MemoryLedger::default()));
+    req.initial_prompt = Some("Initial synthetic task".into());
+    req.initial_context =
+        BTreeMap::from([("my_work_items".into(), "synthetic assigned work".into())]);
+    let (h, mut events) = exec.launch(req).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(events.recv().await.unwrap(), SessionEvent::TurnEnded { .. }) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let text = std::fs::read_to_string(dir.path().join("rpc.log")).unwrap();
+    let calls: Vec<Value> = text
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    let turn = calls.iter().find(|v| v["method"] == "turn/start").unwrap();
+    assert_eq!(
+        turn["params"]["additionalContext"]["my_work_items"],
+        serde_json::json!({"kind":"untrusted","value":"synthetic assigned work"})
+    );
+    h.stop().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
         while !matches!(events.recv().await.unwrap(), SessionEvent::Exited(_)) {}
     })
     .await

@@ -22,6 +22,7 @@ mod sim;
 mod t10c;
 #[cfg(test)]
 mod testkit;
+pub mod work_context;
 pub mod worktree;
 
 use std::sync::Arc;

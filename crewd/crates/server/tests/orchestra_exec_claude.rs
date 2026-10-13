@@ -34,6 +34,7 @@ fn request(session: &str, workdir: &Path) -> LaunchRequest {
         effort: None,
         system_prompt: Some("合成世界观".into()),
         initial_prompt: None,
+        initial_context: Default::default(),
         token: "tok-1".into(),
         ledger: Arc::new(MemoryLedger::default()),
     }

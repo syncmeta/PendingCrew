@@ -68,6 +68,9 @@ impl CodexExecutor {
     }
 }
 impl Executor for CodexExecutor {
+    fn accepts_initial_context(&self) -> bool {
+        true
+    }
     fn check_launch(&self) -> Result<(), LaunchError> {
         if self.config.program == CodexProgram::Disabled {
             return Err(LaunchError::NotConfigured("codex is disabled".into()));
@@ -100,6 +103,7 @@ impl Executor for CodexExecutor {
                     effort: req.effort,
                     developer_instructions: req.system_prompt,
                     initial_prompt: req.initial_prompt,
+                    initial_context: req.initial_context,
                     comms: Some(CommsSpec {
                         helper: self.config.helper.clone(),
                         data_dir: self.config.data_dir.clone(),

@@ -53,6 +53,7 @@ async fn generated_launch_files_and_token_use_the_external_private_runtime() {
             effort: None,
             system_prompt: Some("synthetic shared world".into()),
             initial_prompt: None,
+            initial_context: Default::default(),
             token: "synthetic-token".into(),
             ledger: Arc::new(MemoryLedger::default()),
         })
