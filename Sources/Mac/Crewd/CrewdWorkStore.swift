@@ -46,6 +46,7 @@ final class CrewdWorkStore: ObservableObject {
     private let call: Call
     private var generation = UUID()
     private var refreshID = UUID()
+    private var requirementEpoch = UUID()
     private var activeMutations = 0
     private var pendingDetails: [CrewdWorkID: UUID] = [:]
 
@@ -91,6 +92,12 @@ final class CrewdWorkStore: ObservableObject {
               value["status"].string != nil else {
             throw CrewdClientError(message: "需求契约缺少公共编号、机组、原文或状态。")
         }
+        if value["status"] == .string("closed") {
+            guard let note = value["closure"]["note"].string, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let at = value["closure"]["at"].string, !at.isEmpty else {
+                throw CrewdClientError(message: "关闭需求详情缺少裁定理由或时间。")
+            }
+        }
         return id
     }
     /// The draft owner retains requestID across uncertain replies; the store never retries writes.
@@ -109,12 +116,16 @@ final class CrewdWorkStore: ObservableObject {
     }
     @discardableResult func requirementDetail(_ id: CrewdWorkID) async throws -> CrewdValue {
         guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
-        let token = generation, request = UUID(); pendingDetails[id] = request
+        let token = generation, epoch = requirementEpoch, request = UUID(); pendingDetails[id] = request
         defer { if pendingDetails[id] == request { pendingDetails[id] = nil } }
         let value = try await call("todo.get", .object(["id": .string(id.raw)]))
         try check(token)
-        guard pendingDetails[id] == request else { throw CancellationError() }
+        guard pendingDetails[id] == request, epoch == requirementEpoch else { throw CancellationError() }
         guard try parseRequirement(value) == id else { throw CrewdClientError(message: "需求详情返回了其他对象。") }
+        if requirements[id]?["status"] == .string("closed"), value["status"] != .string("closed") {
+            throw CrewdClientError(message: "需求详情过期，已关闭的需求不能恢复为待处理。")
+        }
+        requirementEpoch = UUID()
         requirements[id] = value
         return value
     }
@@ -130,7 +141,7 @@ final class CrewdWorkStore: ObservableObject {
     }
     func refresh() async throws {
         guard activeMutations == 0 else { return }
-        let token = generation, current = UUID(), crew = selectedCrew
+        let token = generation, current = UUID(), crew = selectedCrew, sourceEpoch = requirementEpoch
         refreshID = current; loading = true; lastFailure = nil
         defer { if refreshID == current { loading = false } }
         do {
@@ -177,7 +188,9 @@ final class CrewdWorkStore: ObservableObject {
                 humans[id] = value
             }
             try check(token, current)
+            guard sourceEpoch == requirementEpoch else { throw CancellationError() }
             for row in rows { adopt(row) }
+            requirementEpoch = UUID()
             for (id, value) in sources {
                 var next = value
                 // Closed rulings are immutable; list rows omit the on-demand closure fields.
@@ -227,9 +240,16 @@ final class CrewdWorkStore: ObservableObject {
                 if method == "todo.close", params["id"].string != id.raw {
                     throw CrewdClientError(message: "关闭需求返回了其他对象。")
                 }
-                if method == "todo.create", value["crewId"] != params["crewId"] {
-                    throw CrewdClientError(message: "创建需求返回了其他机组。")
+                if method == "todo.create", (value["crewId"] != params["crewId"] || value["text"] != params["text"]) {
+                    throw CrewdClientError(message: "创建需求回执与原始机组或原文不符。")
                 }
+                if method == "todo.close" {
+                    guard value["status"] == .string("closed"),
+                          value["closure"]["note"].string == params["note"].string?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                        throw CrewdClientError(message: "关闭需求回执缺少已关闭状态或原始裁定理由。")
+                    }
+                }
+                requirementEpoch = UUID()
                 requirements[id] = value
             }
             activeMutations = 0; ownsMutation = false

@@ -36,3 +36,14 @@ Own regressions additionally cover UUID uppercase normalization, unknown legacy-
 Earlier evidence remains: check-01 caught an adapter signature compile error; workflow-02 actor cases failed because the test fixture attempted a second captain in an occupied crew. The independent author corrected only the synthetic crew fixture, retaining the failure log. These are not claimed as product-behavior red baselines.
 
 Whole-workspace/lint and real daemon+Swift integration are the next integration gates, owned by root. Passing this unit does not complete the entire PendingCrew engineering project.
+
+
+## 客户端整合与读竞态验收
+
+- 数据接口13b34a21、UI接线c59b23d2、专用独验c62db744；后续根修补保证需求读取双向提交水位：旧详情不能覆盖新列表，旧列表不能覆盖新详情。整笔刷新在提交前拒绝已被详情提交取代的快照，不用自动重试写入来恢复。
+- 独审首次RED（7缺口）：/private/tmp/pcw-requirement-store-review-red-01.log；逆向RED（3缺口）：/private/tmp/pcw-requirement-store-review-reverse-red-01.log；最终独立GREEN（15检查）：/private/tmp/pcw-requirement-store-review-reverse-green-independent-01.log。包括closed理由不可丢、假close回执拒绝、create精确原文字节、trim理由和只读后续刷新。
+- 最终原布局/实际UI源码SwiftUI编译与纯结构：/private/tmp/pcw-requirement-client-final-01.log，全部通过。UI按crew保留草稿UUID；未知提交保留旧snapshot并提供显式确认原提交入口，不自动重试、不在编辑时无声遗失不确定任务。当前未知传输错误保守提示，不把发送前未执行与可能已执行精准区分。
+- 最终正常daemon + Swift：/private/tmp/pcw-requirement-swift-backend-final-01.log，数据 /private/tmp/pcw-work-integration.Y2gJ7b。实际公开create→同UUID复用→get原文→冲突拒绝→Human关闭理由（刷新保留），然后既有跨层计划阻塞/H答复/完成/CAS/只读重连，全部通过；无真实模型/账户或fake runner流量。01/02及早期编译日志全部保留。
+- 整套Rust workspace门禁仍在进行，已发现旧agent工具数和每方法RPC覆盖夹具需要补新todo_get及三个公开方法；当前不得称最终workspace全绿。待定向修补/复验与strict clippy/fmt后再冻结交付检查点。
+
+边界仍为隔离源码、真实本地通信与合成数据。未执行原生窗口/像素验收、正式安装、日常数据迁移、main整合或正式发布；文档/独立视图文件夹、完整交接、多厂商真实PTY等仍在工程路线内。
