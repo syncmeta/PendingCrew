@@ -231,3 +231,17 @@ work.update 完成一项时也把显式 BlockOn::Item 解除后的负责人提�
 未安装、发布、切换日常数据或新增真实模型调用；Jev/记忆保持讨论先行，前端由独立设计 session 负责。
 
 完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2397 passed、0 failed、8 ignored；fmt/clippy 全目标通过。日志 /private/tmp/pcw-checkpoint-full-check-01.log。
+
+## 2026-10-13 M4b 空闲检查真实边沿
+
+核对停下即检查接线时发现：Core 原先每条 Working(false) 都调用 on_idle，启动时本来就空闲、重复空闲通知也会轮询 IdleHook。真实工作提醒接上后，这会无端消耗重唤醒预算/模型回合。现改为先捕获旧 working 状态，仅 true→false 调用 idle 路径；其他现有状态写入和通知逻辑保持原语义。人工停止、休眠/叫停、旧 generation 的异步回调仍经过既有资格检查。
+
+新增回归先验证旧实现准确失败（初始 false 调用挂钩 1 次，要求 0）；修复后初始 false 和重复 false 不调用挂钩，后续两个真实 true→false 分别保留一次调用。日志 /private/tmp/pcw-idle-edge-red-01.log。完整 crewd-server 单元测试 708 passed、0 failed；fmt 和整个工作区 all-targets clippy 通过；Codex/Claude 驱动与 daemon 的四组实际合成集成测试通过（原生答复、同 thread 恢复、混合执行器路由和断线不重放）。没有为这两行控制流修复重复不相关的整个工作区测试。
+
+停下即检查尚未宣称整体接线完成。下一单元需要全组织按 session 维护同一防循环预算，不能按 crew 各自重置；挂钩只读生成候选，预算提交放在 actor 接受当前 generation 后的入队事务，避免迟到/取消回调消耗预算。连续无改善后的行政交接须持久化且只通知一次，沿用原工作身份，不再造一份人类 Todo。已有 WorkBook 每 crew 的纯 on_idle 判定不能直接冒充全组织 session 计数。
+
+检查点扫描的候选 SQL 仍应进一步缩小并检查缺失权威账本身份，避免大量已达未回报上限的项使每拍重复恢复整本账；这是下一优化/完整巡检待办，不以当前门禁证明已完成。
+
+候选分支继续开发，未安装、发布或切换日常数据，未新增真实模型调用；Jev/记忆继续讨论先行，前端由独立设计 session 负责。
+
+本 SHA 的四组集成测试合计 11 passed、0 failed；日志 pcw-idle-edge-integration-01.log，单元日志 pcw-idle-edge-server-01.log，lint 日志 pcw-idle-edge-clippy-01.log。

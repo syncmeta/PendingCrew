@@ -2290,6 +2290,7 @@ impl<P: Port> Core<P> {
                 }
             }
             SessionEvent::Working(on) => {
+                let became_idle = l.working && !on;
                 l.working = on;
                 let mut patch = SessionPatch {
                     // crewd 叫停时驱动层 abandon 发的 Working(false) 不落库：was_working 留着「被打断」。
@@ -2331,7 +2332,7 @@ impl<P: Port> Core<P> {
                             .await?;
                     }
                 }
-                if !on {
+                if became_idle {
                     log_err(self.on_idle(session).await);
                 }
             }

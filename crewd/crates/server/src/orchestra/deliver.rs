@@ -2078,6 +2078,50 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
+    struct EdgeOnlyIdle(std::sync::atomic::AtomicUsize);
+    impl IdleHook for EdgeOnlyIdle {
+        fn on_idle<'a>(&'a self, _session: &'a str, _now: Ms) -> BoxFut<'a, Option<NewWake>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                None
+            })
+        }
+    }
+    #[tokio::test]
+    async fn idle_checks_require_a_real_working_to_idle_edge() {
+        let hook = Arc::new(EdgeOnlyIdle::default());
+        let mut rig = Rig::with(Hooks {
+            idle: hook.clone(),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        assert!(!rig.live("w1").unwrap().working);
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(
+            hook.0.load(Ordering::SeqCst),
+            0,
+            "initial idle is not a completed turn"
+        );
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(hook.0.load(Ordering::SeqCst), 1);
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(
+            hook.0.load(Ordering::SeqCst),
+            1,
+            "duplicate idle must not consume budget"
+        );
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        assert_eq!(
+            hook.0.load(Ordering::SeqCst),
+            2,
+            "a later real turn remains eligible"
+        );
+    }
+
     struct OnceStopCheck(AtomicBool);
     impl IdleHook for OnceStopCheck {
         fn on_idle<'a>(&'a self, session: &'a str, now: Ms) -> BoxFut<'a, Option<NewWake>> {
