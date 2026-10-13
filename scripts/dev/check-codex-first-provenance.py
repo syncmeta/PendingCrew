@@ -37,6 +37,21 @@ def files(root,rows):
   if p.is_file():actual.add(p.relative_to(root).as_posix())
  if actual!=seen:fail('snapshot inventory does not equal manifest')
  return out
+def build_configuration(value):
+ if not isinstance(value,dict):fail('actual build configuration missing')
+ for field in ['toolchain','cargoVersion','target']:
+  if not isinstance(value.get(field),str) or not value[field]:fail('build configuration '+field+' missing')
+ if value.get('profile') not in ['debug','release'] or type(value.get('defaultFeatures')) is not bool or type(value.get('allFeatures')) is not bool:fail('invalid profile/default-feature configuration')
+ for field in ['features','artifactFeatures']:
+  v=value.get(field)
+  if not isinstance(v,list) or not all(isinstance(x,str) for x in v) or sorted(set(v))!=v:fail('invalid feature configuration')
+ if not isinstance(value.get('artifactProfile'),dict) or value['artifactProfile'].get('test') is not False:fail('candidate is not a normal non-test compiler artifact')
+ packages=value.get('workspaceFeatures')
+ if not isinstance(packages,dict) or not packages:fail('actual workspace feature evidence missing')
+ for name,v in packages.items():
+  if not isinstance(name,str) or not isinstance(v,list) or not all(isinstance(x,str) for x in v) or sorted(set(v))!=v:fail('workspace feature configuration invalid')
+ return value
+
 def log(base,item,snapshot,input_digest,kind):
  p=regular(base,item.get('buildLog'));expected=hexsha(item.get('buildLogSHA256'))
  if sha(p)!=expected:fail('build log hash mismatch')
@@ -48,6 +63,9 @@ def log(base,item,snapshot,input_digest,kind):
  if len(commands)!=1 or not commands[0].strip():fail('actual build command is missing')
  if kind=='gui' and ('swiftc' not in commands[0] or 'Sources/Mac/Crewd/' not in commands[0]):fail('GUI command does not name actual Swift inputs')
  if kind=='rust' and ('cargo' not in commands[0] or 'crewd' not in commands[0]):fail('backend command does not name actual Rust input cwd')
+ if kind=='rust':
+  configs=[json.loads(x[len('BuildConfiguration: '):]) for x in lines if x.startswith('BuildConfiguration: ')]
+  if configs!=[build_configuration(item.get('buildConfiguration'))]:fail('actual logged build configuration mismatch')
 
 def main():
  app=pathlib.Path(sys.argv[1]).resolve();base=app.parent
@@ -65,6 +83,8 @@ def main():
  gd,rd=digest(gui_entries),digest(rust_entries)
  if manifest.get('guiInputDigest')!=gd or manifest.get('rustInputDigest')!=rd:fail('canonical input digests mismatch')
  gui,backend=proof.get('gui'),proof.get('backend')
+ expected_configuration=build_configuration(manifest.get('backendBuildConfiguration'))
+ if not isinstance(backend,dict) or build_configuration(backend.get('buildConfiguration'))!=expected_configuration:fail('candidate build configuration differs from requested backend inputs')
  if not isinstance(gui,dict) or not isinstance(backend,dict) or gui.get('inputDigest')!=gd or backend.get('inputDigest')!=rd:fail('compiled GUI/backend inputs do not match snapshot')
  for item in [gui,backend]:
   if sha(regular(base,item.get('preSignFile')))!=hexsha(item.get('preSignSHA256')):fail('actual pre-sign binary does not match evidence')
@@ -75,6 +95,7 @@ def main():
   witness_path=regular(base,backend.get('witnessFile'))
   if sha(witness_path)!=hexsha(backend.get('witnessSHA256')):fail('prebuilt witness hash mismatch')
   witness=load(witness_path);hexsha(witness.get('sourceRef'),40)
+  if build_configuration(witness.get('buildConfiguration'))!=expected_configuration:fail('prebuilt toolchain/target/profile/features differ')
   witness_base=base/basename(witness.get('evidenceDirectory'))
   if witness_base.is_symlink() or not witness_base.is_dir():fail('prebuilt evidence directory missing')
   snapshot_name=basename(witness.get('snapshotDirectory'))

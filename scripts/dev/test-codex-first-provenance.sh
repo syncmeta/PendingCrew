@@ -31,16 +31,19 @@ for path in paths:
 rows=[{'path':p,'sha256':sha(snapshot/p)} for p in paths]
 def digest(rows):return hashlib.sha256(''.join(r['path']+'\t'+r['sha256']+'\n' for r in sorted(rows,key=lambda x:x['path'])).encode()).hexdigest()
 gui=[r for r in rows if not r['path'].startswith('crewd/')];rust=[r for r in rows if r['path'].startswith('crewd/')];gd,rd=digest(gui),digest(rust)
-manifest={'format':1,'sourceRef':source,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'candidateVersion':'0.0.12','files':rows,'guiInputDigest':gd,'rustInputDigest':rd};dump(base/'build-inputs.json',manifest)
+configuration={'toolchain':'rustc synthetic-validator-only','cargoVersion':'cargo synthetic-validator-only','target':'aarch64-apple-darwin','profile':'debug','defaultFeatures':True,'features':[],'allFeatures':False,'artifactFeatures':[],'artifactProfile':{'opt_level':'0','debuginfo':2,'debug_assertions':True,'overflow_checks':True,'test':False},'workspaceFeatures':{'crewd':[],'crewd-server':[]}}
+manifest={'format':1,'sourceRef':source,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'candidateVersion':'0.0.12','backendBuildConfiguration':configuration,'files':rows,'guiInputDigest':gd,'rustInputDigest':rd};dump(base/'build-inputs.json',manifest)
 for name,dig,command in [('gui.log',gd,'xcrun swiftc Sources/Mac/Crewd/*.swift CandidateMain.swift'),('backend.log',rd,'cd crewd && cargo build --locked -p crewd')]:
- (base/name).write_text('Snapshot: source-snapshot\nInputDigest: '+dig+'\nCommand: '+command+'\nExit: 0\nsynthetic validator-only control, not a real build observation\n')
-proof={'format':1,'sourceRef':source,'inputManifestSHA256':sha(base/'build-inputs.json'),'gui':{'inputDigest':gd,'preSignFile':'pre-gui','preSignSHA256':sha(base/'pre-gui'),'buildLog':'gui.log','buildLogSHA256':sha(base/'gui.log')},'backend':{'mode':'built-from-snapshot','inputDigest':rd,'preSignFile':'pre-backend','preSignSHA256':sha(base/'pre-backend'),'buildLog':'backend.log','buildLogSHA256':sha(base/'backend.log')},'packaged':{'guiSHA256':sha(app/'Contents/MacOS/Synthetic'),'helperSHA256':sha(app/'Contents/Helpers/crewd')}};dump(base/'build-provenance.json',proof)
+ (base/name).write_text(('BuildConfiguration: '+json.dumps(configuration,sort_keys=True,separators=(',',':'))+'\n' if name=='backend.log' else '')+'Snapshot: source-snapshot\nInputDigest: '+dig+'\nCommand: '+command+'\nExit: 0\nsynthetic validator-only control, not a real build observation\n')
+proof={'format':1,'sourceRef':source,'inputManifestSHA256':sha(base/'build-inputs.json'),'gui':{'inputDigest':gd,'preSignFile':'pre-gui','preSignSHA256':sha(base/'pre-gui'),'buildLog':'gui.log','buildLogSHA256':sha(base/'gui.log')},'backend':{'buildConfiguration':configuration,'mode':'built-from-snapshot','inputDigest':rd,'preSignFile':'pre-backend','preSignSHA256':sha(base/'pre-backend'),'buildLog':'backend.log','buildLogSHA256':sha(base/'backend.log')},'packaged':{'guiSHA256':sha(app/'Contents/MacOS/Synthetic'),'helperSHA256':sha(app/'Contents/Helpers/crewd')}};dump(base/'build-provenance.json',proof)
 validator=['python3',str(root/'scripts/dev/check-codex-first-provenance.py'),str(app)]
 def run(label,want):
  p=subprocess.run(validator,capture_output=True,text=True);(base/(label+'.log')).write_text(p.stdout+p.stderr);assert (p.returncode==0)==want,(label,p.stdout,p.stderr)
 run('valid-synthetic-structure',True)
 for label,change in [('declared-only',lambda p:p['backend'].update(mode='declared-unverified')),('different-rust-input',lambda p:p['backend'].update(inputDigest='2'*64)),('wrong-input-manifest',lambda p:p.update(inputManifestSHA256='3'*64)),('wrong-gui-source',lambda p:p.update(sourceRef='4'*40)),('wrong-packaged-binary',lambda p:p['packaged'].update(helperSHA256='5'*64)),('wrong-presign-binary',lambda p:p['gui'].update(preSignSHA256='6'*64))]:
  bad=copy.deepcopy(proof);change(bad);dump(base/'build-provenance.json',bad);run(label,False)
+for label,field,value in [('wrong-profile','profile','release'),('wrong-target','target','x86_64-apple-darwin'),('wrong-toolchain','toolchain','rustc incompatible'),('wrong-feature-set','features',['testkit']),('wrong-default-features','defaultFeatures',False),('wrong-effective-testkit','workspaceFeatures',{'crewd':[],'crewd-server':['testkit']})]:
+ bad=copy.deepcopy(proof);bad['backend']['buildConfiguration'][field]=value;dump(base/'build-provenance.json',bad);run(label,False)
 dump(base/'build-provenance.json',proof)
 p=snapshot/paths[0];original=p.read_bytes();p.write_text('mutated source');run('changed-source',False);p.write_bytes(original)
 extra=snapshot/'unrecorded';extra.write_text('extra');run('extra-source',False);extra.unlink()
@@ -51,8 +54,8 @@ evidence=base/'prebuilt-evidence';evidence.mkdir();rs=evidence/'source-rust';rs.
 for row in rust:
  p=rs/row['path'];p.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(snapshot/row['path'],p)
 shutil.copy2(base/'pre-backend',evidence/'backend-binary')
-(evidence/'rust.log').write_text('Snapshot: source-rust\nInputDigest: '+rd+'\nCommand: cd crewd && cargo build --locked -p crewd\nExit: 0\nsynthetic validator-only control\n')
-witness={'format':1,'sourceRef':'2'*40,'evidenceDirectory':evidence.name,'snapshotDirectory':rs.name,'files':rust,'rustInputDigest':rd,'binaryFile':'backend-binary','binarySHA256':sha(evidence/'backend-binary'),'buildLog':'rust.log','buildLogSHA256':sha(evidence/'rust.log')}
+(evidence/'rust.log').write_text('BuildConfiguration: '+json.dumps(configuration,sort_keys=True,separators=(',',':'))+'\n'+'Snapshot: source-rust\nInputDigest: '+rd+'\nCommand: cd crewd && cargo build --locked -p crewd\nExit: 0\nsynthetic validator-only control\n')
+witness={'format':1,'sourceRef':'2'*40,'evidenceDirectory':evidence.name,'snapshotDirectory':rs.name,'files':rust,'rustInputDigest':rd,'buildConfiguration':configuration,'binaryFile':'backend-binary','binarySHA256':sha(evidence/'backend-binary'),'buildLog':'rust.log','buildLogSHA256':sha(evidence/'rust.log')}
 dump(base/'backend-witness.json',witness)
 prebuilt=copy.deepcopy(proof);prebuilt['backend'].update(mode='verified-prebuilt',witnessFile='backend-witness.json',witnessSHA256=sha(base/'backend-witness.json'));dump(base/'build-provenance.json',prebuilt)
 run('different-ref-identical-complete-rust-inputs',True)
@@ -63,5 +66,5 @@ dump(base/'backend-witness.json',witness);prebuilt['backend']['witnessSHA256']=s
 shutil.copy2(base/'pre-backend',evidence/'backend-binary');run('restored-prebuilt',True)
 dump(base/'build-provenance.json',proof)
 entry=subprocess.run(check,capture_output=True,text=True);(base/'full-entry-green.log').write_text(entry.stdout+entry.stderr);assert entry.returncode==0,(entry.stdout,entry.stderr)
-print('PASS: small synthetic structure control plus 12 provenance mismatch refusals and independently matched prebuilt inputs; not real app build proof')
+print('PASS: small synthetic structure control plus 18 provenance/configuration mismatch refusals and independently matched prebuilt inputs; not real app build proof')
 PY
