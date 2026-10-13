@@ -1723,6 +1723,15 @@ pub async fn work_block(
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work_block::block(tx, &by, p)).await
 }
+pub async fn work_reassign_lost(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkAssignParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::work_lost::reassign(tx, &by, p)).await
+}
+
 pub async fn work_assign(
     st: &AppState,
     session: &str,

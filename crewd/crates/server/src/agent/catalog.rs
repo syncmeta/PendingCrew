@@ -247,6 +247,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("note", Str, true),
         ],
     )),
+    idempotent(all(
+        "work_item_reassign_lost",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("owner", Str, true),
+            p("note", Str, true),
+        ],
+    )),
     talk(all(
         "post",
         &[
@@ -628,7 +637,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 39);
+        assert_eq!(CATALOG.len(), 40);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -661,8 +670,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 28);
-        assert_eq!(captain.len(), 39);
+        assert_eq!(worker.len(), 29);
+        assert_eq!(captain.len(), 40);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -724,6 +733,7 @@ mod tests {
                 "work_item_update",
                 "work_item_block",
                 "work_item_assign",
+                "work_item_reassign_lost",
                 "channel_listen",
                 "set_session_profile",
                 "rename_crew",

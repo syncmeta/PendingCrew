@@ -1708,7 +1708,11 @@ mod tests {
         let v = hello(&st, Value::Null).await.unwrap();
         assert_eq!(v["apiVersion"], 3);
         assert_eq!(v["minApiVersion"], crewd_proto::MIN_API_VERSION);
-        assert_eq!(v["capabilities"], json!([]), "没有编排：没有能力");
+        assert_eq!(
+            v["capabilities"],
+            json!(["work.reassignLost"]),
+            "持久工作能力不要求编排"
+        );
         let build = &v["build"];
         assert!(
             build["gitSha"].as_str().is_some_and(|s| !s.is_empty()),
@@ -1730,7 +1734,8 @@ mod tests {
                 "crewd.hibernate",
                 "wake.explain",
                 "message.receipts",
-                "settings"
+                "settings",
+                "work.reassignLost"
             ])
         );
     }

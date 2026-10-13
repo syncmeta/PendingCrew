@@ -185,13 +185,14 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .arg("current", API_VERSION.to_string()),
                 ));
             }
-            let capabilities = match state.orchestra.get() {
+            let mut capabilities: Vec<String> = match state.orchestra.get() {
                 Some(_) => orchestra::CAPABILITIES
                     .iter()
                     .map(|c| c.to_string())
                     .collect(),
                 None => Vec::new(),
             };
+            capabilities.push("work.reassignLost".into());
             to_value(Hello {
                 server: "crewd".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -463,6 +464,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: WorkTransferResolveParams = parse_params(p)?;
             write(state, move |tx| {
                 crewd_collab::work_transfer::withdraw(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::WORK_REASSIGN_LOST => {
+            let p: WorkAssignParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work_lost::reassign(tx, &Sender::Human, p)
             })
             .await
         }

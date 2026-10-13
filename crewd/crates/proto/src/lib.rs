@@ -78,6 +78,7 @@ pub mod methods {
     pub const WORK_TRANSFER_ACCEPT: &str = "work.transferAccept";
     pub const WORK_TRANSFER_WITHDRAW: &str = "work.transferWithdraw";
     pub const WORK_ASSIGN: &str = "work.assign";
+    pub const WORK_REASSIGN_LOST: &str = "work.reassignLost";
     pub const WORK_HISTORY: &str = "work.history";
     pub const WORK_PATROL: &str = "work.patrol";
     pub const WORK_LIST: &str = "work.list";
@@ -129,6 +130,7 @@ pub mod methods {
         WORK_TRANSFER_ACCEPT,
         WORK_TRANSFER_WITHDRAW,
         WORK_ASSIGN,
+        WORK_REASSIGN_LOST,
         WORK_HISTORY,
         WORK_PATROL,
         WORK_LIST,
@@ -590,6 +592,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_TRANSFER_WITHDRAW,
             m(sub::<WorkTransferResolveParams>(g), sub::<WorkPlan>(g)),
+        ),
+        (
+            methods::WORK_REASSIGN_LOST,
+            m(sub::<WorkAssignParams>(g), sub::<WorkPlan>(g)),
         ),
         (
             methods::WORK_ASSIGN,

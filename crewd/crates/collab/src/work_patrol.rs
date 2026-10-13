@@ -50,16 +50,23 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
                 owner_facts.is_some_and(|o| o.0.is_some()),
             )
             .ok_or_else(|| StoreError::Invalid("patrol item has no authoritative state".into()))?;
-        let lost = facts.lost.map(|cause| match cause {
-            LostCause::Unrecoverable => WorkPatrolLost::Unrecoverable {
-                resume_failed_at: owner_facts
-                    .and_then(|o| o.0.clone())
-                    .expect("used actual failure fact"),
-            },
-            LostCause::Silent { missed } => WorkPatrolLost::Silent {
-                missed_checks: missed,
-            },
-        });
+        let paused = match &item.owner {
+            Some(o) => crate::wakes::automatic_work_paused(conn, o.as_str())?,
+            None => false,
+        };
+        let lost = facts
+            .lost
+            .filter(|c| !paused || matches!(c, LostCause::Unrecoverable))
+            .map(|cause| match cause {
+                LostCause::Unrecoverable => WorkPatrolLost::Unrecoverable {
+                    resume_failed_at: owner_facts
+                        .and_then(|o| o.0.clone())
+                        .expect("used actual failure fact"),
+                },
+                LostCause::Silent { missed } => WorkPatrolLost::Silent {
+                    missed_checks: missed,
+                },
+            });
         let stop_escalated = owner_facts.is_some_and(|o| o.1) && !facts.stop_violations.is_empty();
         let long_waits_truncated = facts.long_waits.len() > 8;
         let long_waits = facts

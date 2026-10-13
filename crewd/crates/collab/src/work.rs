@@ -228,6 +228,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("work-lost:") {
+        return crate::work_lost::followup_note(conn, row);
+    }
     if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("work-transfer:") {
         return crate::work_transfer::followup_note(conn, row);
     }
@@ -244,6 +247,9 @@ pub(crate) fn followup_note(
         || !(row.source.starts_with("work-done:") || row.source.starts_with("work-assigned:"))
     {
         return Ok(FollowupNote::Ordinary);
+    }
+    if crate::wakes::automatic_work_paused(conn, &row.session)? {
+        return Ok(FollowupNote::Stale);
     }
     let note: StoredFollowup = serde_json::from_str(row.note.as_deref().unwrap_or(""))
         .map_err(|_| invalid("work follow-up metadata is invalid"))?;

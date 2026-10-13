@@ -152,6 +152,7 @@ pub(crate) fn followup_note(conn: &Connection, row: &wakes::WakeRow) -> Result<w
         return Ok(work::FollowupNote::Stale);
     };
     if crews::is_archived(conn, &r.crew_id)?
+        || wakes::automatic_work_paused(conn, &row.session)?
         || wakes::human_stop_floor(conn, &row.session)? != n.stop_floor
         || row.id <= n.stop_floor
     {

@@ -5806,6 +5806,14 @@
         "$ref": "#/$defs/WorkPatrolPage"
       }
     },
+    "work.reassignLost": {
+      "params": {
+        "$ref": "#/$defs/WorkAssignParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
     "work.transferAccept": {
       "params": {
         "$ref": "#/$defs/WorkTransferResolveParams"

@@ -406,6 +406,11 @@ fn rpc_drives_every_client_method() {
             Code(-32004),
         ),
         (
+            "work.reassignLost",
+            r#"{"id":"W999","expectedRevision":"1","owner":"worker-2222bbbb","note":"loss"}"#,
+            Code(-32004),
+        ),
+        (
             "work.transferRequest",
             r#"{"id":"W999","expectedRevision":"1","to":"worker-2222bbbb","note":"handoff"}"#,
             Code(-32004),
@@ -550,12 +555,17 @@ fn rpc_drives_every_client_method() {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             created_work.push(first["id"].as_str().unwrap().to_owned());
             for (method, expected) in [
+                ("work.reassignLost", -32602),
                 ("work.transferRequest", -32003),
                 ("work.transferAccept", -32009),
                 ("work.transferWithdraw", -32009),
             ] {
                 let mut args =
                     serde_json::json!({"id":first["id"],"expectedRevision":first["revision"]});
+                if method == "work.reassignLost" {
+                    args["owner"] = serde_json::json!("worker-2222bbbb");
+                    args["note"] = serde_json::json!("No caller-declared loss");
+                }
                 if method == "work.transferRequest" {
                     args["to"] = serde_json::json!("worker-2222bbbb");
                     args["note"] = serde_json::json!("Human cannot impersonate an owner");

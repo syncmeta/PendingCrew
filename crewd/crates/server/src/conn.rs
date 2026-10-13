@@ -272,6 +272,7 @@ async fn request_step(
                     req.method.as_str(),
                     methods::TODO_CREATE
                         | methods::TODO_CLOSE
+                        | methods::WORK_REASSIGN_LOST
                         | methods::WORK_TRANSFER_REQUEST
                         | methods::WORK_TRANSFER_ACCEPT
                         | methods::WORK_TRANSFER_WITHDRAW

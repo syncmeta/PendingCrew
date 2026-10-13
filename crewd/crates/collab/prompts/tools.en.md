@@ -1005,6 +1005,21 @@ New owner's actual session ID, not a role or human identity.
 ## work_item_assign.note
 Nonempty assignment or claim reason.
 
+## work_item_reassign_lost
+Reassign only after the daemon verifies the current owner cannot recover, or real delivered checkpoints exceed the existing silence threshold and are due. A caller cannot declare loss. Healthy, merely stopped or unknown owners refuse; ordinary workers cannot take another owner's work. The current revision and actual target session are required. Success records lost-owner history and a guarded compact notification; human stopping still applies.
+
+## work_item_reassign_lost.id
+Global W ID.
+
+## work_item_reassign_lost.expected_revision
+Observed current revision as a string; review returned facts on conflict.
+
+## work_item_reassign_lost.owner
+New owner's actual session ID, not a role or human identity.
+
+## work_item_reassign_lost.note
+Nonempty assignment or claim reason.
+
 ## work_item_history
 Read original handoff history only when needed; latest changes first. Full reasons are returned, without goal or acceptance text. This read does not wake anyone or change progress. The recorded actor role describes that historical action, not current authority.
 

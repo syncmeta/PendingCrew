@@ -164,6 +164,22 @@ pub fn human_stop_floor(conn: &Connection, session: &str) -> Result<i64> {
     }
 }
 
+/// Explicit Human stop pauses automatic work reminders until a real resume.
+/// A zero floor still records a stop before the first wake; absence differs from zero.
+pub fn automatic_work_paused(conn: &Connection, session: &str) -> Result<bool> {
+    let Some(s) = crewd_store::sessions::get(conn, session)? else {
+        return Ok(false);
+    };
+    if s.desired != crewd_proto::Desired::Stopped {
+        return Ok(false);
+    }
+    let recorded = crewd_store::meta_get(conn, &format!("{STOP_FLOOR_PREFIX}{session}"))?.is_some();
+    if recorded {
+        let _ = human_stop_floor(conn, session)?;
+    }
+    Ok(recorded)
+}
+
 /// 人停：停止状态 + 截至本事务的 wake-ID 取消意图 + 全部 pending 作废，同一个 Tx、全有或全无。
 /// inflight 只记意图、不提前写终态：迟到的真实 Delivered 仍须原子确认行与游标；未确认的旧行后续退回/失败/boot
 /// 都经共享 event_after_cancel 作废（含没有内存主人的行）。返回本次作废的 pending，给 Port 发布变化。

@@ -31,6 +31,7 @@ pub mod turn_trace;
 pub mod wakes;
 pub mod work;
 pub mod work_block;
+pub mod work_lost;
 pub mod work_patrol;
 pub mod work_transfer;
 pub mod worldview;

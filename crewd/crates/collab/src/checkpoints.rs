@@ -52,6 +52,9 @@ struct Resolved {
     local: WorkId,
 }
 fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Result<Vec<Resolved>> {
+    if wakes::automatic_work_paused(conn, &row.session)? {
+        return Ok(Vec::new());
+    }
     let book = asks::load_org(conn)?;
     let due: BTreeSet<WorkId> = book
         .due_checkpoints(Ts(now))
@@ -143,7 +146,9 @@ pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
     }
     let mut count = 0;
     for (owner, mut targets) in owners {
-        if crewd_store::sessions::get(tx.conn(), &owner)?.is_none() {
+        if wakes::automatic_work_paused(tx.conn(), &owner)?
+            || crewd_store::sessions::get(tx.conn(), &owner)?.is_none()
+        {
             continue;
         }
         let active:bool=tx.conn().query_row("SELECT EXISTS(SELECT 1 FROM wakes WHERE session_id=?1 AND kind='checkpoint' AND source LIKE 'work-check:%' AND state IN ('pending','inflight'))",[&owner],|r|r.get(0))?;

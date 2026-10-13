@@ -326,7 +326,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            28
+            29
         );
         let mut cap = attached(&f, &f.captain).await;
         assert_eq!(
@@ -336,7 +336,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            39
+            40
         );
         requirement_readable(&f, &mut w).await;
         requirement_readable(&f, &mut cap).await;
@@ -389,7 +389,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            39
+            40
         );
         let r = w
             .call(methods::CALL, json!({"tool": "list_sessions"}))
@@ -500,7 +500,7 @@ mod tests {
         assert_eq!(code, -32009);
         // Still the worker: the refused attach changed nothing.
         let n = c.call(methods::TOOLS, json!(null)).await.unwrap();
-        assert_eq!(n.as_array().unwrap().len(), 28);
+        assert_eq!(n.as_array().unwrap().len(), 29);
         let a = c
             .call(
                 methods::ATTACH,

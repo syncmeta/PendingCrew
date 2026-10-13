@@ -173,6 +173,32 @@ pub async fn assign(cx: &Ctx<'_>, v: Value) -> CallResult {
     )
 }
 
+pub async fn reassign_lost(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: Assign = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::work_reassign_lost(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkAssignParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+                owner: a.owner,
+                note: a.note,
+            },
+        )
+        .await
+        .map(|p| {
+            let mut s = crewd_proto::WorkSummary::from(p);
+            s.note = None;
+            s
+        }),
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct History {

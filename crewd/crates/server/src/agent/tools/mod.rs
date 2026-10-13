@@ -166,6 +166,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_transfer_accept" => work::transfer_accept(&cx, args).await,
         "work_item_transfer_withdraw" => work::transfer_withdraw(&cx, args).await,
         "work_item_assign" => work::assign(&cx, args).await,
+        "work_item_reassign_lost" => work::reassign_lost(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
         "read_channel" => messaging::read_channel(&cx, args).await,
         "search" => messaging::search(&cx, args).await,
@@ -360,7 +361,7 @@ mod tests {
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 39);
+        assert_eq!(catalog::CATALOG.len(), 40);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

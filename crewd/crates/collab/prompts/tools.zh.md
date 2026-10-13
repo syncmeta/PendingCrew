@@ -1005,6 +1005,21 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 ## work_item_assign.note
 指派或认领理由，不能为空。
 
+## work_item_reassign_lost
+仅在daemon核实当前负责人恢复失败，或真实投递的检查点达到既有失联阈值且再次到期后重派。调用方不能自称失联；健康、仅停止或未知负责人拒绝，普通成员不能夺取他人工作。需要当前修订与实际目标session；成功记录失联重派历史并持久通知，通知仍遵守人类停止。
+
+## work_item_reassign_lost.id
+全局 W 号。
+
+## work_item_reassign_lost.expected_revision
+读取到的当前修订，作为字符串；冲突时先核对返回事实。
+
+## work_item_reassign_lost.owner
+新负责人的实际 session ID，不能填写角色或人类身份。
+
+## work_item_reassign_lost.note
+指派或认领理由，不能为空。
+
 ## work_item_history
 需要时读取原始交接历史，最新记录在前。返回完整交接说明，不重复目标或验收文字；读取不唤醒成员，也不改变工作进展。历史操作者角色描述当时的行为，不代表当前权限。
 
