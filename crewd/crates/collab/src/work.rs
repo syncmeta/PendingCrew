@@ -77,6 +77,7 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
         }
     });
     Ok(WorkPlan {
+        channel_association: None,
         id: r.id(),
         crew_id: r.crew_id.clone(),
         frozen: crews::is_archived(conn, &r.crew_id)?,
@@ -514,14 +515,89 @@ pub fn create(
     by: &crate::Sender,
     p: crewd_proto::WorkCreateParams,
 ) -> Result<WorkPlan> {
+    use crewd_store::channel_work::{self as requests, CreationWitness};
+    if p.channel_id.is_some() && p.request_id.is_none() {
+        return Err(crate::resource_acl::invalid("requestId"));
+    }
+    let creator = match by {
+        crate::Sender::Human => "human".to_string(),
+        crate::Sender::Session(id) => format!("session:{id}"),
+        crate::Sender::System => {
+            return Err(crate::CollabError::Forbidden(Refusal::new(
+                Code::WorkActorForbidden,
+            )));
+        }
+    };
+    let request = p
+        .request_id
+        .as_deref()
+        .map(crate::resource_acl::uuid)
+        .transpose()?;
+    let mut witness_payload = p.clone();
+    witness_payload.request_id = None;
+    let digest = crate::resource_acl::digest(&witness_payload)?;
+    if let Some(request) = &request
+        && let Some(old) = requests::creation(tx.conn(), request)?
+    {
+        if old.digest != digest
+            || old.creator_key != creator
+            || old.crew_id != p.crew_id
+            || old.source_channel_id != p.channel_id
+        {
+            return Err(crate::CollabError::Conflict(
+                Refusal::new(Code::ResourceRequestConflict).arg("request", request),
+            ));
+        }
+        let mut result = get(tx.conn(), &old.work_id)?;
+        if let Some(ch) = &p.channel_id {
+            result.channel_association = Some(crate::channel_work::association(
+                tx.conn(),
+                by,
+                ch,
+                &crewd_proto::ChannelWorkObject {
+                    kind: crewd_proto::ChannelWorkKind::Work,
+                    id: result.id.clone(),
+                },
+            )?);
+        }
+        return Ok(result);
+    }
+    if let Some(ch) = &p.channel_id {
+        crate::channel_work::authorize(tx.conn(), by, ch, true)?;
+    }
     let actor = actor(tx.conn(), by, &p.crew_id)?;
     let item = prepare_item(tx.conn(), &actor, p.clone())?;
     let local = asks::with_book(tx, &p.crew_id, |b, now| {
         b.create_item(&actor, now, item).map(|a| a.value)
     })?;
     let id = reference(tx.conn(), ObjectKind::Plan, &p.crew_id, local)?;
+    if let Some(request) = &request {
+        requests::record_creation(
+            tx.conn(),
+            request,
+            &CreationWitness {
+                work_id: id.clone(),
+                crew_id: p.crew_id.clone(),
+                creator_key: creator,
+                source_channel_id: p.channel_id.clone(),
+                digest,
+            },
+        )?;
+    }
     changed(tx, by, &p.crew_id, &id)?;
-    get(tx.conn(), &id)
+    let mut result = get(tx.conn(), &id)?;
+    if let Some(ch) = &p.channel_id {
+        result.channel_association = Some(crate::channel_work::link_created(
+            tx,
+            by,
+            ch,
+            crewd_proto::ChannelWorkObject {
+                kind: crewd_proto::ChannelWorkKind::Work,
+                id,
+            },
+        )?);
+    }
+    Ok(result)
 }
 pub(crate) fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result<()> {
     if item.revision != revision {

@@ -4,12 +4,14 @@
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
 pub mod asks;
 pub mod causal;
+pub mod channel_work;
 pub mod channels;
 pub mod checkpoints;
 pub mod crews;
 pub mod cursor_reservations;
 pub mod cursors;
 pub mod directory;
+pub mod documents;
 #[cfg(test)]
 mod global_workflow_core;
 pub mod hibernate;
@@ -20,6 +22,7 @@ pub mod prompts;
 pub mod refusal;
 pub mod render;
 pub mod requirements;
+pub(crate) mod resource_acl;
 pub mod restart;
 pub mod sessions;
 pub mod settings;
@@ -28,6 +31,7 @@ pub mod stop_checks;
 mod testkit;
 pub mod todos;
 pub mod turn_trace;
+pub mod view_folders;
 pub mod wakes;
 pub mod work;
 pub mod work_block;
@@ -70,6 +74,21 @@ pub enum Change {
     },
     SessionChanged {
         session_id: String,
+    },
+    FolderChanged {
+        crew_id: String,
+        view: crewd_proto::FolderView,
+        tree_revision: String,
+    },
+    ChannelWorkChanged {
+        channel_id: String,
+        link_revision: String,
+    },
+    DocumentChanged {
+        crew_id: String,
+        id: String,
+        revision: String,
+        deleted: bool,
     },
     WorkChanged {
         crew_id: String,
@@ -362,4 +381,9 @@ mod tests {
         let (ts, _) = run(&mut s, 0, |tx| Ok(tx.now_ts())).unwrap();
         assert_eq!(ts, "1970-01-01T00:00:00.000Z");
     }
+}
+
+/// Finite invalid resource input for trusted adapters.
+pub fn resource_invalid(field: &str) -> CollabError {
+    resource_acl::invalid(field)
 }

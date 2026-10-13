@@ -435,7 +435,7 @@ git worktree add 失败: {path}. {detail}
 
 ## crew.work_referenced
 
-机组 {crew} 不能永久删除：其他机组仍有 {total} 个对象引用它的工作或 session。引用：{ids}。请先处理这些关系；已移除机组继续只读。
+机组 {crew} 不能永久删除：其他机组仍有 {total} 个对象引用它的工作、session、文档或群分类。引用：{ids}。请先处理这些关系；已移除机组继续只读。
 
 
 ## todo.human_only
@@ -465,3 +465,39 @@ expectedStatus 必须是原始需求状态。
 ## todo.status_conflict
 
 原始需求 {id} 已从 {expected} 变成 {actual}；刷新后再裁定。
+
+## resource.invalid
+{field}无效，请修正该字段后重试。
+
+## resource.not_found
+对象{id}不可用，请刷新当前视图。
+
+## resource.forbidden
+当前连接没有所需的实际机组或对象访问权限。
+
+## resource.request_conflict
+请求{request}已对应不同的原始内容。
+
+## document.revision_conflict
+文档{id}已经变化，请核对当前元数据后编辑。
+
+## document.deleted
+文档{id}已删除，保留的历史只能读取。
+
+## view_folder.revision_conflict
+文件夹分类已变化，请核对当前修订。
+
+## view_folder.limit
+当前范围上限为{limit}，请减少这组内容。
+
+## view_folder.cycle
+此移动会形成循环或超过文件夹深度上限。
+
+## view_folder.object_scope
+对象不属于此视图或当前不可见。
+
+## channel.work_revision_conflict
+群工作引用已经变化。请刷新当前群的工作视图再重试。
+
+## channel.work_cursor_expired
+群工作引用已经变化。请刷新当前群的工作视图再重试。

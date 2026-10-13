@@ -78,7 +78,11 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
             note: c.note.clone(),
             at: crewd_store::ts_from_ms(c.at.0),
         });
-    Ok(RequirementDetail { todo, closure })
+    Ok(RequirementDetail {
+        todo,
+        closure,
+        channel_association: None,
+    })
 }
 pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<RequirementDetail> {
     human(by)?;
@@ -102,6 +106,8 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<Requi
                 .as_ref()
                 .and_then(|m| m["requirementRequestId"].as_str())
                 != Some(request.as_str())
+            || marker.as_ref().and_then(|m| m["sourceChannelId"].as_str())
+                != p.channel_id.as_deref()
         {
             return Err(CollabError::Conflict(
                 Refusal::new(Code::TodoRequestConflict).arg("request", request),
@@ -112,7 +118,22 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<Requi
             [&raw_id],
             |r| r.get(0),
         )?;
-        return get(tx.conn(), &id);
+        let mut detail = get(tx.conn(), &id)?;
+        if let Some(ch) = &p.channel_id {
+            detail.channel_association = Some(crate::channel_work::association(
+                tx.conn(),
+                by,
+                ch,
+                &crewd_proto::ChannelWorkObject {
+                    kind: crewd_proto::ChannelWorkKind::Requirement,
+                    id,
+                },
+            )?);
+        }
+        return Ok(detail);
+    }
+    if let Some(ch) = &p.channel_id {
+        crate::channel_work::authorize(tx.conn(), by, ch, true)?;
     }
     if p.text.trim().is_empty() {
         return Err(invalid(Code::TodoTextEmpty));
@@ -142,7 +163,7 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<Requi
     crewd_store::todos::insert(
         tx.conn(),
         &t,
-        Some(&serde_json::json!({"requirementRequestId":request})),
+        Some(&serde_json::json!({"requirementRequestId":request,"sourceChannelId":p.channel_id})),
     )?;
     let id: String = tx.conn().query_row(
         "SELECT '#'||number FROM object_refs WHERE raw_todo_id=?1 AND kind='requirement'",
@@ -178,7 +199,19 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<Requi
             },
         )?;
     }
-    get(tx.conn(), &id)
+    let mut detail = get(tx.conn(), &id)?;
+    if let Some(ch) = &p.channel_id {
+        detail.channel_association = Some(crate::channel_work::link_created(
+            tx,
+            by,
+            ch,
+            crewd_proto::ChannelWorkObject {
+                kind: crewd_proto::ChannelWorkKind::Requirement,
+                id,
+            },
+        )?);
+    }
+    Ok(detail)
 }
 pub fn close(tx: &mut Tx<'_>, by: &Sender, p: TodoCloseParams) -> Result<RequirementDetail> {
     human(by)?;
@@ -270,6 +303,7 @@ mod tests {
     use crate::testkit::{NOW, err, ok, store};
     fn input() -> TodoCreateParams {
         TodoCreateParams {
+            channel_id: None,
             request_id: "d92c3929-67f8-4c67-8d17-1c7a1cd1f381".into(),
             crew_id: "crew-a".into(),
             text: "  immutable source\n正文原样  ".into(),

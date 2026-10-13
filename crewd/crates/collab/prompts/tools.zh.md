@@ -1103,3 +1103,225 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 ## work_item_transfer_withdraw.expected_revision
 
 当前修订号字符串，原样传回。
+
+## r.resource_result
+{result}
+
+## document_create
+创建机组共用文档，UUID保留原始请求证明；重试只返回当前元数据，不重复正文或唤醒模型。
+
+## document_create.request_id
+原始创建请求的稳定UUID，未知结果时保留原始内容确认。
+
+## document_create.crew_id
+实际机组ID。
+
+## document_create.title
+非空标题，最多512个UTF8字节。
+
+## document_create.body
+完整正文，最多1MiB UTF8字节。
+
+## document_get
+按需读取有限UTF8字节正文块，后续块必须提供已读取修订；已删文档历史仍可读取。
+
+## document_get.id
+稳定对象UUID。
+
+## document_get.offset
+UTF8字节偏移，必须在字符边界，默认0。
+
+## document_get.limit
+在声明范围内的页数或正文块大小。
+
+## document_get.expected_revision
+实际已读取的文档当前修订，不猜测。
+
+## document_list
+仅列出有限元数据，不自动带入正文。
+
+## document_list.crew_id
+实际机组ID。
+
+## document_list.after
+来自相同查询范围和修订的不透明游标。
+
+## document_list.limit
+在声明范围内的页数或正文块大小。
+
+## document_list.include_deleted
+明确包含软删除元数据，默认false。
+
+## document_update
+按当前修订替换标题和正文；小修改优先document_patch，避免重复全文。
+
+## document_update.id
+稳定对象UUID。
+
+## document_update.expected_revision
+实际已读取的文档当前修订，不猜测。
+
+## document_update.title
+非空标题，最多512个UTF8字节。
+
+## document_update.body
+完整正文，最多1MiB UTF8字节。
+
+## document_delete
+按已读取修订软删除，保留正文和审计，不自动唤醒。
+
+## document_delete.id
+稳定对象UUID。
+
+## document_delete.expected_revision
+实际已读取的文档当前修订，不猜测。
+
+## document_patch
+原子修改已读取修订的UTF8字节跨度，最多20个不重叠修改，新文本合计16KiB，只返回元数据。
+
+## document_patch.id
+稳定对象UUID。
+
+## document_patch.expected_revision
+实际已读取的文档当前修订，不猜测。
+
+## document_patch.edits
+精确字节范围{start,end,text}，end不包含末字节且不得重叠。
+
+## view_folder_list
+读取一页有限元数据或引用，游标绑定机组、视图、类型和修订；过期明确冲突，不静默全量重读。
+
+## view_folder_list.crew_id
+实际机组ID。
+
+## view_folder_list.view
+messages、todo、documents、progress，与工作图父级独立。
+
+## view_folder_list.part
+folders或assignments，默认folders。
+
+## view_folder_list.after
+来自相同查询范围和修订的不透明游标。
+
+## view_folder_list.limit
+在声明范围内的页数或正文块大小。
+
+## view_folder_create
+用不可变请求UUID创建共用分类文件夹，与工作父级、状态和负责人独立，只返回简短回执。
+
+## view_folder_create.crew_id
+实际机组ID。
+
+## view_folder_create.view
+messages、todo、documents、progress，与工作图父级独立。
+
+## view_folder_create.request_id
+原始创建请求的稳定UUID，未知结果时保留原始内容确认。
+
+## view_folder_create.expected_tree_revision
+实际读取的机组、视图整体修订，冲突时核对有限事实。
+
+## view_folder_create.name
+人工填写的共用名称，去空白后非空，最多256个UTF8字节。
+
+## view_folder_create.parent_id
+同范围父文件夹UUID，省略表示根。
+
+## view_folder_update
+按整个范围修订，在同机组视图内改名、移动或排序。
+
+## view_folder_update.crew_id
+实际机组ID。
+
+## view_folder_update.view
+messages、todo、documents、progress，与工作图父级独立。
+
+## view_folder_update.id
+稳定对象UUID。
+
+## view_folder_update.expected_tree_revision
+实际读取的机组、视图整体修订，冲突时核对有限事实。
+
+## view_folder_update.name
+人工填写的共用名称，去空白后非空，最多256个UTF8字节。
+
+## view_folder_update.parent_id
+同范围父文件夹UUID，省略表示根。
+
+## view_folder_update.position
+移除当前文件夹后的同级位置，从0开始。
+
+## view_folder_delete
+子文件夹上提到父级，直接内容回到未分类，不删除文档、工作、消息或生命周期历史。
+
+## view_folder_delete.crew_id
+实际机组ID。
+
+## view_folder_delete.view
+messages、todo、documents、progress，与工作图父级独立。
+
+## view_folder_delete.id
+稳定对象UUID。
+
+## view_folder_delete.expected_tree_revision
+实际读取的机组、视图整体修订，冲突时核对有限事实。
+
+## view_folder_assign
+分类一个实际可见的稳定对象，省略folder_id即移出分类；实时检查权限，不自动唤醒或改变工作生命周期。
+
+## view_folder_assign.crew_id
+实际机组ID。
+
+## view_folder_assign.view
+messages、todo、documents、progress，与工作图父级独立。
+
+## view_folder_assign.expected_tree_revision
+实际读取的机组、视图整体修订，冲突时核对有限事实。
+
+## view_folder_assign.object
+实际可见的稳定对象{kind,id}，kind必须匹配所选视图。
+
+## view_folder_assign.folder_id
+同范围文件夹UUID，省略则移出分类。
+
+## channel_work_list
+读取真实可见群的工作引用，返回有限标题和同一全局#/W/H的权威状态。分页绑定引用版本和来源版本；过期游标明确冲突。不会唤醒模型。
+
+## channel_work_link
+用引用版本CAS把现有全局工作关联到可见且活跃的群。不改变工作父项、负责人或状态，不唤醒成员。
+
+## channel_work_unlink
+用引用版本CAS只解除群关联。原需求、计划、人类问题及历史保留，不唤醒成员。
+
+## channel_work_list.channel_id
+实际群ID；实时成员资格决定可见性。
+
+## channel_work_list.after
+该群返回的next不透明游标，不自行构造。
+
+## channel_work_list.limit
+每页1–100项，默认50。
+
+## channel_work_link.channel_id
+实际可见群ID。
+
+## channel_work_link.expected_link_revision
+当前群视图的linkRevision十进制文本。
+
+## channel_work_link.object
+现有{kind:requirement|work|humanTask,id:全局#/W/H}，不新建生命周期对象。
+
+## channel_work_unlink.channel_id
+实际可见群ID。
+
+## channel_work_unlink.expected_link_revision
+当前群视图的linkRevision十进制文本。
+
+## channel_work_unlink.object
+只从本群解除的现有全局#/W/H引用。
+
+## work_item_create.request_id
+可选不可变UUID创建键，带channel_id时必填。只确认原始正文；返回同一工作的当前视图及当前群关联，已解除的关联不会重建。
+
+## work_item_create.channel_id
+可选实际可见群ID；同事务创建并关联计划，须有request_id。关联只是创建回执，不是永久工作字段。

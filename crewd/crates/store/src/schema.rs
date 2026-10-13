@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -665,9 +665,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=8).contains(&target) {
+    if !(4..=9).contains(&target) {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 8".into(),
+            "historical fixture supports versions 4 through 9".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -697,6 +697,9 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
     if target >= 8 {
         migrate_v8(conn)?;
     }
+    if target >= 9 {
+        migrate_v9(conn)?;
+    }
     Ok(())
 }
 
@@ -709,6 +712,94 @@ fn migrate_v9(conn: &Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+// Additive document/classification and channel-reference storage shares the protected chain.
+pub(crate) fn migrate_v10(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(V10)?;
+    tx.commit()?;
+    Ok(())
+}
+const V10: &str = r#"-- Candidate schema10. Apply only via normal protected schema migration transaction.
+CREATE TABLE documents(
+ id TEXT PRIMARY KEY, crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+ title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 512), body TEXT NOT NULL,
+ body_length INTEGER NOT NULL CHECK(body_length>=0 AND body_length<=1048576 AND body_length=length(CAST(body AS BLOB))),
+ revision INTEGER NOT NULL CHECK(revision>0),
+ created_by TEXT NOT NULL CHECK(json_valid(created_by)), updated_by TEXT NOT NULL CHECK(json_valid(updated_by)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+);
+CREATE INDEX documents_crew_cursor ON documents(crew_id,id);
+CREATE TABLE document_requests(
+ request_id TEXT PRIMARY KEY, document_id TEXT NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
+ payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32)
+);
+CREATE TABLE document_events(
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+ document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision>0), actor TEXT NOT NULL CHECK(json_valid(actor)),
+ kind TEXT NOT NULL CHECK(kind IN ('created','updated','deleted')),
+ title TEXT NOT NULL, body TEXT, at TEXT NOT NULL,
+ UNIQUE(document_id,revision)
+);
+CREATE TABLE view_folder_scopes(
+ crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+ view TEXT NOT NULL CHECK(view IN ('messages','todo','documents','progress')),
+ revision INTEGER NOT NULL CHECK(revision>=0), PRIMARY KEY(crew_id,view)
+);
+CREATE TABLE view_folders(
+ id TEXT PRIMARY KEY, crew_id TEXT NOT NULL, view TEXT NOT NULL,
+ name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256), parent_id TEXT REFERENCES view_folders(id), position INTEGER NOT NULL CHECK(position>=0),
+ FOREIGN KEY(crew_id,view) REFERENCES view_folder_scopes(crew_id,view) ON DELETE CASCADE
+);
+CREATE INDEX view_folders_scope ON view_folders(crew_id,view,parent_id,position,id);
+CREATE TABLE view_folder_requests(
+ request_id TEXT PRIMARY KEY, crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+ folder_id TEXT NOT NULL, payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32)
+ -- folder_id intentionally not cascade-deleted: a repeated create after folder deletion
+ -- confirms the original operation; it must not allocate a replacement folder.
+);
+CREATE TABLE view_folder_assignments(
+ crew_id TEXT NOT NULL, view TEXT NOT NULL,
+ object_kind TEXT NOT NULL CHECK(object_kind IN ('channel','requirement','work','humanTask','document')),
+ object_id TEXT NOT NULL, folder_id TEXT NOT NULL REFERENCES view_folders(id) ON DELETE CASCADE,
+ PRIMARY KEY(crew_id,view,object_kind,object_id),
+ FOREIGN KEY(crew_id,view) REFERENCES view_folder_scopes(crew_id,view) ON DELETE CASCADE
+);
+CREATE INDEX view_folder_object_refs ON view_folder_assignments(object_kind,object_id,crew_id);
+CREATE TABLE view_folder_events(
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ crew_id TEXT NOT NULL, view TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0),
+ actor TEXT NOT NULL CHECK(json_valid(actor)), body TEXT NOT NULL CHECK(json_valid(body)), at TEXT NOT NULL,
+ UNIQUE(crew_id,view,revision),
+ FOREIGN KEY(crew_id,view) REFERENCES view_folder_scopes(crew_id,view) ON DELETE CASCADE
+);
+CREATE TABLE channel_work_scopes(
+ channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision>=0)
+);
+CREATE TABLE channel_work_links(
+ channel_id TEXT NOT NULL REFERENCES channel_work_scopes(channel_id) ON DELETE CASCADE,
+ object_kind TEXT NOT NULL CHECK(object_kind IN ('requirement','work','humanTask')),
+ object_id TEXT NOT NULL,
+ source_crew_id TEXT NOT NULL REFERENCES crews(id),
+ PRIMARY KEY(channel_id,object_kind,object_id)
+);
+CREATE INDEX channel_work_source_refs ON channel_work_links(source_crew_id,channel_id);
+CREATE TABLE channel_work_events(
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ channel_id TEXT NOT NULL REFERENCES channel_work_scopes(channel_id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision>0),actor TEXT NOT NULL CHECK(json_valid(actor)),
+ body TEXT NOT NULL CHECK(json_valid(body)),at TEXT NOT NULL,UNIQUE(channel_id,revision)
+);
+CREATE TABLE work_creation_requests(
+ request_id TEXT PRIMARY KEY, crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+ work_id TEXT NOT NULL UNIQUE, creator_key TEXT NOT NULL,
+ source_channel_id TEXT, payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32)
+);
+PRAGMA user_version=10;
+"#;
 
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
@@ -758,6 +849,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 9 {
         migrate_v9(conn)?;
+    }
+    if v < 10 {
+        migrate_v10(conn)?;
     }
     Ok(())
 }
@@ -2361,7 +2455,7 @@ mod organization_version_tests {
         crate::backup::vacuum_into(&original, &path).unwrap();
         drop(original);
         let store = crate::Store::open(&path).unwrap();
-        assert_eq!(version(store.conn()), 9);
+        assert_eq!(version(store.conn()), SCHEMA_VERSION);
         assert_eq!(issued(store.conn()), issued_before);
         let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
             .unwrap()
@@ -2373,7 +2467,7 @@ mod organization_version_tests {
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("crewd-v8-pre-v9-")
+                .starts_with("crewd-v8-pre-v10-")
         );
         let backup = Connection::open(&backups[0]).unwrap();
         assert_eq!(version(&backup), 8);
@@ -2409,7 +2503,7 @@ mod organization_version_tests {
         let current = book.state().clone();
         drop(store);
         let reopened = crate::Store::open(&path).unwrap();
-        assert_eq!(version(reopened.conn()), 9);
+        assert_eq!(version(reopened.conn()), SCHEMA_VERSION);
         assert_eq!(
             crate::work_organization::load(reopened.conn())
                 .unwrap()
@@ -2469,7 +2563,7 @@ mod organization_version_tests {
         std::fs::remove_file(dir.path().join("backups")).unwrap();
         drop(untouched);
         let retried = crate::Store::open(&path).unwrap();
-        assert_eq!(version(retried.conn()), 9);
+        assert_eq!(version(retried.conn()), SCHEMA_VERSION);
         assert_eq!(issued(retried.conn()), before);
     }
 }

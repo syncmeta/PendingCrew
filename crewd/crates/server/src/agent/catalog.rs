@@ -24,6 +24,9 @@ pub enum Ty {
     Mentions,
     Evidence,
     WorkBlockers,
+    FolderObject,
+    ChannelWorkObject,
+    DocumentEdits,
     WorkContinuation,
     /// `[{text, category?}]`
     Messages,
@@ -176,6 +179,130 @@ pub const CATALOG: &[ToolSpec] = &[
             p("include_removed", Bool, false),
         ],
     )),
+    ro(all(
+        "channel_work_list",
+        &[
+            p("channel_id", Str, true),
+            p("after", Str, false),
+            int("limit", 1, 100),
+        ],
+    )),
+    idempotent(all(
+        "channel_work_link",
+        &[
+            p("channel_id", Str, true),
+            p("expected_link_revision", Str, true),
+            p("object", ChannelWorkObject, true),
+        ],
+    )),
+    destructive(idempotent(all(
+        "channel_work_unlink",
+        &[
+            p("channel_id", Str, true),
+            p("expected_link_revision", Str, true),
+            p("object", ChannelWorkObject, true),
+        ],
+    ))),
+    idempotent(all(
+        "document_create",
+        &[
+            p("request_id", Str, true),
+            p("crew_id", Str, true),
+            p("title", Str, true),
+            p("body", Str, true),
+        ],
+    )),
+    ro(all(
+        "document_get",
+        &[
+            p("id", Str, true),
+            int("offset", 0, 1048576),
+            int("limit", 1, 16384),
+            p("expected_revision", Str, false),
+        ],
+    )),
+    ro(all(
+        "document_list",
+        &[
+            p("crew_id", Str, true),
+            p("after", Str, false),
+            int("limit", 1, 100),
+            p("include_deleted", Bool, false),
+        ],
+    )),
+    idempotent(all(
+        "document_update",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("title", Str, true),
+            p("body", Str, true),
+        ],
+    )),
+    destructive(idempotent(all(
+        "document_delete",
+        &[p("id", Str, true), p("expected_revision", Str, true)],
+    ))),
+    idempotent(all(
+        "document_patch",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("edits", DocumentEdits, true),
+        ],
+    )),
+    ro(all(
+        "view_folder_list",
+        &[
+            p("crew_id", Str, true),
+            c("view", true, &["messages", "todo", "documents", "progress"]),
+            c("part", false, &["folders", "assignments"]),
+            p("after", Str, false),
+            int("limit", 1, 100),
+        ],
+    )),
+    idempotent(all(
+        "view_folder_create",
+        &[
+            p("crew_id", Str, true),
+            c("view", true, &["messages", "todo", "documents", "progress"]),
+            p("request_id", Str, true),
+            p("expected_tree_revision", Str, true),
+            p("name", Str, true),
+            p("parent_id", Str, false),
+        ],
+    )),
+    idempotent(all(
+        "view_folder_update",
+        &[
+            p("crew_id", Str, true),
+            c("view", true, &["messages", "todo", "documents", "progress"]),
+            p("id", Str, true),
+            p("expected_tree_revision", Str, true),
+            p("name", Str, true),
+            p("parent_id", Str, false),
+            p("position", Int, true),
+        ],
+    )),
+    destructive(idempotent(all(
+        "view_folder_delete",
+        &[
+            p("crew_id", Str, true),
+            c("view", true, &["messages", "todo", "documents", "progress"]),
+            p("id", Str, true),
+            p("expected_tree_revision", Str, true),
+        ],
+    ))),
+    idempotent(all(
+        "view_folder_assign",
+        &[
+            p("crew_id", Str, true),
+            c("view", true, &["messages", "todo", "documents", "progress"]),
+            p("expected_tree_revision", Str, true),
+            p("object", FolderObject, true),
+            p("folder_id", Str, false),
+        ],
+    )),
     idempotent(all(
         "work_item_transfer_request",
         &[
@@ -206,6 +333,8 @@ pub const CATALOG: &[ToolSpec] = &[
     all(
         "work_item_create",
         &[
+            p("request_id", Str, false),
+            p("channel_id", Str, false),
             p("title", Str, true),
             p("goal", Str, false),
             c("level", false, &["local", "public", "production"]),
@@ -516,6 +645,10 @@ fn work_blockers_schema() -> Value {
 }
 fn work_continuation_schema(loc: Locale) -> Value {
     let mut item = input_schema(find("work_item_create").expect("existing create"), loc);
+    if let Some(props) = item["properties"].as_object_mut() {
+        props.remove("request_id");
+        props.remove("channel_id");
+    }
     item["properties"]
         .as_object_mut()
         .expect("create object")
@@ -540,6 +673,15 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             Evidence => json!({"type":"object","properties":{
                 "kind":{"type":"string","enum":["commit","url","text"]},"value":{"type":"string"}
             },"required":["kind","value"],"additionalProperties":false}),
+            ChannelWorkObject => {
+                json!({"type":"object","properties":{"kind":{"type":"string","enum":["requirement","work","humanTask"]},"id":{"type":"string","maxLength":4096}},"required":["kind","id"],"additionalProperties":false})
+            }
+            FolderObject => {
+                json!({"type":"object","properties":{"kind":{"type":"string","enum":["channel","requirement","work","humanTask","document"]},"id":{"type":"string","maxLength":4096}},"required":["kind","id"],"additionalProperties":false})
+            }
+            DocumentEdits => {
+                json!({"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"start":{"type":"integer","minimum":0,"maximum":1048576},"end":{"type":"integer","minimum":0,"maximum":1048576},"text":{"type":"string","maxLength":16384}},"required":["start","end","text"],"additionalProperties":false}})
+            }
             WorkBlockers => work_blockers_schema(),
             WorkContinuation => work_continuation_schema(loc),
             Mentions => json!({"type": "array", "items": {
@@ -637,7 +779,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 40);
+        assert_eq!(CATALOG.len(), 54);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -670,8 +812,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 29);
-        assert_eq!(captain.len(), 40);
+        assert_eq!(worker.len(), 43);
+        assert_eq!(captain.len(), 54);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -702,6 +844,10 @@ mod tests {
             with(|t| t.read_only),
             [
                 "my_work_items",
+                "channel_work_list",
+                "document_get",
+                "document_list",
+                "view_folder_list",
                 "todo_get",
                 "work_item_get",
                 "work_item_history",
@@ -717,6 +863,9 @@ mod tests {
         assert_eq!(
             with(|t| t.destructive),
             [
+                "channel_work_unlink",
+                "document_delete",
+                "view_folder_delete",
                 "channel_archive",
                 "change_workdir",
                 "stop_session",
@@ -727,6 +876,16 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                "channel_work_link",
+                "channel_work_unlink",
+                "document_create",
+                "document_update",
+                "document_delete",
+                "document_patch",
+                "view_folder_create",
+                "view_folder_update",
+                "view_folder_delete",
+                "view_folder_assign",
                 "work_item_transfer_request",
                 "work_item_transfer_accept",
                 "work_item_transfer_withdraw",
@@ -746,6 +905,10 @@ mod tests {
             with(ToolSpec::passive),
             [
                 "my_work_items",
+                "channel_work_list",
+                "document_get",
+                "document_list",
+                "view_folder_list",
                 "todo_get",
                 "work_item_get",
                 "work_item_history",

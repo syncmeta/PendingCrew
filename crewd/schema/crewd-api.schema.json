@@ -121,6 +121,22 @@
       ],
       "type": "object"
     },
+    "AskGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask"
+      ],
+      "type": "object"
+    },
     "AskListParams": {
       "additionalProperties": false,
       "description": "全可选：`null` 当 `{}`。",
@@ -876,6 +892,203 @@
       ],
       "type": "object"
     },
+    "ChannelWorkAssociation": {
+      "description": "Creation receipt only. Ordinary object reads never imply this association is still present.",
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "linkRevision": {
+          "type": "string"
+        },
+        "linked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "channelId",
+        "linkRevision",
+        "linked"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkChanged": {
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "linkRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId",
+        "linkRevision"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkKind": {
+      "enum": [
+        "requirement",
+        "work",
+        "humanTask"
+      ],
+      "type": "string"
+    },
+    "ChannelWorkLinkParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "expectedLinkRevision": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/ChannelWorkObject"
+        }
+      },
+      "required": [
+        "channelId",
+        "expectedLinkRevision",
+        "object"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkLinkReceipt": {
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "linkRevision": {
+          "type": "string"
+        },
+        "linked": {
+          "type": "boolean"
+        },
+        "object": {
+          "$ref": "#/$defs/ChannelWorkObject"
+        }
+      },
+      "required": [
+        "channelId",
+        "linkRevision",
+        "object",
+        "linked"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "channelId"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkObject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChannelWorkKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkPage": {
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChannelWorkSummary"
+          },
+          "type": "array"
+        },
+        "linkRevision": {
+          "type": "string"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceRevision": {
+          "description": "Organization event high-water bound into the opaque cursor. A change explicitly expires it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId",
+        "linkRevision",
+        "sourceRevision",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ChannelWorkSummary": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "labelTruncated": {
+          "type": "boolean"
+        },
+        "object": {
+          "$ref": "#/$defs/ChannelWorkObject"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "object",
+        "crewId",
+        "label",
+        "labelTruncated",
+        "status"
+      ],
+      "type": "object"
+    },
     "ClientInfo": {
       "description": "客户端是谁（crewd 每次 hello 记一行日志）。同样不拒未知字段。",
       "properties": {
@@ -1421,6 +1634,280 @@
       ],
       "type": "object"
     },
+    "DocumentChanged": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "revision",
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "DocumentCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "crewId",
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "DocumentCreateResult": {
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/DocumentSummary"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "reused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "document",
+        "requestId",
+        "reused"
+      ],
+      "type": "object"
+    },
+    "DocumentDeleteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision"
+      ],
+      "type": "object"
+    },
+    "DocumentDetail": {
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "bodyLength": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "updatedBy": {
+          "$ref": "#/$defs/ResourceActor"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "revision",
+        "bodyLength",
+        "createdBy",
+        "updatedBy",
+        "createdAt",
+        "updatedAt",
+        "body"
+      ],
+      "type": "object"
+    },
+    "DocumentGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "DocumentListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "includeDeleted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "DocumentPage": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DocumentSummary"
+          },
+          "type": "array"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "DocumentSummary": {
+      "properties": {
+        "bodyLength": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "updatedBy": {
+          "$ref": "#/$defs/ResourceActor"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "revision",
+        "bodyLength",
+        "createdBy",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "DocumentUpdateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
     "Empty": {
       "additionalProperties": false,
       "description": "空结果（`crew.purge` 等）。",
@@ -1576,6 +2063,54 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/ChannelWorkChanged"
+            },
+            "event": {
+              "const": "channel.workChanged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/DocumentChanged"
+            },
+            "event": {
+              "const": "document.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/FolderChanged"
+            },
+            "event": {
+              "const": "viewFolder.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/SessionLive"
             },
             "event": {
@@ -1670,6 +2205,252 @@
           "type": "object"
         }
       ]
+    },
+    "FolderAssignParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedTreeRevision": {
+          "type": "string"
+        },
+        "folderId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "object": {
+          "$ref": "#/$defs/FolderObjectRef"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "expectedTreeRevision",
+        "object"
+      ],
+      "type": "object"
+    },
+    "FolderAssignment": {
+      "properties": {
+        "folderId": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/FolderObjectRef"
+        }
+      },
+      "required": [
+        "object",
+        "folderId"
+      ],
+      "type": "object"
+    },
+    "FolderChanged": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "treeRevision": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "treeRevision"
+      ],
+      "type": "object"
+    },
+    "FolderCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedTreeRevision": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "requestId",
+        "expectedTreeRevision",
+        "name"
+      ],
+      "type": "object"
+    },
+    "FolderDeleteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedTreeRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "id",
+        "expectedTreeRevision"
+      ],
+      "type": "object"
+    },
+    "FolderListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view"
+      ],
+      "type": "object"
+    },
+    "FolderObjectKind": {
+      "enum": [
+        "channel",
+        "requirement",
+        "work",
+        "humanTask",
+        "document"
+      ],
+      "type": "string"
+    },
+    "FolderObjectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FolderObjectKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "FolderSnapshot": {
+      "properties": {
+        "assignments": {
+          "items": {
+            "$ref": "#/$defs/FolderAssignment"
+          },
+          "type": "array"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "folders": {
+          "items": {
+            "$ref": "#/$defs/ViewFolder"
+          },
+          "type": "array"
+        },
+        "treeRevision": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "treeRevision",
+        "folders",
+        "assignments"
+      ],
+      "type": "object"
+    },
+    "FolderUpdateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedTreeRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "view": {
+          "$ref": "#/$defs/FolderView"
+        }
+      },
+      "required": [
+        "crewId",
+        "view",
+        "id",
+        "expectedTreeRevision",
+        "name",
+        "position"
+      ],
+      "type": "object"
+    },
+    "FolderView": {
+      "enum": [
+        "messages",
+        "todo",
+        "documents",
+        "progress"
+      ],
+      "type": "string"
     },
     "HealthKindView": {
       "enum": [
@@ -2569,6 +3350,17 @@
           },
           "type": "array"
         },
+        "channelAssociation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelWorkAssociation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only creation receipts carry the current channel association."
+        },
         "closure": {
           "anyOf": [
             {
@@ -2638,6 +3430,23 @@
         "text",
         "status",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "ResourceActor": {
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
       ],
       "type": "object"
     },
@@ -2799,6 +3608,34 @@
     "RpcErrorData": {
       "description": "`RpcError.data`：规则拒绝带的机器可读部分。",
       "properties": {
+        "currentDocument": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currentLinkRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currentSourceRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "currentTreeRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "currentWork": {
           "anyOf": [
             {
@@ -3489,7 +4326,9 @@
               "restart",
               "wake",
               "system",
-              "work"
+              "work",
+              "documents",
+              "viewFolders"
             ],
             "type": "string"
           },
@@ -3675,6 +4514,13 @@
     "TodoCreateParams": {
       "additionalProperties": false,
       "properties": {
+        "channelId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "crewId": {
           "type": "string"
         },
@@ -3824,6 +4670,33 @@
       },
       "required": [
         "role"
+      ],
+      "type": "object"
+    },
+    "ViewFolder": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "position"
       ],
       "type": "object"
     },
@@ -4314,6 +5187,13 @@
           "default": "",
           "type": "string"
         },
+        "channelId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "crewId": {
           "type": "string"
         },
@@ -4347,6 +5227,13 @@
           ]
         },
         "parent": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
           "default": null,
           "type": [
             "string",
@@ -4876,6 +5763,17 @@
           },
           "type": "array"
         },
+        "channelAssociation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelWorkAssociation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Receipt-only association; work.get does not retain a channel projection."
+        },
         "createdAt": {
           "type": "string"
         },
@@ -4989,6 +5887,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "channelAssociation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelWorkAssociation"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "crewId": {
           "type": "string"
@@ -5240,11 +6148,17 @@
     "channel.purged": {
       "$ref": "#/$defs/ChannelRef"
     },
+    "channel.workChanged": {
+      "$ref": "#/$defs/ChannelWorkChanged"
+    },
     "crew.changed": {
       "$ref": "#/$defs/Crew"
     },
     "crew.purged": {
       "$ref": "#/$defs/CrewRef"
+    },
+    "document.changed": {
+      "$ref": "#/$defs/DocumentChanged"
     },
     "events.lagged": {
       "$ref": "#/$defs/Lagged"
@@ -5267,6 +6181,9 @@
     "system.shutdown": {
       "$ref": "#/$defs/SystemShutdown"
     },
+    "viewFolder.changed": {
+      "$ref": "#/$defs/FolderChanged"
+    },
     "wake.changed": {
       "$ref": "#/$defs/WakeChanged"
     },
@@ -5286,6 +6203,14 @@
     "ask.answer": {
       "params": {
         "$ref": "#/$defs/AskAnswerParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Ask"
+      }
+    },
+    "ask.get": {
+      "params": {
+        "$ref": "#/$defs/AskGetParams"
       },
       "result": {
         "$ref": "#/$defs/Ask"
@@ -5367,6 +6292,30 @@
       },
       "result": {
         "$ref": "#/$defs/ChannelSummary"
+      }
+    },
+    "channel.workLink": {
+      "params": {
+        "$ref": "#/$defs/ChannelWorkLinkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelWorkLinkReceipt"
+      }
+    },
+    "channel.workList": {
+      "params": {
+        "$ref": "#/$defs/ChannelWorkListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelWorkPage"
+      }
+    },
+    "channel.workUnlink": {
+      "params": {
+        "$ref": "#/$defs/ChannelWorkLinkParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelWorkLinkReceipt"
       }
     },
     "crew.adopt": {
@@ -5491,6 +6440,46 @@
           "$ref": "#/$defs/DirectoryRow"
         },
         "type": "array"
+      }
+    },
+    "document.create": {
+      "params": {
+        "$ref": "#/$defs/DocumentCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DocumentCreateResult"
+      }
+    },
+    "document.delete": {
+      "params": {
+        "$ref": "#/$defs/DocumentDeleteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DocumentSummary"
+      }
+    },
+    "document.get": {
+      "params": {
+        "$ref": "#/$defs/DocumentGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DocumentDetail"
+      }
+    },
+    "document.list": {
+      "params": {
+        "$ref": "#/$defs/DocumentListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DocumentPage"
+      }
+    },
+    "document.update": {
+      "params": {
+        "$ref": "#/$defs/DocumentUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DocumentSummary"
       }
     },
     "events.subscribe": {
@@ -5742,6 +6731,46 @@
         "type": "array"
       }
     },
+    "viewFolder.assign": {
+      "params": {
+        "$ref": "#/$defs/FolderAssignParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FolderSnapshot"
+      }
+    },
+    "viewFolder.create": {
+      "params": {
+        "$ref": "#/$defs/FolderCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FolderSnapshot"
+      }
+    },
+    "viewFolder.delete": {
+      "params": {
+        "$ref": "#/$defs/FolderDeleteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FolderSnapshot"
+      }
+    },
+    "viewFolder.list": {
+      "params": {
+        "$ref": "#/$defs/FolderListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FolderSnapshot"
+      }
+    },
+    "viewFolder.update": {
+      "params": {
+        "$ref": "#/$defs/FolderUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/FolderSnapshot"
+      }
+    },
     "wake.list": {
       "params": {
         "$ref": "#/$defs/WakeListParams"
@@ -5857,7 +6886,9 @@
     "restart",
     "wake",
     "system",
-    "work"
+    "work",
+    "documents",
+    "viewFolders"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

@@ -435,7 +435,7 @@ History cursor must be a positive canonical sequence string; use nextBefore retu
 
 ## crew.work_referenced
 
-Crew {crew} cannot be permanently deleted: {total} objects in other crews still refer to its work or sessions. References: {ids}. Resolve those relationships first; the removed crew remains read-only.
+Crew {crew} cannot be permanently deleted: {total} objects in other crews still refer to its work, sessions, documents or channel classifications. References: {ids}. Resolve those relationships first; the removed crew remains read-only.
 
 
 ## todo.human_only
@@ -465,3 +465,39 @@ expectedStatus must name a requirement state.
 ## todo.status_conflict
 
 Requirement {id} changed from {expected} to {actual}; refresh before closing.
+
+## resource.invalid
+Invalid {field}; correct this field and retry.
+
+## resource.not_found
+Object {id} is unavailable; refresh its current view.
+
+## resource.forbidden
+This connection lacks the actual crew or object access required.
+
+## resource.request_conflict
+Request {request} already has a different original payload.
+
+## document.revision_conflict
+Document {id} changed; review its current metadata before editing.
+
+## document.deleted
+Document {id} was deleted; its retained history is read-only.
+
+## view_folder.revision_conflict
+Folder classifications changed; review the current revision.
+
+## view_folder.limit
+The scope limit is {limit}; reduce this collection.
+
+## view_folder.cycle
+This folder move would create a cycle or exceed the depth limit.
+
+## view_folder.object_scope
+The object does not belong to this view or is not currently visible.
+
+## channel.work_revision_conflict
+Channel work references changed. Refresh the current channel work view before retrying.
+
+## channel.work_cursor_expired
+Channel work references changed. Refresh the current channel work view before retrying.

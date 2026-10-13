@@ -125,6 +125,42 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
                 channel_id: channel_id.clone(),
             },
         )?],
+        Change::ChannelWorkChanged {
+            channel_id,
+            link_revision,
+        } => vec![ev(
+            events::CHANNEL_WORK_CHANGED,
+            &crewd_proto::ChannelWorkChanged {
+                channel_id: channel_id.clone(),
+                link_revision: link_revision.clone(),
+            },
+        )?],
+        Change::DocumentChanged {
+            crew_id,
+            id,
+            revision,
+            deleted,
+        } => vec![ev(
+            events::DOCUMENT_CHANGED,
+            &crewd_proto::DocumentChanged {
+                crew_id: crew_id.clone(),
+                id: id.clone(),
+                revision: revision.clone(),
+                deleted: *deleted,
+            },
+        )?],
+        Change::FolderChanged {
+            crew_id,
+            view,
+            tree_revision,
+        } => vec![ev(
+            events::FOLDER_CHANGED,
+            &crewd_proto::FolderChanged {
+                crew_id: crew_id.clone(),
+                view: *view,
+                tree_revision: tree_revision.clone(),
+            },
+        )?],
         Change::WorkChanged { crew_id, id } => vec![ev(
             events::WORK_CHANGED,
             &crewd_proto::WorkChanged {

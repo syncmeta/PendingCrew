@@ -1710,7 +1710,12 @@ mod tests {
         assert_eq!(v["minApiVersion"], crewd_proto::MIN_API_VERSION);
         assert_eq!(
             v["capabilities"],
-            json!(["work.reassignLost"]),
+            json!([
+                "work.reassignLost",
+                "documents",
+                "viewFolders",
+                "channelWork"
+            ]),
             "持久工作能力不要求编排"
         );
         let build = &v["build"];
@@ -1735,7 +1740,10 @@ mod tests {
                 "wake.explain",
                 "message.receipts",
                 "settings",
-                "work.reassignLost"
+                "work.reassignLost",
+                "documents",
+                "viewFolders",
+                "channelWork"
             ])
         );
     }

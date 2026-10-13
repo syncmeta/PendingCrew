@@ -1,10 +1,12 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
 pub mod archive;
 pub mod backup;
+pub mod channel_work;
 pub mod channels;
 pub mod crews;
 pub mod db;
 pub mod db_health;
+pub mod documents;
 pub mod fsutil;
 pub mod messages;
 pub mod object_refs;
@@ -13,6 +15,7 @@ pub mod schema;
 pub mod sessions;
 pub mod testing;
 pub mod todos;
+pub mod view_folders;
 pub mod work_events;
 pub mod work_organization;
 pub mod work_stop_checks;

@@ -474,6 +474,72 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-aaaa","ledger":"agent"}"#,
             Ok,
         ),
+        (
+            "document.create",
+            r#"{"requestId":"fb69c781-91bb-4220-ae23-79d1a231861d","crewId":"local-aaaa","title":"CLI doc","body":"CLI original 🙂"}"#,
+            Ok,
+        ),
+        (
+            "document.get",
+            r#"{"id":"11111111-1111-4111-8111-111111111111"}"#,
+            Code(-32004),
+        ),
+        ("document.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        (
+            "document.update",
+            r#"{"id":"11111111-1111-4111-8111-111111111111","expectedRevision":"1","title":"x","body":"x"}"#,
+            Code(-32004),
+        ),
+        (
+            "document.delete",
+            r#"{"id":"11111111-1111-4111-8111-111111111111","expectedRevision":"1"}"#,
+            Code(-32004),
+        ),
+        (
+            "viewFolder.list",
+            r#"{"crewId":"local-aaaa","view":"documents"}"#,
+            Ok,
+        ),
+        (
+            "viewFolder.create",
+            r#"{"requestId":"56fc7f71-3fde-494b-a163-7c1a646af4af","crewId":"local-aaaa","view":"documents","expectedTreeRevision":"0","name":"CLI folder"}"#,
+            Ok,
+        ),
+        (
+            "viewFolder.update",
+            r#"{"crewId":"local-aaaa","view":"progress","id":"11111111-1111-4111-8111-111111111111","expectedTreeRevision":"0","name":"x","position":0}"#,
+            Code(-32004),
+        ),
+        (
+            "viewFolder.delete",
+            r#"{"crewId":"local-aaaa","view":"progress","id":"11111111-1111-4111-8111-111111111111","expectedTreeRevision":"0"}"#,
+            Code(-32004),
+        ),
+        (
+            "viewFolder.assign",
+            r#"{"crewId":"local-aaaa","view":"progress","expectedTreeRevision":"0","object":{"kind":"work","id":"W999"}}"#,
+            Code(-32003),
+        ),
+        (
+            "channel.workList",
+            r#"{"channelId":"local-aaaa/lobby"}"#,
+            Ok,
+        ),
+        (
+            "channel.workLink",
+            r#"{"channelId":"local-aaaa/lobby","expectedLinkRevision":"0","object":{"kind":"work","id":"W999"}}"#,
+            Code(-32004),
+        ),
+        (
+            "channel.workUnlink",
+            r#"{"channelId":"local-aaaa/lobby","expectedLinkRevision":"0","object":{"kind":"work","id":"W999"}}"#,
+            Code(-32004),
+        ),
+        (
+            "ask.get",
+            r#"{"crewId":"local-aaaa","ask":"H999"}"#,
+            Code(-32004),
+        ),
         ("events.subscribe", r#"{"topics":["message"]}"#, Ok),
         // CLI serve does not enable Codex without --codex/CREWD_CODEX.
         // This offline fixture must never discover a real account runner.
@@ -535,6 +601,7 @@ fn rpc_drives_every_client_method() {
     all.sort();
     assert_eq!(covered, all, "加了新方法就在这里加一条");
     let mut created_work = Vec::new();
+    let mut created_document = None;
     for (method, params, want) in cases {
         let out: Output = crewd(data.path())
             .args(["rpc", method, params])
@@ -597,6 +664,74 @@ fn rpc_drives_every_client_method() {
             );
             created_work.push(second["id"].as_str().unwrap().to_owned());
             assert_ne!(created_work[0], created_work[1]);
+        } else if method == "document.create" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            let id = first["document"]["id"].as_str().unwrap();
+            let original = rpc(
+                data.path(),
+                "document.get",
+                &serde_json::json!({"id":id}).to_string(),
+            );
+            assert_eq!(original["body"], "CLI original 🙂");
+            let edited=rpc(data.path(),"document.update",&serde_json::json!({"id":id,"expectedRevision":original["revision"],"title":"CLI edited","body":"changed 🐾"}).to_string());
+            assert_eq!(edited["revision"], "2");
+            let retry = rpc(data.path(), "document.create", params);
+            assert_eq!(retry["reused"], true);
+            assert_eq!(retry["document"], edited);
+            created_document = Some(id.to_string());
+        } else if method == "viewFolder.create" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            let folder = first["folders"][0]["id"].as_str().unwrap();
+            let doc = created_document.as_ref().unwrap();
+            let assigned=rpc(data.path(),"viewFolder.assign",&serde_json::json!({"crewId":"local-aaaa","view":"documents","expectedTreeRevision":first["treeRevision"],"object":{"kind":"document","id":doc},"folderId":folder}).to_string());
+            assert_eq!(assigned["assignments"][0]["object"]["id"], doc.as_str());
+            let updated=rpc(data.path(),"viewFolder.update",&serde_json::json!({"crewId":"local-aaaa","view":"documents","id":folder,"expectedTreeRevision":assigned["treeRevision"],"name":"renamed","position":0}).to_string());
+            assert_eq!(updated["folders"][0]["name"], "renamed");
+            let deleted=rpc(data.path(),"viewFolder.delete",&serde_json::json!({"crewId":"local-aaaa","view":"documents","id":folder,"expectedTreeRevision":updated["treeRevision"]}).to_string());
+            assert_eq!(deleted["folders"], serde_json::json!([]));
+            assert_eq!(deleted["assignments"], serde_json::json!([]));
+            let d = rpc(
+                data.path(),
+                "document.get",
+                &serde_json::json!({"id":doc}).to_string(),
+            );
+            assert_eq!(d["body"], "changed 🐾");
+            let gone = rpc(
+                data.path(),
+                "document.delete",
+                &serde_json::json!({"id":doc,"expectedRevision":d["revision"]}).to_string(),
+            );
+            assert!(gone["deletedAt"].is_string());
+            assert_eq!(
+                rpc(
+                    data.path(),
+                    "document.get",
+                    &serde_json::json!({"id":doc}).to_string()
+                )["body"],
+                d["body"]
+            );
+        } else if method == "channel.workList" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(first["items"], serde_json::json!([]));
+            let o = serde_json::json!({"kind":"work","id":created_work[0]});
+            let linked=rpc(data.path(),"channel.workLink",&serde_json::json!({"channelId":"local-aaaa/lobby","expectedLinkRevision":first["linkRevision"],"object":o}).to_string());
+            assert_eq!(linked["linked"], true);
+            let view = rpc(
+                data.path(),
+                "channel.workList",
+                r#"{"channelId":"local-aaaa/lobby"}"#,
+            );
+            assert_eq!(view["items"][0]["object"], o);
+            let unlinked=rpc(data.path(),"channel.workUnlink",&serde_json::json!({"channelId":"local-aaaa/lobby","expectedLinkRevision":view["linkRevision"],"object":o}).to_string());
+            assert_eq!(unlinked["linked"], false);
+            assert!(
+                rpc(
+                    data.path(),
+                    "work.get",
+                    &serde_json::json!({"id":created_work[0]}).to_string()
+                )["id"]
+                    .is_string()
+            );
         } else if method == "todo.create" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             let id = first["requirementId"].as_str().unwrap();

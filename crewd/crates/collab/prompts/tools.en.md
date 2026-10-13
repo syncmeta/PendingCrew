@@ -1103,3 +1103,225 @@ Issued public W ID.
 ## work_item_transfer_withdraw.expected_revision
 
 Exact current revision string.
+
+## r.resource_result
+{result}
+
+## document_create
+Create shared crew document with immutable UUID request witness; retries return current metadata without repeating body or waking models.
+
+## document_create.request_id
+Stable original creation request UUID; uncertain retries preserve exact original payload.
+
+## document_create.crew_id
+Actual crew ID.
+
+## document_create.title
+Nonblank title, at most512 UTF-8 bytes.
+
+## document_create.body
+Exact document body, at most1MiB UTF-8 bytes.
+
+## document_get
+Read an explicit bounded UTF-8 byte chunk. Subsequent chunks require the observed revision; retained deleted history is readable.
+
+## document_get.id
+Stable object UUID.
+
+## document_get.offset
+UTF-8 byte offset at a character boundary, default0.
+
+## document_get.limit
+Bounded page or body-chunk size within schema limits.
+
+## document_get.expected_revision
+Observed current document revision, never guessed.
+
+## document_list
+List bounded metadata, never automatically include bodies.
+
+## document_list.crew_id
+Actual crew ID.
+
+## document_list.after
+Opaque cursor from this exact query scope and revision.
+
+## document_list.limit
+Bounded page or body-chunk size within schema limits.
+
+## document_list.include_deleted
+Explicitly include soft-deleted metadata, defaultfalse.
+
+## document_update
+Replace exact-revision title/body; use document_patch for small edits to avoid repeating full content.
+
+## document_update.id
+Stable object UUID.
+
+## document_update.expected_revision
+Observed current document revision, never guessed.
+
+## document_update.title
+Nonblank title, at most512 UTF-8 bytes.
+
+## document_update.body
+Exact document body, at most1MiB UTF-8 bytes.
+
+## document_delete
+Soft delete at observed revision, retaining body/audit without automatic wake.
+
+## document_delete.id
+Stable object UUID.
+
+## document_delete.expected_revision
+Observed current document revision, never guessed.
+
+## document_patch
+Patch exact UTF-8 byte spans of the observed revision: at most20 nonoverlapping edits and16KiB combined new text; returns metadata only.
+
+## document_patch.id
+Stable object UUID.
+
+## document_patch.expected_revision
+Observed current document revision, never guessed.
+
+## document_patch.edits
+Exact byte spans {start,end,text}; end exclusive, no overlap.
+
+## view_folder_list
+Read one bounded page. Cursor binds crew/view/part/revision; expired pages conflict without silently reloading all.
+
+## view_folder_list.crew_id
+Actual crew ID.
+
+## view_folder_list.view
+messages/todo/documents/progress; independent from work graph parentage.
+
+## view_folder_list.part
+folders or assignments, defaultfolders.
+
+## view_folder_list.after
+Opaque cursor from this exact query scope and revision.
+
+## view_folder_list.limit
+Bounded page or body-chunk size within schema limits.
+
+## view_folder_create
+Create shared classification folder using immutable request UUID; independent of work lifecycle/parentage. Compact receipt only.
+
+## view_folder_create.crew_id
+Actual crew ID.
+
+## view_folder_create.view
+messages/todo/documents/progress; independent from work graph parentage.
+
+## view_folder_create.request_id
+Stable original creation request UUID; uncertain retries preserve exact original payload.
+
+## view_folder_create.expected_tree_revision
+Observed whole crew/view revision; review finite conflict facts.
+
+## view_folder_create.name
+Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.
+
+## view_folder_create.parent_id
+Same-scope parent UUID; omit for root.
+
+## view_folder_update
+Rename/move/reorder within one crew/view tree under whole-scope revision CAS.
+
+## view_folder_update.crew_id
+Actual crew ID.
+
+## view_folder_update.view
+messages/todo/documents/progress; independent from work graph parentage.
+
+## view_folder_update.id
+Stable object UUID.
+
+## view_folder_update.expected_tree_revision
+Observed whole crew/view revision; review finite conflict facts.
+
+## view_folder_update.name
+Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.
+
+## view_folder_update.parent_id
+Same-scope parent UUID; omit for root.
+
+## view_folder_update.position
+Zero-based sibling position after removing the moved folder.
+
+## view_folder_delete
+Promote child folders to this parent and unclassify direct contents. Never delete underlying work/document/messages or history.
+
+## view_folder_delete.crew_id
+Actual crew ID.
+
+## view_folder_delete.view
+messages/todo/documents/progress; independent from work graph parentage.
+
+## view_folder_delete.id
+Stable object UUID.
+
+## view_folder_delete.expected_tree_revision
+Observed whole crew/view revision; review finite conflict facts.
+
+## view_folder_assign
+Classify one visible stable object, or omit folder_id to unclassify; live ACL, no work lifecycle change or automatic wake.
+
+## view_folder_assign.crew_id
+Actual crew ID.
+
+## view_folder_assign.view
+messages/todo/documents/progress; independent from work graph parentage.
+
+## view_folder_assign.expected_tree_revision
+Observed whole crew/view revision; review finite conflict facts.
+
+## view_folder_assign.object
+Visible stable {kind,id}; kind must match selected view.
+
+## view_folder_assign.folder_id
+Same-scope folder UUID; omit to remove classification.
+
+## channel_work_list
+Read current work references for a readable channel. Returns bounded labels and authoritative status over the same global #/W/H. Pagination binds link and source revisions; an expired cursor is a conflict. No model wake.
+
+## channel_work_link
+Associate one existing global work object with a readable active channel, with link-revision CAS. Does not change work parent, owner or status and does not wake agents.
+
+## channel_work_unlink
+Remove only a channel work reference with link-revision CAS. The requirement, work or human question and its history remain. Does not wake agents.
+
+## channel_work_list.channel_id
+Actual channel ID; current membership determines visibility.
+
+## channel_work_list.after
+Opaque next cursor returned by this channel view; never construct it.
+
+## channel_work_list.limit
+Items per page, 1–100; default 50.
+
+## channel_work_link.channel_id
+Actual readable channel ID.
+
+## channel_work_link.expected_link_revision
+Current channel view linkRevision, as decimal text.
+
+## channel_work_link.object
+Existing {kind:requirement|work|humanTask,id:global #/W/H}. No new lifecycle object.
+
+## channel_work_unlink.channel_id
+Actual readable channel ID.
+
+## channel_work_unlink.expected_link_revision
+Current channel view linkRevision, as decimal text.
+
+## channel_work_unlink.object
+Existing global #/W/H reference to remove from this channel only.
+
+## work_item_create.request_id
+Optional immutable UUID creation key. Required with channel_id. Retry the original payload only; returns the same current work and current association without re-linking after removal.
+
+## work_item_create.channel_id
+Optional actual readable channel ID; creates and associates the plan in the same transaction. Requires request_id. Association is a creation receipt, not a permanent work field.

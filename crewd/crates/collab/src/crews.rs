@@ -746,6 +746,47 @@ fn guard_organization_purge(conn: &Connection, crew: &str) -> Result<()> {
     Ok(())
 }
 
+fn guard_resource_purge(conn: &Connection, crew: &str) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 10 {
+        return Ok(());
+    }
+    let condition = "a.crew_id<>?1 AND ((a.object_kind='channel' AND EXISTS(SELECT 1 FROM channels ch WHERE ch.id=a.object_id AND ch.crew_id=?1)) OR (a.object_kind='document' AND EXISTS(SELECT 1 FROM documents d WHERE d.id=a.object_id AND d.crew_id=?1)) OR EXISTS(SELECT 1 FROM object_refs r WHERE r.crew_id=?1 AND ((a.object_kind='work' AND r.kind='plan' AND a.object_id='W'||r.number) OR (a.object_kind='requirement' AND r.kind='requirement' AND a.object_id='#'||r.number) OR (a.object_kind='humanTask' AND r.kind='human_task' AND a.object_id='H'||r.number))))";
+    let folder_count: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM view_folder_assignments a WHERE {condition}"),
+        [crew],
+        |r| r.get(0),
+    )?;
+    let channel_count:i64=conn.query_row("SELECT COUNT(*) FROM channel_work_links l JOIN channels ch ON ch.id=l.channel_id WHERE l.source_crew_id=?1 AND ch.crew_id<>?1",[crew],|r|r.get(0))?;
+    if folder_count + channel_count == 0 {
+        return Ok(());
+    }
+    let mut q=conn.prepare(&format!("SELECT DISTINCT a.crew_id,a.view,a.folder_id FROM view_folder_assignments a WHERE {condition} ORDER BY a.crew_id,a.view,a.folder_id LIMIT 20"))?;
+    let mut ids = q
+        .query_map([crew], |r| {
+            Ok(format!(
+                "folder:{}/{}/{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut q=conn.prepare("SELECT DISTINCT l.channel_id FROM channel_work_links l JOIN channels ch ON ch.id=l.channel_id WHERE l.source_crew_id=?1 AND ch.crew_id<>?1 ORDER BY l.channel_id LIMIT 20")?;
+    for id in q.query_map([crew], |r| r.get::<_, String>(0))? {
+        if ids.len() == 20 {
+            break;
+        }
+        ids.push(format!("channel-work:{}", id?));
+    }
+    Err(CollabError::Conflict(
+        Refusal::new(Code::CrewWorkReferenced)
+            .arg("crew", crew)
+            .arg("ids", ids.join(", "))
+            .arg("total", (folder_count + channel_count).to_string()),
+    ))
+}
+
 /// `purge` 的前置条件（只读、便宜）：机组存在、不是总机组、**已归档**、没有 desired=running 的 session。
 /// `crew.purge` 先跑它、再拍快照（N4：删不了就不拍整库快照），三步在同一个库线程任务里。
 pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
@@ -759,7 +800,8 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
     refuse_running(conn, id)?;
     crate::cursor_reservations::guard_crew(conn, id)?;
     crate::causal::guard_crew(conn, id)?;
-    guard_organization_purge(conn, id)
+    guard_organization_purge(conn, id)?;
+    guard_resource_purge(conn, id)
 }
 
 /// 永久删除（`crew.purge`，N4 的快照之后跑；只收已归档的机组，见 `check_purgeable`）。子机组的父边随之消失；

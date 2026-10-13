@@ -245,6 +245,21 @@ async fn request_step(
                     return RequestStep::Continue;
                 }
             };
+            if agent.is_attached()
+                && p.topics
+                    .iter()
+                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders"))
+            {
+                return RequestStep::Reply(ServerFrame::Response(Response::err(
+                    id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                )));
+            }
             // 先订阅，再排队 ack，最后才起转发任务：事件不会抢在 ack 前面，
             // 也不会丢（接收端会缓冲）。重复订阅替换旧的转发任务。
             let rx = state.hub.subscribe();
@@ -261,7 +276,13 @@ async fn request_step(
             if let Some(old) = forwarder.take() {
                 old.abort();
             }
-            let task = spawn_forwarder(rx, p.topics, tx.clone(), drain.clone());
+            let task = spawn_forwarder(
+                rx,
+                p.topics,
+                tx.clone(),
+                drain.clone(),
+                agent.attached_flag(),
+            );
             *forward_guard = Some(AbortOnDrop(task.abort_handle()));
             *forwarder = Some(task);
             return RequestStep::Continue;
@@ -270,13 +291,31 @@ async fn request_step(
             if agent.is_attached()
                 && matches!(
                     req.method.as_str(),
-                    methods::TODO_CREATE
+                    methods::ASK_GET
+                        | methods::CHANNEL_WORK_LIST
+                        | methods::CHANNEL_WORK_LINK
+                        | methods::CHANNEL_WORK_UNLINK
+                        | methods::DOCUMENT_CREATE
+                        | methods::DOCUMENT_GET
+                        | methods::DOCUMENT_LIST
+                        | methods::DOCUMENT_UPDATE
+                        | methods::DOCUMENT_DELETE
+                        | methods::FOLDER_LIST
+                        | methods::FOLDER_CREATE
+                        | methods::FOLDER_UPDATE
+                        | methods::FOLDER_DELETE
+                        | methods::FOLDER_ASSIGN
+                        | methods::TODO_CREATE
                         | methods::TODO_CLOSE
                         | methods::WORK_REASSIGN_LOST
                         | methods::WORK_TRANSFER_REQUEST
                         | methods::WORK_TRANSFER_ACCEPT
                         | methods::WORK_TRANSFER_WITHDRAW
-                ) =>
+                )
+                || (agent.is_attached()
+                    && req.method == methods::WORK_CREATE
+                    && (req.params.get("requestId").is_some_and(|v| !v.is_null())
+                        || req.params.get("channelId").is_some_and(|v| !v.is_null()))) =>
         {
             ServerFrame::Response(Response::err(
                 req.id,
@@ -289,7 +328,27 @@ async fn request_step(
                         ) {
                             crewd_collab::refusal::Code::TodoHumanOnly
                         } else {
-                            crewd_collab::refusal::Code::WorkActorForbidden
+                            if matches!(
+                                req.method.as_str(),
+                                methods::ASK_GET
+                                    | methods::CHANNEL_WORK_LIST
+                                    | methods::CHANNEL_WORK_LINK
+                                    | methods::CHANNEL_WORK_UNLINK
+                                    | methods::DOCUMENT_CREATE
+                                    | methods::DOCUMENT_GET
+                                    | methods::DOCUMENT_LIST
+                                    | methods::DOCUMENT_UPDATE
+                                    | methods::DOCUMENT_DELETE
+                                    | methods::FOLDER_LIST
+                                    | methods::FOLDER_CREATE
+                                    | methods::FOLDER_UPDATE
+                                    | methods::FOLDER_DELETE
+                                    | methods::FOLDER_ASSIGN
+                            ) {
+                                crewd_collab::refusal::Code::ResourceForbidden
+                            } else {
+                                crewd_collab::refusal::Code::WorkActorForbidden
+                            }
                         },
                     ),
                 ),
@@ -353,7 +412,11 @@ fn check_topics(topics: &[String]) -> Result<(), RpcError> {
 }
 
 fn topic_of(event: &str) -> &str {
-    event.split('.').next().unwrap_or(event)
+    match event.split('.').next().unwrap_or(event) {
+        "document" => "documents",
+        "viewFolder" => "viewFolders",
+        other => other,
+    }
 }
 
 fn spawn_forwarder(
@@ -361,6 +424,7 @@ fn spawn_forwarder(
     topics: Vec<String>,
     tx: mpsc::Sender<ServerFrame>,
     mut drain: watch::Receiver<bool>,
+    attached: Arc<std::sync::atomic::AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -384,6 +448,17 @@ fn spawn_forwarder(
                 }
             };
             let frame = match received {
+                Ok(e)
+                    if attached.load(std::sync::atomic::Ordering::Acquire)
+                        && matches!(
+                            e.event.as_str(),
+                            events::DOCUMENT_CHANGED
+                                | events::FOLDER_CHANGED
+                                | "channel.workChanged"
+                        ) =>
+                {
+                    continue;
+                }
                 Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => ServerFrame::Event(e),
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(n)) => ServerFrame::Event(Event {

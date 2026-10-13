@@ -20,10 +20,15 @@ use crate::dispatch::internal;
 #[derive(Default)]
 pub struct AgentConn {
     session: Option<String>,
+    attached_flag: Arc<std::sync::atomic::AtomicBool>,
     watcher: Option<JoinHandle<()>>,
 }
 
 impl AgentConn {
+    pub(crate) fn attached_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.attached_flag.clone()
+    }
+
     pub(crate) fn is_attached(&self) -> bool {
         self.session.is_some()
     }
@@ -103,6 +108,8 @@ async fn route(
             tx.clone(),
         ));
         conn.session = Some(me.session_id.clone());
+        conn.attached_flag
+            .store(true, std::sync::atomic::Ordering::Release);
         let loc = port::locale(state).await.unwrap_or_default();
         return to_value(AttachResult {
             role: me.role,
@@ -326,7 +333,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            29
+            43
         );
         let mut cap = attached(&f, &f.captain).await;
         assert_eq!(
@@ -336,7 +343,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            40
+            54
         );
         requirement_readable(&f, &mut w).await;
         requirement_readable(&f, &mut cap).await;
@@ -389,7 +396,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            40
+            54
         );
         let r = w
             .call(methods::CALL, json!({"tool": "list_sessions"}))
@@ -500,7 +507,7 @@ mod tests {
         assert_eq!(code, -32009);
         // Still the worker: the refused attach changed nothing.
         let n = c.call(methods::TOOLS, json!(null)).await.unwrap();
-        assert_eq!(n.as_array().unwrap().len(), 29);
+        assert_eq!(n.as_array().unwrap().len(), 43);
         let a = c
             .call(
                 methods::ATTACH,

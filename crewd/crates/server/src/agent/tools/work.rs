@@ -59,6 +59,8 @@ pub async fn get(cx: &Ctx<'_>, v: Value) -> CallResult {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Create {
+    request_id: Option<String>,
+    channel_id: Option<String>,
     title: String,
     #[serde(default)]
     goal: String,
@@ -93,6 +95,8 @@ pub async fn create(cx: &Ctx<'_>, v: Value) -> CallResult {
             cx.st,
             &cx.me.session_id,
             WorkCreateParams {
+                request_id: a.request_id,
+                channel_id: a.channel_id,
                 crew_id: crew,
                 title: a.title,
                 goal: a.goal,
@@ -291,6 +295,8 @@ pub async fn block(cx: &Ctx<'_>, v: Value) -> CallResult {
                     None => String::new(),
                 };
                 mapped.push(WorkCreateParams {
+                    request_id: None,
+                    channel_id: None,
                     crew_id: crew,
                     title: p.title,
                     goal: p.goal,

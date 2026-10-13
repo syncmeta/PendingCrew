@@ -39,6 +39,659 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read current work references for a readable channel. Returns bounded labels and authoritative status over the same global #/W/H. Pagination binds link and source revisions; an expired cursor is a conflict. No model wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque next cursor returned by this channel view; never construct it.",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "Actual channel ID; current membership determines visibility.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Items per page, 1–100; default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Associate one existing global work object with a readable active channel, with link-revision CAS. Does not change work parent, owner or status and does not wake agents.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "Actual readable channel ID.",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "Current channel view linkRevision, as decimal text.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Existing {kind:requirement|work|humanTask,id:global #/W/H}. No new lifecycle object.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_link"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Remove only a channel work reference with link-revision CAS. The requirement, work or human question and its history remain. Does not wake agents.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "Actual readable channel ID.",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "Current channel view linkRevision, as decimal text.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Existing global #/W/H reference to remove from this channel only.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_unlink"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create shared crew document with immutable UUID request witness; retries return current metadata without repeating body or waking models.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Exact document body, at most1MiB UTF-8 bytes.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Stable original creation request UUID; uncertain retries preserve exact original payload.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Nonblank title, at most512 UTF-8 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "crew_id",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an explicit bounded UTF-8 byte chunk. Subsequent chunks require the observed revision; retained deleted history is readable.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 16384,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "UTF-8 byte offset at a character boundary, default0.",
+            "maximum": 1048576,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "document_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "List bounded metadata, never automatically include bodies.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque cursor from this exact query scope and revision.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "include_deleted": {
+            "description": "Explicitly include soft-deleted metadata, defaultfalse.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "crew_id"
+        ],
+        "type": "object"
+      },
+      "name": "document_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Replace exact-revision title/body; use document_patch for small edits to avoid repeating full content.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Exact document body, at most1MiB UTF-8 bytes.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Nonblank title, at most512 UTF-8 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Soft delete at observed revision, retaining body/audit without automatic wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "document_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Patch exact UTF-8 byte spans of the observed revision: at most20 nonoverlapping edits and16KiB combined new text; returns metadata only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "Exact byte spans {start,end,text}; end exclusive, no overlap.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "maxLength": 16384,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "name": "document_patch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one bounded page. Cursor binds crew/view/part/revision; expired pages conflict without silently reloading all.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque cursor from this exact query scope and revision.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "part": {
+            "description": "folders or assignments, defaultfolders.",
+            "enum": [
+              "folders",
+              "assignments"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create shared classification folder using immutable request UUID; independent of work lifecycle/parentage. Compact receipt only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "Same-scope parent UUID; omit for root.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Stable original creation request UUID; uncertain retries preserve exact original payload.",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "request_id",
+          "expected_tree_revision",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Rename/move/reorder within one crew/view tree under whole-scope revision CAS.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "Same-scope parent UUID; omit for root.",
+            "type": "string"
+          },
+          "position": {
+            "description": "Zero-based sibling position after removing the moved folder.",
+            "type": "integer"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision",
+          "name",
+          "position"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Promote child folders to this parent and unclassify direct contents. Never delete underlying work/document/messages or history.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Classify one visible stable object, or omit folder_id to unclassify; live ACL, no work lifecycle change or automatic wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "folder_id": {
+            "description": "Same-scope folder UUID; omit to remove classification.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Visible stable {kind,id}; kind must match selected view.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "channel",
+                  "requirement",
+                  "work",
+                  "humanTask",
+                  "document"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "expected_tree_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": false
       },
       "description": "Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.",
@@ -222,6 +875,10 @@
             "description": "How to judge that completion level was achieved.",
             "type": "string"
           },
+          "channel_id": {
+            "description": "Optional actual readable channel ID; creates and associates the plan in the same transaction. Requires request_id. Association is a creation receipt, not a permanent work field.",
+            "type": "string"
+          },
           "crew": {
             "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
             "type": "string"
@@ -256,6 +913,10 @@
           },
           "parent": {
             "description": "The same crew parent's global W ID.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Optional immutable UUID creation key. Required with channel_id. Retry the original payload only; returns the same current work and current association without re-linking after removal.",
             "type": "string"
           },
           "sources": {
@@ -1622,6 +2283,659 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read current work references for a readable channel. Returns bounded labels and authoritative status over the same global #/W/H. Pagination binds link and source revisions; an expired cursor is a conflict. No model wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque next cursor returned by this channel view; never construct it.",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "Actual channel ID; current membership determines visibility.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Items per page, 1–100; default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Associate one existing global work object with a readable active channel, with link-revision CAS. Does not change work parent, owner or status and does not wake agents.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "Actual readable channel ID.",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "Current channel view linkRevision, as decimal text.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Existing {kind:requirement|work|humanTask,id:global #/W/H}. No new lifecycle object.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_link"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Remove only a channel work reference with link-revision CAS. The requirement, work or human question and its history remain. Does not wake agents.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "Actual readable channel ID.",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "Current channel view linkRevision, as decimal text.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Existing global #/W/H reference to remove from this channel only.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_unlink"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create shared crew document with immutable UUID request witness; retries return current metadata without repeating body or waking models.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Exact document body, at most1MiB UTF-8 bytes.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Stable original creation request UUID; uncertain retries preserve exact original payload.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Nonblank title, at most512 UTF-8 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "crew_id",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an explicit bounded UTF-8 byte chunk. Subsequent chunks require the observed revision; retained deleted history is readable.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 16384,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "UTF-8 byte offset at a character boundary, default0.",
+            "maximum": 1048576,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "document_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "List bounded metadata, never automatically include bodies.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque cursor from this exact query scope and revision.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "include_deleted": {
+            "description": "Explicitly include soft-deleted metadata, defaultfalse.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "crew_id"
+        ],
+        "type": "object"
+      },
+      "name": "document_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Replace exact-revision title/body; use document_patch for small edits to avoid repeating full content.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Exact document body, at most1MiB UTF-8 bytes.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Nonblank title, at most512 UTF-8 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Soft delete at observed revision, retaining body/audit without automatic wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "document_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Patch exact UTF-8 byte spans of the observed revision: at most20 nonoverlapping edits and16KiB combined new text; returns metadata only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "Exact byte spans {start,end,text}; end exclusive, no overlap.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "maxLength": 16384,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expected_revision": {
+            "description": "Observed current document revision, never guessed.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "name": "document_patch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one bounded page. Cursor binds crew/view/part/revision; expired pages conflict without silently reloading all.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Opaque cursor from this exact query scope and revision.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Bounded page or body-chunk size within schema limits.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "part": {
+            "description": "folders or assignments, defaultfolders.",
+            "enum": [
+              "folders",
+              "assignments"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create shared classification folder using immutable request UUID; independent of work lifecycle/parentage. Compact receipt only.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "Same-scope parent UUID; omit for root.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Stable original creation request UUID; uncertain retries preserve exact original payload.",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "request_id",
+          "expected_tree_revision",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Rename/move/reorder within one crew/view tree under whole-scope revision CAS.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Shared manual name: trimmed nonblank, at most256 UTF-8 bytes.",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "Same-scope parent UUID; omit for root.",
+            "type": "string"
+          },
+          "position": {
+            "description": "Zero-based sibling position after removing the moved folder.",
+            "type": "integer"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision",
+          "name",
+          "position"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Promote child folders to this parent and unclassify direct contents. Never delete underlying work/document/messages or history.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Stable object UUID.",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Classify one visible stable object, or omit folder_id to unclassify; live ACL, no work lifecycle change or automatic wake.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "Actual crew ID.",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "Observed whole crew/view revision; review finite conflict facts.",
+            "type": "string"
+          },
+          "folder_id": {
+            "description": "Same-scope folder UUID; omit to remove classification.",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "Visible stable {kind,id}; kind must match selected view.",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "channel",
+                  "requirement",
+                  "work",
+                  "humanTask",
+                  "document"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "description": "messages/todo/documents/progress; independent from work graph parentage.",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "expected_tree_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": false
       },
       "description": "Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.",
@@ -1805,6 +3119,10 @@
             "description": "How to judge that completion level was achieved.",
             "type": "string"
           },
+          "channel_id": {
+            "description": "Optional actual readable channel ID; creates and associates the plan in the same transaction. Requires request_id. Association is a creation receipt, not a permanent work field.",
+            "type": "string"
+          },
           "crew": {
             "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
             "type": "string"
@@ -1839,6 +3157,10 @@
           },
           "parent": {
             "description": "The same crew parent's global W ID.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Optional immutable UUID creation key. Required with channel_id. Retry the original payload only; returns the same current work and current association without re-linking after removal.",
             "type": "string"
           },
           "sources": {

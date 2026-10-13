@@ -49,14 +49,23 @@ impl Reason {
     /// 按 agent 的语言渲染（`Text` 原样）。
     pub fn text(&self, l: Locale) -> String {
         match self {
-            Self::Rule(r) => match &r.current_work {
-                Some(current) => format!(
-                    "{}\n{}",
-                    r.text(l),
-                    serde_json::json!({"currentWork":current})
-                ),
-                None => r.text(l),
-            },
+            Self::Rule(r) => {
+                let mut facts = serde_json::Map::new();
+                if let Some(v) = &r.current_work {
+                    facts.insert("currentWork".into(), serde_json::json!(v));
+                }
+                if let Some(v) = &r.current_document {
+                    facts.insert("currentDocument".into(), serde_json::json!(v));
+                }
+                if let Some(v) = &r.current_tree_revision {
+                    facts.insert("currentTreeRevision".into(), serde_json::json!(v));
+                }
+                if facts.is_empty() {
+                    r.text(l)
+                } else {
+                    format!("{}\n{}", r.text(l), serde_json::Value::Object(facts))
+                }
+            }
             Self::Text(s) => s.clone(),
         }
     }
@@ -1722,6 +1731,129 @@ pub async fn work_block(
 ) -> PortResult<crewd_proto::WorkBlockReply> {
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work_block::block(tx, &by, p)).await
+}
+pub async fn folder_create_receipt(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderCreateParams,
+) -> PortResult<serde_json::Value> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st,move |tx|{
+        let request=uuid::Uuid::parse_str(&p.request_id).map_err(|_|crewd_collab::resource_invalid("requestId"))?.to_string();
+        let reused=crewd_store::view_folders::request(tx.conn(),&request)?.is_some();
+        let s=crewd_collab::view_folders::create(tx,&by,p)?;
+        let (_,id,_)=crewd_store::view_folders::request(tx.conn(),&request)?.ok_or_else(||crewd_store::StoreError::Invalid("folder receipt lacks request identity".into()))?;
+        Ok(serde_json::json!({"crewId":s.crew_id,"view":s.view,"treeRevision":s.tree_revision,"folderId":id,"requestId":request,"reused":reused}))
+    }).await
+}
+
+pub async fn channel_work_list(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::ChannelWorkListParams,
+) -> PortResult<crewd_proto::ChannelWorkPage> {
+    let by = crewd_collab::Sender::Session(session.into());
+    read(st, move |c| crewd_collab::channel_work::list(c, &by, p)).await
+}
+pub async fn channel_work_link(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::ChannelWorkLinkParams,
+    linked: bool,
+) -> PortResult<crewd_proto::ChannelWorkLinkReceipt> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| {
+        crewd_collab::channel_work::link(tx, &by, p, linked)
+    })
+    .await
+}
+pub async fn document_create(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentCreateParams,
+) -> PortResult<crewd_proto::DocumentCreateResult> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::documents::create(tx, &by, p)).await
+}
+pub async fn document_get(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentGetParams,
+) -> PortResult<crewd_proto::DocumentDetail> {
+    let by = crewd_collab::Sender::Session(session.into());
+    read(st, move |c| crewd_collab::documents::get(c, &by, p)).await
+}
+pub async fn document_list(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentListParams,
+) -> PortResult<crewd_proto::DocumentPage> {
+    let by = crewd_collab::Sender::Session(session.into());
+    read(st, move |c| crewd_collab::documents::list(c, &by, p)).await
+}
+pub async fn document_update(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentUpdateParams,
+) -> PortResult<crewd_proto::DocumentSummary> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::documents::update(tx, &by, p)).await
+}
+pub async fn document_delete(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentDeleteParams,
+) -> PortResult<crewd_proto::DocumentSummary> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::documents::delete(tx, &by, p)).await
+}
+pub async fn folder_list(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderListParams,
+) -> PortResult<crewd_proto::FolderSnapshot> {
+    let by = crewd_collab::Sender::Session(session.into());
+    read(st, move |c| crewd_collab::view_folders::list(c, &by, p)).await
+}
+pub async fn folder_create(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderCreateParams,
+) -> PortResult<crewd_proto::FolderSnapshot> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::view_folders::create(tx, &by, p)).await
+}
+pub async fn folder_update(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderUpdateParams,
+) -> PortResult<crewd_proto::FolderSnapshot> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::view_folders::update(tx, &by, p)).await
+}
+pub async fn folder_delete(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderDeleteParams,
+) -> PortResult<crewd_proto::FolderSnapshot> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::view_folders::delete(tx, &by, p)).await
+}
+pub async fn folder_assign(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::FolderAssignParams,
+) -> PortResult<crewd_proto::FolderSnapshot> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::view_folders::assign(tx, &by, p)).await
+}
+pub async fn document_patch(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::DocumentPatchParams,
+) -> PortResult<crewd_proto::DocumentSummary> {
+    let by = crewd_collab::Sender::Session(session.into());
+    write(st, move |tx| crewd_collab::documents::patch(tx, &by, p)).await
 }
 pub async fn work_reassign_lost(
     st: &AppState,

@@ -39,6 +39,659 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取真实可见群的工作引用，返回有限标题和同一全局#/W/H的权威状态。分页绑定引用版本和来源版本；过期游标明确冲突。不会唤醒模型。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "该群返回的next不透明游标，不自行构造。",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "实际群ID；实时成员资格决定可见性。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页1–100项，默认50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用引用版本CAS把现有全局工作关联到可见且活跃的群。不改变工作父项、负责人或状态，不唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "实际可见群ID。",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "当前群视图的linkRevision十进制文本。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "现有{kind:requirement|work|humanTask,id:全局#/W/H}，不新建生命周期对象。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_link"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用引用版本CAS只解除群关联。原需求、计划、人类问题及历史保留，不唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "实际可见群ID。",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "当前群视图的linkRevision十进制文本。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "只从本群解除的现有全局#/W/H引用。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_unlink"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "创建机组共用文档，UUID保留原始请求证明；重试只返回当前元数据，不重复正文或唤醒模型。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "完整正文，最多1MiB UTF8字节。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "原始创建请求的稳定UUID，未知结果时保留原始内容确认。",
+            "type": "string"
+          },
+          "title": {
+            "description": "非空标题，最多512个UTF8字节。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "crew_id",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按需读取有限UTF8字节正文块，后续块必须提供已读取修订；已删文档历史仍可读取。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 16384,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "UTF8字节偏移，必须在字符边界，默认0。",
+            "maximum": 1048576,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "document_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "仅列出有限元数据，不自动带入正文。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "来自相同查询范围和修订的不透明游标。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "include_deleted": {
+            "description": "明确包含软删除元数据，默认false。",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "crew_id"
+        ],
+        "type": "object"
+      },
+      "name": "document_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按当前修订替换标题和正文；小修改优先document_patch，避免重复全文。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "完整正文，最多1MiB UTF8字节。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "title": {
+            "description": "非空标题，最多512个UTF8字节。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按已读取修订软删除，保留正文和审计，不自动唤醒。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "document_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "原子修改已读取修订的UTF8字节跨度，最多20个不重叠修改，新文本合计16KiB，只返回元数据。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "精确字节范围{start,end,text}，end不包含末字节且不得重叠。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "maxLength": 16384,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "name": "document_patch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取一页有限元数据或引用，游标绑定机组、视图、类型和修订；过期明确冲突，不静默全量重读。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "来自相同查询范围和修订的不透明游标。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "part": {
+            "description": "folders或assignments，默认folders。",
+            "enum": [
+              "folders",
+              "assignments"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用不可变请求UUID创建共用分类文件夹，与工作父级、状态和负责人独立，只返回简短回执。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "name": {
+            "description": "人工填写的共用名称，去空白后非空，最多256个UTF8字节。",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "同范围父文件夹UUID，省略表示根。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "原始创建请求的稳定UUID，未知结果时保留原始内容确认。",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "request_id",
+          "expected_tree_revision",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按整个范围修订，在同机组视图内改名、移动或排序。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "name": {
+            "description": "人工填写的共用名称，去空白后非空，最多256个UTF8字节。",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "同范围父文件夹UUID，省略表示根。",
+            "type": "string"
+          },
+          "position": {
+            "description": "移除当前文件夹后的同级位置，从0开始。",
+            "type": "integer"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision",
+          "name",
+          "position"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "子文件夹上提到父级，直接内容回到未分类，不删除文档、工作、消息或生命周期历史。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "分类一个实际可见的稳定对象，省略folder_id即移出分类；实时检查权限，不自动唤醒或改变工作生命周期。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "folder_id": {
+            "description": "同范围文件夹UUID，省略则移出分类。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "实际可见的稳定对象{kind,id}，kind必须匹配所选视图。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "channel",
+                  "requirement",
+                  "work",
+                  "humanTask",
+                  "document"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "expected_tree_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": false
       },
       "description": "由当前负责人向真实分机提出交接；目标接受前负责人不变。",
@@ -222,6 +875,10 @@
             "description": "怎样判断达到该完成层级。",
             "type": "string"
           },
+          "channel_id": {
+            "description": "可选实际可见群ID；同事务创建并关联计划，须有request_id。关联只是创建回执，不是永久工作字段。",
+            "type": "string"
+          },
           "crew": {
             "description": "机组编号、ID 或唯一名称，默认当前机组；目标机组的权限仍独立校验。",
             "type": "string"
@@ -256,6 +913,10 @@
           },
           "parent": {
             "description": "同机组父计划的全局 W 编号。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "可选不可变UUID创建键，带channel_id时必填。只确认原始正文；返回同一工作的当前视图及当前群关联，已解除的关联不会重建。",
             "type": "string"
           },
           "sources": {
@@ -1622,6 +2283,659 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取真实可见群的工作引用，返回有限标题和同一全局#/W/H的权威状态。分页绑定引用版本和来源版本；过期游标明确冲突。不会唤醒模型。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "该群返回的next不透明游标，不自行构造。",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "实际群ID；实时成员资格决定可见性。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页1–100项，默认50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用引用版本CAS把现有全局工作关联到可见且活跃的群。不改变工作父项、负责人或状态，不唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "实际可见群ID。",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "当前群视图的linkRevision十进制文本。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "现有{kind:requirement|work|humanTask,id:全局#/W/H}，不新建生命周期对象。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_link"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用引用版本CAS只解除群关联。原需求、计划、人类问题及历史保留，不唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "description": "实际可见群ID。",
+            "type": "string"
+          },
+          "expected_link_revision": {
+            "description": "当前群视图的linkRevision十进制文本。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "只从本群解除的现有全局#/W/H引用。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "requirement",
+                  "work",
+                  "humanTask"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_link_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "channel_work_unlink"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "创建机组共用文档，UUID保留原始请求证明；重试只返回当前元数据，不重复正文或唤醒模型。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "完整正文，最多1MiB UTF8字节。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "原始创建请求的稳定UUID，未知结果时保留原始内容确认。",
+            "type": "string"
+          },
+          "title": {
+            "description": "非空标题，最多512个UTF8字节。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "crew_id",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按需读取有限UTF8字节正文块，后续块必须提供已读取修订；已删文档历史仍可读取。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 16384,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "UTF8字节偏移，必须在字符边界，默认0。",
+            "maximum": 1048576,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "document_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "仅列出有限元数据，不自动带入正文。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "来自相同查询范围和修订的不透明游标。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "include_deleted": {
+            "description": "明确包含软删除元数据，默认false。",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "crew_id"
+        ],
+        "type": "object"
+      },
+      "name": "document_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按当前修订替换标题和正文；小修改优先document_patch，避免重复全文。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "完整正文，最多1MiB UTF8字节。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "title": {
+            "description": "非空标题，最多512个UTF8字节。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "title",
+          "body"
+        ],
+        "type": "object"
+      },
+      "name": "document_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按已读取修订软删除，保留正文和审计，不自动唤醒。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "document_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "原子修改已读取修订的UTF8字节跨度，最多20个不重叠修改，新文本合计16KiB，只返回元数据。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "description": "精确字节范围{start,end,text}，end不包含末字节且不得重叠。",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "end": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "maxLength": 16384,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expected_revision": {
+            "description": "实际已读取的文档当前修订，不猜测。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "edits"
+        ],
+        "type": "object"
+      },
+      "name": "document_patch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取一页有限元数据或引用，游标绑定机组、视图、类型和修订；过期明确冲突，不静默全量重读。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "来自相同查询范围和修订的不透明游标。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "在声明范围内的页数或正文块大小。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "part": {
+            "description": "folders或assignments，默认folders。",
+            "enum": [
+              "folders",
+              "assignments"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "用不可变请求UUID创建共用分类文件夹，与工作父级、状态和负责人独立，只返回简短回执。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "name": {
+            "description": "人工填写的共用名称，去空白后非空，最多256个UTF8字节。",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "同范围父文件夹UUID，省略表示根。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "原始创建请求的稳定UUID，未知结果时保留原始内容确认。",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "request_id",
+          "expected_tree_revision",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "按整个范围修订，在同机组视图内改名、移动或排序。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "name": {
+            "description": "人工填写的共用名称，去空白后非空，最多256个UTF8字节。",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "同范围父文件夹UUID，省略表示根。",
+            "type": "string"
+          },
+          "position": {
+            "description": "移除当前文件夹后的同级位置，从0开始。",
+            "type": "integer"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision",
+          "name",
+          "position"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "子文件夹上提到父级，直接内容回到未分类，不删除文档、工作、消息或生命周期历史。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "稳定对象UUID。",
+            "type": "string"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "id",
+          "expected_tree_revision"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_delete"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "分类一个实际可见的稳定对象，省略folder_id即移出分类；实时检查权限，不自动唤醒或改变工作生命周期。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crew_id": {
+            "description": "实际机组ID。",
+            "type": "string"
+          },
+          "expected_tree_revision": {
+            "description": "实际读取的机组、视图整体修订，冲突时核对有限事实。",
+            "type": "string"
+          },
+          "folder_id": {
+            "description": "同范围文件夹UUID，省略则移出分类。",
+            "type": "string"
+          },
+          "object": {
+            "additionalProperties": false,
+            "description": "实际可见的稳定对象{kind,id}，kind必须匹配所选视图。",
+            "properties": {
+              "id": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "channel",
+                  "requirement",
+                  "work",
+                  "humanTask",
+                  "document"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "description": "messages、todo、documents、progress，与工作图父级独立。",
+            "enum": [
+              "messages",
+              "todo",
+              "documents",
+              "progress"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "view",
+          "expected_tree_revision",
+          "object"
+        ],
+        "type": "object"
+      },
+      "name": "view_folder_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": false
       },
       "description": "由当前负责人向真实分机提出交接；目标接受前负责人不变。",
@@ -1805,6 +3119,10 @@
             "description": "怎样判断达到该完成层级。",
             "type": "string"
           },
+          "channel_id": {
+            "description": "可选实际可见群ID；同事务创建并关联计划，须有request_id。关联只是创建回执，不是永久工作字段。",
+            "type": "string"
+          },
           "crew": {
             "description": "机组编号、ID 或唯一名称，默认当前机组；目标机组的权限仍独立校验。",
             "type": "string"
@@ -1839,6 +3157,10 @@
           },
           "parent": {
             "description": "同机组父计划的全局 W 编号。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "可选不可变UUID创建键，带channel_id时必填。只确认原始正文；返回同一工作的当前视图及当前群关联，已解除的关联不会重建。",
             "type": "string"
           },
           "sources": {

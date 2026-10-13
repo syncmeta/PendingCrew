@@ -47,6 +47,11 @@ pub(crate) fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError 
         .as_mut()
         .expect("with_refusal has data")
         .current_work = r.current_work;
+    let data = error.data.as_mut().expect("refusal data");
+    data.current_document = r.current_document;
+    data.current_tree_revision = r.current_tree_revision;
+    data.current_link_revision = r.current_link_revision;
+    data.current_source_revision = r.current_source_revision;
     error
 }
 
@@ -192,7 +197,16 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
-            capabilities.push("work.reassignLost".into());
+            capabilities.extend(
+                [
+                    "work.reassignLost",
+                    "documents",
+                    "viewFolders",
+                    "channelWork",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            );
             to_value(Hello {
                 server: "crewd".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -425,6 +439,91 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: SessionGetParams = parse_params(p)?;
             read(state, move |c| sessions::get(c, &p.session_id)).await
         }
+        methods::CHANNEL_WORK_LIST => {
+            let p: ChannelWorkListParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::channel_work::list(c, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::CHANNEL_WORK_LINK | methods::CHANNEL_WORK_UNLINK => {
+            let linked = req.method == methods::CHANNEL_WORK_LINK;
+            let p: ChannelWorkLinkParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::channel_work::link(tx, &Sender::Human, p, linked)
+            })
+            .await
+        }
+        methods::DOCUMENT_CREATE => {
+            let p: DocumentCreateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::documents::create(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::DOCUMENT_GET => {
+            let p: DocumentGetParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::documents::get(c, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::DOCUMENT_LIST => {
+            let p: DocumentListParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::documents::list(c, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::DOCUMENT_UPDATE => {
+            let p: DocumentUpdateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::documents::update(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::DOCUMENT_DELETE => {
+            let p: DocumentDeleteParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::documents::delete(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::FOLDER_LIST => {
+            let p: FolderListParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::view_folders::list(c, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::FOLDER_CREATE => {
+            let p: FolderCreateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::view_folders::create(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::FOLDER_UPDATE => {
+            let p: FolderUpdateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::view_folders::update(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::FOLDER_DELETE => {
+            let p: FolderDeleteParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::view_folders::delete(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::FOLDER_ASSIGN => {
+            let p: FolderAssignParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::view_folders::assign(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::WORK_CREATE => {
             let p: WorkCreateParams = parse_params(p)?;
             write(state, move |tx| {
@@ -531,6 +630,24 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::WORK_GET => {
             let p: WorkGetParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::get(c, &p.id)).await
+        }
+        methods::ASK_GET => {
+            let p: AskGetParams = parse_params(p)?;
+            if p.ask
+                .strip_prefix('H')
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|n| *n > 0 && p.ask == format!("H{n}"))
+                .is_none()
+            {
+                return Err(refused(
+                    RpcError::INVALID_PARAMS,
+                    crewd_collab::refusal::Refusal::new(
+                        crewd_collab::refusal::Code::ResourceInvalid,
+                    )
+                    .arg("field", "ask"),
+                ));
+            }
+            read(state, move |c| asks::get(c, &p.crew_id, &p.ask)).await
         }
         methods::ASK_LIST => {
             let p: AskListParams = parse_params_or_default(p)?;

@@ -91,6 +91,7 @@ mod tests {
     use crewd_proto::WorkSummary;
     fn item(n: usize) -> WorkSummary {
         WorkSummary {
+            channel_association: None,
             id: format!("W{n}"),
             crew_id: "crew".into(),
             frozen: false,

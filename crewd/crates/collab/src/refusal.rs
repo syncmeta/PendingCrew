@@ -22,6 +22,19 @@ macro_rules! refusal_codes {
 }
 
 refusal_codes! {
+    // documents and view folders
+    ResourceInvalid = "resource.invalid" ["field"],
+    ResourceNotFound = "resource.not_found" ["id"],
+    ResourceForbidden = "resource.forbidden" [],
+    ResourceRequestConflict = "resource.request_conflict" ["request"],
+    DocumentRevisionConflict = "document.revision_conflict" ["id"],
+    DocumentDeleted = "document.deleted" ["id"],
+    ChannelWorkRevisionConflict = "channel.work_revision_conflict" [],
+    ChannelWorkCursorExpired = "channel.work_cursor_expired" [],
+    FolderRevisionConflict = "view_folder.revision_conflict" [],
+    FolderLimit = "view_folder.limit" ["limit"],
+    FolderCycle = "view_folder.cycle" [],
+    FolderObjectScope = "view_folder.object_scope" [],
     // work
     WorkBadRevision = "work.bad_revision" [],
     WorkRevisionConflict = "work.revision_conflict" ["id"],
@@ -197,6 +210,10 @@ pub struct Refusal {
     pub code: Code,
     pub args: Vec<(&'static str, String)>,
     pub current_work: Option<Box<crewd_proto::WorkConflictFacts>>,
+    pub current_document: Option<Box<crewd_proto::DocumentSummary>>,
+    pub current_tree_revision: Option<String>,
+    pub current_link_revision: Option<String>,
+    pub current_source_revision: Option<String>,
 }
 
 impl Refusal {
@@ -205,6 +222,10 @@ impl Refusal {
             code,
             args: Vec::new(),
             current_work: None,
+            current_document: None,
+            current_tree_revision: None,
+            current_link_revision: None,
+            current_source_revision: None,
         }
     }
 

@@ -57,7 +57,12 @@ pub fn block(tx: &mut Tx<'_>, by: &Sender, p: WorkBlockParams) -> Result<WorkBlo
     let rest = match p.can_continue {
         WorkContinuation::Nothing => Continuation::Nothing,
         WorkContinuation::Split { items } => {
-            if items.is_empty() || items.len() > 20 || items.iter().any(|p| p.parent.is_some()) {
+            if items.is_empty()
+                || items.len() > 20
+                || items
+                    .iter()
+                    .any(|p| p.parent.is_some() || p.request_id.is_some() || p.channel_id.is_some())
+            {
                 return Err(CollabError::Invalid(Refusal::new(Code::WorkBadUpdate)));
             }
             Continuation::Split(

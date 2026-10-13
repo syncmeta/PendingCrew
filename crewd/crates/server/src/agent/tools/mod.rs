@@ -5,6 +5,7 @@ pub mod captain;
 pub mod channels;
 pub mod crews;
 pub mod messaging;
+mod resources;
 pub mod work;
 
 use serde::de::DeserializeOwned;
@@ -165,6 +166,20 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_transfer_request" => work::transfer_request(&cx, args).await,
         "work_item_transfer_accept" => work::transfer_accept(&cx, args).await,
         "work_item_transfer_withdraw" => work::transfer_withdraw(&cx, args).await,
+        "channel_work_list"
+        | "channel_work_link"
+        | "channel_work_unlink"
+        | "document_create"
+        | "document_get"
+        | "document_list"
+        | "document_update"
+        | "document_delete"
+        | "document_patch"
+        | "view_folder_list"
+        | "view_folder_create"
+        | "view_folder_update"
+        | "view_folder_delete"
+        | "view_folder_assign" => resources::call(&cx, tool, args).await,
         "work_item_assign" => work::assign(&cx, args).await,
         "work_item_reassign_lost" => work::reassign_lost(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
@@ -361,7 +376,7 @@ mod tests {
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 40);
+        assert_eq!(catalog::CATALOG.len(), 54);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

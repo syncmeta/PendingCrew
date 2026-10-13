@@ -361,6 +361,7 @@ dependencies = [
  "crewd-proto",
  "crewd-store",
  "crewd-work",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
