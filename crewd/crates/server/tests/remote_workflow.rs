@@ -246,3 +246,241 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
         .unwrap()
         .unwrap();
 }
+
+struct Service {
+    owner: RpcClient,
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+async fn service(root: &std::path::Path) -> Service {
+    let root = root.to_owned();
+    let socket = root.join("crewd.sock");
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        crewd_server::serve_with(root, Default::default(), async {
+            let _ = stopping.await;
+        })
+        .await
+    });
+    for _ in 0..400 {
+        if socket.exists() && tokio::net::UnixStream::connect(&socket).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let owner = RpcClient::connect(&socket).await;
+    Service { owner, stop, task }
+}
+async fn stopped(service: Service) {
+    drop(service.owner);
+    service.stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, service.task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+async fn enabled(owner: &mut RpcClient) -> (u16, RemotePublicIdentity) {
+    let before = local(owner, "remote.status", json!({})).await;
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    local(owner,"remote.configure",json!({"requestId":uuid::Uuid::new_v4().to_string(),"expectedRevision":before["configuration"]["revision"],"enabled":true,"listenHost":"127.0.0.1","port":port})).await;
+    let status = local(owner, "remote.status", json!({})).await;
+    assert_eq!(status["listening"], true);
+    (
+        port,
+        serde_json::from_value(status["identity"].clone()).unwrap(),
+    )
+}
+async fn approved(
+    owner: &mut RpcClient,
+    identity: &RemotePublicIdentity,
+) -> (CertificateIdentity, Value, RemoteAcceptResult) {
+    let envelope: RemoteSignedEnvelope = serde_json::from_value(
+        local(
+            owner,
+            "remote.invite",
+            json!({"requestId":uuid::Uuid::new_v4().to_string()}),
+        )
+        .await,
+    )
+    .unwrap();
+    let invitation: RemoteInvitation = verify_envelope(
+        &envelope,
+        &decode_certificate(&identity.certificate_der_base64).unwrap(),
+        CertificateRole::Server,
+        &identity.spki_sha256,
+    )
+    .unwrap();
+    let client = CertificateIdentity::generate().unwrap();
+    let response = client
+        .sign(&RemotePairingResponse {
+            invitation_id: invitation.invitation_id,
+            authority_id: identity.authority_id.clone(),
+            db_id: identity.db_id.clone(),
+            challenge: invitation.challenge,
+            client_certificate_der_base64: client.certificate_base64(),
+            client_spki_sha256: client.pin().into(),
+            device_label: "Restore loopback device".into(),
+        })
+        .unwrap();
+    let input = json!({"requestId":uuid::Uuid::new_v4().to_string(),"responseEnvelope":response});
+    let accepted =
+        serde_json::from_value(local(owner, "remote.accept", input.clone()).await).unwrap();
+    (client, input, accepted)
+}
+
+#[tokio::test]
+async fn public_pair_backup_revoke_restore_same_server_identity_never_revives_old_certificate_or_accept_witness()
+ {
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Public remote restore evidence: {}", root.display());
+    let mut original = service(&root).await;
+    let (port, identity) = enabled(&mut original.owner).await;
+    let (client, accept_input, accepted) = approved(&mut original.owner, &identity).await;
+    let mut connected = RemoteRpc::connect(port, &client, &identity.spki_sha256).await;
+    connected.call("system.hello", json!({})).await;
+    let backup = root.join("old-active-backup.db");
+    crewd_store::backup::backup_db(&root.join(crewd_store::DB_FILE), &backup).unwrap();
+    let old_bytes = std::fs::read(&backup).unwrap();
+    let key_bytes = std::fs::read(root.join("remote/identity.json")).unwrap();
+    local(&mut original.owner,"remote.revoke",json!({"grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"Actual pre-restore revoke"})).await;
+    stopped(original).await;
+    let lock = crewd_server::lock_data_dir(&root).unwrap();
+    crewd_store::backup::restore(&root, &backup).unwrap();
+    drop(lock);
+    assert_eq!(std::fs::read(&backup).unwrap(), old_bytes);
+    assert_eq!(
+        std::fs::read(root.join("remote/identity.json")).unwrap(),
+        key_bytes
+    );
+    let mut restored = service(&root).await;
+    let status = local(&mut restored.owner, "remote.status", json!({})).await;
+    assert_eq!(status["configuration"]["enabled"], false);
+    assert_eq!(status["listening"], false);
+    let confirmed: RemoteAcceptResult =
+        serde_json::from_value(local(&mut restored.owner, "remote.accept", accept_input).await)
+            .unwrap();
+    assert!(
+        confirmed.reused && confirmed.grant.revoked_at.is_some(),
+        "old accept witness must return the current tombstone"
+    );
+    assert_eq!(confirmed.grant.id, accepted.grant.id);
+    let (new_port, new_identity) = enabled(&mut restored.owner).await;
+    assert_eq!(
+        new_identity, identity,
+        "denial must not be explained by a changed db/server key"
+    );
+    let socket = tokio::net::TcpStream::connect(("127.0.0.1", new_port))
+        .await
+        .unwrap();
+    let config = crewd_remote::client_configuration(&client, &identity.spki_sha256).unwrap();
+    let handshake = tokio::time::timeout(
+        LIMIT,
+        tokio_rustls::TlsConnector::from(Arc::new(config)).connect(
+            tokio_rustls::rustls::pki_types::ServerName::try_from("pendingcrew.invalid").unwrap(),
+            socket,
+        ),
+    )
+    .await
+    .unwrap();
+    let old_certificate_is_denied = match handshake {
+        Err(_) => true,
+        Ok(stream) => {
+            let mut attempted = RemoteRpc {
+                io: BufReader::new(stream),
+                next: 1,
+                events: Vec::new(),
+            };
+            let reply = tokio::time::timeout(LIMIT, attempted.frame("system.hello", json!({})))
+                .await
+                .unwrap();
+            reply.is_err() || reply.unwrap().get("error").is_some()
+        }
+    };
+    assert!(
+        old_certificate_is_denied,
+        "old certificate silently revived after an actual same-identity restore"
+    );
+    assert_eq!(std::fs::read(&backup).unwrap(), old_bytes);
+    stopped(restored).await;
+}
+
+async fn durable_state(f: &crewd_server::agent::testkit::Fixture) -> Vec<String> {
+    f.state
+        .db
+        .call(|store| {
+            let mut names = store
+                .conn()
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
+            let tables = names
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut facts = Vec::new();
+            for table in tables {
+                assert!(table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+                let mut statement = store
+                    .conn()
+                    .prepare(&format!("SELECT * FROM \"{table}\""))?;
+                let columns = statement.column_count();
+                let mut rows = statement
+                    .query_map([], |row| {
+                        let mut values = Vec::new();
+                        for column in 0..columns {
+                            values.push(format!("{:?}", row.get_ref(column)?));
+                        }
+                        Ok(values.join("|"))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows.sort();
+                facts.push(table);
+                facts.extend(rows);
+            }
+            Ok::<_, crewd_store::StoreError>(facts)
+        })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn attached_agent_cannot_use_local_remote_administration_as_human() {
+    use crewd_server::agent::testkit::Fixture;
+    let fixture = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(stopping).await;
+    let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(
+        &mut agent,
+        "agent.attach",
+        json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)}),
+    )
+    .await;
+    let before = durable_state(&fixture).await;
+    for method in [
+        "remote.status",
+        "remote.grants",
+        "remote.configure",
+        "remote.invite",
+        "remote.accept",
+        "remote.revoke",
+    ] {
+        let error = tokio::time::timeout(LIMIT, agent.call(method, json!({})))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.0,
+            crewd_proto::RpcError::FORBIDDEN,
+            "attached direct admin {method} must reject before parsing"
+        );
+    }
+    assert_eq!(
+        durable_state(&fixture).await,
+        before,
+        "denied admin cannot allocate IDs, events, wakes, witnesses or facts"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+}
