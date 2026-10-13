@@ -29,8 +29,8 @@ def logcheck(root,value):
  if len(commands)!=1 or 'cargo' not in commands[0] or 'crewd' not in commands[0]:raise ValueError('Actual Rust build command missing')
  configs=[json.loads(line[len('BuildConfiguration: '):]) for line in lines if line.startswith('BuildConfiguration: ')]
  if configs != [value.get('buildConfiguration')]:raise ValueError('Actual logged Rust configuration differs')
-def requested_configuration():
- rust=subprocess.check_output([os.environ.get('RUSTC','rustc'),'-Vv'],text=True).strip()
+def requested_configuration(cwd):
+ rust=subprocess.check_output([os.environ.get('RUSTC','rustc'),'-Vv'],text=True,cwd=cwd).strip()
  host=next(line[6:] for line in rust.splitlines() if line.startswith('host: '))
  profile=os.environ.get('PENDINGCREW_BUILD_BACKEND_PROFILE','release')
  if profile not in ['debug','release']:raise ValueError('Choose an explicit debug or release backend profile')
@@ -39,7 +39,7 @@ def requested_configuration():
   if value not in ['0','1']:raise ValueError(name+' must be 0 or 1')
   return value=='1'
  features=sorted(set(filter(None,re.split(r'[,\s]+',os.environ.get('PENDINGCREW_BUILD_BACKEND_FEATURES','')))))
- return {'toolchain':rust.splitlines()[0],'cargoVersion':subprocess.check_output(['cargo','--version'],text=True).strip(),'target':os.environ.get('PENDINGCREW_BUILD_BACKEND_TARGET') or os.environ.get('CARGO_BUILD_TARGET') or host,'profile':profile,'defaultFeatures':flag('PENDINGCREW_BUILD_BACKEND_DEFAULT_FEATURES','1'),'features':features,'allFeatures':flag('PENDINGCREW_BUILD_BACKEND_ALL_FEATURES','0')}
+ return {'toolchain':rust.splitlines()[0],'cargoVersion':subprocess.check_output(['cargo','--version'],text=True,cwd=cwd).strip(),'target':os.environ.get('PENDINGCREW_BUILD_BACKEND_TARGET') or os.environ.get('CARGO_BUILD_TARGET') or host,'profile':profile,'defaultFeatures':flag('PENDINGCREW_BUILD_BACKEND_DEFAULT_FEATURES','1'),'features':features,'allFeatures':flag('PENDINGCREW_BUILD_BACKEND_ALL_FEATURES','0')}
 def complete_configuration(value):
  if not isinstance(value,dict) or not isinstance(value.get('artifactFeatures'),list) or not isinstance(value.get('artifactProfile'),dict) or not value['artifactProfile'] or not isinstance(value.get('workspaceFeatures'),dict) or not value['workspaceFeatures']:raise ValueError('Actual compiler-artifact effective configuration is missing')
  return value
@@ -64,7 +64,7 @@ def main():
  if action=='inputs':
   root=pathlib.Path(sys.argv[3]);ref=sys.argv[4];count=int(sys.argv[5]);rows=inventory(root)
   if not re.fullmatch('[0-9a-f]{40}',ref):raise ValueError('Frozen commit missing')
-  save(out/'build-inputs.json',{'backendBuildConfiguration':requested_configuration(),'format':1,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':root.name,'candidateVersion':'0.0.'+str(count),'files':rows,'guiInputDigest':digest(subset(rows,'gui')),'rustInputDigest':digest(subset(rows,'rust'))})
+  save(out/'build-inputs.json',{'backendBuildConfiguration':requested_configuration(root/'crewd'),'format':1,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':root.name,'candidateVersion':'0.0.'+str(count),'files':rows,'guiInputDigest':digest(subset(rows,'gui')),'rustInputDigest':digest(subset(rows,'rust'))})
  elif action=='preflight-witness':
   manifest=json.loads((out/'build-inputs.json').read_text());verify_witness(pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[4]),manifest['rustInputDigest'],manifest['backendBuildConfiguration'])
  elif action=='log':
