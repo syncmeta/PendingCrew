@@ -6,7 +6,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture=$(mktemp -d /private/tmp/pcw-client-failure.XXXXXX)
 echo "Failure evidence: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
-    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
+    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/scripts/dev/fixtures/crewd-client-failure.swift" -o "$fixture/probe"
 python3 - "$fixture" "$mode" <<'PYTHON'
 import json,os,pathlib,socket,subprocess,sys,threading,time

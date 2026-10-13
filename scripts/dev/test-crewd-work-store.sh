@@ -6,7 +6,7 @@ fixture=$(mktemp -d /private/tmp/pcw-work-store.XXXXXX)
 echo "Evidence: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" \
- "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" "$root/scripts/dev/fixtures/crewd-work-store.swift" -o "$fixture/test"
+ "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" "$root/scripts/dev/fixtures/crewd-work-store.swift" -o "$fixture/test"
 python3 - "$fixture" <<'PYCODE'
 import pathlib, socket, json, subprocess, threading, sys
 p=pathlib.Path(sys.argv[1]); listener=socket.socket(socket.AF_UNIX); listener.bind(str(p/'wire.sock')); listener.listen(1)

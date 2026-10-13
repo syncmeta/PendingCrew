@@ -71,8 +71,8 @@ struct CrewdWorkspaceView: View {
                     Divider()
                     switch tab {
                     case .messages: messageLayout
-                    case .todo: CrewdWorkPanels(store:workspace.workStore)
-                    case .progress: CrewdWorkPanels(store:workspace.workStore,progressOnly:true)
+                    case .todo: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts)
+                    case .progress: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,progressOnly:true)
                     case .documents:
                         VStack(alignment:.leading,spacing:12) {
                             HStack {Label("文档",systemImage:"doc.text").font(.headline); Spacer(); Text("文件夹 · 待接线").font(.caption).foregroundStyle(.secondary)}
@@ -117,7 +117,7 @@ struct CrewdWorkspaceView: View {
             VStack(alignment:.leading,spacing:8) {
                 DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
                     Text("机组工作引用；群独立视图待接线").font(.caption).foregroundStyle(.secondary)
-                    CrewdWorkPanels(store:workspace.workStore,compact:true).frame(minHeight:100,maxHeight:.infinity)
+                    CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,compact:true).frame(minHeight:100,maxHeight:.infinity)
                 }
                 Divider()
                 DisclosureGroup("本群成员",isExpanded:$membersExpanded) {
