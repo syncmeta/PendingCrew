@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Combine
 
@@ -101,4 +100,3 @@ struct CrewdChannelLinkDrafts {
     /// Explicit user acknowledgement after a fresh read, not inference of an old commit.
     mutating func acknowledge(_ key:Key){guard !busy(key) else{return};unknown[key]=nil}
 }
-#endif

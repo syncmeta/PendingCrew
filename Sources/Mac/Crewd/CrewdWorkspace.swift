@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Combine
 
@@ -6,15 +5,15 @@ import Combine
 final class CrewdWorkspace: ObservableObject {
     let client = CrewdClient()
     lazy var workStore = CrewdWorkStore { [weak self] method, params in
-        guard let self else { throw CancellationError() }
+        guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.client.call(method, params)
     }
     lazy var resources=CrewdResources { [weak self] method,params in
-        guard let self else {throw CancellationError()}
+        guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}
         return try await self.client.call(method,params)
     }
     lazy var channelWork=CrewdChannelWorkStore { [weak self] method,params in
-        guard let self else{throw CancellationError()};return try await self.client.call(method,params)
+        guard let self, !self.retired else{throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)};return try await self.client.call(method,params)
     }
     @Published var channelLinkDrafts=CrewdChannelLinkDrafts()
     @Published var resourceDrafts=CrewdResourceDrafts()
@@ -45,22 +44,44 @@ final class CrewdWorkspace: ObservableObject {
     @Published var status = "未连接"
     @Published var error: String?
     @Published var busy = false
-    let dataDirectory: URL
+    /// Immutable cache/draft namespace. The pairing transport must separately
+    /// authenticate the peer; a namespace UUID is never authentication evidence.
+    let authorityRecordID: UUID
+    let dataDirectory: URL?
+    typealias Connector = @MainActor (CrewdClient) async throws -> Void
+    private let connector: Connector
+    private var retired = false
     private var generation = UUID()
     private var selection = UUID()
     private var sync: Task<Void, Never>?
     private var reconnect: Task<Void, Never>?
     private var reconnectID: UUID?
+    #if os(macOS)
     private var backend: Process?
+    #endif
     private var again = false
     private var recoverNeeded = false
     private var sleeping = false
     private var booting = false
 
-    init(dataDirectory: URL) {
+    #if os(macOS)
+    convenience init(dataDirectory: URL) {
+        self.init(authorityRecordID: UUID(), dataDirectory: dataDirectory, connector: { client in
+            try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        })
+    }
+    #endif
+    /// One instance per paired authority. Switching authorities retires this
+    /// instance and creates another; public W/#/H numbers never share caches.
+    convenience init(authorityRecordID: UUID, connect: @escaping Connector) {
+        self.init(authorityRecordID: authorityRecordID, dataDirectory: nil, connector: connect)
+    }
+    private init(authorityRecordID: UUID, dataDirectory: URL?, connector: @escaping Connector) {
+        self.authorityRecordID = authorityRecordID
         self.dataDirectory = dataDirectory
+        self.connector = connector
         client.onEvent = { [weak self] name, data in
-            guard let self else { return }
+            guard let self, !self.retired else { return }
             self.resources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
             if name == "document.changed" || name == "viewFolder.changed" || name == "channel.workChanged" { return }
@@ -81,7 +102,7 @@ final class CrewdWorkspace: ObservableObject {
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
-            guard let self, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
+            guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
@@ -101,8 +122,28 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    /// Explicit first-edition launch uses an independent root; no legacy importer runs.
+    /// Retain unknown inputs in this old scope for inspection; never replay them
+    /// into the next authority or let a late reconnect reactivate a retired one.
+    func retire() {
+        retired = true; sleeping = true; generation = UUID(); selection = UUID()
+        sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
+        again = false; recoverNeeded = false
+        resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
+        client.disconnect(); status = "已切换连接"
+    }
     func connect() async {
+        guard !retired, !booting else { return }
+        #if os(macOS)
+        if let dataDirectory { await connectLocal(dataDirectory); return }
+        #endif
+        booting = true; defer { booting = false }
+        reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
+        do { try await connectOnly() }
+        catch { if !retired, !Task.isCancelled { self.error = error.localizedDescription; status = "连接失败" } }
+    }
+    #if os(macOS)
+    /// Explicit local launch uses an independent root; no legacy importer runs.
+    private func connectLocal(_ dataDirectory: URL) async {
         guard !booting else { return }
         booting = true; defer { booting = false }
         reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
@@ -150,10 +191,16 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
+    #endif
     private func connectOnly() async throws {
+        guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
-        try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        try await connector(client)
+        guard generation == current, !retired, !Task.isCancelled, !sleeping else {
+            if retired { client.disconnect() }
+            throw CancellationError()
+        }
         workStore.configureCapabilities(client.capabilities)
         resources.configureCapabilities(client.capabilities)
         channelWork.configureCapabilities(client.capabilities)
@@ -273,15 +320,16 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     func perform(_ method: String, _ params: CrewdValue) async -> Bool {
-        guard !busy else { return false }
+        guard !retired, !busy else { return false }
+        let current = generation
         busy = true; defer { busy = false }; error = nil
         do {
             let result = try await client.call(method, params)
+            guard !retired, generation == current else { return false }
             if method == "crew.create", let id = result["id"].string { selectCrew(id) }
             if method == "session.start", let id = result["id"].string { selectSession(id) }
             scheduleSync(); return true
         }
-        catch { self.error = error.localizedDescription; scheduleSync(); return false }
+        catch { if !retired, generation == current { self.error = error.localizedDescription; scheduleSync() }; return false }
     }
 }
-#endif

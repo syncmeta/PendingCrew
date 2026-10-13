@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import SwiftUI
 
@@ -92,6 +91,7 @@ enum CrewdPlanCommand {
         return ("work.update",.object(p))
     }
 }
+#if os(macOS)
 struct CrewdPlanActions:View {
     @ObservedObject var store:CrewdWorkStore
     @Binding var drafts:CrewdPlanDrafts

@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// Mutable window input, including immutable uncertain submission snapshots.
@@ -27,4 +26,3 @@ struct CrewdResourceDrafts {
         if accepted && entries[snapshot.key] == snapshot {entries[snapshot.key]=nil}
     }
 }
-#endif

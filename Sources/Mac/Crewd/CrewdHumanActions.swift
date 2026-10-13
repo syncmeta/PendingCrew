@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 /// Window-owned input snapshots only; ask state remains in the organization inbox.
@@ -31,6 +30,7 @@ struct CrewdHumanTarget:Identifiable {
     var crewTitle:String?=nil
     var id:String {key.scope+":"+key.crew+":"+key.ask}
 }
+#if os(macOS)
 struct CrewdHumanActions:View {
     @ObservedObject var store:CrewdWorkStore
     @Binding var drafts:CrewdHumanDrafts
