@@ -394,6 +394,7 @@ fn rpc_drives_every_client_method() {
         ),
         ("session.list", "null", Ok),
         ("session.get", r#"{"sessionId":"captain-1111aaaa"}"#, Ok),
+        ("session.usage", r#"{"sessionId":"captain-1111aaaa"}"#, Ok),
         (
             "work.create",
             r#"{"crewId":"local-aaaa","title":"synthetic plan"}"#,
@@ -524,6 +525,14 @@ fn rpc_drives_every_client_method() {
             );
             created_work.push(second["id"].as_str().unwrap().to_owned());
             assert_ne!(created_work[0], created_work[1]);
+        } else if method == "session.usage" {
+            let evidence: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(
+                evidence["items"],
+                serde_json::json!([]),
+                "no model notification must remain unknown, not fabricated zeros"
+            );
+            assert!(evidence["nextAfter"].is_null());
         } else if method == "work.patrol" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             assert_eq!(first["items"].as_array().unwrap().len(), 1);

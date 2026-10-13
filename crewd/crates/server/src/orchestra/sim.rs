@@ -58,7 +58,7 @@ operations! {
     LaunchFailed = 2, BriefUndelivered = 3, PromptUndelivered = 2,
     TurnFailed = 2, VersionIncompatible = 2, DraftText = 4, DraftUnknown = 4,
     DraftClear = 5, ResumeRefused = 2, Item = 1, TurnEnded = 1, Notice = 1,
-    Profile = 1, ExitNatural = 4, ExitStopped = 3, ExitQuota = 3,
+    Profile = 1, UsageSnapshot = 1, ExitNatural = 4, ExitStopped = 3, ExitQuota = 3,
     ExitStoppedQuota = 2, StreamEnded = 3, LaunchedOk = 7, LaunchedErr = 4,
     Start = 3, Stop = 5, Resume = 12, NudgeText = 8, NudgeKeys = 5,
     Answer = 6, SetCaptain = 3, Recover = 3, SetSettings = 3, Hibernate = 2,
@@ -131,6 +131,7 @@ fn event_op(e: &SessionEvent) -> Op {
         SessionEvent::TurnEnded { .. } => Op::TurnEnded,
         SessionEvent::Notice(_) => Op::Notice,
         SessionEvent::Profile(_) => Op::Profile,
+        SessionEvent::Usage(_) => Op::UsageSnapshot,
         SessionEvent::Exited(info) => match (info.stopped_by_user, info.hit_limit) {
             (false, false) => Op::ExitNatural,
             (true, false) => Op::ExitStopped,
@@ -1675,6 +1676,18 @@ impl Walk {
                     },
                     Op::Notice => SessionEvent::Notice("sim notice".into()),
                     Op::Profile => SessionEvent::Profile(Profile::default()),
+                    Op::UsageSnapshot => {
+                        SessionEvent::Usage(crewd_exec::session::RunnerUsageSnapshot {
+                            provider: "codex".into(),
+                            thread_id: r
+                                .live(&live)
+                                .expect("selected live runner")
+                                .agent_session_id
+                                .clone(),
+                            turn_id: None,
+                            token_usage_json: "{}".into(),
+                        })
+                    }
                     Op::ExitNatural | Op::ExitStopped | Op::ExitQuota | Op::ExitStoppedQuota => {
                         SessionEvent::Exited(ExitInfo {
                             status: ExitStatusKind::Code(1),

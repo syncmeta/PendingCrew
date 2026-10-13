@@ -997,6 +997,18 @@ impl CodexCore {
         {
             self.clear_human(Some(turn));
         }
+        if method == "thread/tokenUsage/updated" {
+            match super::usage::notification(
+                params,
+                self.thread_id.as_deref().expect("checked active thread"),
+            ) {
+                Ok(Some(snapshot)) => self.event(SessionEvent::Usage(snapshot)),
+                Ok(None) => {}
+                Err(reason) => self.event(SessionEvent::Notice(format!(
+                    "Usage evidence not recorded: {reason}."
+                ))),
+            }
+        }
         let s: Signals = self.tracker.on_notification(method, params);
         if let Some((turn_id, item)) = s.item {
             if method == "item/completed" {
@@ -1246,6 +1258,79 @@ pub fn launch_health(verdict: LaunchVerdict, underlying: &str) -> Health {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn usage_notification_preserves_raw_members_only_for_the_explicit_thread() {
+        let mut t = T::ready(None);
+        t.take_events();
+        let raw = json!({"last":{"inputTokens":42,"cachedInputTokens":3,"outputTokens":9,"reasoningOutputTokens":2,"totalTokens":51},
+            "total":{"totalTokens":9007199254740993u64},"future":{"unknown":true},"modelContextWindow":null});
+        t.notify(
+            "thread/tokenUsage/updated",
+            json!({"threadId":"other","turnId":"wrong","tokenUsage":raw}),
+        );
+        assert!(
+            !t.take_events()
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Usage(_)))
+        );
+        t.notify(
+            "thread/tokenUsage/updated",
+            json!({"threadId":"thr-1","tokenUsage":raw}),
+        );
+        let events = t.take_events();
+        let sample = events
+            .into_iter()
+            .find_map(|e| {
+                if let SessionEvent::Usage(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(sample.turn_id, None, "must not infer a tracker turn");
+        assert_eq!(sample.provider, "codex");
+        assert_eq!(
+            serde_json::from_str::<Value>(&sample.token_usage_json).unwrap(),
+            raw
+        );
+        assert!(sample.token_usage_json.contains("9007199254740993"));
+        assert!(!sample.token_usage_json.contains("cacheWriteInputTokens"));
+        let zero = json!({"last":{"cacheWriteInputTokens":0},"future":null});
+        t.notify(
+            "thread/tokenUsage/updated",
+            json!({"threadId":"thr-1","turnId":"provider-turn","tokenUsage":zero}),
+        );
+        let sample = t
+            .take_events()
+            .into_iter()
+            .find_map(|e| {
+                if let SessionEvent::Usage(s) = e {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(sample.turn_id.as_deref(), Some("provider-turn"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&sample.token_usage_json).unwrap(),
+            zero
+        );
+        for invalid in [
+            json!({"tokenUsage":{}}),
+            json!({"threadId":"thr-1","tokenUsage":null}),
+            json!({"threadId":"thr-1","tokenUsage":{"huge":"x".repeat(crate::session::RUNNER_USAGE_MAX_JSON_BYTES)}}),
+        ] {
+            t.notify("thread/tokenUsage/updated", invalid);
+            let events = t.take_events();
+            assert!(!events.iter().any(|e| matches!(e, SessionEvent::Usage(_))));
+            assert!(events.iter().any(
+                |e| matches!(e,SessionEvent::Notice(n) if n.contains("Usage evidence not recorded"))
+            ));
+        }
+    }
 
     #[test]
     fn human_approval_waits_for_the_person_instead_of_being_rejected() {

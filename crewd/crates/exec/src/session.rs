@@ -221,8 +221,22 @@ pub enum SessionEvent {
     InputDraft(Option<HeldDraft>),
     /// codex：服务端确认的实际模型 / 推理强度 / fast 档（握手回包、设置回显）。
     Profile(Profile),
+    /// Original provider usage snapshot; not a delta, inferred turn, or progress event.
+    Usage(RunnerUsageSnapshot),
     Exited(ExitInfo),
 }
+
+/// Canonical JSON over the parsed tokenUsage object. Only explicit provider turn identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunnerUsageSnapshot {
+    pub provider: String,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub token_usage_json: String,
+}
+/// Bound the queue and explicit readback; no entire wire notification is retained.
+pub const RUNNER_USAGE_MAX_JSON_BYTES: usize = 64 * 1024;
+pub const RUNNER_USAGE_MAX_ID_BYTES: usize = 4096;
 
 /// 服务端确认的会话档位。`None` = 服务端没说（不是「关」）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

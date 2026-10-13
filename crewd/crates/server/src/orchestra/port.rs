@@ -570,6 +570,12 @@ pub trait Port: Send + Sync + 'static {
         turn_id: &str,
         text: &str,
     ) -> impl Future<Output = Result<()>> + Send;
+    fn record_usage(
+        &self,
+        session: &str,
+        snapshot: crewd_exec::session::RunnerUsageSnapshot,
+        observed_at: Ms,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn publish(&self, e: OrchestraEvent);
 }
 

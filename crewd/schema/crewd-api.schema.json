@@ -2796,6 +2796,96 @@
       ],
       "type": "object"
     },
+    "RunnerUsagePage": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RunnerUsageRecord"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "RunnerUsageParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "description": "Canonical positive decimal record ID, not a JSON number.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "RunnerUsageRecord": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "observedAt": {
+          "description": "First accepted actor observation, not a provider timestamp.",
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tokenUsageJson": {
+          "description": "Parsed canonical JSON text preserves fields, missing versus 0, and integer precision.\nConsumers must not sum cumulative snapshots or overlapping breakdown fields.",
+          "type": "string"
+        },
+        "turnId": {
+          "description": "Absent/null provider turn means unknown; never inferred from the active turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "provider",
+        "threadId",
+        "tokenUsageJson",
+        "observedAt"
+      ],
+      "type": "object"
+    },
     "SenderKind": {
       "enum": [
         "human",
@@ -5184,6 +5274,14 @@
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session.usage": {
+      "params": {
+        "$ref": "#/$defs/RunnerUsageParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RunnerUsagePage"
       }
     },
     "settings.get": {
