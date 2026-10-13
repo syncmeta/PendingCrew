@@ -70,3 +70,12 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 - main 实际远端核对原为 67430035；protected README/design/旧ACP资料在整合 diff 中没有变化。实际 inventory166 个 modified/untracked、非 ignored 文件整合前后 SHA/link 均相同。该数字不冒称 ignored 文件 inventory。两份核对记录位于 `/private/tmp/pcw-M3-main-human-before-fe68022f.json` 和 `pcw-M3-main-human-after-fe68022f.json`。
 - 根快进本地 main 并普通推送远端 fe68022f，自动组合 CI `crewd 38479786302` 与 `CI 38479786399` 均绑定此精确 SHA，仍待完成，不手动重复 dispatch。main 合入不代表安装、窗口、真实 provider 或整项 M3 完成。
 - 新 normal helper 输入已 prepare（尚未 build）：`/private/tmp/pcw-M3-normal-backend-20261014-2eeec984`，RustInputDigest `c102588bdde3cae28abc5b8a8849c8fe8fb23a4a39fec8dbc3aaff4f408c016b`。旧 b064 helper/a9候选不冒充新源码；等待唯一 target 短窗口，再实际正常构建及新 GUI/helper 配对。
+
+
+## 2026-10-14：新 main 完整正常后台/GUI候选实际构建
+
+- 后台作者明确交付唯一 target 短窗口后，根实际执行 normal `cargo build --offline --locked -p crewd --message-format=json`，exit0；Rust1.94、default features、debug、非 all-features/非 test artifact。完成 witness `/private/tmp/pcw-M3-normal-backend-20261014-2eeec984-witness.json`。窗口已明确归还作者与 M6/QA 协调。
+- GUI 固定 main `fe68022f`，复用上述完整输入相同的实际 helper，经 immutable snapshot、Swift -O 实编译、打包和 adhoc 签名生成新候选：`/private/tmp/pcw-M3-immutable-candidate-20261014-fe68022f-02/PendingCrew Codex First.app`。
+- 首次构建调用遗漏 explicit debug/toolchain 意图，门禁正确以配置不匹配拒绝，原路径与日志保留；补足 Rust1.94/debug 意图后新目录 build02 成功，未重复编译 Cargo。第一次 artifact 检查误传容器目录而非 .app，立即按脚本参数纠正；不是产品失败。
+- 根实际 artifact checker PASS：完整 GUI/Rust 输入、pre-sign binary、实际配置/日志、打包 digest 及签名配对；日志 `/private/tmp/pcw-M3-immutable-candidate-fe68022f-build-02.log`、`pcw-M3-immutable-candidate-fe68022f-artifact.log`。已交质量线独立产物验收，尚不宣称独验已通过。
+- main 自动组合 CI 仍待结果；没有启动新候选、没有新窗口点击、真实 provider、安装或日常数据切换。M3 仍未完成。
