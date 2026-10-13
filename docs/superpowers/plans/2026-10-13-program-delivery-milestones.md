@@ -75,6 +75,14 @@ Jev 与个人/团队记忆保留为待讨论设计，不擅自实施，也不拿
 
 当前 primary 依据：[common fields](https://code.claude.com/docs/en/hooks#common-input-fields)、[hook failure](https://code.claude.com/docs/en/hooks#block-the-action-when-a-hook-fails)、[UserPromptSubmit](https://code.claude.com/docs/en/hooks#userpromptsubmit)、[Stop](https://code.claude.com/docs/en/hooks#stop)。作者与独立质量线负责整块启动/载入/审批/取消/停止/恢复与混合路由验收，不为该裁决停其他独立实现。
 
+## M4 原生结构化控制优先路径（2026-10-14 根裁决）
+
+采用真正交互 Claude CLI 主进程内的 native Mod prompt/abort/turn receipt 作为自动控制优先方向，主进程始终保留真实 PTY、人工输入、审批和尺寸/ANSI。用户要求真实 PTY，不要求自动任务模拟键盘逐字输入；不转 SDK/headless/-p。ACP helper 通过私有登记桥接 native Mod，继续复用 Core 唯一耐久工作/进程账，不形成第二份团队账。
+
+实际 build types、加载能力、ownership/content/session epoch/turnId、真实取消及已有 hook 继续结果仍需整块验收。原始 submit 参数不独自证明后续 hook/mod 未改变内容；原生内容闸和聚合终态的边界继续有效。自动投递只能走一种已验证路径，不能同时写 PTY 与 native API 重复发同一任务。未知能力明确保留，fake host 不冒充真实 CLI/模型。Primary：[native mod events](https://code.claude.com/docs/en/plugins/mods/events#follow-a-turn)。
+
+允许自有隔离 profile/cwd/config、dummy 凭据、localhost mock 的只观察 metadata PTY 层取得真实 types；不发 prompt、不访问真实 provider、不读个人 auth/transcript、不改全局/日常实例，固定寿命并实际清理。该许可不扩大付费/真实模型运行范围。原动作若审查拒绝，保留事实，不换工具/代理绕过。
+
 ## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
 
 - Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。

@@ -86,3 +86,10 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 质量线实际 artifact checker exit0 且独立从 Git object 比对：369 tracked GUI/Rust 输入匹配 fe68022f，349 Rust 输入还匹配实际 helper witness 2eeec984；配置/原始日志/pre-sign/打包 hash/strict 双签均通过。生成 CandidateMain 单列。质量记录91d2b919已整合为44489e7b；纯追加文档冲突完整保留旧窗口及 CI 段和新独验段，未覆盖历史。实际证据 `/private/tmp/pcw-M3-fe680-artifact-independent-01.log` 与 `.json`。这只关闭新候选的产物独验层；main组合CI、实际窗口、真实任务、安装/迁移仍分别待验。
 
 已绑定 main 自动真实 job：Swift/Mac/iOS 115579275488（run38479786399），工程同步115579275642已通过；后台Mac115579274922与Linux115579274975（run38479786302）。两个 run 精确 SHA 均 fe68022f，仍 live。观察器 session91790/81118 对应这两个 run，不重新 dispatch。
+
+
+## 2026-10-14：main 后台双平台已通过，独立模块继续
+
+真实 main run38479786302 已 terminal success，SHA fe68022f；Mac115579274922与Linux115579274975均2546pass/8skip，Linux另记1leaky。完整日志 `/private/tmp/pcw-M3-main-macos-rust-ci-fe68022f.log` 与 `pcw-M3-main-linux-rust-ci-fe68022f.log`。Swift run38479786399仍live，根保留原watcher91790。质量线接实际新normal packaged helper＋typed客户端受影响组合验收，不重跑稳定单元全集或启动GUI/真实模型。
+
+M6 source-only接线首次被自动审查以持续网络暴露/具体授权不足拒绝，未执行。作者保留同动作，提交准确的隔离源码范围/default-off证据后复核通过，并未换代理或工具绕过。根实际只读核对 schema enabled=0，start_persisted 在disabled返回且先于identity/listen。证据 `/private/tmp/pcw-M6-source-only-routing-scope-proof-01.txt`。这只允许既有范围的源码实施，未启动LAN或改日常配置，模块仍须完整服务/TLS/配对/撤销验收。
