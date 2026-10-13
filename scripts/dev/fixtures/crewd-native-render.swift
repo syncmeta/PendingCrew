@@ -25,16 +25,41 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
         }
         workspace.workStore.selectCrew("engineering");try await workspace.workStore.refresh()
         _ = try await workspace.workStore.detail(CrewdWorkID("W42",kind:.plan)!)
+        let docID="10000000-0000-0000-0000-000000000001",folderID="20000000-0000-0000-0000-000000000001"
+        let docBody="这里保留共享的开发说明。\n原始证据和下一步交接说明由机组成员共同维护。"
+        let docSummary=CrewdValue.object(["id":.string(docID),"crewId":.string("engineering"),"title":.string("机组共同开发说明"),"revision":.string("1"),"bodyLength":.integer(Int64(docBody.utf8.count)),"createdBy":.object(["kind":.string("human")]),"updatedBy":.object(["kind":.string("session"),"sessionId":.string("captain")]),"createdAt":.string("2026-10-14T01:00:00Z"),"updatedAt":.string("2026-10-14T02:00:00Z"),"deletedAt":.null])
+        workspace.resources=CrewdResources{method,params in
+            switch method {
+            case "document.list":return .object(["items":.array([docSummary]),"next":.null])
+            case "document.get":guard case .object(var fields)=docSummary else{fatalError()};fields["body"] = .string(docBody);return .object(fields)
+            case "viewFolder.list":
+                let view=params["view"].string!,kind=view == "documents" ? "document":view == "messages" ? "channel":"work",id=view == "documents" ? docID:view == "messages" ? "group":"W42"
+                return .object(["crewId":.string("engineering"),"view":.string(view),"treeRevision":.string("1"),"folders":.array([.object(["id":.string(folderID),"name":.string("开发资料"),"parentId":.null,"position":.integer(0)])]),"assignments":.array([.object(["object":.object(["kind":.string(kind),"id":.string(id)]),"folderId":.string(folderID)])])])
+            default:fatalError("unexpected resource write in offscreen renderer: \(method)")
+            }
+        }
+        workspace.resources.configureCapabilities(["documents","viewFolders"]);workspace.resources.selectCrew("engineering")
+        try await workspace.resources.refreshDocuments();_ = try await workspace.resources.document(docID)
+        for view in CrewdResourceView.allCases {_ = try await workspace.resources.refreshFolders(view)}
+        var resourceDrafts=CrewdResourceDrafts();let docKey=CrewdResourceDrafts.Key(crew:"engineering",view:.documents,object:"",operation:"create",domain:.document)
+        var docFields=CrewdResourceDrafts.Fields();docFields.title="准备新的交接说明";docFields.body=docBody;resourceDrafts.edit(docKey,docFields)
+        let folderKey=CrewdResourceDrafts.Key(crew:"engineering",view:.documents,object:"",operation:"create",domain:.folder)
+        var folderFields=CrewdResourceDrafts.Fields();folderFields.title="共享资料";folderFields.revision="1";resourceDrafts.edit(folderKey,folderFields)
         for (name,scheme,appearance) in [("light",ColorScheme.light,NSAppearance.Name.aqua),("dark",ColorScheme.dark,NSAppearance.Name.darkAqua)] {
             NSApplication.shared.appearance=NSAppearance(named:appearance)
             let screens:[(String,AnyView)] = [
                 ("messages",AnyView(CrewdWorkspaceView(workspace:workspace,autoConnect:false))),
+                ("documents",AnyView(CrewdDocumentsView(store:workspace.resources,drafts:.constant(resourceDrafts)))),
+                ("document-editor",AnyView(CrewdDocumentEditor(store:workspace.resources,drafts:.constant(resourceDrafts),target:CrewdDocumentTarget(key:docKey)))),
+                ("folder-editor",AnyView(CrewdFolderEditor(store:workspace.resources,drafts:.constant(resourceDrafts),view:.documents))),
                 ("handoff",AnyView(CrewdHandoffView(store:workspace.workStore,id:CrewdWorkID("W42",kind:.plan)!,members:workspace.sessions))),
-                ("human",AnyView(CrewdHumanActions(store:workspace.workStore,drafts:.constant(CrewdHumanDrafts()),target:CrewdHumanTarget(key:.init(scope:"engineering",crew:"engineering",ask:"H43"))))),
-                ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions))),
-                ("progress",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,progressOnly:true)))
+                ("human",AnyView(CrewdHumanActions(store:workspace.workStore,drafts:.constant(CrewdHumanDrafts()),target:CrewdHumanTarget(key:.init(scope:"engineering",crew:"engineering",ask:"H43"),crewTitle:"开发机组")))),
+                ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:.constant(CrewdResourceDrafts()),drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,crews:workspace.crews))),
+                ("progress",AnyView(CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:.constant(CrewdResourceDrafts()),drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,crews:workspace.crews,progressOnly:true)))
             ]
-            for (screen,view) in screens {
+            let selected=ProcessInfo.processInfo.environment["PENDINGCREW_RENDER_SCREENS"].map{Set($0.split(separator:",").map(String.init))}
+            if let selected {precondition(!selected.isEmpty && selected.isSubset(of:Set(screens.map{$0.0})),"explicit render screens must exist")}
+            for (screen,view) in screens where selected == nil || selected!.contains(screen) {
             let controller=NSHostingController(rootView:view.preferredColorScheme(scheme).environment(\.colorScheme,scheme).frame(width:1320,height:820).background(CrewdChatStyle.canvas(scheme)))
             let windowStyle:NSWindow.StyleMask=ProcessInfo.processInfo.environment["PENDINGCREW_RENDER_BORDERLESS"] == "1" ? [.borderless]:[.titled]
             let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:820),styleMask:windowStyle,backing:.buffered,defer:false)

@@ -15,7 +15,7 @@ fixture=$(mktemp -d /private/tmp/pcw-swift-restart.XXXXXX)
 mkdir -p "$fixture/home" "$fixture/work" "$fixture/cache" "$fixture/data"
 echo "Full synthetic logs: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library \
-    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdPlanActions.swift" "$root/Sources/Mac/Crewd/CrewdHumanActions.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
+    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdPlanActions.swift" "$root/Sources/Mac/Crewd/CrewdHumanActions.swift" "$root/Sources/Mac/Crewd/CrewdResources.swift" "$root/Sources/Mac/Crewd/CrewdResourceDrafts.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/scripts/dev/fixtures/crewd-client-restart.swift" -o "$fixture/client-test"
 python3 - "$server_program" "$fake_program" "$fixture" "$mode" <<'PYTHON'
 import os, pathlib, socket, subprocess, sys, time
