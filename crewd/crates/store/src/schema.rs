@@ -2254,4 +2254,66 @@ mod organization_version_tests {
         assert_eq!(version(&old), 9);
         assert_eq!(issued(&old), before);
     }
+    #[test]
+    fn staged_v9_preserves_usage_and_pending_inflight_delivered_wake_receipts() {
+        let conn = legacy_v8();
+        conn.execute_batch("INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('s','b','worker','codex','t');").unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::runner_usage::append(&tx, "s", crate::runner_usage::Snapshot {
+            provider: "codex", thread_id: "thread-original", turn_id: None,
+            token_usage_json: r#"{"total":{"totalTokens":9007199254740993},"unknown":{"future":"retained"}}"#,
+        }, 1000).unwrap();
+        for (state, attempts, settled) in [
+            ("pending", 0, None),
+            ("inflight", 1, None),
+            ("delivered", 1, Some("original-receipt")),
+        ] {
+            tx.execute("INSERT INTO wakes(session_id,kind,source,priority,not_before,note,state,attempts,created_at,settled_at) VALUES('s','checkpoint',?1,'system',1000,?2,?3,?4,'original-time',?5)", params![format!("work-check:{state}"), r#"{"items":["W3"],"original":"receipt identity"}"#,state,attempts,settled]).unwrap();
+        }
+        tx.commit().unwrap();
+        fn wakes(conn: &Connection) -> Vec<(i64, String, String, String, i64, Option<String>)> {
+            conn.prepare("SELECT id,source,note,state,attempts,settled_at FROM wakes ORDER BY id")
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        }
+        let before_wakes = wakes(&conn);
+        let before_usage =
+            serde_json::to_value(crate::runner_usage::list(&conn, "s", 0, 50).unwrap()).unwrap();
+        migrate_v9(&conn).unwrap();
+        assert_eq!(wakes(&conn), before_wakes);
+        assert_eq!(
+            serde_json::to_value(crate::runner_usage::list(&conn, "s", 0, 50).unwrap()).unwrap(),
+            before_usage
+        );
+        // B's published W3 maps to organization W2; existing wake notes must
+        // retain the published identity rather than be rewritten to the core.
+        assert_eq!(
+            crate::work_organization::core_for_reference(
+                &conn,
+                crate::object_refs::ObjectKind::Plan,
+                3
+            )
+            .unwrap()
+            .as_deref(),
+            Some("W2")
+        );
+        migrate_v9(&conn).unwrap();
+        assert_eq!(wakes(&conn), before_wakes);
+        assert_eq!(
+            serde_json::to_value(crate::runner_usage::list(&conn, "s", 0, 50).unwrap()).unwrap(),
+            before_usage
+        );
+    }
 }
