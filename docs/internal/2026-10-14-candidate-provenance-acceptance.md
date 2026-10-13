@@ -15,3 +15,7 @@ The client author owns the immutable committed-input builder, full GUI input reg
 After the complete M2 module is frozen, capture the immutable complete Rust input snapshot and canonical digest before the next necessary actual build. Preserve the command, exit status, original compiler output, pre-sign binary and digest. Use that exact binary in the GUI package when the package Rust inputs match. Do not infer provenance from a later HEAD or substitute only a declared source ref. A matching recorded prebuilt input permits reuse rather than a second cold release build; it does not make the synthetic validator result a real build result.
 
 M3 remains incomplete until the real builder/checker chain, consistent packaged runtime, visible-window flow and authorized actual use/migration gates pass. M1/M2 acceptance and later M4–M6 remain distinct program gates.
+
+## Configuration gate still pending
+
+Exact source inputs alone do not prove toolchain, target, profile or feature equivalence. The actual builder and prebuilt witness must retain the real configuration and compare it with the chosen candidate configuration. An explicitly selected debug local candidate is permitted; an all-features/testkit binary must not silently become a default-feature release artifact. Client and QA own this additional structural check and actual execution integration. The accepted `d5a3c283` synthetic controls are not evidence that this configuration gate is already implemented.
