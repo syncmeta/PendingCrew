@@ -66,6 +66,15 @@ func folder(_ id:String=folderID,parent:String?=nil)->CrewdValue {.object(["id":
         fields.body="edited later";drafts.edit(key,fields);let fresh=drafts.begin(key)!;drafts.finish(old,accepted:true)
         precondition(drafts.busy(key) && drafts.fields(key).body == "edited later" && old.request != fresh.request,"old receipt cannot clear edited input or reuse another payload UUID")
         drafts.finish(fresh,accepted:false,uncertain:true);precondition(drafts.uncertain(key).first?.fields.body == "edited later")
+        store.selectCrew("a");peer.row=summary("4");peer.snapshot=tree("a","documents",revision:"2",folders:[folder()])
+        await store.activate(.documents)
+        peer.row=summary("5",title:"after dropped event");peer.snapshot=tree("a","documents",revision:"3",folders:[folder()])
+        let beforeLag=peer.calls.count
+        store.handleEvent("events.lagged",.object(["dropped":.integer(2)]))
+        store.handleEvent("events.lagged",.object(["dropped":.integer(1)]))
+        try await Task.sleep(nanoseconds:350_000_000)
+        precondition(store.documents[documentID]!.revision == "5" && store.folders[.documents]!.revision == "3","global lagged event with no crewId must restore the current active resource facts")
+        precondition(peer.calls.dropFirst(beforeLag).map{$0.0}.sorted() == ["document.list","viewFolder.list"],"two lagged events should coalesce one bounded read-only active view refresh without mutations")
         let count=peer.calls.count;store.invalidateConnection();await rejects{_ = try await store.document(documentID)};precondition(peer.calls.count == count,"disconnect clears capabilities, no implicit reads/writes")
         print("PASS: resource exact bytes/current-metadata idempotency/capability/metadata-CAS/folder boundaries/scope generation/window drafts; synthetic only")
     }

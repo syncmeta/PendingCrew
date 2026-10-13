@@ -32,6 +32,7 @@ import Foundation
         drafts.finish(before,accepted:false,uncertain:true)
         precondition(drafts.uncertain(key) && drafts.fields(key) == f,"unknown outcome keeps original draft")
         f.note="new payload";drafts.edit(key,f);let fresh=drafts.begin(key)!
+        precondition(drafts.unknownSnapshots(key).contains{$0.version == before.version && $0.fields == before.fields},"edited draft must retain the complete original uncertain operation payload, not only its UUID")
         drafts.finish(before,accepted:true)
         precondition(drafts.busy(key) && drafts.fields(key) == f,"late old success cannot clear newer draft")
         let other=CrewdPlanDrafts.Key(crew:"b",object:"W8",source:"");var b=CrewdPlanDrafts.Fields();b.note="B draft";drafts.edit(other,b)
