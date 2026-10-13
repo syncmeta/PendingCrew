@@ -2,9 +2,9 @@ import Foundation
 import Network
 import Combine
 
-/// The wire value stays lossless; domain state remains owned by crewd.
+/// Preserve signed and unsigned 64-bit wire integers; domain state stays owned by crewd.
 indirect enum CrewdValue: Codable, Equatable, Sendable {
-    case null, bool(Bool), integer(Int64), number(Double), string(String), array([CrewdValue]), object([String: CrewdValue])
+    case null, bool(Bool), integer(Int64), unsigned(UInt64), number(Double), string(String), array([CrewdValue]), object([String: CrewdValue])
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null }
@@ -13,6 +13,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
         else if let v = try? c.decode([String: CrewdValue].self) { self = .object(v) }
         else if let v = try? c.decode([CrewdValue].self) { self = .array(v) }
         else if let v = try? c.decode(Int64.self) { self = .integer(v) }
+        else if let v = try? c.decode(UInt64.self) { self = .unsigned(v) }
         else { self = .number(try c.decode(Double.self)) }
     }
     func encode(to encoder: Encoder) throws {
@@ -21,6 +22,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
         case .null: try c.encodeNil()
         case .bool(let v): try c.encode(v)
         case .integer(let v): try c.encode(v)
+        case .unsigned(let v): try c.encode(v)
         case .number(let v): try c.encode(v)
         case .string(let v): try c.encode(v)
         case .array(let v): try c.encode(v)
@@ -30,7 +32,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
     subscript(_ key: String) -> CrewdValue { if case .object(let v) = self { return v[key] ?? .null }; return .null }
     var string: String? { if case .string(let v) = self { return v }; return nil }
     var array: [CrewdValue] { if case .array(let v) = self { return v }; return [] }
-    var int: Int? { if case .integer(let v) = self { return Int(exactly: v) }; if case .number(let v) = self, v.isFinite, v >= Double(Int.min), v < Double(Int.max), v.rounded() == v { return Int(v) }; return nil }
+    var int: Int? { if case .integer(let v) = self { return Int(exactly: v) }; if case .unsigned(let v) = self { return Int(exactly: v) }; if case .number(let v) = self, v.isFinite, v >= Double(Int.min), v < Double(Int.max), v.rounded() == v { return Int(v) }; return nil }
     var pretty: String { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; return (try? e.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
 }
 
