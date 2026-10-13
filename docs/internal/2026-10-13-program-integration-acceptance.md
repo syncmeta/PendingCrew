@@ -93,3 +93,10 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 真实 main run38479786302 已 terminal success，SHA fe68022f；Mac115579274922与Linux115579274975均2546pass/8skip，Linux另记1leaky。完整日志 `/private/tmp/pcw-M3-main-macos-rust-ci-fe68022f.log` 与 `pcw-M3-main-linux-rust-ci-fe68022f.log`。Swift run38479786399仍live，根保留原watcher91790。质量线接实际新normal packaged helper＋typed客户端受影响组合验收，不重跑稳定单元全集或启动GUI/真实模型。
 
 M6 source-only接线首次被自动审查以持续网络暴露/具体授权不足拒绝，未执行。作者保留同动作，提交准确的隔离源码范围/default-off证据后复核通过，并未换代理或工具绕过。根实际只读核对 schema enabled=0，start_persisted 在disabled返回且先于identity/listen。证据 `/private/tmp/pcw-M6-source-only-routing-scope-proof-01.txt`。这只允许既有范围的源码实施，未启动LAN或改日常配置，模块仍须完整服务/TLS/配对/撤销验收。
+
+
+## 2026-10-14：main 组合 CI 全部关闭
+
+根实际观察 Swift watcher91790 terminal exit0，并以 API 再核对 run38479786399 terminal success、headSha fe68022f。Mac 主工程实际3202总计/15既有skip/0failure（3187通过，既有HelperBuildPerMember单列CI排除），iOS实际 BUILD SUCCEEDED；工程同步job115579275642通过。完整原始日志 `/private/tmp/pcw-M3-main-swift-ci-fe68022f.log`。此前同 main Rust run38479786302已实际Linux/Mac全绿并保存原日志。所有本次main组合运行已terminal，不再重复调度或轮询这些handles。
+
+该结果关闭本次源整合与平台CI关口，配对正常helper/GUI产物独验也已通过；受影响normal-runtime typed组合由质量线接续。实际GUI点击、真实账号任务、安装/日常数据切换及持续自用分别仍待完成；不以本次CI把整个M3或全工程宣布完成。M4原生真实PTY/ACP与M6可信远程/移动端并行继续。
