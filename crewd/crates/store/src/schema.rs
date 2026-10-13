@@ -657,6 +657,48 @@ fn migrate_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+// Historical fixture construction is intentionally independent of the current
+// latest version. Only an empty caller-owned connection may use this path.
+pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
+    initialize_legacy_fixture(conn, 8)
+}
+
+pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
+    if !(4..=8).contains(&target) {
+        return Err(StoreError::Invalid(
+            "historical fixture supports versions 4 through 8".into(),
+        ));
+    }
+    let objects: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |r| r.get(0),
+    )?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if objects != 0 || version != 0 {
+        return Err(StoreError::Invalid(
+            "historical fixture requires an empty database".into(),
+        ));
+    }
+    conn.execute_batch(V1)?;
+    conn.execute_batch(V2)?;
+    migrate_v3(conn)?;
+    migrate_v4(conn)?;
+    if target >= 5 {
+        migrate_v5(conn)?;
+    }
+    if target >= 6 {
+        migrate_v6(conn)?;
+    }
+    if target >= 7 {
+        migrate_v7(conn)?;
+    }
+    if target >= 8 {
+        migrate_v8(conn)?;
+    }
+    Ok(())
+}
+
 // Staged until production cutover gates pass. The transaction owns both the
 // organization conversion and its version marker; a failed conversion stays v8.
 #[cfg(test)]
@@ -2083,16 +2125,7 @@ mod organization_version_tests {
 
     fn legacy_v8() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        // Build the real historical v8 chain, even after the production latest
-        // version advances; never fake-downgrade a newer schema marker.
-        conn.execute_batch(V1).unwrap();
-        conn.execute_batch(V2).unwrap();
-        migrate_v3(&conn).unwrap();
-        migrate_v4(&conn).unwrap();
-        migrate_v5(&conn).unwrap();
-        migrate_v6(&conn).unwrap();
-        migrate_v7(&conn).unwrap();
-        migrate_v8(&conn).unwrap();
+        initialize_v8_fixture(&conn).unwrap();
         assert_eq!(version(&conn), 8);
         conn.execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('a','A','t','t'),('b','B','t','t');").unwrap();
         for crew in ["a", "b"] {

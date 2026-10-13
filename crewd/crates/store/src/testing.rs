@@ -82,3 +82,90 @@ pub fn crash_left_wal(
     assert!(std::fs::metadata(&wal).unwrap().len() > 0);
     (wal, shm)
 }
+
+/// Fresh synthetic historical v8 store for migration fixtures. It runs the true
+/// historical chain; it neither opens nor downgrades an existing database.
+/// Live organization tests must use the current Store constructors instead.
+pub fn open_v8_store() -> crate::Result<crate::Store> {
+    open_legacy_store(8)
+}
+
+/// Empty caller-owned historical v4–v8 store; never a downgrade of an existing
+/// database. Use only for old-schema migration samples, not live product tests.
+pub fn open_legacy_store(version: i64) -> crate::Result<crate::Store> {
+    let conn = rusqlite::Connection::open_in_memory()?;
+    crate::pin_pragmas(&conn)?;
+    crate::schema::initialize_legacy_fixture(&conn, version)?;
+    crate::mark_identity(&conn)?;
+    Ok(crate::Store {
+        conn,
+        backups: None,
+    })
+}
+
+#[cfg(test)]
+mod historical_fixture_tests {
+    #[test]
+    fn v8_fixture_has_real_old_authority_and_refuses_reinitialization() {
+        let store = super::open_v8_store().unwrap();
+        let version: i64 = store
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+        let table: String = store
+            .conn()
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name='work_books'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, "table");
+        let organizations: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='organization_work_book'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(organizations, 0);
+        assert!(crate::schema::initialize_v8_fixture(store.conn()).is_err());
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+    }
+    #[test]
+    fn historical_versions_stop_at_their_actual_tables_without_fake_downgrades() {
+        for version in 4..=8 {
+            let store = super::open_legacy_store(version).unwrap();
+            let actual: i64 = store
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(actual, version);
+            for (table, introduced) in [
+                ("object_refs", 5),
+                ("work_events", 6),
+                ("work_stop_checks", 7),
+                ("runner_usage", 8),
+            ] {
+                let exists: i64 = store
+                    .conn()
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                        [table],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(exists, i64::from(version >= introduced));
+            }
+        }
+        assert!(super::open_legacy_store(9).is_err());
+    }
+}
