@@ -215,3 +215,19 @@ work.update 完成一项时也把显式 BlockOn::Item 解除后的负责人提�
 候选分支继续开发，未合入共享 main、安装、发布或切换日常数据；Jev/记忆仍只保留方案，前端由独立设计 session 负责。
 
 完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2390 passed、0 failed、8 ignored；fmt/clippy 全目标通过。日志 /private/tmp/pcw-work-followup-filter-full-check-02.log。
+
+## 2026-10-13 M4b 检查点队列与投递记账
+
+新增 checkpoints：从非归档、确有到期项的已有工作账本筛选，以 WorkBook 的 due_checkpoints 为权威判定，按全组织负责人合并（包括跨机组负责人），经既有持久 wakes 入队，Checkpoint/System 优先级。每名负责人已有 pending/inflight 检查点时不再造新提醒；相同目标/修订/检查时间的终结清单在既有队列保留期内不重建，避免失败后反复生成新的提醒身份。空扫描不创建工作账本。生产 DbPort 已接 Core::on_tick，合成 MemPort 保持默认空实现。
+
+队列保存完整 checkpointTargets（全局 W 号、当时修订、检查时间）；渲染只给模型最多 50 个当前仍到期的 dueWork 号和 total/partial，移除派发元数据。当前负责人、修订、时间、冻结、终态/卡住与未回报上限均通过当前账本重新核对。继承上一单元 Snapshot/认领事务保护，捕获和认领都使用调用方提供的时间，不在 collab 读取墙钟。
+
+关键边界：入队、认领、忙碌排队、投递失败均不增加 missedChecks。只在实际 ack_delivered 的同一事务内记录 CheckpointWake 并顺延复查时间；租约重放/重复成功确认不再记第二次。若提醒准备后负责人已经更新工作修订/检查时间，旧确认不覆盖新回报。记账写入失败时，已观察到的原投递命运与 inflight/租约一起保留供同一收据重试，不启动第二个模型回合。
+
+六个真实 SQLite/租约测试覆盖跨机组合并、排队不计数、失败/作废不计数、旧回报竞态、记账失败整体回滚与原租约重试，以及两次成功投递后停止继续检查。另用真实 Hub、DbPort、运行中的编排 actor 和合成执行器验证 Tick→持久入队→派发→原成功收据→只记一次，重复收据只保留一个含该 W 号的回合；正常退出关闭自有 actor/DB。移除 ack 记账反例在实际 actor 链路准确失败，日志 /private/tmp/pcw-checkpoint-receipt-red-01.log。
+
+此证据是数据库与合成运行链路，不是新增真实 Codex/Claude 模型回合或正式客户端交付。missedChecks 达既有上限后由纯模型 owner_lost 判定的后续失联通知/交接、停下即检查的三次抑制/行政交接、相关工作动作和客户端视图仍待继续。检查点操作本身会改变工作修订，严格 CAS 保持；后续需要让过期修订回复携带精简的当前事实，避免 agent 为一次冲突重新读长目标。
+
+未安装、发布、切换日常数据或新增真实模型调用；Jev/记忆保持讨论先行，前端由独立设计 session 负责。
+
+完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2397 passed、0 failed、8 ignored；fmt/clippy 全目标通过。日志 /private/tmp/pcw-checkpoint-full-check-01.log。

@@ -2797,6 +2797,7 @@ impl<P: Port> Core<P> {
         self.notifier.flush(now, self.lang()).await?;
         // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
         log_err(self.port.apply_due_defaults().await);
+        log_err(self.port.enqueue_work_checkpoints().await);
         log_err(self.prune(now).await);
         self.rescan().await
     }

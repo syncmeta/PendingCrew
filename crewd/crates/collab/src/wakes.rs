@@ -443,7 +443,8 @@ pub fn ack_delivered(
     cursor_targets: &[(String, i64)],
 ) -> Result<()> {
     let all: Vec<i64> = wakes.iter().chain(rider_ids).copied().collect();
-    for r in by_ids(tx.conn(), &all)? {
+    let before = by_ids(tx.conn(), &all)?;
+    for r in &before {
         if r.session != session {
             // 调用方（M3c）自己的错，不是给人看的规则拒绝。
             return Err(CollabError::Store(StoreError::Invalid(format!(
@@ -465,6 +466,13 @@ pub fn ack_delivered(
     for (channel, seq) in cursor_targets {
         crate::cursors::advance(tx, session, channel, *seq)?;
     }
+    crate::checkpoints::delivered(
+        tx,
+        &before
+            .into_iter()
+            .filter(|r| wakes.contains(&r.id))
+            .collect::<Vec<_>>(),
+    )?;
     Ok(())
 }
 

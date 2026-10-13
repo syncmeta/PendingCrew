@@ -523,6 +523,9 @@ pub trait Port: Send + Sync + 'static {
     fn restart_answer(&self, id: i64) -> impl Future<Output = Result<Option<bool>>> + Send;
     /// 各机组到点的默认方案按默认办（M3a `asks::apply_due_defaults`；控制者裁定由 M3c 的定时拍调）。
     fn apply_due_defaults(&self) -> impl Future<Output = Result<()>> + Send;
+    fn enqueue_work_checkpoints(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     /// 删掉 `before` 之前就已 delivered / dropped 的队列行，一次至多 `limit` 条（M3a `wakes::prune`；控制者裁定 C6：
     /// 清理归 M3c 的定时拍；S28：分批）。返回删了几条。
     fn prune_wakes(&self, before: Ms, limit: usize) -> impl Future<Output = Result<usize>> + Send;

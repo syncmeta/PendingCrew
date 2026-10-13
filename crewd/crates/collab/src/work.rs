@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 fn invalid(detail: &str) -> CollabError {
     StoreError::Invalid(detail.into()).into()
 }
-fn number(id: &str) -> Result<i64> {
+pub(crate) fn number(id: &str) -> Result<i64> {
     match id.strip_prefix('W').and_then(|n| n.parse::<i64>().ok()) {
         Some(n) if n > 0 && id == format!("W{n}") => Ok(n),
         _ => Err(CollabError::Invalid(
@@ -20,7 +20,7 @@ fn number(id: &str) -> Result<i64> {
         )),
     }
 }
-fn reference(
+pub(crate) fn reference(
     conn: &Connection,
     kind: ObjectKind,
     crew: &str,
@@ -185,7 +185,11 @@ struct StoredFollowup {
 pub(crate) fn followup_note(
     conn: &Connection,
     row: &crate::wakes::WakeRow,
+    now: i64,
 ) -> Result<FollowupNote> {
+    if row.kind == crate::wakes::WakeKind::Checkpoint {
+        return crate::checkpoints::render_note(conn, row, now);
+    }
     if row.kind != crate::wakes::WakeKind::System || !row.source.starts_with("work-done:") {
         return Ok(FollowupNote::Ordinary);
     }
@@ -1116,13 +1120,13 @@ mod action_tests {
         ordinary.source = "synthetic ordinary".into();
         ordinary.note = Some("ordinary note".into());
         assert!(matches!(
-            followup_note(s.conn(), &ordinary).unwrap(),
+            followup_note(s.conn(), &ordinary, NOW).unwrap(),
             FollowupNote::Ordinary
         ));
         ordinary.kind = crate::wakes::WakeKind::AskAnswer;
         ordinary.source = "work-done:synthetic".into();
         assert!(matches!(
-            followup_note(s.conn(), &ordinary).unwrap(),
+            followup_note(s.conn(), &ordinary, NOW).unwrap(),
             FollowupNote::Ordinary
         ));
         let mut legacy = rows[0].clone();
@@ -1131,7 +1135,7 @@ mod action_tests {
         note.as_object_mut().unwrap().remove("targets");
         legacy.note = Some(note.to_string());
         assert!(matches!(
-            followup_note(s.conn(), &legacy).unwrap(),
+            followup_note(s.conn(), &legacy, NOW).unwrap(),
             FollowupNote::Current(_)
         ));
         note["partial"] = serde_json::json!(true);
@@ -1139,7 +1143,7 @@ mod action_tests {
         legacy.note = Some(note.to_string());
         assert!(
             matches!(
-                followup_note(s.conn(), &legacy).unwrap(),
+                followup_note(s.conn(), &legacy, NOW).unwrap(),
                 FollowupNote::Ordinary
             ),
             "legacy omitted targets are not evidence of an empty set"
@@ -1151,7 +1155,7 @@ mod action_tests {
         let mut s = store();
         let (children, rows) = pending_followup(&mut s, 2);
         let mut snap = cr::snapshot(s.conn(), "w-a2", &[], NOW).unwrap();
-        snap.capture_work_followups(s.conn(), &rows).unwrap();
+        snap.capture_work_followups(s.conn(), &rows, NOW).unwrap();
         ok(&mut s, |tx| {
             update(tx, &Sender::Human, finish(&children[0]))
         });
@@ -1164,7 +1168,9 @@ mod action_tests {
         assert_eq!(pending[0].state, crate::wakes::WakeState::Pending);
         assert_eq!(pending[0].attempts, 0);
         let mut fresh = cr::snapshot(s.conn(), "w-a2", &[], NOW).unwrap();
-        fresh.capture_work_followups(s.conn(), &pending).unwrap();
+        fresh
+            .capture_work_followups(s.conn(), &pending, NOW)
+            .unwrap();
         let claimed = ok(&mut s, |tx| {
             cr::claim_reserved(tx, &fresh, &[], &ids, &[], cr::Owner::new(1).unwrap())
         });

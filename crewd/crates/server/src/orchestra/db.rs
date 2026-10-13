@@ -884,6 +884,11 @@ impl Port for DbPort {
         .await
     }
 
+    async fn enqueue_work_checkpoints(&self) -> Result<()> {
+        self.write(|tx| collab::checkpoints::enqueue_due(tx).map(|_| ()))
+            .await
+    }
+
     async fn apply_due_defaults(&self) -> Result<()> {
         // 已移除的机组不在列表里（只读，不按默认办）。
         let crews: Vec<String> = self
@@ -1055,7 +1060,7 @@ impl Port for DbPort {
                 let targets = b.cursor_targets();
                 let channels: Vec<_> = targets.iter().map(|(ch, _)| ch.clone()).collect();
                 let mut reservation = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
-                reservation.capture_work_followups(tx.conn(), &rows)?;
+                reservation.capture_work_followups(tx.conn(), &rows, now_ms)?;
                 let causes = captured.causes.select(&targets)?;
                 let prepared = PreparedSnapshot::CausalDatabase {
                     reservation,
@@ -1652,6 +1657,170 @@ mod tests {
                 .unwrap();
             drop(_dir);
         }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_tick_reaches_actual_actor_and_success_receipt_counts_once() {
+        use super::super::{clock::Clock, core::Input, hooks::Hooks};
+        use crewd_exec::{
+            delivery::Subject,
+            session::{DeliveryOutcome, SessionEvent},
+        };
+        use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
+        let rig = S46ActorDb::new(Hooks::default()).await;
+        rig.handle
+            .resume("w-1", super::super::core::Origin::Human)
+            .await
+            .unwrap();
+        let ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if rig.handle.live("w-1").await.unwrap().running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok();
+        let p = rig
+            .state
+            .collab(|tx| {
+                let p = collab::work::create(
+                    tx,
+                    &collab::Sender::Human,
+                    WorkCreateParams {
+                        crew_id: "c-1".into(),
+                        owner: Some("w-1".into()),
+                        title: "synthetic actor checkpoint".into(),
+                        ..Default::default()
+                    },
+                )?;
+                collab::work::update(
+                    tx,
+                    &collab::Sender::Session("w-1".into()),
+                    WorkUpdateParams {
+                        id: p.id,
+                        expected_revision: p.revision,
+                        status: Some(WorkUpdateStatus::Active),
+                        note: Some("next actual synthetic step".into()),
+                        next_check_at: Some(crewd_store::ts_from_ms(tx.now_ms() + 1)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        let receipt = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                rig.clock
+                    .set(Ms(crewd_store::now_ms().max(rig.clock.now().0)));
+                rig.handle.tx.send(Input::Tick).unwrap();
+                rig.handle.latches().await.unwrap();
+                let row = rig
+                    .port
+                    .read(|c| {
+                        Ok(cw::list(c, Some("w-1"), 100)?
+                            .into_iter()
+                            .find(|r| r.kind == cw::WakeKind::Checkpoint))
+                    })
+                    .await
+                    .unwrap();
+                if let Some(row) = row {
+                    break row;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .ok();
+        let sent = if let Some(row) = &receipt {
+            rig.make_source_due(row.source.clone()).await;
+            rig.sent_containing(&p.id).await
+        } else {
+            false
+        };
+        let missed_before = rig
+            .port
+            .read(|c| {
+                Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+            })
+            .await
+            .unwrap();
+        let id = if sent {
+            rig.exec.last_send_id("w-1")
+        } else {
+            0
+        };
+        let counted = if sent {
+            rig.exec.emit(
+                "w-1",
+                SessionEvent::Delivery {
+                    id,
+                    subject: Subject::Steer,
+                    outcome: DeliveryOutcome::Delivered,
+                },
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    rig.handle.latches().await.unwrap();
+                    let n = rig
+                        .port
+                        .read(|c| {
+                            Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+                        })
+                        .await
+                        .unwrap();
+                    if n == 1 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok()
+        } else {
+            false
+        };
+        if counted {
+            rig.exec.emit(
+                "w-1",
+                SessionEvent::Delivery {
+                    id,
+                    subject: Subject::Steer,
+                    outcome: DeliveryOutcome::Delivered,
+                },
+            );
+            rig.handle.latches().await.unwrap();
+        }
+        let final_misses = rig
+            .port
+            .read(|c| {
+                Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+            })
+            .await
+            .unwrap();
+        let sends = rig.exec.sent("w-1");
+        rig.close().await;
+        assert!(ready);
+        assert!(
+            receipt.is_some(),
+            "actual actor tick did not persist a checkpoint"
+        );
+        assert!(sent, "checkpoint did not reach actual dispatch");
+        assert_eq!(
+            missed_before, 0,
+            "queue and dispatch acceptance are not success receipts"
+        );
+        assert!(
+            counted,
+            "original successful delivery did not record the checkpoint"
+        );
+        assert_eq!(final_misses, 1);
+        assert_eq!(
+            sends.iter().filter(|s| s.contains(&p.id)).count(),
+            1,
+            "duplicate success must not schedule another model turn"
+        );
     }
 
     // Test-first: current wire/Port shape only. No proposed cursorUnknown field is needed.

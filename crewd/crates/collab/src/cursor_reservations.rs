@@ -107,12 +107,14 @@ impl Snapshot {
         &mut self,
         conn: &Connection,
         rows: &[wakes::WakeRow],
+        now: i64,
     ) -> Result<()> {
         for row in rows {
             if row.session != self.session {
                 return Err(invalid("work follow-up snapshot ownership mismatch"));
             }
-            if let crate::work::FollowupNote::Current(note) = crate::work::followup_note(conn, row)?
+            if let crate::work::FollowupNote::Current(note) =
+                crate::work::followup_note(conn, row, now)?
             {
                 self.work_notes.insert(row.id, note);
             }
@@ -466,7 +468,7 @@ pub fn claim_reserved(
     // Ownership/terminal changes after rendering must not claim a stale body.
     // This is inside the same transaction that claims the queue and reservation.
     for row in rows.iter().filter(|r| wake_ids.contains(&r.id)) {
-        match crate::work::followup_note(tx.conn(), row)? {
+        match crate::work::followup_note(tx.conn(), row, tx.now_ms())? {
             crate::work::FollowupNote::Current(note)
                 if prepared.work_notes.get(&row.id) == Some(&note) => {}
             crate::work::FollowupNote::Ordinary if !prepared.work_notes.contains_key(&row.id) => {}

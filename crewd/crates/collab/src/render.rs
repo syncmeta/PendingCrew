@@ -635,7 +635,7 @@ pub fn build_batch(
                 body: WakeBody::Restart,
             }),
             WakeKind::System => {
-                let note = match crate::work::followup_note(conn, r)? {
+                let note = match crate::work::followup_note(conn, r, now_ms)? {
                     crate::work::FollowupNote::Ordinary => r.note.clone(),
                     crate::work::FollowupNote::Current(note) => Some(note),
                     crate::work::FollowupNote::Stale => {
@@ -650,12 +650,22 @@ pub fn build_batch(
                     body: WakeBody::System,
                 });
             }
-            WakeKind::Checkpoint => items.push(WakeItem {
-                wake_ids: vec![r.id],
-                kind: r.kind,
-                note: r.note.clone(),
-                body: WakeBody::Checkpoint,
-            }),
+            WakeKind::Checkpoint => {
+                let note = match crate::checkpoints::render_note(conn, r, now_ms)? {
+                    crate::work::FollowupNote::Ordinary => r.note.clone(),
+                    crate::work::FollowupNote::Current(note) => Some(note),
+                    crate::work::FollowupNote::Stale => {
+                        unusable.push((r.id, "checkpoint has no current due target".into()));
+                        continue;
+                    }
+                };
+                items.push(WakeItem {
+                    wake_ids: vec![r.id],
+                    kind: r.kind,
+                    note,
+                    body: WakeBody::Checkpoint,
+                });
+            }
             WakeKind::StopCheck => items.push(WakeItem {
                 wake_ids: vec![r.id],
                 kind: r.kind,

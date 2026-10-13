@@ -5,6 +5,7 @@
 pub mod asks;
 pub mod causal;
 pub mod channels;
+pub mod checkpoints;
 pub mod crews;
 pub mod cursor_reservations;
 pub mod cursors;
