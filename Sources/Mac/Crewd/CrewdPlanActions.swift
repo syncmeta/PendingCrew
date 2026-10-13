@@ -91,7 +91,6 @@ enum CrewdPlanCommand {
         return ("work.update",.object(p))
     }
 }
-#if os(macOS)
 struct CrewdPlanActions:View {
     @ObservedObject var store:CrewdWorkStore
     @Binding var drafts:CrewdPlanDrafts
@@ -111,7 +110,11 @@ struct CrewdPlanActions:View {
             Text(key.object.isEmpty ? "从 \(key.source) 建计划":"\(key.object) · 计划操作").font(.title2)
             Text("机组："+(crews.first(where:{$0["id"] == .string(key.crew)})?["title"].string ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
             if !key.object.isEmpty {
+                #if os(macOS)
                 Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented)
+                #else
+                Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.menu)
+                #endif
                 HStack {Text("已读取版本："+(revision ?? "尚未读取")).font(.caption);Spacer();Button("核对当前详情"){Task {await load()}}.disabled(reading || drafts.busy(key))}
                 if let id=CrewdWorkID(key.object,kind:.plan),let current=store.plans[id] {
                     Text(current.value["title"].string ?? "").font(.headline)
@@ -181,7 +184,7 @@ struct CrewdPlanActions:View {
                 }.disabled(drafts.busy(key))
             }
             HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
-        }.padding(20).frame(width:560,height:560).task {if !key.object.isEmpty {await load()}}
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:560)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {
         VStack(alignment:.leading,spacing:4) {
@@ -242,4 +245,18 @@ struct CrewdPlanActions:View {
         }
     }
 }
-#endif
+
+/// Mac keeps the original form sizes; mobile follows the available sheet width.
+/// This changes layout only, not command fields or draft ownership.
+struct CrewdAdaptiveFormFrame: ViewModifier {
+    let width: CGFloat
+    var height: CGFloat? = nil
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.frame(width: width, height: height)
+        #else
+        ScrollView { content.frame(maxWidth: .infinity, alignment: .topLeading) }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #endif
+    }
+}

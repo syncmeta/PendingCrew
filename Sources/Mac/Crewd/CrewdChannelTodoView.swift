@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 struct CrewdChannelTodoView:View {
@@ -173,7 +172,7 @@ private struct CrewdChannelAssociation:View {
             Button("读取当前关联"){Task{await read()}}.disabled(submitting)
             Text("已核对关联版本："+(revision ?? "尚未读取")).font(.caption)
             HStack{Button("关闭"){dismiss()};Spacer();Button(isLinked ? "解除关联":"关联"){send()}.disabled(selected == nil || revision == nil || submitting || group.channel != scope || unknown)}
-        }.padding(20).frame(width:480).disabled(submitting).task{scope=group.channel;choice=initial?["id"].string ?? "";await read()}
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:480)).disabled(submitting).task{scope=group.channel;choice=initial?["id"].string ?? "";await read()}
     }
     private func read()async{readVerified=false;do{try await group.refresh();guard group.channel == scope else{return};revision=group.linkRevision;readVerified=true;failure=nil}catch{failure=error.localizedDescription}}
     private func send(){
@@ -189,4 +188,3 @@ private struct CrewdChannelAssociation:View {
         }}
     }
 }
-#endif

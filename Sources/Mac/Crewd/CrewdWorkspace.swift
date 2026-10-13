@@ -28,6 +28,8 @@ final class CrewdWorkspace: ObservableObject {
     private var activityDirty = true
     private var activityAffected: Set<String> = []
     private var activityChannelCrews: [String: String] = [:]
+    @Published var uncertainSessionStarts: [CrewdDrafts.Snapshot] = []
+    @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
@@ -212,6 +214,25 @@ final class CrewdWorkspace: ObservableObject {
         await sync?.value
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         guard client.connected else { throw CrewdClientError(message: client.lastError ?? "后台连接已中断。") }
+    }
+
+    func refreshSessionDirectory(_ crew: String) async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        let current = generation
+        let response = try await client.call("session.list", .object(["crewId": .string(crew)]))
+        guard !retired, current == generation, crewID == crew, !Task.isCancelled else { throw CancellationError() }
+        guard case .array(let rows) = response else { throw CrewdClientError(message: "成员列表回复格式无效。") }
+        sessions = rows
+        for row in rows { if let id = row["id"].string { knownSessions[id] = row } }
+    }
+
+    func refreshCrewDirectory() async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        let current = generation
+        let response = try await client.call("crew.list")
+        guard !retired, current == generation, !Task.isCancelled else { throw CancellationError() }
+        guard case .array(let rows) = response else { throw CrewdClientError(message: "机组列表回复格式无效。") }
+        crews = rows
     }
 
     func selectCrew(_ id: String) {
