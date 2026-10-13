@@ -7177,8 +7177,9 @@ mod s42_task_fence_db_windows {
         async fn screen(&mut self, text: &str) {
             let n = self.frame;
             self.frame += 1;
+            let text = text.replace('\n', "\r\n");
             let bytes = format!(
-                "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+                "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
             );
             std::fs::write(self.dir.join(format!("screen-{n}.bin")), bytes).unwrap();
             std::fs::write(self.dir.join(format!("screen-{n}.request")), []).unwrap();
@@ -7538,11 +7539,16 @@ mod s42_task_fence_db_windows {
             )
             .await;
             let b_before = post_snapshot(&state, &b).await;
-            let paste = format!("[Pasted text #1 +{} lines]", body.lines().count());
-            protocol.screen(&paste).await;
-            parser_row(&task, &paste).await;
+            protocol.screen(&body).await;
+            parser_row(&task, body.lines().next().unwrap_or("")).await;
             let mut submitted = body.as_bytes().to_vec();
-            submitted.extend_from_slice(b" \x7f\r");
+            submitted.push(b' ');
+            protocol.capture(&submitted).await;
+            protocol.screen(&format!("{body} ")).await;
+            submitted.push(0x7f);
+            protocol.capture(&submitted).await;
+            protocol.screen(&body).await;
+            submitted.push(b'\r');
             protocol.capture(&submitted).await;
             protocol.screen("").await;
             let emission = timeout(LIMIT, emitted.recv()).await.unwrap().unwrap();
@@ -7845,10 +7851,15 @@ mod s42_task_fence_db_windows {
         let mut capture = prefix.to_vec();
         capture.extend_from_slice(body.as_bytes());
         protocol.capture(&capture).await;
-        let paste = format!("[Pasted text #1 +{} lines]", body.lines().count());
-        protocol.screen(&paste).await;
-        parser_row(task, &paste).await;
-        capture.extend_from_slice(b" \x7f\r");
+        protocol.screen(&body).await;
+        parser_row(task, body.lines().next().unwrap_or("")).await;
+        capture.push(b' ');
+        protocol.capture(&capture).await;
+        protocol.screen(&format!("{body} ")).await;
+        capture.push(0x7f);
+        protocol.capture(&capture).await;
+        protocol.screen(&body).await;
+        capture.push(b'\r');
         protocol.capture(&capture).await;
         protocol.screen("").await;
         let id = timeout(LIMIT, emitted.recv()).await.unwrap().unwrap();

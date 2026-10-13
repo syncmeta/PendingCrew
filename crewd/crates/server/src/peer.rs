@@ -215,15 +215,25 @@ async fn await_enrollment_authority(
     mut classify: impl FnMut() -> Authority,
 ) -> Result<(), RpcError> {
     let deadline = tokio::time::Instant::now() + ENROLLMENT_AUTH_LIMIT;
+    let mut last_denial = None;
     loop {
         if *drain.borrow() {
             return Err(draining_denial());
         }
         let authority = classify();
+        // A kernel walk itself may cross the deadline. A late result cannot
+        // grant authority after an earlier transient refusal of this request.
+        if last_denial.is_some() && tokio::time::Instant::now() >= deadline {
+            return if *drain.borrow() {
+                Err(draining_denial())
+            } else {
+                Err(last_denial.take().expect("previous transient refusal"))
+            };
+        }
         let transient = matches!(
             &authority,
             Authority::Unknown {
-                reason: "spawn_enrollment_in_progress"
+                reason: "spawn_enrollment_in_progress" | "registry_revision_changed"
             }
         );
         let result = authorize_method(authority, method);
@@ -238,6 +248,7 @@ async fn await_enrollment_authority(
         if tokio::time::Instant::now() >= deadline {
             return result;
         }
+        last_denial = Some(result.expect_err("transient protected request was refused"));
         let wake = (tokio::time::Instant::now() + ENROLLMENT_AUTH_POLL).min(deadline);
         tokio::select! {
             biased;
@@ -249,7 +260,7 @@ async fn await_enrollment_authority(
         }
         // No fresh success may start after expiry and revision churn never renews the deadline.
         if tokio::time::Instant::now() >= deadline {
-            return result;
+            return Err(last_denial.take().expect("previous transient refusal"));
         }
     }
 }
@@ -321,6 +332,12 @@ fn classify_lineage(
                     || (exact_daemon_peer && registry_stable == Some(false)))
             {
                 Authority::Human
+            } else if anchor && stable_chain && registry_stable == Some(false) {
+                // Only concurrent registry churn is transient. The same parsed request
+                // must recapture all ancestry and roots before any business effect.
+                Authority::Unknown {
+                    reason: "registry_revision_changed",
+                }
             } else {
                 Authority::Unknown {
                     reason: "unqualified_or_changed_lineage",
@@ -570,7 +587,7 @@ mod tests {
         assert_eq!(
             result,
             Authority::Unknown {
-                reason: "unqualified_or_changed_lineage"
+                reason: "registry_revision_changed"
             }
         );
     }
@@ -1001,6 +1018,73 @@ mod enrollment_wait_controls {
         Authority::Unknown {
             reason: "spawn_enrollment_in_progress",
         }
+    }
+    #[tokio::test]
+    async fn s1_revalidation_kernel_walk_finishing_after_deadline_cannot_grant_human() {
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let calls = AtomicUsize::new(0);
+        let got = await_enrollment_authority("session.start", &mut rx, || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Authority::Unknown {
+                    reason: "registry_revision_changed",
+                }
+            } else {
+                // Controls an actually synchronous ancestry probe crossing the
+                // deadline; no provider or business operation is invoked.
+                std::thread::sleep(ENROLLMENT_AUTH_LIMIT);
+                Authority::Human
+            }
+        })
+        .await;
+        assert_eq!(got.unwrap_err().code, RpcError::FORBIDDEN);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn s1_revision_churn_revalidates_same_request_and_never_retries_effects() {
+        for final_authority in [
+            Authority::Human,
+            Authority::Managed {
+                session: "native".into(),
+            },
+            Authority::Unknown {
+                reason: "unqualified_or_changed_lineage",
+            },
+        ] {
+            let (_tx, mut rx) = tokio::sync::watch::channel(false);
+            let calls = AtomicUsize::new(0);
+            let got = await_enrollment_authority("session.start", &mut rx, || {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Authority::Unknown {
+                        reason: "registry_revision_changed",
+                    }
+                } else {
+                    final_authority.clone()
+                }
+            })
+            .await;
+            assert_eq!(got.is_ok(), matches!(final_authority, Authority::Human));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
+        let (_tx, mut rx) = tokio::sync::watch::channel(false);
+        let start = tokio::time::Instant::now();
+        let got = await_enrollment_authority("session.start", &mut rx, || Authority::Unknown {
+            reason: "registry_revision_changed",
+        })
+        .await;
+        assert_eq!(got.unwrap_err().code, RpcError::FORBIDDEN);
+        assert_eq!(tokio::time::Instant::now() - start, ENROLLMENT_AUTH_LIMIT);
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let calls = AtomicUsize::new(0);
+        let got = await_enrollment_authority("session.start", &mut rx, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            tx.send(true).unwrap();
+            Authority::Unknown {
+                reason: "registry_revision_changed",
+            }
+        })
+        .await;
+        assert_eq!(got.unwrap_err().code, RpcError::FORBIDDEN);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     #[tokio::test(start_paused = true)]
     async fn s1_enrollment_wait_settles_same_request_without_cached_human() {

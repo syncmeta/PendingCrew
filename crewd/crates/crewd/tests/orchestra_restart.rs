@@ -51,6 +51,7 @@ impl Serve {
         let child = command(f)
             .args(["serve", "--claude-env"])
             .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()))
+            .args(["--claude-env", "FAKE_CLAUDE_FULL_INPUT=1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr)
@@ -311,9 +312,25 @@ fn hibernate_result_reaches_client_then_exits_and_restart_note_is_once() {
         json!({"id":prompt["id"],"answer":"resume"}),
     )
     .unwrap();
-    wait("hibernate interrupted note", || {
-        f.count(note("hibernate.interrupted")) == 1
-    });
+    let until = Instant::now() + Duration::from_secs(15);
+    while f.count(note("hibernate.interrupted")) != 1 {
+        if Instant::now() >= until {
+            eprintln!(
+                "synthetic cap live: {:?}",
+                rpc(&f, "session.live", json!({"sessionId":cap}))
+            );
+            eprintln!(
+                "synthetic cap native: {:?}",
+                rpc(&f, "session.inspect", json!({"sessionId":cap}))
+            );
+            eprintln!(
+                "synthetic serve stderr: {}",
+                std::fs::read_to_string(f.root.path().join("serve-stderr.log")).unwrap_or_default()
+            );
+            panic!("timed out: hibernate interrupted note");
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(f.count(note("hibernate.interrupted")), 1);
     second.term();
