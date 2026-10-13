@@ -210,18 +210,13 @@ mod tests {
     }
     #[test]
     fn v6_migration_preserves_global_budget_without_double_counting_crews() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(6).unwrap();
         seed(&s);
         let a = legacy(&s, "a");
         let b = legacy(&s, "b");
         let count: i64 = s
             .conn()
             .query_row("SELECT count(*) FROM object_refs", [], |r| r.get(0))
-            .unwrap();
-        s.conn()
-            .execute_batch(
-                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; PRAGMA user_version=6;",
-            )
             .unwrap();
         crate::schema::migrate(s.conn()).unwrap();
         let budget = get(s.conn(), "worker").unwrap().unwrap();
@@ -259,7 +254,7 @@ mod tests {
     }
     #[test]
     fn bad_later_book_rolls_back_table_version_and_budget_migration() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(6).unwrap();
         seed(&s);
         legacy(&s, "a");
         let bad =
@@ -269,11 +264,6 @@ mod tests {
             .execute(
                 "INSERT INTO work_books(crew_id,state,updated_at) VALUES('b',?1,'t')",
                 [bad],
-            )
-            .unwrap();
-        s.conn()
-            .execute_batch(
-                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; PRAGMA user_version=6;",
             )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());

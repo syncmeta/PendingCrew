@@ -223,8 +223,7 @@ mod tests {
     #[test]
     fn v4_migration_preserves_source_state_and_takes_a_prewrite_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db");
-        let s = Store::open(&path).unwrap();
+        let s = crate::testing::open_legacy_store(4).unwrap();
         setup(s.conn());
         let state = r#"{"crew":"a","items":{},"entries":{},"asks":{},"last_item":0,"last_ask":0,"last_seq":0,"clock":0,"stop_streaks":{}}"#;
         s.conn()
@@ -232,9 +231,6 @@ mod tests {
                 "INSERT INTO work_books(crew_id,state,updated_at) VALUES('a',?1,'t')",
                 [state],
             )
-            .unwrap();
-        s.conn()
-            .execute_batch("DROP TABLE runner_usage; DROP TABLE work_stop_checks; DROP TABLE work_events; DROP TABLE object_refs; PRAGMA user_version=4;")
             .unwrap();
         let backups = dir.path().join("backups");
         crate::schema::migrate_guarded(s.conn(), Some(&backups)).unwrap();
@@ -282,9 +278,11 @@ mod tests {
     }
     #[test]
     fn refused_migration_keeps_old_version_and_sources() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(4).unwrap();
         setup(s.conn());
-        s.conn().execute_batch("DROP TABLE work_events; DROP TABLE object_refs; CREATE VIEW object_refs AS SELECT id FROM crews; PRAGMA user_version=4;").unwrap();
+        s.conn()
+            .execute_batch("CREATE VIEW object_refs AS SELECT id FROM crews;")
+            .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
         assert_eq!(
             s.conn()

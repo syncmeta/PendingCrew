@@ -164,8 +164,9 @@ mod tests {
     }
     #[test]
     fn v5_backfill_indexes_frozen_books_without_rewriting_or_inventing_events() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(5).unwrap();
         setup(s.conn());
+        s.conn().execute_batch("INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('w','a','worker','codex','t');").unwrap();
         let mut b = WorkBook::new(CrewId::new("a"), Config::default());
         b.create_item(
             &Actor::worker("w"),
@@ -180,7 +181,9 @@ mod tests {
                 [&state],
             )
             .unwrap();
-        s.conn().execute_batch("UPDATE crews SET archived_at='frozen'; DROP TABLE runner_usage; DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;").unwrap();
+        s.conn()
+            .execute_batch("UPDATE crews SET archived_at='frozen';")
+            .unwrap();
         crate::schema::migrate(s.conn()).unwrap();
         let r = crate::object_refs::resolve(s.conn(), ObjectKind::Plan, "a", "work:W1")
             .unwrap()
@@ -205,7 +208,7 @@ mod tests {
     }
     #[test]
     fn invalid_old_book_rolls_back_the_v6_schema_and_keeps_v5() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(5).unwrap();
         setup(s.conn());
         let invalid =
             serde_json::to_string(WorkBook::new(CrewId::new("another"), Config::default()).state())
@@ -214,11 +217,6 @@ mod tests {
             .execute(
                 "INSERT INTO work_books(crew_id,state,updated_at) VALUES('a',?1,'t')",
                 [&invalid],
-            )
-            .unwrap();
-        s.conn()
-            .execute_batch(
-                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;",
             )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
@@ -295,7 +293,7 @@ mod tests {
     }
     #[test]
     fn a_later_invalid_book_rolls_back_earlier_reference_backfill() {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(5).unwrap();
         setup(s.conn());
         s.conn()
             .execute_batch(
@@ -319,11 +317,6 @@ mod tests {
             .execute(
                 "INSERT INTO work_books(crew_id,state,updated_at) VALUES('z','not json','t')",
                 [],
-            )
-            .unwrap();
-        s.conn()
-            .execute_batch(
-                "DROP TABLE runner_usage; DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;",
             )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
