@@ -142,7 +142,7 @@ mod historical_fixture_tests {
     }
     #[test]
     fn historical_versions_stop_at_their_actual_tables_without_fake_downgrades() {
-        for version in 4..=8 {
+        for version in 4..=9 {
             let store = super::open_legacy_store(version).unwrap();
             let actual: i64 = store
                 .conn()
@@ -154,6 +154,9 @@ mod historical_fixture_tests {
                 ("work_events", 6),
                 ("work_stop_checks", 7),
                 ("runner_usage", 8),
+                ("organization_work_book", 9),
+                ("documents", 10),
+                ("channel_work_scopes", 10),
             ] {
                 let exists: i64 = store
                     .conn()
@@ -166,6 +169,6 @@ mod historical_fixture_tests {
                 assert_eq!(exists, i64::from(version >= introduced));
             }
         }
-        assert!(super::open_legacy_store(9).is_err());
+        assert!(super::open_legacy_store(10).is_err());
     }
 }

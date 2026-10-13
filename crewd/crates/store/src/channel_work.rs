@@ -57,16 +57,21 @@ pub fn rows(c: &Connection, ch: &str) -> Result<Vec<ChannelWorkObject>> {
     }
     Ok(rows)
 }
-pub fn change(
-    c: &Connection,
-    ch: &str,
-    expected: i64,
-    o: &ChannelWorkObject,
-    crew: &str,
-    link: bool,
-    actor: &ResourceActor,
-    at: &str,
-) -> Result<i64> {
+pub struct LinkChange<'a> {
+    pub object: &'a ChannelWorkObject,
+    pub source_crew: &'a str,
+    pub linked: bool,
+    pub actor: &'a ResourceActor,
+    pub at: &'a str,
+}
+pub fn change(c: &Connection, ch: &str, expected: i64, change: LinkChange<'_>) -> Result<i64> {
+    let LinkChange {
+        object: o,
+        source_crew: crew,
+        linked: link,
+        actor,
+        at,
+    } = change;
     c.execute(
         "INSERT OR IGNORE INTO channel_work_scopes(channel_id,revision) VALUES(?1,0)",
         [ch],

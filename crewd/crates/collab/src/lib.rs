@@ -312,6 +312,11 @@ pub fn run_with_context<T>(
     Ok((v, changes))
 }
 
+/// Finite invalid resource input for trusted adapters.
+pub fn resource_invalid(field: &str) -> CollabError {
+    resource_acl::invalid(field)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,9 +386,4 @@ mod tests {
         let (ts, _) = run(&mut s, 0, |tx| Ok(tx.now_ts())).unwrap();
         assert_eq!(ts, "1970-01-01T00:00:00.000Z");
     }
-}
-
-/// Finite invalid resource input for trusted adapters.
-pub fn resource_invalid(field: &str) -> CollabError {
-    resource_acl::invalid(field)
 }

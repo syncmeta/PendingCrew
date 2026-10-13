@@ -327,28 +327,10 @@ async fn request_step(
                             methods::TODO_CREATE | methods::TODO_CLOSE
                         ) {
                             crewd_collab::refusal::Code::TodoHumanOnly
+                        } else if req.method.starts_with("work.") {
+                            crewd_collab::refusal::Code::WorkActorForbidden
                         } else {
-                            if matches!(
-                                req.method.as_str(),
-                                methods::ASK_GET
-                                    | methods::CHANNEL_WORK_LIST
-                                    | methods::CHANNEL_WORK_LINK
-                                    | methods::CHANNEL_WORK_UNLINK
-                                    | methods::DOCUMENT_CREATE
-                                    | methods::DOCUMENT_GET
-                                    | methods::DOCUMENT_LIST
-                                    | methods::DOCUMENT_UPDATE
-                                    | methods::DOCUMENT_DELETE
-                                    | methods::FOLDER_LIST
-                                    | methods::FOLDER_CREATE
-                                    | methods::FOLDER_UPDATE
-                                    | methods::FOLDER_DELETE
-                                    | methods::FOLDER_ASSIGN
-                            ) {
-                                crewd_collab::refusal::Code::ResourceForbidden
-                            } else {
-                                crewd_collab::refusal::Code::WorkActorForbidden
-                            }
+                            crewd_collab::refusal::Code::ResourceForbidden
                         },
                     ),
                 ),

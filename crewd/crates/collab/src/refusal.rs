@@ -212,8 +212,8 @@ pub struct Refusal {
     pub current_work: Option<Box<crewd_proto::WorkConflictFacts>>,
     pub current_document: Option<Box<crewd_proto::DocumentSummary>>,
     pub current_tree_revision: Option<String>,
-    pub current_link_revision: Option<String>,
-    pub current_source_revision: Option<String>,
+    pub current_link_revision: Option<Box<String>>,
+    pub current_source_revision: Option<Box<String>>,
 }
 
 impl Refusal {

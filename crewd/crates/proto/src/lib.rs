@@ -273,9 +273,9 @@ pub struct RpcErrorData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_tree_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_link_revision: Option<String>,
+    pub current_link_revision: Option<Box<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current_source_revision: Option<String>,
+    pub current_source_revision: Option<Box<String>>,
 }
 
 impl RpcError {

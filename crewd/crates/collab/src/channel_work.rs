@@ -60,8 +60,8 @@ fn identity(c: &Connection, o: &ChannelWorkObject) -> Result<ObjectReference> {
 }
 fn conflict(code: Code, link: i64, source: Option<u64>) -> CollabError {
     let mut r = Refusal::new(code);
-    r.current_link_revision = Some(link.to_string());
-    r.current_source_revision = source.map(|n| n.to_string());
+    r.current_link_revision = Some(Box::new(link.to_string()));
+    r.current_source_revision = source.map(|n| Box::new(n.to_string()));
     CollabError::Conflict(r)
 }
 fn expected(raw: &str) -> Result<i64> {
@@ -107,11 +107,13 @@ pub fn link(
             tx.conn(),
             &p.channel_id,
             rev,
-            &p.object,
-            &r.crew_id,
-            linked,
-            &actor,
-            &tx.now_ts(),
+            db::LinkChange {
+                object: &p.object,
+                source_crew: &r.crew_id,
+                linked,
+                actor: &actor,
+                at: &tx.now_ts(),
+            },
         )?;
         tx.note(Change::ChannelWorkChanged {
             channel_id: p.channel_id.clone(),
@@ -247,10 +249,10 @@ pub fn list(c: &Connection, by: &Sender, p: ChannelWorkListParams) -> Result<Cha
         .as_deref()
         .map(|s| serde_json::from_str::<Cursor>(s).map_err(|_| acl::invalid("after")))
         .transpose()?;
-    if let Some(a) = &cursor {
-        if a.channel_id != p.channel_id || a.link_revision != rev || a.source_revision != source {
-            return Err(conflict(Code::ChannelWorkCursorExpired, rev, Some(source)));
-        }
+    if let Some(a) = &cursor
+        && (a.channel_id != p.channel_id || a.link_revision != rev || a.source_revision != source)
+    {
+        return Err(conflict(Code::ChannelWorkCursorExpired, rev, Some(source)));
     }
     let mut refs = db::rows(c, &p.channel_id)?;
     refs.retain(|o| cursor.as_ref().is_none_or(|a| key(o) > a.last));
