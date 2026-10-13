@@ -218,6 +218,8 @@ struct CrewdSessionStartView: View {
                     }
                 }
             }.disabled(reading || workspace.busy || !workspace.client.connected || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
+        }.onChange(of: workspace.crewID) { _, _ in
+            failure = nil; readUnknown = false; reviewedUnknown = false
         }
     }
 }
