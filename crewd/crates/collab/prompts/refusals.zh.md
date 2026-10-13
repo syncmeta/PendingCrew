@@ -411,3 +411,21 @@ git worktree add 失败: {path}. {detail}
 
 ## work.bad_limit
 工作列表每页须为 1 到 200 项。
+
+## work.bad_revision
+修订号须使用 work.get 返回的当前修订字符串。
+
+## work.revision_conflict
+计划 {id} 已变化，请读取最新修订后再更新。
+
+## work.actor_forbidden
+此调用者不能执行公开工作命令。
+
+## work.link_other_crew
+跨机组链接 {id} 需要尚未接线的全局关系层。
+
+## work.bad_time
+须提供 RFC3339 时间：{value}。
+
+## work.bad_update
+进展更新须有备注；凭据仅用于完成，完成不能安排下次检查。

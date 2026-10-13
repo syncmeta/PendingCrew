@@ -23,6 +23,12 @@ macro_rules! refusal_codes {
 
 refusal_codes! {
     // work
+    WorkBadRevision = "work.bad_revision" [],
+    WorkRevisionConflict = "work.revision_conflict" ["id"],
+    WorkActorForbidden = "work.actor_forbidden" [],
+    WorkLinkOtherCrew = "work.link_other_crew" ["id"],
+    WorkBadTime = "work.bad_time" ["value"],
+    WorkBadUpdate = "work.bad_update" [],
     WorkBadId = "work.bad_id" ["input"],
     WorkNotFound = "work.not_found" ["id"],
     WorkBadLimit = "work.bad_limit" [],

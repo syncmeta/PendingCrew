@@ -418,6 +418,20 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: SessionGetParams = parse_params(p)?;
             read(state, move |c| sessions::get(c, &p.session_id)).await
         }
+        methods::WORK_CREATE => {
+            let p: WorkCreateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work::create(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::WORK_UPDATE => {
+            let p: WorkUpdateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work::update(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::WORK_LIST => {
             let p: WorkListParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::list(c, p)).await

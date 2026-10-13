@@ -146,6 +146,186 @@ pub fn list(conn: &Connection, p: WorkListParams) -> Result<WorkPage> {
     }
     Ok(WorkPage { items, next_after })
 }
+fn actor(conn: &Connection, by: &crate::Sender, crew: &str) -> Result<crewd_work::Actor> {
+    use crewd_work::Actor;
+    match by {
+        crate::Sender::Human => Ok(Actor::Human),
+        crate::Sender::System => Err(CollabError::Forbidden(Refusal::new(
+            Code::WorkActorForbidden,
+        ))),
+        crate::Sender::Session(id) => {
+            let session = crate::sessions::get(conn, id)?;
+            crews::refuse_archived(conn, &session.crew_id)?;
+            if crews::acts_as_captain_of(conn, id, crew)? {
+                Ok(Actor::captain(id))
+            } else if session.crew_id == crew && session.role == crewd_proto::Role::Admin {
+                Ok(Actor::admin(id))
+            } else {
+                Ok(Actor::worker(id))
+            }
+        }
+    }
+}
+fn timestamp(value: Option<&str>) -> Result<Option<crewd_work::Ts>> {
+    value
+        .map(|v| {
+            chrono::DateTime::parse_from_rfc3339(v)
+                .map(|t| crewd_work::Ts(t.timestamp_millis()))
+                .map_err(|_| CollabError::Invalid(Refusal::new(Code::WorkBadTime).arg("value", v)))
+        })
+        .transpose()
+}
+fn local_reference(conn: &Connection, kind: ObjectKind, crew: &str, id: &str) -> Result<String> {
+    let n = id
+        .strip_prefix(kind.prefix())
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|n| *n > 0 && id == format!("{}{n}", kind.prefix()))
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkBadId).arg("input", id)))?;
+    let r = object_refs::get(conn, kind, n)?
+        .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", id)))?;
+    if r.crew_id != crew {
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::WorkLinkOtherCrew).arg("id", id),
+        ));
+    }
+    r.source_id
+        .strip_prefix("work:")
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("work command reference source is invalid"))
+}
+fn local_plan(conn: &Connection, crew: &str, id: &str) -> Result<crewd_work::WorkId> {
+    local_reference(conn, ObjectKind::Plan, crew, id)?
+        .parse()
+        .map_err(|_| invalid("work command plan identity is invalid"))
+}
+fn changed(tx: &mut crate::Tx<'_>, by: &crate::Sender, crew: &str, id: &str) -> Result<()> {
+    if let crate::Sender::Session(session) = by {
+        crate::sessions::note_progress(tx, session, crate::ProgressKind::WorkItem)?;
+    }
+    tx.note(crate::Change::WorkChanged {
+        crew_id: crew.into(),
+        id: id.into(),
+    });
+    Ok(())
+}
+pub fn create(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    p: crewd_proto::WorkCreateParams,
+) -> Result<WorkPlan> {
+    use crewd_work::{Body, ItemRef, NewItem, SessionId};
+    crews::refuse_archived(tx.conn(), &p.crew_id)?;
+    let actor = actor(tx.conn(), by, &p.crew_id)?;
+    let owner = p.owner.or_else(|| actor.session().map(ToString::to_string));
+    if let Some(owner) = &owner {
+        let owner = crate::sessions::get(tx.conn(), owner)?;
+        crews::refuse_archived(tx.conn(), &owner.crew_id)?;
+    }
+    let item = NewItem {
+        title: p.title,
+        body: Body {
+            goal: p.goal,
+            acceptance: p.acceptance,
+            level: match p.level {
+                crewd_proto::WorkLevel::Local => DoneLevel::Local,
+                crewd_proto::WorkLevel::Public => DoneLevel::Public,
+                crewd_proto::WorkLevel::Production => DoneLevel::Production,
+            },
+        },
+        owner: owner.map(|id| SessionId::new(&id)),
+        parent: p
+            .parent
+            .as_deref()
+            .map(|id| local_plan(tx.conn(), &p.crew_id, id).map(ItemRef::Id))
+            .transpose()?,
+        depends_on: p
+            .depends_on
+            .iter()
+            .map(|id| local_plan(tx.conn(), &p.crew_id, id).map(ItemRef::Id))
+            .collect::<Result<_>>()?,
+        sources: p
+            .sources
+            .iter()
+            .map(|id| {
+                local_reference(tx.conn(), ObjectKind::Requirement, &p.crew_id, id)?
+                    .parse()
+                    .map_err(|_| invalid("work command requirement identity is invalid"))
+            })
+            .collect::<Result<_>>()?,
+        next_check_at: timestamp(p.next_check_at.as_deref())?,
+        channel: None,
+    };
+    let local = asks::with_book(tx, &p.crew_id, |b, now| {
+        b.create_item(&actor, now, item).map(|a| a.value)
+    })?;
+    let id = reference(tx.conn(), ObjectKind::Plan, &p.crew_id, local)?;
+    changed(tx, by, &p.crew_id, &id)?;
+    get(tx.conn(), &id)
+}
+pub fn update(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    p: crewd_proto::WorkUpdateParams,
+) -> Result<WorkPlan> {
+    use crewd_proto::WorkUpdateStatus as S;
+    use crewd_work::{Progress, Report};
+    let n = number(&p.id)?;
+    let r = object_refs::get(tx.conn(), ObjectKind::Plan, n)?
+        .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
+    crews::refuse_archived(tx.conn(), &r.crew_id)?;
+    let actor = actor(tx.conn(), by, &r.crew_id)?;
+    let local = local_plan(tx.conn(), &r.crew_id, &p.id)?;
+    let revision = p
+        .expected_revision
+        .parse::<u64>()
+        .ok()
+        .filter(|n| p.expected_revision == n.to_string())
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkBadRevision)))?;
+    let done = p.status == Some(S::Done);
+    if (!done && (p.evidence.is_some() || p.note.as_ref().is_none_or(|n| n.trim().is_empty())))
+        || (done && p.next_check_at.is_some())
+    {
+        return Err(CollabError::Invalid(Refusal::new(Code::WorkBadUpdate)));
+    }
+    let next = timestamp(p.next_check_at.as_deref())?;
+    let evidence = p.evidence.map(|e| match e.kind {
+        crewd_proto::WorkEvidenceKind::Commit => Evidence::Commit(e.value),
+        crewd_proto::WorkEvidenceKind::Url => Evidence::Url(e.value),
+        crewd_proto::WorkEvidenceKind::Text => Evidence::Text(e.value),
+    });
+    // The revision comparison and command run inside the same single-writer transaction.
+    let current = asks::load(tx.conn(), &r.crew_id)?;
+    if current.item(local).is_none_or(|i| i.revision != revision) {
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::WorkRevisionConflict).arg("id", &p.id),
+        ));
+    }
+    asks::with_book(tx, &r.crew_id, |b, now| {
+        if !done || p.note.is_some() {
+            b.report(
+                &actor,
+                now,
+                local,
+                Report {
+                    status: match p.status {
+                        Some(S::Open) => Some(Progress::Open),
+                        Some(S::Active) => Some(Progress::Active),
+                        _ => None,
+                    },
+                    next_check_at: next,
+                    note: p.note.unwrap_or_default(),
+                },
+            )?;
+        }
+        if done {
+            b.mark_done(&actor, now, local, evidence)?;
+        }
+        Ok(())
+    })?;
+    changed(tx, by, &r.crew_id, &p.id)?;
+    get(tx.conn(), &p.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +461,205 @@ mod tests {
             list(s.conn(), WorkListParams::default()),
             Err(CollabError::Store(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    use crate::testkit::{NOW, err, ok, store};
+    use crate::{Change, ProgressKind, Sender};
+    use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
+    fn input() -> WorkCreateParams {
+        WorkCreateParams {
+            crew_id: "crew-a".into(),
+            title: "synthetic plan".into(),
+            ..Default::default()
+        }
+    }
+    fn finish(p: &WorkPlan) -> WorkUpdateParams {
+        WorkUpdateParams {
+            id: p.id.clone(),
+            expected_revision: p.revision.clone(),
+            status: Some(WorkUpdateStatus::Done),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn owned_work_reports_real_progress_and_completes_without_evidence() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let (p, changes) = crate::run(&mut s, NOW, |tx| create(tx, &by, input())).unwrap();
+        assert_eq!(p.owner.as_deref(), Some("w-a1"));
+        assert!(changes.contains(&Change::Progress {
+            session_id: "w-a1".into(),
+            kind: ProgressKind::WorkItem
+        }));
+        assert!(changes.contains(&Change::WorkChanged {
+            crew_id: "crew-a".into(),
+            id: p.id.clone()
+        }));
+        let active = ok(&mut s, |tx| {
+            update(
+                tx,
+                &by,
+                WorkUpdateParams {
+                    id: p.id.clone(),
+                    expected_revision: p.revision.clone(),
+                    status: Some(WorkUpdateStatus::Active),
+                    note: Some("next concrete step".into()),
+                    next_check_at: Some(crewd_store::ts_from_ms(NOW + 60_000)),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(active.status, "active");
+        assert_eq!(active.note.as_deref(), Some("next concrete step"));
+        let done = ok(&mut s, |tx| update(tx, &by, finish(&active)));
+        assert_eq!(done.status, "done");
+        assert!(done.evidence.is_none());
+        assert!(done.next_check_at.is_none());
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+    #[test]
+    fn stale_revision_and_unauthorized_actor_leave_all_state_unchanged() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let p = ok(&mut s, |tx| create(tx, &by, input()));
+        assert!(matches!(
+            err(&mut s, |tx| update(
+                tx,
+                &Sender::Session("w-a2".into()),
+                finish(&p)
+            )),
+            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+        ));
+        assert!(matches!(
+            err(&mut s, |tx| update(
+                tx,
+                &Sender::Session("cap-b".into()),
+                finish(&p)
+            )),
+            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+        ));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
+        let done = ok(&mut s, |tx| update(tx, &by, finish(&p)));
+        let stale = err(&mut s, |tx| update(tx, &by, finish(&p)));
+        assert!(matches!(stale, CollabError::Conflict(_)));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), done);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn stale_report_cannot_overwrite_a_newer_next_step() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let original = ok(&mut s, |tx| create(tx, &by, input()));
+        let update_request = |note: &str| WorkUpdateParams {
+            id: original.id.clone(),
+            expected_revision: original.revision.clone(),
+            note: Some(note.into()),
+            ..Default::default()
+        };
+        let current = ok(&mut s, |tx| {
+            update(tx, &by, update_request("newer next step"))
+        });
+        let e = err(&mut s, |tx| {
+            update(tx, &by, update_request("stale next step"))
+        });
+        assert_eq!(e.refusal().unwrap().code, Code::WorkRevisionConflict);
+        assert_eq!(get(s.conn(), &original.id).unwrap(), current);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn target_captain_and_management_captain_use_current_authority() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let p = ok(&mut s, |tx| create(tx, &by, input()));
+        let done = ok(&mut s, |tx| {
+            update(tx, &Sender::Session("cap-a".into()), finish(&p))
+        });
+        assert_eq!(done.status, "done");
+        let chief = crate::testkit::org_captain(&mut s);
+        let p = ok(&mut s, |tx| create(tx, &by, input()));
+        assert_eq!(
+            ok(&mut s, |tx| update(tx, &Sender::Session(chief), finish(&p))).status,
+            "done"
+        );
+    }
+    #[test]
+    fn failed_progress_write_rolls_back_work_events_and_issued_references() {
+        let mut s = store();
+        s.conn().execute_batch("CREATE TRIGGER fail_work_progress BEFORE UPDATE OF last_progress_at ON sessions BEGIN SELECT RAISE(ABORT,'synthetic progress failure'); END;").unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                input()
+            )),
+            CollabError::Store(_)
+        ));
+        assert!(
+            list(s.conn(), WorkListParams::default())
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM work_books", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(
+            s.conn()
+                .query_row(
+                    "SELECT last_progress_at FROM sessions WHERE id='w-a1'",
+                    [],
+                    |r| r.get::<_, Option<String>>(0)
+                )
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn frozen_crews_reject_writes_and_cross_crew_links_never_alias() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let p = ok(&mut s, |tx| create(tx, &by, input()));
+        let mut cross = input();
+        cross.crew_id = "crew-b".into();
+        cross.parent = Some(p.id.clone());
+        let e = err(&mut s, |tx| create(tx, &Sender::Human, cross));
+        assert_eq!(e.refusal().unwrap().code, Code::WorkLinkOtherCrew);
+        s.conn()
+            .execute(
+                "UPDATE crews SET archived_at='frozen' WHERE id='crew-a'",
+                [],
+            )
+            .unwrap();
+        let e = err(&mut s, |tx| update(tx, &Sender::Human, finish(&p)));
+        assert_eq!(e.refusal().unwrap().code, Code::CrewRemoved);
+        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
     }
 }

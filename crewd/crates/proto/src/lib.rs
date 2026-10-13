@@ -64,6 +64,8 @@ pub mod methods {
     pub const READ_MARK: &str = "read.mark";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_GET: &str = "session.get";
+    pub const WORK_CREATE: &str = "work.create";
+    pub const WORK_UPDATE: &str = "work.update";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
     pub const ASK_LIST: &str = "ask.list";
@@ -102,6 +104,8 @@ pub mod methods {
         READ_MARK,
         SESSION_LIST,
         SESSION_GET,
+        WORK_CREATE,
+        WORK_UPDATE,
         WORK_LIST,
         WORK_GET,
         ASK_LIST,
@@ -139,6 +143,7 @@ pub mod events {
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
     pub const TOPICS: &[&str] = &[
         "message", "channel", "crew", "badge", "ask", "session", "restart", "wake", "system",
+        "work",
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -150,6 +155,7 @@ pub mod events {
     /// 机组被永久删除（`crew.purge`，`{crewId}`）；移除（归档）发的是 `crew.changed`。
     pub const CREW_PURGED: &str = "crew.purged";
     pub const BADGE_CHANGED: &str = "badge.changed";
+    pub const WORK_CHANGED: &str = "work.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
     /// `SessionLive`，M3c 发。
     pub const SESSION_CHANGED: &str = "session.changed";
@@ -323,6 +329,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::CREW_PURGED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
         (events::ASK_CHANGED, sub::<Ask>(g)),
+        (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
         (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
         (events::LAGGED, sub::<Lagged>(g)),
@@ -528,6 +535,14 @@ pub fn api_schema() -> Value {
         (
             methods::SESSION_GET,
             m(sub::<SessionGetParams>(g), sub::<Session>(g)),
+        ),
+        (
+            methods::WORK_CREATE,
+            m(sub::<WorkCreateParams>(g), sub::<WorkPlan>(g)),
+        ),
+        (
+            methods::WORK_UPDATE,
+            m(sub::<WorkUpdateParams>(g), sub::<WorkPlan>(g)),
         ),
         (
             methods::WORK_LIST,

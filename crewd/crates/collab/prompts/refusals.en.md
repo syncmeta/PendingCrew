@@ -411,3 +411,21 @@ Plan {id} does not exist.
 
 ## work.bad_limit
 Work page limit must be between 1 and 200.
+
+## work.bad_revision
+Expected revision must be the exact current revision string from work.get.
+
+## work.revision_conflict
+Plan {id} changed; read its latest revision before updating.
+
+## work.actor_forbidden
+This actor cannot issue a public work command.
+
+## work.link_other_crew
+Cross-crew link {id} requires the global relation layer, which is not connected yet.
+
+## work.bad_time
+Expected an RFC3339 timestamp: {value}.
+
+## work.bad_update
+Progress needs a note. Evidence applies only to done, and done cannot schedule a next check.

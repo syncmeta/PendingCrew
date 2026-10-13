@@ -82,3 +82,74 @@ impl From<WorkPlan> for WorkSummary {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkLevel {
+    #[default]
+    Local,
+    Public,
+    Production,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkUpdateStatus {
+    Open,
+    Active,
+    Done,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkEvidenceKind {
+    Commit,
+    Url,
+    Text,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkEvidenceParam {
+    pub kind: WorkEvidenceKind,
+    pub value: String,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkCreateParams {
+    pub crew_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub level: WorkLevel,
+    #[serde(default)]
+    pub acceptance: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub sources: Vec<String>,
+    #[serde(default)]
+    pub next_check_at: Option<String>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkUpdateParams {
+    pub id: String,
+    pub expected_revision: String,
+    #[serde(default)]
+    pub status: Option<WorkUpdateStatus>,
+    #[serde(default)]
+    pub next_check_at: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<WorkEvidenceParam>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkChanged {
+    pub crew_id: String,
+    pub id: String,
+}

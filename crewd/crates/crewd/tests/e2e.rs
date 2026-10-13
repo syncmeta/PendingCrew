@@ -394,6 +394,16 @@ fn rpc_drives_every_client_method() {
         ),
         ("session.list", "null", Ok),
         ("session.get", r#"{"sessionId":"captain-1111aaaa"}"#, Ok),
+        (
+            "work.create",
+            r#"{"crewId":"local-aaaa","title":"synthetic plan"}"#,
+            Ok,
+        ),
+        (
+            "work.update",
+            r#"{"id":"W999","expectedRevision":"1","status":"done"}"#,
+            Code(-32004),
+        ),
         ("work.list", "{}", Ok),
         ("work.get", r#"{"id":"W999"}"#, Code(-32004)),
         ("ask.list", "null", Ok),

@@ -139,3 +139,15 @@ Optional-evidence gate: 2352 passed, 0 failed, 8 ignored; fmt/clippy passed. Ful
 查询接线完整后端门禁 pcw-work-query-full-check-01.log：2364 passed、0 failed、8 ignored。之后摘要投影与新增 socket 夹具的最终变更以格式、全 workspace lint、proto 全测试、全部 socket 测试及 CLI 全方法端到端复验，日志 pcw-work-query-final-01.log；没有把改动前的全量数冒充改动后的完整重跑。首次两次编译错误是工作目录/夹具类型错误，不计作行为反例，原始日志保留。
 
 当前接口仅为计划读取，不代表原始需求/待人事项全量视图、操作命令、MCP、跨机组关系、可读代号、自建表、检查点和注入已经完成。下一单元接工作操作与 agent 工具，沿用同一账本、全局引用及事务。没有新增真实模型调用、安装、发布或日常数据迁移。
+
+## 2026-10-13 M4b 工作操作事务
+
+增加 work.create/work.update 客户端 RPC 与严格输入契约；创建支持目标、验收层级、负责人、同机组的父项/依赖/原始需求引用和检查时间。引用先从全局编号定位到权威账本，绝不拿其他机组的同号别名代替。更新支持进展/下一步与完成；完成可不附凭据，提供的凭据仍须非空。每次更新必须带读取到的修订字符串，比较和修改处于同一个单写事务内，旧修订返回稳定冲突码，不覆写新进展。
+
+调用者角色按当前机长指针、管理机组机长及归属重新判定；其他机组的机长不自动成为目标机组机长。工作项负责人仍按核心权限改状态；冻结机组和冻结的调用者机组拒绝写入，保留读取。真实 agent 工作操作把 note_progress(WorkItem) 与状态、事件、引用一起提交，失败整笔回滚；提交成功才发布 work.changed，通知只带全局 ID 与机组，不广播长正文。
+
+六项事务行为验收通过 pcw-work-actions-focused-03.log。实际 Unix socket 验收通过 pcw-work-actions-socket-01.log：创建后通知、无凭据完成、旧修订冲突且状态不变、非法完成层级拒绝。pcw-work-actions-revision-red-01.log 实际观察到移除 CAS 后旧备注覆盖新备注；progress-red-01.log 观察到移除真实进展写入后错误提交。恢复正确源码后完整门禁日志为 pcw-work-actions-full-check-01.log。最初冻结测试错误期待 Forbidden，而既有规则正确返回 Conflict/crew.removed，改为检查原稳定码；不算产品缺陷反例。
+
+本单元不是整个 M4b 完成。MCP 工具、带修订号的我的工作摘要、依赖放行后的唤醒、检查点/IdleHook/上下文注入、跨机组关系、可读代号与自建表仍需继续。当前跨机组关系明确返回未接线拒绝，不静默错连；公开完成命令已放行依赖状态，自动跟进还未接线。候选分支继续开发，未切换日常应用/数据、未新增真实模型调用。
+
+Final gate: 2372 passed, 0 failed, 8 ignored; fmt and workspace clippy passed.

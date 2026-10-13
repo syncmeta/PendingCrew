@@ -1560,6 +1560,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/WorkChanged"
+            },
+            "event": {
+              "const": "work.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/SessionLive"
             },
             "event": {
@@ -3275,7 +3291,8 @@
               "session",
               "restart",
               "wake",
-              "system"
+              "system",
+              "work"
             ],
             "type": "string"
           },
@@ -3782,10 +3799,112 @@
       ],
       "type": "object"
     },
+    "WorkChanged": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "WorkCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance": {
+          "default": "",
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "dependsOn": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal": {
+          "default": "",
+          "type": "string"
+        },
+        "level": {
+          "$ref": "#/$defs/WorkLevel",
+          "default": "local"
+        },
+        "nextCheckAt": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "title"
+      ],
+      "type": "object"
+    },
     "WorkEvidence": {
       "properties": {
         "kind": {
           "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "WorkEvidenceKind": {
+      "enum": [
+        "commit",
+        "url",
+        "text"
+      ],
+      "type": "string"
+    },
+    "WorkEvidenceParam": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WorkEvidenceKind"
         },
         "value": {
           "type": "string"
@@ -3808,6 +3927,14 @@
         "id"
       ],
       "type": "object"
+    },
+    "WorkLevel": {
+      "enum": [
+        "local",
+        "public",
+        "production"
+      ],
+      "type": "string"
     },
     "WorkListParams": {
       "additionalProperties": false,
@@ -4019,6 +4146,66 @@
         "revision"
       ],
       "type": "object"
+    },
+    "WorkUpdateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkEvidenceParam"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nextCheckAt": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkUpdateStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision"
+      ],
+      "type": "object"
+    },
+    "WorkUpdateStatus": {
+      "enum": [
+        "open",
+        "active",
+        "done"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4109,6 +4296,9 @@
     },
     "wake.changed": {
       "$ref": "#/$defs/WakeChanged"
+    },
+    "work.changed": {
+      "$ref": "#/$defs/WorkChanged"
     }
   },
   "frames": {
@@ -4555,6 +4745,14 @@
         "$ref": "#/$defs/WakeListResult"
       }
     },
+    "work.create": {
+      "params": {
+        "$ref": "#/$defs/WorkCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
     "work.get": {
       "params": {
         "$ref": "#/$defs/WorkGetParams"
@@ -4570,6 +4768,14 @@
       "result": {
         "$ref": "#/$defs/WorkPage"
       }
+    },
+    "work.update": {
+      "params": {
+        "$ref": "#/$defs/WorkUpdateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
     }
   },
   "topics": [
@@ -4581,7 +4787,8 @@
     "session",
     "restart",
     "wake",
-    "system"
+    "system",
+    "work"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

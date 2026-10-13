@@ -62,6 +62,10 @@ pub enum Change {
     SessionChanged {
         session_id: String,
     },
+    WorkChanged {
+        crew_id: String,
+        id: String,
+    },
     AskChanged {
         crew_id: String,
         ask: String,

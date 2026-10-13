@@ -1303,3 +1303,63 @@ async fn work_queries_read_committed_plans_over_the_actual_socket() {
     );
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn work_commands_commit_then_notify_and_reject_stale_revisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = start(dir.path()).await;
+    let mut observer = Client::connect(dir.path()).await;
+    observer
+        .call(1, "events.subscribe", json!({"topics":["work"]}))
+        .await;
+    let mut client = Client::connect(dir.path()).await;
+    let plan = client
+        .call(
+            1,
+            "work.create",
+            json!({"crewId":"a","title":"socket-owned plan","owner":"w-a1"}),
+        )
+        .await;
+    let id = plan["id"].as_str().unwrap();
+    match observer.next().await {
+        ServerFrame::Event(e) => {
+            assert_eq!(e.event, "work.changed");
+            assert_eq!(e.data["id"], id);
+        }
+        other => panic!("expected committed work event: {other:?}"),
+    }
+    let done = client
+        .call(
+            2,
+            "work.update",
+            json!({"id":id,"expectedRevision":plan["revision"],"status":"done"}),
+        )
+        .await;
+    assert_eq!(done["status"], "done");
+    assert!(done["evidence"].is_null());
+    match observer.next().await {
+        ServerFrame::Event(e) => assert_eq!(e.data["id"], id),
+        other => panic!("missing change: {other:?}"),
+    };
+    let stale = client
+        .call_rpc_err(
+            3,
+            "work.update",
+            json!({"id":id,"expectedRevision":plan["revision"],"status":"done"}),
+        )
+        .await;
+    assert_eq!(stale.code, -32009);
+    assert_eq!(stale.data.unwrap().refusal, "work.revision_conflict");
+    assert_eq!(client.call(4, "work.get", json!({"id":id})).await, done);
+    assert_eq!(
+        client
+            .call_err(
+                5,
+                "work.create",
+                json!({"crewId":"a","title":"bad","level":"invalid"})
+            )
+            .await,
+        -32602
+    );
+    let _ = stop.send(());
+}
