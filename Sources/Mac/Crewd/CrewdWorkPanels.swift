@@ -20,6 +20,8 @@ enum CrewdChatStyle {
 struct CrewdWorkPanels: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: CrewdWorkStore
+    @ObservedObject var resources:CrewdResources
+    @Binding var resourceDrafts:CrewdResourceDrafts
     @Binding var drafts: CrewdRequirementDrafts
     @Binding var planDrafts: CrewdPlanDrafts
     @Binding var humanDrafts: CrewdHumanDrafts
@@ -29,23 +31,25 @@ struct CrewdWorkPanels: View {
     var compact = false
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
-    @State private var showFolders=false
     @State private var failure:String?
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
+    private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
+    private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView)},set:{resourceDrafts.select(resources.crew,folderView,$0)})}
+    private func includes(_ kind:String,_ id:String)->Bool {compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             if !compact {
                 HStack {
-                    Button("文件夹",systemImage:"folder") {showFolders.toggle()}.buttonStyle(.plain)
+                    CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView)
                     Spacer(); Button("刷新",systemImage:"arrow.clockwise") {Task {do {try await store.refresh()} catch {failure=error.localizedDescription}}}
                 }
-                if showFolders {Text("独立文件夹分组等待后台分类与视图接口接线；不会把文件夹写成计划父项。").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
             }
             if let error=store.lastFailure { Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error=resources.failure {Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
             if store.loading {ProgressView().controlSize(.small)}
             ScrollView {
@@ -53,13 +57,13 @@ struct CrewdWorkPanels: View {
                     if !progressOnly && !compact {
                         Text("原始需求").font(.headline)
                         requirementComposer
-                        ForEach(store.requirementIDs,id:\.self) {id in
+                        ForEach(store.requirementIDs.filter{includes("requirement",$0.raw)},id:\.self) {id in
                             VStack(alignment:.leading,spacing:4) {
                                 Button {
                                     selectedRequirement = selectedRequirement == id ? nil : id
                                     if selectedRequirement != nil {Task {do {_ = try await store.requirementDetail(id)} catch {failure = describe(error)}}}
                                 } label: {Text("\(id.raw)  \(store.requirements[id]?["text"].string ?? "")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
-                                HStack {Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
+                                HStack {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("requirement",id.raw));Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
                                 if selectedRequirement == id {requirementDetail(id)}
                                 Text(CrewdWorkStatusLabel.display(store.requirements[id]?["status"].string ?? "")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                 Text(store.plans(from:id).map {$0.id.raw}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
@@ -67,7 +71,7 @@ struct CrewdWorkPanels: View {
                         }
                         Text("计划").font(.headline)
                     }
-                    ForEach(CrewdNavigation.planTree(store.progress,collapsed:collapsed)) {row in
+                    ForEach(CrewdNavigation.planTree(store.progress.filter{includes("work",$0.id.raw)},collapsed:collapsed)) {row in
                         if let id=CrewdWorkID(row.object,kind:.plan),let plan=store.plans[id] {
                             VStack(alignment:.leading,spacing:4) {
                                 HStack(alignment:.top) {
@@ -90,6 +94,7 @@ struct CrewdWorkPanels: View {
                                         Text("依赖：" + detail["dependsOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         Text("卡点：" + detail["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         if let evidence=detail["evidence"]["value"].string {Text(evidence).textSelection(.enabled)}
+                                        CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:folderView,object:CrewdFolderFilter.object("work",id.raw))
                                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew + ":" + id.raw)
                                         Button("计划操作") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))
                                     } else {Button("读取当前详情") {Task {do {_ = try await store.detail(id)} catch {failure=describe(error)}}}}
@@ -106,11 +111,11 @@ struct CrewdWorkPanels: View {
                     if store.planIDs.isEmpty {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                     if !progressOnly && !compact {
                         Divider(); Text("待人类处理 · 全组织收件箱").font(.headline)
-                        ForEach(store.humanTasks.keys.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
+                        ForEach(store.humanTasks.keys.filter{store.humanTasks[$0]?["ask"]["crewId"].string != resources.crew || includes("humanTask",$0.raw)}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
                             let ask=store.humanTasks[id]?["ask"] ?? .null
                             Text("\(id.raw)  \(ask["question"].string ?? "")").textSelection(.enabled)
                             Text(ask["item"].string.map{"关联计划："+$0} ?? ("所属机组："+(crews.first(where:{$0["id"] == ask["crewId"]})?["title"].string ?? "机组资料尚未加载"))).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                            if let crew=ask["crewId"].string {Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw),crewTitle:crews.first(where:{$0["id"].string == crew})?["title"].string)}}
+                            if let crew=ask["crewId"].string {if crew == resources.crew{CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("humanTask",id.raw))};Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw),crewTitle:crews.first(where:{$0["id"].string == crew})?["title"].string)}}
                         }
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)

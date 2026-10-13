@@ -9,6 +9,11 @@ final class CrewdWorkspace: ObservableObject {
         guard let self else { throw CancellationError() }
         return try await self.client.call(method, params)
     }
+    lazy var resources=CrewdResources { [weak self] method,params in
+        guard let self else {throw CancellationError()}
+        return try await self.client.call(method,params)
+    }
+    @Published var resourceDrafts=CrewdResourceDrafts()
     private var workDirty = true
     @Published var crews: [CrewdValue] = []
     @Published var sessions: [CrewdValue] = []
@@ -52,6 +57,7 @@ final class CrewdWorkspace: ObservableObject {
         self.dataDirectory = dataDirectory
         client.onEvent = { [weak self] name, data in
             guard let self else { return }
+            self.resources.handleEvent(name,data)
             if name.hasPrefix("message.") {
                 if let channel=data["channelId"].string,let crew=self.activityChannelCrews[channel] {
                     if !self.activityDirty || !self.activityAffected.isEmpty {self.activityAffected.insert(crew)}
@@ -64,13 +70,13 @@ final class CrewdWorkspace: ObservableObject {
                 if let id = item["id"].string, let index = self.runnerItems.firstIndex(where: {$0["id"].string == id}) { self.runnerItems[index] = item }
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
-                self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
+                self.resources.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
             guard let self, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
-            self.workStore.invalidateConnection(); self.workDirty = true
+            self.resources.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
             let attempt = UUID(); self.reconnectID = attempt
@@ -139,9 +145,11 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     private func connectOnly() async throws {
-        workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        resources.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        workStore.configureCapabilities(client.capabilities)
+        resources.configureCapabilities(client.capabilities)
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         error = nil
         status = "已连接 · crewd \(client.version)"
@@ -153,7 +161,7 @@ final class CrewdWorkspace: ObservableObject {
 
     func selectCrew(_ id: String) {
         guard crewID != id else { return }
-        workStore.selectCrew(id); workDirty = true
+        workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
@@ -225,7 +233,7 @@ final class CrewdWorkspace: ObservableObject {
         restartPrompt = restart
         if !crews.contains(where: {$0["id"].string == crewID}) { crewID = crews.first?["id"].string ?? "" }
         let crew = crewID
-        workStore.selectCrew(crew)
+        workStore.selectCrew(crew); resources.selectCrew(crew)
         if workDirty {
             workDirty = false
             do { try await workStore.refresh() } catch { /* WorkStore retains typed failures; first-edition messaging stays usable. */ }

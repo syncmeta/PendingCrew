@@ -14,7 +14,6 @@ struct CrewdWorkspaceView: View {
     @State private var todoExpanded = true
     @State private var membersExpanded = true
     @State private var runnerExpanded = false
-    @State private var folderHelp = false
     @State private var crewTitle = ""
     @State private var workingDirectory = ""
     private var messageContext: CrewdDrafts.Context {
@@ -72,14 +71,9 @@ struct CrewdWorkspaceView: View {
                     Divider()
                     switch tab {
                     case .messages: messageLayout
-                    case .todo: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews)
-                    case .progress: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,progressOnly:true)
-                    case .documents:
-                        VStack(alignment:.leading,spacing:12) {
-                            HStack {Label("文档",systemImage:"doc.text").font(.headline); Spacer(); Text("文件夹 · 待接线").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
-                            Text("文档与独立文件夹视图等待后台接口接线。现有消息、原始需求与计划仍保留在各自对象中。").foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                            Spacer()
-                        }.padding(20).frame(maxWidth:.infinity,alignment:.leading)
+                    case .todo: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews)
+                    case .progress: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,progressOnly:true)
+                    case .documents: CrewdDocumentsView(store:workspace.resources,drafts:$workspace.resourceDrafts)
                     }
                 }
             }.background(CrewdChatStyle.canvas(colorScheme))
@@ -107,13 +101,15 @@ struct CrewdWorkspaceView: View {
         let rows=Dictionary(roster.filter {$0["crewId"].string == id}.compactMap {row in row["id"].string.map {($0,row)}},uniquingKeysWith:{a,_ in a})
         return rows.keys.sorted().map {.object(["kind":.string("session"),"id":.string($0)])}
     }
+    private var messageFolderSelection:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(workspace.crewID,.messages)},set:{workspace.resourceDrafts.select(workspace.crewID,.messages,$0)})}
     private var messageLayout: some View {
         HSplitView {
             VStack(alignment:.leading,spacing:8) {
-                Text("全部会话").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(10)
-                ScrollView {VStack(alignment:.leading,spacing:6){ForEach(workspace.channels.indices,id:\.self){i in
+                CrewdFolderControls(store:workspace.resources,drafts:$workspace.resourceDrafts,selection:messageFolderSelection,view:.messages).padding(8)
+                Text("群聊与单聊").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(.horizontal,10)
+                ScrollView {VStack(alignment:.leading,spacing:6){ForEach(workspace.channels.indices.filter{CrewdFolderFilter.includes(CrewdFolderFilter.object("channel",workspace.channels[$0]["id"].string ?? ""),selection:messageFolderSelection.wrappedValue,snapshot:workspace.resources.folders[.messages])},id:\.self){i in
                     let channel=workspace.channels[i]
-                    Button {workspace.selectConversation(channel["id"].string ?? "")} label:{
+                    HStack(spacing:2){Button {workspace.selectConversation(channel["id"].string ?? "")} label:{
                         HStack {
                             let members=workspace.channelSummaries.first(where:{$0["channel"]["id"] == channel["id"]})?["members"].array ?? []
                             if channel["kind"].string == "dm",let peer=members.compactMap(CrewdAvatarIdentity.seed).first(where:{$0 != "human"}) {CrewdMemberAvatar(seed:peer,colorSeed:channel["id"].string ?? "")}
@@ -121,6 +117,7 @@ struct CrewdWorkspaceView: View {
                             Text(channelName(channel)); Spacer()
                         }.padding(10).background(workspace.channelID == channel["id"].string ? CrewdChatStyle.selection(colorScheme):Color.clear,in:RoundedRectangle(cornerRadius:5))
                     }.buttonStyle(.plain)
+                    CrewdFolderAssignmentButton(store:workspace.resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("channel",channel["id"].string ?? ""))}
                 }}.padding(8)}
                 Spacer(minLength:0)
             }.frame(minWidth:165,idealWidth:190,maxWidth:245)
@@ -132,7 +129,7 @@ struct CrewdWorkspaceView: View {
             VStack(alignment:.leading,spacing:8) {
                 DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
                     Text("机组工作引用；群独立视图待接线").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                    CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,compact:true).frame(minHeight:100,maxHeight:.infinity)
+                    CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,compact:true).frame(minHeight:100,maxHeight:.infinity)
                 }
                 Divider()
                 DisclosureGroup("本群成员",isExpanded:$membersExpanded) {
@@ -179,9 +176,8 @@ struct CrewdWorkspaceView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(channelName(workspace.channels.first(where:{$0["id"].string == workspace.channelID}) ?? .null)).font(.headline)
-                Spacer(); Button("消息文件夹",systemImage:"folder") {folderHelp.toggle()}.buttonStyle(.plain)
+                Spacer();if !workspace.channelID.isEmpty{CrewdFolderAssignmentButton(store:workspace.resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("channel",workspace.channelID))}
             }
-            if folderHelp {Text("消息独立文件夹分类等待后台视图接口接线。").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
             if !workspace.pendingAsks.isEmpty {
                 DisclosureGroup("全组织等待你的答复（\(workspace.pendingAsks.count)）") {
                     ScrollView {
