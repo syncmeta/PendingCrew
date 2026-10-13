@@ -440,5 +440,39 @@ async fn public_human_task_answer_is_shared_by_both_channel_projections() {
             .unwrap()
             .is_empty()
     );
+    // Public closed detail must remain readable after disappearing from pending lists.
+    let wrong_crew = f.add_crew("wrong closed-question scope", None).await;
+    let before = snapshot(&f).await;
+    let closed = rpc(&mut human, "ask.get", json!({"crewId":f.crew,"ask":h})).await;
+    assert_eq!(closed["ask"], h);
+    assert_eq!(closed["crewId"], f.crew);
+    assert_eq!(closed["state"], "answered");
+    assert_eq!(closed["answer"], "actual human decision");
+    assert!(closed["closedAt"].is_string());
+    assert_eq!(snapshot(&f).await, before);
+    assert_eq!(
+        call(&mut human, "ask.get", json!({"crewId":wrong_crew,"ask":h}))
+            .await
+            .unwrap_err()
+            .0,
+        crewd_proto::RpcError::NOT_FOUND
+    );
+    assert_eq!(
+        snapshot(&f).await,
+        before,
+        "wrong crew cannot turn a global H identifier into an unrelated-scope detail"
+    );
+    assert_eq!(
+        call(&mut owner, "ask.get", json!({"crewId":f.crew,"ask":h}))
+            .await
+            .unwrap_err()
+            .0,
+        crewd_proto::RpcError::FORBIDDEN
+    );
+    assert_eq!(
+        snapshot(&f).await,
+        before,
+        "attached session cannot borrow ordinary Human question detail"
+    );
     close_socket(task, stop).await;
 }
