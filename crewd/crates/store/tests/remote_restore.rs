@@ -104,3 +104,57 @@ fn restoring_an_active_backup_does_not_revive_revoked_remote_trust() {
         "same-identity restore revived a previously revoked device grant"
     );
 }
+
+#[test]
+fn failed_trust_invalidation_keeps_backup_and_aside_without_creating_empty_live_db() {
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Restore fault evidence: {}", root.display());
+    let data = root.join("data");
+    std::fs::create_dir(&data).unwrap();
+    let db = data.join(crewd_store::DB_FILE);
+    let store = Store::open_data_dir(&data).unwrap();
+    let identity = RemotePublicIdentity {
+        authority_id: "33333333-3333-4333-8333-333333333333".into(),
+        db_id: meta_get(store.conn(), "dbId").unwrap().unwrap(),
+        certificate_der_base64: "inert-store-server-certificate".into(),
+        spki_sha256: "c".repeat(64),
+    };
+    remote::bind_identity(store.conn(), &identity, "2026-10-14T00:00:00Z").unwrap();
+    // Explicit Store-layer SQL fault fixture, copied unchanged by the actual backup.
+    store.conn().execute_batch("CREATE TRIGGER reject_restore_trust_audit BEFORE INSERT ON remote_audit BEGIN SELECT RAISE(ABORT,'synthetic restore trust audit failure'); END;").unwrap();
+    let snapshot = root.join("fault-backup.db");
+    backup::backup_db(&db, &snapshot).unwrap();
+    let original = std::fs::read(&snapshot).unwrap();
+    drop(store);
+    let error = backup::restore(&data, &snapshot).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("synthetic restore trust audit failure")
+    );
+    assert_eq!(std::fs::read(&snapshot).unwrap(), original);
+    assert!(
+        !db.exists(),
+        "a failing trust transformation must never install an active backup"
+    );
+    // A replaced file is recovery evidence, not a claim that live DB stayed in place.
+    let aside = std::fs::read_dir(&data)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            let name = p.file_name().unwrap().to_string_lossy();
+            name.starts_with("crewd.db.replaced-")
+                && !name.ends_with("-wal")
+                && !name.ends_with("-shm")
+        })
+        .expect("original database must remain recoverable");
+    assert!(aside.is_file());
+    assert!(matches!(
+        Store::open_data_dir(&data),
+        Err(crewd_store::StoreError::DbMissing { .. })
+    ));
+    assert!(
+        !db.exists(),
+        "reopen must refuse rather than silently create an empty library"
+    );
+}
