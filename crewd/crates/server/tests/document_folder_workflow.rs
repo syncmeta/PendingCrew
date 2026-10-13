@@ -429,6 +429,14 @@ async fn persisted_dm_membership_changes_filter_real_folder_refs_without_hidden_
         "attached connection cannot borrow local Human to reveal filtered refs"
     );
     assert_eq!(snapshot(&f).await, before);
+    rpc(&mut human, "crew.remove", json!({"crewId":b})).await;
+    let before = snapshot(&f).await;
+    assert_eq!(call(&mut human, "crew.purge", json!({"crewId":b})).await.unwrap_err().0, crewd_proto::RpcError::CONFLICT);
+    assert_eq!(snapshot(&f).await, before, "purge cannot silently discard foreign structured refs, even currently invisible to the agent");
+    let cleared = rpc(&mut human, "viewFolder.assign", json!({"crewId":f.crew,"view":"messages","expectedTreeRevision":assigned["treeRevision"],"object":{"kind":"channel","id":visible},"folderId":null})).await;
+    assert!(cleared["assignments"].as_array().unwrap().is_empty());
+    rpc(&mut human, "crew.purge", json!({"crewId":b})).await;
+    assert_eq!(rpc(&mut human, "viewFolder.list", json!({"crewId":f.crew,"view":"messages"})).await, cleared, "explicit unbind allows source purge while retaining foreign folder metadata");
     close_socket(task, stop).await;
 }
 
@@ -491,5 +499,31 @@ async fn resource_event_subscriptions_cannot_keep_human_privilege_after_attach()
             .is_none(),
         "subscribe-before-attach cannot leak future Human resource stream"
     );
+    close_socket(task, stop).await;
+}
+
+
+// Genuine public topic membership changes complement the explicit DM Store fixture.
+#[tokio::test]
+async fn public_topic_leave_revokes_read_without_extending_foreign_folder_scope() {
+    let f = Fixture::new().await;
+    let b = f.add_crew("foreign topic owner", None).await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let mut member = attach(&f, &socket, &f.worker).await;
+    let topic = rpc(&mut human, "channel.create", json!({"crewId":b,"kind":"topic","name":"foreign topic actual membership","members":[{"kind":"session","id":f.worker}]})).await;
+    let read = rpc(&mut member, "agent.call", json!({"tool":"read_channel","args":{"channel":topic["id"]}})).await;
+    assert_eq!(read["isError"], false);
+    let initial = rpc(&mut human, "viewFolder.list", json!({"crewId":f.crew,"view":"messages"})).await;
+    let created = rpc(&mut human, "viewFolder.create", json!({"crewId":f.crew,"view":"messages","requestId":uuid::Uuid::new_v4().to_string(),"expectedTreeRevision":initial["treeRevision"],"name":"retain neutral classification container"})).await;
+    let before = snapshot(&f).await;
+    let refused = rpc(&mut member, "agent.call", json!({"tool":"view_folder_assign","args":{"crew_id":f.crew,"view":"messages","expected_tree_revision":created["treeRevision"],"object":{"kind":"channel","id":topic["id"]},"folder_id":created["folders"][0]["id"]}})).await;
+    assert_eq!(refused["isError"], true, "foreign topic visibility does not extend the agreed DM-only classification scope");
+    assert_eq!(snapshot(&f).await, before);
+    rpc(&mut human, "channel.removeMember", json!({"channelId":topic["id"],"member":{"kind":"session","id":f.worker}})).await;
+    let read = rpc(&mut member, "agent.call", json!({"tool":"read_channel","args":{"channel":topic["id"]}})).await;
+    assert_eq!(read["isError"], true, "public removal revokes the sole actual crewmate-derived read permission");
     close_socket(task, stop).await;
 }
