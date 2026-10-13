@@ -97,6 +97,12 @@ Jev 与个人/团队记忆保留为待讨论设计，不擅自实施，也不拿
 
 允许自有隔离 profile/cwd/config、dummy 凭据、localhost mock 的只观察 metadata PTY 层取得真实 types；不发 prompt、不访问真实 provider、不读个人 auth/transcript、不改全局/日常实例，固定寿命并实际清理。该许可不扩大付费/真实模型运行范围。原动作若审查拒绝，保留事实，不换工具/代理绕过。
 
+## 原生运行桥与下一配套构建输入（2026-10-14）
+
+官方Mods静态导入只允许插件内relative import和claude-code bare import，不能以node:net直接连接Unix来假定实际适配。采用官方process API的受控自有stdio proxy：Core验证实际peer PID、native直接parent与已登记helper/Core稳定链、nonce/runtime generation，并在业务帧前耐久登记proxy。未知SDK broker链/PGID/API shape明确unknown，不放宽任意ancestor或同UID；proxy必须纳入实际native进程族监督。既有same-native-PID控制保留其窄证明。实际SDK类型仍等待精确目录的非阻塞人类许可。Primary：[Mods create](https://code.claude.com/docs/en/plugins/mods/create)。
+
+Native远程客户端引入Sources/CrewdRemote及X509/SPM后，旧仅Mac/Crewd直接swiftc的候选配方不能复用于新GUI声明。客户端拥有下一完整固定输入/实际目标构建配方：纳入新源码与固定dependency配置、实际编译日志和normal helper完整来源配对。根仍以实际目标/产物验证交付，不拿旧fe680候选标签冒充新Native版本。
+
 ## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
 
 - Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。
