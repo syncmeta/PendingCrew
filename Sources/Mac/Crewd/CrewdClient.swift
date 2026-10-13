@@ -55,6 +55,8 @@ final class CrewdClient: ObservableObject {
     private var connection: NWConnection?
     private var generation = UUID()
     private var buffer = Data()
+    private var receivePending = false
+    private var terminalFailure: String?
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<CrewdValue, Error>] = [:]
     private var timeouts: [Int: Task<Void, Never>] = [:]
@@ -76,8 +78,8 @@ final class CrewdClient: ObservableObject {
                     self.connected = true
                     self.ready?.resume(); self.ready = nil
                     self.receive(current)
-                case .failed(let error): self.fail(error.localizedDescription, notify: true)
-                case .cancelled: self.fail("后台连接已关闭。", notify: true)
+                case .failed(let error): self.transportEnded(error.localizedDescription)
+                case .cancelled: self.transportEnded("后台连接已关闭。")
                 default: break
                 }
             }
@@ -137,14 +139,23 @@ final class CrewdClient: ObservableObject {
 
     func disconnect() { fail("连接已断开。", notify: false); lastError = nil }
 
+    private func transportEnded(_ message: String) {
+        // Network can announce failure before completing an outstanding receive.
+        // Let that receive drain final bytes; only received RPC frames prove success.
+        if connected && receivePending { terminalFailure = message }
+        else { fail(message, notify: true) }
+    }
+
     private func receive(_ current: UUID) {
+        receivePending = true
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
             DispatchQueue.main.async {
                 guard let self, self.generation == current else { return }
+                self.receivePending = false
                 do {
                     if let data { try self.ingest(data) }
                     if let error { self.fail(error.localizedDescription, notify: true) }
-                    else if complete { self.fail("后台连接已结束。", notify: true) }
+                    else if complete { self.fail(self.terminalFailure ?? "后台连接已结束。", notify: true) }
                     else { self.receive(current) }
                 } catch { self.fail("后台响应无法解析：\(error.localizedDescription)", notify: true) }
             }
@@ -173,7 +184,7 @@ final class CrewdClient: ObservableObject {
         generation = UUID()
         let c = connection; connection = nil
         c?.stateUpdateHandler = nil; c?.cancel()
-        connected = false; buffer.removeAll(); lastError = message
+        connected = false; receivePending = false; terminalFailure = nil; buffer.removeAll(); lastError = message
         ready?.resume(throwing: CrewdClientError(message: message)); ready = nil
         let ids = Array(pending.keys)
         for id in ids { finish(id, .failure(CrewdClientError(message: "连接中断，结果未知；请检查当前状态。"))) }
