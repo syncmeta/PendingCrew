@@ -1666,6 +1666,51 @@ pub async fn handoff_captain(st: &AppState, crew: &str, session: &str) -> PortRe
         .await?)
 }
 
+pub async fn work_mine(
+    st: &AppState,
+    session: &str,
+    after: Option<String>,
+    limit: Option<u16>,
+    include_finished: bool,
+    include_removed: bool,
+) -> PortResult<crewd_proto::WorkPage> {
+    let owner = session.to_owned();
+    read(st, move |c| {
+        crewd_collab::work::list(
+            c,
+            crewd_proto::WorkListParams {
+                owner: Some(owner),
+                include_removed: Some(include_removed),
+                live_only: !include_finished,
+                after,
+                limit,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+}
+pub async fn work_get(st: &AppState, id: &str) -> PortResult<crewd_proto::WorkPlan> {
+    let id = id.to_owned();
+    read(st, move |c| crewd_collab::work::get(c, &id)).await
+}
+pub async fn work_create(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkCreateParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| crewd_collab::work::create(tx, &by, p)).await
+}
+pub async fn work_update(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkUpdateParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| crewd_collab::work::update(tx, &by, p)).await
+}
+
 #[cfg(test)]
 mod tests {
 

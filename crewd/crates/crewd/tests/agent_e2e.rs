@@ -42,8 +42,8 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 17);
-    assert_eq!(ct.len(), 28);
+    assert_eq!(wt.len(), 21);
+    assert_eq!(ct.len(), 32);
     for t in wt.iter().chain(&ct) {
         assert_eq!(t["annotations"]["openWorldHint"], false);
         for k in ["readOnlyHint", "destructiveHint", "idempotentHint"] {
@@ -54,13 +54,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 28);
-    assert_eq!(cm.tools().await.len(), 17);
+    assert_eq!(wm.tools().await.len(), 32);
+    assert_eq!(cm.tools().await.len(), 21);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 17);
+    assert_eq!(wm.tools().await.len(), 21);
     wm.close().await;
     cm.close().await;
 }
@@ -465,4 +465,98 @@ async fn session_start_quota_unknown_unavailable_and_failed_are_distinct() {
             assert!(!ctx.contains("synthetic-private-error"));
         }
     }
+}
+
+#[tokio::test]
+async fn work_tools_use_real_helper_and_shared_transactions_without_echoing_full_details() {
+    let f = Fixture::new().await;
+    f.spawn_socket().await;
+    let rt = tempfile::tempdir().unwrap();
+    let launch = launch(&f, &f.worker, rt.path());
+    let mut m = Mcp::start(&launch.mcp).await;
+    let goal = "large detail retained only when requested".repeat(200);
+    let (text, error) = m
+        .call(
+            "work_item_create",
+            json!({"title":"MCP planned work","goal":goal}),
+        )
+        .await;
+    assert!(!error, "{text}");
+    let created: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(created["owner"], f.worker);
+    assert!(
+        created.get("goal").is_none(),
+        "creation receipt echoed long detail"
+    );
+    assert!(!text.contains("large detail"));
+    let (text, error) = m.call("my_work_items", json!({})).await;
+    assert!(!error, "{text}");
+    let page: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(page["items"][0]["id"], created["id"]);
+    assert!(page["items"][0].get("goal").is_none());
+    assert!(!text.contains("large detail"));
+    let (text, error) = m.call("work_item_get", json!({"id":created["id"]})).await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["goal"],
+        goal
+    );
+    let (text,error)=m.call("work_item_update",json!({"id":created["id"],"expected_revision":page["items"][0]["revision"],"status":"done"})).await;
+    assert!(!error, "{text}");
+    let completed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(completed["status"], "done");
+    assert!(completed["evidence"].is_null());
+    let (text, error) = m.call("my_work_items", json!({})).await;
+    assert!(!error, "{text}");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let (text, error) = m
+        .call("my_work_items", json!({"include_finished":true}))
+        .await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["items"][0]["status"],
+        "done"
+    );
+    let (text,error)=m.call("work_item_update",json!({"id":created["id"],"expected_revision":created["revision"],"note":"stale change"})).await;
+    assert!(error, "{text}");
+    let (text, error) = m
+        .call("work_item_create", json!({"title":"spoof","actor":"human"}))
+        .await;
+    assert!(error, "{text}");
+    let crew = f.crew.clone();
+    f.state
+        .collab(move |tx| {
+            tx.conn()
+                .execute("UPDATE crews SET archived_at='frozen' WHERE id=?1", [crew])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (text, error) = m
+        .call("my_work_items", json!({"include_finished":true}))
+        .await;
+    assert!(!error, "{text}");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let (text, error) = m
+        .call(
+            "my_work_items",
+            json!({"include_finished":true,"include_removed":true}),
+        )
+        .await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["items"][0]["frozen"],
+        true
+    );
+    m.close().await;
 }

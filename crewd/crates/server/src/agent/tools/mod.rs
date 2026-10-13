@@ -5,6 +5,7 @@ pub mod captain;
 pub mod channels;
 pub mod crews;
 pub mod messaging;
+pub mod work;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -154,6 +155,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
+        "my_work_items" => work::mine(&cx, args).await,
+        "work_item_get" => work::get(&cx, args).await,
+        "work_item_create" => work::create(&cx, args).await,
+        "work_item_update" => work::update(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
         "read_channel" => messaging::read_channel(&cx, args).await,
         "search" => messaging::search(&cx, args).await,
@@ -343,12 +348,12 @@ mod tests {
         );
     }
 
-    /// Every catalog tool reaches its handler (28 after T15b): none answers `r.no_handler`.
+    /// Every catalog tool reaches its handler (32 after M4b work tools): none answers `r.no_handler`.
     #[tokio::test]
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 28);
+        assert_eq!(catalog::CATALOG.len(), 32);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

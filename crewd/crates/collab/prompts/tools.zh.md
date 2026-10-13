@@ -911,3 +911,81 @@ crew_structure(action: "{action}") 除了 crew 只收这些参数：{params}（�
 
 ## r.helper_build_skew
 helper 与 crewd daemon 的构建不同；本次调用仍可继续。请通知人，由人选择更新、休眠与重启时机，不要自行重启。
+
+## my_work_items
+读取全组织中你负责的工作摘要，默认只列未完成项。使用返回的编号和修订号更新进展；长目标和验收标准按需用 work_item_get 读取。不必为了更新备注反复读整份详情。
+
+## my_work_items.after
+上一页的 nextAfter 全局计划编号；省略从第一页开始。
+
+## my_work_items.limit
+每页 1–200 项，默认 50。
+
+## my_work_items.include_finished
+true 也列出已完成和已放弃的项，默认 false。
+
+## work_item_get
+按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。
+
+## work_item_get.id
+全局 W 编号，使用工作工具返回的 id；不是机组内的旧别名。
+
+## work_item_create
+登记一项真实计划，默认由你负责。目标、完成层级和验收标准按实际任务填写；父项与依赖目前限同机组。创建、事件、编号和进展信号一起提交；失败不留下半项。成功后使用返回的 id/revision，不要重复创建同一项来重试未知结果。
+
+## work_item_create.title
+清楚说明这一项要完成什么。
+
+## work_item_create.goal
+实际目标，详情按需读取。
+
+## work_item_create.level
+完成层级 local/public/production，默认 local。
+
+## work_item_create.acceptance
+怎样判断达到该完成层级。
+
+## work_item_create.owner
+负责人 session ID，默认你自己。指派别人须有机长权限。
+
+## work_item_create.crew
+机组编号、ID 或唯一名称，默认当前机组；目标机组的权限仍独立校验。
+
+## work_item_create.parent
+同机组父计划的全局 W 编号。
+
+## work_item_create.depends_on
+同机组依赖计划的全局 W 编号列表。
+
+## work_item_create.sources
+已登记原始需求的全局 # 编号列表。
+
+## work_item_create.next_check_at
+RFC3339 检查时间；活跃状态的下一次检查必须满足工作规则。
+
+## work_item_update
+使用刚读到的修订号报告进展或完成；旧修订拒绝覆盖新内容。进展更新须有下一步备注；active 须有有效检查时间。完成由负责人自己标，可不附凭据，不等额外验收。冲突时读取最新摘要/详情再判断，别盲目循环重试。
+
+## work_item_update.id
+全局计划 W 编号。
+
+## work_item_update.expected_revision
+工作摘要或上一操作返回的 revision 字符串，原样传入。
+
+## work_item_update.status
+open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。
+
+## work_item_update.next_check_at
+RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。
+
+## work_item_update.note
+覆盖这一项的下一步/进展备注；非完成更新必填非空，完成时可选。
+
+## work_item_update.evidence
+可选完成凭据，{kind:"commit"|"url"|"text", value:"非空文字"}；只用于 done。
+
+## r.work_result
+{result}
+
+## my_work_items.include_removed
+true 也查看已移除机组中的工作，默认 false。返回 frozen:true 的对象只读，别反复尝试推进它。

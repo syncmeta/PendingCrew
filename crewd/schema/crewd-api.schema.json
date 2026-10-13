@@ -3953,6 +3953,13 @@
             "null"
           ]
         },
+        "includeRemoved": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "limit": {
           "default": null,
           "format": "uint16",
@@ -3960,6 +3967,17 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "liveOnly": {
+          "default": false,
+          "type": "boolean"
+        },
+        "owner": {
+          "default": null,
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -4019,6 +4037,9 @@
             }
           ]
         },
+        "frozen": {
+          "type": "boolean"
+        },
         "goal": {
           "type": "string"
         },
@@ -4074,6 +4095,7 @@
       "required": [
         "id",
         "crewId",
+        "frozen",
         "title",
         "goal",
         "level",
@@ -4099,6 +4121,9 @@
         },
         "crewId": {
           "type": "string"
+        },
+        "frozen": {
+          "type": "boolean"
         },
         "id": {
           "type": "string"
@@ -4140,6 +4165,7 @@
       "required": [
         "id",
         "crewId",
+        "frozen",
         "title",
         "status",
         "blockedOn",

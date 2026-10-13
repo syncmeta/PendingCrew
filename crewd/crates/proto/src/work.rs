@@ -7,6 +7,12 @@ pub struct WorkListParams {
     #[serde(default)]
     pub crew_id: Option<String>,
     #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub live_only: bool,
+    #[serde(default)]
+    pub include_removed: Option<bool>,
+    #[serde(default)]
     pub after: Option<String>,
     #[serde(default)]
     pub limit: Option<u16>,
@@ -27,6 +33,7 @@ pub struct WorkEvidence {
 pub struct WorkPlan {
     pub id: String,
     pub crew_id: String,
+    pub frozen: bool,
     pub title: String,
     pub goal: String,
     pub level: String,
@@ -57,6 +64,7 @@ pub struct WorkPage {
 pub struct WorkSummary {
     pub id: String,
     pub crew_id: String,
+    pub frozen: bool,
     pub title: String,
     pub owner: Option<String>,
     pub status: String,
@@ -71,6 +79,7 @@ impl From<WorkPlan> for WorkSummary {
         Self {
             id: p.id,
             crew_id: p.crew_id,
+            frozen: p.frozen,
             title: p.title,
             owner: p.owner,
             status: p.status,

@@ -22,6 +22,7 @@ pub enum Ty {
     Ref,
     /// `[{kind, target_id?}]`
     Mentions,
+    Evidence,
     /// `[{text, category?}]`
     Messages,
 }
@@ -164,6 +165,42 @@ const fn talk(t: ToolSpec) -> ToolSpec {
 use Ty::*;
 
 pub const CATALOG: &[ToolSpec] = &[
+    ro(all(
+        "my_work_items",
+        &[
+            p("after", Str, false),
+            int("limit", 1, 200),
+            p("include_finished", Bool, false),
+            p("include_removed", Bool, false),
+        ],
+    )),
+    ro(all("work_item_get", &[p("id", Str, true)])),
+    all(
+        "work_item_create",
+        &[
+            p("title", Str, true),
+            p("goal", Str, false),
+            c("level", false, &["local", "public", "production"]),
+            p("acceptance", Str, false),
+            p("owner", Str, false),
+            p("crew", Str, false),
+            p("parent", Str, false),
+            p("depends_on", StrList, false),
+            p("sources", StrList, false),
+            p("next_check_at", Str, false),
+        ],
+    ),
+    idempotent(all(
+        "work_item_update",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            c("status", false, &["open", "active", "done"]),
+            p("next_check_at", Str, false),
+            p("note", Str, false),
+            p("evidence", Evidence, false),
+        ],
+    )),
     talk(all(
         "post",
         &[
@@ -426,6 +463,9 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             Bool => json!({"type": "boolean"}),
             StrList => json!({"type": "array", "items": {"type": "string"}}),
             Ref => json!({"type": ["string", "integer"]}),
+            Evidence => json!({"type":"object","properties":{
+                "kind":{"type":"string","enum":["commit","url","text"]},"value":{"type":"string"}
+            },"required":["kind","value"],"additionalProperties":false}),
             Mentions => json!({"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -521,7 +561,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 28);
+        assert_eq!(CATALOG.len(), 32);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -554,8 +594,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 17);
-        assert_eq!(captain.len(), 28);
+        assert_eq!(worker.len(), 21);
+        assert_eq!(captain.len(), 32);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -585,6 +625,8 @@ mod tests {
         assert_eq!(
             with(|t| t.read_only),
             [
+                "my_work_items",
+                "work_item_get",
                 "read_channel",
                 "search",
                 "list_channels",
@@ -607,6 +649,7 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                "work_item_update",
                 "channel_listen",
                 "set_session_profile",
                 "rename_crew",
@@ -618,6 +661,8 @@ mod tests {
         assert_eq!(
             with(ToolSpec::passive),
             [
+                "my_work_items",
+                "work_item_get",
                 "post",
                 "read_channel",
                 "search",

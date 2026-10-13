@@ -3,6 +3,200 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取全组织中你负责的工作摘要，默认只列未完成项。使用返回的编号和修订号更新进展；长目标和验收标准按需用 work_item_get 读取。不必为了更新备注反复读整份详情。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页的 nextAfter 全局计划编号；省略从第一页开始。",
+            "type": "string"
+          },
+          "include_finished": {
+            "description": "true 也列出已完成和已放弃的项，默认 false。",
+            "type": "boolean"
+          },
+          "include_removed": {
+            "description": "true 也查看已移除机组中的工作，默认 false。返回 frozen:true 的对象只读，别反复尝试推进它。",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "每页 1–200 项，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "my_work_items"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "全局 W 编号，使用工作工具返回的 id；不是机组内的旧别名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "登记一项真实计划，默认由你负责。目标、完成层级和验收标准按实际任务填写；父项与依赖目前限同机组。创建、事件、编号和进展信号一起提交；失败不留下半项。成功后使用返回的 id/revision，不要重复创建同一项来重试未知结果。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "description": "怎样判断达到该完成层级。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "机组编号、ID 或唯一名称，默认当前机组；目标机组的权限仍独立校验。",
+            "type": "string"
+          },
+          "depends_on": {
+            "description": "同机组依赖计划的全局 W 编号列表。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "description": "实际目标，详情按需读取。",
+            "type": "string"
+          },
+          "level": {
+            "description": "完成层级 local/public/production，默认 local。",
+            "enum": [
+              "local",
+              "public",
+              "production"
+            ],
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 检查时间；活跃状态的下一次检查必须满足工作规则。",
+            "type": "string"
+          },
+          "owner": {
+            "description": "负责人 session ID，默认你自己。指派别人须有机长权限。",
+            "type": "string"
+          },
+          "parent": {
+            "description": "同机组父计划的全局 W 编号。",
+            "type": "string"
+          },
+          "sources": {
+            "description": "已登记原始需求的全局 # 编号列表。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "清楚说明这一项要完成什么。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "使用刚读到的修订号报告进展或完成；旧修订拒绝覆盖新内容。进展更新须有下一步备注；active 须有有效检查时间。完成由负责人自己标，可不附凭据，不等额外验收。冲突时读取最新摘要/详情再判断，别盲目循环重试。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "可选完成凭据，{kind:\"commit\"|\"url\"|\"text\", value:\"非空文字\"}；只用于 done。",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "工作摘要或上一操作返回的 revision 字符串，原样传入。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局计划 W 编号。",
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。",
+            "type": "string"
+          },
+          "note": {
+            "description": "覆盖这一项的下一步/进展备注；非完成更新必填非空，完成时可选。",
+            "type": "string"
+          },
+          "status": {
+            "description": "open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。",
+            "enum": [
+              "open",
+              "active",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -951,6 +1145,200 @@
   ],
   "instructions": "crew 工具是你和机组、人类说话的方式。\n关键节点用 post 发到群里；需要人拍板用 ask，然后继续做不依赖答案的事，不阻塞等待。",
   "worker": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取全组织中你负责的工作摘要，默认只列未完成项。使用返回的编号和修订号更新进展；长目标和验收标准按需用 work_item_get 读取。不必为了更新备注反复读整份详情。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页的 nextAfter 全局计划编号；省略从第一页开始。",
+            "type": "string"
+          },
+          "include_finished": {
+            "description": "true 也列出已完成和已放弃的项，默认 false。",
+            "type": "boolean"
+          },
+          "include_removed": {
+            "description": "true 也查看已移除机组中的工作，默认 false。返回 frozen:true 的对象只读，别反复尝试推进它。",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "每页 1–200 项，默认 50。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "my_work_items"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "全局 W 编号，使用工作工具返回的 id；不是机组内的旧别名。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "登记一项真实计划，默认由你负责。目标、完成层级和验收标准按实际任务填写；父项与依赖目前限同机组。创建、事件、编号和进展信号一起提交；失败不留下半项。成功后使用返回的 id/revision，不要重复创建同一项来重试未知结果。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "description": "怎样判断达到该完成层级。",
+            "type": "string"
+          },
+          "crew": {
+            "description": "机组编号、ID 或唯一名称，默认当前机组；目标机组的权限仍独立校验。",
+            "type": "string"
+          },
+          "depends_on": {
+            "description": "同机组依赖计划的全局 W 编号列表。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "description": "实际目标，详情按需读取。",
+            "type": "string"
+          },
+          "level": {
+            "description": "完成层级 local/public/production，默认 local。",
+            "enum": [
+              "local",
+              "public",
+              "production"
+            ],
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 检查时间；活跃状态的下一次检查必须满足工作规则。",
+            "type": "string"
+          },
+          "owner": {
+            "description": "负责人 session ID，默认你自己。指派别人须有机长权限。",
+            "type": "string"
+          },
+          "parent": {
+            "description": "同机组父计划的全局 W 编号。",
+            "type": "string"
+          },
+          "sources": {
+            "description": "已登记原始需求的全局 # 编号列表。",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "清楚说明这一项要完成什么。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "使用刚读到的修订号报告进展或完成；旧修订拒绝覆盖新内容。进展更新须有下一步备注；active 须有有效检查时间。完成由负责人自己标，可不附凭据，不等额外验收。冲突时读取最新摘要/详情再判断，别盲目循环重试。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "可选完成凭据，{kind:\"commit\"|\"url\"|\"text\", value:\"非空文字\"}；只用于 done。",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "工作摘要或上一操作返回的 revision 字符串，原样传入。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局计划 W 编号。",
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接受此字段。",
+            "type": "string"
+          },
+          "note": {
+            "description": "覆盖这一项的下一步/进展备注；非完成更新必填非空，完成时可选。",
+            "type": "string"
+          },
+          "status": {
+            "description": "open/active/done；省略只更新进展备注或检查时间。卡住、放弃和转交另有工作动作，不能伪造为这些状态。",
+            "enum": [
+              "open",
+              "active",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_update"
+    },
     {
       "annotations": {
         "destructiveHint": false,

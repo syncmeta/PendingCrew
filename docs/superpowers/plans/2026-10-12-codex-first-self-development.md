@@ -151,3 +151,21 @@ Optional-evidence gate: 2352 passed, 0 failed, 8 ignored; fmt/clippy passed. Ful
 本单元不是整个 M4b 完成。MCP 工具、带修订号的我的工作摘要、依赖放行后的唤醒、检查点/IdleHook/上下文注入、跨机组关系、可读代号与自建表仍需继续。当前跨机组关系明确返回未接线拒绝，不静默错连；公开完成命令已放行依赖状态，自动跟进还未接线。候选分支继续开发，未切换日常应用/数据、未新增真实模型调用。
 
 Final gate: 2372 passed, 0 failed, 8 ignored; fmt and workspace clippy passed.
+
+## 2026-10-13 M4b agent 工作工具
+
+MCP 增加 my_work_items、work_item_get、work_item_create、work_item_update，直接调用与客户端相同的全局工作事务，没有模型中转或第二本工作账。工具参数、嵌套凭据对象严格，不能从参数冒充 human actor。权限由实际 session 与当前机长指针重读；修订号使用文本，并从摘要/上一回执直接复用。
+
+my_work_items 跨机组筛选当前成员负责的项，默认只列活项并排除已移除机组；公开列表默认仍可读全部对象。显式 include_finished/include_removed 可查看历史和冻结项，摘要与详情带 frozen 标志，避免把只读旧工作当成仍可推进的任务。缺账/缺对象不能被 owner/live 过滤掩成空列表。新增工具数为 worker 21、captain 32；这会增加初始工具声明成本，不能据减少正文就声称整体 token 节省率已证明。
+
+创建和更新的 MCP 成功回执也只给摘要；目标/验收标准/凭据详情通过 work_item_get 按需读取。实际 helper 反例 pcw-work-mcp-echo-red-01.log 捕获创建回执重复长目标；改为摘要后 e2e-green-02.log、e2e-frozen-03.log 通过。真实 helper + 合成数据库/会话控制验证建项、摘要带修订号、按需详情、无凭据完成、历史/冻结筛选、旧修订和伪造 actor 参数拒绝，未调用真实 runner/model。负责人分页跨机组、冻结只读、缺账拒绝定向通过 frozen-04.log；所有日志在 /private/tmp。
+
+首轮窄 server 测试没有工作区启用的 testkit，既有 s1 测试编译失败，改用 --lib 定向入口；catalog 注解列表与角色工具数量按新增四项更新，未削弱权限检查。full-check-01 在文件布局 lint 失败，已将生产端口移到 test module 之前。full-check-02 因磁盘 ENOSPC 编译失败；确认进程停止后仅删除本轮 /private/tmp/pcw-decision-target/debug/incremental 可重建缓存（目录占用 23GB、实际恢复约 14GB），保留依赖、源码、验收日志与应用/原型产物，并以 CARGO_INCREMENTAL=0 继续。full-check-03 发现 RPC 多行数量断言仍是历史 17/28；更新为 21/32，rpc-final-01.log 32 项通过。
+
+full-check-04 捕获既有 S1 权限夹具的就绪发布竞态：文件已存在但 PID 内容还是空的，尚未执行权限判定。生产权限规则未改；假 runner 先完整写 staging 文件，再原子 rename 发布就绪。新增确定性创建阶段回调测试，提前暴露最终文件的坏例 pcw-s1-readiness-red-01.log 失败；正确实现 green-01.log 通过，全部六项真实 socket/注册/重父化权限测试 authority-green-01.log 通过。最终完整门禁为 pcw-work-mcp-full-check-05.log。可复用经验：就绪边界必须是完整有效数据，不是文件刚创建；修正夹具的因果边界能同时减少偶发重跑成本并加强验收，不能降低权限断言来消除偶发失败。
+
+下一单元为有界、稳定的我的工作上下文和检查点/停下检查接线；跨机组关系、可读代号、自建表和行政巡检仍待完成。前端由用户设计，独立 Sketch 原型已交付 design/prototypes/2026-10-13-private-team，18 画板、151 条原生 Flow；原生文件解析/导出与浏览器 13 个流程通过，本机 Sketch.app 损坏，未把原生播放当成通过。该原型未提交/推送；后端继续候选分支，不擅自实现用户正在设计的界面。Jev/记忆仍方案先行，无新增真实模型调用/安装/发布/日常迁移。
+
+用户随后明确纠正前端：保留原来的设计与微信式形态，不做总览/早上好；左侧仅通讯录（原层级）与消息（原时间流）两种视图，选中机组后右侧消息（群聊/单聊）、Todo、文档、进展四视图。第一版仪表盘草图撤回为设计方向，仅保留历史文件、不覆盖用户可能的修改；同一前端子代理已按 owning Sources 重做微信布局版本。界面实现等用户设计对齐，后端继续。
+
+Final gate: 2375 passed, 0 failed, 8 ignored; fmt/workspace clippy passed, CARGO_INCREMENTAL=0.

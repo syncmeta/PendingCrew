@@ -911,3 +911,81 @@ Parent crew "{crew}" (number {number}) was created with "{child}" under it, but 
 
 ## r.helper_build_skew
 The helper and crewd daemon were built from different commits; this call may continue. Notify the human to choose an update, hibernate and restart time; do not restart automatically.
+
+## my_work_items
+Read concise summaries of work you own across the organization; unfinished only by default. Use the returned id/revision to update progress. Fetch long goals and acceptance criteria with work_item_get only when needed.
+
+## my_work_items.after
+The previous page's nextAfter global plan ID; omitted starts the first page.
+
+## my_work_items.limit
+Page size 1–200, default 50.
+
+## my_work_items.include_finished
+true also includes done/dropped plans; default false.
+
+## work_item_get
+Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.
+
+## work_item_get.id
+Global W ID returned by a work tool, not a legacy crew-local alias.
+
+## work_item_create
+Register real planned work, owned by you by default. Set the actual goal, completion level and acceptance criteria. Parent/dependency links currently require the same crew. State, events, identity and progress commit together. Retain the returned id/revision; do not duplicate a plan to retry an unknown outcome.
+
+## work_item_create.title
+Clearly state what this item will accomplish.
+
+## work_item_create.goal
+The actual goal; detail is loaded on demand.
+
+## work_item_create.level
+Completion level local/public/production, default local.
+
+## work_item_create.acceptance
+How to judge that completion level was achieved.
+
+## work_item_create.owner
+Owner session ID, defaults to you. Assigning someone else requires captain authority.
+
+## work_item_create.crew
+Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.
+
+## work_item_create.parent
+The same crew parent's global W ID.
+
+## work_item_create.depends_on
+Global W IDs of dependencies in the same crew.
+
+## work_item_create.sources
+Global # IDs of registered original requirements.
+
+## work_item_create.next_check_at
+RFC3339 check time; active work must have a valid next check.
+
+## work_item_update
+Report progress or completion using the revision you just read; stale revisions cannot overwrite new work. Progress requires a next-step note and active requires a valid check time. The owner marks done; evidence is optional, with no extra verification gate. On conflict read the latest summary/detail and reassess rather than blindly looping.
+
+## work_item_update.id
+The global W plan ID.
+
+## work_item_update.expected_revision
+The revision string from a summary or the previous operation, passed unchanged.
+
+## work_item_update.status
+open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.
+
+## work_item_update.next_check_at
+RFC3339 check time, later than now and within work limits; not accepted for done.
+
+## work_item_update.note
+Overwrite this item's next-step/progress note; required and nonblank except for completion.
+
+## work_item_update.evidence
+Optional completion evidence: {kind:"commit"|"url"|"text", value:"nonblank text"}; only for done.
+
+## r.work_result
+{result}
+
+## my_work_items.include_removed
+true also reads work in removed crews, default false. Objects with frozen:true are read-only; do not repeatedly try to advance them.

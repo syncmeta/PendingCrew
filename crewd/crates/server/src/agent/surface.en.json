@@ -3,6 +3,200 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read concise summaries of work you own across the organization; unfinished only by default. Use the returned id/revision to update progress. Fetch long goals and acceptance criteria with work_item_get only when needed.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter global plan ID; omitted starts the first page.",
+            "type": "string"
+          },
+          "include_finished": {
+            "description": "true also includes done/dropped plans; default false.",
+            "type": "boolean"
+          },
+          "include_removed": {
+            "description": "true also reads work in removed crews, default false. Objects with frozen:true are read-only; do not repeatedly try to advance them.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Page size 1–200, default 50.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "my_work_items"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Global W ID returned by a work tool, not a legacy crew-local alias.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Register real planned work, owned by you by default. Set the actual goal, completion level and acceptance criteria. Parent/dependency links currently require the same crew. State, events, identity and progress commit together. Retain the returned id/revision; do not duplicate a plan to retry an unknown outcome.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "description": "How to judge that completion level was achieved.",
+            "type": "string"
+          },
+          "crew": {
+            "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
+            "type": "string"
+          },
+          "depends_on": {
+            "description": "Global W IDs of dependencies in the same crew.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "description": "The actual goal; detail is loaded on demand.",
+            "type": "string"
+          },
+          "level": {
+            "description": "Completion level local/public/production, default local.",
+            "enum": [
+              "local",
+              "public",
+              "production"
+            ],
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 check time; active work must have a valid next check.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Owner session ID, defaults to you. Assigning someone else requires captain authority.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "The same crew parent's global W ID.",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Global # IDs of registered original requirements.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Clearly state what this item will accomplish.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Report progress or completion using the revision you just read; stale revisions cannot overwrite new work. Progress requires a next-step note and active requires a valid check time. The owner marks done; evidence is optional, with no extra verification gate. On conflict read the latest summary/detail and reassess rather than blindly looping.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "Optional completion evidence: {kind:\"commit\"|\"url\"|\"text\", value:\"nonblank text\"}; only for done.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "The revision string from a summary or the previous operation, passed unchanged.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The global W plan ID.",
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 check time, later than now and within work limits; not accepted for done.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Overwrite this item's next-step/progress note; required and nonblank except for completion.",
+            "type": "string"
+          },
+          "status": {
+            "description": "open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.",
+            "enum": [
+              "open",
+              "active",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -951,6 +1145,200 @@
   ],
   "instructions": "Crew tools are how you talk to your crew and the human.\nPost key moments with post; use ask when you need a human decision, then keep working without blocking.",
   "worker": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read concise summaries of work you own across the organization; unfinished only by default. Use the returned id/revision to update progress. Fetch long goals and acceptance criteria with work_item_get only when needed.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter global plan ID; omitted starts the first page.",
+            "type": "string"
+          },
+          "include_finished": {
+            "description": "true also includes done/dropped plans; default false.",
+            "type": "boolean"
+          },
+          "include_removed": {
+            "description": "true also reads work in removed crews, default false. Objects with frozen:true are read-only; do not repeatedly try to advance them.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Page size 1–200, default 50.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "my_work_items"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Global W ID returned by a work tool, not a legacy crew-local alias.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Register real planned work, owned by you by default. Set the actual goal, completion level and acceptance criteria. Parent/dependency links currently require the same crew. State, events, identity and progress commit together. Retain the returned id/revision; do not duplicate a plan to retry an unknown outcome.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "description": "How to judge that completion level was achieved.",
+            "type": "string"
+          },
+          "crew": {
+            "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
+            "type": "string"
+          },
+          "depends_on": {
+            "description": "Global W IDs of dependencies in the same crew.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goal": {
+            "description": "The actual goal; detail is loaded on demand.",
+            "type": "string"
+          },
+          "level": {
+            "description": "Completion level local/public/production, default local.",
+            "enum": [
+              "local",
+              "public",
+              "production"
+            ],
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 check time; active work must have a valid next check.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Owner session ID, defaults to you. Assigning someone else requires captain authority.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "The same crew parent's global W ID.",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Global # IDs of registered original requirements.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Clearly state what this item will accomplish.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Report progress or completion using the revision you just read; stale revisions cannot overwrite new work. Progress requires a next-step note and active requires a valid check time. The owner marks done; evidence is optional, with no extra verification gate. On conflict read the latest summary/detail and reassess rather than blindly looping.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "Optional completion evidence: {kind:\"commit\"|\"url\"|\"text\", value:\"nonblank text\"}; only for done.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "The revision string from a summary or the previous operation, passed unchanged.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The global W plan ID.",
+            "type": "string"
+          },
+          "next_check_at": {
+            "description": "RFC3339 check time, later than now and within work limits; not accepted for done.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Overwrite this item's next-step/progress note; required and nonblank except for completion.",
+            "type": "string"
+          },
+          "status": {
+            "description": "open/active/done; omitted updates only the note/check time. Blocking, dropping and transfer are separate actions.",
+            "enum": [
+              "open",
+              "active",
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_update"
+    },
     {
       "annotations": {
         "destructiveHint": false,

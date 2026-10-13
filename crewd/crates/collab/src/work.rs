@@ -68,6 +68,7 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
     Ok(WorkPlan {
         id: r.id(),
         crew_id: r.crew_id.clone(),
+        frozen: crews::is_archived(conn, &r.crew_id)?,
         title: item.title.clone(),
         goal: item.body.goal.clone(),
         level: level.into(),
@@ -117,17 +118,27 @@ pub fn list(conn: &Connection, p: WorkListParams) -> Result<WorkPage> {
     if let Some(crew) = &p.crew_id {
         crews::get(conn, crew)?;
     }
-    let mut stmt = conn.prepare("SELECT number,crew_id,source_id,created_at FROM object_refs WHERE kind='plan' AND number>?1 AND (?2 IS NULL OR crew_id=?2) ORDER BY number LIMIT ?3")?;
+    let mut stmt = conn.prepare("SELECT r.number,r.crew_id,r.source_id,r.created_at FROM object_refs r LEFT JOIN work_books b ON b.crew_id=r.crew_id LEFT JOIN crews c ON c.id=r.crew_id WHERE r.kind='plan' AND r.number>?1 AND (?2 IS NULL OR r.crew_id=?2) AND (?3 IS NULL OR b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL OR json_extract(b.state,'$.items.'||substr(r.source_id,6)||'.owner')=?3) AND (?4=0 OR b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL OR json_extract(b.state,'$.items.'||substr(r.source_id,6)||'.status') NOT IN ('done','dropped')) AND (?6=1 OR c.archived_at IS NULL) ORDER BY r.number LIMIT ?5")?;
     let mut refs = stmt
-        .query_map(params![after, p.crew_id, i64::from(limit) + 1], |r| {
-            Ok(ObjectReference {
-                number: r.get(0)?,
-                kind: ObjectKind::Plan,
-                crew_id: r.get(1)?,
-                source_id: r.get(2)?,
-                created_at: r.get(3)?,
-            })
-        })?
+        .query_map(
+            params![
+                after,
+                p.crew_id,
+                p.owner,
+                p.live_only,
+                i64::from(limit) + 1,
+                p.include_removed.unwrap_or(true)
+            ],
+            |r| {
+                Ok(ObjectReference {
+                    number: r.get(0)?,
+                    kind: ObjectKind::Plan,
+                    crew_id: r.get(1)?,
+                    source_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let more = refs.len() > usize::from(limit);
     refs.truncate(usize::from(limit));
@@ -560,6 +571,54 @@ mod action_tests {
         );
     }
     #[test]
+    fn owner_pages_span_crews_filter_finished_and_do_not_hide_missing_books() {
+        let mut s = store();
+        let a = ok(&mut s, |tx| {
+            create(tx, &Sender::Session("w-a1".into()), input())
+        });
+        let mut cross = input();
+        cross.crew_id = "crew-b".into();
+        cross.owner = Some("w-a1".into());
+        let b = ok(&mut s, |tx| create(tx, &Sender::Human, cross));
+        let mut other = input();
+        other.crew_id = "crew-b".into();
+        other.owner = Some("w-b1".into());
+        ok(&mut s, |tx| create(tx, &Sender::Human, other));
+        let mine = |after, live_only| WorkListParams {
+            owner: Some("w-a1".into()),
+            live_only,
+            after,
+            limit: Some(1),
+            ..Default::default()
+        };
+        let first = list(s.conn(), mine(None, true)).unwrap();
+        assert_eq!(first.items[0].id, a.id);
+        assert_eq!(first.next_after, Some(a.id.clone()));
+        let second = list(s.conn(), mine(first.next_after, true)).unwrap();
+        assert_eq!(second.items[0].id, b.id);
+        assert!(second.next_after.is_none());
+        ok(&mut s, |tx| update(tx, &Sender::Human, finish(&a)));
+        assert_eq!(list(s.conn(), mine(None, true)).unwrap().items[0].id, b.id);
+        assert_eq!(list(s.conn(), mine(None, false)).unwrap().items[0].id, a.id);
+        s.conn()
+            .execute(
+                "UPDATE crews SET archived_at='frozen' WHERE id='crew-b'",
+                [],
+            )
+            .unwrap();
+        let mut active_only = mine(None, true);
+        active_only.include_removed = Some(false);
+        assert!(list(s.conn(), active_only).unwrap().items.is_empty());
+        assert!(list(s.conn(), mine(None, true)).unwrap().items[0].frozen);
+        s.conn()
+            .execute("DELETE FROM work_books WHERE crew_id='crew-b'", [])
+            .unwrap();
+        assert!(matches!(
+            list(s.conn(), mine(None, true)),
+            Err(CollabError::Store(_))
+        ));
+    }
+    #[test]
     fn stale_report_cannot_overwrite_a_newer_next_step() {
         let mut s = store();
         let by = Sender::Session("w-a1".into());
@@ -660,6 +719,8 @@ mod action_tests {
             .unwrap();
         let e = err(&mut s, |tx| update(tx, &Sender::Human, finish(&p)));
         assert_eq!(e.refusal().unwrap().code, Code::CrewRemoved);
-        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
+        let mut expected = p;
+        expected.frozen = true;
+        assert_eq!(get(s.conn(), &expected.id).unwrap(), expected);
     }
 }
