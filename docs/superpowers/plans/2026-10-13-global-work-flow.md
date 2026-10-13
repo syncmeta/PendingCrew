@@ -57,3 +57,21 @@ The schema-9 `work_organization` module is now compiled and tested but remains d
 Store full gate: 139 tests passed, 2 environment/cost tests ignored, `/private/tmp/pcw-global-work-store-final-01.log`; warnings-denied all-target clippy `/private/tmp/pcw-global-work-store-clippy-02.log`. Used the shared warm target only after usage worker explicitly released it; no cold workspace build. Earlier clippy failure evidence retained. No current build process remains.
 
 The next required integration is atomic cutover: resolve every external W/H/# and legacy alias through `object_refs.core_id`; construct trusted scoped actor from actual crew hierarchy; replace every per-crew mutable work/ask/context/checkpoint/idle/patrol operation with the sole authority transaction; preserve external wake/receipt identity, check render/claim against translated nodes, and prove queue failure rollback. Only after those paths are complete may schema 9 be activated and socket/actor acceptance begin. The module and its tests do not yet prove this full product use case.
+
+### Production cutover checkpoint — independent socket evidence (2026-10-13)
+
+This checkpoint supersedes the earlier statement that usage schema 8 remains separate: usage f990bf71 is now integrated into this worktree. Production schema remains version 8; organization migration is explicitly initialized only in synthetic fixtures. No daily data has been migrated.
+
+- Store migration/raw-source gate: 9 passing tests, `/private/tmp/pcw-global-work-raw-source-store-01.log`. Previously registered raw Agent requirements reuse their exact public identity; unregistered requirements receive one organization entry; raw text and local numbers remain source facts, while status derives from organization plans. Failed registration rolls back the raw source too.
+- Collaboration transaction gate: 6 passing tests, `/private/tmp/pcw-global-work-transaction-02.log`. Actual owner completion preserves the other blocker and refreshes the affected crew; queue refusal rolls back source, target, events and revision. Purge allows a crew's internal subgraph but refuses foreign references/current owners; SQL failure restores the complete transaction.
+- Independently authored Unix-socket/MCP gate: commit `64788d1e`, `/private/tmp/pcw-global-workflow-02.log`. Attached identities create cross-crew parent/source/dependency relationships. B owner reports and finishes B; two A items retain their shared H until the last answer, then become active with checkpoints and one owner-grouped durable wake. Unrelated captain mutation is refused; affected events carry the actual object crew. Initial fixture checkpoint-time failure is preserved in the 01 log and was corrected using current time plus a valid interval.
+
+The socket test seeds initial blockers directly in the canonical organization fixture. It proves public creation relationships, owner completion and human-answer handling, but does not yet prove user creation of those blockers or actual runner receipt. The public atomic `work.block` / MCP `work_item_block` entry is approved for implementation using the existing pure BlockOn/Continuation rules, revision CAS, scoped identity and one transaction.
+
+Remaining gates before activation and delivery:
+
+1. Finish and test the public blocker/new-human/split action, including atomic rejection and real announcement/wake paths.
+2. Resolve independent production review findings: frozen-crew history must stay readable; public H identity must not silently fall back to a different local H. Verify raw requirement allocation high-water behavior after purge.
+3. Prove actual actor delivery with fake execution, including render/claim refusal after owner/revision/terminal changes. A queue row is not a delivery receipt.
+4. Switch schema 9 through the serialized migration/backup chain; run version-8 upgrade, reopen/idempotence, failure rollback and restoration fixtures. Run the final combined lint/workspace gate on a single source worktree.
+5. Integrate with original-style client and packaged runtime. Main integration, release, installation and real-account/day-data acceptance remain separate delivery gates.
