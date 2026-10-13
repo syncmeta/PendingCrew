@@ -15,3 +15,9 @@ Boundaries: 64 KiB canonical usage payload, 4 KiB identity, 128-byte provider; R
 - `/private/tmp/pcw-usage-fmt-final-02.log` and `/private/tmp/pcw-usage-clippy-final.log`: format check and locked offline workspace/all-target clippy with warnings denied passed.
 
 The first formatting failure and prior failed migration logs are preserved. The main agent owns independent review and final combined workspace test gate. No push, main merge, app install, real model call, or daily-data migration is claimed by this acceptance.
+
+## Main-agent integration acceptance
+
+Independent read review found no blocking correctness or permission issues; report is `2026-10-13-usage-independent-review.md`. Actual CodexCore/DbPort coverage, generation/thread identity, non-null null-turn key, precision-preserving text, explicit API authorization and strict migration were checked. Extreme signed/unsigned 64-bit values and omitted-turn versus explicit-null cross-layer repetition remain optional evidence extensions; no arbitrary precision or full provider billing claim is made.
+
+Final locked Rust 1.94.0 offline/all-features workspace fmt, all-target clippy and complete test gate passed, `/private/tmp/pcw-usage-workspace-final-01.log`. The main agent invalidated only work/store library cache mtimes before the gate because another source worktree had used the same warm target; tracked source bytes did not change. The global organization branch has received this schema-8 input as 5dabca7d; its schema-9 production cutover remains in flight, independently of this accepted raw-evidence unit.
