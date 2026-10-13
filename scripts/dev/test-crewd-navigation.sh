@@ -7,7 +7,7 @@ echo "Navigation evidence: $fixture"
 client="$root/Sources/Mac/Crewd"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library "$client/CrewdClient.swift" "$client/CrewdWorkStore.swift" "$client/CrewdNavigation.swift" "$root/scripts/dev/fixtures/crewd-navigation.swift" -o "$fixture/fixture"
 "$fixture/fixture" "$fixture/navigation-structure.json"
-xcrun swiftc -module-cache-path "$fixture/cache" -typecheck -parse-as-library "$client/CrewdClient.swift" "$client/CrewdDrafts.swift" "$client/CrewdWorkStore.swift" "$client/CrewdNavigation.swift" "$root/Sources/Mac/Design/CrewColorHash.swift" "$client/CrewdWorkPanels.swift" "$client/CrewdRequirementDrafts.swift" "$client/CrewdPlanActions.swift" "$client/CrewdWorkspace.swift" "$client/CrewdWorkspaceView.swift"
+xcrun swiftc -module-cache-path "$fixture/cache" -typecheck -parse-as-library "$client/CrewdClient.swift" "$client/CrewdDrafts.swift" "$client/CrewdWorkStore.swift" "$client/CrewdNavigation.swift" "$root/Sources/Mac/Design/CrewColorHash.swift" "$client/CrewdHandoffView.swift" "$client/CrewdWorkPanels.swift" "$client/CrewdRequirementDrafts.swift" "$client/CrewdPlanActions.swift" "$client/CrewdHumanActions.swift" "$client/CrewdWorkspace.swift" "$client/CrewdWorkspaceView.swift"
 python3 - "$client/CrewdWorkspaceView.swift" <<'PYCODE'
 from pathlib import Path
 import sys

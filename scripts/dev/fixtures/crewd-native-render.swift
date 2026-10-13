@@ -18,17 +18,21 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
             switch method {
             case "work.list": return wire("{\"items\":[{\"id\":\"W42\",\"crewId\":\"engineering\",\"title\":\"贯通原始需求与客户端\",\"owner\":\"captain\",\"status\":\"active\",\"revision\":\"1\",\"sources\":[\"#42\"],\"parent\":null,\"blockedOn\":[],\"nextAfter\":null}],\"nextAfter\":null}")
             case "todo.list": return wire("[{\"id\":\"raw-42\",\"requirementId\":\"#42\",\"crewId\":\"engineering\",\"text\":\"保留原来的通讯录和消息布局\",\"status\":\"in_progress\"}]")
-            case "ask.list": return .array([])
+            case "work.get": return wire("{\"id\":\"W42\",\"crewId\":\"engineering\",\"title\":\"贯通原始需求与客户端\",\"owner\":\"captain\",\"status\":\"active\",\"revision\":\"1\",\"sources\":[\"#42\"],\"pendingTransfer\":{\"to\":\"reviewer\",\"requestedBy\":\"captain\",\"requestSeq\":\"99\",\"note\":\"后端接口已经接通，请验收员接手完成独立核验。保留原始数据与故障证据。\",\"at\":\"2026-10-14T01:00:00.000Z\"}}")
+            case "ask.list": return wire("[{\"ask\":{\"ask\":\"H43\",\"crewId\":\"engineering\",\"question\":\"希望保留哪种交接呈现？\",\"state\":\"open\",\"item\":\"W42\"},\"items\":[\"W42\"]}]")
             default: fatalError("unexpected call in offline renderer: \(method)")
             }
         }
         workspace.workStore.selectCrew("engineering");try await workspace.workStore.refresh()
+        _ = try await workspace.workStore.detail(CrewdWorkID("W42",kind:.plan)!)
         for (name,scheme,appearance) in [("light",ColorScheme.light,NSAppearance.Name.aqua),("dark",ColorScheme.dark,NSAppearance.Name.darkAqua)] {
             NSApplication.shared.appearance=NSAppearance(named:appearance)
             let screens:[(String,AnyView)] = [
                 ("messages",AnyView(CrewdWorkspaceView(workspace:workspace,autoConnect:false))),
-                ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),members:workspace.sessions))),
-                ("progress",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),members:workspace.sessions,progressOnly:true)))
+                ("handoff",AnyView(CrewdHandoffView(store:workspace.workStore,id:CrewdWorkID("W42",kind:.plan)!,members:workspace.sessions))),
+                ("human",AnyView(CrewdHumanActions(store:workspace.workStore,drafts:.constant(CrewdHumanDrafts()),target:CrewdHumanTarget(key:.init(scope:"engineering",crew:"engineering",ask:"H43"))))),
+                ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions))),
+                ("progress",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,progressOnly:true)))
             ]
             for (screen,view) in screens {
             let controller=NSHostingController(rootView:view.preferredColorScheme(scheme).environment(\.colorScheme,scheme).frame(width:1320,height:820).background(CrewdChatStyle.canvas(scheme)))
