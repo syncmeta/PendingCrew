@@ -81,3 +81,20 @@
 - 从实际窗口发送 `PCW_REAL_RECONNECT_20261012_A` 并在任务运行中重新连接；数据库重连前后同一消息 ID、只有一条。实际 thread 共两个已完成回合：原始开发任务和该消息引起的排队唤醒；不能把有意发送新消息带来的第二回合说成重连重放。证据摘要保存在 `/private/tmp/pcw-codex-first-real-20261012/acceptance.json`。
 
 本次成本样本：累计输入 1,370,153 token，其中缓存命中 1,317,760，未命中输入 52,393；输出 6,979（推理输出 654 已在输出口径内）。这是多次请求累计读入量，不是唯一上下文大小，也不能直接换算 ChatGPT 额度或费用。第一次模型请求输入 22,381；读取约定和完整夹具后每次输入升至约 4–5 万。样本提示要核查基础指令/工具声明预算，任务定向提取贡献约定，按区域读取代码，减少重复小搜索和多余唤醒。缓存命中率高不等于重复请求无成本；先记录输入、命中、输出、请求数、缺陷和耗时再比较优化效果。未证明某段基础上下文由 PendingCrew 单独造成，不应未经归因就删掉权限或质量规则。
+
+## 2026-10-13 持续推进：首版重启与休眠边界
+
+运行时修复 `8378f7d9`，与 main 已接受降噪/方案整合后的冻结候选 `9424c207`。整合只增加文档；两者的 Sources/crewd/project.yml/生成工程差异为空。原 M3b/M3c §27/§28 保留，首版决定改编号为 §29。工程重生成无字节差异。
+
+- Mac 窗口订阅 restart 事件、读取 restart.pending，显示待恢复数量及中断提醒；人选择 resume/later，指向原 prompt ID。没有默认自动恢复或另建恢复账本。
+- 修复收到 system.shutdown 后仍继续快照请求：取消后续同步，在每个 await 边界检查休眠与代际，保留已发请求的回执；取消的只读同步不再制造休眠后的错误提示。没有把未知写入结果改写成成功。
+- 真实 crewd + 假 Codex 的原生 Mac 客户端，正常退出及 SIGKILL 两种重启都通过：仅原来运行成员进入名单、later 保留、人工 resume 用原 thread、不重放初始任务、人工停止成员不复活。日志 pcw-restart-client-final-{graceful,crash}-01.log。
+- 确定性 synthetic Unix peer 对五个快照边界注入 shutdown，修复前捕获额外 ask/restart 读取及 session.list 后额外 channel.list；修复后五阶段通过。日志 pcw-shutdown-client-red-01.log、pcw-shutdown-session-boundary-red-01.log、pcw-shutdown-{crew.list,ask.list,restart.pending,session.list,channel.list}-green-final-01.log。
+- 原消息/人工请求/重连/休眠回归通过，pcw-restart-client-final-message-{01,02}.log。之前一次休眠尾部连接失败保留在 pcw-restart-client-message-regression-01.log；半关闭实验未复现该症状，不能据此宣称根因完全证明。稳定复现并修复的是 shutdown 后额外请求缺口。
+- 修复 fake Codex 多进程共享 NDJSON 日志交错；t11 夹具恢复默认补字段以支持 workspace testkit，仅对无 testkit 时的 needless_update 加注明原因的窄允许。首次全 workspace 编译失败保留 pcw-restart-backend-check-01.log，最终格式/lint/2334 测试通过、8 个活测试未运行，pcw-restart-backend-check-02.log。
+- Mac 与 iOS Simulator build 通过。首次 Mac 全量 3228/12 skipped/1 failure（旧 repeatForever 反例布局量不足）；定向实测随后达到 23470 次并通过，没有降低阈值；完整复查 3228/12 skipped/0 failures。日志 pcw-restart-mac-{build-01,test-01,layout-focused-01,test-final-01}.log、pcw-restart-ios-build-01.log。
+
+稳定签名候选：`/private/tmp/pendingcrew-codex-recovery-final-20261013/PendingCrew Codex First.app`，源码记录 9424c207、source-changes.patch 空。整合期间的混合产物不用于验收，冻结版本重建日志 pcw-restart-candidate-build-final-01.log。
+
+实际窗口使用独立 bundle ID 的副本、明确 fake_codex 和合成数据库，验证恢复提示、later、重连保持暂缓、resume 后等待下一步；数据库保持原 thread。最后停止、退出，并按 PID/启动时间/完整命令收尾自有后台。初次 getApp 意外阻塞约 8 小时，期间没有代码推进；后续用短超时并优先 CLI/API。全程无新的真实模型、安装、发布或日常数据迁移。短日志均在 /private/tmp。
+

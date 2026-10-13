@@ -11,7 +11,7 @@
 - 按人类授权，降噪改动单独移植到 main，`d3cb5b23` 已推送并核实远端；该基线通过格式、lint 和 1115 项离线测试。整合树另外 207 个提交未随降噪带入 main，共享目录中既有未跟踪 ACP 资料保留。
 - Jev 多后端仅保留[讨论方案](../specs/2026-10-12-decision-provider-options.md)，不继续实现。
 - Codex 首个接线单元保存为独立候选 `codex/codex-orchestra-20261012@36f2ac81`：新增独立 Executor 适配器，传递世界观、模型/effort、MCP、持久 thread、上下文、因果绑定和停止/续跑；成功投递复用已有观察函数，在 app-server 确认接受后、广播事件前登记。回归先在未接观察器时失败，再验证修复及超时不计成功；候选源码通过格式、lint 和 2320 项离线测试（8 项活测试未运行）。此处不是生产或真实 Codex 验收。
-- 首版候选已推进为 `codex/codex-orchestra-20261012@eeb24dca`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建；合成窗口已验证新建、发消息、原生审批/答复、恢复与停止。用户随后授权独立首版真实任务，现有 Codex 登录已完成一次隔离自我开发回归，群内报告与红/绿测试已核查。未安装、未迁移日常数据，也尚未将候选代码纳入共享 main。本机运行产物对应 bec60f86，eeb24dca 仅增加回归测试。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
+- 首版候选已推进为 `codex/codex-orchestra-20261012@9424c207`：生产 `serve --codex` 接线、Item/TurnEnded/Profile/Notice、原生人工请求与 Mac NDJSON 操作窗口已实现；MCP 默认招募能沿用实际 Codex 机长。完整后端 2333 项通过（8 个活测试未运行），Mac 完整复查 3228 项、12 项跳过、零失败，Mac/iOS Simulator 构建与原生客户端合成验收通过。独立 ad-hoc 本机候选已构建；合成窗口已验证新建、发消息、原生审批/答复、恢复与停止。用户随后授权独立首版真实任务，现有 Codex 登录已完成一次隔离自我开发回归，群内报告与红/绿测试已核查。未安装、未迁移日常数据，也尚未将候选代码纳入共享 main。本机运行产物对应 bec60f86，eeb24dca 仅增加回归测试。详细边界、首次测试失败与最终结果见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
 - 下一步按这个顺序串行推进：核对并纳入已接受后端整合输入；完成 Codex 生产事件与待请求链；接通 Mac 本机候选并验证恢复路径。完整自由表、Jev 自动调度、其他端与 Claude ACP 不抢占这条路径。
 
 最初只读核查的基线是保留整合树 `worktree-agent-a624116fb76233769` 的 `8c7d6efefb78f02c4f9ddca799c08b0848547617`，含另外在途维护单元；当时共享 main 为 `4c06b0eee394c6e91fcee9ed321a1c9185180a93`。这是历史核查快照，不能把两个源码状态混作同一构建证据；本次进展见上面的推进记录。
@@ -92,3 +92,8 @@ Codex 优先沿用现有 app-server 驱动，并核查 [codex-acp](https://githu
 候选已补同一 crew 下假 Claude/PTy 与假 Codex/app-server 的实际驱动混合验收：通用 message.post 按指定 session 投递，未指定成员不被唤醒，接收者的投递记录收敛，客户端断开重连后消息不重复、两种执行器不重复提交，停止后自有进程登记清空。Codex/Claude 的七个集成回归通过，固定 Rust 1.94.0 格式和 lint 通过；注入重复消息的临时坏例失败，原始测试恢复后通过。此项证明混合执行器的通用接收与路由；消息来源为测试客户端，不能声称已经完成两个真实厂商 agent 经 MCP 双向对话的验收。日志见 `/private/tmp/pcw-mixed-executor-{replay-red,restored-green,clippy-final,final-check}.log`。共享夹具原有无效默认更新语句在固定工具链 lint 中报错，已移除并复验；初次失败日志 `pcw-mixed-executor-clippy.log` 保留。
 
 首版下一项仍优先验证后台失败/重启后的可见状态与恢复，不扩展记忆、Jev 或厂商内部通信。已完成的真实任务和窗口验收记录见[候选记录](../../internal/2026-10-12-codex-first-local-candidate.md)。
+
+
+## 2026-10-13 持续推进检查点
+
+Codex 首版已补后台重启人工恢复入口与休眠后停止快照读取；正常/强制退出、人工停止、同 thread 恢复、五个同步边界及实际合成窗口按钮已验收。候选与 main 已接受降噪/方案已在隔离树整合，保留有界批处理与双方交付记录。完整门禁、首次失败、稳定产物及工具阻塞记录在候选记录；候选仍不是安装或日常迁移。接下来整合共享 main，再核对 M4b 工作账本持久化/工具/编排接线缺口；Jev/记忆继续讨论先行，厂商内部通信延期。
