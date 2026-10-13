@@ -325,7 +325,7 @@ pub fn invalidate_for_work_replacement(conn: &Connection, reason: &str, at: &str
         "UPDATE remote_invitations SET consumed_at=?1 WHERE consumed_at IS NULL",
         [at],
     )?;
-    if let identity = identity(conn)? {
+    if let Some(identity) = identity(conn)? {
         audit(
             conn,
             &identity.authority_id,
