@@ -99,3 +99,11 @@
 实际窗口使用独立 bundle ID 的副本、明确 fake_codex 和合成数据库，验证恢复提示、later、重连保持暂缓、resume 后等待下一步；数据库保持原 thread。最后停止、退出，并按 PID/启动时间/完整命令收尾自有后台。初次 getApp 意外阻塞约 8 小时，期间没有代码推进；后续用短超时并优先 CLI/API。全程无新的真实模型、安装、发布或日常数据迁移。短日志均在 /private/tmp。
 
 2026-10-13：源码与证据记录 `29e72bb3` 已快进合入共享 main；运行时源码与稳定产物 9424c207 相同，后续仅文档变化。共享目录既有 README 未提交内容保持字节一致，ACP 未跟踪研究资料保留。上文 10 月 12 日“候选未纳入 main”是历史状态，由此记录更新；本次仍未安装、发布或迁移日常数据。
+
+## 2026-10-13 work/idle integrated local candidate
+
+Frozen source 4d111668a97e1deed746e6b7a3e0c0be57baca70, candidate branch codex/work-identity-20261013. Independent app /private/tmp/pendingcrew-work-idle-candidate-20261013/PendingCrew Codex First.app built and ad-hoc signed; source-changes.patch is empty. Prior recovery candidate and all original evidence preserved. Build log pcw-work-idle-candidate-build-01.log; source-head.txt, artifact-sha256.txt and ACCEPTANCE.txt beside the app.
+
+Production Rust baseline full gate passed 2412 tests with 8 live tests ignored; the added test-only actual actor race unit passes all 11 m3i_hook_wake integrations. The packaged release helper then passed the native Swift client fixture: channels, messages, wake/events, approval, free input, stale reply and reconnect; reconnect kept one marked message and two expected runner turns. /private/tmp/pcw-work-idle-release-client-01.log; complete synthetic artifacts /private/tmp/pcw-swift-client.9qdGnb. The temporary test wrapper only selects this packaged release helper instead of debug crewd; original Swift fixture/assertions are unchanged.
+
+No new actual window playback or real-model validation is claimed; the existing first-edition UI was rebuilt without frontend design changes. Not installed, released, switched to daily data or merged to shared main. Jev and memory remain proposals. The added workload model is not yet fully exposed in the frontend; full M4b/global DAG/actions/admin/platform remain separate work.
