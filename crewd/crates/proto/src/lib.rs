@@ -17,6 +17,8 @@ pub mod orchestra;
 mod params;
 pub mod work;
 pub use work::*;
+pub mod remote;
+pub use remote::*;
 pub mod resources;
 pub use resources::*;
 pub mod channel_work;

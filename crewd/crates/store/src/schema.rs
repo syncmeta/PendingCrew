@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -853,6 +853,75 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 10 {
         migrate_v10(conn)?;
     }
+    if v < 11 {
+        migrate_v11(conn)?;
+    }
+    Ok(())
+}
+
+/// Persistent remote permission has its own public identity binding, separate
+/// from dbId and private TLS key material. The listener remains disabled.
+pub(crate) fn migrate_v11(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(r#"
+CREATE TABLE remote_authority(
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  authority_id TEXT NOT NULL UNIQUE,
+  db_id TEXT NOT NULL,
+  certificate_der_base64 TEXT NOT NULL,
+  spki_sha256 TEXT NOT NULL CHECK(length(spki_sha256)=64),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE remote_configuration(
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  revision INTEGER NOT NULL CHECK(revision>0),
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  listen_host TEXT NOT NULL,
+  port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535)
+);
+INSERT INTO remote_configuration VALUES(1,1,0,'127.0.0.1',7423);
+CREATE TABLE remote_invitations(
+  id TEXT PRIMARY KEY,
+  authority_id TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  expires_unix INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
+);
+CREATE TABLE remote_grants(
+  id TEXT PRIMARY KEY,
+  authority_id TEXT NOT NULL,
+  device_label TEXT NOT NULL,
+  client_spki_sha256 TEXT NOT NULL CHECK(length(client_spki_sha256)=64),
+  client_certificate_der_base64 TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  created_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoke_note TEXT,
+  CHECK((revoked_at IS NULL) = (revoke_note IS NULL))
+);
+CREATE UNIQUE INDEX remote_active_client_pin ON remote_grants(authority_id,client_spki_sha256) WHERE revoked_at IS NULL;
+CREATE TABLE remote_requests(
+  request_id TEXT PRIMARY KEY,
+  authority_id TEXT NOT NULL,
+  method TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE remote_audit(
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  authority_id TEXT NOT NULL,
+  grant_id TEXT,
+  action TEXT NOT NULL,
+  request_id TEXT,
+  at TEXT NOT NULL,
+  facts_json TEXT NOT NULL
+);
+PRAGMA user_version=11;
+"#)?;
+    tx.commit()?;
     Ok(())
 }
 
