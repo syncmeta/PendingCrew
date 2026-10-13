@@ -46,6 +46,6 @@ Root-reported real normal-daemon + Swift integration passed (`/private/tmp/pcw-r
 - 独审首次RED（7缺口）：/private/tmp/pcw-requirement-store-review-red-01.log；逆向RED（3缺口）：/private/tmp/pcw-requirement-store-review-reverse-red-01.log；最终独立GREEN（15检查）：/private/tmp/pcw-requirement-store-review-reverse-green-independent-01.log。包括closed理由不可丢、假close回执拒绝、create精确原文字节、trim理由和只读后续刷新。
 - 最终原布局/实际UI源码SwiftUI编译与纯结构：/private/tmp/pcw-requirement-client-final-01.log，全部通过。UI按crew保留草稿UUID；未知提交保留旧snapshot并提供显式确认原提交入口，不自动重试、不在编辑时无声遗失不确定任务。当前未知传输错误保守提示，不把发送前未执行与可能已执行精准区分。
 - 最终正常daemon + Swift：/private/tmp/pcw-requirement-swift-backend-final-01.log，数据 /private/tmp/pcw-work-integration.Y2gJ7b。实际公开create→同UUID复用→get原文→冲突拒绝→Human关闭理由（刷新保留），然后既有跨层计划阻塞/H答复/完成/CAS/只读重连，全部通过；无真实模型/账户或fake runner流量。01/02及早期编译日志全部保留。
-- 整套Rust workspace门禁仍在进行，已发现旧agent工具数和每方法RPC覆盖夹具需要补新todo_get及三个公开方法；当前不得称最终workspace全绿。待定向修补/复验与strict clippy/fmt后再冻结交付检查点。
+- 最终冻结357c3c12：原workspace完整运行2505通过/4失败/8忽略；4处旧契约夹具修补后对应实际CLI/agent集成各1项与agent.rpc 32项全部通过，所有未解决失败为0。合并覆盖2509项，不宣称在最终源码重跑过一次全套。后续变更仅测试断言/实际新增覆盖和相同port函数位置；严格workspace all-target/all-feature clippy与fmt通过，原失败日志保留。
 
 边界仍为隔离源码、真实本地通信与合成数据。未执行原生窗口/像素验收、正式安装、日常数据迁移、main整合或正式发布；文档/独立视图文件夹、完整交接、多厂商真实PTY等仍在工程路线内。
