@@ -154,6 +154,19 @@ final class CrewdWorkStore: ObservableObject {
         requirements[id] = value
         return value
     }
+    @discardableResult func withdrawTransfer(_ id:CrewdWorkID,expectedRevision:String) async throws -> CrewdValue {
+        guard id.kind == .plan else {throw CrewdClientError(message:"交接必须使用公共计划编号。",code:-32602)}
+        return try await mutate("work.transferWithdraw",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision)]))
+    }
+    func ownerHistory(_ id:CrewdWorkID,before:String?=nil) async throws -> CrewdValue {
+        guard id.kind == .plan else {throw CrewdClientError(message:"交接记录必须使用公共计划编号。",code:-32602)}
+        let token=generation
+        var params:[String:CrewdValue]=["id":.string(id.raw),"limit":.integer(20)]
+        if let before {params["before"] = .string(before)}
+        let value=try await call("work.history",.object(params));try check(token)
+        guard value["id"] == .string(id.raw),case .array = value["items"] else {throw CrewdClientError(message:"交接记录返回了其他对象或无效内容。")}
+        return value
+    }
     private func adopt(_ incoming: CrewdPlan) {
         if let old = plans[incoming.id] {
             let a = old.revision, b = incoming.revision
@@ -245,7 +258,7 @@ final class CrewdWorkStore: ObservableObject {
     /// A failed mutation retains structured facts for UI and leaves drafts to their owner.
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
     @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
-        guard ["work.create", "work.update", "work.assign", "work.block", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
+        guard ["work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。")
         }
         guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。") }

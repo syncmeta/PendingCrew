@@ -443,6 +443,7 @@
 		891784B01A6EF8F6FFE35872 /* CrewSessionRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19AB68BF7E4D689CEAF0A0F /* CrewSessionRunner.swift */; };
 		89807FB95510F3F9C61B59FC /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5ED121602F6C57458CB290B /* MarkdownText.swift */; };
 		89E78145E07ABCF97B70E5C9 /* CrewModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50E2059733A66707D66E27E /* CrewModels.swift */; };
+		8A1894962E5E3CE9B5847331 /* CrewdHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA8B2048BB210727ADD88A72 /* CrewdHandoffView.swift */; };
 		8A23157D010EB9F45781BDE6 /* LocalPromptLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6AF2AE2C93EB875D8DBFF8 /* LocalPromptLoader.swift */; };
 		8A2E0ED4E2DCD8D29C657CBB /* AgentTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10CE71B99772AB7C3D2086DA /* AgentTerminalView.swift */; };
 		8AD1A7D1DC89ACB0C290D31C /* FileFingerprintCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39C82A3CCDE95321F76BB53E /* FileFingerprintCache.swift */; };
@@ -1251,6 +1252,7 @@
 		B941CD4F1B6BA470A1953642 /* SessionProtocolOverSocketTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionProtocolOverSocketTests.swift; sourceTree = "<group>"; };
 		B96C620FB6C125B79B01FB02 /* TerminalBellTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalBellTests.swift; sourceTree = "<group>"; };
 		BA1E023BE4F12FDCCEAACC91 /* CrewReportingParent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewReportingParent.swift; sourceTree = "<group>"; };
+		BA8B2048BB210727ADD88A72 /* CrewdHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdHandoffView.swift; sourceTree = "<group>"; };
 		BAB87EC5A9ACD37C7A2B09A0 /* McpHelperMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = McpHelperMain.swift; sourceTree = "<group>"; };
 		BABA959B14709D868709A394 /* CaptainDelegationPolicyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptainDelegationPolicyStore.swift; sourceTree = "<group>"; };
 		BAF186B1180EFC81E792573C /* CrewWakeDispatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewWakeDispatch.swift; sourceTree = "<group>"; };
@@ -1830,6 +1832,7 @@
 			children = (
 				9ED1364BB456C51758515468 /* CrewdClient.swift */,
 				F002EF65A8C2142FE653B389 /* CrewdDrafts.swift */,
+				BA8B2048BB210727ADD88A72 /* CrewdHandoffView.swift */,
 				C30B7A1BA9EE415835720865 /* CrewdNavigation.swift */,
 				9B17D70252E5414FE1E45777 /* CrewdPlanActions.swift */,
 				0890DC64B807FBABDF3BC3B5 /* CrewdRequirementDrafts.swift */,
@@ -2582,6 +2585,7 @@
 				2824EE1F2326A49770BE6558 /* CrewWhiteboardVisibility.swift in Sources */,
 				4931675C8C5E6114A69A73B7 /* CrewdClient.swift in Sources */,
 				B3DDF33BDE3578090B6B246A /* CrewdDrafts.swift in Sources */,
+				8A1894962E5E3CE9B5847331 /* CrewdHandoffView.swift in Sources */,
 				A667A3AFB59426959D3C3C32 /* CrewdNavigation.swift in Sources */,
 				71D8A3F8B80847949F37EB3E /* CrewdPlanActions.swift in Sources */,
 				0B3CF973FB2FFC49F2ACBB9E /* CrewdRequirementDrafts.swift in Sources */,

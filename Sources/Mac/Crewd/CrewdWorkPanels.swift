@@ -73,6 +73,7 @@ struct CrewdWorkPanels: View {
                                     Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label:{Text("\(id.raw)  \(plan.value["title"].string ?? "计划")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
                                     Spacer()
                                     Text(CrewdWorkStatusLabel.display(plan.status)).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                    if plan.value["pendingTransfer"] != .null {Text("交接中").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                                 }
                                 if !compact {
                                     Text([plan.value["owner"].string,plan.value["note"].string,plan.value["nextCheckAt"].string].compactMap{$0}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
@@ -86,8 +87,10 @@ struct CrewdWorkPanels: View {
                                         Text("依赖：" + detail["dependsOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         Text("卡点：" + detail["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         if let evidence=detail["evidence"]["value"].string {Text(evidence).textSelection(.enabled)}
+                                        CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew + ":" + id.raw)
                                         Button("计划操作") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))
-                                    } else {Text("正在读取详情").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
+                                    } else {Button("读取当前详情") {Task {do {_ = try await store.detail(id)} catch {failure=describe(error)}}}}
+
                                 }
                             }.padding(.leading,CGFloat(row.depth)*14).padding(.vertical,6)
                         }
