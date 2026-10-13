@@ -16,6 +16,7 @@ SWIFT
 candidate_arch=$(uname -m)
 xcrun swiftc -O -parse-as-library -target "$candidate_arch-apple-macos14.0" \
     "$root/Sources/Mac/Crewd/CrewdClient.swift" \
+    "$root/Sources/Mac/Crewd/CrewdDrafts.swift" \
     "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/Sources/Mac/Crewd/CrewdWorkspaceView.swift" \
     "$out/CandidateMain.swift" -o "$app/Contents/MacOS/PendingCrewCodexFirst"

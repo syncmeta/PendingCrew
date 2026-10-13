@@ -5,11 +5,21 @@ import AppKit
 struct CrewdWorkspaceView: View {
     @ObservedObject var workspace: CrewdWorkspace
     var autoConnect = true
-    @State private var compose = ""
-    @State private var task = ""
+    @State private var drafts = CrewdDrafts()
     @State private var creatingCrew = false
     @State private var crewTitle = ""
     @State private var workingDirectory = ""
+    private var messageContext: CrewdDrafts.Context {
+        .message(crew: workspace.crewID, channel: workspace.channelID, session: workspace.sessionID)
+    }
+    private var taskContext: CrewdDrafts.Context {
+        .initialTask(crew: workspace.crewID, session: workspace.sessionID)
+    }
+    private var compose: String { drafts.text(for: messageContext) }
+    private var task: String { drafts.text(for: taskContext) }
+    private func draftBinding(_ context: CrewdDrafts.Context) -> Binding<String> {
+        Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context) })
+    }
     var body: some View {
         NavigationSplitView {
             List {
@@ -108,15 +118,16 @@ struct CrewdWorkspaceView: View {
                     if let last = workspace.messages.last?["id"].string { proxy.scrollTo(last, anchor: .bottom) }
                 }
             }
-            TextField("发给当前 Codex 会话", text: $compose, axis: .vertical).lineLimit(2...6)
+            TextField("发给当前 Codex 会话", text: draftBinding(messageContext), axis: .vertical).lineLimit(2...6)
             HStack {
                 Text("发送会通知选中的会话").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("发送") {
-                    let text = compose, channel = workspace.channelID, target = workspace.sessionID
+                    let sent = drafts.snapshot(for: messageContext)
+                    let text = sent.text, channel = sent.context.channel, target = sent.context.session
                     Task {
                         let mentions: [CrewdValue] = target.isEmpty ? [] : [.object(["kind": .string("session"), "targetId": .string(target)])]
-                        if await workspace.perform("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)])), compose == text { compose = "" }
+                        if await workspace.perform("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)])) { drafts.clearIfUnchanged(sent) }
                     }
                 }.disabled(compose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy || workspace.channelID.isEmpty || workspace.sessionID.isEmpty)
             }
@@ -161,15 +172,16 @@ struct CrewdWorkspaceView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
-            TextField("给新的 Codex 会话交代任务", text: $task, axis: .vertical).lineLimit(2...6)
+            TextField("给新的 Codex 会话交代任务", text: draftBinding(taskContext), axis: .vertical).lineLimit(2...6)
             HStack {
                 Text("沿用 Codex 的默认模型和设置").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("启动 Codex") {
-                    let brief = task, crew = workspace.crewID
+                    let sent = drafts.snapshot(for: taskContext)
+                    let brief = sent.text, crew = sent.context.crew
                     let role = workspace.sessions.contains(where: {$0["role"].string == "captain"}) ? "worker" : "captain"
                     Task {
-                        if await workspace.perform("session.start", .object(["crewId": .string(crew), "role": .string(role), "executor": .string("codex"), "brief": .string(brief), "isolation": .bool(true)])), task == brief { task = "" }
+                        if await workspace.perform("session.start", .object(["crewId": .string(crew), "role": .string(role), "executor": .string("codex"), "brief": .string(brief), "isolation": .bool(true)])) { drafts.clearIfUnchanged(sent) }
                     }
                 }.disabled(task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
             }
