@@ -56,6 +56,8 @@ final class CrewdWorkspace: ObservableObject {
     private var retired = false
     private var generation = UUID()
     private var selection = UUID()
+    private var sessionDirectoryQuery = UUID()
+    private var crewDirectoryQuery = UUID()
     private var sync: Task<Void, Never>?
     private var reconnect: Task<Void, Never>?
     private var reconnectID: UUID?
@@ -218,9 +220,11 @@ final class CrewdWorkspace: ObservableObject {
 
     func refreshSessionDirectory(_ crew: String) async throws {
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
-        let current = generation
+        let current = generation, selected = selection, query = UUID()
+        sessionDirectoryQuery = query
         let response = try await client.call("session.list", .object(["crewId": .string(crew)]))
-        guard !retired, current == generation, crewID == crew, !Task.isCancelled else { throw CancellationError() }
+        guard !retired, current == generation, selected == selection, sessionDirectoryQuery == query,
+              crewID == crew, !Task.isCancelled else { throw CancellationError() }
         guard case .array(let rows) = response else { throw CrewdClientError(message: "成员列表回复格式无效。") }
         sessions = rows
         for row in rows { if let id = row["id"].string { knownSessions[id] = row } }
@@ -228,9 +232,11 @@ final class CrewdWorkspace: ObservableObject {
 
     func refreshCrewDirectory() async throws {
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
-        let current = generation
+        let current = generation, selected = selection, query = UUID()
+        crewDirectoryQuery = query
         let response = try await client.call("crew.list")
-        guard !retired, current == generation, !Task.isCancelled else { throw CancellationError() }
+        guard !retired, current == generation, selected == selection, crewDirectoryQuery == query,
+              !Task.isCancelled else { throw CancellationError() }
         guard case .array(let rows) = response else { throw CrewdClientError(message: "机组列表回复格式无效。") }
         crews = rows
     }
@@ -345,18 +351,23 @@ final class CrewdWorkspace: ObservableObject {
     /// The compatibility Bool entry remains for the original Mac controls.
     func performValue(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         guard !retired, !busy else { throw CrewdClientError(message: "连接已关闭或正在提交，尚未发送本次操作。", kind: .notSubmitted) }
-        let current = generation
+        let current = generation, selected = selection, requestCrew = crewID
         busy = true; defer { busy = false }; error = nil
         do {
             let result = try await client.call(method, params)
             guard !retired, generation == current else { throw CrewdClientError(message: "连接已切换，原操作结果需要在原团队核对。") }
             if method == "crew.create" || method == "session.start" {
                 guard let id = result["id"].string, !id.isEmpty else { throw CrewdClientError(message: "创建回执缺少真实编号，结果需要核对。") }
-                if method == "crew.create" { selectCrew(id) } else { selectSession(id) }
+                // A valid older write still returns its receipt to the original draft
+                // owner, but must not replace the user's newer selection.
+                if selected == selection {
+                    if method == "crew.create" { selectCrew(id) }
+                    else if crewID == requestCrew, params["crewId"].string == requestCrew { selectSession(id) }
+                }
             }
             scheduleSync(); return result
         } catch {
-            if !retired, generation == current { self.error = error.localizedDescription; scheduleSync() }
+            if !retired, generation == current, selected == selection { self.error = error.localizedDescription; scheduleSync() }
             throw error
         }
     }
