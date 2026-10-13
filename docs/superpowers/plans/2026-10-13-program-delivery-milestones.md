@@ -31,6 +31,12 @@
 - UI RPC可提供事务snapshot；MCP修改回执仅scope/revision/有限影响引用及partial，refs分页cursor绑定scope/treeRevision，元数据与全文按需，避免每次回灌整树。Folder按四视图独立树与typed对象引用组织，不改变Plan parent/状态/owner，不套Plan三层限制。删除文件夹只解散分类而不删除内容/历史；子folder提升父级、直接成员未分类，界面明确实际效果。
 - 后端进入正式schema升级/备份/失败回滚，客户端使用同一权威接口；完整公共CRUD/权限/故障/分类独立性/原生操作贯通由质量线验收，不以种子数据或占位页替代。
 
+## M2 本群Todo范围裁决（2026-10-14）
+
+右上“本群Todo”必须按实际channel工作关联显示，不能用crew全工作引用加占位说明算交付完成。本项归本次完整M2，在文档/四视图分类成套完成后、M2最终冻结前补齐，不延后为首次交付后的功能。已定FolderScope仍为crew/view，不因群Todo扩展为第二种分类账。
+
+后台与客户端直接冻结最小完整契约：关联/取消关联/按群读取，群内创建需求或计划建立实际来源关联，读取和写入均校验actual channel ACL及source work可见性。共享# / W / H权威与生命周期，不复制Plan、推断channel、修改parent/status/owner或默认唤醒模型；解除关联不删除工作。质量线验证双群隔离、跨投影状态一致、成员权限变化、持久重开与未知结果不重复创建/关联。纯说明诚实标出在途边界，但不替代最终操作链。
+
 ## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
 
 - Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。
