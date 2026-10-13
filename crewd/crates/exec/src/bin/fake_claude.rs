@@ -437,6 +437,19 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
             }
         }
         if filler_total.is_none() {
+            #[cfg(target_os = "linux")]
+            if !dir.join("raw-input-full").exists() {
+                // N_TTY non-canonical receive buffer stores at most 4095 bytes.
+                // Observe kernel input without starting a reader or draining it.
+                let queued = rustix::io::ioctl_fionread(stdin_fd)?;
+                if queued == 4095 {
+                    receipt(
+                        "raw-input-full",
+                        "kernel_fionread=4095\nstdin_reader_started=0\n",
+                    )?;
+                    record(&mut protocol, "raw-input-full kernel_fionread=4095")?;
+                }
+            }
             std::thread::sleep(Duration::from_millis(2));
             continue;
         }

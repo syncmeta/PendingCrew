@@ -1677,7 +1677,10 @@ mod output_drain_tests {
                 }
             })
             .await
-            .unwrap_or_else(|_| panic!("fixture receipt deadline: {name}"));
+            .unwrap_or_else(|_| {
+                let protocol = std::fs::read_to_string(self.dir.path().join("protocol.log")).unwrap_or_default();
+                panic!("fixture receipt deadline: {name}; protocol:\n{protocol}")
+            });
         }
 
         async fn screen(&mut self, core: &mut Core, bytes: &[u8], at: Instant) {
@@ -1716,7 +1719,7 @@ mod output_drain_tests {
             core.after_output_drain(at);
         }
 
-        fn saturate(&self) -> usize {
+        async fn saturate(&self) -> usize {
             let start = Instant::now();
             let mut accepted = 0;
             let mut single = false;
@@ -1734,6 +1737,15 @@ mod output_drain_tests {
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         if single {
+                            // Linux master writes first enter asynchronous flip buffers.
+                            // A transient EAGAIN does not prove the slave's raw buffer is
+                            // full. Wait for the child's real FIONREAD=4095 receipt, then
+                            // refill the remaining upstream capacity before final EAGAIN.
+                            #[cfg(target_os = "linux")]
+                            if !self.dir.path().join("raw-input-full").exists() {
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
                             break;
                         }
                         single = true;
@@ -1880,7 +1892,7 @@ mod output_drain_tests {
         );
         let mut queued = VecDeque::new();
         enqueue_actions(&mut queued, &actions);
-        let filler = fixture.saturate();
+        let filler = fixture.saturate().await;
         let fence = Mutex::new(0);
         let error = write_ready(fixture.master(), &mut core, &fence, 0, &mut queued).unwrap_err();
         assert_eq!(
@@ -2001,7 +2013,7 @@ mod output_drain_tests {
         let enter = core.take_actions();
         assert_eq!(writes(&enter), vec![b"\r".as_slice()]);
         enqueue_actions(&mut queued, &enter);
-        let filler = fixture.saturate();
+        let filler = fixture.saturate().await;
         let error =
             write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queued).unwrap_err();
         assert_eq!(
@@ -2066,7 +2078,7 @@ mod output_drain_tests {
                 enqueue_actions(&mut queue, &core.take_actions());
                 assert_eq!(queue[0].bytes, b"\r");
             }
-            let filler = fixture.saturate();
+            let filler = fixture.saturate().await;
             let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
                 .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
@@ -2190,7 +2202,7 @@ mod output_drain_tests {
                         _ => b"\r".to_vec(),
                     }
                 );
-                let filler = fixture.saturate();
+                let filler = fixture.saturate().await;
                 let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
                     .unwrap_err();
                 assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
@@ -2647,7 +2659,7 @@ mod output_drain_tests {
         fixture.screen(&mut core, &menu("Proceed?", 0), now).await;
         core.take_actions();
         let expect = shown(&core).fingerprint();
-        let filler = fixture.saturate(); // Child has no stdin reader: exact actual one-byte EAGAIN.
+        let filler = fixture.saturate().await; // Child has no stdin reader: exact actual one-byte EAGAIN.
         let (handle, mut events, mut observed, mut owner) = run_public_fixture(&mut fixture, core);
         let started = Instant::now();
         let held = handle.answer(
@@ -2875,7 +2887,7 @@ mod output_drain_tests {
             args: vec![
                 "-c".into(),
                 format!(
-                    "cat '{}' && printf ready > '{}' && sleep 30",
+                    "stty raw -echo && cat '{}' && printf ready > '{}' && sleep 30",
                     source.display(),
                     ready.display()
                 ),
@@ -3008,7 +3020,7 @@ mod output_drain_tests {
 
     #[tokio::test]
     async fn delivery_completion_requires_the_last_actual_byte_and_survives_no_cancellation() {
-        let (_dir, p) = readable_output(b"").await;
+        let mut fixture = GuardedFixture::new().await;
         let now = Instant::now();
         let mut core = Core::new(
             CoreConfig::default(),
@@ -3021,7 +3033,7 @@ mod output_drain_tests {
             }],
             None,
         );
-        core.on_output(&input_box(""), now);
+        fixture.screen(&mut core, &input_box(""), now).await;
         core.take_actions();
         core.on_tick(now + Duration::from_millis(300));
         let actions = core.take_actions();
@@ -3039,17 +3051,16 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         let fence = Mutex::new(0);
-        let completed = write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap();
+        let completed = write_ready(fixture.master(), &mut core, &fence, 0, &mut writes).unwrap();
+        let Some(progress) = completed else {
+            panic!("actual partial syscall must report its token");
+        };
         assert_eq!(
-            completed,
-            Some(WriteProgress {
-                id,
-                token,
-                complete: false,
-                actual_bytes: 4096
-            }),
-            "one bounded syscall is progress, not completion for 5000 bytes"
+            (progress.id, progress.token, progress.complete),
+            (id, token, false)
         );
+        assert!((1..=4096).contains(&progress.actual_bytes));
+        assert_eq!(writes[0].offset, progress.actual_bytes);
         assert!(writes[0].offset > 0 && writes[0].offset < bytes.len());
         core.on_output(&input_box("x"), now + Duration::from_secs(1));
         assert!(
@@ -3058,13 +3069,19 @@ mod output_drain_tests {
         );
         core.raw(b"z");
         assert_eq!(
-            write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut core, &fence, 0, &mut writes).unwrap(),
             None
         );
         assert!(
             writes.is_empty(),
             "cancelled partial write has no completion"
         );
+        fixture.release(progress.actual_bytes).await;
+        assert!(
+            fixture.capture(&mut core, writes).await.is_empty(),
+            "no cancelled suffix reaches the real reader"
+        );
+        let mut fixture = GuardedFixture::new().await;
         // Full positive writes return the exact token once, leaving the caller to notify Core.
         let mut fresh = Core::new(
             CoreConfig::default(),
@@ -3077,7 +3094,7 @@ mod output_drain_tests {
             }],
             None,
         );
-        fresh.on_output(&input_box(""), now);
+        fixture.screen(&mut fresh, &input_box(""), now).await;
         fresh.take_actions();
         fresh.on_tick(now + Duration::from_millis(300));
         let actions = fresh.take_actions();
@@ -3095,7 +3112,7 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         assert_eq!(
-            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut fresh, &fence, 0, &mut writes).unwrap(),
             Some(WriteProgress {
                 id,
                 token,
@@ -3104,10 +3121,15 @@ mod output_drain_tests {
             })
         );
         assert_eq!(
-            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut fresh, &fence, 0, &mut writes).unwrap(),
             None
         );
-        stop(p).await;
+        fixture.release(0).await;
+        assert_eq!(
+            fixture.capture(&mut fresh, writes).await,
+            b"ok",
+            "positive last bytes reach actual slave reader exactly once"
+        );
     }
 
     #[tokio::test]
