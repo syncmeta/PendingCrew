@@ -68,6 +68,7 @@ final class CrewdWorkStore: ObservableObject {
     @Published private(set) var requirementIDs: [CrewdWorkID] = []
     @Published private(set) var lastFailure: CrewdClientError?
     @Published private(set) var loading = false
+    @Published private(set) var capabilities:Set<String>=[]
     private let call: Call
     private var generation = UUID()
     private var refreshID = UUID()
@@ -76,6 +77,7 @@ final class CrewdWorkStore: ObservableObject {
     private var pendingDetails: [CrewdWorkID: UUID] = [:]
 
     init(call: @escaping Call) { self.call = call }
+    func configureCapabilities(_ value:Set<String>) {capabilities=value}
     var progress: [CrewdPlan] { planIDs.compactMap { plans[$0] } }
     var todoPlans: [CrewdPlan] { progress }
     func plans(from requirement: CrewdWorkID) -> [CrewdPlan] {
@@ -89,6 +91,7 @@ final class CrewdWorkStore: ObservableObject {
     }
     /// Stops old reads. Reconnect reconciles by reading; never resends a mutation.
     func invalidateConnection() {
+        capabilities=[]
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
     }
     private func check(_ token: UUID, _ refresh: UUID? = nil) throws {
@@ -262,9 +265,10 @@ final class CrewdWorkStore: ObservableObject {
     /// A failed mutation retains structured facts for UI and leaves drafts to their owner.
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
     @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
-        guard ["work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
+        guard ["work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "work.reassignLost", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
         }
+        if method == "work.reassignLost",!capabilities.contains(method) {throw CrewdClientError(message:"配套后台尚未开放核实失联后的重派操作。",kind:.notSubmitted)}
         guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。",kind:.notSubmitted) }
         let target = params["id"].string.flatMap { CrewdWorkID($0, kind: .plan) }
         if let target, plans[target]?.frozen == true { throw CrewdClientError(message: "已归档工作只读。", code: -32009, data: .object(["refusal": .string("crew.removed")])) }

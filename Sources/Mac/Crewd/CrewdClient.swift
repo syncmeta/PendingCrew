@@ -58,6 +58,7 @@ struct CrewdClientError: LocalizedError {
 final class CrewdClient: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var version = ""
+    @Published private(set) var capabilities:Set<String>=[]
     @Published private(set) var lastError: String?
     var onEvent: ((String, CrewdValue) -> Void)?
     var onDisconnect: (() -> Void)?
@@ -112,7 +113,9 @@ final class CrewdClient: ObservableObject {
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
             guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
-            _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "work", "restart", "system"].map(CrewdValue.string))]))
+            capabilities=Set(hello["capabilities"].array.compactMap(\.string))
+            let topics=["crew", "session", "message", "channel", "ask", "work", "restart", "system"] + ["documents","viewFolders"].filter {capabilities.contains($0)}
+            _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
             guard generation == current, !Task.isCancelled else { throw CancellationError() }
             lastError = nil
         } catch {
@@ -195,7 +198,7 @@ final class CrewdClient: ObservableObject {
         generation = UUID()
         let c = connection; connection = nil
         c?.stateUpdateHandler = nil; c?.cancel()
-        connected = false; receivePending = false; terminalFailure = nil; buffer.removeAll(); lastError = message
+        connected = false; capabilities=[]; receivePending = false; terminalFailure = nil; buffer.removeAll(); lastError = message
         ready?.resume(throwing: CrewdClientError(message: message)); ready = nil
         let ids = Array(pending.keys)
         for id in ids { finish(id, .failure(CrewdClientError(message: "连接中断，结果未知；请检查当前状态。"))) }

@@ -5,7 +5,7 @@ import SwiftUI
 /// UI command drafts, never a work ledger or a copied status authority.
 struct CrewdPlanDrafts {
     struct Key: Hashable {let crew:String;let object:String;let source:String}
-    enum Action:String,CaseIterable {case report="回报",assign="指派",complete="完成",drop="放弃",block="阻塞"}
+    enum Action:String,CaseIterable {case report="回报",assign="指派",reassignLost="失联重派",complete="完成",drop="放弃",block="阻塞"}
     struct Fields: Equatable {
         var action=Action.report
         var title="",goal="",acceptance="",owner="",parent="",note="",evidence="",question="",splitTitle=""
@@ -53,9 +53,9 @@ enum CrewdPlanCommand {
         guard CrewdWorkID(key.object,kind:.plan) != nil,let revision,!revision.isEmpty else {throw CrewdClientError(message:"请先读取当前计划详情。")}
         var p:[String:CrewdValue]=["id":.string(key.object),"expectedRevision":.string(revision)]
         switch f.action {
-        case .assign:
+        case .assign,.reassignLost:
             try need(f.owner,"真实负责人");try need(f.note,"交接说明")
-            p["owner"] = .string(f.owner);p["note"] = .string(f.note);return ("work.assign",.object(p))
+            p["owner"] = .string(f.owner);p["note"] = .string(f.note);return (f.action == .reassignLost ? "work.reassignLost":"work.assign",.object(p))
         case .report:
             try need(f.note,"当前回报")
             guard ["open","active"].contains(f.reportStatus) else {throw CrewdClientError(message:"回报状态无效。")}
@@ -127,7 +127,12 @@ struct CrewdPlanActions:View {
                         Text("父计划选项来自已读取的实际计划；层级与跨机组权限由后台校验。").font(.caption).foregroundStyle(.secondary)
                     } else {
                         switch fields.action {
-                        case .assign:ownerPicker;TextField("交接说明",text:binding(\.note),axis:.vertical).lineLimit(2...5)
+                        case .assign,.reassignLost:
+                            if fields.action == .reassignLost {
+                                Text("后台会核实当前负责人是否确实失联；健康成员不能通过此操作重派。若只是人工调整负责人，请选择指派。").font(.caption).foregroundStyle(.secondary)
+                                if !store.capabilities.contains("work.reassignLost") {Text("配套后台尚未开放此操作，当前不能提交。").font(.caption).foregroundStyle(.orange)}
+                            }
+                            ownerPicker;TextField("交接说明",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                         case .report:
                             Picker("状态",selection:binding(\.reportStatus)){Text("待推进").tag("open");Text("推进中").tag("active")}
                             TextField("当前进展与下一步",text:binding(\.note),axis:.vertical).lineLimit(2...5)
@@ -146,7 +151,7 @@ struct CrewdPlanActions:View {
                     }
                 }.disabled(drafts.busy(key))
             }
-            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
+            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
         }.padding(20).frame(width:560,height:560).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {
