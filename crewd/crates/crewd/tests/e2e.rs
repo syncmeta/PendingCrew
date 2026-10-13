@@ -412,6 +412,7 @@ fn rpc_drives_every_client_method() {
         ("work.history", r#"{"id":"W999"}"#, Code(-32004)),
         ("work.list", "{}", Ok),
         ("work.get", r#"{"id":"W999"}"#, Code(-32004)),
+        ("work.patrol", r#"{"crewId":"local-aaaa","limit":1}"#, Ok),
         ("ask.list", "null", Ok),
         // R11（控制者裁定 h）：号码格式对、夹具的账本里没有 = 不存在（-32004），不是参数错。
         (
@@ -496,6 +497,7 @@ fn rpc_drives_every_client_method() {
     let mut all = crewd_proto::methods::ALL.to_vec();
     all.sort();
     assert_eq!(covered, all, "加了新方法就在这里加一条");
+    let mut created_work = Vec::new();
     for (method, params, want) in cases {
         let out: Output = crewd(data.path())
             .args(["rpc", method, params])
@@ -511,6 +513,59 @@ fn rpc_drives_every_client_method() {
                     "{method}: 期望 {c}，实际 {err}"
                 );
             }
+        }
+        if method == "work.create" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            created_work.push(first["id"].as_str().unwrap().to_owned());
+            let second = rpc(
+                data.path(),
+                "work.create",
+                r#"{"crewId":"local-aaaa","title":"second synthetic plan"}"#,
+            );
+            created_work.push(second["id"].as_str().unwrap().to_owned());
+            assert_ne!(created_work[0], created_work[1]);
+        } else if method == "work.patrol" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(first["items"].as_array().unwrap().len(), 1);
+            assert_eq!(first["items"][0]["id"], created_work[0]);
+            assert_eq!(first["items"][0]["crewId"], "local-aaaa");
+            assert_eq!(first["items"][0]["unowned"], true);
+            assert_eq!(first["items"][0]["stopEscalated"], false);
+            assert_eq!(first["items"][0]["longWaits"], serde_json::json!([]));
+            assert!(first["items"][0]["revision"].is_string());
+            assert!(first["observedAt"].is_string());
+            assert_eq!(first["liveOnly"], true);
+            assert_eq!(first["includeRemoved"], false);
+            assert_eq!(first["nextAfter"], created_work[0]);
+            let second = rpc(
+                data.path(),
+                "work.patrol",
+                &serde_json::json!({
+                    "crewId":"local-aaaa", "limit":1, "after":first["nextAfter"]
+                })
+                .to_string(),
+            );
+            assert_eq!(second["items"].as_array().unwrap().len(), 1);
+            assert_eq!(second["items"][0]["id"], created_work[1]);
+            assert_eq!(second["items"][0]["unowned"], true);
+            assert!(second["nextAfter"].is_null());
+            let detail = rpc(
+                data.path(),
+                "work.get",
+                &serde_json::json!({"id":second["items"][0]["id"]}).to_string(),
+            );
+            assert_eq!(detail["id"], created_work[1]);
+            assert_eq!(detail["title"], "second synthetic plan");
+            let exhausted = rpc(
+                data.path(),
+                "work.patrol",
+                &serde_json::json!({
+                    "crewId":"local-aaaa", "limit":1, "after":second["items"][0]["id"]
+                })
+                .to_string(),
+            );
+            assert_eq!(exhausted["items"], serde_json::json!([]));
+            assert!(exhausted["nextAfter"].is_null());
         }
     }
 }
