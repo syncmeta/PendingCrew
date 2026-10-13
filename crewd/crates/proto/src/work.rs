@@ -39,6 +39,8 @@ pub struct WorkPlan {
     pub level: String,
     pub acceptance: String,
     pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_transfer: Option<WorkPendingTransfer>,
     pub status: String,
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
@@ -175,6 +177,8 @@ pub struct WorkConflictFacts {
     pub blocker_count: usize,
     pub note: Option<String>,
     pub note_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_transfer: Option<WorkPendingTransfer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -219,4 +223,15 @@ pub struct WorkHistoryPage {
     pub total: usize,
     pub items: Vec<WorkOwnerChange>,
     pub next_before: Option<String>,
+}
+
+/// Current offer, not evidence that the target accepted ownership.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkPendingTransfer {
+    pub to: String,
+    pub requested_by: String,
+    pub note: String,
+    pub note_truncated: bool,
+    pub at: String,
 }

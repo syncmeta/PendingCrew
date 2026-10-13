@@ -30,6 +30,19 @@ pub(crate) fn reference(
         .map(|r| r.id())
         .ok_or_else(|| invalid("work link has no issued global identity"))
 }
+fn pending_view(t: &crewd_work::PendingTransfer, short: bool) -> crewd_proto::WorkPendingTransfer {
+    crewd_proto::WorkPendingTransfer {
+        to: t.to.to_string(),
+        requested_by: t.requested_by.to_string(),
+        note: if short {
+            t.note.chars().take(256).collect()
+        } else {
+            t.note.clone()
+        },
+        note_truncated: short && t.note.chars().nth(256).is_some(),
+        at: crewd_store::ts_from_ms(t.at.0),
+    }
+}
 fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<WorkPlan> {
     let local = r
         .source_id
@@ -74,6 +87,10 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
         level: level.into(),
         acceptance: item.body.acceptance.clone(),
         owner: item.owner.as_ref().map(ToString::to_string),
+        pending_transfer: item
+            .pending_transfer
+            .as_ref()
+            .map(|t| pending_view(t, false)),
         status: status.into(),
         parent: item.parent.map(plans).transpose()?,
         depends_on: item
@@ -483,6 +500,10 @@ fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result<()> {
             blocker_count: item.blocked_on.len(),
             note,
             note_truncated,
+            pending_transfer: item
+                .pending_transfer
+                .as_ref()
+                .map(|t| pending_view(t, true)),
         }));
         return Err(CollabError::Conflict(refusal));
     }
@@ -1710,5 +1731,158 @@ mod history_tests {
             .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
             .unwrap();
         assert!(history(s.conn(), query(&p.id, None, 20)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pending_transfer_view_tests {
+    use super::*;
+    use crate::{
+        Sender,
+        testkit::{NOW, err, ok, store},
+    };
+    use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
+    #[test]
+    fn detail_and_conflict_show_actual_offer_without_implying_acceptance() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "synthetic pending transfer".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let before = serde_json::to_value(&p).unwrap();
+        assert!(before.get("pendingTransfer").is_none());
+        assert!(
+            serde_json::from_value::<WorkPlan>(before)
+                .unwrap()
+                .pending_transfer
+                .is_none()
+        );
+        let note = "转交说明🙂".repeat(400);
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.request_transfer(
+                    &crewd_work::Actor::worker("w-a1"),
+                    now,
+                    "W1".parse().unwrap(),
+                    crewd_work::SessionId::new("w-a2"),
+                    &note,
+                )
+            })
+        });
+        let offered = get(s.conn(), &p.id).unwrap();
+        assert_eq!(offered.owner.as_deref(), Some("w-a1"));
+        let t = offered.pending_transfer.as_ref().unwrap();
+        assert_eq!(t.to, "w-a2");
+        assert_eq!(t.requested_by, "w-a1");
+        assert_eq!(t.note, note);
+        assert!(!t.note_truncated);
+        assert_eq!(t.at, crewd_store::ts_from_ms(NOW));
+        let summary =
+            serde_json::to_value(crewd_proto::WorkSummary::from(offered.clone())).unwrap();
+        assert!(summary.get("pendingTransfer").is_none());
+        assert_eq!(
+            history(
+                s.conn(),
+                crewd_proto::WorkHistoryParams {
+                    id: p.id.clone(),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .total,
+            1,
+            "an offer is not a completed handoff"
+        );
+        let error = err(&mut s, |tx| {
+            update(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkUpdateParams {
+                    id: p.id.clone(),
+                    expected_revision: p.revision,
+                    status: Some(WorkUpdateStatus::Open),
+                    note: Some("stale report".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let CollabError::Conflict(r) = error else {
+            panic!("strict CAS required")
+        };
+        let t = r.current_work.unwrap().pending_transfer.unwrap();
+        assert_eq!(t.to, "w-a2");
+        assert_eq!(t.requested_by, "w-a1");
+        assert_eq!(t.note.chars().count(), 256);
+        assert!(t.note_truncated);
+        assert_eq!(get(s.conn(), &p.id).unwrap(), offered);
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.accept_transfer(
+                    &crewd_work::Actor::worker("w-a2"),
+                    now,
+                    "W1".parse().unwrap(),
+                )
+            })
+        });
+        let accepted = get(s.conn(), &p.id).unwrap();
+        assert_eq!(accepted.owner.as_deref(), Some("w-a2"));
+        assert!(accepted.pending_transfer.is_none());
+        assert!(
+            serde_json::to_value(accepted)
+                .unwrap()
+                .get("pendingTransfer")
+                .is_none()
+        );
+    }
+    #[test]
+    fn withdrawal_removes_offer_and_frozen_reads_remain_honest() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "withdrawal view fixture".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.request_transfer(
+                    &crewd_work::Actor::worker("w-a1"),
+                    now,
+                    "W1".parse().unwrap(),
+                    crewd_work::SessionId::new("w-a2"),
+                    "original offer",
+                )
+            })
+        });
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-a"));
+        let frozen = get(s.conn(), &p.id).unwrap();
+        assert!(frozen.frozen);
+        assert_eq!(frozen.pending_transfer.unwrap().note, "original offer");
+        ok(&mut s, |tx| crate::crews::unarchive(tx, "crew-a"));
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.withdraw_transfer(
+                    &crewd_work::Actor::worker("w-a1"),
+                    now,
+                    "W1".parse().unwrap(),
+                )
+            })
+        });
+        let current = get(s.conn(), &p.id).unwrap();
+        assert!(current.pending_transfer.is_none());
+        assert_eq!(current.owner.as_deref(), Some("w-a1"));
     }
 }

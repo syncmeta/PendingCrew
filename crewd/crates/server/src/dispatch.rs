@@ -644,6 +644,7 @@ mod tests {
             blocker_count: 0,
             note: None,
             note_truncated: false,
+            pending_transfer: None,
         }));
         let error = collab_err(CollabError::Conflict(r));
         assert_eq!(error.code, RpcError::CONFLICT);

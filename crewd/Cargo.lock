@@ -342,6 +342,7 @@ dependencies = [
  "crewd-server",
  "crewd-store",
  "crewd-wake",
+ "crewd-work",
  "dirs",
  "libc",
  "rmcp",

@@ -19,6 +19,7 @@ serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "signal", "io-std", "io-util", "net", "sync", "time"] }
 
 [dev-dependencies]
+crewd-work = { path = "../work" }
 # Direct dependency for exact owned PID signals; cached workspace version.
 libc = "0.2.190"
 # Read-only observation of the disposable live fixture; version already in the workspace lock.

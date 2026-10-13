@@ -638,3 +638,66 @@ async fn work_assignment_uses_actual_helper_identity_and_compact_receipts() {
     w.close().await;
     c.close().await;
 }
+
+#[tokio::test]
+async fn pending_transfer_is_detailed_on_request_and_bounded_in_stale_reply() {
+    let f = Fixture::new().await;
+    f.spawn_socket().await;
+    let crew = f.crew.clone();
+    let owner = f.worker.clone();
+    let target = f.captain.clone();
+    let note = "synthetic full pending offer 🙂".repeat(400);
+    let original = note.clone();
+    let p = f
+        .state
+        .collab(move |tx| {
+            let p = crewd_collab::work::create(
+                tx,
+                &crewd_collab::Sender::Session(owner.clone()),
+                crewd_proto::WorkCreateParams {
+                    crew_id: crew.clone(),
+                    title: "pending detail fixture".into(),
+                    ..Default::default()
+                },
+            )?;
+            crewd_collab::asks::with_book(tx, &crew, |b, now| {
+                b.request_transfer(
+                    &crewd_work::Actor::worker(&owner),
+                    now,
+                    "W1".parse().unwrap(),
+                    crewd_work::SessionId::new(&target),
+                    &note,
+                )
+            })?;
+            Ok(p)
+        })
+        .await
+        .unwrap();
+    let rt = tempfile::tempdir().unwrap();
+    let l = launch(&f, &f.worker, rt.path());
+    let mut m = Mcp::start(&l.mcp).await;
+    let (text, error) = m.call("work_item_get", json!({"id":p.id})).await;
+    assert!(!error, "{text}");
+    let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(plan["owner"], f.worker);
+    assert_eq!(plan["pendingTransfer"]["to"], f.captain);
+    assert_eq!(plan["pendingTransfer"]["requestedBy"], f.worker);
+    assert_eq!(plan["pendingTransfer"]["note"], original);
+    assert_eq!(plan["pendingTransfer"]["noteTruncated"], false);
+    let (text, error) = m.call("my_work_items", json!({})).await;
+    assert!(!error, "{text}");
+    assert!(!text.contains("pendingTransfer"));
+    assert!(!text.contains("synthetic full pending offer"));
+    let (text, error) = m
+        .call(
+            "work_item_update",
+            json!({"id":p.id,"expected_revision":p.revision,"note":"stale proposal report"}),
+        )
+        .await;
+    assert!(error, "{text}");
+    assert!(text.contains("pendingTransfer"));
+    assert!(text.contains("\"noteTruncated\":true"));
+    assert!(!text.contains(&original));
+    assert!(text.len() < 4096);
+    m.close().await;
+}
