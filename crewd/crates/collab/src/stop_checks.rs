@@ -21,6 +21,11 @@ pub struct Candidate {
     expected_epoch: Option<i64>,
     targets: Vec<Target>,
 }
+impl Candidate {
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+}
 fn invalid(s: &str) -> crate::CollabError {
     StoreError::Invalid(s.into()).into()
 }
@@ -359,7 +364,7 @@ mod tests {
         assert_eq!(ok(&mut s, |tx| accept(tx, &old)), Accepted::Stale);
         assert_eq!(next(&mut s), Accepted::Clean);
         let b = budget::get(s.conn(), "w-a1").unwrap().unwrap();
-        assert_eq!(b.epoch, 2);
+        assert_eq!(b.epoch, 3);
         assert_eq!(b.streak, StopStreak::default());
         assert!(candidate(s.conn(), "w-a1", NOW).unwrap().is_none());
         seed(&mut s, "crew-b");
@@ -571,5 +576,60 @@ mod tests {
                 "{mode}"
             );
         }
+    }
+    #[test]
+    fn owner_progress_breaks_streak_but_never_refunds_total_rewake_budget() {
+        let mut s = store();
+        let p = seed(&mut s, "crew-a");
+        let tx = s.conn().unchecked_transaction().unwrap();
+        budget::save(
+            &tx,
+            "w-a1",
+            None,
+            &StopStreak {
+                unimproved: 3,
+                rewakes: 3,
+                escalated: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let report = |p: &crewd_proto::WorkPlan| WorkUpdateParams {
+            id: p.id.clone(),
+            expected_revision: p.revision.clone(),
+            status: Some(WorkUpdateStatus::Open),
+            note: Some("actual owner report".into()),
+            ..Default::default()
+        };
+        let p = ok(&mut s, |tx| {
+            work::update(tx, &Sender::Session("w-a1".into()), report(&p))
+        });
+        let b = budget::get(s.conn(), "w-a1").unwrap().unwrap();
+        assert_eq!(b.epoch, 2);
+        assert_eq!(b.streak.unimproved, 0);
+        assert_eq!(b.streak.rewakes, 3);
+        assert!(!b.streak.escalated);
+        let tx = s.conn().unchecked_transaction().unwrap();
+        budget::save(
+            &tx,
+            "w-a1",
+            Some(b.epoch),
+            &StopStreak {
+                unimproved: 3,
+                rewakes: 6,
+                escalated: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        ok(&mut s, |tx| {
+            work::update(tx, &Sender::Session("w-a1".into()), report(&p))
+        });
+        let b = budget::get(s.conn(), "w-a1").unwrap().unwrap();
+        assert_eq!(b.streak.rewakes, 6);
+        assert!(b.streak.escalated);
+        assert!(candidate(s.conn(), "w-a1", NOW).unwrap().is_none());
     }
 }

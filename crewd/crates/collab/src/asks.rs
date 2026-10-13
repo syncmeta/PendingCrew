@@ -153,6 +153,31 @@ pub fn with_book<R>(
         params![crew, serde_json::to_string(book.state())?, tx.now_ts()],
     )?;
     crewd_store::work_events::append(tx.conn(), crew, &events)?;
+    // Actual owner changes break the consecutive-no-improvement streak, but
+    // cannot reset the total rewake budget by repeatedly editing a note.
+    let owners: std::collections::BTreeSet<_> =
+        events.iter().filter_map(|e| e.by.session()).collect();
+    for owner in owners {
+        if book.state().items.iter().any(|(id, item)| {
+            item.owner.as_ref() == Some(owner) && before.items.get(id) != Some(item)
+        }) && let Some(mut budget) =
+            crewd_store::work_stop_checks::get(tx.conn(), owner.as_str())?
+        {
+            budget.streak.unimproved = 0;
+            budget.streak.escalated = budget.streak.rewakes >= Config::default().stop_rewake_budget;
+            if !crewd_store::work_stop_checks::save(
+                tx.conn(),
+                owner.as_str(),
+                Some(budget.epoch),
+                &budget.streak,
+            )? {
+                return Err(crewd_store::StoreError::Invalid(
+                    "owner progress stop budget changed inside transaction".into(),
+                )
+                .into());
+            }
+        }
+    }
     // Identity metadata commits with the authoritative state, never as a second
     // copy of status. Legacy local aliases remain valid during staged M4b cutover.
     for event in events {

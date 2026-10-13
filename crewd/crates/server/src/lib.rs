@@ -373,6 +373,7 @@ async fn serve_with_hooks_inner(
     let db = Db::spawn(Store::open_data_dir(&data_dir)?)?;
     let hooks = hooks.unwrap_or_else(|| orchestra::hooks::Hooks {
         extras: Arc::new(orchestra::work_context::WorkContext(db.clone())),
+        idle: Arc::new(orchestra::work_idle::WorkIdle(db.clone())),
         ..Default::default()
     });
     let backups = match crewd_store::backup::Ticker::start(

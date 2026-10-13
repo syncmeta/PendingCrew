@@ -912,10 +912,9 @@ impl<P: Port> Core<P> {
             return Ok(());
         };
         let current = !self.shutting_down
-            && self
-                .live
-                .get(session)
-                .is_some_and(|l| l.generator == generator && !l.stopping && !l.halting);
+            && self.live.get(session).is_some_and(|l| {
+                l.generator == generator && !l.working && !l.stopping && !l.halting
+            });
         if current && self.enqueue(w).await? {
             self.try_deliver(session).await?;
         }
@@ -3011,6 +3010,25 @@ mod tests {
             rig.port.wakes_of("w1")
         );
         assert_eq!(rig.exec.launches("w1").len(), 1, "停掉的没被拉起来");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_hook_answer_for_a_session_working_again_is_dropped() {
+        let mut rig = Rig::with(Hooks {
+            idle: Arc::new(SlowCheck),
+            ..Hooks::default()
+        })
+        .await;
+        crew_with(&mut rig, &["w1"], &["w1"]).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        rig.emit("w1", SessionEvent::Working(false)).await;
+        rig.emit("w1", SessionEvent::Working(true)).await;
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
+        rig.settle().await;
+        assert!(
+            rig.port.wakes_of("w1").is_empty(),
+            "slow idle result queued while working"
+        );
     }
 
     /// 同上，会话还在、还空着：回来的唤醒照常入队、投出去。

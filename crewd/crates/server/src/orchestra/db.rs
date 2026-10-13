@@ -370,6 +370,21 @@ impl Port for DbPort {
     }
 
     async fn enqueue(&self, w: NewWake) -> Result<Option<i64>> {
+        if w.kind == WakeKind::StopCheck && w.source == super::work_idle::CANDIDATE_SOURCE {
+            let candidate: crewd_collab::stop_checks::Candidate =
+                serde_json::from_str(w.note.as_deref().unwrap_or(""))?;
+            anyhow::ensure!(
+                candidate.session() == w.session,
+                "idle candidate session mismatch"
+            );
+            let result = self
+                .write(move |tx| crewd_collab::stop_checks::accept(tx, &candidate))
+                .await?;
+            return Ok(match result {
+                crewd_collab::stop_checks::Accepted::Rewake(id) => Some(id),
+                _ => None,
+            });
+        }
         let r = self
             .write(move |tx| {
                 cw::enqueue(
@@ -1544,13 +1559,22 @@ mod tests {
     }
 
     impl S46ActorDb {
-        async fn new(mut hooks: super::super::hooks::Hooks) -> Self {
+        async fn new(hooks: super::super::hooks::Hooks) -> Self {
+            Self::new_with_work_idle(hooks, false).await
+        }
+        async fn new_with_work_idle(
+            mut hooks: super::super::hooks::Hooks,
+            work_idle: bool,
+        ) -> Self {
             use super::super::{
                 clock::ManualClock,
                 exec::Executors,
                 testkit::{StandIn, StandInWorktrees},
             };
             let (state, port, dir) = seeded().await;
+            if work_idle {
+                hooks.idle = Arc::new(super::super::work_idle::WorkIdle(state.db.clone()));
+            }
             let rx = state.hub.subscribe_collab();
             let port = Arc::new(port);
             let exec = StandIn::default();
@@ -1821,6 +1845,81 @@ mod tests {
             1,
             "duplicate success must not schedule another model turn"
         );
+    }
+
+    #[tokio::test]
+    async fn work_idle_real_actor_accepts_budget_and_delivers_compact_stop_reminder() {
+        use super::super::{core::Origin, hooks::Hooks};
+        use crewd_exec::session::SessionEvent;
+        let rig = S46ActorDb::new_with_work_idle(Hooks::default(), true).await;
+        let observation = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            rig.handle.resume("w-1", Origin::Human).await.unwrap();
+            while !rig.handle.live("w-1").await.unwrap().running {
+                tokio::task::yield_now().await;
+            }
+            let p = rig
+                .state
+                .collab(|tx| {
+                    collab::work::create(
+                        tx,
+                        &collab::Sender::Human,
+                        crewd_proto::WorkCreateParams {
+                            crew_id: "c-1".into(),
+                            owner: Some("w-1".into()),
+                            title: "synthetic real idle edge".into(),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .await
+                .unwrap();
+            rig.exec.emit("w-1", SessionEvent::Working(true));
+            while !rig.handle.live("w-1").await.unwrap().working {
+                tokio::task::yield_now().await;
+            }
+            rig.exec.emit("w-1", SessionEvent::Working(false));
+            let row = loop {
+                rig.handle.latches().await.unwrap();
+                if let Some(r) = rig
+                    .port
+                    .read(|c| {
+                        Ok(cw::list(c, Some("w-1"), 100)?
+                            .into_iter()
+                            .find(|r| r.kind == cw::WakeKind::StopCheck))
+                    })
+                    .await
+                    .unwrap()
+                {
+                    break r;
+                }
+                tokio::task::yield_now().await;
+            };
+            rig.make_source_due(row.source.clone()).await;
+            let sent = rig.sent_containing(&p.id).await;
+            let budget = rig
+                .port
+                .read(|c| Ok(crewd_store::work_stop_checks::get(c, "w-1")?))
+                .await
+                .unwrap()
+                .unwrap();
+            let sends = rig.exec.sent("w-1");
+            (p, row, sent, budget, sends)
+        })
+        .await;
+        rig.close().await;
+        let (p, row, sent, budget, sends) = observation.expect("actual idle actor chain timed out");
+        assert!(sent, "accepted stop reminder did not reach dispatch");
+        assert_eq!(budget.epoch, 1);
+        assert_eq!(budget.streak.rewakes, 1);
+        assert!(row.source.starts_with("work-stop:"));
+        assert!(
+            !row.source
+                .starts_with(super::super::work_idle::CANDIDATE_SOURCE)
+        );
+        let sent: Vec<_> = sends.iter().filter(|s| s.contains(&p.id)).collect();
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0].contains("stopTargets"));
+        assert!(!sent[0].contains("expected_epoch"));
     }
 
     // Test-first: current wire/Port shape only. No proposed cursorUnknown field is needed.
