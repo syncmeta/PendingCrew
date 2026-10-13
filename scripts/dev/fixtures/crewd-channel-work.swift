@@ -19,6 +19,11 @@ func page(_ items:[CrewdValue],channel:String="group-a",links:String="1",source:
         await rejects{try await store.refresh()};await rejects{_ = try await store.changeLink(object:.object(["kind":.string("work"),"id":.string("W2")]),expectedRevision:"0",linked:true)}
         precondition(peer.calls.isEmpty,"cap absent must produce zero reads or writes")
         store.configureCapabilities(["channelWork"])
+        let hiddenStart=peer.calls.count
+        store.handleEvent("work.changed",.object(["crewId":.string("a")]))
+        try await Task.sleep(nanoseconds:250_000_000)
+        precondition(peer.calls.count == hiddenStart,"initial hidden group view must not issue an event refresh before any view activates")
+        store.setActive(true)
         peer.pages=[page([row("requirement","#1")],next:"opaque-next"),page([row("work","W2"),row("humanTask","H3")])]
         try await store.refresh();precondition(store.items.count == 3 && store.linkRevision == "1" && store.sourceRevision == "9")
         let authority=store.items
@@ -92,6 +97,18 @@ func page(_ items:[CrewdValue],channel:String="group-a",links:String="1",source:
         let confirmed=try await workStore.createRequirement(requestID:ra.requestID,text:ra.text,channel:ra.channel)
         precondition(confirmed["channelAssociation"]["linked"] == .bool(false) && workStore.requirements[CrewdWorkID("#11",kind:.requirement)!]!["channelAssociation"] == .null)
         precondition(transport.filter{$0.0 == "channel.workLink"}.isEmpty,"confirming a removed initial association must not cause a link request")
+        #if QA_ACTIVE_OWNER_CONTROLS
+        store.setActive(false);store.selectChannel(crew:"a",channel:"group-a")
+        let viewA=UUID(),viewB=UUID();store.setActive(true,owner:viewA);store.setActive(true,owner:viewB);store.setActive(false,owner:viewA)
+        peer.pages=[page([row("work","W2")])];let oneRemaining=peer.calls.count
+        store.handleEvent("work.changed",.object(["crewId":.string("a")]))
+        store.handleEvent("work.changed",.object(["crewId":.string("a")]))
+        try await Task.sleep(nanoseconds:250_000_000)
+        precondition(peer.calls.count == oneRemaining+1 && store.items.count == 1,"closing one of two visible owners retains one coalesced read for the remaining view")
+        store.setActive(false,owner:viewB);let allHidden=peer.calls.count
+        store.handleEvent("events.lagged",.object(["dropped":.integer(2)]));try await Task.sleep(nanoseconds:250_000_000)
+        precondition(peer.calls.count == allHidden,"all views hidden must issue zero event-driven reads")
+        #endif
         let beforeReconnect=peer.calls.count;store.invalidateConnection();await rejects{try await store.refresh()};precondition(peer.calls.count == beforeReconnect)
         print("PASS: channel projection full-page authority/two revision bounds/capability/scope+late-link/no replay and exact per-channel uncertain request payloads; offline only")
     }
