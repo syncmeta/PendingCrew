@@ -93,7 +93,7 @@ fn actual_owner_completion_releases_only_one_cross_crew_blocker_and_refreshes_ta
     let changes = done(&mut s, &b);
     let after = work::get(s.conn(), &a.id).unwrap();
     assert_eq!(after.status, "blocked");
-    assert_eq!(after.blocked_on, [h.clone()]);
+    assert_eq!(after.blocked_on.as_slice(), std::slice::from_ref(&h));
     assert!(changes.contains(&Change::WorkChanged {
         crew_id: "crew-a".into(),
         id: a.id.clone()
@@ -573,7 +573,7 @@ fn organization_default_batch_refusal_rolls_back_all_crews_and_success_keeps_eac
     }
     let before = authority::load(s.conn()).unwrap().unwrap();
     s.conn().execute_batch("CREATE TRIGGER injected_batch_default_failure BEFORE INSERT ON wakes WHEN NEW.kind='ask_answer' BEGIN SELECT RAISE(ABORT,'injected batch delivery failure'); END;").unwrap();
-    assert!(crate::run(&mut s, NOW + 60_000, |tx| asks::apply_all_due_defaults(tx)).is_err());
+    assert!(crate::run(&mut s, NOW + 60_000, asks::apply_all_due_defaults).is_err());
     assert_eq!(authority::load(s.conn()).unwrap().unwrap(), before);
     assert_eq!(
         s.conn()

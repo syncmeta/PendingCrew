@@ -511,6 +511,117 @@ pub fn bind_core(
     Ok(reference)
 }
 
+/// New source fact is registered in the same insert savepoint as the raw Todo.
+/// This stores lifecycle only in the sole authority; raw status is never copied.
+pub fn register_raw_entry(conn: &Connection, todo: &crewd_proto::Todo) -> Result<()> {
+    if todo.ledger != crewd_proto::Ledger::Agent {
+        return Ok(());
+    }
+    let active:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization_work_book')",[],|r|r.get(0))?;
+    if !active {
+        return Ok(());
+    } // pre-schema9 legacy import is reconciled by migration
+    transaction(conn)?;
+    let state =
+        load(conn)?.ok_or_else(|| invalid("raw requirement has no organization authority"))?;
+    let mut book =
+        WorkBook::restore(state, Config::default()).map_err(|v| invalid(v.to_string()))?;
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT core_id FROM object_refs WHERE raw_todo_id=?1 AND kind='requirement'",
+            [&todo.id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if existing.is_some() {
+        return Ok(());
+    }
+    let last = book.state().last_entry;
+    let core = crewd_work::EntryNo(
+        last.checked_add(1)
+            .ok_or_else(|| invalid("organization requirement identity range exhausted"))?,
+    );
+    let created = chrono::DateTime::parse_from_rfc3339(&todo.created_at)
+        .map_err(|_| invalid("raw requirement has invalid original time"))?
+        .timestamp_millis();
+    let made = book
+        .register_entry_in(
+            crewd_work::Ts(created),
+            core,
+            crewd_work::CrewId::new(&todo.crew_id),
+        )
+        .map_err(|r| invalid(r.to_string()))?;
+    let reference = crate::object_refs::bind(
+        conn,
+        ObjectKind::Requirement,
+        &todo.crew_id,
+        &format!("todo:{}", todo.id),
+        &todo.created_at,
+    )?;
+    conn.execute(
+        "UPDATE object_refs SET core_id=?1,raw_todo_id=?2 WHERE number=?3 AND core_id IS NULL",
+        params![core.to_string(), todo.id, reference.number],
+    )?;
+    save(conn, book.state(), &made.events, &todo.created_at)
+}
+
+/// This destructive operation is called only after the existing human purge
+/// preflight/snapshot and foreign-link guard, within the crew deletion transaction.
+/// Registry/todo rows already cascade with the real crew; other crew nodes remain.
+pub fn purge_crew_in_tx(conn: &Connection, crew: &str) -> Result<()> {
+    transaction(conn)?;
+    let mut state = load(conn)?.ok_or_else(|| invalid("purge has no organization authority"))?;
+    let org = state.organization.as_mut().expect("organization load");
+    let items: std::collections::BTreeSet<_> = org
+        .item_crews
+        .iter()
+        .filter(|(_, c)| c.as_str() == crew)
+        .map(|(id, _)| *id)
+        .collect();
+    let asks: std::collections::BTreeSet<_> = org
+        .ask_crews
+        .iter()
+        .filter(|(_, c)| c.as_str() == crew)
+        .map(|(id, _)| *id)
+        .collect();
+    let entries: std::collections::BTreeSet<_> = org
+        .entry_crews
+        .iter()
+        .filter(|(_, c)| c.as_str() == crew)
+        .map(|(id, _)| *id)
+        .collect();
+    org.item_crews.retain(|id, _| !items.contains(id));
+    org.ask_crews.retain(|id, _| !asks.contains(id));
+    org.entry_crews.retain(|id, _| !entries.contains(id));
+    state.items.retain(|id, _| !items.contains(id));
+    state.asks.retain(|id, _| !asks.contains(id));
+    state.entries.retain(|id, _| !entries.contains(id));
+    for streak in state.stop_streaks.values_mut() {
+        streak.last.retain(|v| !items.contains(&v.item));
+    }
+    let surviving_sessions: std::collections::BTreeSet<String> = {
+        let mut q = conn.prepare("SELECT id FROM sessions")?;
+        q.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    state
+        .stop_streaks
+        .retain(|sid, _| surviving_sessions.contains(sid.as_str()));
+    WorkBook::restore(state.clone(), Config::default())
+        .map_err(|v| invalid(format!("purge would break organization graph: {v}")))?;
+    verify_references(conn, &state)?;
+    conn.execute(
+        "UPDATE organization_work_book SET state=?1 WHERE singleton=1",
+        [serde_json::to_string(&state)?],
+    )?;
+    conn.execute(
+        "DELETE FROM organization_work_events WHERE crew_id=?1",
+        [crew],
+    )?;
+    conn.execute("DELETE FROM legacy_work_sequences WHERE crew_id=?1", [crew])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1002,115 +1113,4 @@ mod tests {
             1
         );
     }
-}
-
-/// New source fact is registered in the same insert savepoint as the raw Todo.
-/// This stores lifecycle only in the sole authority; raw status is never copied.
-pub fn register_raw_entry(conn: &Connection, todo: &crewd_proto::Todo) -> Result<()> {
-    if todo.ledger != crewd_proto::Ledger::Agent {
-        return Ok(());
-    }
-    let active:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization_work_book')",[],|r|r.get(0))?;
-    if !active {
-        return Ok(());
-    } // pre-schema9 legacy import is reconciled by migration
-    transaction(conn)?;
-    let state =
-        load(conn)?.ok_or_else(|| invalid("raw requirement has no organization authority"))?;
-    let mut book =
-        WorkBook::restore(state, Config::default()).map_err(|v| invalid(v.to_string()))?;
-    let existing: Option<String> = conn
-        .query_row(
-            "SELECT core_id FROM object_refs WHERE raw_todo_id=?1 AND kind='requirement'",
-            [&todo.id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if existing.is_some() {
-        return Ok(());
-    }
-    let last = book.state().last_entry;
-    let core = crewd_work::EntryNo(
-        last.checked_add(1)
-            .ok_or_else(|| invalid("organization requirement identity range exhausted"))?,
-    );
-    let created = chrono::DateTime::parse_from_rfc3339(&todo.created_at)
-        .map_err(|_| invalid("raw requirement has invalid original time"))?
-        .timestamp_millis();
-    let made = book
-        .register_entry_in(
-            crewd_work::Ts(created),
-            core,
-            crewd_work::CrewId::new(&todo.crew_id),
-        )
-        .map_err(|r| invalid(r.to_string()))?;
-    let reference = crate::object_refs::bind(
-        conn,
-        ObjectKind::Requirement,
-        &todo.crew_id,
-        &format!("todo:{}", todo.id),
-        &todo.created_at,
-    )?;
-    conn.execute(
-        "UPDATE object_refs SET core_id=?1,raw_todo_id=?2 WHERE number=?3 AND core_id IS NULL",
-        params![core.to_string(), todo.id, reference.number],
-    )?;
-    save(conn, book.state(), &made.events, &todo.created_at)
-}
-
-/// This destructive operation is called only after the existing human purge
-/// preflight/snapshot and foreign-link guard, within the crew deletion transaction.
-/// Registry/todo rows already cascade with the real crew; other crew nodes remain.
-pub fn purge_crew_in_tx(conn: &Connection, crew: &str) -> Result<()> {
-    transaction(conn)?;
-    let mut state = load(conn)?.ok_or_else(|| invalid("purge has no organization authority"))?;
-    let org = state.organization.as_mut().expect("organization load");
-    let items: std::collections::BTreeSet<_> = org
-        .item_crews
-        .iter()
-        .filter(|(_, c)| c.as_str() == crew)
-        .map(|(id, _)| *id)
-        .collect();
-    let asks: std::collections::BTreeSet<_> = org
-        .ask_crews
-        .iter()
-        .filter(|(_, c)| c.as_str() == crew)
-        .map(|(id, _)| *id)
-        .collect();
-    let entries: std::collections::BTreeSet<_> = org
-        .entry_crews
-        .iter()
-        .filter(|(_, c)| c.as_str() == crew)
-        .map(|(id, _)| *id)
-        .collect();
-    org.item_crews.retain(|id, _| !items.contains(id));
-    org.ask_crews.retain(|id, _| !asks.contains(id));
-    org.entry_crews.retain(|id, _| !entries.contains(id));
-    state.items.retain(|id, _| !items.contains(id));
-    state.asks.retain(|id, _| !asks.contains(id));
-    state.entries.retain(|id, _| !entries.contains(id));
-    for streak in state.stop_streaks.values_mut() {
-        streak.last.retain(|v| !items.contains(&v.item));
-    }
-    let surviving_sessions: std::collections::BTreeSet<String> = {
-        let mut q = conn.prepare("SELECT id FROM sessions")?;
-        q.query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?
-    };
-    state
-        .stop_streaks
-        .retain(|sid, _| surviving_sessions.contains(sid.as_str()));
-    WorkBook::restore(state.clone(), Config::default())
-        .map_err(|v| invalid(format!("purge would break organization graph: {v}")))?;
-    verify_references(conn, &state)?;
-    conn.execute(
-        "UPDATE organization_work_book SET state=?1 WHERE singleton=1",
-        [serde_json::to_string(&state)?],
-    )?;
-    conn.execute(
-        "DELETE FROM organization_work_events WHERE crew_id=?1",
-        [crew],
-    )?;
-    conn.execute("DELETE FROM legacy_work_sequences WHERE crew_id=?1", [crew])?;
-    Ok(())
 }
