@@ -1545,3 +1545,183 @@ async fn s44_actual_member_join_preserves_held_frontier_and_pins_new_member() {
         "late receipt confirms captured prefix, not the newer suffix"
     );
 }
+
+#[tokio::test]
+async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
+    use crewd_collab::{Sender, checkpoints, stop_checks, wakes, work};
+    use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
+    for mode in ["stop", "checkpoint", "dependency"] {
+        let rig = Rig::new().await;
+        rig.working(true).await;
+        let crew = rig.f.crew.clone();
+        let owner = rig.worker.clone();
+        let p = rig
+            .f
+            .state
+            .collab(move |tx| {
+                let parent = if mode == "dependency" {
+                    Some(work::create(
+                        tx,
+                        &Sender::Human,
+                        WorkCreateParams {
+                            crew_id: crew.clone(),
+                            title: "synthetic dependency".into(),
+                            owner: Some(owner.clone()),
+                            ..Default::default()
+                        },
+                    )?)
+                } else {
+                    None
+                };
+                let p = work::create(
+                    tx,
+                    &Sender::Human,
+                    WorkCreateParams {
+                        crew_id: crew,
+                        title: "synthetic rendered work race".into(),
+                        owner: Some(owner.clone()),
+                        depends_on: parent
+                            .as_ref()
+                            .map(|p| vec![p.id.clone()])
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    },
+                )?;
+                if let Some(parent) = parent {
+                    work::update(
+                        tx,
+                        &Sender::Session(owner.clone()),
+                        WorkUpdateParams {
+                            id: parent.id,
+                            expected_revision: parent.revision,
+                            status: Some(WorkUpdateStatus::Done),
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                if mode == "checkpoint" {
+                    work::update(
+                        tx,
+                        &Sender::Session(owner),
+                        WorkUpdateParams {
+                            id: p.id,
+                            expected_revision: p.revision,
+                            status: Some(WorkUpdateStatus::Active),
+                            next_check_at: Some(crewd_store::ts_from_ms(tx.now_ms() + 1)),
+                            note: Some("synthetic next step".into()),
+                            ..Default::default()
+                        },
+                    )
+                } else {
+                    Ok(p)
+                }
+            })
+            .await
+            .unwrap();
+        if mode == "stop" {
+            let owner = rig.worker.clone();
+            rig.f
+                .state
+                .collab(move |tx| {
+                    let c = stop_checks::candidate(tx.conn(), &owner, tx.now_ms())?
+                        .expect("live open work candidate");
+                    stop_checks::accept(tx, &c)
+                })
+                .await
+                .unwrap();
+        } else if mode == "checkpoint" {
+            let due = p.next_check_at.as_deref().unwrap();
+            timeout(LIMIT, async {
+                while crewd_store::now_ts().as_str() < due {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            rig.f.state.collab(checkpoints::enqueue_due).await.unwrap();
+        }
+        let owner = rig.worker.clone();
+        let row = rig
+            .f
+            .state
+            .db
+            .call_result(move |s| {
+                Ok::<_, crewd_collab::CollabError>(
+                    wakes::list(s.conn(), Some(&owner), 100)?
+                        .into_iter()
+                        .find(|r| {
+                            r.source.starts_with("work-stop:")
+                                || r.source.starts_with("work-check:")
+                                || r.source.starts_with("work-done:")
+                        })
+                        .expect("durable work reminder"),
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let mut gate = rig.f.caller_gate(&rig.worker, CallerStage::WakeRendered);
+        rig.fake.emit(&rig.worker, SessionEvent::Working(false));
+        let rendered = timeout(LIMIT, gate.entered()).await.unwrap();
+        let id = p.id.clone();
+        let rev = p.revision.clone();
+        rig.f
+            .state
+            .collab(move |tx| {
+                work::update(
+                    tx,
+                    &Sender::Human,
+                    WorkUpdateParams {
+                        id,
+                        expected_revision: rev,
+                        status: Some(WorkUpdateStatus::Done),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .unwrap();
+        gate.release();
+        let id = row.id;
+        let settled = timeout(LIMIT, async {
+            loop {
+                let rows = rig
+                    .f
+                    .state
+                    .db
+                    .call_result(move |s| wakes::by_ids(s.conn(), &[id]))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if matches!(
+                    rows[0].state,
+                    wakes::WakeState::Dropped | wakes::WakeState::Inflight
+                ) {
+                    break rows[0].clone();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        rig.h.latches().await.unwrap();
+        let sent = rig.fake.sent(&rig.worker);
+        let launches = rig.fake.launches(&rig.worker).len();
+        rig.close().await;
+        assert!(
+            rendered.text.contains(&p.id),
+            "{mode}: actual renderer did not capture work body"
+        );
+        let settled = settled.expect("obsolete work reminder not settled");
+        assert_eq!(
+            settled.state,
+            wakes::WakeState::Dropped,
+            "{mode}: obsolete body entered inflight"
+        );
+        assert_eq!(settled.attempts, 0, "{mode}: obsolete body was claimed");
+        assert!(
+            !sent.iter().any(|s| s.contains(&p.id)),
+            "{mode}: obsolete body reached executor"
+        );
+        assert_eq!(launches, 1, "{mode}: stale body triggered another launch");
+    }
+}
