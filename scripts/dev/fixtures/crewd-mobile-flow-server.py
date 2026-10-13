@@ -26,7 +26,11 @@ with conn,conn.makefile('rb') as file:
    crew=p['crewId'];v=[member(crew,(fresh if (root/'fresh-directory').exists() else old) if crew==a else bid)] if crew in (a,b) else []
    if crew==a and (root/'hold-directory').exists() and not (root/'held-directory').exists():
     (root/'held-directory').touch();threading.Thread(target=held,args=('directory',q,v),daemon=True).start();continue
-  elif m in ('channel.list','message.list','ask.list','todo.list'):v=[]
+  elif m=='channel.list':v=[{'id':'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','crewId':a,'kind':'topic','name':'Synthetic message channel','members':[]}] if (root/'qa-mode').read_text().strip()=='unknown-message' else []
+  elif m=='message.post':
+   assert p['text']=='original message text before actual EOF',q
+   (root/'received-message.json').write_text(json.dumps(q));conn.shutdown(socket.SHUT_RDWR);break
+  elif m in ('message.list','ask.list','todo.list'):v=[]
   elif m=='work.list':v={'items':[]}
   elif m=='restart.pending':v=None
   elif m=='session.inspect':v={'id':p['sessionId'],'screen':'synthetic','runnerItems':[]}

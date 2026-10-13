@@ -21,6 +21,33 @@ import Foundation
    precondition(workspace.crews.first?["title"] == .string("fresh A"));try signal("release-crews")
    var rejected=false;do{try await old.value}catch{rejected=true}
    precondition(rejected && workspace.crews.first?["title"] == .string("fresh A"),"older crew directory must not overwrite normal refresh's newer facts")
+  case "unknown-message":
+   workspace.selectChannel("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+   precondition(!workspace.channelID.isEmpty)
+   let context=CrewdDrafts.Context.message(crew:a,channel:workspace.channelID,session:workspace.sessionID)
+   workspace.messageDrafts.set("original message text before actual EOF",for:context)
+   let snapshot=workspace.messageDrafts.snapshot(for:context),params=CrewdValue.object(["channelId":.string(context.channel),"text":.string(snapshot.text),"mentions":.array([])])
+   #if QA_TEXT_SUBMISSION
+   let accepted=await workspace.performText("message.post",params,snapshot:snapshot)
+   #else
+   let accepted=await workspace.perform("message.post",params)
+   #endif
+   precondition(!accepted && !workspace.client.connected,"actual EOF must not manufacture success")
+   workspace.messageDrafts.set("newer edited message text",for:context)
+   #if QA_TEXT_SUBMISSION
+   let retained=workspace.uncertainTextSnapshots
+   precondition(workspace.uncertainTextSubmissions.contains{$0.method=="message.post" && $0.params==params && $0.snapshot==snapshot},"unknown submission must retain the complete actual method/params/snapshot")
+   #else
+   // Observe real old stored snapshot arrays; never insert a made-up fallback.
+   func snapshots(_ value:Any,_ depth:Int)->[CrewdDrafts.Snapshot] {
+    if let values=value as? [CrewdDrafts.Snapshot] {return values}
+    guard depth<10 else{return []}
+    return Mirror(reflecting:value).children.flatMap{snapshots($0.value,depth+1)}
+   }
+   let retained=Mirror(reflecting:workspace).children.filter{($0.label ?? "").contains("uncertain")}.flatMap{snapshots($0.value,0)}
+   #endif
+   precondition(retained.contains{$0.context==context && $0.text==snapshot.text},"old complete unknown message text was lost after editing the newer draft")
+   precondition(workspace.messageDrafts.text(for:context)=="newer edited message text")
   case "late-start":
    let context=CrewdDrafts.Context.initialTask(crew:a,session:workspace.sessionID);workspace.messageDrafts.set("held-start",for:context);let snapshot=workspace.messageDrafts.snapshot(for:context)
    let call=Task {try await workspace.performValue("session.start",.object(["crewId":.string(a),"role":.string("captain"),"executor":.string("codex"),"brief":.string(snapshot.text),"isolation":.bool(true)]))};try await wait("held-start")

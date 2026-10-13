@@ -10,10 +10,13 @@ cp "$root/scripts/dev/fixtures/crewd-mobile-flow.swift" "$evidence/fixture.swift
 cp "$root/scripts/dev/fixtures/crewd-mobile-flow-server.py" "$evidence/server.py"
 find "$evidence/source" -type f -exec shasum -a 256 {} \; > "$evidence/source-sha256.txt"
 shasum -a 256 "$evidence/fixture.swift" "$evidence/server.py" >> "$evidence/source-sha256.txt"
-xcrun swiftc -module-cache-path "$evidence/cache" -parse-as-library "$evidence/source"/Sources/Mac/Crewd/*.swift "$evidence/source/Sources/Mac/Design/CrewColorHash.swift" "$evidence/fixture.swift" -o "$evidence/test"
+textflag=
+[ "${PENDINGCREW_QA_GREEN_TEXT:-0}" = 1 ] && textflag="-D QA_TEXT_SUBMISSION"
+xcrun swiftc $textflag -module-cache-path "$evidence/cache" -parse-as-library "$evidence/source"/Sources/Mac/Crewd/*.swift "$evidence/source/Sources/Mac/Design/CrewColorHash.swift" "$evidence/fixture.swift" -o "$evidence/test"
 failed=0
 for mode in ${PENDINGCREW_QA_MODES:-late-directory same-crew-directory sync-directory sync-crews late-start late-create unknown}; do
  mkdir "$evidence/$mode"
+ printf '%s\n' "$mode" > "$evidence/$mode/qa-mode"
  python3 "$evidence/server.py" "$evidence/$mode" > "$evidence/$mode/server.log" 2>&1 &
  server=$!
  trap 'kill "$server" 2>/dev/null || true' EXIT

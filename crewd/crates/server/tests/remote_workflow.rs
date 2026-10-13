@@ -484,3 +484,294 @@ async fn attached_agent_cannot_use_local_remote_administration_as_human() {
     stop.send(()).unwrap();
     tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires explicit frozen fake executor/helper paths; no real executor fallback"]
+async fn paired_remote_keeps_high_level_fake_session_approval_stop_and_resume_flow() {
+    use crewd_server::{OrchestraServe, ServeOptions};
+    let fake = std::path::PathBuf::from(
+        std::env::var("PENDINGCREW_QA_FAKE_CODEX_PROGRAM")
+            .expect("explicit synthetic executor required"),
+    );
+    let helper = std::path::PathBuf::from(
+        std::env::var("PENDINGCREW_QA_HELPER_PROGRAM").expect("explicit frozen helper required"),
+    );
+    assert!(fake.is_absolute() && helper.is_absolute());
+    let measured = std::process::Command::new("/usr/bin/shasum")
+        .args(["-a", "256"])
+        .arg(&fake)
+        .output()
+        .unwrap();
+    assert!(measured.status.success());
+    assert_eq!(
+        String::from_utf8(measured.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap(),
+        std::env::var("PENDINGCREW_QA_FAKE_CODEX_SHA256")
+            .expect("verified synthetic digest required")
+    );
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Remote high-level fake evidence: {}", root.display());
+    std::fs::create_dir(root.join("home")).unwrap();
+    std::fs::create_dir(root.join("work")).unwrap();
+    let mut orchestra = OrchestraServe::default();
+    orchestra.codex = crewd_server::orchestra::exec_codex::CodexProgram::Path(fake);
+    orchestra.claude =
+        crewd_server::orchestra::exec_claude::ClaudeProgram::Path("/usr/bin/false".into());
+    orchestra.helper = Some(helper);
+    orchestra.codex_env = std::collections::BTreeMap::from([
+        (
+            "HOME".into(),
+            root.join("home").to_string_lossy().into_owned(),
+        ),
+        ("SHELL".into(), "/usr/bin/false".into()),
+        ("FAKE_CODEX_MODE".into(), "human_requests".into()),
+        (
+            "FAKE_CODEX_LOG".into(),
+            root.join("fake-requests.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    ]);
+    let options = ServeOptions {
+        orchestra: Some(orchestra),
+        ..Default::default()
+    };
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server_root = root.clone();
+    let task = tokio::spawn(async move {
+        crewd_server::serve_with(server_root, options, async {
+            let _ = stopping.await;
+        })
+        .await
+    });
+    for _ in 0..400 {
+        if root.join("crewd.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut owner = RpcClient::connect(&root.join("crewd.sock")).await;
+    let (port, identity) = enabled(&mut owner).await;
+    let (client, _, _) = approved(&mut owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &client, &identity.spki_sha256).await;
+    remote.call("system.hello", json!({})).await;
+    let crew = remote.call("crew.create",json!({"title":"Remote fake session crew","workingDirectory":root.join("work").to_str().unwrap()})).await;
+    let session = remote.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"REMOTE_FAKE_ONLY_APPROVAL_TASK","isolation":false})).await;
+    let id = session["id"].as_str().unwrap();
+    async fn request(remote: &mut RemoteRpc, id: &str, method: &str) -> Value {
+        let until = tokio::time::Instant::now() + LIMIT;
+        loop {
+            let view = remote
+                .call("session.inspect", json!({"sessionId":id}))
+                .await;
+            if view["runnerRequest"]["method"] == method {
+                return view["runnerRequest"].clone();
+            }
+            assert!(
+                tokio::time::Instant::now() < until,
+                "actual fake runner request {method} missing"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+    let approval = request(&mut remote, id, "item/commandExecution/requestApproval").await;
+    assert_eq!(
+        remote
+            .call(
+                "session.answer",
+                json!({"sessionId":id,"fingerprint":approval["fingerprint"],"choice":0})
+            )
+            .await["cleared"],
+        true
+    );
+    let question = request(&mut remote, id, "item/tool/requestUserInput").await;
+    assert_eq!(remote.call("session.respondRunnerRequest",json!({"sessionId":id,"fingerprint":question["fingerprint"],"response":{"answers":{"task":{"answers":["SYNTHETIC_TASK"]}}}})).await["cleared"],true);
+    remote
+        .call(
+            "session.stop",
+            json!({"sessionId":id,"reason":"Synthetic remote stop acceptance"}),
+        )
+        .await;
+    let until = tokio::time::Instant::now() + LIMIT;
+    loop {
+        let view = remote
+            .call("session.inspect", json!({"sessionId":id}))
+            .await;
+        if view["live"]["running"] == false {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < until,
+            "actual stopped fake session still running"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    remote.call("session.resume", json!({"sessionId":id})).await;
+    let until = tokio::time::Instant::now() + LIMIT;
+    loop {
+        let view = remote
+            .call("session.inspect", json!({"sessionId":id}))
+            .await;
+        if view["live"]["running"] == true {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < until,
+            "actual fake session failed resume"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    remote
+        .call(
+            "session.stop",
+            json!({"sessionId":id,"reason":"Synthetic remote stop acceptance"}),
+        )
+        .await;
+    drop(remote);
+    drop(owner);
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        std::fs::read_to_string(root.join("fake-requests.jsonl"))
+            .unwrap()
+            .contains("REMOTE_FAKE_ONLY_APPROVAL_TASK")
+    );
+}
+
+#[tokio::test]
+async fn admitted_tls_write_without_consuming_receipt_survives_revoke_without_grant_revival() {
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Remote admitted-write evidence: {}", root.display());
+    let mut running = service(&root).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (client, original_accept, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &client, &identity.spki_sha256).await;
+    remote.call("system.hello", json!({})).await;
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({"title":"Unknown admitted TLS write"}),
+    )
+    .await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let params = json!({"requestId":request_id,"crewId":crew["id"],"text":"TLS write committed but no receipt consumed"});
+    let mut wire =
+        serde_json::to_vec(&json!({"id":remote.next,"method":"todo.create","params":params}))
+            .unwrap();
+    wire.push(b'\n');
+    // Actual TLS request transmission. Deliberately never read its response;
+    // the caller remains uncertain even if the server has already buffered it.
+    remote.io.get_mut().write_all(&wire).await.unwrap();
+    let until = tokio::time::Instant::now() + LIMIT;
+    let committed = loop {
+        let rows = local(
+            &mut running.owner,
+            "todo.list",
+            json!({"crewId":crew["id"]}),
+        )
+        .await;
+        let items = rows.as_array().expect("real TodoList is an array");
+        if let Some(item) = items.iter().find(|item| item["text"] == params["text"]) {
+            assert_eq!(
+                items.len(),
+                1,
+                "one transmitted create must create exactly one fact"
+            );
+            break item.clone();
+        }
+        assert!(
+            tokio::time::Instant::now() < until,
+            "actual TLS write never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    local(&mut running.owner, "remote.revoke", json!({"grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"Revoke while caller has not consumed receipt"})).await;
+    drop(remote);
+    let current = local(
+        &mut running.owner,
+        "todo.get",
+        json!({"id":committed["requirementId"]}),
+    )
+    .await;
+    assert_eq!(
+        current["text"], params["text"],
+        "revocation cannot erase an admitted committed write"
+    );
+    let confirmation: RemoteAcceptResult =
+        serde_json::from_value(local(&mut running.owner, "remote.accept", original_accept).await)
+            .unwrap();
+    assert!(
+        confirmation.reused && confirmation.grant.revoked_at.is_some(),
+        "old accept UUID must return current revoked tombstone"
+    );
+    let rows = local(
+        &mut running.owner,
+        "todo.list",
+        json!({"crewId":crew["id"]}),
+    )
+    .await;
+    assert_eq!(
+        rows.as_array().unwrap().len(),
+        1,
+        "read-only confirmation must not replay the write"
+    );
+    stopped(running).await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit frozen native Swift QA executable; memory vault only"]
+async fn native_apple_pairing_tls_work_event_and_revoke() {
+    let program = std::path::PathBuf::from(
+        std::env::var("PENDINGCREW_QA_NATIVE_PROGRAM")
+            .expect("explicit compiled native QA executable required"),
+    );
+    assert!(program.is_absolute());
+    let measured = std::process::Command::new("/usr/bin/shasum")
+        .args(["-a", "256"])
+        .arg(&program)
+        .output()
+        .unwrap();
+    assert!(measured.status.success());
+    assert_eq!(
+        String::from_utf8(measured.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap(),
+        std::env::var("PENDINGCREW_QA_NATIVE_SHA256")
+            .expect("native QA executable digest required")
+    );
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Native remote service evidence: {}", root.display());
+    let mut running = service(&root).await;
+    let _ = enabled(&mut running.owner).await;
+    let output = tokio::time::timeout(
+        Duration::from_secs(40),
+        tokio::process::Command::new(program)
+            .arg(&root)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("native loopback flow exceeded fixed deadline")
+    .unwrap();
+    std::fs::write(root.join("native-stdout.log"), &output.stdout).unwrap();
+    std::fs::write(root.join("native-stderr.log"), &output.stderr).unwrap();
+    assert!(
+        output.status.success(),
+        "native producer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("native-result.txt")).unwrap(),
+        "Native production pairing + Network TLS13 + Core work + event + revoke PASS\n"
+    );
+    stopped(running).await;
+}
