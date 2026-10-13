@@ -345,7 +345,7 @@ fn wake_asker(tx: &mut Tx<'_>, crew: &str, a: &Ask) -> Result<()> {
     Ok(())
 }
 
-/// 一条问被答 / 按默认办之后的收尾（`answer` 与 `apply_due_defaults` 共用）：直接开的问叫醒提问者；
+/// 一条问被答 / 按默认办之后的收尾（`answer` 与 `apply_due_defaults` 共用）：同事务叫醒受影响负责人，直接开的问也叫醒提问者；
 /// 记 `AskChanged` 与 `AskAnswered`（`cleared` = 账本事件里每条 `BlockerCleared` 的 (项, 负责人)，裁定 17）。
 fn closed(
     tx: &mut Tx<'_>,
@@ -364,6 +364,15 @@ fn closed(
         })
         .collect();
     let a = get(tx.conn(), crew, &h.to_string())?;
+    crate::work::wake_cleared(
+        tx,
+        crew,
+        events,
+        &[],
+        WakeKind::AskAnswer,
+        WakePriority::Human,
+        &wakes::source::ask(crew, &a.ask),
+    )?;
     if standalone {
         wake_asker(tx, crew, &a)?;
     }
@@ -1451,6 +1460,119 @@ mod tests {
                     .unwrap(),
                 0
             );
+        }
+    }
+    fn shared_blocked_work(s: &mut crewd_store::Store) -> (String, Vec<String>) {
+        let a = ok(s, |tx| open(tx, "w-a1", q("synthetic shared blocker")));
+        ok(s, |tx| {
+            with_book(tx, "crew-a", |b, now| {
+                for owner in ["w-a1", "w-a1", "w-a2", "w-b1"] {
+                    let w = b
+                        .create_item(
+                            &Actor::Human,
+                            now,
+                            crewd_work::NewItem::titled("shared task").owned_by(owner),
+                        )?
+                        .value;
+                    b.block(
+                        &Actor::Human,
+                        now,
+                        w,
+                        vec![crewd_work::BlockOn::Ask(a.ask.parse().unwrap())],
+                        crewd_work::Continuation::Nothing,
+                    )?;
+                }
+                Ok(())
+            })
+        });
+        let ids = crate::work::list(
+            s.conn(),
+            crewd_proto::WorkListParams {
+                crew_id: Some("crew-a".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+        (a.ask, ids)
+    }
+    #[test]
+    fn answer_durably_wakes_every_owner_once_without_an_observer() {
+        let mut s = store();
+        let (ask, ids) = shared_blocked_work(&mut s);
+        ok(&mut s, |tx| answer(tx, "crew-a", &ask, "synthetic answer"));
+        let rows = wakes::list(s.conn(), None, 20).unwrap();
+        assert_eq!(
+            rows.len(),
+            3,
+            "two released tasks and original asker share one wake"
+        );
+        for (owner, expected) in [
+            ("w-a1", ids[..2].to_vec()),
+            ("w-a2", vec![ids[2].clone()]),
+            ("w-b1", vec![ids[3].clone()]),
+        ] {
+            let row = rows.iter().find(|r| r.session == owner).unwrap();
+            assert_eq!(row.kind, WakeKind::AskAnswer);
+            assert_eq!(row.priority, WakePriority::Human);
+            assert_eq!(row.source, wakes::source::ask("crew-a", &ask));
+            let note: serde_json::Value = serde_json::from_str(row.note.as_ref().unwrap()).unwrap();
+            assert_eq!(note["unblockedWork"], serde_json::json!(expected));
+            assert_eq!(row.state, wakes::WakeState::Pending);
+        }
+        for id in ids {
+            assert_eq!(crate::work::get(s.conn(), &id).unwrap().status, "active");
+        }
+        err(&mut s, |tx| answer(tx, "crew-a", &ask, "repeat"));
+        assert_eq!(wakes::list(s.conn(), None, 20).unwrap().len(), 3);
+    }
+    #[test]
+    fn wake_write_failure_rolls_back_answer_released_work_and_events() {
+        let mut s = store();
+        let (ask, ids) = shared_blocked_work(&mut s);
+        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_unblock_wake BEFORE INSERT ON wakes WHEN NEW.session_id='w-a2' BEGIN SELECT RAISE(ABORT,'synthetic unblock wake fault'); END;").unwrap();
+        err(&mut s, |tx| answer(tx, "crew-a", &ask, "synthetic answer"));
+        assert_eq!(
+            get(s.conn(), "crew-a", &ask).unwrap().state,
+            AskStateView::Open
+        );
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            before
+        );
+        assert!(wakes::list(s.conn(), None, 20).unwrap().is_empty());
+        for id in ids {
+            assert_eq!(crate::work::get(s.conn(), &id).unwrap().status, "blocked");
+        }
+        s.conn()
+            .execute_batch("DROP TRIGGER reject_unblock_wake")
+            .unwrap();
+        ok(&mut s, |tx| answer(tx, "crew-a", &ask, "retry"));
+        assert_eq!(wakes::list(s.conn(), None, 20).unwrap().len(), 3);
+    }
+    #[test]
+    fn archived_and_purged_owner_targets_do_not_abort_a_human_answer() {
+        for purge in [false, true] {
+            let mut s = store();
+            let (ask, _) = shared_blocked_work(&mut s);
+            if purge {
+                s.conn()
+                    .execute("DELETE FROM sessions WHERE id='w-b1'", [])
+                    .unwrap();
+            } else {
+                ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+            }
+            ok(&mut s, |tx| answer(tx, "crew-a", &ask, "synthetic answer"));
+            assert_eq!(
+                get(s.conn(), "crew-a", &ask).unwrap().state,
+                AskStateView::Answered
+            );
+            assert!(wakes::list(s.conn(), Some("w-b1"), 20).unwrap().is_empty());
+            assert_eq!(wakes::list(s.conn(), None, 20).unwrap().len(), 2);
         }
     }
 }

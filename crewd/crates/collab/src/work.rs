@@ -103,6 +103,61 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
         updated_at: crewd_store::ts_from_ms(item.updated_at.0),
     })
 }
+/// Commit follow-up with the state change, so a dropped observer cannot strand owners.
+/// One trigger/owner produces one durable wake, even when many items are released.
+pub(crate) fn wake_cleared(
+    tx: &mut crate::Tx<'_>,
+    crew: &str,
+    events: &[crewd_work::Event],
+    ready: &[(crewd_work::WorkId, crewd_work::SessionId)],
+    kind: crate::wakes::WakeKind,
+    priority: crate::wakes::WakePriority,
+    source: &str,
+) -> Result<()> {
+    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for event in events {
+        if let crewd_work::EventKind::BlockerCleared {
+            id,
+            owner: Some(owner),
+            ..
+        } = &event.kind
+        {
+            let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
+            owners.entry(owner.to_string()).or_default().push(id);
+        }
+    }
+    for (id, owner) in ready {
+        let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
+        owners.entry(owner.to_string()).or_default().push(id);
+    }
+    for (owner, mut ids) in owners {
+        // Purged owners have no runnable target. Preserve the answer and ledger;
+        // ownership repair belongs to patrol, not to the answering transaction.
+        if crewd_store::sessions::get(tx.conn(), &owner)?.is_none() {
+            continue;
+        }
+        ids.sort();
+        ids.dedup();
+        let total = ids.len();
+        ids.truncate(50);
+        let note =
+            serde_json::json!({"unblockedWork":ids,"total":total,"partial":total>50}).to_string();
+        crate::wakes::enqueue(
+            tx,
+            crate::wakes::WakeRequest {
+                session: owner,
+                kind,
+                source: source.into(),
+                priority,
+                not_before_ms: None,
+                note: Some(note),
+                origin: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// All organization objects remain readable, including removed crews.
 pub fn get(conn: &Connection, id: &str) -> Result<WorkPlan> {
     let r = object_refs::get(conn, ObjectKind::Plan, number(id)?)?
@@ -311,7 +366,7 @@ pub fn update(
             Refusal::new(Code::WorkRevisionConflict).arg("id", &p.id),
         ));
     }
-    asks::with_book(tx, &r.crew_id, |b, now| {
+    let (released, ready) = asks::with_book(tx, &r.crew_id, |b, now| {
         if !done || p.note.is_some() {
             b.report(
                 &actor,
@@ -329,10 +384,48 @@ pub fn update(
             )?;
         }
         if done {
-            b.mark_done(&actor, now, local, evidence)?;
+            // Plain dependency edges can become ready without an explicit BlockOn.
+            // Compare real before/after state, rather than inventing ledger events.
+            let candidates: Vec<_> = b
+                .state()
+                .items
+                .values()
+                .filter(|i| {
+                    matches!(i.status, Status::Open | Status::Active)
+                        && i.depends_on.contains(&local)
+                        && !i
+                            .depends_on
+                            .iter()
+                            .all(|d| b.state().items[d].status == Status::Done)
+                })
+                .map(|i| i.id)
+                .collect();
+            let ap = b.mark_done(&actor, now, local, evidence)?;
+            let ready = candidates
+                .into_iter()
+                .filter_map(|id| {
+                    let i = &b.state().items[&id];
+                    (i.blocked_on.is_empty()
+                        && i.depends_on
+                            .iter()
+                            .all(|d| b.state().items[d].status == Status::Done))
+                    .then(|| i.owner.clone().map(|owner| (id, owner)))
+                    .flatten()
+                })
+                .collect();
+            return Ok((ap.events, ready));
         }
-        Ok(())
+        Ok((Vec::new(), Vec::new()))
     })?;
+    wake_cleared(
+        tx,
+        &r.crew_id,
+        &released,
+        &ready,
+        crate::wakes::WakeKind::System,
+        crate::wakes::WakePriority::System,
+        &format!("work-done:{}:{}", p.id, p.expected_revision),
+    )?;
     changed(tx, by, &r.crew_id, &p.id)?;
     get(tx.conn(), &p.id)
 }
@@ -722,5 +815,92 @@ mod action_tests {
         let mut expected = p;
         expected.frozen = true;
         assert_eq!(get(s.conn(), &expected.id).unwrap(), expected);
+    }
+    #[test]
+    fn completion_wakes_blocked_owners_and_queue_failure_is_atomic() {
+        use crewd_work::{BlockOn, Continuation};
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let p = ok(&mut s, |tx| create(tx, &by, input()));
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                for _ in 0..2 {
+                    let w = b
+                        .create_item(
+                            &crewd_work::Actor::Human,
+                            now,
+                            crewd_work::NewItem::titled("dependent").owned_by("w-a2"),
+                        )?
+                        .value;
+                    b.block(
+                        &crewd_work::Actor::Human,
+                        now,
+                        w,
+                        vec![BlockOn::Item("W1".parse().unwrap())],
+                        Continuation::Nothing,
+                    )?;
+                }
+                Ok(())
+            })
+        });
+        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_done_wake BEFORE INSERT ON wakes BEGIN SELECT RAISE(ABORT,'synthetic done wake fault'); END;").unwrap();
+        err(&mut s, |tx| update(tx, &by, finish(&p)));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            before
+        );
+        assert!(crate::wakes::list(s.conn(), None, 10).unwrap().is_empty());
+        s.conn()
+            .execute_batch("DROP TRIGGER reject_done_wake")
+            .unwrap();
+        ok(&mut s, |tx| update(tx, &by, finish(&p)));
+        let rows = crate::wakes::list(s.conn(), Some("w-a2"), 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, crate::wakes::WakeKind::System);
+        assert_eq!(rows[0].priority, crate::wakes::WakePriority::System);
+        let note: serde_json::Value = serde_json::from_str(rows[0].note.as_ref().unwrap()).unwrap();
+        assert_eq!(note["unblockedWork"].as_array().unwrap().len(), 2);
+        err(&mut s, |tx| update(tx, &by, finish(&p)));
+        assert_eq!(
+            crate::wakes::list(s.conn(), Some("w-a2"), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn last_plain_dependency_wakes_ready_owner_without_fabricated_events() {
+        let mut s = store();
+        let by = Sender::Session("w-a1".into());
+        let a = ok(&mut s, |tx| create(tx, &by, input()));
+        let b = ok(&mut s, |tx| create(tx, &by, input()));
+        let mut child = input();
+        child.owner = Some("w-a2".into());
+        child.depends_on = vec![a.id.clone(), b.id.clone()];
+        let c = ok(&mut s, |tx| create(tx, &Sender::Human, child));
+        ok(&mut s, |tx| update(tx, &by, finish(&a)));
+        assert!(crate::wakes::list(s.conn(), None, 10).unwrap().is_empty());
+        let done = ok(&mut s, |tx| update(tx, &by, finish(&b)));
+        let rows = crate::wakes::list(s.conn(), Some("w-a2"), 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        let note: serde_json::Value = serde_json::from_str(rows[0].note.as_ref().unwrap()).unwrap();
+        assert_eq!(note["unblockedWork"], serde_json::json!([c.id]));
+        let history = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        assert!(
+            !history
+                .iter()
+                .any(|e| matches!(e.kind, crewd_work::EventKind::BlockerCleared { .. })),
+            "plain readiness is not a made-up blocker release"
+        );
+        // An already-done predecessor is refused and must not re-notify.
+        err(&mut s, |tx| update(tx, &by, finish(&done)));
+        assert_eq!(
+            crate::wakes::list(s.conn(), Some("w-a2"), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

@@ -183,3 +183,17 @@ Final gate: 2375 passed, 0 failed, 8 ignored; fmt/workspace clippy passed, CARGO
 这一单元仍非完整 M4b：检查点/停下即检查、人回复与工作依赖放行的自动唤醒、跨机组关系、转派与全局工作模型继续推进。前端设计已交接独立 session「PendingCrew 前端设计」，保留微信式原结构，后端不越过用户设计讨论。无新增真实模型调用、安装、发布或日常数据迁移；Jev/记忆继续方案先行。
 
 完整 crewd/scripts/check.sh（Rust 1.94.0，offline，incremental=0）通过：2381 passed、0 failed、8 ignored；fmt 与 clippy 全目标通过。完整日志 /private/tmp/pcw-work-context-full-check-01.log；此 SHA 尚未合入共享 main，也未重建/安装桌面候选。
+
+## 2026-10-13 M4b 阻塞解除持久唤醒
+
+人类待确认被回答或既有默认方案到点后，直接把 BlockerCleared 里的各负责人唤醒写进同一 collab 事务。沿用 AskAnswer 的原来源键和人类优先级；多项归同一负责人只入队一条，负责人同时也是直接提问者时与原提问者唤醒去重。附言仅列全局 W 号，最多 50 项并明确 total/partial，不复制长目标或证据。缺失 session 不让人答复失败，已归档目标由既有 wakes::enqueue 跳过；没有擅自恢复或转派失联/归档负责人。
+
+work.update 完成一项时也把显式 BlockOn::Item 解除后的负责人提醒纳入同一事务，走 System 优先级。普通 dependsOn 边另比较真实前后状态：仅最后一个未完成依赖完成、工作已无其他卡点时提醒；不制造 BlockerCleared 历史事件、不改写历史。终态重复完成仍由核心拒绝，过期 CAS 不产生第二条提醒。
+
+真实 SQLite 测试覆盖多项/多负责人/跨机组负责人、原提问者合并、没有事件观察器仍留下 pending、归档和已删除 session，以及队列写入失败时答复/完成状态、被放行项、历史事件和先前已入队行全部回滚。原始终态测试误预期重复完成成功，核心实际返回 Terminal；已修正为验证既有拒绝与队列无增量，没有放宽核心规则。丢弃全部负责人提醒的反例准确失败（旧行为仅 1 条，要求 3 条），见 /private/tmp/pcw-work-unblock-red-01.log。
+
+这是持久入队及事务证据，不扩称本轮新增实际 runner 投递或真实模型回合验收。完整 M4b 仍需：检查点到期合并与真正投递后的 missedChecks 记账、停下即检查的三次抑制/行政交接、过期工作提醒在投递前重新核对当前负责人/终态、释放项 work.changed 客户端通知，以及其他工作动作/跨机组关系与客户端视图。协作事件漏调不再影响这两类提醒入队；既有 AskAnsweredHook 继续保留给后续观察能力，不重复造提醒。
+
+继续候选分支开发，未切换共享 main、安装应用、发布或迁移日常数据，未新增真实模型调用；Jev/记忆继续讨论先行。前端由独立设计 session 负责。
+
+完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2386 passed、0 failed、8 ignored；fmt 与 clippy 全目标通过。完整日志 /private/tmp/pcw-work-unblock-full-check-01.log。
