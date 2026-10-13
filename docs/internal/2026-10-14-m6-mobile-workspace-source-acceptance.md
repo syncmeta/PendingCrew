@@ -27,3 +27,14 @@ Previous compile diagnostics and intermediate logs were preserved. No Cargo, ful
 The root application must create one workspace per window and paired authority. Production remote transport requires the already-decided TLS 1.3 mutual SPKI pinning, explicit pairing, durable revocation and a server-authenticated remote actor; the legacy local Unix Human trust cannot be applied to an arbitrary network peer. The backend listener and public pairing/identity DTOs are not yet frozen. Therefore no temporary open port, old PSK, fabricated pairing screen or raw network endpoint is enabled here.
 
 After those contracts exist: implement paired transport and record persistence, wire the mobile root and iPad window ownership, run shared form/transport runtime controls, then perform actual iPhone and iPad connection/revocation/reconnect/work-flow acceptance. Current type-check success must not be reported as those later gates passing.
+
+## Original project build gates (c22ef439)
+
+After the real Unix mobile-flow fixture preserved three delayed-reply failures on 0dd409ed, c22ef439 added per-directory query epochs plus selection guards and made older valid create/start receipts return to their draft owner without adopting a new selection. Independent same-input runtime revalidation is owned by QA.
+
+The actual PendingCrew target was built, serially, with Xcode 27.0 (27A266a), using the existing `/tmp/pcw-codex-first-xcode` DerivedData and `/tmp/pcw-codex-first-spm` package checkout cache. Both invocations used `-disableAutomaticPackageResolution -skipPackageUpdates` and `-scheme PendingCrew`:
+
+- `-destination 'platform=macOS' ... build`: terminal exit 0, BUILD SUCCEEDED; `/private/tmp/pcw-M6-main-macos-build-01.log`.
+- `-destination 'generic/platform=iOS Simulator' ... build`: terminal exit 0, BUILD SUCCEEDED; `/private/tmp/pcw-M6-main-ios-simulator-build-01.log`.
+
+These are original target compilation gates, not standalone type-checks. No tests, simulator execution, actual device, app launch, install, model or Cargo build ran in this gate. Local 27 does not substitute for the final integrated source's remote CI 26.5. Free disk remained about 3.1 GiB. Only the client c22 product inputs were compiled; parallel QA script/fixture files are not target sources.
