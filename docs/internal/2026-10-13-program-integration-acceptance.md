@@ -61,3 +61,12 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 - 全工程开发分支已普通快进保存远端 `c1a913fc`；main 仍为 `67430035`，没有提前整合本次修复或安装新产物。
 - 原始证据：`/private/tmp/pcw-ci-native-submit-workspace-05.log`、`/private/tmp/pcw-ci-native-submit-clippy-02.log`、`/private/tmp/pcw-ci-native-submit-fmt-02.log`。
 - 后台线接续完整 M4；客户端/远程线继续 M6；质量线已实际重新启动接 M6 恢复信任、TLS/配对/在线撤销及共享操作独验。根接这次准确 CI 和组合交付。
+
+
+## 2026-10-14：双平台修复通过并整块整合 main
+
+- 真实运行 `38478555783` terminal success，headSha 为 `2eeec9842803bbd96e07291d8d6b62040da8e3e1`。Linux 与 macOS 均 2546 tests passed、8 skipped；Linux 单列 1 leaky，macOS 无该分类。实际 strict checks/doctests 同 run 通过，日志 `pcw-M3-linux-ci-2eeec984.log`、`pcw-M3-macos-ci-2eeec984.log` 保存在 `/private/tmp`。
+- 根无冲突合入 global 为 `fe68022f3cfc9af368282d90a44e69f1d8ce8f0a`：完整 Rust 输入与通过的 2eeec984 完全相同；Sources/Tests/project.yml/Package.swift/CI workflow 与已通过实际 Mac/iOS CI 的 37d199f4 完全相同。
+- main 实际远端核对原为 67430035；protected README/design/旧ACP资料在整合 diff 中没有变化。实际 inventory166 个 modified/untracked、非 ignored 文件整合前后 SHA/link 均相同。该数字不冒称 ignored 文件 inventory。两份核对记录位于 `/private/tmp/pcw-M3-main-human-before-fe68022f.json` 和 `pcw-M3-main-human-after-fe68022f.json`。
+- 根快进本地 main 并普通推送远端 fe68022f，自动组合 CI `crewd 38479786302` 与 `CI 38479786399` 均绑定此精确 SHA，仍待完成，不手动重复 dispatch。main 合入不代表安装、窗口、真实 provider 或整项 M3 完成。
+- 新 normal helper 输入已 prepare（尚未 build）：`/private/tmp/pcw-M3-normal-backend-20261014-2eeec984`，RustInputDigest `c102588bdde3cae28abc5b8a8849c8fe8fb23a4a39fec8dbc3aaff4f408c016b`。旧 b064 helper/a9候选不冒充新源码；等待唯一 target 短窗口，再实际正常构建及新 GUI/helper 配对。
