@@ -473,3 +473,92 @@ async fn public_attached_block_creates_human_and_split_then_reuses_cross_crew_re
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn attached_foreign_home_owner_blocks_target_crew_without_full_plan_receipt_echo() {
+    let f = Fixture::new().await;
+    f.state
+        .db
+        .call(|s| {
+            let tx = s.conn().unchecked_transaction()?;
+            crewd_store::work_organization::migrate_in_tx(&tx, "2026-10-13T00:00:00.000Z")?;
+            tx.commit()?;
+            Ok::<_, crewd_store::StoreError>(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let b = f.add_crew("target B", None).await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let parent = rpc(
+        &mut human,
+        "work.create",
+        json!({
+            "crewId":b,"title":"target B assigned to home A",
+            "owner":f.worker,"goal":"FULL_GOAL_MUST_NOT_ECHO_IN_BLOCK_RECEIPT",
+            "acceptance":"FULL_ACCEPTANCE_MUST_NOT_ECHO_IN_BLOCK_RECEIPT"
+        }),
+    )
+    .await;
+    let mut owner = attach(&f, &socket, &f.worker).await;
+    let receipt = tool(
+        &mut owner,
+        "work_item_block",
+        json!({
+            "id":parent["id"],"expected_revision":parent["revision"],
+            "on":[{"type":"new_human","question":"target B needs approval"}],
+            "can_continue":{"type":"split","items":[{"title":"default target crew split"}]}
+        }),
+    )
+    .await;
+    assert_eq!(receipt["item"]["crewId"], b);
+    assert_eq!(receipt["item"]["owner"], f.worker);
+    assert_eq!(receipt["item"]["status"], "blocked");
+    for omitted in ["goal", "acceptance", "evidence", "pendingTransfer"] {
+        assert!(
+            receipt["item"].get(omitted).is_none(),
+            "compact MCP result must not repeat {omitted}: {receipt}"
+        );
+    }
+    assert!(!receipt.to_string().contains("FULL_GOAL_MUST_NOT_ECHO"));
+    assert!(
+        !receipt
+            .to_string()
+            .contains("FULL_ACCEPTANCE_MUST_NOT_ECHO")
+    );
+    assert_eq!(receipt["split"].as_array().unwrap().len(), 1);
+    assert_eq!(receipt["humanTasks"].as_array().unwrap().len(), 1);
+    let child = rpc(&mut human, "work.get", json!({"id":receipt["split"][0]})).await;
+    assert_eq!(
+        child["crewId"], b,
+        "missing split crew belongs to target work crew, not attached owner's home"
+    );
+    assert_eq!(child["parent"], parent["id"]);
+    assert_eq!(
+        child["owner"], f.worker,
+        "split inherits owner even when owner lives elsewhere"
+    );
+    let waits = rpc(&mut human, "ask.list", json!({})).await;
+    let h = waits
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["ask"]["ask"] == receipt["humanTasks"][0])
+        .expect("public target ask");
+    assert_eq!(h["ask"]["crewId"], b, "new H has target work attribution");
+    assert_eq!(h["ask"]["item"], parent["id"]);
+    assert_eq!(h["ask"]["askedBy"], f.worker);
+    // Explicit full details are still available when requested; compactness is not data loss.
+    let full = rpc(&mut human, "work.get", json!({"id":parent["id"]})).await;
+    assert_eq!(full["goal"], parent["goal"]);
+    assert_eq!(full["acceptance"], parent["acceptance"]);
+    drop((human, owner));
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
