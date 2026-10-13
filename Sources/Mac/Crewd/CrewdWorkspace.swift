@@ -55,7 +55,10 @@ final class CrewdWorkspace: ObservableObject {
                 for delay in [1, 2, 4, 8, 8] {
                     try? await Task.sleep(for: .seconds(delay))
                     guard !Task.isCancelled, let self, self.reconnectID == attempt else { return }
-                    do { try await self.connectOnly(); return } catch { self.error = error.localizedDescription }
+                    do { try await self.connectOnly(); return } catch {
+                        guard !Task.isCancelled, self.reconnectID == attempt, !self.sleeping else { return }
+                        self.error = error.localizedDescription
+                    }
                 }
                 if self?.reconnectID == attempt { self?.status = "连接已中断" }
             }
@@ -108,11 +111,15 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     private func connectOnly() async throws {
-        generation = UUID(); sync?.cancel(); sync = nil
+        generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
+        error = nil
         status = "已连接 · crewd \(client.version)"
         scheduleSync(recoverHistory: true)
         await sync?.value
+        guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
+        guard client.connected else { throw CrewdClientError(message: client.lastError ?? "后台连接已中断。") }
     }
 
     func selectCrew(_ id: String) {
