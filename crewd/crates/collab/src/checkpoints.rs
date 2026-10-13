@@ -107,14 +107,21 @@ pub(crate) fn render_note(
     let total = targets.len();
     Ok(work::FollowupNote::Current(serde_json::json!({"dueWork":targets.iter().take(50).map(|t|&t.id).collect::<Vec<_>>(),"total":total,"partial":total>50}).to_string()))
 }
+fn candidate_crews(conn: &Connection, now: i64) -> Result<Vec<String>> {
+    let crews = {
+        let mut q=conn.prepare("SELECT c.id FROM crews c LEFT JOIN work_books b ON b.crew_id=c.id WHERE c.archived_at IS NULL AND (EXISTS(SELECT 1 FROM json_each(b.state,'$.items') i WHERE json_extract(i.value,'$.owner') IS NOT NULL AND json_extract(i.value,'$.status') IN ('open','active') AND coalesce(json_extract(i.value,'$.missed_checks'),0)<?2 AND json_extract(i.value,'$.next_check_at') <= max(?1,json_extract(b.state,'$.clock'))) OR EXISTS(SELECT 1 FROM object_refs r WHERE r.crew_id=c.id AND r.kind='plan' AND (b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL))) ORDER BY c.id")?;
+        q.query_map(
+            params![now, crewd_work::Config::default().missed_checks_limit],
+            |r| r.get::<_, String>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    Ok(crews)
+}
 /// One merged due reminder per owner across crews. Existing queued work never
 /// advances missedChecks; duplicate settled manifests do not restart fail loops.
 pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
-    let crews = {
-        let mut q=tx.conn().prepare("SELECT b.crew_id FROM work_books b JOIN crews c ON c.id=b.crew_id WHERE c.archived_at IS NULL AND EXISTS(SELECT 1 FROM json_each(b.state,'$.items') i WHERE json_extract(i.value,'$.next_check_at') <= max(?1,json_extract(b.state,'$.clock'))) ORDER BY b.crew_id")?;
-        q.query_map([tx.now_ms()], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let crews = candidate_crews(tx.conn(), tx.now_ms())?;
     let mut owners: BTreeMap<String, Vec<Target>> = BTreeMap::new();
     for crew in crews {
         let book = asks::load(tx.conn(), &crew)?;
@@ -412,6 +419,12 @@ mod tests {
             });
             assert_eq!(missed(&s, "crew-a"), n);
         }
+        assert!(
+            candidate_crews(s.conn(), NOW + 31 * MIN)
+                .unwrap()
+                .is_empty(),
+            "exhausted work must not restore its book every tick"
+        );
         assert_eq!(ok_at(&mut s, NOW + 31 * MIN, enqueue_due).0, 0);
         assert_eq!(rows(&s).len(), 2);
     }
@@ -432,5 +445,80 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_checkpoint_queue")
             .unwrap();
         assert_eq!(ok_at(&mut s, NOW + MIN, enqueue_due).0, 1);
+    }
+    #[test]
+    fn missing_authoritative_book_or_item_is_not_an_empty_due_scan() {
+        for mode in ["book", "item"] {
+            let mut s = store();
+            active(&mut s, "crew-a");
+            match mode {
+                "book" => {
+                    s.conn()
+                        .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+                        .unwrap();
+                }
+                "item" => {
+                    s.conn().execute("UPDATE work_books SET state=json_remove(state,'$.items.W1') WHERE crew_id='crew-a'",[]).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                crate::run(&mut s, NOW + MIN, enqueue_due).is_err(),
+                "{mode}: missing issued authority was treated as empty"
+            );
+            assert!(rows(&s).is_empty());
+        }
+    }
+    #[test]
+    fn scan_preserves_book_clock_and_skips_blocked_and_unowned_work() {
+        let mut s = store();
+        active(&mut s, "crew-a");
+        ok_at(&mut s, NOW + 2 * MIN, |tx| {
+            work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "synthetic clock advance".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(candidate_crews(s.conn(), NOW).unwrap(), vec!["crew-a"]);
+        assert_eq!(
+            ok(&mut s, enqueue_due),
+            1,
+            "book clock determines due even when caller clock moved back"
+        );
+        let mut s = store();
+        active(&mut s, "crew-a");
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.block(
+                    &Actor::worker("w-a1"),
+                    now,
+                    "W1".parse().unwrap(),
+                    vec![crewd_work::BlockOn::NewAsk {
+                        question: "synthetic blocker".into(),
+                        default: None,
+                    }],
+                    crewd_work::Continuation::Nothing,
+                )
+            })
+        });
+        assert!(candidate_crews(s.conn(), NOW + MIN).unwrap().is_empty());
+        ok(&mut s, |tx| {
+            work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "unowned work".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(candidate_crews(s.conn(), NOW + MIN).unwrap().is_empty());
+        assert_eq!(ok_at(&mut s, NOW + MIN, enqueue_due).0, 0);
     }
 }
