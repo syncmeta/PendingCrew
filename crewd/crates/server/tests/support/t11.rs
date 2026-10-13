@@ -66,6 +66,7 @@ impl Fixture {
                 self.config.display().to_string(),
             ),
             ("FAKE_CLAUDE_LOG".into(), self.log.display().to_string()),
+            ("FAKE_CLAUDE_FULL_INPUT".into(), "1".into()),
         ])
     }
     // Extra fields appear when the workspace unifies the testkit feature.

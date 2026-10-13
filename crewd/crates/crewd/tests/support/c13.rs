@@ -51,6 +51,8 @@ impl Rig {
             let mut opts = f.options("ready");
             let o = opts.orchestra.as_mut().unwrap();
             o.claude_env
+                .insert("FAKE_CLAUDE_FULL_INPUT".into(), "1".into());
+            o.claude_env
                 .insert("FAKE_CLAUDE_C13_GATE".into(), gate.display().to_string());
             o.claude_env.insert(
                 "FAKE_CLAUDE_C13_WITNESS".into(),
@@ -80,7 +82,9 @@ impl Rig {
                 .env("CREWD_CLAUDE", t11::artifact("fake_claude"))
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
-                .arg("serve");
+                .arg("serve")
+                .arg("--claude-env")
+                .arg("FAKE_CLAUDE_FULL_INPUT=1");
             for (key, value) in [
                 ("FAKE_CLAUDE_LOG", f.log.clone()),
                 ("FAKE_CLAUDE_C13_GATE", gate),

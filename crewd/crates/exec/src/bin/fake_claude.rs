@@ -228,14 +228,39 @@ impl Fake {
         // 占位提示与底下的提示条照真 claude 上暗淡样式（SGR 2）：执行器的草稿闸靠样式分辨占位提示和人打的字。
         let shown = if self.input.is_empty() {
             format!("\x1b[2m{HINT}\x1b[22m")
+        } else if std::env::var("FAKE_CLAUDE_FULL_INPUT").as_deref() == Ok("1") {
+            // Synthetic full-input codec paints meaningful hard-line trailing
+            // blanks, which otherwise alias default grid padding. This is a
+            // visible fixture witness, not a production provider capability.
+            self.input
+                .split('\n')
+                .map(|line| {
+                    let plain = line.trim_end_matches(' ');
+                    let blanks = &line[plain.len()..];
+                    if blanks.is_empty() {
+                        line.to_owned()
+                    } else {
+                        format!("{plain}\x1b[4m{blanks}\x1b[24m")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\r\n")
         } else if self.input.contains('\n') || self.input.chars().count() > 60 {
-            format!("[Pasted text #1 +{} lines]", self.input.lines().count())
+            format!(
+                "[Pasted text #1 +{} lines]{}",
+                self.input.lines().count(),
+                if self.input.ends_with(' ') && !self.input.trim_end_matches(' ').ends_with('\n') {
+                    " "
+                } else {
+                    ""
+                }
+            )
         } else {
             self.input.clone()
         };
         let rule = "─".repeat(40);
         out(format!(
-            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\r\n{rule}\r\n\x1b[2m  ? for shortcuts\x1b[22m",
+            "{}\r\n{}\r\n\r\n{rule}\r\n\u{276f} {shown}\x1b[7m \x1b[27m\r\n{rule}\r\n\x1b[2m  ? for shortcuts\x1b[22m",
             self.banner(),
             self.last
         )
@@ -328,7 +353,6 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
     let mut next_screen = 0u64;
     let mut filler_total = None;
     let mut filler_left = 0usize;
-    let mut input = std::io::stdin();
     let mut capture = File::create(dir.join("capture.bin"))?;
     let mut captured = Vec::new();
     let mut read_seq = 0u64;
@@ -437,6 +461,19 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
             }
         }
         if filler_total.is_none() {
+            #[cfg(target_os = "linux")]
+            if !dir.join("raw-input-full").exists() {
+                // N_TTY non-canonical receive buffer stores at most 4095 bytes.
+                // Observe kernel input without starting a reader or draining it.
+                let queued = rustix::io::ioctl_fionread(stdin_fd)?;
+                if queued == 4095 {
+                    receipt(
+                        "raw-input-full",
+                        "kernel_fionread=4095\nstdin_reader_started=0\n",
+                    )?;
+                    record(&mut protocol, "raw-input-full kernel_fionread=4095")?;
+                }
+            }
             std::thread::sleep(Duration::from_millis(2));
             continue;
         }
@@ -460,7 +497,9 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
             continue;
         }
         let mut bytes = [0u8; 4096];
-        let n = match input.read(&mut bytes) {
+        // Poll and read the same actual descriptor. Stdin's buffered reader may
+        // retain bytes that poll cannot see, so it cannot be mixed with this seam.
+        let n = match rustix::io::read(stdin_fd, &mut bytes).map_err(Error::from) {
             Ok(0) => {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
@@ -815,6 +854,12 @@ fn main() {
                 c if c == '\n' || !c.is_control() => fake.input.push(c),
                 _ => {}
             }
+        }
+        if let Some(trace) = &trace {
+            trace.record(format_args!(
+                "consume-result seq={consume_seq} input_bytes={} input_lines={} submitted={submitted}",
+                fake.input.len(), fake.input.lines().count(),
+            ));
         }
         if submitted && fake.submits == 1 && fake.mode == "usage" {
             out(b"\r\nYou've reached your usage limit \xc2\xb7 resets 5pm\r\n");

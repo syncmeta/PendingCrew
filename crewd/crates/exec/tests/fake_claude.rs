@@ -57,6 +57,7 @@ async fn start_with(fake_env: &[(&str, &str)], brief: Option<&str>, ledger: Memo
     let mut config = DriverConfig::new(dir.path().join("run"));
     config.stop_grace = Duration::from_millis(500);
     // 缩短重试窗口，「投不进去」那条不用等 7.5s。
+    config.core.verified_collapsed_paste_codec = true; // Declared synthetic codec; production default remains unknown.
     config.core.delivery.verify_window = Duration::from_millis(800);
     config.core.delivery.submit_gap = Duration::from_millis(300);
     let start = ClaudeStart {
@@ -470,7 +471,18 @@ async fn huge_brief_with_delayed_chunk_echo_is_submitted_exactly_once() {
         .map(|i| format!("{i:05} 白板条目，带点中文\n"))
         .collect();
     assert!(brief.len() > 60_000);
-    let r = start(&[("FAKE_CLAUDE_CHUNK_DELAY_MS", "10")], Some(&brief)).await;
+    let trace = SlowTrace {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let trace_path = trace.dir.path().join("read-boundaries.log");
+    let r = start(
+        &[
+            ("FAKE_CLAUDE_CHUNK_DELAY_MS", "10"),
+            ("FAKE_CLAUDE_TRACE", trace_path.to_str().unwrap()),
+        ],
+        Some(&brief),
+    )
+    .await;
     let pid = r.h.status().await.unwrap().pid;
     let mut r = EchoRun {
         r,
@@ -483,6 +495,59 @@ async fn huge_brief_with_delayed_chunk_echo_is_submitted_exactly_once() {
     .await;
     assert_eq!(r.r.submitted(), [brief.replace('\n', "\\n")]);
     r.stop().await;
+    let trace = std::fs::read_to_string(&trace_path).unwrap();
+    let consumed: Vec<_> = trace
+        .lines()
+        .filter(|line| line.contains("consume-result "))
+        .collect();
+    let marker = format!(
+        "input_bytes={} input_lines={}",
+        brief.len() + 1,
+        brief.lines().count() + 1
+    );
+    let expanded = consumed
+        .iter()
+        .position(|line| line.contains(&marker))
+        .expect("actual native consumer must paint the post-body Space marker");
+    assert_eq!(
+        consumed
+            .iter()
+            .filter(|line| line.contains(&marker))
+            .count(),
+        1
+    );
+    for line in &consumed[..expanded] {
+        let lines: usize = line
+            .split("input_lines=")
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            lines <= brief.lines().count(),
+            "no incomplete original-body prefix may produce the extra line marker: {line}"
+        );
+    }
+    let restored = format!(
+        "input_bytes={} input_lines={}",
+        brief.len(),
+        brief.lines().count()
+    );
+    assert!(
+        consumed[expanded + 1..]
+            .iter()
+            .any(|line| line.contains(&restored)),
+        "actual BS restores the full-body cursor before Enter"
+    );
+    println!(
+        "actual native consumer prefix_states={} body_bytes={} body_lines={} extra_line_marker_once=1 bs_restored=1",
+        expanded,
+        brief.len(),
+        brief.lines().count()
+    );
 }
 
 /// A real submit key can precede a late nonempty paste redraw. Success needs
@@ -644,7 +709,7 @@ echoed = False
 paused = False
 def draw():
     body = value.decode(errors='replace') if value else '\x1b[2mTry x\x1b[22m'
-    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + body + '\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m').encode())
+    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + body + '\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m').encode())
 draw()
 while True:
     if not pause_body and not echoed and (root / 'show-echo').exists():
