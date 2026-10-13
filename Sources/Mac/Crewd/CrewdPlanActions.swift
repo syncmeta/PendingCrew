@@ -28,6 +28,7 @@ struct CrewdPlanDrafts {
         pending[snapshot.key]=snapshot.version;return true
     }
     func unknownSnapshots(_ key:Key)->[Snapshot] {(unknown[key] ?? [:]).values.sorted{$0.version.uuidString < $1.version.uuidString}}
+    var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0.values}.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if entries[key]?.fields != fields {entries[key]=Entry(fields:fields,version:UUID())}}
     mutating func begin(_ key:Key)->Snapshot? {
         guard !busy(key) else {return nil}

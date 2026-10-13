@@ -6,7 +6,7 @@ struct CrewdWorkspaceView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var workspace: CrewdWorkspace
     var autoConnect = true
-    @State private var drafts = CrewdDrafts()
+    var machineLabel = "本机"
     @State private var creatingCrew = false
     @State private var sidebarMode = CrewdNavigation.Sidebar.contacts
     @State private var tab = CrewdNavigation.Tab.messages
@@ -14,18 +14,12 @@ struct CrewdWorkspaceView: View {
     @State private var todoExpanded = true
     @State private var membersExpanded = true
     @State private var runnerExpanded = false
-    @State private var crewTitle = ""
-    @State private var workingDirectory = ""
     private var messageContext: CrewdDrafts.Context {
         .message(crew: workspace.crewID, channel: workspace.channelID, session: workspace.sessionID)
     }
-    private var taskContext: CrewdDrafts.Context {
-        .initialTask(crew: workspace.crewID, session: workspace.sessionID)
-    }
-    private var compose: String { drafts.text(for: messageContext) }
-    private var task: String { drafts.text(for: taskContext) }
+    private var compose: String { workspace.messageDrafts.text(for: messageContext) }
     private func draftBinding(_ context: CrewdDrafts.Context) -> Binding<String> {
-        Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context) })
+        Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.messageDrafts.set($0, for: context) })
     }
     var body: some View {
         NavigationSplitView {
@@ -34,7 +28,7 @@ struct CrewdWorkspaceView: View {
                 ScrollView {
                     VStack(alignment:.leading,spacing:6) {
                         if sidebarMode == .contacts {
-                            Label("本机",systemImage:"desktopcomputer").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(.vertical,8)
+                            Label(machineLabel,systemImage:"desktopcomputer").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(.vertical,8)
                             ForEach(CrewdNavigation.directory(workspace.crews,collapsed:collapsedCrews)) {row in
                                 if let crew=workspace.crews.first(where:{$0["id"].string == row.object}) {
                                     HStack(spacing:5) {
@@ -78,7 +72,7 @@ struct CrewdWorkspaceView: View {
                 }
             }.background(CrewdChatStyle.canvas(colorScheme))
         }.foregroundStyle(CrewdChatStyle.ink(colorScheme)).frame(minWidth:1150,minHeight:700)
-        .sheet(isPresented:$creatingCrew){crewForm}
+        .sheet(isPresented:$creatingCrew){CrewdCrewCreationView(workspace:workspace)}
         .task {if autoConnect {await workspace.connect()}}
         .onChange(of:workspace.inspection["runnerRequest"]) {_,value in if value != .null {runnerExpanded=true}}
     }
@@ -213,11 +207,11 @@ struct CrewdWorkspaceView: View {
                 Text("发送会通知选中的会话").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                 Spacer()
                 Button("发送") {
-                    let sent = drafts.snapshot(for: messageContext)
+                    let sent = workspace.messageDrafts.snapshot(for: messageContext)
                     let text = sent.text, channel = sent.context.channel, target = sent.context.session
                     Task {
                         let mentions: [CrewdValue] = target.isEmpty ? [] : [.object(["kind": .string("session"), "targetId": .string(target)])]
-                        if await workspace.perform("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)])) { drafts.clearIfUnchanged(sent) }
+                        _ = await workspace.performText("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)]),snapshot:sent)
                     }
                 }.disabled(compose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy || workspace.channelID.isEmpty || workspace.sessionID.isEmpty)
             }
@@ -262,19 +256,7 @@ struct CrewdWorkspaceView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
-            TextField("给新的 Codex 会话交代任务", text: draftBinding(taskContext), axis: .vertical).lineLimit(2...6)
-            HStack {
-                Text("沿用 Codex 的默认模型和设置").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                Spacer()
-                Button("启动 Codex") {
-                    let sent = drafts.snapshot(for: taskContext)
-                    let brief = sent.text, crew = sent.context.crew
-                    let role = workspace.sessions.contains(where: {$0["role"].string == "captain"}) ? "worker" : "captain"
-                    Task {
-                        if await workspace.perform("session.start", .object(["crewId": .string(crew), "role": .string(role), "executor": .string("codex"), "brief": .string(brief), "isolation": .bool(true)])) { drafts.clearIfUnchanged(sent) }
-                    }
-                }.disabled(task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
-            }
+            CrewdSessionStartView(workspace:workspace,drafts:$workspace.messageDrafts)
         }.padding()
     }
     private func action(_ method: String, extra: [String: CrewdValue] = [:]) {
@@ -284,20 +266,7 @@ struct CrewdWorkspaceView: View {
     private func channelName(_ row: CrewdValue) -> String {
         switch row["kind"].string { case "human": return "与我沟通"; case "lobby": return "大厅"; default: return row["name"].string ?? "群" }
     }
-    private var crewForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("新建机组").font(.title2)
-            TextField("机组名称", text: $crewTitle)
-            HStack { Text(workingDirectory.isEmpty ? "选择工作目录" : workingDirectory).lineLimit(2).textSelection(.enabled); Spacer(); Button("选择…") {
-                let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true
-                if panel.runModal() == .OK { workingDirectory = panel.url?.path ?? "" }
-            } }
-            HStack { Button("取消") { creatingCrew = false }; Spacer(); Button("创建") {
-                let title = crewTitle, path = workingDirectory
-                Task { if await workspace.perform("crew.create", .object(["title": .string(title), "workingDirectory": .string(path)])) { creatingCrew = false; crewTitle = ""; workingDirectory = "" } }
-            }.disabled(crewTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workingDirectory.isEmpty || workspace.busy) }
-        }.padding(24).frame(width: 500)
-    }
+
 }
 
 private struct CrewdCrewQuestionView: View {

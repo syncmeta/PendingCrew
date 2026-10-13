@@ -9,6 +9,9 @@ options:
     macOS: "14.0"
   createIntermediateGroups: true
 packages:
+  SwiftCertificates:
+    url: https://github.com/apple/swift-certificates.git
+    exactVersion: 1.21.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     minVersion: 2.4.0
@@ -85,6 +88,8 @@ targets:
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
         basedOnDependencyAnalysis: false
     dependencies:
+      - package: SwiftCertificates
+        product: X509
       - package: MarkdownUI
         product: MarkdownUI
       - package: Sparkle

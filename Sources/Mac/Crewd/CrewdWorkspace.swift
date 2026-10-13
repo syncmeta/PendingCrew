@@ -28,6 +28,9 @@ final class CrewdWorkspace: ObservableObject {
     private var activityDirty = true
     private var activityAffected: Set<String> = []
     private var activityChannelCrews: [String: String] = [:]
+    struct TextSubmission:Identifiable {let id:UUID;let method:String;let params:CrewdValue;let snapshot:CrewdDrafts.Snapshot}
+    @Published private(set) var uncertainTextSubmissions:[TextSubmission]=[]
+    var uncertainTextSnapshots:[CrewdDrafts.Snapshot] {uncertainTextSubmissions.map(\.snapshot)}
     @Published var uncertainSessionStarts: [CrewdDrafts.Snapshot] = []
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
@@ -374,6 +377,18 @@ final class CrewdWorkspace: ObservableObject {
         } catch {
             if !retired, generation == current, selected == selection { self.error = error.localizedDescription; scheduleSync() }
             throw error
+        }
+    }
+    @discardableResult func performText(_ method:String,_ params:CrewdValue,snapshot:CrewdDrafts.Snapshot) async -> Bool {
+        do {
+            _ = try await performValue(method,params)
+            messageDrafts.clearIfUnchanged(snapshot)
+            return true
+        } catch {
+            if CrewdClientError.isUncertainSubmission(error) {
+                uncertainTextSubmissions.append(TextSubmission(id:UUID(),method:method,params:params,snapshot:snapshot))
+            }
+            return false
         }
     }
     func perform(_ method: String, _ params: CrewdValue) async -> Bool {

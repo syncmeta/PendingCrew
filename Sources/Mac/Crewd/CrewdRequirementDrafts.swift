@@ -12,6 +12,7 @@ struct CrewdRequirementDrafts {
     private var submitting:[Key:UUID]=[:]
     private var unknown:[Key:[Snapshot]]=[:]
     func uncertain(_ crew:String,channel:String="")->[Snapshot] {unknown[Key(crew:crew,channel:channel)] ?? []}
+    var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.revision.uuidString < $1.revision.uuidString}}
     mutating func confirm(_ snapshot:Snapshot)->Bool {
         guard !busy(snapshot.crew,channel:snapshot.channel), uncertain(snapshot.crew,channel:snapshot.channel).contains(snapshot) else {return false}
         submitting[snapshot.key]=snapshot.requestID;return true
@@ -45,6 +46,7 @@ struct CrewdCrewCreationDrafts {
     private(set) var unknown: [Snapshot] = []
     var fields: Fields { current?.fields ?? Fields() }
     var busy: Bool { pending != nil }
+    func isCurrent(_ snapshot:Snapshot)->Bool {current?.version == snapshot.version}
     mutating func edit(_ value: Fields) { if fields != value { current = Snapshot(fields: value, version: UUID()) } }
     mutating func begin() -> Snapshot? {
         guard !busy, let current, !current.fields.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

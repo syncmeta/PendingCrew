@@ -247,7 +247,7 @@ private struct CrewdMobileConversation: View {
     private func send() {
         let snapshot = workspace.messageDrafts.snapshot(for: context)
         let fields: CrewdValue = .object(["channelId": .string(snapshot.context.channel), "text": .string(snapshot.text), "mentions": .array([.object(["kind": .string("session"), "targetId": .string(snapshot.context.session)])])])
-        Task { if await workspace.perform("message.post", fields) { workspace.messageDrafts.clearIfUnchanged(snapshot) } }
+        Task { _ = await workspace.performText("message.post", fields, snapshot:snapshot) }
     }
 }
 #endif

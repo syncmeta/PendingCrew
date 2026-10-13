@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Shared colors follow the original chat-pane's muted warm sidebar and mint selection.
 enum CrewdChatStyle {
@@ -28,6 +31,7 @@ struct CrewdHumanDrafts {
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->[Snapshot] {unknown[key] ?? []}
+    var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if self.fields(key) != fields {entries[key]=Snapshot(key:key,fields:fields,version:UUID())}}
     mutating func begin(_ key:Key)->Snapshot? {
         guard !busy(key),!fields(key).text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return nil}
@@ -217,14 +221,13 @@ struct CrewdSessionStartView: View {
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
                     }
                 }
-            }.disabled(reading || workspace.busy || !workspace.client.connected || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
+            }.disabled(reading || workspace.busy || !workspace.client.connected || !workspace.client.capabilities.contains("session.start") || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
         }.onChange(of: workspace.crewID) { _, _ in
             failure = nil; readUnknown = false; reviewedUnknown = false
         }
     }
 }
 
-#if os(iOS)
 struct CrewdCrewCreationView: View {
     @ObservedObject var workspace: CrewdWorkspace
     @Environment(\.dismiss) private var dismiss
@@ -248,7 +251,19 @@ struct CrewdCrewCreationView: View {
                 }
             }
             Text("工作目录属于被连接的电脑。").font(.caption).foregroundStyle(.secondary)
+            #if os(iOS)
             TextField("电脑上的完整目录路径", text: input(\.directory)).textInputAutocapitalization(.never).autocorrectionDisabled()
+            #else
+            HStack {
+                TextField("电脑上的完整目录路径", text: input(\.directory))
+                if workspace.dataDirectory != nil {
+                    Button("选择…") {
+                        let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true
+                        if panel.runModal() == .OK {input(\.directory).wrappedValue=panel.url?.path ?? ""}
+                    }
+                }
+            }
+            #endif
             Menu("沿用已有机组的工作目录") {
                 ForEach(workspace.crews.indices, id: \.self) { index in
                     let crew = workspace.crews[index]
@@ -281,9 +296,13 @@ struct CrewdCrewCreationView: View {
         if !snapshot.fields.parent.isEmpty { fields["parentId"] = .string(snapshot.fields.parent) }
         failure = nil; readAfterUnknown = false; reviewedUnknown = false
         Task {
-            do { _ = try await owner.performValue("crew.create", .object(fields)); owner.crewCreationDrafts.finish(snapshot, accepted: true); dismiss() }
+            do {
+                _ = try await owner.performValue("crew.create", .object(fields))
+                let wasCurrent=owner.crewCreationDrafts.isCurrent(snapshot)
+                owner.crewCreationDrafts.finish(snapshot, accepted: true)
+                if wasCurrent {dismiss()} else {failure="原创建已确认，当前编辑草稿仍保留。"}
+            }
             catch { owner.crewCreationDrafts.finish(snapshot, accepted: false, uncertain: CrewdClientError.isUncertainSubmission(error)); failure = error.localizedDescription }
         }
     }
 }
-#endif

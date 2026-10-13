@@ -255,16 +255,16 @@ struct RootView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            IPadShell()
+            CrewdRemoteMobileRoot()
             #else
             MacThreePaneView()
             #endif
         }
         // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）。
+        #if os(macOS)
         .task {
             await crewStore.refreshMachines()
         }
-        #if os(macOS)
         // 恢复弹窗（人类 2026-09-11 定的规格）：**只有「刚更新过」或「上次意外结束」
         // 才问**，而且必须真有东西可恢复；问了他点头才恢复，**一次都不自动**。
         // 判定全在 `SessionRestoreOffer`（有测试），这里只负责显示。

@@ -88,6 +88,7 @@ struct CrewdChannelLinkDrafts {
     private var unknown:[Key:[Snapshot]]=[:]
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->[Snapshot] {unknown[key] ?? []}
+    var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.requestID.uuidString < $1.requestID.uuidString}}
     mutating func begin(_ key:Key,object:CrewdValue,expectedRevision:String,linked:Bool)->Snapshot? {
         guard !busy(key) else{return nil}
         let snapshot=Snapshot(key:key,object:object,expectedRevision:expectedRevision,linked:linked,requestID:UUID());pending[key]=snapshot.requestID;return snapshot

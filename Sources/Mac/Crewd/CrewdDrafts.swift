@@ -16,7 +16,7 @@ struct CrewdDrafts {
             Self(kind: .initialTask, crew: crew, channel: "", session: session)
         }
     }
-    struct Snapshot {
+    struct Snapshot: Equatable {
         let context: Context
         let text: String
         fileprivate let revision: UUID?
@@ -26,6 +26,7 @@ struct CrewdDrafts {
         var revision: UUID
     }
     private var entries: [Context: Entry] = [:]
+    var allSnapshots:[Snapshot] {entries.map{Snapshot(context:$0.key,text:$0.value.text,revision:$0.value.revision)}.filter{!$0.text.isEmpty}}
     func text(for context: Context) -> String { entries[context]?.text ?? "" }
     mutating func set(_ text: String, for context: Context) {
         guard self.text(for: context) != text else { return }
