@@ -116,7 +116,7 @@ impl WorkBook {
             .collect()
     }
 
-    fn deps_done(&self, it: &WorkItem) -> bool {
+    pub(crate) fn deps_done(&self, it: &WorkItem) -> bool {
         it.depends_on
             .iter()
             .all(|d| self.state.items[d].status == Status::Done)
@@ -137,7 +137,7 @@ impl WorkBook {
         self.state
             .items
             .values()
-            .filter(|it| it.status == Status::Open && it.owner.is_none())
+            .filter(|it| is_unowned(it))
             .map(|it| it.id)
             .collect()
     }
@@ -232,17 +232,36 @@ impl WorkBook {
 /// 这一项的负责人算不算失联（spec §5）：恢复失败名单里有它 → Unrecoverable（含 blocked 项）；
 /// open / active 项连续 K 次叫醒没回报、且最后一次之后的复查时间也过了 → Silent。`owner_lost` 与
 /// `reassign_lost`（重派前核实）共用这一个判定。
+pub(crate) fn is_unowned(it: &WorkItem) -> bool {
+    it.status == Status::Open && it.owner.is_none()
+}
+
 pub(crate) fn lost_cause(
     it: &WorkItem,
     now: Ts,
     cfg: &Config,
     unrecoverable: &BTreeSet<SessionId>,
 ) -> Option<LostCause> {
-    let owner = it.owner.as_ref()?;
+    lost_cause_from_fact(
+        it,
+        now,
+        cfg,
+        it.owner.as_ref().is_some_and(|o| unrecoverable.contains(o)),
+    )
+}
+
+/// The fact is supplied by the owning runtime's actual recovery records.
+pub(crate) fn lost_cause_from_fact(
+    it: &WorkItem,
+    now: Ts,
+    cfg: &Config,
+    owner_unrecoverable: bool,
+) -> Option<LostCause> {
+    it.owner.as_ref()?;
     if it.status.is_terminal() {
         return None;
     }
-    if unrecoverable.contains(owner) {
+    if owner_unrecoverable {
         Some(LostCause::Unrecoverable)
     } else if matches!(it.status, Status::Open | Status::Active)
         && it.missed_checks >= cfg.missed_checks_limit

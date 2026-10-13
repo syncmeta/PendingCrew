@@ -5,15 +5,9 @@ use crewd_proto::{
     WorkPatrolWait,
 };
 use crewd_store::{StoreError, object_refs::ObjectKind, work_stop_checks};
-use crewd_work::{Blocker, LostCause, SessionId, Ts, WorkBook};
+use crewd_work::{LostCause, SessionId, Ts, WorkBook};
 use rusqlite::Connection;
-use std::collections::{BTreeMap, BTreeSet};
-
-struct CrewFacts {
-    book: WorkBook,
-    patrol: crewd_work::Patrol,
-    violations: BTreeMap<SessionId, BTreeSet<crewd_work::WorkId>>,
-}
+use std::collections::BTreeMap;
 
 pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkPatrolPage> {
     // Reuse the issued-ID, limit, scope, and authority checks; do not add a second ledger.
@@ -28,53 +22,15 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
             ..Default::default()
         },
     )?;
-    let mut crews: BTreeMap<String, CrewFacts> = BTreeMap::new();
+    let mut crews: BTreeMap<String, WorkBook> = BTreeMap::new();
     let mut owners: BTreeMap<SessionId, (Option<String>, bool)> = BTreeMap::new();
-    for row in &page.items {
-        if crews.contains_key(&row.crew_id) {
-            continue;
-        }
-        let book = asks::load(conn, &row.crew_id)?;
-        let mut unrecoverable = BTreeSet::new();
-        let mut violations = BTreeMap::new();
-        let page_owners: BTreeSet<SessionId> = page
-            .items
-            .iter()
-            .filter(|i| i.crew_id == row.crew_id)
-            .filter_map(|i| i.owner.as_deref())
-            .map(SessionId::new)
-            .collect();
-        for owner in &page_owners {
-            if let std::collections::btree_map::Entry::Vacant(entry) = owners.entry(owner.clone()) {
-                let session = sessions::get(conn, owner.as_str())?;
-                let escalated = work_stop_checks::get(conn, owner.as_str())?
-                    .is_some_and(|b| b.streak.escalated);
-                entry.insert((session.resume_failed_at, escalated));
-            }
-            if owners[owner].0.is_some() {
-                unrecoverable.insert(owner.clone());
-            }
-            violations.entry(owner.clone()).or_insert_with(|| {
-                book.stop_violations(owner, Ts(now_ms))
-                    .into_iter()
-                    .map(|v| v.item)
-                    .collect()
-            });
-        }
-        // Archive candidates and entry rulings are intentionally not projected here.
-        let patrol = book.patrol(Ts(now_ms), &unrecoverable, &BTreeSet::new());
-        crews.insert(
-            row.crew_id.clone(),
-            CrewFacts {
-                book,
-                patrol,
-                violations,
-            },
-        );
-    }
     let mut items = Vec::with_capacity(page.items.len());
     for row in page.items {
-        let facts = &crews[&row.crew_id];
+        if let std::collections::btree_map::Entry::Vacant(entry) = crews.entry(row.crew_id.clone())
+        {
+            entry.insert(asks::load(conn, &row.crew_id)?);
+        }
+        let book = &crews[&row.crew_id];
         let reference =
             crewd_store::object_refs::get(conn, ObjectKind::Plan, work::number(&row.id)?)?
                 .ok_or_else(|| StoreError::Invalid("patrol item has no issued identity".into()))?;
@@ -84,47 +40,53 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
             .and_then(|v| v.parse().ok())
             .ok_or_else(|| StoreError::Invalid("patrol item identity is invalid".into()))?;
         let item =
-            facts.book.state().items.get(&local).ok_or_else(|| {
+            book.state().items.get(&local).ok_or_else(|| {
                 StoreError::Invalid("patrol item has no authoritative state".into())
             })?;
-        let lost = facts
-            .patrol
-            .lost
+        if let Some(owner) = &item.owner
+            && let std::collections::btree_map::Entry::Vacant(entry) = owners.entry(owner.clone())
+        {
+            let session = sessions::get(conn, owner.as_str())?;
+            let escalated =
+                work_stop_checks::get(conn, owner.as_str())?.is_some_and(|b| b.streak.escalated);
+            entry.insert((session.resume_failed_at, escalated));
+        }
+        let owner_facts = item.owner.as_ref().map(|o| &owners[o]);
+        let facts = book
+            .patrol_item(
+                local,
+                Ts(now_ms),
+                owner_facts.is_some_and(|o| o.0.is_some()),
+            )
+            .ok_or_else(|| StoreError::Invalid("patrol item has no authoritative state".into()))?;
+        let lost = facts.lost.map(|cause| match cause {
+            LostCause::Unrecoverable => WorkPatrolLost::Unrecoverable {
+                resume_failed_at: owner_facts
+                    .and_then(|o| o.0.clone())
+                    .expect("used actual failure fact"),
+            },
+            LostCause::Silent { missed } => WorkPatrolLost::Silent {
+                missed_checks: missed,
+            },
+        });
+        let stop_escalated = owner_facts.is_some_and(|o| o.1) && !facts.stop_violations.is_empty();
+        let long_waits_truncated = facts.long_waits.len() > 8;
+        let long_waits = facts
+            .long_waits
             .iter()
-            .find(|l| l.item == local)
-            .map(|l| match l.cause {
-                LostCause::Unrecoverable => WorkPatrolLost::Unrecoverable {
-                    resume_failed_at: owners[&l.owner]
-                        .0
-                        .clone()
-                        .expect("patrol used actual failure set"),
-                },
-                LostCause::Silent { missed } => WorkPatrolLost::Silent {
-                    missed_checks: missed,
-                },
-            });
-        let stop_escalated = item
-            .owner
-            .as_ref()
-            .is_some_and(|o| owners[o].1 && facts.violations[o].contains(&local));
-        let mut long_waits = Vec::new();
-        for blocker in &item.blocked_on {
-            if let Blocker::Human(ask) = blocker
-                && facts.patrol.long_waits.contains(ask)
-            {
-                long_waits.push(WorkPatrolWait {
+            .take(8)
+            .map(|ask| {
+                Ok(WorkPatrolWait {
                     id: work::reference(conn, ObjectKind::HumanTask, &row.crew_id, ask)?,
                     ask_id: ask.to_string(),
-                });
-            }
-        }
-        let long_waits_truncated = long_waits.len() > 8;
-        long_waits.truncate(8);
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         items.push(WorkPatrolItem {
             id: row.id,
             crew_id: row.crew_id,
             revision: row.revision,
-            unowned: facts.patrol.unowned_items.contains(&local),
+            unowned: facts.unowned,
             lost,
             stop_escalated,
             long_waits,

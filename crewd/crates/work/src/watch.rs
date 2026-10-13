@@ -4,7 +4,8 @@ use crate::book::{Applied, Rejected, WorkBook};
 use crate::events::EventKind;
 use crate::ids::{AskId, ChannelId, EntryNo, SessionId, Ts, WorkId};
 use crate::model::{
-    Actor, AskState, Blocker, Config, Status, StopKind, StopStreak, StopViolation, WaitTier,
+    Actor, AskState, Blocker, Config, HumanAsk, Status, StopKind, StopStreak, StopViolation,
+    WaitTier, WorkItem,
 };
 use crate::perm::{Action, Ctx};
 use crate::views::{EntryStatus, LostOwner};
@@ -128,39 +129,90 @@ pub fn advance_stop_streak(
     }
 }
 
+/// Operational findings for one item; examines only its dependencies and human blockers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemPatrol {
+    pub unowned: bool,
+    pub lost: Option<crate::views::LostCause>,
+    pub stop_violations: Vec<StopKind>,
+    pub long_waits: Vec<AskId>,
+}
+
 impl WorkBook {
+    /// No whole-book traversal or entry/channel projection. Authority restoration remains the caller's job.
+    pub fn patrol_item(
+        &self,
+        id: WorkId,
+        now: Ts,
+        owner_unrecoverable: bool,
+    ) -> Option<ItemPatrol> {
+        let it = self.state.items.get(&id)?;
+        let now = self.view_now(now);
+        Some(ItemPatrol {
+            unowned: crate::views::is_unowned(it),
+            lost: crate::views::lost_cause_from_fact(it, now, &self.cfg, owner_unrecoverable),
+            stop_violations: if it.owner.is_some() {
+                self.item_stop_kinds(it, now)
+            } else {
+                Vec::new()
+            },
+            long_waits: if it.status.is_live() {
+                it.blocked_on
+                    .iter()
+                    .filter_map(|b| {
+                        let Blocker::Human(h) = b else {
+                            return None;
+                        };
+                        let (_, tier) = self.ask_wait(&self.state.asks[h], now)?;
+                        (tier >= WaitTier::Pinned).then_some(*h)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        })
+    }
+
+    fn ask_wait(&self, ask: &HumanAsk, now: Ts) -> Option<(i64, WaitTier)> {
+        if ask.state != AskState::Open {
+            return None;
+        }
+        let waited = now.since(ask.asked_at).max(0);
+        Some((waited, wait_tier(waited, &self.cfg)))
+    }
+
+    fn item_stop_kinds(&self, it: &WorkItem, now: Ts) -> Vec<StopKind> {
+        if !matches!(it.status, Status::Open | Status::Active) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if it.missed_checks > 0 {
+            out.push(StopKind::Unanswered);
+        }
+        if it.next_check_at.is_some_and(|t| t <= now) {
+            out.push(StopKind::Overdue);
+        }
+        if it.status == Status::Open && it.next_check_at.is_none() && self.deps_done(it) {
+            out.push(StopKind::ReadyUnscheduled);
+        }
+        out
+    }
+
     /// session 进入 idle 时它名下没着落的项（按 W 号、再按种类）。
     pub fn stop_violations(&self, session: &SessionId, now: Ts) -> Vec<StopViolation> {
         let now = self.view_now(now);
         let mut out = Vec::new();
-        for it in self.state.items.values() {
-            if it.owner.as_ref() != Some(session)
-                || !matches!(it.status, Status::Open | Status::Active)
-            {
-                continue;
-            }
-            if it.missed_checks > 0 {
-                out.push(StopViolation {
-                    item: it.id,
-                    kind: StopKind::Unanswered,
-                });
-            }
-            if it.next_check_at.is_some_and(|t| t <= now) {
-                out.push(StopViolation {
-                    item: it.id,
-                    kind: StopKind::Overdue,
-                });
-            }
-            let deps_done = it
-                .depends_on
-                .iter()
-                .all(|d| self.state.items[d].status == Status::Done);
-            if it.status == Status::Open && it.next_check_at.is_none() && deps_done {
-                out.push(StopViolation {
-                    item: it.id,
-                    kind: StopKind::ReadyUnscheduled,
-                });
-            }
+        for it in self
+            .state
+            .items
+            .values()
+            .filter(|it| it.owner.as_ref() == Some(session))
+        {
+            out.extend(
+                self.item_stop_kinds(it, now)
+                    .into_iter()
+                    .map(|kind| StopViolation { item: it.id, kind }),
+            );
         }
         out
     }
@@ -209,16 +261,13 @@ impl WorkBook {
             .into_iter()
             .filter_map(|(h, (items, owners))| {
                 let ask = &self.state.asks[&h];
-                if ask.state != AskState::Open {
-                    return None;
-                }
-                let waited_ms = now.since(ask.asked_at).max(0);
+                let (waited_ms, tier) = self.ask_wait(ask, now)?;
                 Some(HumanWait {
                     ask: h,
                     items,
                     owners: owners.into_iter().collect(),
                     waited_ms,
-                    tier: wait_tier(waited_ms, &self.cfg),
+                    tier,
                     default_due_at: ask.default.as_ref().map(|d| ask.asked_at.plus(d.after_ms)),
                 })
             })
@@ -357,6 +406,115 @@ mod tests {
             Continuation::Nothing,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn item_projection_matches_full_rules_with_unrelated_history_and_clock_clamp() {
+        let mut b = book();
+        let ids = claim(
+            &mut b,
+            "a",
+            &[
+                "ready",
+                "scheduled",
+                "waiting",
+                "silent",
+                "dependent",
+                "finished",
+            ],
+        );
+        activate(&mut b, "a", ids[1], T1);
+        b.report(
+            &Actor::worker("a"),
+            T1,
+            ids[3],
+            Report {
+                status: None,
+                next_check_at: Some(T1.plus(MINUTE)),
+                note: "scheduled".into(),
+            },
+        )
+        .unwrap();
+        for at in [T1, T1.plus(15 * MINUTE)] {
+            b.record_checkpoint_wake(&Actor::System, at, &sid("a"), &[ids[3]])
+                .unwrap();
+        }
+        block_on_new_ask(&mut b, "a", ids[2], T1.plus(15 * MINUTE), None);
+        b.mark_done(
+            &Actor::worker("a"),
+            T1.plus(15 * MINUTE),
+            ids[5],
+            Evidence::Text("done".into()),
+        )
+        .unwrap();
+        let unowned = b
+            .create_item(
+                &Actor::Human,
+                T1.plus(15 * MINUTE),
+                NewItem::titled("unowned"),
+            )
+            .unwrap()
+            .value;
+        let mut selected = ids;
+        selected.push(unowned);
+        for n in 0..128 {
+            let id = b
+                .create_item(
+                    &Actor::Human,
+                    T1.plus(15 * MINUTE),
+                    NewItem::titled(&format!("history {n}")),
+                )
+                .unwrap()
+                .value;
+            b.mark_done(
+                &Actor::Human,
+                T1.plus(15 * MINUTE),
+                id,
+                Evidence::Text("archived result".into()),
+            )
+            .unwrap();
+        }
+        let original = b.state().clone();
+        for now in [T0, T1.plus(30 * MINUTE), T1.plus(25 * HOUR)] {
+            for unrecoverable in [false, true] {
+                let failed = if unrecoverable {
+                    BTreeSet::from([sid("a")])
+                } else {
+                    BTreeSet::new()
+                };
+                let full = b.patrol(now, &failed, &BTreeSet::new());
+                let stops = b.stop_violations(&sid("a"), now);
+                for id in &selected {
+                    let projected = b.patrol_item(*id, now, unrecoverable).unwrap();
+                    assert_eq!(projected.unowned, full.unowned_items.contains(id));
+                    assert_eq!(
+                        projected.lost,
+                        full.lost.iter().find(|l| l.item == *id).map(|l| l.cause)
+                    );
+                    assert_eq!(
+                        projected.stop_violations,
+                        stops
+                            .iter()
+                            .filter(|v| v.item == *id)
+                            .map(|v| v.kind)
+                            .collect::<Vec<_>>()
+                    );
+                    let waits: Vec<_> = b
+                        .item(*id)
+                        .unwrap()
+                        .blocked_on
+                        .iter()
+                        .filter_map(|blocker| match blocker {
+                            Blocker::Human(h) if full.long_waits.contains(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(projected.long_waits, waits);
+                }
+            }
+        }
+        assert!(b.patrol_item(WorkId(u32::MAX), T1, false).is_none());
+        assert_eq!(b.state(), &original, "projection must be read-only");
     }
 
     #[test]
