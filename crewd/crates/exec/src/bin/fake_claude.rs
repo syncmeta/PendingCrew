@@ -348,6 +348,29 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
                 return Err(invalid("guarded fixture screen exceeds 1MiB"));
             }
             let frame = std::fs::read(source)?;
+            // Explicit fault mode: writer receipt is visible before parent-readable bytes.
+            // The parent must prove actual read progress, not trust this marker alone.
+            if dir
+                .join(format!("screen-{next_screen}.early-receipt"))
+                .exists()
+            {
+                receipt(
+                    &format!("screen-{next_screen}.written"),
+                    "synthetic early receipt\n",
+                )?;
+                while !dir
+                    .join(format!("screen-{next_screen}.reader-waiting"))
+                    .exists()
+                {
+                    if start.elapsed() >= Duration::from_secs(30) {
+                        return Err(Error::new(
+                            ErrorKind::TimedOut,
+                            "fixture reader observation deadline",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
             let mut offset = 0usize;
             while offset < frame.len() {
                 if start.elapsed() >= Duration::from_secs(30) {

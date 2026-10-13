@@ -950,16 +950,32 @@ fn drain_for_write(
     first: Option<&[u8]>,
     budget: usize,
 ) -> OutputDrain {
+    drain_for_write_with(master, core, first, budget, Instant::now, |_| {})
+}
+
+// Private I/O witness and clock seam. Production always uses the real clock and
+// no observer; native fixtures keep their logical Core clock consistent and count
+// bytes that actually reached the parser. Neither is exposed to RPC/caller policy.
+fn drain_for_write_with(
+    master: &PtyMaster,
+    core: &mut Core,
+    first: Option<&[u8]>,
+    budget: usize,
+    mut now: impl FnMut() -> Instant,
+    mut observed: impl FnMut(usize),
+) -> OutputDrain {
     let mut read_chunks = 0;
     if let Some(bytes) = first {
-        core.ingest_output(bytes, Instant::now());
+        observed(bytes.len());
+        core.ingest_output(bytes, now());
         read_chunks += 1;
     }
     let mut buf = [0u8; PTY_READ_SIZE];
     while read_chunks < budget {
         match master.try_read(&mut buf) {
             Ok(Some(n)) if n > 0 => {
-                core.ingest_output(&buf[..n], Instant::now());
+                observed(n);
+                core.ingest_output(&buf[..n], now());
                 read_chunks += 1;
             }
             Ok(None) => return OutputDrain::Drained,
@@ -1670,13 +1686,27 @@ mod output_drain_tests {
             std::fs::write(self.dir.path().join(format!("screen-{n}.bin")), bytes).unwrap();
             std::fs::write(self.dir.path().join(format!("screen-{n}.request")), []).unwrap();
             let written = self.dir.path().join(format!("screen-{n}.written"));
+            let reader_waiting = self.dir.path().join(format!("screen-{n}.reader-waiting"));
+            let mut received = 0usize;
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     // Drain while waiting: a large child frame cannot deadlock its receipt.
-                    let fully_drained = drain_ready(self.master(), core, None, DRAIN_CHUNKS);
+                    let drained = drain_for_write_with(
+                        self.master(),
+                        core,
+                        None,
+                        DRAIN_CHUNKS,
+                        || at,
+                        |n| received += n,
+                    );
+                    let fully_drained =
+                        matches!(drained, OutputDrain::Drained | OutputDrain::Closed);
                     assert!(!self.dir.path().join("fixture.error").exists());
-                    if written.exists() && fully_drained {
+                    if written.exists() && received >= bytes.len() && fully_drained {
                         break;
+                    }
+                    if written.exists() && received < bytes.len() && !reader_waiting.exists() {
+                        std::fs::write(&reader_waiting, []).unwrap();
                     }
                     tokio::time::sleep(Duration::from_millis(2)).await;
                 }
@@ -1889,6 +1919,27 @@ mod output_drain_tests {
                 }
             )),
             "an unwritten key cannot be Answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn screen_setup_requires_actual_parser_bytes_after_a_writer_receipt() {
+        let mut fixture = GuardedFixture::new().await;
+        std::fs::write(fixture.dir.path().join("screen-0.early-receipt"), []).unwrap();
+        let now = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            now,
+            vec![],
+            None,
+        );
+        fixture
+            .screen(&mut core, &input_box("LATE_NATIVE_FRAME"), now)
+            .await;
+        assert!(
+            core.screen_text(25).contains("LATE_NATIVE_FRAME"),
+            "writer receipt must not stand in for actual parser ingestion"
         );
     }
 
