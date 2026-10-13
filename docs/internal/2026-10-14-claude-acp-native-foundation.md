@@ -13,3 +13,10 @@ Executed local synthetic evidence:
 - `/private/tmp/pcw-M4-real-terminal-tap-01.log`: actual ANSI/UTF8 PTY output split between async and immediate-drain reads mirrored exactly once, passed.
 
 No paid CLI, personal transcript/auth, installed runtime, full ACP helper, lifecycle recovery, mixed Codex route or independent M4 acceptance is claimed. Production initialize must not advertise these planned capabilities until the full implementation is connected and proven. Next work remains helper/core transport, single-writer enrollment, authenticated Stop-hook completion, confirmed resize, permission fidelity, prompt delivery/recovery deduplication and process-group stop. The Linux M3 delivery failure is being addressed in a separate exact-source tree before resuming this lifecycle.
+
+
+## In-progress checkpoint before integrating the native submission repair
+
+The independent M4 tree retains the actual confirmed-resize and control/terminal stream tests previously recorded. The additional participant registry and cancelled-read retention changes are staged implementation, not completed lifecycle acceptance: core remains the sole persistent writer; generation/epoch slots retain separate helper/native orphan obligations. Both control and terminal readers keep consumed partial frames across cancellation, enforce their existing bounds, and permanently reject further frames after malformed input. New cancellation/poison controls are prepared but have not yet been compiled. No executable helper, genuine provider turn closure, approval projection, or whole M4 completion is claimed.
+
+The complete M3 native submission repair is frozen separately at `2eeec984`; root owns its real two-platform CI. Incorporating that fixed source into M4 preserves the default unknown-content and actual consumption/late-key guarantees before further helper implementation. It does not modify the frozen CI tree or grant a real-provider capability.

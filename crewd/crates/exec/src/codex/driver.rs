@@ -539,6 +539,9 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         Command::Interrupt => t.core.interrupt(now),
         // 没有终端，尺寸无意义。
         Command::Resize { .. } => {}
+        Command::ResizeConfirmed { reply, .. } => {
+            let _ = reply.send(crate::driver::ResizeOutcome::Unsupported);
+        }
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
         Command::ScreenText { max_lines, reply } => {

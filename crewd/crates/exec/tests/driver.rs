@@ -587,6 +587,40 @@ async fn raw_input_and_resize_reach_the_child() {
     until(&mut rx, |e| exited(e).is_some()).await;
 }
 
+#[tokio::test]
+async fn confirmed_native_resize_matches_kernel_and_snapshot_without_queue_guess() {
+    use crewd_exec::driver::ResizeOutcome;
+    let env = Env::new();
+    let program = env.script("stty size; read l; stty size; sleep 30");
+    let (h, mut rx) = start_claude(
+        env.start(program, Arc::new(MemoryLedger::default())),
+        env.config(),
+    )
+    .await
+    .unwrap();
+    screen_contains(&h, "25 80").await;
+    assert_eq!(
+        h.resize_confirmed(0, 30).await.unwrap(),
+        ResizeOutcome::InvalidSize
+    );
+    assert_eq!(
+        h.resize_confirmed(513, 30).await.unwrap(),
+        ResizeOutcome::InvalidSize
+    );
+    assert_eq!(h.snapshot().await.unwrap().unwrap().cols, 80);
+    assert_eq!(
+        h.resize_confirmed(100, 30).await.unwrap(),
+        ResizeOutcome::Applied
+    );
+    let snapshot = h.snapshot().await.unwrap().unwrap();
+    assert_eq!((snapshot.cols, snapshot.lines), (100, 30));
+    h.raw(b"size-check\r".to_vec()).unwrap();
+    screen_contains(&h, "30 100").await;
+    h.stop().unwrap();
+    until(&mut rx, |e| exited(e).is_some()).await;
+    assert!(h.resize_confirmed(90, 20).await.is_err());
+}
+
 /// 空 / 全空白的正文在句柄上就拒掉：不占投递编号，也不会有「投递结果」那条事件可等。
 #[tokio::test]
 async fn empty_text_is_rejected_at_the_handle() {

@@ -258,6 +258,16 @@ pub fn with_untrusted_context(context: &UntrustedContext, text: &str) -> String 
     out
 }
 
+/// Native resize acknowledgement reflects the real kernel ioctl, not queue admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeOutcome {
+    Applied,
+    InvalidSize,
+    Unsupported,
+    NotRunning,
+    Failed { errno: Option<i32> },
+}
+
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
     AnswerChoice {
@@ -283,6 +293,11 @@ pub(crate) enum Command {
     Resize {
         cols: u16,
         lines: u16,
+    },
+    ResizeConfirmed {
+        cols: u16,
+        lines: u16,
+        reply: oneshot::Sender<ResizeOutcome>,
     },
     Stop,
     ClearQuotaHealth,
@@ -476,6 +491,13 @@ impl SessionHandle {
 
     pub fn resize(&self, cols: u16, lines: u16) -> Result<(), Closed> {
         self.cmd(Command::Resize { cols, lines })
+    }
+
+    /// ACP extension resize, bounded and acknowledged after the actual PTY ioctl.
+    pub async fn resize_confirmed(&self, cols: u16, lines: u16) -> Result<ResizeOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::ResizeConfirmed { cols, lines, reply })?;
+        rx.await.map_err(|_| Closed)
     }
 
     /// SIGTERM，`stop_grace` 后 `killpg(SIGKILL)`。退出后发 `Exited { stopped_by_user: true }`。
@@ -1210,6 +1232,24 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         }
         Command::Interrupt => t.core.interrupt(),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
+        Command::ResizeConfirmed { cols, lines, reply } => {
+            let outcome = if !t.core.is_running() {
+                ResizeOutcome::NotRunning
+            } else if cols == 0 || lines == 0 || cols > 512 || lines > 256 {
+                ResizeOutcome::InvalidSize
+            } else {
+                match t.running.master.resize(cols, lines) {
+                    Ok(()) => {
+                        t.core.resize_observed(cols, lines);
+                        ResizeOutcome::Applied
+                    }
+                    Err(e) => ResizeOutcome::Failed {
+                        errno: e.raw_os_error(),
+                    },
+                }
+            };
+            let _ = reply.send(outcome);
+        }
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
         Command::ScreenText { max_lines, reply } => {
