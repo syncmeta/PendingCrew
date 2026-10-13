@@ -176,3 +176,12 @@ pub struct WorkConflictFacts {
     pub note: Option<String>,
     pub note_truncated: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkAssignParams {
+    pub id: String,
+    pub expected_revision: String,
+    pub owner: String,
+    pub note: String,
+}

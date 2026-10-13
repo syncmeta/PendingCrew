@@ -42,8 +42,8 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 21);
-    assert_eq!(ct.len(), 32);
+    assert_eq!(wt.len(), 22);
+    assert_eq!(ct.len(), 33);
     for t in wt.iter().chain(&ct) {
         assert_eq!(t["annotations"]["openWorldHint"], false);
         for k in ["readOnlyHint", "destructiveHint", "idempotentHint"] {
@@ -54,13 +54,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 32);
-    assert_eq!(cm.tools().await.len(), 21);
+    assert_eq!(wm.tools().await.len(), 33);
+    assert_eq!(cm.tools().await.len(), 22);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 21);
+    assert_eq!(wm.tools().await.len(), 22);
     wm.close().await;
     cm.close().await;
 }
@@ -569,4 +569,53 @@ async fn work_tools_use_real_helper_and_shared_transactions_without_echoing_full
         true
     );
     m.close().await;
+}
+
+#[tokio::test]
+async fn work_assignment_uses_actual_helper_identity_and_compact_receipts() {
+    let f = Fixture::new().await;
+    f.spawn_socket().await;
+    let crew = f.crew.clone();
+    let goal = "synthetic long assignment goal".repeat(200);
+    let p = f
+        .state
+        .collab(move |tx| {
+            crewd_collab::work::create(
+                tx,
+                &crewd_collab::Sender::Human,
+                crewd_proto::WorkCreateParams {
+                    crew_id: crew,
+                    title: "unowned helper work".into(),
+                    goal,
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let rt = tempfile::tempdir().unwrap();
+    let worker = launch(&f, &f.worker, rt.path());
+    let captain = launch(&f, &f.captain, rt.path());
+    let mut w = Mcp::start(&worker.mcp).await;
+    let mut c = Mcp::start(&captain.mcp).await;
+    let (text,error)=w.call("work_item_assign",json!({"id":p.id,"expected_revision":p.revision,"owner":f.worker,"note":"claim unowned work"})).await;
+    assert!(!error, "{text}");
+    assert!(!text.contains("long assignment goal"));
+    let claimed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(claimed["owner"], f.worker);
+    assert!(claimed.get("goal").is_none());
+    let (text,error)=c.call("work_item_assign",json!({"id":p.id,"expected_revision":claimed["revision"],"owner":f.captain,"note":"captain takes ownership"})).await;
+    assert!(!error, "{text}");
+    let assigned: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(assigned["owner"], f.captain);
+    let (text,error)=w.call("work_item_assign",json!({"id":p.id,"expected_revision":assigned["revision"],"owner":f.worker,"note":"attempted steal"})).await;
+    assert!(error, "{text}");
+    let (text,error)=w.call("work_item_assign",json!({"id":p.id,"expected_revision":assigned["revision"],"owner":f.worker,"note":"spoof","actor":"human"})).await;
+    assert!(error, "{text}");
+    let (text,error)=c.call("work_item_assign",json!({"id":p.id,"expected_revision":claimed["revision"],"owner":f.worker,"note":"stale assignment"})).await;
+    assert!(error, "{text}");
+    assert!(text.contains("currentWork"));
+    assert!(!text.contains("long assignment goal"));
+    w.close().await;
+    c.close().await;
 }

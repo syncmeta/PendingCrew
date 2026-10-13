@@ -989,3 +989,18 @@ RFC3339 检查时间，晚于现在且不超过工作规则上限；done 不接�
 
 ## my_work_items.include_removed
 true 也查看已移除机组中的工作，默认 false。返回 frozen:true 的对象只读，别反复尝试推进它。
+
+## work_item_assign
+指派负责人或认领无主工作。普通成员只能把无主项认领给自己；机长只能在自己有管理权限的机组指派。需要当前修订和理由，成功后持久通知新负责人。转交已负责的工作请由机长或人指派，不冒充对方同意。
+
+## work_item_assign.id
+全局 W 号。
+
+## work_item_assign.expected_revision
+读取到的当前修订，作为字符串；冲突时先核对返回事实。
+
+## work_item_assign.owner
+新负责人的实际 session ID，不能填写角色或人类身份。
+
+## work_item_assign.note
+指派或认领理由，不能为空。

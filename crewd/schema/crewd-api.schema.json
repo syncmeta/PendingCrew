@@ -3809,6 +3809,30 @@
       ],
       "type": "object"
     },
+    "WorkAssignParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "owner",
+        "note"
+      ],
+      "type": "object"
+    },
     "WorkChanged": {
       "properties": {
         "crewId": {
@@ -4827,6 +4851,14 @@
       },
       "result": {
         "$ref": "#/$defs/WakeListResult"
+      }
+    },
+    "work.assign": {
+      "params": {
+        "$ref": "#/$defs/WorkAssignParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
       }
     },
     "work.create": {

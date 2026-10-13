@@ -1547,13 +1547,14 @@ async fn s44_actual_member_join_preserves_held_frontier_and_pins_new_member() {
 }
 
 #[tokio::test]
-async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
+async fn work_reminder_changed_after_actual_render_never_reaches_executor() {
     use crewd_collab::{Sender, checkpoints, stop_checks, wakes, work};
     use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
-    for mode in ["stop", "checkpoint", "dependency"] {
+    for mode in ["stop", "checkpoint", "dependency", "assignment"] {
         let rig = Rig::new().await;
         rig.working(true).await;
         let crew = rig.f.crew.clone();
+        let captain = rig.captain.clone();
         let owner = rig.worker.clone();
         let p = rig
             .f
@@ -1579,7 +1580,11 @@ async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
                     WorkCreateParams {
                         crew_id: crew,
                         title: "synthetic rendered work race".into(),
-                        owner: Some(owner.clone()),
+                        owner: Some(if mode == "assignment" {
+                            captain.clone()
+                        } else {
+                            owner.clone()
+                        }),
                         depends_on: parent
                             .as_ref()
                             .map(|p| vec![p.id.clone()])
@@ -1598,6 +1603,18 @@ async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
                             ..Default::default()
                         },
                     )?;
+                }
+                if mode == "assignment" {
+                    return work::assign(
+                        tx,
+                        &Sender::Human,
+                        crewd_proto::WorkAssignParams {
+                            id: p.id,
+                            expected_revision: p.revision,
+                            owner,
+                            note: "synthetic actual assignment".into(),
+                        },
+                    );
                 }
                 if mode == "checkpoint" {
                     work::update(
@@ -1653,6 +1670,7 @@ async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
                             r.source.starts_with("work-stop:")
                                 || r.source.starts_with("work-check:")
                                 || r.source.starts_with("work-done:")
+                                || r.source.starts_with("work-assigned:")
                         })
                         .expect("durable work reminder"),
                 )
@@ -1665,9 +1683,22 @@ async fn work_reminder_completed_after_actual_render_never_reaches_executor() {
         let rendered = timeout(LIMIT, gate.entered()).await.unwrap();
         let id = p.id.clone();
         let rev = p.revision.clone();
+        let next_owner = rig.captain.clone();
         rig.f
             .state
             .collab(move |tx| {
+                if mode == "assignment" {
+                    return work::assign(
+                        tx,
+                        &Sender::Human,
+                        crewd_proto::WorkAssignParams {
+                            id,
+                            expected_revision: rev,
+                            owner: next_owner,
+                            note: "synthetic owner changed after render".into(),
+                        },
+                    );
+                }
                 work::update(
                     tx,
                     &Sender::Human,

@@ -142,3 +142,33 @@ pub async fn update(cx: &Ctx<'_>, v: Value) -> CallResult {
         .map(crewd_proto::WorkSummary::from),
     )
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Assign {
+    id: String,
+    expected_revision: String,
+    owner: String,
+    note: String,
+}
+pub async fn assign(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: Assign = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::work_assign(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkAssignParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+                owner: a.owner,
+                note: a.note,
+            },
+        )
+        .await
+        .map(crewd_proto::WorkSummary::from),
+    )
+}

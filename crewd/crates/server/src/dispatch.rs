@@ -438,6 +438,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_ASSIGN => {
+            let p: WorkAssignParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work::assign(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::WORK_LIST => {
             let p: WorkListParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::list(c, p)).await

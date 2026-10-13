@@ -197,6 +197,44 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "指派负责人或认领无主工作。普通成员只能把无主项认领给自己；机长只能在自己有管理权限的机组指派。需要当前修订和理由，成功后持久通知新负责人。转交已负责的工作请由机长或人指派，不冒充对方同意。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "读取到的当前修订，作为字符串；冲突时先核对返回事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 号。",
+            "type": "string"
+          },
+          "note": {
+            "description": "指派或认领理由，不能为空。",
+            "type": "string"
+          },
+          "owner": {
+            "description": "新负责人的实际 session ID，不能填写角色或人类身份。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "owner",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -1338,6 +1376,44 @@
         "type": "object"
       },
       "name": "work_item_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "指派负责人或认领无主工作。普通成员只能把无主项认领给自己；机长只能在自己有管理权限的机组指派。需要当前修订和理由，成功后持久通知新负责人。转交已负责的工作请由机长或人指派，不冒充对方同意。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "读取到的当前修订，作为字符串；冲突时先核对返回事实。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 号。",
+            "type": "string"
+          },
+          "note": {
+            "description": "指派或认领理由，不能为空。",
+            "type": "string"
+          },
+          "owner": {
+            "description": "新负责人的实际 session ID，不能填写角色或人类身份。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "owner",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_assign"
     },
     {
       "annotations": {

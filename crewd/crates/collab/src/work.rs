@@ -175,10 +175,14 @@ pub(crate) enum FollowupNote {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StoredFollowup {
+    #[serde(alias = "assignedWork")]
     unblocked_work: Vec<String>,
     total: usize,
     partial: bool,
     targets: Option<Vec<String>>,
+    assignment_note: Option<String>,
+    note_truncated: Option<bool>,
+    assigned_revision: Option<String>,
 }
 /// Recheck current ownership/terminal state at render time. Corrupt books remain
 /// errors, so a temporary DB fault cannot permanently discard a wake.
@@ -193,7 +197,9 @@ pub(crate) fn followup_note(
     if row.kind == crate::wakes::WakeKind::Checkpoint {
         return crate::checkpoints::render_note(conn, row, now);
     }
-    if row.kind != crate::wakes::WakeKind::System || !row.source.starts_with("work-done:") {
+    if row.kind != crate::wakes::WakeKind::System
+        || !(row.source.starts_with("work-done:") || row.source.starts_with("work-assigned:"))
+    {
         return Ok(FollowupNote::Ordinary);
     }
     let note: StoredFollowup = serde_json::from_str(row.note.as_deref().unwrap_or(""))
@@ -204,6 +210,18 @@ pub(crate) fn followup_note(
             || note.unblocked_work != ids.iter().take(50).cloned().collect::<Vec<_>>())
     {
         return Err(invalid("work follow-up target metadata is inconsistent"));
+    }
+    let assignment = row.source.starts_with("work-assigned:");
+    if assignment
+        && (note.total != 1
+            || note
+                .assignment_note
+                .as_ref()
+                .is_none_or(|n| n.chars().nth(256).is_some())
+            || note.note_truncated.is_none()
+            || note.assigned_revision.is_none())
+    {
+        return Err(invalid("assignment follow-up metadata is incomplete"));
     }
     let targets = match note.targets {
         Some(ids) => ids,
@@ -245,6 +263,8 @@ pub(crate) fn followup_note(
                 .as_ref()
                 .is_some_and(|o| o.as_str() == row.session)
             && !matches!(item.status, Status::Done | Status::Dropped)
+            && (!assignment
+                || note.assigned_revision.as_deref() == Some(item.revision.to_string().as_str()))
         {
             current.push(id);
         }
@@ -257,7 +277,12 @@ pub(crate) fn followup_note(
     let total = current.len();
     current.truncate(50);
     Ok(FollowupNote::Current(
-        serde_json::json!({"unblockedWork":current,"total":total,"partial":total>50}).to_string(),
+        if row.source.starts_with("work-assigned:") {
+            serde_json::json!({"assignedWork":current,"total":total,"partial":total>50,"assignmentNote":note.assignment_note,"noteTruncated":note.note_truncated}).to_string()
+        } else {
+            serde_json::json!({"unblockedWork":current,"total":total,"partial":total>50})
+                .to_string()
+        },
     ))
 }
 
@@ -431,6 +456,38 @@ pub fn create(
     changed(tx, by, &p.crew_id, &id)?;
     get(tx.conn(), &id)
 }
+fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result<()> {
+    if item.revision != revision {
+        let note = item
+            .last_report
+            .as_ref()
+            .map(|n| n.text.chars().take(256).collect::<String>());
+        let note_truncated = item
+            .last_report
+            .as_ref()
+            .is_some_and(|n| n.text.chars().nth(256).is_some());
+        let mut refusal = Refusal::new(Code::WorkRevisionConflict).arg("id", id);
+        refusal.current_work = Some(Box::new(crewd_proto::WorkConflictFacts {
+            id: id.into(),
+            revision: item.revision.to_string(),
+            owner: item.owner.as_ref().map(ToString::to_string),
+            status: match item.status {
+                Status::Open => "open",
+                Status::Active => "active",
+                Status::Blocked => "blocked",
+                Status::Done => "done",
+                Status::Dropped => "dropped",
+            }
+            .into(),
+            next_check_at: item.next_check_at.map(|t| crewd_store::ts_from_ms(t.0)),
+            blocker_count: item.blocked_on.len(),
+            note,
+            note_truncated,
+        }));
+        return Err(CollabError::Conflict(refusal));
+    }
+    Ok(())
+}
 pub fn update(
     tx: &mut crate::Tx<'_>,
     by: &crate::Sender,
@@ -467,35 +524,7 @@ pub fn update(
     let item = current
         .item(local)
         .ok_or_else(|| invalid("plan reference has no authoritative item"))?;
-    if item.revision != revision {
-        let note = item
-            .last_report
-            .as_ref()
-            .map(|n| n.text.chars().take(256).collect::<String>());
-        let note_truncated = item
-            .last_report
-            .as_ref()
-            .is_some_and(|n| n.text.chars().nth(256).is_some());
-        let mut refusal = Refusal::new(Code::WorkRevisionConflict).arg("id", &p.id);
-        refusal.current_work = Some(Box::new(crewd_proto::WorkConflictFacts {
-            id: p.id.clone(),
-            revision: item.revision.to_string(),
-            owner: item.owner.as_ref().map(ToString::to_string),
-            status: match item.status {
-                Status::Open => "open",
-                Status::Active => "active",
-                Status::Blocked => "blocked",
-                Status::Done => "done",
-                Status::Dropped => "dropped",
-            }
-            .into(),
-            next_check_at: item.next_check_at.map(|t| crewd_store::ts_from_ms(t.0)),
-            blocker_count: item.blocked_on.len(),
-            note,
-            note_truncated,
-        }));
-        return Err(CollabError::Conflict(refusal));
-    }
+    check_revision(item, &p.id, revision)?;
     let (released, ready) = asks::with_book(tx, &r.crew_id, |b, now| {
         if !done || p.note.is_some() {
             b.report(
@@ -1253,5 +1282,225 @@ mod action_tests {
             cr::claim_reserved(tx, &fresh, &[], &ids, &[], cr::Owner::new(1).unwrap())
         });
         assert!(matches!(claimed, cr::Decision::Applied(_)));
+    }
+}
+
+/// Assign a live plan; the pure model also permits workers to claim unowned work.
+pub fn assign(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    p: crewd_proto::WorkAssignParams,
+) -> Result<WorkPlan> {
+    let r = object_refs::get(tx.conn(), ObjectKind::Plan, number(&p.id)?)?
+        .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
+    crews::refuse_archived(tx.conn(), &r.crew_id)?;
+    let actor = actor(tx.conn(), by, &r.crew_id)?;
+    let target = crate::sessions::get(tx.conn(), &p.owner)?;
+    crews::refuse_archived(tx.conn(), &target.crew_id)?;
+    let local = local_plan(tx.conn(), &r.crew_id, &p.id)?;
+    let revision = p
+        .expected_revision
+        .parse::<u64>()
+        .ok()
+        .filter(|n| p.expected_revision == n.to_string())
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkBadRevision)))?;
+    if p.note.trim().is_empty() {
+        return Err(CollabError::Invalid(Refusal::new(Code::WorkBadUpdate)));
+    }
+    let book = asks::load(tx.conn(), &r.crew_id)?;
+    let item = book
+        .item(local)
+        .ok_or_else(|| invalid("plan reference has no authoritative item"))?;
+    check_revision(item, &p.id, revision)?;
+    asks::with_book(tx, &r.crew_id, |b, now| {
+        b.assign(
+            &actor,
+            now,
+            local,
+            crewd_work::SessionId::new(&p.owner),
+            &p.note,
+        )
+    })?;
+    let plan = get(tx.conn(), &p.id)?;
+    crate::wakes::enqueue(tx,crate::wakes::WakeRequest {session:p.owner,kind:crate::wakes::WakeKind::System,source:format!("work-assigned:{}:{}",p.id,plan.revision),priority:crate::wakes::WakePriority::System,not_before_ms:None,note:Some(serde_json::json!({"assignedWork":[p.id],"targets":[p.id],"total":1,"partial":false,"assignmentNote":p.note.chars().take(256).collect::<String>(),"noteTruncated":p.note.chars().nth(256).is_some(),"assignedRevision":plan.revision}).to_string()),origin:None})?;
+    changed(tx, by, &r.crew_id, &p.id)?;
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod assignment_tests {
+    use super::*;
+    use crate::{
+        Change, Sender,
+        testkit::{NOW, err, ok, store},
+        wakes,
+    };
+    use crewd_proto::{WorkAssignParams, WorkCreateParams};
+    fn input(p: &WorkPlan, owner: &str) -> WorkAssignParams {
+        WorkAssignParams {
+            id: p.id.clone(),
+            expected_revision: p.revision.clone(),
+            owner: owner.into(),
+            note: "synthetic assignment reason".into(),
+        }
+    }
+    fn create_plan(s: &mut crewd_store::Store, owner: Option<&str>) -> WorkPlan {
+        ok(s, |tx| {
+            create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "synthetic assigned work".into(),
+                    owner: owner.map(str::to_owned),
+                    ..Default::default()
+                },
+            )
+        })
+    }
+    #[test]
+    fn assignment_commits_owner_history_global_notice_and_filters_old_owner() {
+        let mut s = store();
+        let p = create_plan(&mut s, Some("w-a1"));
+        ok(&mut s, |tx| {
+            wakes::enqueue(tx,wakes::WakeRequest {session:"w-a1".into(),kind:wakes::WakeKind::System,source:"work-done:synthetic".into(),priority:wakes::WakePriority::System,not_before_ms:None,note:Some(serde_json::json!({"unblockedWork":[p.id],"targets":[p.id],"total":1,"partial":false}).to_string()),origin:None})
+        });
+        let (assigned, changes) = crate::run(&mut s, NOW, |tx| {
+            assign(tx, &Sender::Human, input(&p, "w-b1"))
+        })
+        .unwrap();
+        assert_eq!(assigned.id, p.id);
+        assert_eq!(assigned.owner.as_deref(), Some("w-b1"));
+        assert_ne!(assigned.revision, p.revision);
+        assert!(changes.contains(&Change::WorkChanged {
+            crew_id: "crew-a".into(),
+            id: p.id.clone()
+        }));
+        let old = wakes::list(s.conn(), Some("w-a1"), 100).unwrap().remove(0);
+        assert!(matches!(
+            followup_note(s.conn(), &old, NOW).unwrap(),
+            FollowupNote::Stale
+        ));
+        let rows = wakes::list(s.conn(), Some("w-b1"), 100).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(changes.contains(&Change::WakeEnqueued {
+            wake_id: rows[0].id,
+            session_id: "w-b1".into()
+        }));
+        let FollowupNote::Current(body) = followup_note(s.conn(), &rows[0], NOW).unwrap() else {
+            panic!("new owner must be notified")
+        };
+        assert!(body.contains("assignedWork"));
+        assert!(body.contains("synthetic assignment reason"));
+        assert!(!body.contains("assignedRevision"));
+        assert!(!body.contains("unblockedWork"));
+        assert!(!body.contains("targets"));
+        assert!(body.contains(&p.id));
+        let book = asks::load(s.conn(), "crew-a").unwrap();
+        let item = book.item("W1".parse().unwrap()).unwrap();
+        assert_eq!(item.owner_history.len(), 2);
+        assert_eq!(
+            item.owner_history
+                .last()
+                .unwrap()
+                .from
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "w-a1"
+        );
+    }
+    #[test]
+    fn worker_claim_is_not_steal_or_foreign_captain_privilege_and_stale_cas_is_read_only() {
+        let mut s = store();
+        let p = create_plan(&mut s, None);
+        let claimed = ok(&mut s, |tx| {
+            assign(tx, &Sender::Session("w-a1".into()), input(&p, "w-a1"))
+        });
+        for (actor, owner) in [("w-a2", "w-a2"), ("cap-b", "w-b1")] {
+            assert!(matches!(
+                err(&mut s, |tx| assign(
+                    tx,
+                    &Sender::Session(actor.into()),
+                    input(&claimed, owner)
+                )),
+                CollabError::Work(crewd_work::Rejected::Forbidden(_))
+            ));
+        }
+        let moved = ok(&mut s, |tx| {
+            assign(
+                tx,
+                &Sender::Session("cap-a".into()),
+                input(&claimed, "w-a2"),
+            )
+        });
+        let error = err(&mut s, |tx| {
+            assign(tx, &Sender::Human, input(&claimed, "w-b1"))
+        });
+        let CollabError::Conflict(r) = error else {
+            panic!("strict CAS required")
+        };
+        assert_eq!(r.current_work.unwrap().revision, moved.revision);
+        assert_eq!(get(s.conn(), &p.id).unwrap(), moved);
+        assert_eq!(wakes::list(s.conn(), Some("w-a2"), 100).unwrap().len(), 1);
+        assert!(wakes::list(s.conn(), Some("w-b1"), 100).unwrap().is_empty());
+        let mut blank = input(&moved, "w-b1");
+        blank.note = " ".into();
+        err(&mut s, |tx| assign(tx, &Sender::Human, blank));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), moved);
+    }
+    #[test]
+    fn queue_failure_rolls_back_assignment_history_and_target_frozen_refuses() {
+        let mut s = store();
+        let p = create_plan(&mut s, Some("w-a1"));
+        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        s.conn().execute_batch("CREATE TRIGGER deny_assign BEFORE INSERT ON wakes BEGIN SELECT RAISE(ABORT,'synthetic assignment queue failure'); END;").unwrap();
+        err(&mut s, |tx| assign(tx, &Sender::Human, input(&p, "w-b1")));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            before
+        );
+        assert!(wakes::list(s.conn(), Some("w-b1"), 100).unwrap().is_empty());
+        s.conn().execute_batch("DROP TRIGGER deny_assign;").unwrap();
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+        assert!(matches!(
+            err(&mut s, |tx| assign(tx, &Sender::Human, input(&p, "w-b1"))),
+            CollabError::Conflict(r) if r.code==Code::CrewRemoved
+        ));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), p);
+    }
+    #[test]
+    fn assignment_reason_is_bounded_and_new_owner_report_invalidates_old_notice() {
+        let mut s = store();
+        let p = create_plan(&mut s, Some("w-a1"));
+        let mut params = input(&p, "w-b1");
+        params.note = "交接🙂".repeat(400);
+        let assigned = ok(&mut s, |tx| assign(tx, &Sender::Human, params));
+        let row = wakes::list(s.conn(), Some("w-b1"), 100).unwrap().remove(0);
+        let FollowupNote::Current(body) = followup_note(s.conn(), &row, NOW).unwrap() else {
+            panic!("notice required")
+        };
+        let n: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(n["assignmentNote"].as_str().unwrap().chars().count(), 256);
+        assert_eq!(n["noteTruncated"], true);
+        assert!(!body.contains("assignedRevision"));
+        ok(&mut s, |tx| {
+            update(
+                tx,
+                &Sender::Session("w-b1".into()),
+                crewd_proto::WorkUpdateParams {
+                    id: assigned.id,
+                    expected_revision: assigned.revision,
+                    status: Some(crewd_proto::WorkUpdateStatus::Open),
+                    note: Some("new owner already reported".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        assert!(matches!(
+            followup_note(s.conn(), &row, NOW).unwrap(),
+            FollowupNote::Stale
+        ));
     }
 }

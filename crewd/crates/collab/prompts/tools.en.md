@@ -989,3 +989,18 @@ Optional completion evidence: {kind:"commit"|"url"|"text", value:"nonblank text"
 
 ## my_work_items.include_removed
 true also reads work in removed crews, default false. Objects with frozen:true are read-only; do not repeatedly try to advance them.
+
+## work_item_assign
+Assign an owner or claim unowned work. Workers may only claim an unowned item for themselves; captains may assign only in crews they manage. Requires the current revision and a reason; success durably notifies the new owner. Assignment by a captain or human does not fabricate the recipient's consent.
+
+## work_item_assign.id
+Global W ID.
+
+## work_item_assign.expected_revision
+Observed current revision as a string; review returned facts on conflict.
+
+## work_item_assign.owner
+New owner's actual session ID, not a role or human identity.
+
+## work_item_assign.note
+Nonempty assignment or claim reason.

@@ -66,6 +66,7 @@ pub mod methods {
     pub const SESSION_GET: &str = "session.get";
     pub const WORK_CREATE: &str = "work.create";
     pub const WORK_UPDATE: &str = "work.update";
+    pub const WORK_ASSIGN: &str = "work.assign";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
     pub const ASK_LIST: &str = "ask.list";
@@ -106,6 +107,7 @@ pub mod methods {
         SESSION_GET,
         WORK_CREATE,
         WORK_UPDATE,
+        WORK_ASSIGN,
         WORK_LIST,
         WORK_GET,
         ASK_LIST,
@@ -546,6 +548,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_UPDATE,
             m(sub::<WorkUpdateParams>(g), sub::<WorkPlan>(g)),
+        ),
+        (
+            methods::WORK_ASSIGN,
+            m(sub::<WorkAssignParams>(g), sub::<WorkPlan>(g)),
         ),
         (
             methods::WORK_LIST,

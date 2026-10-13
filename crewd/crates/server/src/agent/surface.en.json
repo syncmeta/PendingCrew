@@ -197,6 +197,44 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Assign an owner or claim unowned work. Workers may only claim an unowned item for themselves; captains may assign only in crews they manage. Requires the current revision and a reason; success durably notifies the new owner. Assignment by a captain or human does not fabricate the recipient's consent.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current revision as a string; review returned facts on conflict.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Global W ID.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Nonempty assignment or claim reason.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "New owner's actual session ID, not a role or human identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "owner",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_assign"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -1338,6 +1376,44 @@
         "type": "object"
       },
       "name": "work_item_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Assign an owner or claim unowned work. Workers may only claim an unowned item for themselves; captains may assign only in crews they manage. Requires the current revision and a reason; success durably notifies the new owner. Assignment by a captain or human does not fabricate the recipient's consent.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Observed current revision as a string; review returned facts on conflict.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Global W ID.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Nonempty assignment or claim reason.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "New owner's actual session ID, not a role or human identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "owner",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_assign"
     },
     {
       "annotations": {

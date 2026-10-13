@@ -404,6 +404,11 @@ fn rpc_drives_every_client_method() {
             r#"{"id":"W999","expectedRevision":"1","status":"done"}"#,
             Code(-32004),
         ),
+        (
+            "work.assign",
+            r#"{"id":"W999","expectedRevision":"1","owner":"synthetic-owner","note":"assign reason"}"#,
+            Code(-32004),
+        ),
         ("work.list", "{}", Ok),
         ("work.get", r#"{"id":"W999"}"#, Code(-32004)),
         ("ask.list", "null", Ok),
