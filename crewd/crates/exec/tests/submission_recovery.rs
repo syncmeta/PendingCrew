@@ -190,3 +190,55 @@ fn native_cursor_wrapped_input_preserves_submission_liveness() {
         assert!(delivered(&result));
     }
 }
+
+#[test]
+fn opaque_same_count_suffix_and_cursor_change_cannot_acknowledge_space() {
+    for body in ["x".repeat(9000), format!("first\n{}", "x".repeat(9000))] {
+        let base = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            base,
+            vec![PendingText {
+                id: 52,
+                subject: Subject::Brief,
+                text: body.clone(),
+            }],
+            None,
+        );
+        core.on_output(&frame(""), base);
+        core.take_actions();
+        core.on_tick(at(base, 310));
+        let writes = core.take_actions();
+        assert_eq!(keys(&writes), vec![body.as_bytes().to_vec()]);
+        complete(&mut core, &writes, at(base, 310));
+        // Real native metadata can have the final total line count while the last
+        // line's hidden suffix has not yet been processed. This is no body receipt.
+        let caption = format!("[Pasted text #1 +{} lines]", body.lines().count());
+        core.on_output(&frame(&caption), at(base, 900));
+        let probe = core.take_actions();
+        // An implementation may refuse the opaque paint before the Space probe.
+        // If it probes, neither same count nor a native cursor shift certifies it.
+        assert!(keys(&probe).is_empty() || keys(&probe) == vec![b" ".to_vec()]);
+        complete(&mut core, &probe, at(base, 900));
+        core.on_output(&frame(&format!("{caption} ")), at(base, 1100));
+        let after = core.take_actions();
+        assert!(
+            keys(&after).is_empty() && !delivered(&after),
+            "same-count collapsed suffix redraw/cursor movement must not release BS"
+        );
+        core.on_tick(at(base, 3500));
+        let terminal = core.take_actions();
+        assert!(keys(&terminal).is_empty() && !delivered(&terminal));
+        assert!(
+            terminal.iter().any(|a| matches!(
+                a,
+                Action::Event(SessionEvent::Delivery {
+                    outcome: DeliveryOutcome::Unsubmitted(_) | DeliveryOutcome::Undelivered(_),
+                    ..
+                })
+            )),
+            "unsupported opaque body must terminate unknown within the existing budget"
+        );
+    }
+}
