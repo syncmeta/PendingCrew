@@ -6,7 +6,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture=$(mktemp -d /private/tmp/pcw-client-shutdown.XXXXXX)
 echo "Full synthetic logs: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
-    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdPlanActions.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
+    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdRequirementDrafts.swift" "$root/Sources/Mac/Crewd/CrewdPlanActions.swift" "$root/Sources/Mac/Crewd/CrewdHumanActions.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/scripts/dev/fixtures/crewd-client-shutdown.swift" -o "$fixture/probe"
 python3 - "$fixture" "$stage" <<'PYTHON'
 import json,pathlib,socket,subprocess,sys,time,threading
