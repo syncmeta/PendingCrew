@@ -2012,9 +2012,16 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
         prime.setIntegerValueField(.scrollWheelEventScrollPhase, value: 2)
         scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: prime)))
         settle(window, rig)
+        let rowBaseline = rig.observedRowY
+        XCTAssertTrue(rowBaseline.isFinite, "滚动前必须真实量到长消息，不能从默认 NaN 推导结果")
+        XCTAssertTrue(rig.viewport.isFinite && rig.viewport > 0)
         for step in 0..<5 {
             let before = rig.offset
-            let rowBefore = rig.observedRowY
+            let clipBefore = scroll.contentView.bounds.minY
+            let geometrySamplesBefore = rig.geometrySamples.count
+            // A lazy row can leave the viewport and disappear. Its absence is
+            // valid only outside the measured viewport, never while still visible.
+            let rowBefore = rowBaseline + CGFloat(step) * 40
             let samplesBefore = rig.observedRowYSamples.count
             sensor.receiveWheelSample(at: ProcessInfo.processInfo.systemUptime,
                                       scrollingDeltaY: 40, nearTop: false,
@@ -2031,8 +2038,22 @@ final class CrewChatBottomReboundProbeTests: XCTestCase {
             rig.refreshRevision += 1
             settle(window, rig)
             print("[upward long row] limit=\(renderLimit) step=\(step) offset=\(before)->\(rig.offset) row=\(rowBefore)->\(rig.observedRowY) top=\(String(describing: rig.topID)) following=\(rig.following)")
-            XCTAssertEqual(rig.observedRowY, rowBefore + 40, accuracy: 2,
-                           "滑动 40pt 不得因锚点回写跳到长消息的开头")
+            XCTAssertEqual(scroll.contentView.bounds.minY, clipBefore - 40, accuracy: 2,
+                           "实际 AppKit 视口也必须只移动滚轮距离")
+            XCTAssertEqual(rig.offset, before - 40, accuracy: 2)
+            let samples = rig.geometrySamples.dropFirst(geometrySamplesBefore)
+            XCTAssertFalse(samples.isEmpty, "必须收到本次滚动的实际几何回调")
+            XCTAssertTrue(samples.allSatisfy {
+                $0.offsetY.isFinite && $0.offsetY >= before - 42 && $0.offsetY <= before + 2
+            }, "视口中间帧也不能先跳走再回来")
+            let expectedRow = rowBefore + 40
+            if rig.observedRowY.isFinite {
+                XCTAssertEqual(rig.observedRowY, expectedRow, accuracy: 2,
+                               "滑动 40pt 不得因锚点回写跳到长消息的开头")
+            } else {
+                XCTAssertTrue(expectedRow >= rig.viewport || expectedRow + 1400 <= 0,
+                              "只有已完全离开视口的 lazy 行允许被回收；在屏行丢失测量仍须失败")
+            }
             XCTAssertTrue(rig.observedRowYSamples.dropFirst(samplesBefore).allSatisfy {
                 $0 >= rowBefore - 2 && $0 <= rowBefore + 42
             }, "中间帧也不能先跳走再回来")
