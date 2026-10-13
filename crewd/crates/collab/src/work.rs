@@ -116,18 +116,23 @@ pub(crate) fn wake_cleared(
 ) -> Result<()> {
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for event in events {
-        if let crewd_work::EventKind::BlockerCleared {
-            id,
-            owner: Some(owner),
-            ..
-        } = &event.kind
-        {
+        if let crewd_work::EventKind::BlockerCleared { id, owner, .. } = &event.kind {
             let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
-            owners.entry(owner.to_string()).or_default().push(id);
+            tx.note(crate::Change::WorkChanged {
+                crew_id: crew.into(),
+                id: id.clone(),
+            });
+            if let Some(owner) = owner {
+                owners.entry(owner.to_string()).or_default().push(id);
+            }
         }
     }
     for (id, owner) in ready {
         let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
+        tx.note(crate::Change::WorkChanged {
+            crew_id: crew.into(),
+            id: id.clone(),
+        });
         owners.entry(owner.to_string()).or_default().push(id);
     }
     for (owner, mut ids) in owners {
@@ -139,9 +144,13 @@ pub(crate) fn wake_cleared(
         ids.sort();
         ids.dedup();
         let total = ids.len();
-        ids.truncate(50);
-        let note =
-            serde_json::json!({"unblockedWork":ids,"total":total,"partial":total>50}).to_string();
+        let mut note = serde_json::json!({"unblockedWork":ids.iter().take(50).collect::<Vec<_>>(),"total":total,"partial":total>50});
+        if kind == crate::wakes::WakeKind::System {
+            // All dispatch targets stay in the durable record. Rendering strips
+            // this metadata and still sends at most 50 current IDs to the model.
+            note["targets"] = serde_json::json!(ids);
+        }
+        let note = note.to_string();
         crate::wakes::enqueue(
             tx,
             crate::wakes::WakeRequest {
@@ -156,6 +165,93 @@ pub(crate) fn wake_cleared(
         )?;
     }
     Ok(())
+}
+
+pub(crate) enum FollowupNote {
+    Ordinary,
+    Stale,
+    Current(String),
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredFollowup {
+    unblocked_work: Vec<String>,
+    total: usize,
+    partial: bool,
+    targets: Option<Vec<String>>,
+}
+/// Recheck current ownership/terminal state at render time. Corrupt books remain
+/// errors, so a temporary DB fault cannot permanently discard a wake.
+pub(crate) fn followup_note(
+    conn: &Connection,
+    row: &crate::wakes::WakeRow,
+) -> Result<FollowupNote> {
+    if row.kind != crate::wakes::WakeKind::System || !row.source.starts_with("work-done:") {
+        return Ok(FollowupNote::Ordinary);
+    }
+    let note: StoredFollowup = serde_json::from_str(row.note.as_deref().unwrap_or(""))
+        .map_err(|_| invalid("work follow-up metadata is invalid"))?;
+    if let Some(ids) = &note.targets
+        && (ids.len() != note.total
+            || note.partial != (note.total > 50)
+            || note.unblocked_work != ids.iter().take(50).cloned().collect::<Vec<_>>())
+    {
+        return Err(invalid("work follow-up target metadata is inconsistent"));
+    }
+    let targets = match note.targets {
+        Some(ids) => ids,
+        None if !note.partial && note.total == note.unblocked_work.len() => note.unblocked_work,
+        // Old truncated records do not identify the omitted items. Conservatively
+        // retain them instead of incorrectly declaring all targets stale.
+        None if note.partial => return Ok(FollowupNote::Ordinary),
+        None => return Err(invalid("work follow-up target count is invalid")),
+    };
+    let mut books = BTreeMap::new();
+    let mut current = Vec::new();
+    for id in targets {
+        let Some(r) = object_refs::get(conn, ObjectKind::Plan, number(&id)?)? else {
+            continue;
+        };
+        if !books.contains_key(&r.crew_id) {
+            books.insert(
+                r.crew_id.clone(),
+                (
+                    asks::load(conn, &r.crew_id)?,
+                    crews::is_archived(conn, &r.crew_id)?,
+                ),
+            );
+        }
+        let (book, frozen) = &books[&r.crew_id];
+        let local = r
+            .source_id
+            .strip_prefix("work:")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| invalid("work follow-up source identity is invalid"))?;
+        let item = book
+            .state()
+            .items
+            .get(&local)
+            .ok_or_else(|| invalid("work follow-up target has no authoritative item"))?;
+        if !frozen
+            && item
+                .owner
+                .as_ref()
+                .is_some_and(|o| o.as_str() == row.session)
+            && !matches!(item.status, Status::Done | Status::Dropped)
+        {
+            current.push(id);
+        }
+    }
+    current.sort();
+    current.dedup();
+    if current.is_empty() {
+        return Ok(FollowupNote::Stale);
+    }
+    let total = current.len();
+    current.truncate(50);
+    Ok(FollowupNote::Current(
+        serde_json::json!({"unblockedWork":current,"total":total,"partial":total>50}).to_string(),
+    ))
 }
 
 /// All organization objects remain readable, including removed crews.
@@ -902,5 +998,176 @@ mod action_tests {
                 .len(),
             1
         );
+    }
+    fn pending_followup(
+        s: &mut crewd_store::Store,
+        n: usize,
+    ) -> (Vec<WorkPlan>, Vec<crate::wakes::WakeRow>) {
+        let by = Sender::Session("w-a1".into());
+        let parent = ok(s, |tx| create(tx, &by, input()));
+        let mut children = Vec::new();
+        for _ in 0..n {
+            let mut child = input();
+            child.owner = Some("w-a2".into());
+            child.depends_on = vec![parent.id.clone()];
+            children.push(ok(s, |tx| create(tx, &Sender::Human, child)));
+        }
+        let (_, changes) = crate::run(s, NOW, |tx| update(tx, &by, finish(&parent))).unwrap();
+        for c in &children {
+            assert!(changes.contains(&Change::WorkChanged {
+                crew_id: "crew-a".into(),
+                id: c.id.clone()
+            }));
+        }
+        let rows = crate::wakes::list(s.conn(), Some("w-a2"), 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        (children, rows)
+    }
+    #[test]
+    fn stale_followups_are_filtered_and_missing_authority_is_not_empty() {
+        for mode in ["done", "transfer", "frozen", "purged", "missing-book"] {
+            let mut s = store();
+            let (children, rows) = pending_followup(&mut s, 1);
+            let before =
+                crate::render::build_batch(s.conn(), "w-a2", crate::Locale::En, &rows, NOW)
+                    .unwrap();
+            assert_eq!(before.items.len(), 1);
+            assert!(!before.items[0].note.as_ref().unwrap().contains("targets"));
+            match mode {
+                "done" => {
+                    ok(&mut s, |tx| {
+                        update(tx, &Sender::Human, finish(&children[0]))
+                    });
+                }
+                "transfer" => {
+                    ok(&mut s, |tx| {
+                        asks::with_book(tx, "crew-a", |b, now| {
+                            b.assign(
+                                &crewd_work::Actor::Human,
+                                now,
+                                "W2".parse().unwrap(),
+                                crewd_work::SessionId::new("w-a1"),
+                                "synthetic transfer",
+                            )
+                        })
+                    });
+                }
+                "frozen" => {
+                    ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+                    ok(&mut s, |tx| crate::crews::archive(tx, "crew-a"));
+                }
+                "purged" => {
+                    s.conn()
+                        .execute("DELETE FROM crews WHERE id='crew-a'", [])
+                        .unwrap();
+                }
+                "missing-book" => {
+                    s.conn()
+                        .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let after = crate::render::build_batch(s.conn(), "w-a2", crate::Locale::En, &rows, NOW);
+            if mode == "missing-book" {
+                assert!(after.is_err(), "corruption must retain the wake for retry");
+            } else {
+                let after = after.unwrap();
+                assert!(after.items.is_empty(), "{mode}");
+                assert_eq!(after.unusable.len(), 1, "{mode}");
+            }
+        }
+    }
+    #[test]
+    fn omitted_fifty_first_target_stays_deliverable_without_metadata_echo() {
+        let mut s = store();
+        let (children, rows) = pending_followup(&mut s, 51);
+        let raw: serde_json::Value = serde_json::from_str(rows[0].note.as_ref().unwrap()).unwrap();
+        let omitted = raw["targets"][50].as_str().unwrap();
+        for c in &children {
+            if c.id != omitted {
+                ok(&mut s, |tx| update(tx, &Sender::Human, finish(c)));
+            }
+        }
+        let batch =
+            crate::render::build_batch(s.conn(), "w-a2", crate::Locale::En, &rows, NOW).unwrap();
+        assert_eq!(batch.items.len(), 1);
+        assert!(batch.unusable.is_empty());
+        let note: serde_json::Value =
+            serde_json::from_str(batch.items[0].note.as_ref().unwrap()).unwrap();
+        assert_eq!(note["unblockedWork"], serde_json::json!([omitted]));
+        assert_eq!(note["total"], 1);
+        assert_eq!(note["partial"], false);
+        assert!(note.get("targets").is_none());
+        let mut tampered = rows.clone();
+        let mut bad = raw.clone();
+        bad["total"] = serde_json::json!(50);
+        tampered[0].note = Some(bad.to_string());
+        assert!(
+            crate::render::build_batch(s.conn(), "w-a2", crate::Locale::En, &tampered, NOW)
+                .is_err()
+        );
+    }
+    #[test]
+    fn ordinary_system_and_human_answer_wakes_keep_their_contract() {
+        let mut s = store();
+        let (_, rows) = pending_followup(&mut s, 1);
+        let mut ordinary = rows[0].clone();
+        ordinary.source = "synthetic ordinary".into();
+        ordinary.note = Some("ordinary note".into());
+        assert!(matches!(
+            followup_note(s.conn(), &ordinary).unwrap(),
+            FollowupNote::Ordinary
+        ));
+        ordinary.kind = crate::wakes::WakeKind::AskAnswer;
+        ordinary.source = "work-done:synthetic".into();
+        assert!(matches!(
+            followup_note(s.conn(), &ordinary).unwrap(),
+            FollowupNote::Ordinary
+        ));
+        let mut legacy = rows[0].clone();
+        let mut note: serde_json::Value =
+            serde_json::from_str(legacy.note.as_ref().unwrap()).unwrap();
+        note.as_object_mut().unwrap().remove("targets");
+        legacy.note = Some(note.to_string());
+        assert!(matches!(
+            followup_note(s.conn(), &legacy).unwrap(),
+            FollowupNote::Current(_)
+        ));
+        note["partial"] = serde_json::json!(true);
+        note["total"] = serde_json::json!(51);
+        legacy.note = Some(note.to_string());
+        assert!(
+            matches!(
+                followup_note(s.conn(), &legacy).unwrap(),
+                FollowupNote::Ordinary
+            ),
+            "legacy omitted targets are not evidence of an empty set"
+        );
+    }
+    #[test]
+    fn work_changed_between_render_and_claim_invalidates_exact_body() {
+        use crate::cursor_reservations as cr;
+        let mut s = store();
+        let (children, rows) = pending_followup(&mut s, 2);
+        let mut snap = cr::snapshot(s.conn(), "w-a2", &[], NOW).unwrap();
+        snap.capture_work_followups(s.conn(), &rows).unwrap();
+        ok(&mut s, |tx| {
+            update(tx, &Sender::Human, finish(&children[0]))
+        });
+        let ids = [rows[0].id];
+        let old = ok(&mut s, |tx| {
+            cr::claim_reserved(tx, &snap, &[], &ids, &[], cr::Owner::new(1).unwrap())
+        });
+        assert!(matches!(old, cr::Decision::Stale));
+        let pending = crate::wakes::by_ids(s.conn(), &ids).unwrap();
+        assert_eq!(pending[0].state, crate::wakes::WakeState::Pending);
+        assert_eq!(pending[0].attempts, 0);
+        let mut fresh = cr::snapshot(s.conn(), "w-a2", &[], NOW).unwrap();
+        fresh.capture_work_followups(s.conn(), &pending).unwrap();
+        let claimed = ok(&mut s, |tx| {
+            cr::claim_reserved(tx, &fresh, &[], &ids, &[], cr::Owner::new(1).unwrap())
+        });
+        assert!(matches!(claimed, cr::Decision::Applied(_)));
     }
 }

@@ -634,12 +634,22 @@ pub fn build_batch(
                 note: r.note.clone(),
                 body: WakeBody::Restart,
             }),
-            WakeKind::System => items.push(WakeItem {
-                wake_ids: vec![r.id],
-                kind: r.kind,
-                note: r.note.clone(),
-                body: WakeBody::System,
-            }),
+            WakeKind::System => {
+                let note = match crate::work::followup_note(conn, r)? {
+                    crate::work::FollowupNote::Ordinary => r.note.clone(),
+                    crate::work::FollowupNote::Current(note) => Some(note),
+                    crate::work::FollowupNote::Stale => {
+                        unusable.push((r.id, "work follow-up has no current target".into()));
+                        continue;
+                    }
+                };
+                items.push(WakeItem {
+                    wake_ids: vec![r.id],
+                    kind: r.kind,
+                    note,
+                    body: WakeBody::System,
+                });
+            }
             WakeKind::Checkpoint => items.push(WakeItem {
                 wake_ids: vec![r.id],
                 kind: r.kind,

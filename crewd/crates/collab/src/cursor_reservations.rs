@@ -79,6 +79,7 @@ pub struct Snapshot {
     bases: BTreeMap<String, Option<i64>>,
     prefixes: BTreeMap<String, Vec<Identity>>,
     eligible: std::collections::BTreeSet<String>,
+    work_notes: BTreeMap<i64, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,24 @@ impl From<&Message> for Identity {
 }
 
 impl Snapshot {
+    /// Capture the exact current work text in the same DB job as rendering.
+    pub fn capture_work_followups(
+        &mut self,
+        conn: &Connection,
+        rows: &[wakes::WakeRow],
+    ) -> Result<()> {
+        for row in rows {
+            if row.session != self.session {
+                return Err(invalid("work follow-up snapshot ownership mismatch"));
+            }
+            if let crate::work::FollowupNote::Current(note) = crate::work::followup_note(conn, row)?
+            {
+                self.work_notes.insert(row.id, note);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn causal_session(&self) -> &str {
         &self.session
     }
@@ -317,6 +336,7 @@ pub fn snapshot(
         bases,
         prefixes,
         eligible,
+        work_notes: BTreeMap::new(),
     })
 }
 
@@ -442,6 +462,16 @@ pub fn claim_reserved(
     let rows = wakes::by_ids(tx.conn(), &ids)?;
     if rows.len() != ids.len() || rows.iter().any(|r| r.session != prepared.session) {
         return Err(invalid("reservation wake ownership mismatch"));
+    }
+    // Ownership/terminal changes after rendering must not claim a stale body.
+    // This is inside the same transaction that claims the queue and reservation.
+    for row in rows.iter().filter(|r| wake_ids.contains(&r.id)) {
+        match crate::work::followup_note(tx.conn(), row)? {
+            crate::work::FollowupNote::Current(note)
+                if prepared.work_notes.get(&row.id) == Some(&note) => {}
+            crate::work::FollowupNote::Ordinary if !prepared.work_notes.contains_key(&row.id) => {}
+            _ => return Ok(Decision::Stale),
+        }
     }
     for row in rows
         .iter()

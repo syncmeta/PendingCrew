@@ -1054,7 +1054,8 @@ impl Port for DbPort {
                 let text = collab::render::wake_text(locale, &b);
                 let targets = b.cursor_targets();
                 let channels: Vec<_> = targets.iter().map(|(ch, _)| ch.clone()).collect();
-                let reservation = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
+                let mut reservation = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
+                reservation.capture_work_followups(tx.conn(), &rows)?;
                 let causes = captured.causes.select(&targets)?;
                 let prepared = PreparedSnapshot::CausalDatabase {
                     reservation,

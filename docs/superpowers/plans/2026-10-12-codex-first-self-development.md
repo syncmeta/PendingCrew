@@ -197,3 +197,21 @@ work.update 完成一项时也把显式 BlockOn::Item 解除后的负责人提�
 继续候选分支开发，未切换共享 main、安装应用、发布或迁移日常数据，未新增真实模型调用；Jev/记忆继续讨论先行。前端由独立设计 session 负责。
 
 完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2386 passed、0 failed、8 ignored；fmt 与 clippy 全目标通过。完整日志 /private/tmp/pcw-work-unblock-full-check-01.log。
+
+## 2026-10-13 M4b 自动工作提醒过滤与认领保护
+
+工作完成产生的 System 提醒在渲染时重新核对权威账本：只保留仍属于该负责人、未终结、未冻结的工作项；全部过期则进入既有 unusable/drop 路径，不生成模型回合。普通 System 与人类 AskAnswer 契约保持原样，人的答复不被自动工作过滤器吞掉。
+
+新提醒在持久队列附言中保存完整 targets，渲染给模型前移除这份派发元数据，仅展示最多 50 个当前有效全局 W 号和准确 total/partial。不能仅凭最初展示的 50 项都完成就认定整条无效：第 51 项仍有效的反例已覆盖。读取按机组缓存账本，避免每项重新恢复同一本账。旧未截断记录可以核对；旧 partial 记录没有完整目标，保守保留，不将缺失身份视为完成证据。异常元数据、缺失权威账本或读取失败原样返回错误，保留提醒供重试。
+
+渲染与认领之间也有事务保护：Snapshot 保存这条工作提醒实际渲染的简短正文，DbPort 在同一数据库作业捕获；claim_reserved 在认领队列/游标租约的同一事务内再次核对。正文因负责人/终态变化而失效或改变时返回 Stale，队列仍 pending、attempts 不增加，下一轮重新渲染。正常重渲染后可认领；claim_output 同样经过这条保护。没有新增第二套投递账本。
+
+解除显式卡点和普通依赖变为可推进时，事务内也发布对应全局 WorkChanged；不以新增 WakeEnqueued 或旧本地 W 别名替代客户端工作变更通知。
+
+验证覆盖完成、强制换负责人、归档、删除机组、缺失 work_books、旧记录、普通/人类提醒隔离、完整目标裁剪与不回显、认领前并发变化及通知集合。合成归档测试最初违反“有活子机组不能归档”规则，修正为先归档子机组，没有放宽生产规则。两个反例分别让过期提醒继续渲染、移除认领核对，均准确失败；日志 pcw-work-followup-filter-red-01.log、pcw-work-followup-claim-red-01.log。首次门禁指出 collapsible_if，按现有 lint 修复，没有 suppress。
+
+这是 SQLite/渲染/实际认领事务的证据，不扩称新增真实模型验证。后续仍要接检查点与投递后的 missedChecks、停下即检查/行政交接，并补实际 actor 在渲染屏障后的竞态回归，以及将来修改依赖/新增卡点时普通 ready 提醒的进一步资格过滤。人回复通知保留，不能为节省 token 擅自忽略仍卡在其他事项上的负责人。
+
+候选分支继续开发，未合入共享 main、安装、发布或切换日常数据；Jev/记忆仍只保留方案，前端由独立设计 session 负责。
+
+完整 crewd/scripts/check.sh（Rust 1.94.0、offline、incremental=0）通过：2390 passed、0 failed、8 ignored；fmt/clippy 全目标通过。日志 /private/tmp/pcw-work-followup-filter-full-check-02.log。
