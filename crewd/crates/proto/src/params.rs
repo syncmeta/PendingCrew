@@ -198,6 +198,10 @@ params!(SessionGetParams { session_id: String });
 params!(/// 全可选：`null` 当 `{}`。
     #[schemars(extend("type" = ["object", "null"]))]
     AskListParams { #[serde(default)] home_crew_id: Option<String> });
+params!(AskGetParams {
+    crew_id: String,
+    ask: String
+});
 params!(AskAnswerParams {
     crew_id: String,
     ask: String,

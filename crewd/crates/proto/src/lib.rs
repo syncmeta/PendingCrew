@@ -100,6 +100,7 @@ pub mod methods {
     pub const WORK_PATROL: &str = "work.patrol";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
+    pub const ASK_GET: &str = "ask.get";
     pub const ASK_LIST: &str = "ask.list";
     pub const ASK_ANSWER: &str = "ask.answer";
     pub const ASK_WITHDRAW: &str = "ask.withdraw";
@@ -165,6 +166,7 @@ pub mod methods {
         WORK_PATROL,
         WORK_LIST,
         WORK_GET,
+        ASK_GET,
         ASK_LIST,
         ASK_ANSWER,
         ASK_WITHDRAW,
@@ -270,6 +272,10 @@ pub struct RpcErrorData {
     pub current_document: Option<Box<DocumentSummary>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_tree_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_link_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_source_revision: Option<String>,
 }
 
 impl RpcError {
@@ -302,6 +308,8 @@ impl RpcError {
             current_work: None,
             current_document: None,
             current_tree_revision: None,
+            current_link_revision: None,
+            current_source_revision: None,
         });
         self
     }
@@ -734,6 +742,7 @@ pub fn api_schema() -> Value {
             methods::WORK_GET,
             m(sub::<WorkGetParams>(g), sub::<WorkPlan>(g)),
         ),
+        (methods::ASK_GET, m(sub::<AskGetParams>(g), sub::<Ask>(g))),
         (
             methods::ASK_LIST,
             m(sub::<AskListParams>(g), many(sub::<HumanWait>(g))),
