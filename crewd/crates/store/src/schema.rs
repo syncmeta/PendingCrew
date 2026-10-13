@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -641,6 +641,15 @@ fn migrate_v6(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v7(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("CREATE TABLE work_stop_checks(session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,epoch INTEGER NOT NULL CHECK(epoch>=0),state TEXT NOT NULL CHECK(json_valid(state)));")?;
+    crate::work_stop_checks::backfill(&tx)?;
+    tx.execute_batch("PRAGMA user_version=7;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
 }
@@ -680,6 +689,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 6 {
         migrate_v6(conn)?;
+    }
+    if v < 7 {
+        migrate_v7(conn)?;
     }
     Ok(())
 }

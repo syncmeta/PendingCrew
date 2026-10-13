@@ -245,3 +245,13 @@ work.update 完成一项时也把显式 BlockOn::Item 解除后的负责人提�
 候选分支继续开发，未安装、发布或切换日常数据，未新增真实模型调用；Jev/记忆继续讨论先行，前端由独立设计 session 负责。
 
 本 SHA 的四组集成测试合计 11 passed、0 failed；日志 pcw-idle-edge-integration-01.log，单元日志 pcw-idle-edge-server-01.log，lint 日志 pcw-idle-edge-clippy-01.log。
+
+## 2026-10-13 M4b global stop-budget persistence foundation
+
+Schema 7 adds a session-owned operational budget with monotonic CAS epochs and session-delete cascade. Updates require an existing transaction; stale epochs cannot overwrite or reuse a cleared budget. The pure stop-streak transition is shared with the existing WorkBook policy without changing reminder/escalation thresholds.
+
+Migration restores and validates every legacy book, maps local violation IDs to already-issued global identities, merges counters by maximum (one shared idle must not be counted once per crew), and preserves raw books/history/identity counts. Invalid later books roll back the whole v7 migration. No new production IdleHook has been enabled in this unit.
+
+Tests cover transactional CAS, file reopen, epoch exhaustion, cascade, two-crew migration and rollback. Two old downgrade fixtures initially retained the new table; fixtures now faithfully remove it before declaring the older schema. The original failed log is preserved. Replacing maximum with addition fails the migration counterexample (4 versus 2); production code restored before the full gate. Evidence: /private/tmp/pcw-stop-budget-foundation-01.log, pcw-stop-budget-foundation-02.log, pcw-stop-budget-migration-red-01.log.
+
+Full crewd/scripts/check.sh passed with Rust 1.94.0, offline, incremental=0: 2401 passed, 0 failed, 8 ignored; workspace fmt and all-targets clippy passed. Full evidence: /private/tmp/pcw-stop-budget-full-check-01.log. Candidate branch only; no main integration, installation, release, daily-data migration or additional real-model invocation. Next: read-only idle candidate and atomic accepted enqueue/budget/escalation; Jev and memory remain proposal-only.

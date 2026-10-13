@@ -83,6 +83,51 @@ pub fn patrol_due(
     }
 }
 
+/// Advance one session-wide budget over an already-authoritative violation set.
+/// IDs may be globally issued IDs when the caller merges several crew books.
+pub fn advance_stop_streak(
+    streak: &mut StopStreak,
+    v: Vec<StopViolation>,
+    cfg: &Config,
+) -> StopDecision {
+    if v.is_empty() {
+        *streak = StopStreak::default();
+        return StopDecision::Clean;
+    }
+    let limit = cfg.stop_check_limit;
+    let budget = cfg.stop_rewake_budget;
+    // 要再叫一次时先看预算：自上次干净以来已经叫满 `budget` 次 → 这次改为交行政处。
+    let rewake = |streak: &mut StopStreak, v: Vec<StopViolation>| {
+        if streak.rewakes >= budget {
+            streak.escalated = true;
+            StopDecision::Escalate(v)
+        } else {
+            streak.rewakes += 1;
+            StopDecision::Rewake(v)
+        }
+    };
+    if streak.last != v {
+        streak.last = v.clone();
+        streak.unimproved = 0;
+        if streak.escalated && streak.rewakes >= budget {
+            // 预算已用完：集合变了也不再叫，保持安静直到干净（复审 P12：来回摆动）。
+            return StopDecision::Suppressed(v);
+        }
+        streak.escalated = false;
+        return rewake(streak, v);
+    }
+    if streak.escalated {
+        return StopDecision::Suppressed(v);
+    }
+    streak.unimproved += 1;
+    if streak.unimproved >= limit {
+        streak.escalated = true;
+        StopDecision::Escalate(v)
+    } else {
+        rewake(streak, v)
+    }
+}
+
 impl WorkBook {
     /// session 进入 idle 时它名下没着落的项（按 W 号、再按种类）。
     pub fn stop_violations(&self, session: &SessionId, now: Ts) -> Vec<StopViolation> {
@@ -130,39 +175,8 @@ impl WorkBook {
             self.state.stop_streaks.remove(session);
             return StopDecision::Clean;
         }
-        let limit = self.cfg.stop_check_limit;
-        let budget = self.cfg.stop_rewake_budget;
         let streak = self.state.stop_streaks.entry(session.clone()).or_default();
-        // 要再叫一次时先看预算：自上次干净以来已经叫满 `budget` 次 → 这次改为交行政处。
-        let rewake = |streak: &mut StopStreak, v: Vec<StopViolation>| {
-            if streak.rewakes >= budget {
-                streak.escalated = true;
-                StopDecision::Escalate(v)
-            } else {
-                streak.rewakes += 1;
-                StopDecision::Rewake(v)
-            }
-        };
-        if streak.last != v {
-            streak.last = v.clone();
-            streak.unimproved = 0;
-            if streak.escalated && streak.rewakes >= budget {
-                // 预算已用完：集合变了也不再叫，保持安静直到干净（复审 P12：来回摆动）。
-                return StopDecision::Suppressed(v);
-            }
-            streak.escalated = false;
-            return rewake(streak, v);
-        }
-        if streak.escalated {
-            return StopDecision::Suppressed(v);
-        }
-        streak.unimproved += 1;
-        if streak.unimproved >= limit {
-            streak.escalated = true;
-            StopDecision::Escalate(v)
-        } else {
-            rewake(streak, v)
-        }
+        advance_stop_streak(streak, v, &self.cfg)
     }
 
     /// 人的待确认清单：还开着、且此刻卡着至少一个活着的项的问（没人等的问不打扰人）。等得最久的在前。

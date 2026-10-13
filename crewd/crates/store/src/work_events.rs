@@ -180,7 +180,7 @@ mod tests {
                 [&state],
             )
             .unwrap();
-        s.conn().execute_batch("UPDATE crews SET archived_at='frozen'; DROP TABLE work_events; PRAGMA user_version=5;").unwrap();
+        s.conn().execute_batch("UPDATE crews SET archived_at='frozen'; DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;").unwrap();
         crate::schema::migrate(s.conn()).unwrap();
         let r = crate::object_refs::resolve(s.conn(), ObjectKind::Plan, "a", "work:W1")
             .unwrap()
@@ -217,7 +217,9 @@ mod tests {
             )
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE work_events; PRAGMA user_version=5;")
+            .execute_batch(
+                "DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;",
+            )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
         assert_eq!(
@@ -320,7 +322,9 @@ mod tests {
             )
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE work_events; PRAGMA user_version=5;")
+            .execute_batch(
+                "DROP TABLE work_stop_checks; DROP TABLE work_events; PRAGMA user_version=5;",
+            )
             .unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
         assert_eq!(

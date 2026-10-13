@@ -13,6 +13,7 @@ pub mod sessions;
 pub mod testing;
 pub mod todos;
 pub mod work_events;
+pub mod work_stop_checks;
 
 pub use db::Db;
 

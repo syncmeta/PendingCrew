@@ -33,4 +33,4 @@ pub use owner::WakeResult;
 pub use perm::Action;
 pub use progress::{Progress, Report};
 pub use views::{CheckpointDue, EntryStatus, EntryView, LostCause, LostOwner, MyItem};
-pub use watch::{HumanWait, Patrol, StopDecision, patrol_due, wait_tier};
+pub use watch::{HumanWait, Patrol, StopDecision, advance_stop_streak, patrol_due, wait_tier};
