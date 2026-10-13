@@ -1004,3 +1004,15 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 
 ## work_item_assign.note
 指派或认领理由，不能为空。
+
+## work_item_history
+需要时读取原始交接历史，最新记录在前。返回完整交接说明，不重复目标或验收文字；读取不唤醒成员，也不改变工作进展。历史操作者角色描述当时的行为，不代表当前权限。
+
+## work_item_history.id
+全局 W 号。
+
+## work_item_history.before
+使用上一页的 nextBefore 读取更早记录；不传则从最新开始。游标为正整数的规范字符串。
+
+## work_item_history.limit
+每页最多 1 到 200 条，默认 20 条。

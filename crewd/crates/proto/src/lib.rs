@@ -67,6 +67,7 @@ pub mod methods {
     pub const WORK_CREATE: &str = "work.create";
     pub const WORK_UPDATE: &str = "work.update";
     pub const WORK_ASSIGN: &str = "work.assign";
+    pub const WORK_HISTORY: &str = "work.history";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
     pub const ASK_LIST: &str = "ask.list";
@@ -108,6 +109,7 @@ pub mod methods {
         WORK_CREATE,
         WORK_UPDATE,
         WORK_ASSIGN,
+        WORK_HISTORY,
         WORK_LIST,
         WORK_GET,
         ASK_LIST,
@@ -552,6 +554,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_ASSIGN,
             m(sub::<WorkAssignParams>(g), sub::<WorkPlan>(g)),
+        ),
+        (
+            methods::WORK_HISTORY,
+            m(sub::<WorkHistoryParams>(g), sub::<WorkHistoryPage>(g)),
         ),
         (
             methods::WORK_LIST,

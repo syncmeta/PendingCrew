@@ -60,6 +60,39 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read original handoff history only when needed; latest changes first. Full reasons are returned, without goal or acceptance text. This read does not wake anyone or change progress. The recorded actor role describes that historical action, not current authority.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "Use nextBefore from the previous page to read older entries; omit for latest. Sequence cursor is a positive canonical string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Global W ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum entries, 1 to 200, default 20.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -1239,6 +1272,39 @@
         "type": "object"
       },
       "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read original handoff history only when needed; latest changes first. Full reasons are returned, without goal or acceptance text. This read does not wake anyone or change progress. The recorded actor role describes that historical action, not current authority.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "Use nextBefore from the previous page to read older entries; omit for latest. Sequence cursor is a positive canonical string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Global W ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum entries, 1 to 200, default 20.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_history"
     },
     {
       "annotations": {

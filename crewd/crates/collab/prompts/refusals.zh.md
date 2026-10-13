@@ -429,3 +429,6 @@ git worktree add 失败: {path}. {detail}
 
 ## work.bad_update
 进展更新须有备注；凭据仅用于完成，完成不能安排下次检查。
+
+## work.history_cursor
+历史游标应为正整数的规范字符串，请使用上一页返回的 nextBefore。

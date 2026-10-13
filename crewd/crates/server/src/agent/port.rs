@@ -1697,6 +1697,12 @@ pub async fn work_mine(
     })
     .await
 }
+pub async fn work_history(
+    st: &AppState,
+    p: crewd_proto::WorkHistoryParams,
+) -> PortResult<crewd_proto::WorkHistoryPage> {
+    read(st, move |c| crewd_collab::work::history(c, p)).await
+}
 pub async fn work_get(st: &AppState, id: &str) -> PortResult<crewd_proto::WorkPlan> {
     let id = id.to_owned();
     read(st, move |c| crewd_collab::work::get(c, &id)).await

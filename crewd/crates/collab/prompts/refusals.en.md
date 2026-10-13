@@ -429,3 +429,6 @@ Expected an RFC3339 timestamp: {value}.
 
 ## work.bad_update
 Progress needs a note. Evidence applies only to done, and done cannot schedule a next check.
+
+## work.history_cursor
+History cursor must be a positive canonical sequence string; use nextBefore returned by the previous page.

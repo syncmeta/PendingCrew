@@ -4010,6 +4010,115 @@
       ],
       "type": "object"
     },
+    "WorkHistoryActor": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "system",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "session",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/Role"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "role"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkHistoryPage": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkOwnerChange"
+          },
+          "type": "array"
+        },
+        "nextBefore": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "total": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "total",
+        "items"
+      ],
+      "type": "object"
+    },
+    "WorkHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "WorkLevel": {
       "enum": [
         "local",
@@ -4064,6 +4173,43 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "WorkOwnerChange": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "by": {
+          "$ref": "#/$defs/WorkHistoryActor"
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "how": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "to",
+        "by",
+        "how",
+        "note",
+        "at"
+      ],
       "type": "object"
     },
     "WorkPage": {
@@ -4875,6 +5021,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.history": {
+      "params": {
+        "$ref": "#/$defs/WorkHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkHistoryPage"
       }
     },
     "work.list": {

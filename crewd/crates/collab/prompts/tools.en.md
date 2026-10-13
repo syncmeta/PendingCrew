@@ -1004,3 +1004,15 @@ New owner's actual session ID, not a role or human identity.
 
 ## work_item_assign.note
 Nonempty assignment or claim reason.
+
+## work_item_history
+Read original handoff history only when needed; latest changes first. Full reasons are returned, without goal or acceptance text. This read does not wake anyone or change progress. The recorded actor role describes that historical action, not current authority.
+
+## work_item_history.id
+Global W ID.
+
+## work_item_history.before
+Use nextBefore from the previous page to read older entries; omit for latest. Sequence cursor is a positive canonical string.
+
+## work_item_history.limit
+Maximum entries, 1 to 200, default 20.

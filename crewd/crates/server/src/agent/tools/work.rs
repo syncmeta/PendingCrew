@@ -172,3 +172,29 @@ pub async fn assign(cx: &Ctx<'_>, v: Value) -> CallResult {
         .map(crewd_proto::WorkSummary::from),
     )
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct History {
+    id: String,
+    before: Option<String>,
+    limit: Option<u16>,
+}
+pub async fn history(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: History = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::work_history(
+            cx.st,
+            crewd_proto::WorkHistoryParams {
+                id: a.id,
+                before: a.before,
+                limit: a.limit,
+            },
+        )
+        .await,
+    )
+}

@@ -1504,3 +1504,211 @@ mod assignment_tests {
         ));
     }
 }
+
+/// Latest handoffs first; older pages never repeat an appended newer record.
+pub fn history(
+    conn: &Connection,
+    p: crewd_proto::WorkHistoryParams,
+) -> Result<crewd_proto::WorkHistoryPage> {
+    use crewd_proto::{WorkHistoryActor as A, WorkOwnerChange};
+    let limit = p.limit.unwrap_or(20);
+    if limit == 0 || limit > 200 {
+        return Err(CollabError::Invalid(Refusal::new(Code::WorkBadLimit)));
+    }
+    let before = match p.before {
+        Some(s) => Some(
+            s.parse::<usize>()
+                .ok()
+                .filter(|n| *n > 0 && n.to_string() == s)
+                .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkHistoryCursor)))?,
+        ),
+        None => None,
+    };
+    let r = object_refs::get(conn, ObjectKind::Plan, number(&p.id)?)?
+        .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
+    let book = asks::load(conn, &r.crew_id)?;
+    let local = local_plan(conn, &r.crew_id, &p.id)?;
+    let item = book
+        .item(local)
+        .ok_or_else(|| invalid("history plan has no authoritative item"))?;
+    let total = item.owner_history.len();
+    let mut rows = item
+        .owner_history
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(i, _)| before.is_none_or(|b| i + 1 < b));
+    let mut out = Vec::new();
+    for (i, h) in rows.by_ref().take(usize::from(limit)) {
+        let by = match &h.by {
+            crewd_work::Actor::Human => A::Human,
+            crewd_work::Actor::System => A::System,
+            crewd_work::Actor::Session { id, role } => A::Session {
+                id: id.to_string(),
+                role: match role {
+                    crewd_work::Role::Worker => crewd_proto::Role::Worker,
+                    crewd_work::Role::Captain => crewd_proto::Role::Captain,
+                    crewd_work::Role::Admin => crewd_proto::Role::Admin,
+                },
+            },
+        };
+        out.push(WorkOwnerChange {
+            seq: (i + 1).to_string(),
+            from: h.from.as_ref().map(ToString::to_string),
+            to: h.to.to_string(),
+            by,
+            how: match h.how {
+                crewd_work::HowChanged::Claim => "claim",
+                crewd_work::HowChanged::Transfer => "transfer",
+                crewd_work::HowChanged::Assign => "assign",
+                crewd_work::HowChanged::Lost => "lost",
+            }
+            .into(),
+            note: h.note.clone(),
+            at: crewd_store::ts_from_ms(h.at.0),
+        });
+    }
+    let next_before = rows.next().and_then(|_| out.last().map(|h| h.seq.clone()));
+    Ok(crewd_proto::WorkHistoryPage {
+        id: p.id,
+        revision: item.revision.to_string(),
+        total,
+        items: out,
+        next_before,
+    })
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use crate::{
+        Sender,
+        testkit::{NOW, ok, store},
+    };
+    use crewd_proto::{WorkAssignParams, WorkCreateParams, WorkHistoryActor, WorkHistoryParams};
+    fn query(id: &str, before: Option<String>, limit: u16) -> WorkHistoryParams {
+        WorkHistoryParams {
+            id: id.into(),
+            before,
+            limit: Some(limit),
+        }
+    }
+    #[test]
+    fn latest_full_handoff_and_stable_older_pages_are_read_only() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "history fixture".into(),
+                    goal: "LONG_GOAL_NOT_IN_HISTORY".repeat(100),
+                    owner: Some("w-a1".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let reason = "完整交接说明🙂".repeat(400);
+        let moved = ok(&mut s, |tx| {
+            assign(
+                tx,
+                &Sender::Session("cap-a".into()),
+                WorkAssignParams {
+                    id: p.id.clone(),
+                    expected_revision: p.revision.clone(),
+                    owner: "w-a2".into(),
+                    note: reason.clone(),
+                },
+            )
+        });
+        let latest = history(s.conn(), query(&p.id, None, 1)).unwrap();
+        assert_eq!(latest.id, p.id);
+        assert_eq!(latest.revision, moved.revision);
+        assert_eq!(latest.total, 2);
+        assert_eq!(latest.items[0].seq, "2");
+        assert_eq!(latest.items[0].note, reason);
+        assert_eq!(latest.items[0].from.as_deref(), Some("w-a1"));
+        assert_eq!(latest.items[0].to, "w-a2");
+        assert_eq!(latest.items[0].how, "assign");
+        assert!(
+            matches!(&latest.items[0].by,WorkHistoryActor::Session{id,role} if id=="cap-a" && *role==crewd_proto::Role::Captain)
+        );
+        assert_eq!(latest.items[0].at, crewd_store::ts_from_ms(NOW));
+        assert!(
+            !serde_json::to_string(&latest)
+                .unwrap()
+                .contains("LONG_GOAL")
+        );
+        let moved = ok(&mut s, |tx| {
+            assign(
+                tx,
+                &Sender::Human,
+                WorkAssignParams {
+                    id: p.id.clone(),
+                    expected_revision: moved.revision,
+                    owner: "w-a1".into(),
+                    note: "new append after first page".into(),
+                },
+            )
+        });
+        let events = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let wakes = crate::testkit::count(&s, "SELECT COUNT(*) FROM wakes");
+        let older = history(s.conn(), query(&p.id, latest.next_before, 1)).unwrap();
+        assert_eq!(older.items.len(), 1);
+        assert_eq!(older.items[0].seq, "1");
+        assert!(older.next_before.is_none());
+        assert!(matches!(older.items[0].by, WorkHistoryActor::Human));
+        assert_eq!(get(s.conn(), &p.id).unwrap(), moved);
+        assert_eq!(
+            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            events
+        );
+        assert_eq!(
+            crate::testkit::count(&s, "SELECT COUNT(*) FROM wakes"),
+            wakes
+        );
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+        ok(&mut s, |tx| crate::crews::archive(tx, "crew-a"));
+        assert_eq!(history(s.conn(), query(&p.id, None, 20)).unwrap().total, 3);
+    }
+    #[test]
+    fn empty_history_is_not_invented_and_bad_bounds_or_missing_authority_refuse() {
+        let mut s = store();
+        let p = ok(&mut s, |tx| {
+            create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "unowned history fixture".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let empty = history(s.conn(), query(&p.id, None, 20)).unwrap();
+        assert_eq!(empty.total, 0);
+        assert!(empty.items.is_empty());
+        assert!(empty.next_before.is_none());
+        for limit in [0, 201] {
+            assert!(
+                matches!(history(s.conn(),query(&p.id,None,limit)),Err(CollabError::Invalid(r)) if r.code==Code::WorkBadLimit)
+            );
+        }
+        for before in [
+            "0",
+            "01",
+            "-1",
+            "1.0",
+            "9999999999999999999999999999999999999",
+        ] {
+            assert!(
+                matches!(history(s.conn(),query(&p.id,Some(before.into()),1)),Err(CollabError::Invalid(r)) if r.code==Code::WorkHistoryCursor)
+            );
+        }
+        s.conn()
+            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .unwrap();
+        assert!(history(s.conn(), query(&p.id, None, 20)).is_err());
+    }
+}

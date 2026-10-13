@@ -175,6 +175,14 @@ pub const CATALOG: &[ToolSpec] = &[
         ],
     )),
     ro(all("work_item_get", &[p("id", Str, true)])),
+    ro(all(
+        "work_item_history",
+        &[
+            p("id", Str, true),
+            p("before", Str, false),
+            int("limit", 1, 200),
+        ],
+    )),
     all(
         "work_item_create",
         &[
@@ -570,7 +578,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 33);
+        assert_eq!(CATALOG.len(), 34);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -603,8 +611,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 22);
-        assert_eq!(captain.len(), 33);
+        assert_eq!(worker.len(), 23);
+        assert_eq!(captain.len(), 34);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -636,6 +644,7 @@ mod tests {
             [
                 "my_work_items",
                 "work_item_get",
+                "work_item_history",
                 "read_channel",
                 "search",
                 "list_channels",
@@ -673,6 +682,7 @@ mod tests {
             [
                 "my_work_items",
                 "work_item_get",
+                "work_item_history",
                 "post",
                 "read_channel",
                 "search",

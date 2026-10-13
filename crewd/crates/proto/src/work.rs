@@ -185,3 +185,38 @@ pub struct WorkAssignParams {
     pub owner: String,
     pub note: String,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkHistoryParams {
+    pub id: String,
+    pub before: Option<String>,
+    pub limit: Option<u16>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum WorkHistoryActor {
+    Human,
+    System,
+    Session { id: String, role: crate::Role },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkOwnerChange {
+    pub seq: String,
+    pub from: Option<String>,
+    pub to: String,
+    pub by: WorkHistoryActor,
+    pub how: String,
+    pub note: String,
+    pub at: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkHistoryPage {
+    pub id: String,
+    pub revision: String,
+    pub total: usize,
+    pub items: Vec<WorkOwnerChange>,
+    pub next_before: Option<String>,
+}

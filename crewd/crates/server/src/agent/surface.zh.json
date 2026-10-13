@@ -60,6 +60,39 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "需要时读取原始交接历史，最新记录在前。返回完整交接说明，不重复目标或验收文字；读取不唤醒成员，也不改变工作进展。历史操作者角色描述当时的行为，不代表当前权限。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "使用上一页的 nextBefore 读取更早记录；不传则从最新开始。游标为正整数的规范字符串。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 号。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页最多 1 到 200 条，默认 20 条。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -1239,6 +1272,39 @@
         "type": "object"
       },
       "name": "work_item_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "需要时读取原始交接历史，最新记录在前。返回完整交接说明，不重复目标或验收文字；读取不唤醒成员，也不改变工作进展。历史操作者角色描述当时的行为，不代表当前权限。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "使用上一页的 nextBefore 读取更早记录；不传则从最新开始。游标为正整数的规范字符串。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 号。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页最多 1 到 200 条，默认 20 条。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_history"
     },
     {
       "annotations": {

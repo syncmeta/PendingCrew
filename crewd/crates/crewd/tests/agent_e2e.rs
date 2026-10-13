@@ -42,8 +42,8 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 22);
-    assert_eq!(ct.len(), 33);
+    assert_eq!(wt.len(), 23);
+    assert_eq!(ct.len(), 34);
     for t in wt.iter().chain(&ct) {
         assert_eq!(t["annotations"]["openWorldHint"], false);
         for k in ["readOnlyHint", "destructiveHint", "idempotentHint"] {
@@ -54,13 +54,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 33);
-    assert_eq!(cm.tools().await.len(), 22);
+    assert_eq!(wm.tools().await.len(), 34);
+    assert_eq!(cm.tools().await.len(), 23);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 22);
+    assert_eq!(wm.tools().await.len(), 23);
     wm.close().await;
     cm.close().await;
 }
@@ -608,6 +608,25 @@ async fn work_assignment_uses_actual_helper_identity_and_compact_receipts() {
     assert!(!error, "{text}");
     let assigned: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(assigned["owner"], f.captain);
+    let (history_text, history_error) = w
+        .call("work_item_history", json!({"id":p.id,"limit":1}))
+        .await;
+    assert!(!history_error, "{history_text}");
+    let history: serde_json::Value = serde_json::from_str(&history_text).unwrap();
+    assert_eq!(history["items"][0]["note"], "captain takes ownership");
+    assert_eq!(history["items"][0]["by"]["id"], f.captain);
+    assert!(!history_text.contains("long assignment goal"));
+    let (older_text, older_error) = w
+        .call(
+            "work_item_history",
+            json!({"id":p.id,"before":history["nextBefore"],"limit":1}),
+        )
+        .await;
+    assert!(!older_error, "{older_text}");
+    let older: serde_json::Value = serde_json::from_str(&older_text).unwrap();
+    assert_eq!(older["items"][0]["note"], "claim unowned work");
+    assert!(older["nextBefore"].is_null());
+
     let (text,error)=w.call("work_item_assign",json!({"id":p.id,"expected_revision":assigned["revision"],"owner":f.worker,"note":"attempted steal"})).await;
     assert!(error, "{text}");
     let (text,error)=w.call("work_item_assign",json!({"id":p.id,"expected_revision":assigned["revision"],"owner":f.worker,"note":"spoof","actor":"human"})).await;
