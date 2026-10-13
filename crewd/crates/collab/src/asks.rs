@@ -115,7 +115,7 @@ fn rejected(crew: &str, r: Rejected) -> CollabError {
 /// 在同一个事务里读整本账、跑一条命令、整份写回（M4a 的持久化边界）。M4b 的工作项命令也走这里。
 /// 闭包返回账本自己的 `Result<R, Rejected>`；这里把 `Rejected` 映射成 collab 的错误（R5，见 `rejected`）。
 /// 被拒 = 不写回（账本原样）；命令没改动账本（只读、到点的拍子没事可办）也不写回——不改 `updated_at`，
-/// 没账本的机组也不因此建出一行。事件日志此时丢弃（M4b 加 v4 的事件表再落）。
+/// Full state, real events and stable references commit in the same transaction.
 pub fn with_book<R>(
     tx: &mut Tx<'_>,
     crew: &str,
@@ -152,6 +152,7 @@ pub fn with_book<R>(
          ON CONFLICT(crew_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
         params![crew, serde_json::to_string(book.state())?, tx.now_ts()],
     )?;
+    crewd_store::work_events::append(tx.conn(), crew, &events)?;
     // Identity metadata commits with the authoritative state, never as a second
     // copy of status. Legacy local aliases remain valid during staged M4b cutover.
     for event in events {
@@ -1409,5 +1410,47 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+    #[test]
+    fn successful_work_commands_persist_real_events_with_original_actor() {
+        let mut s = store();
+        ok(&mut s, |tx| open(tx, "w-a1", q("event witness")));
+        let events = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "actual ask command must record its real event"
+        );
+        assert!(matches!(events[0].kind, EventKind::AskOpened { .. }));
+        assert_eq!(events[0].by, Actor::worker("w-a1"));
+        assert_eq!(events[0].at, Ts(crate::testkit::NOW));
+    }
+    #[test]
+    fn history_failure_rolls_back_book_references_and_announcement() {
+        let mut s = store();
+        let before: i64 = s
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_work_event BEFORE INSERT ON work_events BEGIN SELECT RAISE(ABORT,'synthetic history fault'); END;").unwrap();
+        assert!(matches!(
+            err(&mut s, |tx| open(tx, "w-a1", q("must not commit"))),
+            CollabError::Store(_)
+        ));
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before
+        );
+        for table in ["work_books", "work_events", "object_refs"] {
+            assert_eq!(
+                s.conn()
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
     }
 }

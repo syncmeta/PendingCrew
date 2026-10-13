@@ -234,7 +234,7 @@ mod tests {
             )
             .unwrap();
         s.conn()
-            .execute_batch("DROP TABLE object_refs; PRAGMA user_version=4;")
+            .execute_batch("DROP TABLE work_events; DROP TABLE object_refs; PRAGMA user_version=4;")
             .unwrap();
         let backups = dir.path().join("backups");
         crate::schema::migrate_guarded(s.conn(), Some(&backups)).unwrap();
@@ -242,7 +242,7 @@ mod tests {
             s.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            5
+            crate::schema::SCHEMA_VERSION
         );
         assert_eq!(
             s.conn()
@@ -284,7 +284,7 @@ mod tests {
     fn refused_migration_keeps_old_version_and_sources() {
         let s = Store::open_in_memory().unwrap();
         setup(s.conn());
-        s.conn().execute_batch("DROP TABLE object_refs; CREATE VIEW object_refs AS SELECT id FROM crews; PRAGMA user_version=4;").unwrap();
+        s.conn().execute_batch("DROP TABLE work_events; DROP TABLE object_refs; CREATE VIEW object_refs AS SELECT id FROM crews; PRAGMA user_version=4;").unwrap();
         assert!(crate::schema::migrate(s.conn()).is_err());
         assert_eq!(
             s.conn()

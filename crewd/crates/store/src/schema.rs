@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -624,6 +624,23 @@ fn migrate_v5(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+// Retains real new events; historical events are not reconstructed from snapshots.
+fn migrate_v6(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE work_events(
+        crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL CHECK(seq > 0),
+        body TEXT NOT NULL CHECK(json_valid(body)),
+        PRIMARY KEY(crew_id,seq)
+    );",
+    )?;
+    crate::work_events::backfill_references(&tx)?;
+    tx.execute_batch("PRAGMA user_version = 6;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
 }
@@ -660,6 +677,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 5 {
         migrate_v5(conn)?;
+    }
+    if v < 6 {
+        migrate_v6(conn)?;
     }
     Ok(())
 }

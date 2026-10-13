@@ -12,6 +12,7 @@ pub mod schema;
 pub mod sessions;
 pub mod testing;
 pub mod todos;
+pub mod work_events;
 
 pub use db::Db;
 

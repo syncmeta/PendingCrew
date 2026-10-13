@@ -121,3 +121,11 @@ Final offline gate: 2349 passed, 0 failed, 8 ignored; fmt/clippy passed. Evidenc
 本单元不改变事实性放弃/行政关闭的证据约束，不实现 Jev/记忆，不安装或启动真实数据实例。后续继续历史引用补齐、工作动作 API/MCP、持久工作事件和检查点/停下即检查接线；各单元以真实事务、源码和运行证据验收。
 
 Optional-evidence gate: 2352 passed, 0 failed, 8 ignored; fmt/clippy passed. Full log: /private/tmp/pcw-work-optional-evidence-full-check-01.log.
+
+## 2026-10-13 M4b 工作历史持久化
+
+数据库 v6 增加真实工作事件表。命令更新的账本快照、事件、对象引用与公告在同一单写事务内提交；事件写入失败整笔回滚。事件按原始序号/行为者保存，不覆盖重复序号；查询限制为 1–200 条，并校验记录序号与事件内容一致。迁移只给旧账本补已有对象的全局引用，包括已移除机组；不改变工作状态，不合成迁移前历史。旧账本身份/不变式无效时迁移拒绝，版本与部分引用一起回滚。
+
+实际问题创建命令的旧实现未留下事件，反例失败记录 pcw-work-history-integration-red-01.log。定向存储与问题集成分别通过 pcw-work-history-store-green-02.log、pcw-work-history-integration-green-02.log；补充分页、重复序号整笔回滚、记录身份篡改和后段迁移失败后完整门禁通过 pcw-work-history-full-check-01.log：2361 passed、0 failed、8 ignored，格式/lint 通过。首次编译和旧版本夹具错误保留，不算行为反例。日志位于 /private/tmp。
+
+此单元仍位于 codex/work-identity-20261013，不代表 M4b 全部完成：公开工作 API/MCP、进展检查点、空闲挂钩和工作视图仍待接线。没有新增真实模型调用、安装、发布或日常数据迁移；Jev/记忆继续仅保留方案。
