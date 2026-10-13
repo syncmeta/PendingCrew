@@ -43,12 +43,24 @@ fn exchange(socket: &Path, requests: &[Value]) -> std::io::Result<Vec<Value>> {
     }
     Ok(out)
 }
+// Publication is a barrier, not merely evidence that a file was created.
+fn publish_readiness_with(
+    dir: &Path,
+    tag: &str,
+    pid: u32,
+    after_create: impl FnOnce(&Path, &Path),
+) -> std::io::Result<()> {
+    let ready = dir.join(format!("{tag}.ready"));
+    let staging = dir.join(format!(".{tag}.ready-{pid}.partial"));
+    let mut file = std::fs::File::create(&staging)?;
+    after_create(&staging, &ready);
+    file.write_all(pid.to_string().as_bytes())?;
+    drop(file);
+    std::fs::rename(staging, ready)
+}
 pub fn run(dir: &Path, child: bool, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let tag = if child { "child" } else { "root" };
-    std::fs::write(
-        dir.join(format!("{tag}.ready")),
-        std::process::id().to_string(),
-    )?;
+    publish_readiness_with(dir, tag, std::process::id(), |_, _| {})?;
     await_file(&dir.join("go"))?; // Root test verifies genuine driver registration before issuing command.
     let spec: Value = serde_json::from_slice(&std::fs::read(dir.join("requests.json"))?)?;
     let socket = Path::new(spec["socket"].as_str().ok_or("socket")?);
@@ -495,4 +507,27 @@ fn run_orphan_inner(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_vec(&json!({"return_code_intent":0,"wait_status_available":false}))?,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn readiness_publishes_only_complete_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        publish_readiness_with(dir.path(), "root", 41, |staging, ready| {
+            assert!(staging.is_file());
+            assert_eq!(std::fs::read(staging).unwrap(), b"");
+            assert!(
+                !ready.exists(),
+                "reader must never observe an empty readiness payload"
+            );
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("root.ready")).unwrap(),
+            "41"
+        );
+        assert!(!dir.path().join(".root.ready-41.partial").exists());
+    }
 }
