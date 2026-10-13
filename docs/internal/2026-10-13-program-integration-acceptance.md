@@ -79,3 +79,10 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 - 首次构建调用遗漏 explicit debug/toolchain 意图，门禁正确以配置不匹配拒绝，原路径与日志保留；补足 Rust1.94/debug 意图后新目录 build02 成功，未重复编译 Cargo。第一次 artifact 检查误传容器目录而非 .app，立即按脚本参数纠正；不是产品失败。
 - 根实际 artifact checker PASS：完整 GUI/Rust 输入、pre-sign binary、实际配置/日志、打包 digest 及签名配对；日志 `/private/tmp/pcw-M3-immutable-candidate-fe68022f-build-02.log`、`pcw-M3-immutable-candidate-fe68022f-artifact.log`。已交质量线独立产物验收，尚不宣称独验已通过。
 - main 自动组合 CI 仍待结果；没有启动新候选、没有新窗口点击、真实 provider、安装或日常数据切换。M3 仍未完成。
+
+
+## 2026-10-14：新 main 候选独验收口
+
+质量线实际 artifact checker exit0 且独立从 Git object 比对：369 tracked GUI/Rust 输入匹配 fe68022f，349 Rust 输入还匹配实际 helper witness 2eeec984；配置/原始日志/pre-sign/打包 hash/strict 双签均通过。生成 CandidateMain 单列。质量记录91d2b919已整合为44489e7b；纯追加文档冲突完整保留旧窗口及 CI 段和新独验段，未覆盖历史。实际证据 `/private/tmp/pcw-M3-fe680-artifact-independent-01.log` 与 `.json`。这只关闭新候选的产物独验层；main组合CI、实际窗口、真实任务、安装/迁移仍分别待验。
+
+已绑定 main 自动真实 job：Swift/Mac/iOS 115579275488（run38479786399），工程同步115579275642已通过；后台Mac115579274922与Linux115579274975（run38479786302）。两个 run 精确 SHA 均 fe68022f，仍 live。观察器 session91790/81118 对应这两个 run，不重新 dispatch。

@@ -64,6 +64,17 @@ Jev 与个人/团队记忆保留为待讨论设计，不擅自实施，也不拿
 
 后台与客户端直接冻结最小完整契约：关联/取消关联/按群读取，群内创建需求或计划建立实际来源关联，读取和写入均校验actual channel ACL及source work可见性。共享# / W / H权威与生命周期，不复制Plan、推断channel、修改parent/status/owner或默认唤醒模型；解除关联不删除工作。质量线验证双群隔离、跨投影状态一致、成员权限变化、持久重开与未知结果不重复创建/关联。纯说明诚实标出在途边界，但不替代最终操作链。
 
+## M4 自动原生提交内容闸：根架构裁决（2026-10-14）
+
+同意在 Core 已拥有的自动 prompt 中采用原生 UserPromptSubmit 内容闸，替代只有提交后观察 sidecar 的不足；不改变真实交互 PTY 要求，也不提前宣称真实厂商已验收。
+
+- 私有已登记 native session/epoch、当前自动 ownership 和原生 prompt_id 必须绑定；完整内容仅按已验证版本的无损编码精确核对，不 trim、substring 或凭终端行数放行。既有用户 hook 的拒绝和权限结果保持，不能修改全局用户配置。
+- 人工 raw 输入先耐久撤销自动 ownership；旧/重复/迟到回调不能重新获得自动许可。Core 仍是耐久账本与进程登记的唯一写者。
+- 完整自动能力需要真实 CLI 支持阻断失败的 command hook。官方新增 onFailure:block 要求至少 v2.1.295；必须验证 timeout/crash/缺 executable/解析失败的实际行为，不用版本号或模拟事件代替真实能力验收。旧版/缺字段保持明确 unknown 和真实 PTY，不能假成功或用 transcript 猜测。
+- 官方 common hook fields 已列当前 prompt_id，Stop 可继承；这不是已安装版本的实测。内容展开可能有 pasted_content 包装，编码处理仍须版本实证。已有用户 Stop hook 可以继续同一 turn，单个 Stop 回调不能独自宣布空闲；须保留实际聚合阻断/继续结果。取消未确认不能投递下一条。
+
+当前 primary 依据：[common fields](https://code.claude.com/docs/en/hooks#common-input-fields)、[hook failure](https://code.claude.com/docs/en/hooks#block-the-action-when-a-hook-fails)、[UserPromptSubmit](https://code.claude.com/docs/en/hooks#userpromptsubmit)、[Stop](https://code.claude.com/docs/en/hooks#stop)。作者与独立质量线负责整块启动/载入/审批/取消/停止/恢复与混合路由验收，不为该裁决停其他独立实现。
+
 ## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
 
 - Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。
