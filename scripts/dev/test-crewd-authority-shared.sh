@@ -3,8 +3,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 evidence=$(mktemp -d /private/tmp/pcw-M6-authority.XXXXXX)
 echo "M6 authority evidence: $evidence"
+git -C "$root" rev-parse "${PENDINGCREW_QA_REF:-HEAD}" > "$evidence/source-ref.txt"
 mkdir "$evidence/source" "$evidence/A" "$evidence/B"
-git -C "$root" archive ed67cb32 Sources/Mac/Crewd Sources/Mac/Design/CrewColorHash.swift | tar -x -C "$evidence/source"
+git -C "$root" archive "${PENDINGCREW_QA_REF:-HEAD}" Sources/Mac/Crewd Sources/Mac/Design/CrewColorHash.swift | tar -x -C "$evidence/source"
 cp "$root/scripts/dev/fixtures/crewd-authority-shared.swift" "$evidence/fixture.swift"
 cp "$root/scripts/dev/fixtures/crewd-authority-server.py" "$evidence/server.py"
 find "$evidence/source" -type f -exec shasum -a 256 {} \; > "$evidence/source-sha256.txt"
@@ -26,5 +27,6 @@ r=pathlib.Path(sys.argv[1])
 for name in ('A','B'):
  methods=(r/name/'requests').read_text().splitlines()
  assert not any(x in methods for x in ('work.update','todo.create','ask.answer')),methods
+ assert methods.count('system.hello') == 1 and methods.count('events.subscribe') == 1, (name, 'retired late connector must not emit a second handshake', methods)
 (r/'RESULTS').write_text('PASS: authority transport records contain read-only calls; retired write never sent\n')
 ASSERT
