@@ -1768,6 +1768,9 @@ mod output_drain_tests {
         }
 
         async fn capture(mut self, core: &mut Core, mut queued: VecDeque<PendingWrite>) -> Vec<u8> {
+            // Include already queued legitimate raw/reply actions before closing
+            // observation; the marker must not overtake those product writes.
+            enqueue_actions(&mut queued, &core.take_actions());
             // The unguarded terminal marker closes observation AFTER the actual production queue.
             assert!(enqueue_write_action(
                 &mut queued,
@@ -3078,8 +3081,8 @@ mod output_drain_tests {
         );
         fixture.release(progress.actual_bytes).await;
         assert!(
-            fixture.capture(&mut core, writes).await.is_empty(),
-            "no cancelled suffix reaches the real reader"
+            fixture.capture(&mut core, writes).await == b"z",
+            "only legitimate user raw input reaches reader; no cancelled bot suffix"
         );
         let mut fixture = GuardedFixture::new().await;
         // Full positive writes return the exact token once, leaving the caller to notify Core.

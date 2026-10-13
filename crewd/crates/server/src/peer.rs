@@ -215,7 +215,7 @@ async fn await_enrollment_authority(
     mut classify: impl FnMut() -> Authority,
 ) -> Result<(), RpcError> {
     let deadline = tokio::time::Instant::now() + ENROLLMENT_AUTH_LIMIT;
-    let mut revalidating = false;
+    let mut last_denial = None;
     loop {
         if *drain.borrow() {
             return Err(draining_denial());
@@ -223,16 +223,11 @@ async fn await_enrollment_authority(
         let authority = classify();
         // A kernel walk itself may cross the deadline. A late result cannot
         // grant authority after an earlier transient refusal of this request.
-        if revalidating && tokio::time::Instant::now() >= deadline {
+        if last_denial.is_some() && tokio::time::Instant::now() >= deadline {
             return if *drain.borrow() {
                 Err(draining_denial())
             } else {
-                authorize_method(
-                    Authority::Unknown {
-                        reason: "authority_revalidation_expired",
-                    },
-                    method,
-                )
+                Err(last_denial.take().expect("previous transient refusal"))
             };
         }
         let transient = matches!(
@@ -253,7 +248,7 @@ async fn await_enrollment_authority(
         if tokio::time::Instant::now() >= deadline {
             return result;
         }
-        revalidating = true;
+        last_denial = Some(result.expect_err("transient protected request was refused"));
         let wake = (tokio::time::Instant::now() + ENROLLMENT_AUTH_POLL).min(deadline);
         tokio::select! {
             biased;
@@ -265,7 +260,7 @@ async fn await_enrollment_authority(
         }
         // No fresh success may start after expiry and revision churn never renews the deadline.
         if tokio::time::Instant::now() >= deadline {
-            return result;
+            return Err(last_denial.take().expect("previous transient refusal"));
         }
     }
 }

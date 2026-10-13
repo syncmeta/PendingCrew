@@ -25,3 +25,20 @@ Caller qualification distinguishes concurrent registry revision changes only whe
 - `/private/tmp/pcw-linux-ci-fmt-01.log`: format check passed.
 
 No Linux GREEN, independent review, main merge, package, installation or provider runtime is claimed by these local results. Root owns isolated-branch publication and new actual Linux/macOS CI. No paid provider or personal data was used.
+
+## Second actual Linux run and follow-up
+
+Root published exact `f80e6e52`; run `38460564434`, Linux job `115514341225` remained RED: 2535 run/2532 passed/three failed/eight skipped. `/private/tmp/pcw-M3-linux-ci-f80e6e52-failure.log` is preserved. This is new evidence, not a successful retry of the initial gate.
+
+The new real reader capture found one legitimate user `z` after the closing marker. Capture now enqueues already pending raw/reply actions before its marker; the partial-cancellation case requires exact `z`, proving user input survives while cancelled bot suffix is absent. Linux rate fixture logged one 4095-byte actual read despite 14336 accepted filler bytes. Its reader now uses the same raw FD that `poll` observes, eliminating buffered `Stdin` state invisible to readiness checks. Linux behavior of that correction remains to be proven by the next remote gate; no filler count or zero-trailing assertion is relaxed.
+
+The permanent-enrollment actual socket test expected the original `spawn_enrollment_in_progress` denial, but the added expiry boundary replaced that fact with a generic expiry message. The original transient refusal is now retained across the fixed deadline. Late Human still cannot be granted; drain still wins, and no business retry is added.
+
+Local follow-up:
+
+- `/private/tmp/pcw-linux-ci-output-drain-mac-03.log`: 25 passed, real guarded reader captures retained.
+- `/private/tmp/pcw-linux-ci-peer-fix-03.log`: 20 passed.
+- `/private/tmp/pcw-linux-ci-enrollment-physical-mac-01.log`: two actual socket enrollment/drain tests passed, including original request ID, bounded refusal, unchanged database/hub effects and fresh external Human after guard retirement.
+- `/private/tmp/pcw-linux-ci-clippy-02.log` and `pcw-linux-ci-fmt-02.log`: strict workspace clippy and format passed.
+
+These are macOS evidence only. Root still owns the next exact-source remote two-platform gate and subsequent main decision.

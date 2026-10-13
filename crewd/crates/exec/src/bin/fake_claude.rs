@@ -328,7 +328,6 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
     let mut next_screen = 0u64;
     let mut filler_total = None;
     let mut filler_left = 0usize;
-    let mut input = std::io::stdin();
     let mut capture = File::create(dir.join("capture.bin"))?;
     let mut captured = Vec::new();
     let mut read_seq = 0u64;
@@ -473,7 +472,9 @@ fn guarded_write_fixture(dir: &std::path::Path) -> std::io::Result<()> {
             continue;
         }
         let mut bytes = [0u8; 4096];
-        let n = match input.read(&mut bytes) {
+        // Poll and read the same actual descriptor. Stdin's buffered reader may
+        // retain bytes that poll cannot see, so it cannot be mixed with this seam.
+        let n = match rustix::io::read(stdin_fd, &mut bytes).map_err(Error::from) {
             Ok(0) => {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
