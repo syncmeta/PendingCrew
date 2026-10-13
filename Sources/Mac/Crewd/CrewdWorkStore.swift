@@ -15,6 +15,22 @@ struct CrewdWorkID: Hashable, Sendable {
     }
 }
 
+/// User-facing vocabulary only. Raw backend states stay untouched for CAS and actions.
+enum CrewdWorkStatusLabel {
+    static func display(_ value:String)->String {
+        switch value {
+        case "unclaimed":return "待认领"
+        case "open":return "待推进"
+        case "active","in_progress":return "进行中"
+        case "done":return "已完成"
+        case "blocked":return "受阻"
+        case "dropped":return "已放弃"
+        case "needs_ruling":return "待裁定"
+        case "closed":return "已关闭"
+        default:return "状态待确认"
+        }
+    }
+}
 struct CrewdPlan: Equatable, Sendable {
     let id: CrewdWorkID
     var summary: CrewdValue
@@ -22,7 +38,16 @@ struct CrewdPlan: Equatable, Sendable {
     var value: CrewdValue {
         guard case .object(var fields) = detail, case .object(let latest) = summary else { return summary }
         // Summary members are authoritative too, including explicit null clears.
-        fields.merge(latest) { _, new in new }; return .object(fields)
+        var projection = latest
+        // Pending summaries omit the long handoff note. Preserve only detail belonging
+        // to this exact version and offer; never carry it into a different request.
+        if fields["revision"] == latest["revision"],
+           case .object(var full) = fields["pendingTransfer"],
+           case .object(let compact) = latest["pendingTransfer"],
+           full["to"] == compact["to"], full["requestSeq"] == compact["requestSeq"] {
+            full.merge(compact) { _, new in new }; projection["pendingTransfer"] = .object(full)
+        }
+        fields.merge(projection) { _, new in new }; return .object(fields)
     }
     var revision: String { summary["revision"].string ?? "" }
     var status: String { summary["status"].string ?? "" }

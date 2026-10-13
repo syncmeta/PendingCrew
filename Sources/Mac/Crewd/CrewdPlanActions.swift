@@ -102,7 +102,7 @@ struct CrewdPlanActions:View {
                 HStack {Text("已读取版本："+(revision ?? "尚未读取")).font(.caption);Spacer();Button("核对当前详情"){Task {await load()}}.disabled(reading || drafts.busy(key))}
                 if let id=CrewdWorkID(key.object,kind:.plan),let current=store.plans[id] {
                     Text(current.value["title"].string ?? "").font(.headline)
-                    Text("当前："+current.status+" · "+(current.value["owner"].string ?? "未指派")).font(.caption).foregroundStyle(.secondary)
+                    Text("当前："+CrewdWorkStatusLabel.display(current.status)+" · "+(current.value["owner"].string ?? "未指派")).font(.caption).foregroundStyle(.secondary)
                     Text("卡点："+current.value["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)
                     if let note=current.value["note"].string {Text(note).font(.caption).textSelection(.enabled)}
                 }

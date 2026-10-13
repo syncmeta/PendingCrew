@@ -58,7 +58,7 @@ struct CrewdWorkPanels: View {
                                 } label: {Text("\(id.raw)  \(store.requirements[id]?["text"].string ?? "")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
                                 HStack {Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
                                 if selectedRequirement == id {requirementDetail(id)}
-                                Text(store.requirements[id]?["status"].string ?? "").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                Text(CrewdWorkStatusLabel.display(store.requirements[id]?["status"].string ?? "")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                 Text(store.plans(from:id).map {$0.id.raw}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                             }.padding(8).frame(maxWidth:.infinity,alignment:.leading).background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:6))
                         }
@@ -72,7 +72,7 @@ struct CrewdWorkPanels: View {
                                     Image(systemName:plan.status == "done" ? "checkmark.circle.fill":plan.status == "blocked" ? "questionmark.circle":"circle").foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label:{Text("\(id.raw)  \(plan.value["title"].string ?? "计划")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
                                     Spacer()
-                                    Text(plan.status).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                    Text(CrewdWorkStatusLabel.display(plan.status)).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                 }
                                 if !compact {
                                     Text([plan.value["owner"].string,plan.value["note"].string,plan.value["nextCheckAt"].string].compactMap{$0}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
