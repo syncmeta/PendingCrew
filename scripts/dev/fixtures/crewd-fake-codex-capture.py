@@ -30,6 +30,8 @@ try:
                 args = config['args']
                 session = args[args.index('--session') + 1]
                 token_file = args[args.index('--token-file') + 1]
+                if (output / ('fail-launch-' + session)).is_file():
+                    raise RuntimeError('ACTUAL_SYNTHETIC_RELAUNCH_FAILURE')
                 if not all(c.isalnum() or c in '-_' for c in session): raise RuntimeError('fixture session identity')
                 temp = output / (session + '.tmp')
                 descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
