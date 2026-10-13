@@ -77,6 +77,7 @@ final class CrewdWorkspace: ObservableObject {
             error = "首版试用须使用独立数据目录，不能与旧版共用。"; status = "连接未建立"; return
         }
         do { try await connectOnly(); return } catch {
+            guard !sleeping, !Task.isCancelled else { return }
             if let failure = error as? CrewdClientError, failure.kind == .backendHandshake {
                 self.error = failure.localizedDescription; status = "后台协议连接失败"; return
             }
@@ -103,11 +104,14 @@ final class CrewdWorkspace: ObservableObject {
             try p.run(); backend = p; try log.close()
             for _ in 0..<30 {
                 try await Task.sleep(for: .milliseconds(100))
-                do { try await connectOnly(); return } catch {}
+                do { try await connectOnly(); return } catch { if sleeping || Task.isCancelled { return } }
                 if !p.isRunning { throw CrewdClientError(message: "后台启动失败，请查看连接信息中的日志。") }
             }
             throw CrewdClientError(message: "后台启动后未能建立连接，请检查后台日志。")
-        } catch { self.error = error.localizedDescription; status = "连接失败" }
+        } catch {
+            guard !sleeping, !Task.isCancelled else { return }
+            self.error = error.localizedDescription; status = "连接失败"
+        }
     }
 
     private func connectOnly() async throws {
