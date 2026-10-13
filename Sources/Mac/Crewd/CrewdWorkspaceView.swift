@@ -7,6 +7,13 @@ struct CrewdWorkspaceView: View {
     var autoConnect = true
     @State private var drafts = CrewdDrafts()
     @State private var creatingCrew = false
+    @State private var sidebarMode = CrewdNavigation.Sidebar.contacts
+    @State private var tab = CrewdNavigation.Tab.messages
+    @State private var collapsedCrews: Set<String> = []
+    @State private var todoExpanded = true
+    @State private var membersExpanded = true
+    @State private var runnerExpanded = false
+    @State private var folderHelp = false
     @State private var crewTitle = ""
     @State private var workingDirectory = ""
     private var messageContext: CrewdDrafts.Context {
@@ -22,40 +29,109 @@ struct CrewdWorkspaceView: View {
     }
     var body: some View {
         NavigationSplitView {
-            List {
-                ForEach(workspace.crews.indices, id: \.self) { index in
-                    let crew = workspace.crews[index]
-                    Button { workspace.selectCrew(crew["id"].string ?? "") } label: {
-                        HStack { Text(crew["title"].string ?? "机组"); Spacer(); if crew["id"].string == workspace.crewID { Image(systemName: "checkmark") } }
-                    }.buttonStyle(.plain)
+            VStack(spacing:0) {
+                Picker("侧栏",selection:$sidebarMode) {ForEach(CrewdNavigation.Sidebar.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented).padding(12)
+                ScrollView {
+                    VStack(alignment:.leading,spacing:6) {
+                        if sidebarMode == .contacts {
+                            Label("本机",systemImage:"desktopcomputer").font(.caption).foregroundStyle(.secondary).padding(.vertical,8)
+                            ForEach(CrewdNavigation.directory(workspace.crews,collapsed:collapsedCrews)) {row in
+                                if let crew=workspace.crews.first(where:{$0["id"].string == row.object}) {
+                                    HStack(spacing:5) {
+                                        if row.expandable {Button {if !collapsedCrews.insert(row.id).inserted {collapsedCrews.remove(row.id)}} label:{Image(systemName:collapsedCrews.contains(row.id) ? "chevron.right":"chevron.down")}.buttonStyle(.plain).font(.caption)}
+                                        crewButton(crew)
+                                    }.padding(.leading,CGFloat(row.depth)*16)
+                                }
+                            }
+                        } else {
+                            let rows=CrewdNavigation.timeline(workspace.crews,activity:workspace.crewActivity)
+                            ForEach(rows.indices,id:\.self) {i in crewButton(rows[i])}
+                        }
+                    }.padding(.horizontal,12)
                 }
-            }
-            .navigationTitle("PendingCrew")
-            .safeAreaInset(edge: .bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Button("新建机组", systemImage: "plus") { creatingCrew = true }
-                    Text("Codex 首版 · 独立数据空间").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength:0)
+                VStack(alignment:.leading,spacing:8) {
+                    Button("新建机组",systemImage:"plus") {creatingCrew=true}
                     Text(workspace.status).font(.caption).foregroundStyle(.secondary)
-                    Button("重新连接") { Task { await workspace.connect() } }
-                }.padding()
-            }
+                    Button("重新连接") {Task {await workspace.connect()}}
+                }.padding(14).frame(maxWidth:.infinity,alignment:.leading)
+            }.background(CrewdChatStyle.sidebar).navigationTitle("PendingCrew").navigationSplitViewColumnWidth(min:220,ideal:260,max:340)
         } detail: {
-            VStack(spacing: 0) {
-                if workspace.restartPrompt != .null { restartQuestion }
-                if let error = workspace.error {
-                    HStack { Image(systemName: "exclamationmark.triangle"); Text(error).textSelection(.enabled); Spacer(); Button("关闭") { workspace.error = nil } }
-                        .padding(10).background(.orange.opacity(0.12))
+            VStack(spacing:0) {
+                if workspace.restartPrompt != .null {restartQuestion}
+                if let error=workspace.error {HStack {Image(systemName:"exclamationmark.triangle"); Text(error).textSelection(.enabled); Spacer(); Button("关闭"){workspace.error=nil}}.padding(10).background(.orange.opacity(0.12))}
+                if workspace.crewID.isEmpty {ContentUnavailableView("选择机组",systemImage:"person.3")}
+                else {
+                    VStack(alignment:.leading,spacing:12) {
+                        Text(workspace.crews.first(where:{$0["id"].string == workspace.crewID})?["title"].string ?? "机组").font(.title2)
+                        HStack(spacing:8) {ForEach(CrewdNavigation.Tab.allCases,id:\.self){item in
+                            Button(item.rawValue){tab=item}.buttonStyle(.plain).padding(.horizontal,18).padding(.vertical,8).background(tab == item ? CrewdChatStyle.selection:CrewdChatStyle.bubble,in:RoundedRectangle(cornerRadius:5))
+                        }}
+                    }.padding(16).frame(maxWidth:.infinity,alignment:.leading)
+                    Divider()
+                    switch tab {
+                    case .messages: messageLayout
+                    case .todo: CrewdWorkPanels(store:workspace.workStore)
+                    case .progress: CrewdWorkPanels(store:workspace.workStore,progressOnly:true)
+                    case .documents:
+                        VStack(alignment:.leading,spacing:12) {
+                            HStack {Label("文档",systemImage:"doc.text").font(.headline); Spacer(); Text("文件夹 · 待接线").font(.caption).foregroundStyle(.secondary)}
+                            Text("文档与独立文件夹视图等待后台接口接线。现有消息、原始需求与计划仍保留在各自对象中。").foregroundStyle(.secondary)
+                            Spacer()
+                        }.padding(20).frame(maxWidth:.infinity,alignment:.leading)
+                    }
                 }
-                if workspace.crewID.isEmpty {
-                    ContentUnavailableView("建立你的第一个机组", systemImage: "person.3", description: Text("选择工作目录，与 Codex 一起开始工作。"))
-                } else {
-                    HSplitView { conversation.frame(minWidth: 330); session.frame(minWidth: 420) }
+            }.background(Color(nsColor:.windowBackgroundColor))
+        }.frame(minWidth:1150,minHeight:700)
+        .sheet(isPresented:$creatingCrew){crewForm}
+        .task {if autoConnect {await workspace.connect()}}
+        .onChange(of:workspace.inspection["runnerRequest"]) {_,value in if value != .null {runnerExpanded=true}}
+    }
+    private func crewButton(_ crew:CrewdValue) -> some View {
+        let id=crew["id"].string ?? "", latest=workspace.crewActivity[id]
+        return Button {workspace.selectCrew(id)} label:{
+            VStack(alignment:.leading,spacing:4) {
+                Text(crew["title"].string ?? "机组").font(.body)
+                if sidebarMode == .messages,let time=latest?["createdAt"].string {Text(time).font(.caption2).foregroundStyle(.secondary)}
+                Text(latest?["text"].string ?? (workspace.activityRead.contains(id) ? crew["statusLine"].string ?? "暂无消息":"尚未读取消息")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }.padding(9).frame(maxWidth:.infinity,alignment:.leading).background(workspace.crewID == id ? CrewdChatStyle.selection:Color.clear,in:RoundedRectangle(cornerRadius:5))
+        }.buttonStyle(.plain)
+    }
+    private var messageLayout: some View {
+        HSplitView {
+            VStack(alignment:.leading,spacing:8) {
+                Text("全部会话").font(.caption).foregroundStyle(.secondary).padding(10)
+                ScrollView {VStack(alignment:.leading,spacing:6){ForEach(workspace.channels.indices,id:\.self){i in
+                    let channel=workspace.channels[i]
+                    Button {workspace.selectConversation(channel["id"].string ?? "")} label:{
+                        HStack {Image(systemName:channel["kind"].string == "dm" ? "person.crop.circle":"person.2.circle"); Text(channelName(channel)); Spacer()}.padding(10).background(workspace.channelID == channel["id"].string ? CrewdChatStyle.selection:Color.clear,in:RoundedRectangle(cornerRadius:5))
+                    }.buttonStyle(.plain)
+                }}.padding(8)}
+                Spacer(minLength:0)
+            }.frame(minWidth:165,idealWidth:190,maxWidth:245)
+            VStack(spacing:0) {
+                conversation
+                Divider()
+                DisclosureGroup("会话运行、记录与审批",isExpanded:$runnerExpanded){session.frame(maxHeight:360)}.padding(10)
+            }.frame(minWidth:350)
+            VStack(alignment:.leading,spacing:8) {
+                DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
+                    Text("机组工作引用；群独立视图待接线").font(.caption).foregroundStyle(.secondary)
+                    CrewdWorkPanels(store:workspace.workStore,compact:true).frame(minHeight:100,maxHeight:.infinity)
                 }
-            }
+                Divider()
+                DisclosureGroup("本群成员",isExpanded:$membersExpanded) {
+                    ScrollView {VStack(alignment:.leading,spacing:12){ForEach(workspace.selectedMembers.indices,id:\.self){i in
+                        let member=workspace.selectedMembers[i], id=member["id"].string ?? ""
+                        let row=workspace.sessions.first(where:{$0["id"].string == id})
+                        Button {if member["kind"].string == "session" {workspace.selectSession(id); runnerExpanded=true}} label:{
+                            HStack {Image(systemName:"person.crop.circle"); Text(member["kind"].string == "human" ? "你":row?["displayName"].string ?? id)}
+                        }.buttonStyle(.plain)
+                    }}.frame(maxWidth:.infinity,alignment:.leading)}.frame(minHeight:100,maxHeight:.infinity)
+                }
+                Spacer(minLength:0)
+            }.padding(12).frame(minWidth:185,idealWidth:215,maxWidth:280)
         }
-        .frame(minWidth: 1050, minHeight: 680)
-        .sheet(isPresented: $creatingCrew) { crewForm }
-        .task { if autoConnect { await workspace.connect() } }
     }
 
     private var restartQuestion: some View {
@@ -86,14 +162,13 @@ struct CrewdWorkspaceView: View {
 
     private var conversation: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("群", selection: Binding(get: { workspace.channelID }, set: { workspace.selectChannel($0) })) {
-                ForEach(workspace.channels.indices, id: \.self) { i in
-                    let channel = workspace.channels[i]
-                    Text(channelName(channel)).tag(channel["id"].string ?? "")
-                }
+            HStack {
+                Text(channelName(workspace.channels.first(where:{$0["id"].string == workspace.channelID}) ?? .null)).font(.headline)
+                Spacer(); Button("消息文件夹",systemImage:"folder") {folderHelp.toggle()}.buttonStyle(.plain)
             }
+            if folderHelp {Text("消息独立文件夹分类等待后台视图接口接线。").font(.caption).foregroundStyle(.secondary)}
             if !workspace.pendingAsks.isEmpty {
-                DisclosureGroup("机组等待你的答复（\(workspace.pendingAsks.count)）") {
+                DisclosureGroup("全组织等待你的答复（\(workspace.pendingAsks.count)）") {
                     ScrollView {
                         ForEach(workspace.pendingAsks.indices, id: \.self) { i in
                             let ask = workspace.pendingAsks[i]["ask"]
@@ -107,9 +182,14 @@ struct CrewdWorkspaceView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(workspace.messages.indices, id: \.self) { i in
                             let message = workspace.messages[i]
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(message["senderName"].string ?? message["senderKind"].string ?? "成员").font(.caption).foregroundStyle(.secondary)
-                                Text(message["text"].string ?? "").textSelection(.enabled)
+                            let human=message["senderKind"].string == "human"
+                            HStack(alignment:.top,spacing:9) {
+                                if human {Spacer(minLength:40)} else {Image(systemName:"person.crop.circle.fill").font(.title2).foregroundStyle(.secondary)}
+                                VStack(alignment:.leading,spacing:5) {
+                                    Text(message["senderName"].string ?? (human ? "你":"成员")).font(.caption).foregroundStyle(.secondary)
+                                    Text(message["text"].string ?? "").textSelection(.enabled).padding(12).background(human ? CrewdChatStyle.selection:CrewdChatStyle.bubble,in:RoundedRectangle(cornerRadius:6))
+                                }
+                                if human {Image(systemName:"person.crop.circle.fill").font(.title2).foregroundStyle(.secondary)} else {Spacer(minLength:40)}
                             }.id(message["id"].string ?? "\(i)")
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)

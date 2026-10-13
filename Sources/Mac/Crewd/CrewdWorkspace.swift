@@ -13,6 +13,12 @@ final class CrewdWorkspace: ObservableObject {
     @Published var crews: [CrewdValue] = []
     @Published var sessions: [CrewdValue] = []
     @Published var channels: [CrewdValue] = []
+    @Published private(set) var channelSummaries: [CrewdValue] = []
+    @Published private(set) var crewActivity: [String: CrewdValue] = [:]
+    @Published private(set) var activityRead: Set<String> = []
+    private var activityDirty = true
+    private var activityAffected: Set<String> = []
+    private var activityChannelCrews: [String: String] = [:]
     @Published var pendingAsks: [CrewdValue] = []
     @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
@@ -41,6 +47,12 @@ final class CrewdWorkspace: ObservableObject {
         self.dataDirectory = dataDirectory
         client.onEvent = { [weak self] name, data in
             guard let self else { return }
+            if name.hasPrefix("message.") {
+                if let channel=data["channelId"].string,let crew=self.activityChannelCrews[channel] {
+                    if !self.activityDirty || !self.activityAffected.isEmpty {self.activityAffected.insert(crew)}
+                } else {self.activityAffected.removeAll()}
+                self.activityDirty=true
+            } else if name.hasPrefix("crew.") || name == "events.lagged" {self.activityDirty=true;self.activityAffected.removeAll()}
             if name.hasPrefix("work.") || name.hasPrefix("ask.") || name.hasPrefix("crew.") || name == "events.lagged" { self.workDirty = true }
             if name == "session.runnerItem", data["sessionId"].string == self.sessionID {
                 let item = data["item"]
@@ -122,7 +134,7 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     private func connectOnly() async throws {
-        workStore.invalidateConnection(); workDirty = true
+        workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
@@ -140,6 +152,12 @@ final class CrewdWorkspace: ObservableObject {
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
+    func selectConversation(_ id: String) {
+        selectChannel(id)
+        if let summary = channelSummaries.first(where: {$0["channel"]["id"].string == id}), summary["channel"]["kind"].string == "dm",
+           let member = summary["members"].array.first(where: {$0["kind"].string == "session"})?["id"].string { selectSession(member) }
+    }
+    var selectedMembers: [CrewdValue] { channelSummaries.first(where: {$0["channel"]["id"].string == channelID})?["members"].array ?? [] }
     func selectSession(_ id: String) { selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
     func selectChannel(_ id: String) { selection = UUID(); channelID = id; messages = []; scheduleSync() }
 
@@ -168,6 +186,31 @@ final class CrewdWorkspace: ObservableObject {
         guard current == generation, !sleeping, !Task.isCancelled else { return }
         guard selected == selection else { again = true; return }
         crews = newCrews.array
+        if activityDirty {
+            activityDirty = false
+            // Only message/crew changes and reconnect request this cached snapshot,
+            // never picker changes or runner-item renders. No UI body performs I/O.
+            do {
+                var snapshot = crewActivity, read = activityRead
+                let affected=activityAffected; activityAffected.removeAll()
+                for row in crews {
+                    guard let id = row["id"].string else { continue }
+                    if !affected.isEmpty && !affected.contains(id) {continue}
+                    let list = try await client.call("channel.list", .object(["crewId": .string(id)]))
+                    guard current == generation, !Task.isCancelled else { activityDirty=true; return }
+                    var latest: CrewdValue?
+                    for summary in list.array {
+                        guard let channel = summary["channel"]["id"].string else { continue }
+                        activityChannelCrews[channel]=id
+                        let messages = try await client.call("message.list", .object(["channelId": .string(channel), "limit": .integer(1)]))
+                        guard current == generation, !Task.isCancelled else { activityDirty=true; return }
+                        if let message = messages.array.last, (message["createdAt"].string ?? "") > (latest?["createdAt"].string ?? "") { latest = message }
+                    }
+                    snapshot[id] = latest; read.insert(id)
+                }
+                crewActivity = snapshot; activityRead = read
+            } catch { activityDirty = true }
+        }
         let asks = try await client.call("ask.list")
         guard !sleeping, !Task.isCancelled, current == generation, selected == selection else { again = true; return }
         pendingAsks = asks.array
@@ -187,8 +230,9 @@ final class CrewdWorkspace: ObservableObject {
         guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
         guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
-        sessions = newSessions.array; channels = newChannels.array.map { $0["channel"] }
-        if !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
+        sessions = newSessions.array; channelSummaries = newChannels.array; channels = newChannels.array.map { $0["channel"] }
+        let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
+        if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = channels.first(where: {$0["kind"].string == "human"})?["id"].string ?? channels.first?["id"].string ?? "" }
         let session = sessionID, channel = channelID
         if !session.isEmpty {

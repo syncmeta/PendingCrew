@@ -10,7 +10,7 @@ fixture=$(mktemp -d /private/tmp/pcw-swift-restart.XXXXXX)
 mkdir -p "$fixture/home" "$fixture/work" "$fixture/cache" "$fixture/data"
 echo "Full synthetic logs: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library \
-    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
+    "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdNavigation.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/scripts/dev/fixtures/crewd-client-restart.swift" -o "$fixture/client-test"
 python3 - "$target" "$fixture" "$mode" <<'PYTHON'
 import os, pathlib, socket, subprocess, sys, time
