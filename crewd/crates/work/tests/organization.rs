@@ -525,3 +525,60 @@ fn legacy_books_never_silently_accept_foreign_attribution() {
         Err(Rejected::Invalid("entry number must be positive"))
     );
 }
+
+#[test]
+fn organization_identity_cannot_silently_change_crew_or_default_to_synthetic_crew() {
+    let mut b = WorkBook::organization(Config::default());
+    b.register_entry_in(NOW, EntryNo(1), CrewId::new("a"))
+        .unwrap();
+    assert_eq!(
+        b.register_entry_in(NOW, EntryNo(1), CrewId::new("b")),
+        Err(Rejected::Invalid("entry identity belongs to another crew"))
+    );
+    assert_eq!(
+        b.create_item(&Actor::Human, NOW, NewItem::titled("missing crew")),
+        Err(Rejected::Invalid(
+            "organization work requires explicit crew attribution"
+        ))
+    );
+    assert!(b.state().items.is_empty());
+}
+
+#[test]
+fn standalone_questions_require_real_object_crew_and_never_use_synthetic_crew() {
+    let mut b = WorkBook::organization(Config::default());
+    assert_eq!(
+        b.open_ask(&Actor::System, NOW, "missing crew", None, None),
+        Err(Rejected::Invalid(
+            "organization question requires explicit crew attribution"
+        ))
+    );
+    let h = b
+        .open_ask_in(
+            &Actor::System,
+            NOW,
+            CrewId::new("a"),
+            "specific crew",
+            None,
+            None,
+        )
+        .unwrap()
+        .value;
+    assert_eq!(b.state().ask_crew(h), Some(&CrewId::new("a")));
+    let w = b
+        .create_item(&Actor::Human, NOW, item("a", "a work", "wa"))
+        .unwrap()
+        .value;
+    assert_eq!(
+        b.open_ask_in(
+            &Actor::System,
+            NOW,
+            CrewId::new("b"),
+            "wrong crew",
+            None,
+            Some(w)
+        ),
+        Err(Rejected::Invalid("question crew must match its work item"))
+    );
+    assert_eq!(b.state().last_ask, 1);
+}

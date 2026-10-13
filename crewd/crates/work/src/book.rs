@@ -263,6 +263,9 @@ impl WorkBook {
                 return Err(Rejected::Invalid("entry number must be positive"));
             }
             if d.s.entries.contains_key(&no) {
+                if d.s.entry_crew(no) != Some(&crew) {
+                    return Err(Rejected::Invalid("entry identity belongs to another crew"));
+                }
                 return Ok(false);
             }
             if let Some(org) = &mut d.s.organization {
@@ -415,6 +418,16 @@ impl Draft {
     ) -> Result<Vec<WorkId>, Rejected> {
         let mut ids: Vec<WorkId> = Vec::with_capacity(batch.len());
         for n in batch {
+            if self.s.organization.is_some()
+                && n.crew_id.is_none()
+                && fixed_parent.is_none()
+                && extra_source.is_none()
+                && self.by.home().is_none()
+            {
+                return Err(Rejected::Invalid(
+                    "organization work requires explicit crew attribution",
+                ));
+            }
             let crew = n
                 .crew_id
                 .clone()

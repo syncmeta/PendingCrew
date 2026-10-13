@@ -2,7 +2,7 @@
 //! 人回复 / 默认方案到点 / 卡它的项完成 → 清掉卡点、叫醒负责人。
 use crate::book::{Applied, Draft, Rejected, WorkBook};
 use crate::events::EventKind;
-use crate::ids::{AskId, Ts, WorkId};
+use crate::ids::{AskId, CrewId, Ts, WorkId};
 use crate::model::{Actor, AskState, Blocker, DefaultOption, HumanAsk, NewItem, Status, WaitTier};
 use crate::perm::{Action, Ctx};
 
@@ -54,7 +54,7 @@ impl WorkBook {
             for b in on {
                 match b {
                     BlockOn::NewAsk { question, default } => {
-                        let h = d.new_ask(&question, default, Some(id), false)?;
+                        let h = d.new_ask(&question, default, Some(id), false, None)?;
                         blockers.push(Blocker::Human(h));
                         asks.push(h);
                     }
@@ -107,12 +107,55 @@ impl WorkBook {
         default: Option<DefaultOption>,
         item: Option<WorkId>,
     ) -> Result<Applied<AskId>, Rejected> {
+        let crew = item
+            .and_then(|id| self.state.item_crew(id).cloned())
+            .or_else(|| by.home().cloned())
+            .or_else(|| {
+                self.state
+                    .organization
+                    .is_none()
+                    .then(|| self.state.crew.clone())
+            });
+        self.open_ask_scoped(by, now, crew, question, default, item)
+    }
+
+    /// Explicit object attribution for a trusted system question without a work item.
+    pub fn open_ask_in(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        crew: CrewId,
+        question: &str,
+        default: Option<DefaultOption>,
+        item: Option<WorkId>,
+    ) -> Result<Applied<AskId>, Rejected> {
+        self.open_ask_scoped(by, now, Some(crew), question, default, item)
+    }
+
+    fn open_ask_scoped(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        crew: Option<CrewId>,
+        question: &str,
+        default: Option<DefaultOption>,
+        item: Option<WorkId>,
+    ) -> Result<Applied<AskId>, Rejected> {
         self.transact(by, now, |d| {
-            d.permit(Action::OpenAsk, Ctx::default())?;
+            d.permit(
+                Action::OpenAsk,
+                Ctx {
+                    crew: crew.as_ref(),
+                    ..Ctx::default()
+                },
+            )?;
             if let Some(w) = item {
                 d.live(w)?;
+                if crew.as_ref() != d.s.item_crew(w) {
+                    return Err(Rejected::Invalid("question crew must match its work item"));
+                }
             }
-            d.new_ask(question, default, item, true)
+            d.new_ask(question, default, item, true, crew)
         })
     }
 
@@ -231,6 +274,7 @@ impl Draft {
         default: Option<DefaultOption>,
         item: Option<WorkId>,
         standalone: bool,
+        attributed_crew: Option<CrewId>,
     ) -> Result<AskId, Rejected> {
         let question = question.trim().to_string();
         if question.is_empty() {
@@ -252,8 +296,16 @@ impl Draft {
         let h = AskId(self.s.last_ask);
         let crew = item
             .and_then(|id| self.s.item_crew(id).cloned())
+            .or(attributed_crew)
             .or_else(|| self.by.home().cloned())
-            .unwrap_or_else(|| self.s.crew.clone());
+            .or_else(|| self.s.organization.is_none().then(|| self.s.crew.clone()))
+            .ok_or(Rejected::Invalid(
+                "organization question requires explicit crew attribution",
+            ))?;
+        if crew.as_str().trim().is_empty() || (self.s.organization.is_none() && crew != self.s.crew)
+        {
+            return Err(Rejected::Invalid("invalid question crew attribution"));
+        }
         if let Some(org) = &mut self.s.organization {
             org.ask_crews.insert(h, crew);
         }
