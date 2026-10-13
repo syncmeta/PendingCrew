@@ -48,6 +48,20 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
 }
 @main struct Test {
     @MainActor static func main() async throws {
+        let transferID=CrewdWorkID("W42",kind:.plan)!
+        guard case .object(var full)=plan("W42",full:true), case .object(var short)=plan("W42") else {preconditionFailure()}
+        full["pendingTransfer"] = .object(["to":.string("target"),"requestSeq":.string("99"),"note":.string("on-demand full handoff"),"requestedBy":.string("owner")])
+        short["pendingTransfer"] = .object(["to":.string("target"),"requestSeq":.string("99")])
+        var pending=CrewdPlan(id:transferID,summary:.object(short),detail:.object(full))
+        precondition(pending.value["pendingTransfer"]["note"] == .string("on-demand full handoff"),"bounded summary must preserve same-offer detail after list refresh")
+        short["pendingTransfer"] = .object(["to":.string("target"),"requestSeq":.string("100")]); pending.summary = .object(short)
+        precondition(pending.value["pendingTransfer"]["note"] == .null,"different offer must not inherit old private handoff note")
+        short["pendingTransfer"] = .object(["to":.string("another-target"),"requestSeq":.string("99")]); pending.summary = .object(short)
+        precondition(pending.value["pendingTransfer"]["note"] == .null,"same sequence for different target must not inherit old note")
+        short["pendingTransfer"] = .object(["to":.string("target"),"requestSeq":.string("99")]); short["revision"] = .string("9007199254740994"); pending.summary = .object(short)
+        precondition(pending.value["pendingTransfer"]["note"] == .null,"different work revision must not inherit stale detail")
+        short["pendingTransfer"] = .null; pending.summary = .object(short)
+        precondition(pending.value["pendingTransfer"] == .null,"explicit clear must not resurrect pending offer")
         let rf=Fixture(), rs=CrewdWorkStore(call: {try await rf.call($0,$1)})
         rs.selectCrew("a")
         let request=UUID(), created=try await rs.createRequirement(requestID:request, text:"  exact original\n")

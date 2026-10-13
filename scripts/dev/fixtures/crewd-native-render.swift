@@ -25,7 +25,13 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
         workspace.workStore.selectCrew("engineering");try await workspace.workStore.refresh()
         for (name,scheme,appearance) in [("light",ColorScheme.light,NSAppearance.Name.aqua),("dark",ColorScheme.dark,NSAppearance.Name.darkAqua)] {
             NSApplication.shared.appearance=NSAppearance(named:appearance)
-            let controller=NSHostingController(rootView:CrewdWorkspaceView(workspace:workspace,autoConnect:false).preferredColorScheme(scheme).environment(\.colorScheme,scheme).frame(width:1320,height:820))
+            let screens:[(String,AnyView)] = [
+                ("messages",AnyView(CrewdWorkspaceView(workspace:workspace,autoConnect:false))),
+                ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),members:workspace.sessions))),
+                ("progress",AnyView(CrewdWorkPanels(store:workspace.workStore,drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),members:workspace.sessions,progressOnly:true)))
+            ]
+            for (screen,view) in screens {
+            let controller=NSHostingController(rootView:view.preferredColorScheme(scheme).environment(\.colorScheme,scheme).frame(width:1320,height:820).background(CrewdChatStyle.canvas(scheme)))
             let windowStyle:NSWindow.StyleMask=ProcessInfo.processInfo.environment["PENDINGCREW_RENDER_BORDERLESS"] == "1" ? [.borderless]:[.titled]
             let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:820),styleMask:windowStyle,backing:.buffered,defer:false)
             window.appearance=NSAppearance(named:appearance)
@@ -38,7 +44,8 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
             guard let bitmap=controller.view.bitmapImageRepForCachingDisplay(in:controller.view.bounds) else {fatalError("native bitmap unavailable")}
             controller.view.cacheDisplay(in:controller.view.bounds,to:bitmap)
             guard let png=bitmap.representation(using:.png,properties:[:]) else {fatalError("native PNG unavailable")}
-            try png.write(to:output.appendingPathComponent("crew-messages-"+name+".png"))
+            try png.write(to:output.appendingPathComponent("crew-"+screen+"-"+name+".png"))
+        }
         }
         precondition(!workspace.client.connected)
         print("PASS: actual native view rendered offscreen; no connection, account, visible window or model")
