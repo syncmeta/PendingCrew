@@ -28,6 +28,9 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
             var source: [String:CrewdValue] = ["id":.string("raw-original"),"number":.integer(1),"crewId":.string(crew),"text":.string("original text"),"status":.string(changed ? "done":"in_progress")]
             if !missingSource { source["requirementId"] = .string("#9007199254740995") }
             return .array([.object(source)])
+        case "todo.create", "todo.get", "todo.close":
+            if let error { throw error }
+            return .object(["id":.string("raw-created"),"requirementId":.string("#42"),"crewId":.string("a"),"text":.string("  exact original\n"),"status":.string(method == "todo.close" ? "closed":"unclaimed"),"closure":method == "todo.close" ? .object(["note":.string("reason"),"at":.string("2026-10-13T00:00:00Z")]):.null])
         case "ask.list": return value("[{\"ask\":{\"ask\":\"H9007199254740996\",\"crewId\":\"b\",\"question\":\"global question\",\"item\":\"W9007199254740993\"},\"items\":[\"W9007199254740993\"],\"tier\":\"future_tier\"}]")
         case "work.get":
             var full = plan(params["id"].string!,revision:revisionAdvance ? "9007199254740995" : changed ? "9007199254740994":"9007199254740993",full:true)
@@ -45,6 +48,21 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
 }
 @main struct Test {
     @MainActor static func main() async throws {
+        let rf=Fixture(), rs=CrewdWorkStore(call: {try await rf.call($0,$1)})
+        rs.selectCrew("a")
+        let request=UUID(), created=try await rs.createRequirement(requestID:request, text:"  exact original\n")
+        let rid=CrewdWorkID("#42",kind:.requirement)!
+        precondition(created["text"] == .string("  exact original\n"))
+        precondition(rf.calls.first!.1["requestId"] == .string(request.uuidString.lowercased()))
+        precondition(rf.calls.first!.1["text"] == .string("  exact original\n"))
+        _ = try await rs.requirementDetail(rid)
+        _ = try await rs.closeRequirement(rid, expectedStatus:"unclaimed", note:"reason")
+        precondition(rs.requirements[rid]?["closure"]["note"] == .string("reason"))
+        rf.error=CrewdClientError(message:"lost reply")
+        do {_ = try await rs.createRequirement(requestID:request,text:"  exact original\n"); preconditionFailure()} catch {}
+        let writeCount=rf.calls.filter {$0.0 == "todo.create"}.count
+        rs.invalidateConnection(); rf.error=nil; try await rs.refresh()
+        precondition(rf.calls.filter {$0.0 == "todo.create"}.count == writeCount, "uncertain requirement write never automatically replayed")
         let f=Fixture(), s=CrewdWorkStore(call: {try await f.call($0,$1)})
         s.selectCrew("a"); try await s.refresh()
         let id=CrewdWorkID("W9007199254740993",kind:.plan)!, source=CrewdWorkID("#9007199254740995",kind:.requirement)!

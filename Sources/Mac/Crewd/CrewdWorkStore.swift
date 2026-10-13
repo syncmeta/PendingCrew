@@ -84,6 +84,40 @@ final class CrewdWorkStore: ObservableObject {
         }) else { throw CrewdClientError(message: "工作摘要缺少公共来源编号；不能推断需求与计划关联。") }
         return CrewdPlan(id: id, summary: value, detail: full ? value : nil)
     }
+    private func parseRequirement(_ value: CrewdValue) throws -> CrewdWorkID {
+        guard let raw = value["requirementId"].string,
+              let id = CrewdWorkID(raw, kind: .requirement),
+              value["crewId"].string != nil, value["text"].string != nil,
+              value["status"].string != nil else {
+            throw CrewdClientError(message: "需求契约缺少公共编号、机组、原文或状态。")
+        }
+        return id
+    }
+    /// The draft owner retains requestID across uncertain replies; the store never retries writes.
+    @discardableResult func createRequirement(requestID: UUID, text: String) async throws -> CrewdValue {
+        guard !selectedCrew.isEmpty else { throw CrewdClientError(message: "请先选择机组。") }
+        return try await mutate("todo.create", .object([
+            "requestId": .string(requestID.uuidString.lowercased()),
+            "crewId": .string(selectedCrew), "text": .string(text)
+        ]))
+    }
+    @discardableResult func closeRequirement(_ id: CrewdWorkID, expectedStatus: String, note: String) async throws -> CrewdValue {
+        guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
+        return try await mutate("todo.close", .object([
+            "id": .string(id.raw), "expectedStatus": .string(expectedStatus), "note": .string(note)
+        ]))
+    }
+    @discardableResult func requirementDetail(_ id: CrewdWorkID) async throws -> CrewdValue {
+        guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
+        let token = generation, request = UUID(); pendingDetails[id] = request
+        defer { if pendingDetails[id] == request { pendingDetails[id] = nil } }
+        let value = try await call("todo.get", .object(["id": .string(id.raw)]))
+        try check(token)
+        guard pendingDetails[id] == request else { throw CancellationError() }
+        guard try parseRequirement(value) == id else { throw CrewdClientError(message: "需求详情返回了其他对象。") }
+        requirements[id] = value
+        return value
+    }
     private func adopt(_ incoming: CrewdPlan) {
         if let old = plans[incoming.id] {
             let a = old.revision, b = incoming.revision
@@ -144,7 +178,15 @@ final class CrewdWorkStore: ObservableObject {
             }
             try check(token, current)
             for row in rows { adopt(row) }
-            for (id, value) in sources { requirements[id] = value }
+            for (id, value) in sources {
+                var next = value
+                // Closed rulings are immutable; list rows omit the on-demand closure fields.
+                if value["status"] == .string("closed"), requirements[id]?["status"] == .string("closed"),
+                   case .object(var fields) = value, let closure = requirements[id]?["closure"] {
+                    fields["closure"] = closure; next = .object(fields)
+                }
+                requirements[id] = next
+            }
             planIDs = rows.map(\.id); requirementIDs = sources.map { $0.0 }; humanTasks = humans
         } catch {
             if token == generation && refreshID == current && !(error is CancellationError) { lastFailure = failure(error) }
@@ -165,7 +207,7 @@ final class CrewdWorkStore: ObservableObject {
     /// A failed mutation retains structured facts for UI and leaves drafts to their owner.
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
     @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
-        guard ["work.create", "work.update", "work.assign", "work.block", "ask.answer", "ask.withdraw"].contains(method) else {
+        guard ["work.create", "work.update", "work.assign", "work.block", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。")
         }
         guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。") }
@@ -180,6 +222,16 @@ final class CrewdWorkStore: ObservableObject {
             try check(token)
             if method == "work.block" { adopt(try parsePlan(value["item"], full: true)) }
             else if method.hasPrefix("work.") { adopt(try parsePlan(value, full: true)) }
+            else if method.hasPrefix("todo.") {
+                let id = try parseRequirement(value)
+                if method == "todo.close", params["id"].string != id.raw {
+                    throw CrewdClientError(message: "关闭需求返回了其他对象。")
+                }
+                if method == "todo.create", value["crewId"] != params["crewId"] {
+                    throw CrewdClientError(message: "创建需求返回了其他机组。")
+                }
+                requirements[id] = value
+            }
             activeMutations = 0; ownsMutation = false
             // Reconcile derived requirements and global human inbox by reads only.
             do { try await refresh() } catch { /* The write succeeded; read failure is recorded separately. */ }

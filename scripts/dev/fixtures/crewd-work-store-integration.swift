@@ -11,6 +11,21 @@ func require(_ yes: @autoclosure () -> Bool, _ message: String) { precondition(y
         require(store.requirementIDs.count == 1,"CLI imported source must have one global identity")
         let source=store.requirementIDs[0]
         require(store.requirements[source]!["text"] == .string("synthetic original demand"),"raw source is original text")
+        let request = UUID(), original = "  Swift public requirement\n"
+        let created = try await store.createRequirement(requestID:request, text:original)
+        let publicSource = CrewdWorkID(created["requirementId"].string!,kind:.requirement)!
+        let repeatResult = try await store.createRequirement(requestID:request,text:original)
+        require(repeatResult["requirementId"] == .string(publicSource.raw),"same draft UUID returns same public identity")
+        require(store.requirementIDs.count == 2,"idempotent creation allocates only one source")
+        let raw = try await store.requirementDetail(publicSource)
+        require(raw["text"] == .string(original),"public get retains original bytes")
+        do {
+            _ = try await store.createRequirement(requestID:request,text:"changed payload")
+            preconditionFailure("same request with changed payload accepted")
+        } catch let e as CrewdClientError { require(e.code == -32009,"payload conflict is explicit") }
+        let closed = try await store.closeRequirement(publicSource,expectedStatus:"unclaimed",note:"synthetic deliberate ruling")
+        require(closed["status"] == .string("closed") && closed["closure"]["note"] == .string("synthetic deliberate ruling"),"human ruling comes from actual backend")
+        require(store.requirements[publicSource]?["closure"]["note"] == .string("synthetic deliberate ruling"),"list reconciliation retains immutable ruling detail")
         let made=try await store.mutate("work.create",.object(["crewId":.string(crew),"owner":.string(owner),"title":.string("Swift organization parent"),"sources":.array([.string(source.raw)])]))
         let id=CrewdWorkID(made["id"].string!,kind:.plan)!, initial=made["revision"].string!
         require(store.plans(from:source).map(\.id) == [id],"real list must associate source before detail")
