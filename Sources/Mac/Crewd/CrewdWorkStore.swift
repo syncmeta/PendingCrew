@@ -53,7 +53,7 @@ final class CrewdWorkStore: ObservableObject {
     var progress: [CrewdPlan] { planIDs.compactMap { plans[$0] } }
     var todoPlans: [CrewdPlan] { progress }
     func plans(from requirement: CrewdWorkID) -> [CrewdPlan] {
-        plans.values.filter { $0.detail?["sources"].array.contains(.string(requirement.raw)) == true }
+        plans.values.filter { $0.value["sources"].array.contains(.string(requirement.raw)) }
             .sorted { $0.id.raw < $1.id.raw }
     }
     func selectCrew(_ crew: String) {
@@ -78,6 +78,10 @@ final class CrewdWorkStore: ObservableObject {
               value["crewId"].string != nil, value["status"].string != nil else {
             throw CrewdClientError(message: "工作契约缺少稳定编号、机组或字符串版本。")
         }
+        guard case .array(let sources) = value["sources"], sources.allSatisfy({
+            guard let raw = $0.string else { return false }
+            return CrewdWorkID(raw, kind: .requirement) != nil
+        }) else { throw CrewdClientError(message: "工作摘要缺少公共来源编号；不能推断需求与计划关联。") }
         return CrewdPlan(id: id, summary: value, detail: full ? value : nil)
     }
     private func adopt(_ incoming: CrewdPlan) {
