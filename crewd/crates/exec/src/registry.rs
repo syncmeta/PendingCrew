@@ -263,7 +263,7 @@ pub enum ProcessParticipant {
     AcpNative { generation: uuid::Uuid, epoch: u64 },
 }
 impl ProcessParticipant {
-    fn key(self) -> io::Result<String> {
+    pub(crate) fn key(self) -> io::Result<String> {
         match self {
             Self::AcpHelper { generation } if !generation.is_nil() => {
                 Ok(format!("@acp/{generation}/helper"))

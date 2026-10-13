@@ -118,10 +118,10 @@ impl PtyMaster {
         self.observer = Some(observer);
     }
     fn observed(&self, bytes: &[u8]) {
-        if !bytes.is_empty() {
-            if let Some(observer) = &self.observer {
-                observer.observe(bytes);
-            }
+        if !bytes.is_empty()
+            && let Some(observer) = &self.observer
+        {
+            observer.observe(bytes);
         }
     }
 
