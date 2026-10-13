@@ -5,6 +5,10 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 : "${PENDINGCREW_TEST_OLD_CREWD_PROGRAM:?Explicit v9 binary required}"
 : "${PENDINGCREW_TEST_CREWD_PROGRAM:?Explicit v10 binary required}"
 : "${FAKE_CODEX_PROGRAM:?Explicit fake executor required}"
+case "$PENDINGCREW_TEST_OLD_CREWD_PROGRAM" in /*) ;; *) exit 2;; esac
+case "$PENDINGCREW_TEST_CREWD_PROGRAM" in /*) ;; *) exit 2;; esac
+case "$FAKE_CODEX_PROGRAM" in /*/fake_codex) ;; *) echo 'Only the explicitly gated fake_codex executor is accepted.' >&2; exit 2;; esac
+[ -x "$PENDINGCREW_TEST_OLD_CREWD_PROGRAM" ] && [ -x "$PENDINGCREW_TEST_CREWD_PROGRAM" ] && [ -x "$FAKE_CODEX_PROGRAM" ]
 fixture=$(mktemp -d /private/tmp/pcw-resources-migration.XXXXXX)
 echo "Migration evidence: $fixture"
 mkdir -p "$fixture/bin"

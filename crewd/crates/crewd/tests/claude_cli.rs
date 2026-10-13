@@ -98,21 +98,46 @@ fn second_run_resumes_the_id_recorded_by_the_first() {
     assert_eq!(registry.trim(), "{}", "退出后登记表清空");
 }
 
-/// 「claude」用 shell 顶替：参数记到 `<dir>/args.txt`；画一个输入行，用终端自己的行编辑收下
-/// 投进来的正文（回显、退格、回车都由 PTY 的行规程处理），收到一行就记到 `<dir>/got.txt`、
-/// 清屏重画空输入行，再过一会儿退出。
+/// Synthetic native TUI: raw/no-echo input, explicit consumed-key cursor frames,
+/// real received bytes recorded outside argv. This is not kernel line-echo evidence.
 fn line_reader_fake(dir: &Path) -> std::path::PathBuf {
     let fake = dir.join("fake-claude-reader");
-    std::fs::write(
-        &fake,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{dir}/args.txt'\nprintf '\\342\\235\\257 '\n\
-             IFS= read -r line\nprintf '%s\\n' \"$line\" > '{dir}/got.txt'\n\
-             printf '\\033[2J\\033[H\\342\\235\\257 \\n'\nsleep 1\n",
-            dir = dir.display()
-        ),
-    )
-    .unwrap();
+    std::fs::write(&fake, r#"#!/usr/bin/env python3
+import os, pathlib, select, sys, termios, time
+root = pathlib.Path(__file__).parent
+(root / 'args.txt').write_text(' '.join(sys.argv[1:]) + '\n')
+attrs = termios.tcgetattr(0)
+attrs[0] &= ~termios.ICRNL
+attrs[3] &= ~(termios.ICANON | termios.ECHO)
+attrs[6][termios.VMIN] = 1
+attrs[6][termios.VTIME] = 0
+termios.tcsetattr(0, termios.TCSANOW, attrs)
+value = bytearray()
+def draw():
+    os.write(1, ('\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ ' + value.decode(errors='replace') + '\x1b[7m \x1b[27m\r\n────────────────────\r\n').encode())
+draw()
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    ready, _, _ = select.select([0], [], [], 0.05)
+    if not ready:
+        continue
+    chunk = os.read(0, 4096)
+    if not chunk:
+        break
+    for key in chunk:
+        if key == 127:
+            value = value[:-1]
+        elif key == 13:
+            (root / 'got.txt').write_bytes(bytes(value) + b'\n')
+            value.clear()
+            draw()
+            time.sleep(1)
+            sys.exit(0)
+        else:
+            value.append(key)
+    draw()
+sys.exit(2)
+"#).unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     fake
 }

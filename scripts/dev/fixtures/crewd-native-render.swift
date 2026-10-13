@@ -38,6 +38,14 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
             default:fatalError("unexpected resource write in offscreen renderer: \(method)")
             }
         }
+        workspace.channelWork=CrewdChannelWorkStore{method,params in
+            guard method == "channel.workList",params["channelId"] == .string("group") else{fatalError("unexpected group write in offscreen renderer")}
+            return .object(["channelId":.string("group"),"linkRevision":.string("3"),"sourceRevision":.string("5"),"items":.array([
+                .object(["object":.object(["kind":.string("requirement"),"id":.string("#42")]),"crewId":.string("engineering"),"label":.string("打通原始需求与客户端"),"labelTruncated":.bool(false),"status":.string("in_progress")]),
+                .object(["object":.object(["kind":.string("work"),"id":.string("W42")]),"crewId":.string("engineering"),"label":.string("贯通原始需求与客户端"),"labelTruncated":.bool(false),"status":.string("active"),"revision":.string("1")]),
+                .object(["object":.object(["kind":.string("humanTask"),"id":.string("H43")]),"crewId":.string("engineering"),"label":.string("希望保留哪种交接呈现？"),"labelTruncated":.bool(false),"status":.string("open")])]),"next":.null])
+        }
+        workspace.channelWork.configureCapabilities(["channelWork"]);workspace.channelWork.selectChannel(crew:"engineering",channel:"group");try await workspace.channelWork.refresh()
         workspace.resources.configureCapabilities(["documents","viewFolders"]);workspace.resources.selectCrew("engineering")
         try await workspace.resources.refreshDocuments();_ = try await workspace.resources.document(docID)
         for view in CrewdResourceView.allCases {_ = try await workspace.resources.refreshFolders(view)}
@@ -52,6 +60,7 @@ func wire(_ text:String)->CrewdValue {try! JSONDecoder().decode(CrewdValue.self,
                 ("documents",AnyView(CrewdDocumentsView(store:workspace.resources,drafts:.constant(resourceDrafts)))),
                 ("document-editor",AnyView(CrewdDocumentEditor(store:workspace.resources,drafts:.constant(resourceDrafts),target:CrewdDocumentTarget(key:docKey)))),
                 ("folder-editor",AnyView(CrewdFolderEditor(store:workspace.resources,drafts:.constant(resourceDrafts),view:.documents))),
+                ("group-todo",AnyView(CrewdChannelTodoView(group:workspace.channelWork,work:workspace.workStore,linkDrafts:.constant(CrewdChannelLinkDrafts()),requirementDrafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,crews:workspace.crews,openCrew:{_ in}))),
                 ("handoff",AnyView(CrewdHandoffView(store:workspace.workStore,id:CrewdWorkID("W42",kind:.plan)!,members:workspace.sessions))),
                 ("human",AnyView(CrewdHumanActions(store:workspace.workStore,drafts:.constant(CrewdHumanDrafts()),target:CrewdHumanTarget(key:.init(scope:"engineering",crew:"engineering",ask:"H43"),crewTitle:"开发机组")))),
                 ("todo",AnyView(CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:.constant(CrewdResourceDrafts()),drafts:.constant(CrewdRequirementDrafts()),planDrafts:.constant(CrewdPlanDrafts()),humanDrafts:.constant(CrewdHumanDrafts()),members:workspace.sessions,crews:workspace.crews))),

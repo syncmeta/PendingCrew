@@ -1728,7 +1728,10 @@ mod output_drain_tests {
                 }
             })
             .await
-            .unwrap_or_else(|_| panic!("fixture receipt deadline: {name}"));
+            .unwrap_or_else(|_| {
+                let protocol = std::fs::read_to_string(self.dir.path().join("protocol.log")).unwrap_or_default();
+                panic!("fixture receipt deadline: {name}; protocol:\n{protocol}")
+            });
         }
 
         async fn screen(&mut self, core: &mut Core, bytes: &[u8], at: Instant) {
@@ -1767,7 +1770,7 @@ mod output_drain_tests {
             core.after_output_drain(at);
         }
 
-        fn saturate(&self) -> usize {
+        async fn saturate(&self) -> usize {
             let start = Instant::now();
             let mut accepted = 0;
             let mut single = false;
@@ -1785,6 +1788,15 @@ mod output_drain_tests {
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         if single {
+                            // Linux master writes first enter asynchronous flip buffers.
+                            // A transient EAGAIN does not prove the slave's raw buffer is
+                            // full. Wait for the child's real FIONREAD=4095 receipt, then
+                            // refill the remaining upstream capacity before final EAGAIN.
+                            #[cfg(target_os = "linux")]
+                            if !self.dir.path().join("raw-input-full").exists() {
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
                             break;
                         }
                         single = true;
@@ -1807,6 +1819,9 @@ mod output_drain_tests {
         }
 
         async fn capture(mut self, core: &mut Core, mut queued: VecDeque<PendingWrite>) -> Vec<u8> {
+            // Include already queued legitimate raw/reply actions before closing
+            // observation; the marker must not overtake those product writes.
+            enqueue_actions(&mut queued, &core.take_actions());
             // The unguarded terminal marker closes observation AFTER the actual production queue.
             assert!(enqueue_write_action(
                 &mut queued,
@@ -1931,7 +1946,7 @@ mod output_drain_tests {
         );
         let mut queued = VecDeque::new();
         enqueue_actions(&mut queued, &actions);
-        let filler = fixture.saturate();
+        let filler = fixture.saturate().await;
         let fence = Mutex::new(0);
         let error = write_ready(fixture.master(), &mut core, &fence, 0, &mut queued).unwrap_err();
         assert_eq!(
@@ -2033,6 +2048,16 @@ mod output_drain_tests {
             .await;
         core.take_actions();
         for (at, expected) in [(820, b" ".as_slice()), (930, &[0x7f][..])] {
+            if at == 930 {
+                fixture
+                    .screen(
+                        &mut core,
+                        &input_box("BOT "),
+                        now + Duration::from_millis(870),
+                    )
+                    .await;
+                core.take_actions();
+            }
             core.on_tick(now + Duration::from_millis(at));
             let actions = core.take_actions();
             assert_eq!(
@@ -2048,11 +2073,19 @@ mod output_drain_tests {
                 now + Duration::from_millis(at),
             );
         }
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                now + Duration::from_millis(980),
+            )
+            .await;
+        core.take_actions();
         core.on_tick(now + Duration::from_millis(1040));
         let enter = core.take_actions();
         assert_eq!(writes(&enter), vec![b"\r".as_slice()]);
         enqueue_actions(&mut queued, &enter);
-        let filler = fixture.saturate();
+        let filler = fixture.saturate().await;
         let error =
             write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queued).unwrap_err();
         assert_eq!(
@@ -2117,7 +2150,7 @@ mod output_drain_tests {
                 enqueue_actions(&mut queue, &core.take_actions());
                 assert_eq!(queue[0].bytes, b"\r");
             }
-            let filler = fixture.saturate();
+            let filler = fixture.saturate().await;
             let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
                 .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
@@ -2173,6 +2206,189 @@ mod output_drain_tests {
     }
 
     #[tokio::test]
+    async fn missing_native_key_echo_expires_without_physical_retries_or_late_bytes() {
+        let mut fixture = GuardedFixture::new().await;
+        let base = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            base,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), base).await;
+        core.take_actions();
+        core.on_tick(base + Duration::from_millis(310));
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(310)
+            ),
+            3
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(900),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(900)
+            ),
+            1
+        );
+        core.on_tick(base + Duration::from_millis(3500));
+        let terminal = core.take_actions();
+        assert!(
+            terminal.iter().any(|a| matches!(
+                a,
+                Action::Event(SessionEvent::Delivery {
+                    id: 1,
+                    outcome: DeliveryOutcome::Unsubmitted(_),
+                    ..
+                })
+            )),
+            "original verify budget must terminate unconfirmed physical submission"
+        );
+        assert!(writes(&terminal).is_empty());
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT "),
+                base + Duration::from_millis(3600),
+            )
+            .await;
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "late echo cannot revive cancelled beats"
+        );
+        fixture.release(0).await;
+        assert_eq!(
+            fixture.capture(&mut core, queue).await,
+            b"BOT ",
+            "real reader sees no BS, CR, body retry or cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_beats_wait_for_actual_post_write_echo_not_elapsed_gap_alone() {
+        let mut fixture = GuardedFixture::new().await;
+        let base = Instant::now();
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            base,
+            vec![PendingText {
+                id: 1,
+                subject: Subject::Brief,
+                text: "BOT".into(),
+            }],
+            None,
+        );
+        fixture.screen(&mut core, &input_box(""), base).await;
+        core.take_actions();
+        core.on_tick(base + Duration::from_millis(310));
+        let mut queue = VecDeque::new();
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(310)
+            ),
+            3
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(900),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(900)
+            ),
+            1
+        );
+        // The physical reader is still held: no output after the actual Space.
+        core.on_tick(base + Duration::from_millis(1050));
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "elapsed gap alone cannot queue Backspace before native echo"
+        );
+        for noise in [b"\x1b[?25h".to_vec(), input_box("BOT")] {
+            fixture
+                .screen(&mut core, &noise, base + Duration::from_millis(1075))
+                .await;
+            assert!(
+                writes(&core.take_actions()).is_empty(),
+                "unrelated physical redraw cannot consume Space"
+            );
+        }
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT "),
+                base + Duration::from_millis(1100),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(1100)
+            ),
+            1
+        );
+        core.on_tick(base + Duration::from_millis(1250));
+        assert!(
+            writes(&core.take_actions()).is_empty(),
+            "elapsed gap alone cannot queue Enter before native echo"
+        );
+        fixture
+            .screen(
+                &mut core,
+                &input_box("BOT"),
+                base + Duration::from_millis(1300),
+            )
+            .await;
+        enqueue_actions(&mut queue, &core.take_actions());
+        assert_eq!(
+            write_completed_setup(
+                fixture.master(),
+                &mut core,
+                &mut queue,
+                base + Duration::from_millis(1300)
+            ),
+            1
+        );
+        fixture.release(0).await;
+        assert_eq!(fixture.capture(&mut core, queue).await, b"BOT \x7f\r");
+    }
+
+    #[tokio::test]
     async fn every_queued_delivery_phase_checks_real_new_dialog_and_missing_input_authority() {
         for beat in 0..=3 {
             for missing_row in [false, true] {
@@ -2218,6 +2434,14 @@ mod output_drain_tests {
                         &mut queue,
                         now + Duration::from_millis(900),
                     );
+                    fixture
+                        .screen(
+                            &mut core,
+                            &input_box("BOT "),
+                            now + Duration::from_millis(950),
+                        )
+                        .await;
+                    core.take_actions();
                     core.on_tick(now + Duration::from_millis(1000));
                     enqueue_actions(&mut queue, &core.take_actions());
                 }
@@ -2228,6 +2452,14 @@ mod output_drain_tests {
                         &mut queue,
                         now + Duration::from_millis(1000),
                     );
+                    fixture
+                        .screen(
+                            &mut core,
+                            &input_box("BOT"),
+                            now + Duration::from_millis(1050),
+                        )
+                        .await;
+                    core.take_actions();
                     core.on_tick(now + Duration::from_millis(1100));
                     enqueue_actions(&mut queue, &core.take_actions());
                 }
@@ -2241,7 +2473,7 @@ mod output_drain_tests {
                         _ => b"\r".to_vec(),
                     }
                 );
-                let filler = fixture.saturate();
+                let filler = fixture.saturate().await;
                 let error = write_ready(fixture.master(), &mut core, &Mutex::new(0), 0, &mut queue)
                     .unwrap_err();
                 assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
@@ -2698,7 +2930,7 @@ mod output_drain_tests {
         fixture.screen(&mut core, &menu("Proceed?", 0), now).await;
         core.take_actions();
         let expect = shown(&core).fingerprint();
-        let filler = fixture.saturate(); // Child has no stdin reader: exact actual one-byte EAGAIN.
+        let filler = fixture.saturate().await; // Child has no stdin reader: exact actual one-byte EAGAIN.
         let (handle, mut events, mut observed, mut owner) = run_public_fixture(&mut fixture, core);
         let started = Instant::now();
         let held = handle.answer(
@@ -2926,7 +3158,7 @@ mod output_drain_tests {
             args: vec![
                 "-c".into(),
                 format!(
-                    "cat '{}' && printf ready > '{}' && sleep 30",
+                    "stty raw -echo && cat '{}' && printf ready > '{}' && sleep 30",
                     source.display(),
                     ready.display()
                 ),
@@ -2970,7 +3202,7 @@ mod output_drain_tests {
             );
             let screen = |text| {
                 format!(
-                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+                    "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
                 )
             };
             core.on_output(screen("").as_bytes(), now);
@@ -2985,11 +3217,15 @@ mod output_drain_tests {
             }
             if beat > 1 {
                 complete_actions(&mut core, &actions, now + Duration::from_millis(900));
+                core.on_output(screen("BOT ").as_bytes(), now + Duration::from_millis(950));
+                core.take_actions();
                 core.on_tick(now + Duration::from_millis(1000));
                 actions = core.take_actions();
             }
             if beat > 2 {
                 complete_actions(&mut core, &actions, now + Duration::from_millis(1000));
+                core.on_output(screen("BOT").as_bytes(), now + Duration::from_millis(1050));
+                core.take_actions();
                 core.on_tick(now + Duration::from_millis(1100));
                 actions = core.take_actions();
             }
@@ -3059,7 +3295,7 @@ mod output_drain_tests {
 
     #[tokio::test]
     async fn delivery_completion_requires_the_last_actual_byte_and_survives_no_cancellation() {
-        let (_dir, p) = readable_output(b"").await;
+        let mut fixture = GuardedFixture::new().await;
         let now = Instant::now();
         let mut core = Core::new(
             CoreConfig::default(),
@@ -3072,7 +3308,7 @@ mod output_drain_tests {
             }],
             None,
         );
-        core.on_output(&input_box(""), now);
+        fixture.screen(&mut core, &input_box(""), now).await;
         core.take_actions();
         core.on_tick(now + Duration::from_millis(300));
         let actions = core.take_actions();
@@ -3090,17 +3326,16 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         let fence = Mutex::new(0);
-        let completed = write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap();
+        let completed = write_ready(fixture.master(), &mut core, &fence, 0, &mut writes).unwrap();
+        let Some(progress) = completed else {
+            panic!("actual partial syscall must report its token");
+        };
         assert_eq!(
-            completed,
-            Some(WriteProgress {
-                id,
-                token,
-                complete: false,
-                actual_bytes: 4096
-            }),
-            "one bounded syscall is progress, not completion for 5000 bytes"
+            (progress.id, progress.token, progress.complete),
+            (id, token, false)
         );
+        assert!((1..=4096).contains(&progress.actual_bytes));
+        assert_eq!(writes[0].offset, progress.actual_bytes);
         assert!(writes[0].offset > 0 && writes[0].offset < bytes.len());
         core.on_output(&input_box("x"), now + Duration::from_secs(1));
         assert!(
@@ -3109,13 +3344,19 @@ mod output_drain_tests {
         );
         core.raw(b"z");
         assert_eq!(
-            write_ready(&p.master, &mut core, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut core, &fence, 0, &mut writes).unwrap(),
             None
         );
         assert!(
             writes.is_empty(),
             "cancelled partial write has no completion"
         );
+        fixture.release(progress.actual_bytes).await;
+        assert!(
+            fixture.capture(&mut core, writes).await == b"z",
+            "only legitimate user raw input reaches reader; no cancelled bot suffix"
+        );
+        let mut fixture = GuardedFixture::new().await;
         // Full positive writes return the exact token once, leaving the caller to notify Core.
         let mut fresh = Core::new(
             CoreConfig::default(),
@@ -3128,7 +3369,7 @@ mod output_drain_tests {
             }],
             None,
         );
-        fresh.on_output(&input_box(""), now);
+        fixture.screen(&mut fresh, &input_box(""), now).await;
         fresh.take_actions();
         fresh.on_tick(now + Duration::from_millis(300));
         let actions = fresh.take_actions();
@@ -3146,7 +3387,7 @@ mod output_drain_tests {
             delivery: Some((id, token)),
         }]);
         assert_eq!(
-            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut fresh, &fence, 0, &mut writes).unwrap(),
             Some(WriteProgress {
                 id,
                 token,
@@ -3155,10 +3396,15 @@ mod output_drain_tests {
             })
         );
         assert_eq!(
-            write_ready(&p.master, &mut fresh, &fence, 0, &mut writes).unwrap(),
+            write_ready(fixture.master(), &mut fresh, &fence, 0, &mut writes).unwrap(),
             None
         );
-        stop(p).await;
+        fixture.release(0).await;
+        assert_eq!(
+            fixture.capture(&mut fresh, writes).await,
+            b"ok",
+            "positive last bytes reach actual slave reader exactly once"
+        );
     }
 
     #[tokio::test]
@@ -3271,7 +3517,7 @@ mod output_drain_tests {
 
     fn input_box(text: &str) -> Vec<u8> {
         format!(
-            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {text}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m ? for shortcuts\x1b[22m"
         )
         .into_bytes()
     }
@@ -3634,6 +3880,10 @@ mod output_drain_tests {
         captured_prefix(&fixture, b"BOT").await;
         let after_body = successes.lock().unwrap().clone();
         // The actual CLI fixture draws its owned body; Task performs real submit beats.
+        public_fixture_frame(&mut fixture, &input_box("BOT")).await;
+        captured_prefix(&fixture, b"BOT ").await;
+        public_fixture_frame(&mut fixture, &input_box("BOT ")).await;
+        captured_prefix(&fixture, b"BOT \x7f").await;
         public_fixture_frame(&mut fixture, &input_box("BOT")).await;
         captured_prefix(&fixture, b"BOT \x7f\r").await;
         let before_confirmation = successes.lock().unwrap().clone();

@@ -11,6 +11,7 @@ struct CrewdChannelTodoView:View {
     let members:[CrewdValue]
     let crews:[CrewdValue]
     let openCrew:(String)->Void
+    @State private var activeOwner=UUID()
     @State private var selected:CrewdValue?
     @State private var detail:CrewdValue = .null
     @State private var reading=false
@@ -53,7 +54,7 @@ struct CrewdChannelTodoView:View {
                     }.frame(maxWidth:.infinity,alignment:.leading)
                 }
             }
-        }.onAppear{group.setActive(true)}.onDisappear{group.setActive(false)}
+        }.onAppear{group.setActive(true,owner:activeOwner)}.onDisappear{group.setActive(false,owner:activeOwner)}
         .onChange(of:channel){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil}
         .onChange(of:crew){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil}
         .onChange(of:group.items){_,rows in
@@ -101,6 +102,15 @@ struct CrewdChannelTodoView:View {
             guard detailToken == token,channel == scope,selected?["object"] == row["object"] else{return};detail=value
         }catch{if detailToken == token,channel == scope,selected?["object"] == row["object"]{failure=error.localizedDescription}}}
     }
+    private func openBlocker(_ id:CrewdWorkID){
+        let token=detailToken,scope=channel,scopeCrew=crew
+        Task{do{
+            try await work.refresh()
+            guard detailToken == token,channel == scope,crew == scopeCrew else{return}
+            guard let ask=work.humanTasks[id]?["ask"],ask["state"] == .string("open"),let owner=ask["crewId"].string else{failure="卡点已不在当前待答复收件箱，请刷新核对计划。";return}
+            humanTarget=CrewdHumanTarget(key:.init(scope:work.selectedCrew,crew:owner,ask:id.raw),crewTitle:crews.first(where:{$0["id"] == .string(owner)})?["title"].string)
+        }catch{if detailToken == token,channel == scope,crew == scopeCrew{failure=error.localizedDescription}}}
+    }
     @ViewBuilder private func selectedDetails(_ row:CrewdValue,_ id:CrewdWorkID)->some View {
         if reading {ProgressView().controlSize(.small)}
         if detail != .null {
@@ -111,6 +121,9 @@ struct CrewdChannelTodoView:View {
                 Button("从需求建本群计划"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:"",source:id.raw,channel:channel))}.font(.caption).disabled(busy || detail["status"] == .string("closed"))
             }else if id.kind == .plan,row["crewId"] == .string(crew) {
                 Button("计划操作"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:id.raw,source:""))}.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))
+                ForEach(detail["blockedOn"].array.compactMap{$0.string.flatMap{CrewdWorkID($0,kind:.human)}},id:\.self){wait in
+                    Button("答复卡点 "+wait.raw){openBlocker(wait)}.font(.caption).disabled(busy)
+                }
             }else if id.kind == .human,detail["state"] == .string("open"),let owner=row["crewId"].string {
                 Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:work.selectedCrew,crew:owner,ask:id.raw),crewTitle:crews.first(where:{$0["id"] == .string(owner)})?["title"].string)}.font(.caption)
             }

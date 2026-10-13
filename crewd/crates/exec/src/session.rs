@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crewd_term::{
-    AnsiPlainTextTail, CURSOR_MARKERS, DecisionEvent, InputDraft, PendingDecision,
+    AnsiPlainTextTail, CURSOR_MARKERS, DecisionEvent, InputDraft, InputEcho, PendingDecision,
     PendingDecisionTracker, RATE_LIMIT_MENU_PHRASES, Screen, ScreenConfig, Snapshot,
     blocking_dialog, body_tail_visible, input_row, strip,
 };
@@ -92,6 +92,9 @@ pub enum AnswerOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreConfig {
     pub delivery: Timing,
+    /// Trusted executor codec capability, not an environment/RPC/native-screen claim.
+    /// Default native providers remain unknown until their actual semantics/witness is verified.
+    pub verified_collapsed_paste_codec: bool,
     /// 距最后一次输出多久算「不在干活」。
     pub working_quiet: Duration,
     /// 提交三拍（空格 / 退格 / 回车）之间的间隔。
@@ -114,6 +117,7 @@ impl Default for CoreConfig {
     fn default() -> Self {
         Self {
             delivery: Timing::default(),
+            verified_collapsed_paste_codec: false,
             working_quiet: Duration::from_secs(1),
             submit_key_gap: Duration::from_millis(100),
             rate_limit_answer_gap: Duration::from_millis(250),
@@ -309,6 +313,12 @@ struct InFlight {
     landed_row: Option<String>,
     /// 最后一个提交回车之后，必须等完整 PTY drain 的新输出才能确认空框。
     submit_needs_output: bool,
+    /// A timed key gap cannot certify the previous key was consumed.
+    submit_key_needs_output: bool,
+    submit_echo: Option<InputEcho>,
+    submit_echo_purpose: Option<DeliveryWritePurpose>,
+    /// Empty input before the actual final Enter is not a submission receipt.
+    enter_completed: bool,
     awaiting_write: Option<DeliveryWriteToken>,
     write_started_at: Instant,
     write_progress_at: Instant,
@@ -347,6 +357,95 @@ fn paste_placeholder(text: &str) -> bool {
         && !lines.is_empty()
         && number.bytes().all(|b| b.is_ascii_digit())
         && lines.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn paste_lines(text: &str) -> Option<usize> {
+    if !paste_placeholder(text) {
+        return None;
+    }
+    text.rsplit_once(" +")?
+        .1
+        .strip_suffix(" lines]")?
+        .parse()
+        .ok()
+}
+
+fn submit_echo_matches(
+    before: &InputEcho,
+    after: &InputEcho,
+    purpose: DeliveryWritePurpose,
+    body: &str,
+) -> bool {
+    let expected = match purpose {
+        DeliveryWritePurpose::Space { .. } => {
+            Some((format!("{} ", before.prefix), before.column.checked_add(1)))
+        }
+        DeliveryWritePurpose::Backspace { .. } => before
+            .prefix
+            .strip_suffix(' ')
+            .map(|p| (p.to_owned(), before.column.checked_sub(1))),
+        _ => None,
+    };
+    let full_plain = match purpose {
+        DeliveryWritePurpose::Space { .. } => before.prefix.ends_with(body),
+        DeliveryWritePurpose::Backspace { .. } => before
+            .prefix
+            .strip_suffix(' ')
+            .is_some_and(|p| p.ends_with(body)),
+        _ => false,
+    } || (!body.is_empty()
+        && match purpose {
+            DeliveryWritePurpose::Space { .. } => before.content.as_deref() == Some(body),
+            DeliveryWritePurpose::Backspace { .. } => {
+                before
+                    .content
+                    .as_deref()
+                    .and_then(|text| text.strip_suffix(' '))
+                    == Some(body)
+            }
+            _ => false,
+        });
+    if full_plain
+        && !paste_placeholder(before.content.as_deref().unwrap_or(""))
+        && expected.is_some_and(|(prefix, col)| prefix == after.prefix && col == Some(after.column))
+    {
+        return true;
+    }
+    // Native collapsed multiline paste expands by one line for Space and restores on BS.
+    // Preserve the entire painted prefix; unrelated redraws or different paste IDs cannot qualify.
+    let Some((head, tail)) = before.prefix.rsplit_once(" +") else {
+        return false;
+    };
+    let Some(lines) = tail
+        .strip_suffix(" lines]")
+        .and_then(|n| n.parse::<usize>().ok())
+    else {
+        return false;
+    };
+    if !head.contains("[Pasted text #") {
+        return false;
+    }
+    let next = match purpose {
+        DeliveryWritePurpose::Space { .. } => lines.checked_add(1),
+        DeliveryWritePurpose::Backspace { .. } => lines.checked_sub(1),
+        _ => None,
+    };
+    if !body.ends_with('\n')
+        || lines
+            != match purpose {
+                DeliveryWritePurpose::Space { .. } => body.lines().count(),
+                DeliveryWritePurpose::Backspace { .. } => body.lines().count().saturating_add(1),
+                _ => return false,
+            }
+    {
+        return false;
+    }
+    next.is_some_and(|n| {
+        let expected = format!("{head} +{n} lines]");
+        expected == after.prefix
+            && after.column as isize - before.column as isize
+                == expected.chars().count() as isize - before.prefix.chars().count() as isize
+    })
 }
 
 /// 排着、还没开始的一次回答。
@@ -493,6 +592,14 @@ impl Core {
         }
         let key = self.keys.front().map(|k| k.at);
         let verify = self.answering.as_ref().and_then(|a| a.verify_at);
+        let echo = self
+            .in_flight
+            .as_ref()
+            .filter(|f| f.submit_key_needs_output)
+            .and_then(|f| {
+                f.write_progress_at
+                    .checked_add(self.config.delivery.verify_window)
+            });
         // 排着按键、或正在回答时投递机是冻住的（`step_delivery` 不推进），它的期限可能早已过去——不算。
         let delivery = if self.keys.is_empty() && self.answering.is_none() {
             self.in_flight
@@ -513,11 +620,19 @@ impl Core {
                     .and_then(|at| at.checked_add(self.config.working_quiet))
             })
             .flatten();
-        [key, verify, delivery, launch, idle, self.guarded_deadline()]
-            .into_iter()
-            .flatten()
-            .filter(|t| *t > self.last_now)
-            .min()
+        [
+            key,
+            verify,
+            echo,
+            delivery,
+            launch,
+            idle,
+            self.guarded_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|t| *t > self.last_now)
+        .min()
     }
 
     pub fn is_running(&self) -> bool {
@@ -990,6 +1105,15 @@ impl Core {
                 }
             };
             if safe {
+                if matches!(key.purpose, KeyPurpose::SubmitBeat { .. })
+                    && self
+                        .in_flight
+                        .as_ref()
+                        .is_some_and(|f| f.submit_key_needs_output)
+                {
+                    self.keys.push_front(key);
+                    return;
+                }
                 if matches!(key.purpose, KeyPurpose::SubmitBeat { .. }) {
                     let KeyPurpose::SubmitBeat { via_body } = key.purpose else {
                         unreachable!()
@@ -1009,6 +1133,9 @@ impl Core {
                 // 回车没发出去：告诉投递机这一轮不算提交过（否则长正文那一路「输入行出现」
                 // 会被当成投递成功），等安全了它会再发一轮。
                 if let Some(flight) = self.in_flight.as_mut() {
+                    flight.submit_key_needs_output = false;
+                    flight.submit_echo = None;
+                    flight.submit_echo_purpose = None;
                     flight.machine.submit_aborted(now);
                 }
             }
@@ -1177,6 +1304,10 @@ impl Core {
                 wrote_body: false,
                 landed_row: None,
                 submit_needs_output: false,
+                submit_key_needs_output: false,
+                submit_echo: None,
+                submit_echo_purpose: None,
+                enter_completed: false,
                 awaiting_write: None,
                 write_started_at: now,
                 write_progress_at: now,
@@ -1187,6 +1318,24 @@ impl Core {
 
     fn step_delivery(&mut self, now: Instant) {
         if self.expire_pending_write(now) {
+            return;
+        }
+        if self
+            .in_flight
+            .as_ref()
+            .is_some_and(|f| f.submit_key_needs_output)
+            && blocking_dialog(&self.screen.screen_rows()).is_none()
+            && self.in_flight.as_ref().is_some_and(|f| {
+                now.saturating_duration_since(f.write_progress_at)
+                    >= self.config.delivery.verify_window
+            })
+        {
+            self.report(
+                DeliveryOutcome::Unsubmitted(
+                    "上一提交按键未获原生输入消费回显；未重发正文或继续按键，提交未确认。".into(),
+                ),
+                now,
+            );
             return;
         }
         // 提交三拍（空格 / 退格 / 回车）没发完之前不回读：中间那一帧（多了个空格）不作数。回答待决策框的键
@@ -1211,8 +1360,12 @@ impl Core {
             return;
         };
         let step = flight.machine.step(Observation {
-            input_row: row.as_deref(),
+            // Total caption count is necessary readiness only; consumption is checked separately.
+            input_row: row
+                .as_deref()
+                .filter(|r| paste_lines(r).is_none_or(|n| n == flight.body.lines().count())),
             input_empty: self.screen.input_draft() == InputDraft::Empty
+                && flight.enter_completed
                 && !flight.submit_needs_output,
             body_visible: body_tail_visible(&flight.body, &rows),
             dialog_present: blocking_dialog(&rows).is_some(),
@@ -1243,6 +1396,27 @@ impl Core {
                 self.queue_delivery_write(bytes, DeliveryWritePurpose::Body, now);
             }
             Step::Submit { .. } => {
+                if row.as_deref().is_some_and(paste_placeholder)
+                    && !self.config.verified_collapsed_paste_codec
+                {
+                    // Opaque native display cannot self-authorize a codec. Preserve it
+                    // for explicit human clear/resume rather than replacing it with a queued job.
+                    self.foreign_input = Foreign::Conflicted;
+                    self.report(DeliveryOutcome::Unsubmitted(
+                        "折叠正文的内容确认能力尚未验证；未继续提交按键，请在真实终端人工确认。".into()
+                    ), now);
+                    return;
+                }
+                if flight.submit_key_needs_output {
+                    self.report(
+                        DeliveryOutcome::Unsubmitted(
+                            "上一提交按键写入后未获原生回显；未继续按键，未确认提交。".into(),
+                        ),
+                        now,
+                    );
+                    return;
+                }
+                flight.enter_completed = false;
                 if flight.landed_row.is_none() {
                     flight.landed_row = row.clone();
                 }
@@ -1589,6 +1763,10 @@ impl Core {
         if self.expire_pending_write(now) || !self.delivery_write_pending(id, token) {
             return;
         }
+        let echo = self
+            .in_flight
+            .as_ref()
+            .and_then(|f| self.screen.input_echo(&f.body));
         let Some(flight) = self.in_flight.as_mut() else {
             return;
         };
@@ -1600,6 +1778,11 @@ impl Core {
         match token.purpose {
             DeliveryWritePurpose::Body => flight.machine.body_written(now),
             DeliveryWritePurpose::Space { via_body } => {
+                flight.submit_key_needs_output = true;
+                flight.submit_echo = echo;
+                flight.submit_echo_purpose = Some(token.purpose);
+                flight.write_progress_at = now;
+                self.output_pending = false;
                 self.schedule(
                     now + self.config.submit_key_gap,
                     vec![0x7f],
@@ -1607,6 +1790,11 @@ impl Core {
                 );
             }
             DeliveryWritePurpose::Backspace { via_body } => {
+                flight.submit_key_needs_output = true;
+                flight.submit_echo = echo;
+                flight.submit_echo_purpose = Some(token.purpose);
+                flight.write_progress_at = now;
+                self.output_pending = false;
                 self.schedule(
                     now + self.config.submit_key_gap,
                     b"\r".to_vec(),
@@ -1614,6 +1802,7 @@ impl Core {
                 );
             }
             DeliveryWritePurpose::Enter { .. } => {
+                flight.enter_completed = true;
                 flight.machine.enter_written(now);
                 flight.submit_needs_output = true;
                 // Any bytes ingested before actual Enter completion cannot acknowledge it.
@@ -1653,6 +1842,8 @@ impl Core {
             }
         }
         if outcome.is_final() {
+            self.keys
+                .retain(|k| !matches!(k.purpose, KeyPurpose::SubmitBeat { .. }));
             if outcome != DeliveryOutcome::Delivered
                 && wrote_body
                 && self.foreign_input == Foreign::None
@@ -1700,6 +1891,16 @@ impl Core {
         if std::mem::take(&mut self.output_pending) {
             if let Some(flight) = &mut self.in_flight {
                 flight.submit_needs_output = false;
+                if let (Some(before), Some(after), Some(purpose)) = (
+                    flight.submit_echo.as_ref(),
+                    self.screen.input_echo(&flight.body),
+                    flight.submit_echo_purpose,
+                ) && submit_echo_matches(before, &after, purpose, &flight.body)
+                {
+                    flight.submit_key_needs_output = false;
+                    flight.submit_echo = None;
+                    flight.submit_echo_purpose = None;
+                }
             }
             self.observe_input_box();
         }
@@ -1892,7 +2093,10 @@ mod tests {
             let t0 = Instant::now();
             Self {
                 core: Core::new(
-                    CoreConfig::default(),
+                    CoreConfig {
+                        verified_collapsed_paste_codec: true,
+                        ..CoreConfig::default()
+                    },
                     ScreenConfig::default(),
                     t0,
                     pending,
@@ -1940,9 +2144,17 @@ mod tests {
     /// 合成的 claude 输入框画面（整屏重画）。
     fn input_box(input: &str) -> Vec<u8> {
         format!(
-            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n╭──────────────────────╮\r\n│ ❯ {input} \r\n╰──────────────────────╯\r\n  ? for shortcuts"
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n╭──────────────────────╮\r\n│ ❯ {input}\x1b[7m \x1b[27m\r\n╰──────────────────────╯\r\n  ? for shortcuts"
         )
         .into_bytes()
+    }
+
+    fn unstyled_input_box(input: &str) -> Vec<u8> {
+        String::from_utf8(input_box(input))
+            .unwrap()
+            .replace("\x1b[7m", "")
+            .replace("\x1b[27m", "")
+            .into_bytes()
     }
 
     fn trust_dialog() -> Vec<u8> {
@@ -1989,8 +2201,10 @@ mod tests {
         );
         all.extend(t.output(&input_box(text), start + 0.9));
         assert_eq!(writes(&all).last().unwrap(), b" ", "落地后先发空格");
+        all.extend(t.output(&input_box(&format!("{text} ")), start + 0.95));
         all.extend(t.tick(start + 1.0));
         assert_eq!(writes(&all).last().unwrap(), &[0x7f]);
+        all.extend(t.output(&input_box(text), start + 1.05));
         all.extend(t.tick(start + 1.1));
         assert_eq!(writes(&all).last().unwrap(), b"\r");
         all.extend(t.output(&input_box(""), start + 1.2));
@@ -2020,7 +2234,7 @@ mod tests {
     /// （`+2 lines` → `+3 lines`），退格之后又变回去——那一帧不能当成回车被接受。
     #[test]
     fn row_change_mid_submit_sequence_is_not_success() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         let submit = t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
@@ -2039,11 +2253,13 @@ mod tests {
 
     #[test]
     fn submission_late_paste_redraw_is_not_an_acknowledgement() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
+        t.output(&input_box("[Pasted text #1 +3 lines]"), 0.95);
         t.tick(1.0);
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 1.05);
         assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
         let late = t.output(&input_box("[Pasted text #1 +3 lines]"), 1.2);
         assert!(
@@ -2057,7 +2273,7 @@ mod tests {
 
     #[test]
     fn submission_old_empty_screen_is_not_a_fresh_enter_acknowledgement() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
@@ -2065,7 +2281,10 @@ mod tests {
             &t.output(&input_box(""), 0.95),
             BRIEF_DELIVERY_ID
         ));
+        t.output(&input_box("[Pasted text #1 +3 lines]"), 0.97);
         t.tick(1.0);
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 1.02);
+        t.output(&input_box(""), 1.05);
         let enter = t.tick(1.1);
         assert_eq!(writes(&enter), vec![b"\r".to_vec()]);
         assert!(
@@ -2154,7 +2373,9 @@ mod tests {
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("BOT"), 0.9);
+        t.output(&input_box("BOT "), 0.95);
         t.tick(1.0);
+        t.output(&input_box("BOT"), 1.05);
         t.core.on_tick(t.at(1.1));
         let enter = t.core.take_actions();
         let Action::DeliveryWrite { id, token, .. } = enter[0] else {
@@ -2209,7 +2430,7 @@ mod tests {
             panic!("space");
         };
         t.core.delivery_write_completed(id, token, t.at(8.0));
-        assert!(writes(&t.tick(8.05)).is_empty());
+        assert!(writes(&t.output(&input_box("BOT "), 8.05)).is_empty());
         t.core.on_tick(t.at(8.1));
         let backspace = t.core.take_actions();
         assert_eq!(writes(&backspace), vec![vec![0x7f]]);
@@ -2221,7 +2442,7 @@ mod tests {
             panic!("backspace");
         };
         t.core.delivery_write_completed(id, token, t.at(10.0));
-        assert!(writes(&t.tick(10.05)).is_empty());
+        assert!(writes(&t.output(&input_box("BOT"), 10.05)).is_empty());
         assert_eq!(writes(&t.tick(10.1)), vec![b"\r".to_vec()]);
         assert!(delivered(
             &t.output(&input_box(""), 10.2),
@@ -2231,12 +2452,14 @@ mod tests {
 
     #[test]
     fn pending_enter_cannot_use_late_empty_as_delivery_ack() {
-        let mut t = T::new(brief("一\n二"));
+        let mut t = T::new(brief("一\n二\n"));
         t.output(&input_box(""), 0.0);
         t.tick(0.3);
         t.output(&input_box("[Pasted text #1 +2 lines]"), 0.9);
+        t.output(&input_box("[Pasted text #1 +3 lines]"), 0.95);
         t.tick(1.0);
         // Extract the action without actually completing the queued PTY write.
+        t.output(&input_box("[Pasted text #1 +2 lines]"), 1.05);
         t.core.on_tick(t.at(1.1));
         let enter = t.core.take_actions();
         assert_eq!(writes(&enter), vec![b"\r".to_vec()]);
@@ -2748,7 +2971,9 @@ mod tests {
 
         let back = t.output(&input_box("体"), 4.0);
         assert_eq!(writes(&back), vec![b" ".to_vec()], "{back:?}");
+        t.output(&input_box("体 "), 4.05);
         assert_eq!(writes(&t.tick(4.1)), vec![vec![0x7f]]);
+        t.output(&input_box("体"), 4.15);
         assert_eq!(writes(&t.tick(4.2)), vec![b"\r".to_vec()]);
         let done = t.output(&input_box(""), 4.3);
         assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
@@ -3050,7 +3275,9 @@ mod tests {
         assert!(writes(&waiting).is_empty(), "{waiting:?}");
         t.core.send(2, "乙", t.at(199.5));
         let mut back = t.output(&input_box("甲"), 200.0);
+        t.output(&input_box("甲 "), 200.05);
         back.extend(t.tick(200.1));
+        t.output(&input_box("甲"), 200.15);
         back.extend(t.tick(200.2));
         back.extend(t.output(&input_box(""), 200.3));
         assert_eq!(
@@ -3119,7 +3346,7 @@ mod tests {
 
     /// 长正文把提示符顶出了屏：屏上只剩正文尾巴，没有输入行。
     fn body_only(body: &str) -> Vec<u8> {
-        format!("\x1b[2J\x1b[H{body}\r\n").into_bytes()
+        format!("\x1b[2J\x1b[H{body}\x1b[7m \x1b[27m\r\n").into_bytes()
     }
 
     /// 正文尾巴还在屏上，下面弹了个权限框。
@@ -3140,7 +3367,9 @@ mod tests {
             writes(&t.output(&body_only("红色的字"), 0.9)),
             vec![b" ".to_vec()]
         );
+        t.output(&body_only("红色的字 "), 0.95);
         assert_eq!(writes(&t.tick(1.0)), vec![vec![0x7f]]);
+        t.output(&body_only("红色的字"), 1.05);
         assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
         let done = t.output(&input_box(""), 1.2);
         assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
@@ -3167,7 +3396,9 @@ mod tests {
             "回车没发过，不算投递：{back:?}"
         );
         assert_eq!(writes(&back), vec![b" ".to_vec()], "重发一轮提交：{back:?}");
+        t.output(&input_box("红色的字 "), 2.05);
         assert_eq!(writes(&t.tick(2.1)), vec![vec![0x7f]]);
+        t.output(&input_box("红色的字"), 2.15);
         assert_eq!(writes(&t.tick(2.2)), vec![b"\r".to_vec()]);
         let done = t.output(&input_box(""), 2.3);
         assert!(delivered(&done, BRIEF_DELIVERY_ID), "{done:?}");
@@ -3342,7 +3573,7 @@ mod tests {
             input.to_string()
         };
         format!(
-            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {shown}\r\n────────────────────\r\n\x1b[2m  ? for shortcuts\x1b[22m"
+            "\x1b[2J\x1b[HClaude Code v9.9.9\r\n\r\n────────────────────\r\n❯ {shown}\x1b[7m \x1b[27m\r\n────────────────────\r\n\x1b[2m  ? for shortcuts\x1b[22m"
         )
         .into_bytes()
     }
@@ -3551,7 +3782,7 @@ mod tests {
             (styled_box("BO"), true),
             (styled_box("[Pasted text #1 +2 lines]"), true),
             (styled_box("someone else's draft"), false),
-            (input_box("BO"), false),
+            (unstyled_input_box("BO"), false),
         ] {
             let (mut t, token) = pending_body_with_partial_prefix();
             t.core.on_output(&frame, t.at(0.4));
@@ -3580,7 +3811,7 @@ mod tests {
 
     #[test]
     fn partial_body_unknown_or_unrelated_text_cannot_clear_or_replay_into_next_job() {
-        for frame in [input_box("BO"), styled_box("someone else's draft")] {
+        for frame in [unstyled_input_box("BO"), styled_box("someone else's draft")] {
             let (mut t, token) = pending_body_with_partial_prefix();
             t.core.send(2, "NEXT", t.at(0.35));
             t.core.on_output(&frame, t.at(0.4));
@@ -3801,7 +4032,9 @@ mod tests {
         let wrote = t.tick(3.4);
         assert_eq!(writes(&wrote), vec!["唤醒正文".as_bytes().to_vec()]);
         let mut rest = t.output(&styled_box("唤醒正文"), 4.0);
+        t.output(&styled_box("唤醒正文 "), 4.05);
         rest.extend(t.tick(4.1));
+        t.output(&styled_box("唤醒正文"), 4.15);
         rest.extend(t.tick(4.2));
         rest.extend(t.output(&styled_box(""), 4.3));
         assert!(delivered(&rest, 1), "{rest:?}");
@@ -3816,7 +4049,9 @@ mod tests {
         log.extend(t.tick(0.3));
         assert_eq!(writes(&log), vec!["甲".as_bytes().to_vec()]);
         log.extend(t.output(&styled_box("甲"), 0.9));
+        t.output(&styled_box("甲 "), 0.95);
         log.extend(t.tick(1.0));
+        t.output(&styled_box("甲"), 1.05);
         log.extend(t.tick(1.1));
         log.extend(t.output(&styled_box(""), 1.2));
         assert!(delivered(&log, 1), "{log:?}");
@@ -3887,7 +4122,9 @@ mod tests {
             "没有外来输入：照常投"
         );
         log.extend(t.output(&styled_box("甲"), 0.9));
+        t.output(&styled_box("甲 "), 0.95);
         log.extend(t.tick(1.0));
+        t.output(&styled_box("甲"), 1.05);
         log.extend(t.tick(1.1));
         log.extend(t.output(&styled_box(""), 1.2));
         assert!(delivered(&log, 1), "{log:?}");
@@ -3908,7 +4145,9 @@ mod tests {
         back.extend(t.tick(4.3));
         assert_eq!(writes(&back), vec!["乙".as_bytes().to_vec()]);
         back.extend(t.output(&styled_box("乙"), 4.9));
+        t.output(&styled_box("乙 "), 4.95);
         back.extend(t.tick(5.0));
+        t.output(&styled_box("乙"), 5.05);
         back.extend(t.tick(5.1));
         back.extend(t.output(&styled_box(""), 5.2));
         assert!(delivered(&back, 2), "{back:?}");
@@ -3980,9 +4219,11 @@ mod tests {
                 );
             }
             if beat > 1 {
+                t.output(&styled_box("BOT "), 0.95);
                 assert_eq!(writes(&t.tick(1.0)), vec![vec![0x7f]]);
             }
             if beat > 2 {
+                t.output(&styled_box("BOT"), 1.05);
                 assert_eq!(writes(&t.tick(1.1)), vec![b"\r".to_vec()]);
             }
             t.core.raw(b"x");

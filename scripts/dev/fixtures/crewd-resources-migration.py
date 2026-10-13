@@ -5,8 +5,15 @@ for name in ['home','work','data']:(base/name).mkdir()
 env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(base/'home'),'SHELL':'/usr/bin/false'}
 def args(program,data):return [str(program),'--data-dir',str(data),'serve','--codex',str(fake),'--claude','/usr/bin/false','--codex-env','HOME='+str(base/'home'),'--codex-env','SHELL=/usr/bin/false']
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def read_db(path):
+ # Quiescent WAL-mode SQLite files without sidecars require immutable=1 for
+ # genuinely read-only inspection on this Python SQLite build. If an actual
+ # retained WAL has frames, include it rather than silently ignoring authority.
+ wal=pathlib.Path(str(path)+'-wal')
+ uri=path.as_uri()+'?mode=ro'+('' if wal.exists() and wal.stat().st_size>32 else '&immutable=1')
+ return sqlite3.connect(uri,uri=True)
 def version(data):
- with sqlite3.connect('file:'+str(data/'crewd.db')+'?mode=ro',uri=True) as c:return c.execute('pragma user_version').fetchone()[0]
+ with read_db(data/'crewd.db') as c:return c.execute('pragma user_version').fetchone()[0]
 class RPC:
  def __init__(self,data):
   self.sock=socket.socket(socket.AF_UNIX);self.sock.settimeout(10);self.sock.connect(str(data/'crewd.sock'));self.file=self.sock.makefile('rb');self.seq=0
@@ -62,7 +69,7 @@ with server(new,base/'data','upgrade-v10') as rpc:
  tree=rpc.call('viewFolder.assign',{'crewId':crew,'view':'documents','expectedTreeRevision':tree['treeRevision'],'object':{'kind':'document','id':doc},'folderId':tree['folders'][0]['id']})
 assert version(base/'data')==10
 backups=list((base/'data/backups').glob('crewd-v9-pre-v10-*.db'));assert len(backups)==1
-with sqlite3.connect('file:'+str(backups[0])+'?mode=ro',uri=True) as c:
+with read_db(backups[0]) as c:
  assert c.execute('pragma user_version').fetchone()[0]==9
  assert c.execute('pragma integrity_check').fetchone()[0]=='ok'
  assert c.execute('select text from todos where ledger="agent"').fetchone()[0]=='immutable pre-upgrade original'
@@ -81,7 +88,7 @@ with server(new,base/'data','manual-backup-v10') as rpc:
  refused=subprocess.run([str(new),'--data-dir',str(base/'data'),'restore','--from',str(manual)],env=env,capture_output=True,timeout=20);assert refused.returncode!=0,'live directory lock must refuse restore'
 shutil.copytree(base/'data',base/'restore-target')
 restore_root=base/'restore-target'
-with sqlite3.connect('file:'+str(manual)+'?mode=ro',uri=True) as c:
+with read_db(manual) as c:
  backup_id=c.execute("SELECT value FROM meta WHERE key='dbId'").fetchone()[0]
 with server(new,restore_root,'before-crash-restore',crash=True) as rpc:
  current=rpc.call('document.get',{'id':doc})
@@ -95,7 +102,7 @@ crash_hashes={name:digest(restore_root/name) for name in ['crewd.db','crewd.db-w
 p=subprocess.run([str(new),'--data-dir',str(restore_root),'restore','--from',str(manual)],env=env,capture_output=True,timeout=20);(base/'actual-restore.log').write_bytes(p.stdout+p.stderr);assert p.returncode==0
 replaced=[p for p in restore_root.glob('crewd.db.replaced-*') if not p.name.endswith(('-wal','-shm'))]
 assert len(replaced)==1,'restore must retain the original database authority'
-with sqlite3.connect('file:'+str(replaced[0])+'?mode=ro',uri=True) as c:
+with read_db(replaced[0]) as c:
  assert c.execute('pragma integrity_check').fetchone()[0]=='ok'
  assert c.execute('SELECT body FROM documents WHERE id=?',(doc,)).fetchone()[0]=='this newer body must be replaced','replaced database plus any renamed companions must retain crash-time facts'
 # Any retained companions use <replaced database>-wal/-shm, not a new authority's names.
