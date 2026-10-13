@@ -406,6 +406,21 @@ fn rpc_drives_every_client_method() {
             Code(-32004),
         ),
         (
+            "work.transferRequest",
+            r#"{"id":"W999","expectedRevision":"1","to":"worker-2222bbbb","note":"handoff"}"#,
+            Code(-32004),
+        ),
+        (
+            "work.transferAccept",
+            r#"{"id":"W999","expectedRevision":"1"}"#,
+            Code(-32004),
+        ),
+        (
+            "work.transferWithdraw",
+            r#"{"id":"W999","expectedRevision":"1"}"#,
+            Code(-32004),
+        ),
+        (
             "work.assign",
             r#"{"id":"W999","expectedRevision":"1","owner":"synthetic-owner","note":"assign reason"}"#,
             Code(-32004),
@@ -534,6 +549,37 @@ fn rpc_drives_every_client_method() {
         if method == "work.create" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             created_work.push(first["id"].as_str().unwrap().to_owned());
+            for (method, expected) in [
+                ("work.transferRequest", -32003),
+                ("work.transferAccept", -32009),
+                ("work.transferWithdraw", -32009),
+            ] {
+                let mut args =
+                    serde_json::json!({"id":first["id"],"expectedRevision":first["revision"]});
+                if method == "work.transferRequest" {
+                    args["to"] = serde_json::json!("worker-2222bbbb");
+                    args["note"] = serde_json::json!("Human cannot impersonate an owner");
+                }
+                let refused = crewd(data.path())
+                    .args(["rpc", method, &args.to_string()])
+                    .output()
+                    .unwrap();
+                assert!(!refused.status.success(), "{method}");
+                assert!(
+                    String::from_utf8_lossy(&refused.stderr).contains(&format!("({expected})")),
+                    "{method}: {:?}",
+                    refused.stderr
+                );
+                assert_eq!(
+                    rpc(
+                        data.path(),
+                        "work.get",
+                        &serde_json::json!({"id":first["id"]}).to_string()
+                    ),
+                    first
+                );
+            }
+
             let second = rpc(
                 data.path(),
                 "work.create",

@@ -1745,6 +1745,39 @@ pub async fn todo_get(st: &AppState, id: &str) -> PortResult<crewd_proto::Requir
     read(st, move |c| crewd_collab::requirements::get(c, &id)).await
 }
 
+pub async fn work_transfer_request(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkTransferRequestParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.into());
+    write(st, move |tx| {
+        crewd_collab::work_transfer::request(tx, &by, p)
+    })
+    .await
+}
+pub async fn work_transfer_accept(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkTransferResolveParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.into());
+    write(st, move |tx| {
+        crewd_collab::work_transfer::accept(tx, &by, p)
+    })
+    .await
+}
+pub async fn work_transfer_withdraw(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkTransferResolveParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.into());
+    write(st, move |tx| {
+        crewd_collab::work_transfer::withdraw(tx, &by, p)
+    })
+    .await
+}
 #[cfg(test)]
 mod tests {
 

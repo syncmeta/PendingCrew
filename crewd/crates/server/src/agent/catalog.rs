@@ -176,6 +176,23 @@ pub const CATALOG: &[ToolSpec] = &[
             p("include_removed", Bool, false),
         ],
     )),
+    idempotent(all(
+        "work_item_transfer_request",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("to", Str, true),
+            p("note", Str, true),
+        ],
+    )),
+    idempotent(all(
+        "work_item_transfer_accept",
+        &[p("id", Str, true), p("expected_revision", Str, true)],
+    )),
+    idempotent(all(
+        "work_item_transfer_withdraw",
+        &[p("id", Str, true), p("expected_revision", Str, true)],
+    )),
     ro(all("todo_get", &[p("id", Str, true)])),
     ro(all("work_item_get", &[p("id", Str, true)])),
     ro(all(
@@ -611,7 +628,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 36);
+        assert_eq!(CATALOG.len(), 39);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -644,8 +661,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 25);
-        assert_eq!(captain.len(), 36);
+        assert_eq!(worker.len(), 28);
+        assert_eq!(captain.len(), 39);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -701,6 +718,9 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                "work_item_transfer_request",
+                "work_item_transfer_accept",
+                "work_item_transfer_withdraw",
                 "work_item_update",
                 "work_item_block",
                 "work_item_assign",

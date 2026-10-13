@@ -69,6 +69,8 @@ pub struct WorkSummary {
     pub frozen: bool,
     pub title: String,
     pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_transfer: Option<WorkTransferHint>,
     pub status: String,
     pub parent: Option<String>,
     /// Stable requirement references permit lightweight linkage without fetching full plans.
@@ -87,6 +89,10 @@ impl From<WorkPlan> for WorkSummary {
             frozen: p.frozen,
             title: p.title,
             owner: p.owner,
+            pending_transfer: p.pending_transfer.map(|t| WorkTransferHint {
+                to: t.to,
+                request_seq: t.request_seq,
+            }),
             status: p.status,
             parent: p.parent,
             sources: p.sources,
@@ -234,6 +240,9 @@ pub struct WorkHistoryPage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkPendingTransfer {
+    /// Actual organization request event identity; unknown for migrated legacy offers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_seq: Option<String>,
     pub to: String,
     pub requested_by: String,
     pub note: String,
@@ -276,4 +285,26 @@ pub struct WorkBlockReply {
     pub item: WorkPlan,
     pub human_tasks: Vec<String>,
     pub split: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkTransferHint {
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_seq: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkTransferRequestParams {
+    pub id: String,
+    pub expected_revision: String,
+    pub to: String,
+    pub note: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkTransferResolveParams {
+    pub id: String,
+    pub expected_revision: String,
 }

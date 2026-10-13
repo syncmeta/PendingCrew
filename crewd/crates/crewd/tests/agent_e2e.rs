@@ -43,8 +43,8 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 25);
-    assert_eq!(ct.len(), 36);
+    assert_eq!(wt.len(), 28);
+    assert_eq!(ct.len(), 39);
     for tools in [&wt, &ct] {
         let get = tools
             .iter()
@@ -70,13 +70,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 36);
-    assert_eq!(cm.tools().await.len(), 25);
+    assert_eq!(wm.tools().await.len(), 39);
+    assert_eq!(cm.tools().await.len(), 28);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 25);
+    assert_eq!(wm.tools().await.len(), 28);
     for m in [&mut wm, &mut cm] {
         let (text, failed) = m
             .call("todo_get", json!({"id":requirement["requirementId"]}))
@@ -709,7 +709,10 @@ async fn pending_transfer_is_detailed_on_request_and_bounded_in_stale_reply() {
     assert_eq!(plan["pendingTransfer"]["noteTruncated"], false);
     let (text, error) = m.call("my_work_items", json!({})).await;
     assert!(!error, "{text}");
-    assert!(!text.contains("pendingTransfer"));
+    let summary: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(summary["items"][0]["pendingTransfer"]["to"], f.captain);
+    assert!(summary["items"][0]["pendingTransfer"]["requestSeq"].is_string());
+    assert!(summary["items"][0]["pendingTransfer"].get("note").is_none());
     assert!(!text.contains("synthetic full pending offer"));
     let (text, error) = m
         .call(

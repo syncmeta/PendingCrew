@@ -1044,3 +1044,47 @@ Read one original requirement by its issued public # ID. Returns the unchanged h
 ## todo_get.id
 
 Issued requirement ID, for example #7.
+
+## work_item_transfer_request
+
+Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.
+
+## work_item_transfer_request.id
+
+Issued public W ID.
+
+## work_item_transfer_request.expected_revision
+
+Exact current revision string.
+
+## work_item_transfer_request.to
+
+Actual target session ID.
+
+## work_item_transfer_request.note
+
+Nonblank handoff reason, retained in full detail and ownership history; receipts carry only the offer reference.
+
+## work_item_transfer_accept
+
+Accept a current transfer offered to you. Refresh the work revision if ordinary progress changed it.
+
+## work_item_transfer_accept.id
+
+Issued public W ID.
+
+## work_item_transfer_accept.expected_revision
+
+Exact current revision string.
+
+## work_item_transfer_withdraw
+
+Withdraw a current offer as its owner, target or actual work captain.
+
+## work_item_transfer_withdraw.id
+
+Issued public W ID.
+
+## work_item_transfer_withdraw.expected_revision
+
+Exact current revision string.

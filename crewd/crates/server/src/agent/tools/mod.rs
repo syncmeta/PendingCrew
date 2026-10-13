@@ -162,6 +162,9 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_create" => work::create(&cx, args).await,
         "work_item_update" => work::update(&cx, args).await,
         "work_item_block" => work::block(&cx, args).await,
+        "work_item_transfer_request" => work::transfer_request(&cx, args).await,
+        "work_item_transfer_accept" => work::transfer_accept(&cx, args).await,
+        "work_item_transfer_withdraw" => work::transfer_withdraw(&cx, args).await,
         "work_item_assign" => work::assign(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
         "read_channel" => messaging::read_channel(&cx, args).await,
@@ -357,7 +360,7 @@ mod tests {
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 36);
+        assert_eq!(catalog::CATALOG.len(), 39);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

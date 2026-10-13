@@ -445,6 +445,27 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_TRANSFER_REQUEST => {
+            let p: WorkTransferRequestParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work_transfer::request(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::WORK_TRANSFER_ACCEPT => {
+            let p: WorkTransferResolveParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work_transfer::accept(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::WORK_TRANSFER_WITHDRAW => {
+            let p: WorkTransferResolveParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work_transfer::withdraw(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::WORK_ASSIGN => {
             let p: WorkAssignParams = parse_params(p)?;
             write(state, move |tx| {

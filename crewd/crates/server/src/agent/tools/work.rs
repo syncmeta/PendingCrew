@@ -308,3 +308,84 @@ pub async fn todo_get(cx: &Ctx<'_>, v: Value) -> CallResult {
     };
     receipt(cx, port::todo_get(cx.st, &a.id).await)
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransferRequest {
+    id: String,
+    expected_revision: String,
+    to: String,
+    note: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransferResolve {
+    id: String,
+    expected_revision: String,
+}
+fn transfer_receipt(cx: &Ctx<'_>, p: port::PortResult<crewd_proto::WorkPlan>) -> CallResult {
+    receipt(
+        cx,
+        p.map(|p| {
+            let mut s = crewd_proto::WorkSummary::from(p);
+            s.note = None;
+            s
+        }),
+    )
+}
+pub async fn transfer_request(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: TransferRequest = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    transfer_receipt(
+        cx,
+        port::work_transfer_request(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkTransferRequestParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+                to: a.to,
+                note: a.note,
+            },
+        )
+        .await,
+    )
+}
+pub async fn transfer_accept(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: TransferResolve = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    transfer_receipt(
+        cx,
+        port::work_transfer_accept(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkTransferResolveParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+            },
+        )
+        .await,
+    )
+}
+pub async fn transfer_withdraw(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: TransferResolve = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    transfer_receipt(
+        cx,
+        port::work_transfer_withdraw(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkTransferResolveParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+            },
+        )
+        .await,
+    )
+}

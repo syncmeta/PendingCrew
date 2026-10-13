@@ -33,6 +33,7 @@ pub(crate) fn reference(
 }
 fn pending_view(t: &crewd_work::PendingTransfer, short: bool) -> crewd_proto::WorkPendingTransfer {
     crewd_proto::WorkPendingTransfer {
+        request_seq: None,
         to: t.to.to_string(),
         requested_by: t.requested_by.to_string(),
         note: if short {
@@ -87,7 +88,13 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
         pending_transfer: item
             .pending_transfer
             .as_ref()
-            .map(|t| pending_view(t, false)),
+            .map(|t| {
+                let mut view = pending_view(t, false);
+                view.request_seq = crate::work_transfer::request_seq(conn, &r.crew_id, local, t)?
+                    .map(|s| s.to_string());
+                Ok::<_, CollabError>(view)
+            })
+            .transpose()?,
         status: status.into(),
         parent: item.parent.map(plans).transpose()?,
         depends_on: item
@@ -221,6 +228,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("work-transfer:") {
+        return crate::work_transfer::followup_note(conn, row);
+    }
     if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("requirement-new:") {
         return crate::requirements::followup_note(conn, row);
     }
@@ -1838,7 +1848,13 @@ mod pending_transfer_view_tests {
         assert_eq!(t.at, crewd_store::ts_from_ms(NOW));
         let summary =
             serde_json::to_value(crewd_proto::WorkSummary::from(offered.clone())).unwrap();
-        assert!(summary.get("pendingTransfer").is_none());
+        assert_eq!(summary["pendingTransfer"]["to"], t.to);
+        assert_eq!(
+            summary["pendingTransfer"]["requestSeq"].as_str(),
+            t.request_seq.as_deref()
+        );
+        assert!(summary["pendingTransfer"].get("note").is_none());
+        assert!(summary["pendingTransfer"].get("requestedBy").is_none());
         assert_eq!(
             history(
                 s.conn(),

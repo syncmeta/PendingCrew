@@ -96,6 +96,7 @@ mod tests {
             frozen: false,
             title: "title".into(),
             owner: Some("worker".into()),
+            pending_transfer: None,
             status: "active".into(),
             parent: None,
             sources: vec![],

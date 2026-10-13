@@ -39,6 +39,100 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Nonblank handoff reason, retained in full detail and ownership history; receipts carry only the offer reference.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Actual target session ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "to",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Accept a current transfer offered to you. Refresh the work revision if ordinary progress changed it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Withdraw a current offer as its owner, target or actual work captain.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_withdraw"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": true
       },
       "description": "Read one original requirement by its issued public # ID. Returns the unchanged human text and current derived lifecycle. Fetch only the relevant requirement rather than scanning all Todo rows.",
@@ -1484,6 +1578,100 @@
         "type": "object"
       },
       "name": "my_work_items"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Nonblank handoff reason, retained in full detail and ownership history; receipts carry only the offer reference.",
+            "type": "string"
+          },
+          "to": {
+            "description": "Actual target session ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "to",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Accept a current transfer offered to you. Refresh the work revision if ordinary progress changed it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Withdraw a current offer as its owner, target or actual work captain.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Exact current revision string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Issued public W ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_transfer_withdraw"
     },
     {
       "annotations": {

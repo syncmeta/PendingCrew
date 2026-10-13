@@ -622,6 +622,26 @@ pub fn purge_crew_in_tx(conn: &Connection, crew: &str) -> Result<()> {
     Ok(())
 }
 
+/// Genuine latest request for one organization node. Legacy archive events are not relabelled.
+pub fn latest_transfer_request(
+    conn: &Connection,
+    crew: &str,
+    id: crewd_work::WorkId,
+) -> Result<Option<Event>> {
+    let row:Option<(i64,String)>=conn.query_row("SELECT seq,body FROM organization_work_events WHERE crew_id=?1 AND json_extract(body,'$.kind.type')='transfer_requested' AND json_extract(body,'$.kind.id')=?2 ORDER BY seq DESC LIMIT 1",params![crew,id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    row.map(|(seq, body)| {
+        let event: Event = serde_json::from_str(&body)?;
+        if seq <= 0
+            || event.seq != seq as u64
+            || !matches!(event.kind,crewd_work::EventKind::TransferRequested{id:i,..} if i==id)
+        {
+            return Err(invalid("transfer request journal identity mismatch"));
+        }
+        Ok(event)
+    })
+    .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

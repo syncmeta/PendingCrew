@@ -1044,3 +1044,47 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 ## todo_get.id
 
 已发放的原始需求编号，例如 #7。
+
+## work_item_transfer_request
+
+由当前负责人向真实分机提出交接；目标接受前负责人不变。
+
+## work_item_transfer_request.id
+
+已发放的全局 W 编号。
+
+## work_item_transfer_request.expected_revision
+
+当前修订号字符串，原样传回。
+
+## work_item_transfer_request.to
+
+实际目标分机 ID。
+
+## work_item_transfer_request.note
+
+必填非空交接说明，保存在详情与接受后的负责人历史里；回执只带交接引用。
+
+## work_item_transfer_accept
+
+本人接受交给你的工作；普通进展更新了修订号时先刷新工作详情。
+
+## work_item_transfer_accept.id
+
+已发放的全局 W 编号。
+
+## work_item_transfer_accept.expected_revision
+
+当前修订号字符串，原样传回。
+
+## work_item_transfer_withdraw
+
+当前负责人、目标本人或本工作机长撤回交接。
+
+## work_item_transfer_withdraw.id
+
+已发放的全局 W 编号。
+
+## work_item_transfer_withdraw.expected_revision
+
+当前修订号字符串，原样传回。

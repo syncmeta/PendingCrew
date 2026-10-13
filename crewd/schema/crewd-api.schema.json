@@ -4842,6 +4842,13 @@
         "noteTruncated": {
           "type": "boolean"
         },
+        "requestSeq": {
+          "description": "Actual organization request event identity; unknown for migrated legacy offers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requestedBy": {
           "type": "string"
         },
@@ -5016,6 +5023,16 @@
             "null"
           ]
         },
+        "pendingTransfer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkTransferHint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "revision": {
           "type": "string"
         },
@@ -5042,6 +5059,63 @@
         "status",
         "blockedOn",
         "revision"
+      ],
+      "type": "object"
+    },
+    "WorkTransferHint": {
+      "properties": {
+        "requestSeq": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "type": "object"
+    },
+    "WorkTransferRequestParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "to",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkTransferResolveParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision"
       ],
       "type": "object"
     },
@@ -5730,6 +5804,30 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPatrolPage"
+      }
+    },
+    "work.transferAccept": {
+      "params": {
+        "$ref": "#/$defs/WorkTransferResolveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.transferRequest": {
+      "params": {
+        "$ref": "#/$defs/WorkTransferRequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.transferWithdraw": {
+      "params": {
+        "$ref": "#/$defs/WorkTransferResolveParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
       }
     },
     "work.update": {

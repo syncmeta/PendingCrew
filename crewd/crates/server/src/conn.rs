@@ -270,14 +270,27 @@ async fn request_step(
             if agent.is_attached()
                 && matches!(
                     req.method.as_str(),
-                    methods::TODO_CREATE | methods::TODO_CLOSE
+                    methods::TODO_CREATE
+                        | methods::TODO_CLOSE
+                        | methods::WORK_TRANSFER_REQUEST
+                        | methods::WORK_TRANSFER_ACCEPT
+                        | methods::WORK_TRANSFER_WITHDRAW
                 ) =>
         {
             ServerFrame::Response(Response::err(
                 req.id,
                 crate::dispatch::refused(
                     RpcError::FORBIDDEN,
-                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::TodoHumanOnly),
+                    crewd_collab::refusal::Refusal::new(
+                        if matches!(
+                            req.method.as_str(),
+                            methods::TODO_CREATE | methods::TODO_CLOSE
+                        ) {
+                            crewd_collab::refusal::Code::TodoHumanOnly
+                        } else {
+                            crewd_collab::refusal::Code::WorkActorForbidden
+                        },
+                    ),
                 ),
             ))
         }
