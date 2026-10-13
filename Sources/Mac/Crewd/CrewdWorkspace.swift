@@ -277,10 +277,11 @@ final class CrewdWorkspace: ObservableObject {
 
     private func refresh(recoverHistory: Bool) async throws {
         guard !sleeping, !Task.isCancelled else { return }
-        let current = generation, selected = selection
+        let current = generation, selected = selection, crewQuery = UUID()
+        crewDirectoryQuery = crewQuery
         let newCrews = try await client.call("crew.list")
         guard current == generation, !sleeping, !Task.isCancelled else { return }
-        guard selected == selection else { again = true; return }
+        guard selected == selection, crewDirectoryQuery == crewQuery else { again = true; return }
         crews = newCrews.array
         if activityDirty {
             activityDirty = false
@@ -323,10 +324,14 @@ final class CrewdWorkspace: ObservableObject {
             guard current == generation, selected == selection, !sleeping, !Task.isCancelled else { return }
         }
         guard !crew.isEmpty else { return }
+        let sessionQuery = UUID()
+        sessionDirectoryQuery = sessionQuery
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
-        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection,
+              crewID == crew, sessionDirectoryQuery == sessionQuery else { again = true; return }
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
-        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection,
+              crewID == crew, sessionDirectoryQuery == sessionQuery else { again = true; return }
         for row in newSessions.array {if let id=row["id"].string {knownSessions[id]=row}}
         sessions = newSessions.array; channelSummaries = newChannels.array; channels = newChannels.array.map { $0["channel"] }
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
