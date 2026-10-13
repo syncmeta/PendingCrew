@@ -352,6 +352,28 @@ mod tests {
         t
     }
 
+    // Obtain the actual issued public H from authority, never infer crew-local H1.
+    async fn latest_ask_of(f: &Fixture, session: &str) -> String {
+        let session = session.to_owned();
+        f.state
+            .db
+            .call_result(move |store| {
+                let waits = crewd_collab::asks::waits(store.conn(), crewd_store::now_ms(), None)?;
+                Ok::<_, crewd_collab::CollabError>(
+                    waits
+                        .into_iter()
+                        .filter(|w| w.ask.asked_by.as_deref() == Some(session.as_str()))
+                        .max_by_key(|w| w.ask.ask[1..].parse::<i64>().unwrap())
+                        .expect("successful ask has a public authority record")
+                        .ask
+                        .ask,
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     async fn number_of(f: &Fixture, crew: &str) -> String {
         port::crew(&f.state, crew)
             .await
@@ -379,7 +401,12 @@ mod tests {
         .await;
         assert_eq!(
             r.text,
-            asked_receipt("H1", "A / B，我倾向 A", &human_label("示例机组"), true)
+            asked_receipt(
+                &latest_ask_of(&f, "s-child").await,
+                "A / B，我倾向 A",
+                &human_label("示例机组"),
+                true
+            )
         );
         assert!(!r.is_error);
         let home = port::home_human_channel(&f.state, &child).await.unwrap();
@@ -394,11 +421,16 @@ mod tests {
             .unwrap();
         assert_eq!(m.text, "A / B，我倾向 A");
         assert!(m.mentions.iter().any(|x| x.kind == MentionKind::Human));
-        // Numbers come from the asking crew's book, consecutively.
+        // Each receipt uses its actually issued organization-wide H identity.
         let r2 = run(&f, "s-child", "ask", json!({"question": "第二个问题"})).await;
         assert_eq!(
             r2.text,
-            asked_receipt("H2", "第二个问题", &human_label("示例机组"), false)
+            asked_receipt(
+                &latest_ask_of(&f, "s-child").await,
+                "第二个问题",
+                &human_label("示例机组"),
+                false
+            )
         );
 
         let mgmt = f.management_crew().await;
@@ -408,7 +440,12 @@ mod tests {
         let title = port::crew(&f.state, &mgmt).await.unwrap().unwrap().title;
         assert_eq!(
             r.text,
-            asked_receipt("H1", "全局冻结发版吗？", &human_label(&title), false)
+            asked_receipt(
+                &latest_ask_of(&f, "s-boss").await,
+                "全局冻结发版吗？",
+                &human_label(&title),
+                false
+            )
         );
         let mh = port::home_human_channel(&f.state, &mgmt).await.unwrap();
         assert_eq!(mh.crew_id, mgmt);
@@ -433,7 +470,15 @@ mod tests {
             json!({"question": "\n  \u{200B}\n示例【标题】行\u{202E}\n第二行不回显", "resume_note": "接着做"}),
         )
         .await;
-        assert_eq!(r.text, asked_receipt("H1", "示例「标题」行", &home, true));
+        assert_eq!(
+            r.text,
+            asked_receipt(
+                &latest_ask_of(&f, &f.worker).await,
+                "示例「标题」行",
+                &home,
+                true
+            )
+        );
         let long = "长".repeat(100);
         let r = run(
             &f,
@@ -444,7 +489,10 @@ mod tests {
         .await;
         let head = format!("{}\u{2026}", "长".repeat(79));
         assert_eq!(head.chars().count(), 80);
-        assert_eq!(r.text, asked_receipt("H2", &head, &home, true));
+        assert_eq!(
+            r.text,
+            asked_receipt(&latest_ask_of(&f, &f.worker).await, &head, &home, true)
+        );
         // A blank question is collab's refusal, not a tool-side copy (C1).
         let r = run(&f, &f.worker, "ask", json!({"question": " \n "})).await;
         refused(&r, Refusal::new(Code::AskQuestionEmpty));
@@ -507,34 +555,41 @@ mod tests {
         let f = Fixture::new().await;
         f.add_session(&f.crew, "s-w2", Role::Worker, "另一个 worker")
             .await;
+        let mut issued = Vec::new();
         for q in ["q1", "q2", "q3"] {
             let r = run(&f, &f.worker, "ask", json!({"question": q})).await;
             assert!(!r.is_error, "{}", r.text);
+            issued.push(latest_ask_of(&f, &f.worker).await);
         }
+        let (h1, h2, h3) = (&issued[0], &issued[1], &issued[2]);
         let crew = "示例机组";
         // A crewmate may not.
         let r = run(
             &f,
             "s-w2",
             "withdraw_ask",
-            json!({"ask": "h1", "reason": "不是我的"}),
+            json!({"ask": h1.to_lowercase(), "reason": "不是我的"}),
         )
         .await;
         refused(
             &r,
-            Refusal::new(Code::AskWithdrawForbidden).arg("ask", "H1"),
+            Refusal::new(Code::AskWithdrawForbidden).arg("ask", h1.as_str()),
         );
         // The asker may; the receipt uses the canonical id and names the crew.
         let r = run(
             &f,
             &f.worker,
             "withdraw_ask",
-            json!({"ask": "h1", "reason": "已经发版了"}),
+            json!({"ask": h1.to_lowercase(), "reason": "已经发版了"}),
         )
         .await;
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.withdrawn", &[("ask", "H1"), ("crew", crew)])
+            text::r(
+                Locale::Zh,
+                "r.withdrawn",
+                &[("ask", h1.as_str()), ("crew", crew)]
+            )
         );
         assert!(!r.is_error);
         // Withdrawn already: collab's conflict.
@@ -542,16 +597,16 @@ mod tests {
             &f,
             &f.worker,
             "withdraw_ask",
-            json!({"ask": "H1", "reason": "再撤"}),
+            json!({"ask": h1.as_str(), "reason": "再撤"}),
         )
         .await;
-        refused(&r, Refusal::new(Code::AskNotOpen).arg("ask", "H1"));
+        refused(&r, Refusal::new(Code::AskNotOpen).arg("ask", h1.as_str()));
         // The reason is collab's rule too (no tool-side copy).
         let r = run(
             &f,
             &f.worker,
             "withdraw_ask",
-            json!({"ask": "H2", "reason": " "}),
+            json!({"ask": h2.as_str(), "reason": " "}),
         )
         .await;
         refused(&r, Refusal::new(Code::AskReasonEmpty));
@@ -560,12 +615,16 @@ mod tests {
             &f,
             &f.captain,
             "withdraw_ask",
-            json!({"ask": "H2", "reason": "人当面答了"}),
+            json!({"ask": h2.as_str(), "reason": "人当面答了"}),
         )
         .await;
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.withdrawn", &[("ask", "H2"), ("crew", crew)])
+            text::r(
+                Locale::Zh,
+                "r.withdrawn",
+                &[("ask", h2.as_str()), ("crew", crew)]
+            )
         );
         // The management captain may in any crew, by naming it; without `crew` it looks in its
         // own book.
@@ -576,42 +635,47 @@ mod tests {
             &f,
             "s-boss",
             "withdraw_ask",
-            json!({"ask": "H3", "reason": "管理层撤"}),
+            json!({"ask": h3.as_str(), "reason": "管理层撤"}),
         )
         .await;
         refused(
             &r,
             Refusal::new(Code::AskIdNotFound)
                 .arg("crew", mgmt.as_str())
-                .arg("id", "H3"),
+                .arg("id", h3.as_str()),
         );
         let n = number_of(&f, &f.crew).await;
         let r = run(
             &f,
             "s-boss",
             "withdraw_ask",
-            json!({"ask": "H3", "reason": "管理层撤", "crew": n}),
+            json!({"ask": h3.as_str(), "reason": "管理层撤", "crew": n}),
         )
         .await;
         assert_eq!(
             r.text,
-            text::r(Locale::Zh, "r.withdrawn", &[("ask", "H3"), ("crew", crew)])
+            text::r(
+                Locale::Zh,
+                "r.withdrawn",
+                &[("ask", h3.as_str()), ("crew", crew)]
+            )
         );
         // A plain management session is a plain session in another crew's book.
         f.add_session(&mgmt, "s-mw", Role::Worker, "示例总机组 worker")
             .await;
         let r = run(&f, &f.worker, "ask", json!({"question": "q4"})).await;
         assert!(!r.is_error, "{}", r.text);
+        let h4 = latest_ask_of(&f, &f.worker).await;
         let r = run(
             &f,
             "s-mw",
             "withdraw_ask",
-            json!({"ask": "H4", "reason": "x", "crew": f.crew}),
+            json!({"ask": h4.as_str(), "reason": "x", "crew": f.crew}),
         )
         .await;
         refused(
             &r,
-            Refusal::new(Code::AskWithdrawForbidden).arg("ask", "H4"),
+            Refusal::new(Code::AskWithdrawForbidden).arg("ask", h4.as_str()),
         );
     }
 
@@ -622,7 +686,7 @@ mod tests {
         let f = Fixture::new().await;
         let worker = f.worker.clone();
         let crew = f.crew.clone();
-        let h = f
+        let core_h = f
             .state
             .collab(move |tx| {
                 crewd_collab::asks::with_book(tx, &crew, |b, now| {
@@ -649,6 +713,23 @@ mod tests {
             })
             .await
             .unwrap();
+        let h = f
+            .state
+            .db
+            .call_result(move |store| {
+                Ok::<_, crewd_collab::CollabError>(
+                    crewd_store::work_organization::reference_for_core(
+                        store.conn(),
+                        crewd_store::object_refs::ObjectKind::HumanTask,
+                        &core_h,
+                    )?
+                    .expect("blocked ask has public identity")
+                    .id(),
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
         let r = run(
             &f,
             &f.worker,
@@ -664,6 +745,11 @@ mod tests {
     async fn respond_todo_echoes_the_item_and_keeps_status() {
         let f = Fixture::new().await;
         f.add_agent_todo(1, "示例：把文档补齐\n第二行").await;
+        let before = f
+            .rpc("todo.list", json!({"crewId":f.crew,"ledger":"agent"}))
+            .await;
+        assert_eq!(before.as_array().unwrap()[0]["status"], "unclaimed");
+
         let r = run(
             &f,
             &f.worker,
@@ -685,7 +771,25 @@ mod tests {
             .await;
         let t = &todos.as_array().unwrap()[0];
         assert_eq!(t["responses"][0]["text"], "认领，今天做");
-        assert_eq!(t["status"], "pending", "回应不改状态（§9）");
+        assert_eq!(
+            t["status"],
+            before.as_array().unwrap()[0]["status"],
+            "回应不改组织派生状态（§9）"
+        );
+        let raw_status = f
+            .state
+            .db
+            .call(|store| {
+                store
+                    .conn()
+                    .query_row("SELECT status FROM todos WHERE id='todo-1'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(raw_status, "pending", "回应也不重写历史来源状态（§9）");
         let r = run(
             &f,
             &f.worker,

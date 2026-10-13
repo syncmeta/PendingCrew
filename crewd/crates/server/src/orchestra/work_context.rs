@@ -98,6 +98,7 @@ mod tests {
             owner: Some("worker".into()),
             status: "active".into(),
             parent: None,
+            sources: vec![],
             blocked_on: vec![],
             next_check_at: Some("2026-10-13T00:00:00Z".into()),
             revision: "9007199254740993".into(),
@@ -240,7 +241,7 @@ mod tests {
         assert!(!a[KEY].contains("long omitted goal"));
         db.call(|s| {
             s.conn()
-                .execute("DELETE FROM work_books WHERE crew_id='a'", [])
+                .execute("DELETE FROM organization_work_book", [])
                 .unwrap();
         })
         .await

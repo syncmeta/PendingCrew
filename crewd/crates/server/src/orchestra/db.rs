@@ -1767,10 +1767,11 @@ mod tests {
         } else {
             false
         };
+        let work_number = p.id.strip_prefix('W').unwrap().parse::<i64>().unwrap();
         let missed_before = rig
             .port
-            .read(|c| {
-                Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+            .read(move |c| {
+                Ok(c.query_row("SELECT json_extract(i.value,'$.missed_checks') FROM organization_work_book b,json_each(b.state,'$.items') i JOIN object_refs r ON r.core_id=i.key AND r.kind='plan' WHERE r.number=?1",[work_number],|r|r.get::<_,u32>(0))?)
             })
             .await
             .unwrap();
@@ -1793,8 +1794,8 @@ mod tests {
                     rig.handle.latches().await.unwrap();
                     let n = rig
                         .port
-                        .read(|c| {
-                            Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+                        .read(move |c| {
+                            Ok(c.query_row("SELECT json_extract(i.value,'$.missed_checks') FROM organization_work_book b,json_each(b.state,'$.items') i JOIN object_refs r ON r.core_id=i.key AND r.kind='plan' WHERE r.number=?1",[work_number],|r|r.get::<_,u32>(0))?)
                         })
                         .await
                         .unwrap();
@@ -1822,8 +1823,8 @@ mod tests {
         }
         let final_misses = rig
             .port
-            .read(|c| {
-                Ok(c.query_row("SELECT coalesce(sum(json_extract(i.value,'$.missed_checks')),0) FROM work_books b,json_each(b.state,'$.items') i WHERE b.crew_id='c-1'",[],|r|r.get::<_,u32>(0))?)
+            .read(move |c| {
+                Ok(c.query_row("SELECT json_extract(i.value,'$.missed_checks') FROM organization_work_book b,json_each(b.state,'$.items') i JOIN object_refs r ON r.core_id=i.key AND r.kind='plan' WHERE r.number=?1",[work_number],|r|r.get::<_,u32>(0))?)
             })
             .await
             .unwrap();

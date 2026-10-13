@@ -351,12 +351,12 @@ mod tests {
         );
     }
 
-    /// Every catalog tool reaches its handler (34 after M4b history): none answers `r.no_handler`.
+    /// Every catalog tool reaches its handler (35 after public work blocking): none answers `r.no_handler`.
     #[tokio::test]
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 34);
+        assert_eq!(catalog::CATALOG.len(), 35);
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

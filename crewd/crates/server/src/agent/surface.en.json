@@ -234,6 +234,217 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
+      "description": "Atomically block work on W items, existing H questions, or new human questions. State explicitly whether anything can continue; split work stays under the original item and inherits its owner unless specified. Uses the current revision and actual object permissions.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "can_continue": {
+            "description": "Required: type nothing, or type split with one to twenty work_item_create items; parent cannot be set.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "nothing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "acceptance": {
+                          "description": "How to judge that completion level was achieved.",
+                          "type": "string"
+                        },
+                        "crew": {
+                          "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
+                          "type": "string"
+                        },
+                        "depends_on": {
+                          "description": "Global W IDs of dependencies in the same crew.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "goal": {
+                          "description": "The actual goal; detail is loaded on demand.",
+                          "type": "string"
+                        },
+                        "level": {
+                          "description": "Completion level local/public/production, default local.",
+                          "enum": [
+                            "local",
+                            "public",
+                            "production"
+                          ],
+                          "type": "string"
+                        },
+                        "next_check_at": {
+                          "description": "RFC3339 check time; active work must have a valid next check.",
+                          "type": "string"
+                        },
+                        "owner": {
+                          "description": "Owner session ID, defaults to you. Assigning someone else requires captain authority.",
+                          "type": "string"
+                        },
+                        "sources": {
+                          "description": "Global # IDs of registered original requirements.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "title": {
+                          "description": "Clearly state what this item will accomplish.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "type": {
+                    "enum": [
+                      "split"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "items"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "expected_revision": {
+            "description": "Current revision as a decimal string; conflict returns current facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Public W identity.",
+            "type": "string"
+          },
+          "on": {
+            "description": "One to sixteen work/human/new_human blockers. New defaults use text and after_minutes.",
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "work"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "human"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "default": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "after_minutes": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text",
+                        "after_minutes"
+                      ],
+                      "type": "object"
+                    },
+                    "question": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "new_human"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "question"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "on",
+          "can_continue"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_block"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
       "description": "Assign an owner or claim unowned work. Workers may only claim an unowned item for themselves; captains may assign only in crews they manage. Requires the current revision and a reason; success durably notifies the new owner. Assignment by a captain or human does not fabricate the recipient's consent.",
       "inputSchema": {
         "additionalProperties": false,
@@ -1442,6 +1653,217 @@
         "type": "object"
       },
       "name": "work_item_update"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Atomically block work on W items, existing H questions, or new human questions. State explicitly whether anything can continue; split work stays under the original item and inherits its owner unless specified. Uses the current revision and actual object permissions.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "can_continue": {
+            "description": "Required: type nothing, or type split with one to twenty work_item_create items; parent cannot be set.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "nothing"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "acceptance": {
+                          "description": "How to judge that completion level was achieved.",
+                          "type": "string"
+                        },
+                        "crew": {
+                          "description": "Crew number, ID or unique name, defaults to your crew. Target crew authority is checked independently.",
+                          "type": "string"
+                        },
+                        "depends_on": {
+                          "description": "Global W IDs of dependencies in the same crew.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "goal": {
+                          "description": "The actual goal; detail is loaded on demand.",
+                          "type": "string"
+                        },
+                        "level": {
+                          "description": "Completion level local/public/production, default local.",
+                          "enum": [
+                            "local",
+                            "public",
+                            "production"
+                          ],
+                          "type": "string"
+                        },
+                        "next_check_at": {
+                          "description": "RFC3339 check time; active work must have a valid next check.",
+                          "type": "string"
+                        },
+                        "owner": {
+                          "description": "Owner session ID, defaults to you. Assigning someone else requires captain authority.",
+                          "type": "string"
+                        },
+                        "sources": {
+                          "description": "Global # IDs of registered original requirements.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "title": {
+                          "description": "Clearly state what this item will accomplish.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "type": {
+                    "enum": [
+                      "split"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "items"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "expected_revision": {
+            "description": "Current revision as a decimal string; conflict returns current facts.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Public W identity.",
+            "type": "string"
+          },
+          "on": {
+            "description": "One to sixteen work/human/new_human blockers. New defaults use text and after_minutes.",
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "work"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "human"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "default": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "after_minutes": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text",
+                        "after_minutes"
+                      ],
+                      "type": "object"
+                    },
+                    "question": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "new_human"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "question"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "on",
+          "can_continue"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_block"
     },
     {
       "annotations": {

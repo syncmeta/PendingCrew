@@ -65,8 +65,8 @@ mod tests {
                 fingerprint(&golden),
                 "hash must cover the golden, not a constant"
             );
-            assert_eq!(value["worker"].as_array().unwrap().len(), 23);
-            assert_eq!(value["captain"].as_array().unwrap().len(), 34);
+            assert_eq!(value["worker"].as_array().unwrap().len(), 24);
+            assert_eq!(value["captain"].as_array().unwrap().len(), 35);
             let instructions = value["instructions"].as_str().unwrap();
             assert!(!instructions.is_empty() && instructions.lines().count() <= 3);
         }

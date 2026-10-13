@@ -137,6 +137,23 @@ async fn attached_owner_finishes_cross_crew_child_without_losing_other_human_blo
     assert_eq!(unique.len(), ids.len(), "global identities may not collide");
     assert_eq!(child["parent"], parent["id"]);
     assert_eq!(child["sources"], json!([source]));
+    let summary_page = rpc(&mut human, "work.list", json!({"crewId":b_crew})).await;
+    let summary = summary_page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == child["id"])
+        .expect("public B work summary");
+    assert_eq!(
+        summary["sources"], child["sources"],
+        "compact work.list must preserve full public source associations from work.get"
+    );
+    assert_eq!(
+        summary["sources"],
+        json!([source]),
+        "cross-crew # must be issued public identity, not core-local number"
+    );
+
     assert_eq!(a["dependsOn"], json!([child["id"]]));
     assert_eq!(same["parent"], parent["id"]);
     let crew = a_crew.clone();
