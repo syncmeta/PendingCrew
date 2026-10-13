@@ -31,3 +31,11 @@ RPC names `viewFolder.list/create/update/delete/assign`. MCP names `view_folder_
 ## Acceptance and delivery
 
 Before enabling capabilities: real old-v9 upgrade/backup/reopen/failure rollback; idempotent create after edited doc; CAS concurrency and frozen scopes; authenticated Human/member/foreign boundaries including attached direct read/write bypass; private DM visibility change list/count/reference guards; all folder operations across each view with unchanged work parents/state; actual daemon + typed Swift interactive document edits and independent filters. A contract-only page is not counted as delivered UI or backend.
+
+## Frozen bounds and refresh facts
+
+Document title <=512 UTF-8 bytes; body <=1 MiB. Folder name nonblank trimmed <=256 UTF-8 bytes; each crew/view scope <=256 folders and <=4096 assignments, so full snapshot is bounded. RPC CAS returns existing CONFLICT (-32009), data.currentDocument:DocumentSummary or data.currentTreeRevision:string; MCP refuses with the same finite facts.
+
+`document.changed {crewId,id,revision,deleted:bool}` uses subscribe topic `documents`; `viewFolder.changed {crewId,view,treeRevision}` uses topic `viewFolders`. Subscribe only when corresponding capability is present. No visible assignments still returns the current scope treeRevision for legitimate CAS; this revision is not an object count. All refs/counts remain live-filtered.
+
+Folder names are intentionally shared, manually authored crew metadata; empty folders remain visible. They do not inherit DM privacy. The system never derives/copies hidden channel titles or participant identities into metadata, and returns no hidden-item count. Purging a crew must reject live structured foreign folder/channel references with finite stable conflict refs for explicit Human unassignment; invisibility never silently deletes a classification. No arbitrary document-body text scanning.
