@@ -16,7 +16,7 @@ def inventory(root):
    path=p.relative_to(root).as_posix()
    if any(c in path for c in '\n\r\t'):raise ValueError('Control characters in source paths')
    rows.append({'path':path,'sha256':sha(p)})
- return rows
+ return sorted(rows,key=lambda row:row['path'])
 def subset(rows,kind):
  return [r for r in rows if r['path'].startswith('crewd/')] if kind=='rust' else [r for r in rows if (r['path'].startswith('Sources/Mac/Crewd/') and r['path'].endswith('.swift')) or r['path'] in ['Sources/Mac/Design/CrewColorHash.swift','scripts/dev/build-codex-first-macos.sh','CandidateMain.swift']]
 def logcheck(root,value):
