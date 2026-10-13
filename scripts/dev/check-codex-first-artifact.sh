@@ -42,8 +42,10 @@ while IFS= read -r line || [ -n "$line" ]; do
     [ "${actual%% *}" = "$expected" ] || fail "digest mismatch: $file"
 done < "$manifest"
 [ "$count" -eq 2 ] && [ "$seen_gui" -eq 1 ] && [ "$seen_helper" -eq 1 ] || fail 'manifest must contain exactly two required digests'
+checker_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+/usr/bin/python3 "$checker_root/check-codex-first-provenance.py" "$app" || fail 'GUI/backend source proof does not establish a paired frozen candidate'
 /usr/bin/codesign --verify --strict "$helper" || fail 'embedded crewd signature is invalid'
 /usr/bin/codesign --verify --strict "$app" || fail 'application signature is invalid'
-printf 'PASS: frozen Codex-first artifact, signatures and recorded hashes match\nSource: '
+printf 'PASS: paired frozen artifact, source proof, signatures and recorded hashes match\nSource: '
 cat "$meta/source-head.txt"
 printf 'Application: %s\n' "$app"
