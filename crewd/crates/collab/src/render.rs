@@ -1966,11 +1966,13 @@ mod tests {
         );
 
         s.conn()
-            .execute_batch("ALTER TABLE work_books RENAME TO work_books_gone")
+            .execute_batch(
+                "ALTER TABLE organization_work_book RENAME TO organization_work_book_gone",
+            )
             .unwrap();
         let ask_row: Vec<WakeRow> = rows
             .iter()
-            .filter(|r| r.source.ends_with("/H99"))
+            .filter(|r| r.source.ends_with(&format!("/{}", a.ask)))
             .cloned()
             .collect();
         assert!(matches!(

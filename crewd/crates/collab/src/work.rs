@@ -769,7 +769,7 @@ mod tests {
         }
         let id = create(&mut s, "crew-a", "real");
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(matches!(get(s.conn(), &id), Err(CollabError::Store(_))));
         assert!(matches!(
@@ -835,7 +835,7 @@ mod action_tests {
         assert!(done.evidence.is_none());
         assert!(done.next_check_at.is_none());
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200)
                 .unwrap()
                 .len(),
             3
@@ -868,7 +868,7 @@ mod action_tests {
         assert!(matches!(stale, CollabError::Conflict(_)));
         assert_eq!(get(s.conn(), &p.id).unwrap(), done);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200)
                 .unwrap()
                 .len(),
             2
@@ -915,7 +915,7 @@ mod action_tests {
         assert!(!encoded.contains("LONG_ACCEPTANCE"));
         assert_eq!(get(s.conn(), &p.id).unwrap(), active);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200)
                 .unwrap()
                 .len(),
             2
@@ -963,7 +963,7 @@ mod action_tests {
         assert!(list(s.conn(), active_only).unwrap().items.is_empty());
         assert!(list(s.conn(), mine(None, true)).unwrap().items[0].frozen);
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-b'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(matches!(
             list(s.conn(), mine(None, true)),
@@ -990,7 +990,7 @@ mod action_tests {
         assert_eq!(e.refusal().unwrap().code, Code::WorkRevisionConflict);
         assert_eq!(get(s.conn(), &original.id).unwrap(), current);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200)
                 .unwrap()
                 .len(),
             2
@@ -1031,7 +1031,7 @@ mod action_tests {
                 .is_empty()
         );
         assert!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200)
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200)
                 .unwrap()
                 .is_empty()
         );
@@ -1061,8 +1061,9 @@ mod action_tests {
         let mut cross = input();
         cross.crew_id = "crew-b".into();
         cross.parent = Some(p.id.clone());
-        let e = err(&mut s, |tx| create(tx, &Sender::Human, cross));
-        assert_eq!(e.refusal().unwrap().code, Code::WorkLinkOtherCrew);
+        let child = ok(&mut s, |tx| create(tx, &Sender::Human, cross));
+        assert_eq!(child.parent.as_deref(), Some(p.id.as_str()));
+        assert_eq!(child.crew_id, "crew-b");
         s.conn()
             .execute(
                 "UPDATE crews SET archived_at='frozen' WHERE id='crew-a'",
@@ -1102,12 +1103,12 @@ mod action_tests {
                 Ok(())
             })
         });
-        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let before = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         s.conn().execute_batch("CREATE TRIGGER reject_done_wake BEFORE INSERT ON wakes BEGIN SELECT RAISE(ABORT,'synthetic done wake fault'); END;").unwrap();
         err(&mut s, |tx| update(tx, &by, finish(&p)));
         assert_eq!(get(s.conn(), &p.id).unwrap(), p);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap(),
             before
         );
         assert!(crate::wakes::list(s.conn(), None, 10).unwrap().is_empty());
@@ -1146,7 +1147,7 @@ mod action_tests {
         assert_eq!(rows.len(), 1);
         let note: serde_json::Value = serde_json::from_str(rows[0].note.as_ref().unwrap()).unwrap();
         assert_eq!(note["unblockedWork"], serde_json::json!([c.id]));
-        let history = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let history = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         assert!(
             !history
                 .iter()
@@ -1220,13 +1221,13 @@ mod action_tests {
                     ok(&mut s, |tx| crate::crews::archive(tx, "crew-a"));
                 }
                 "purged" => {
-                    s.conn()
-                        .execute("DELETE FROM crews WHERE id='crew-a'", [])
-                        .unwrap();
+                    ok(&mut s, |tx| crate::crews::archive(tx, "crew-b"));
+                    ok(&mut s, |tx| crate::crews::archive(tx, "crew-a"));
+                    ok(&mut s, |tx| crate::crews::purge(tx, "crew-a"));
                 }
                 "missing-book" => {
                     s.conn()
-                        .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+                        .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
                         .unwrap();
                 }
                 _ => unreachable!(),
@@ -1505,12 +1506,12 @@ mod assignment_tests {
     fn queue_failure_rolls_back_assignment_history_and_target_frozen_refuses() {
         let mut s = store();
         let p = create_plan(&mut s, Some("w-a1"));
-        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let before = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         s.conn().execute_batch("CREATE TRIGGER deny_assign BEFORE INSERT ON wakes BEGIN SELECT RAISE(ABORT,'synthetic assignment queue failure'); END;").unwrap();
         err(&mut s, |tx| assign(tx, &Sender::Human, input(&p, "w-b1")));
         assert_eq!(get(s.conn(), &p.id).unwrap(), p);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap(),
             before
         );
         assert!(wakes::list(s.conn(), Some("w-b1"), 100).unwrap().is_empty());
@@ -1707,7 +1708,7 @@ mod history_tests {
                 },
             )
         });
-        let events = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let events = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         let wakes = crate::testkit::count(&s, "SELECT COUNT(*) FROM wakes");
         let older = history(s.conn(), query(&p.id, latest.next_before, 1)).unwrap();
         assert_eq!(older.items.len(), 1);
@@ -1716,7 +1717,7 @@ mod history_tests {
         assert!(matches!(older.items[0].by, WorkHistoryActor::Human));
         assert_eq!(get(s.conn(), &p.id).unwrap(), moved);
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap(),
             events
         );
         assert_eq!(
@@ -1762,7 +1763,7 @@ mod history_tests {
             );
         }
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(history(s.conn(), query(&p.id, None, 20)).is_err());
     }

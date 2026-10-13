@@ -61,6 +61,8 @@ pub enum WorkPatrolLost {
 #[serde(rename_all = "camelCase")]
 pub struct WorkPatrolWait {
     pub id: String,
-    /// Use ask.get({crewId: row.crewId, askId}) for detail; not the global ID.
+    /// The human task's crew, which may differ from the blocked work item's crew.
+    pub crew_id: String,
+    /// Public H identity; ask.get uses this wait's crewId and askId.
     pub ask_id: String,
 }

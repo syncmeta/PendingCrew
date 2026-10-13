@@ -67,9 +67,18 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
             .iter()
             .take(8)
             .map(|ask| {
+                let crew = book
+                    .state()
+                    .ask_crew(*ask)
+                    .ok_or_else(|| {
+                        StoreError::Invalid("patrol ask has no crew attribution".into())
+                    })?
+                    .to_string();
+                let id = work::reference(conn, ObjectKind::HumanTask, &crew, ask)?;
                 Ok(WorkPatrolWait {
-                    id: work::reference(conn, ObjectKind::HumanTask, &row.crew_id, ask)?,
-                    ask_id: ask.to_string(),
+                    crew_id: crew,
+                    ask_id: id.clone(),
+                    id,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -280,10 +289,51 @@ mod tests {
         .unwrap();
         assert_eq!(reference.crew_id, "crew-a");
         assert_eq!(
-            asks::get(s.conn(), "crew-a", &h.ask_id).unwrap().question,
+            asks::get(s.conn(), "crew-a", &h.id).unwrap().question,
             "synthetic blocker"
         );
         assert_eq!(s.conn().total_changes(), changes);
+    }
+    #[test]
+    fn cross_crew_human_wait_is_a_complete_public_readback_handle() {
+        let mut s = store();
+        let a = create(&mut s, "crew-a", Some("w-a1"));
+        let h = ok(&mut s, |tx| {
+            asks::open(
+                tx,
+                "w-b1",
+                asks::OpenAsk {
+                    question: "cross-crew decision".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        assert_ne!(
+            h.ask, "H1",
+            "public H differs from pure H1 after W allocation"
+        );
+        ok(&mut s, |tx| {
+            asks::with_book(tx, "crew-a", |b, now| {
+                b.block(
+                    &Actor::Human,
+                    now,
+                    WorkId(1),
+                    vec![BlockOn::Ask("H1".parse().unwrap())],
+                    Continuation::Nothing,
+                )
+            })
+        });
+        let before = s.conn().total_changes();
+        let page = read(s.conn(), WorkPatrolParams::default(), NOW + 24 * 60 * MIN).unwrap();
+        let wait = &page.items.iter().find(|i| i.id == a.id).unwrap().long_waits[0];
+        assert_eq!(wait.crew_id, "crew-b");
+        assert_eq!(wait.id, h.ask);
+        assert_eq!(wait.ask_id, h.ask);
+        let detail = asks::get(s.conn(), &wait.crew_id, &wait.ask_id).unwrap();
+        assert_eq!(detail.question, "cross-crew decision");
+        assert_eq!(detail.ask, wait.id);
+        assert!(asks::get(s.conn(), "crew-a", &wait.ask_id).is_err());
+        assert_eq!(s.conn().total_changes(), before);
     }
     #[test]
     fn long_wait_facts_are_capped_and_answered_blockers_disappear() {
@@ -312,9 +362,8 @@ mod tests {
         assert!(page.items[0].long_waits_truncated);
         assert_eq!(s.conn().total_changes(), changes);
         for n in 1..=9 {
-            ok_at(&mut s, late, |tx| {
-                asks::answer(tx, "crew-a", &format!("H{n}"), "answer")
-            });
+            let h = crate::testkit::public_ask(&s, &format!("H{n}"));
+            ok_at(&mut s, late, |tx| asks::answer(tx, "crew-a", &h, "answer"));
         }
         let changes = s.conn().total_changes();
         let page = read(s.conn(), WorkPatrolParams::default(), late).unwrap();
@@ -395,7 +444,7 @@ mod tests {
             );
         }
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(read(s.conn(), WorkPatrolParams::default(), NOW).is_err());
     }

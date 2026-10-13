@@ -454,10 +454,6 @@ mod tests {
             "prompts.rs",
             r#"return Err(format!("prompts/{name}.md 有一个没有名字的 ##"));"#,
         ),
-        (
-            "asks.rs",
-            r#"let a = book.ask(w.ask).expect("human_waits 只列账本里的问");"#,
-        ),
         ("refusal.rs", r#""{} 没有占位符 {{{key}}}","#),
         ("refusal.rs", r#""{} 少给了占位符：要 {:?}，给了 {:?}","#),
         ("channels.rs", r#""群 {id} 的 kind = {kind:?}""#),

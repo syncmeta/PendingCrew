@@ -29,6 +29,23 @@ pub(crate) fn load_org(conn: &Connection) -> Result<WorkBook> {
         crewd_store::StoreError::Invalid("organization work authority is missing".into())
     })?;
     crewd_store::work_organization::verify_references(conn, &state)?;
+    // Metadata is an identity witness, including explicit pre-v9 aliases.
+    let mut q=conn.prepare("SELECT m.crew_id,r.core_id FROM ask_meta m LEFT JOIN object_refs r ON r.kind='human_task' AND r.crew_id=m.crew_id AND r.source_id=CASE WHEN substr(m.ask,1,13)='organization:' THEN m.ask ELSE 'work:'||m.ask END")?;
+    for row in q.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    })? {
+        let (crew, core) = row?;
+        let ask = core.and_then(|v| v.parse::<AskId>().ok());
+        if ask
+            .and_then(|id| state.ask_crew(id))
+            .is_none_or(|c| c.as_str() != crew)
+        {
+            return Err(crewd_store::StoreError::Invalid(
+                "question metadata identity witness is missing or mismatched".into(),
+            )
+            .into());
+        }
+    }
     WorkBook::restore(state, Config::default())
         .map_err(|v| CollabError::Work(Rejected::Invariant(v)))
 }
@@ -569,14 +586,15 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
         .trim()
         .to_string();
     for h in open {
+        let public = public_ask(tx.conn(), h)?.id();
         with_book(tx, crew, |b, now| {
             b.withdraw_ask(&Actor::Human, now, h, &reason)
         })
         .map_err(|e| match e {
-            CollabError::Work(Rejected::AskInUse(h)) => CollabError::Conflict(
+            CollabError::Work(Rejected::AskInUse(_)) => CollabError::Conflict(
                 Refusal::new(Code::AskRemoveBlocked)
                     .arg("crew", crew)
-                    .arg("ask", h.to_string()),
+                    .arg("ask", &public),
             ),
             e => e,
         })?;
@@ -765,7 +783,7 @@ mod tests {
             "与工作账本共用一个计数（M4b 的 block 开新问也走它）"
         );
         let c = ok(&mut s, |tx| open(tx, "w-a1", q("crew-a 的第一个问题？")));
-        assert_eq!(c.ask, "H1", "H 号按机组");
+        assert_eq!(c.ask, "H3", "H numbers are organization-wide");
     }
 
     #[test]
@@ -1148,7 +1166,7 @@ mod tests {
 
     /// crew-a 里 w-a1 名下的一项卡在一条带默认方案（30 分钟）的新问上，返回 H 号。
     fn blocked_item_with_default(s: &mut crewd_store::Store) -> String {
-        ok(s, |tx| {
+        let core = ok(s, |tx| {
             with_book(tx, "crew-a", |b, now| {
                 let w = b
                     .create_item(
@@ -1172,7 +1190,8 @@ mod tests {
                 )?;
                 Ok(r.value.asks[0].to_string())
             })
-        })
+        });
+        crate::testkit::public_ask(s, &core)
     }
 
     #[test]
@@ -1213,7 +1232,7 @@ mod tests {
         let before: Vec<(String, String)> = {
             let mut st = s
                 .conn()
-                .prepare("SELECT crew_id, updated_at FROM work_books ORDER BY crew_id")
+                .prepare("SELECT 'organization', updated_at FROM organization_work_book")
                 .unwrap();
             st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                 .unwrap()
@@ -1230,7 +1249,7 @@ mod tests {
         let after: Vec<(String, String)> = {
             let mut st = s
                 .conn()
-                .prepare("SELECT crew_id, updated_at FROM work_books ORDER BY crew_id")
+                .prepare("SELECT 'organization', updated_at FROM organization_work_book")
                 .unwrap();
             st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                 .unwrap()
@@ -1304,7 +1323,7 @@ mod tests {
         let raw: String = s
             .conn()
             .query_row(
-                "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                "SELECT state FROM organization_work_book WHERE singleton=1",
                 [],
                 |r| r.get(0),
             )
@@ -1317,29 +1336,32 @@ mod tests {
         v[key] = serde_json::json!(0);
         s.conn()
             .execute(
-                "UPDATE work_books SET state=?1 WHERE crew_id='crew-a'",
+                "UPDATE organization_work_book SET state=?1 WHERE singleton=1",
                 [v.to_string()],
             )
             .unwrap();
         let e = get(s.conn(), "crew-a", "H1").unwrap_err();
         assert!(
-            matches!(e, CollabError::Work(Rejected::Invariant(_))),
+            matches!(
+                e,
+                CollabError::Store(_) | CollabError::Work(Rejected::Invariant(_))
+            ),
             "{e:?}"
         );
     }
     #[test]
-    fn new_asks_get_global_references_without_changing_local_aliases() {
+    fn new_asks_get_stable_global_references() {
         use crewd_store::object_refs::{self, ObjectKind};
         let mut s = store();
         let a = ok(&mut s, |tx| open(tx, "w-a1", q("synthetic A")));
         let b = ok(&mut s, |tx| open(tx, "w-b1", q("synthetic B")));
         assert_eq!(a.ask, "H1");
-        assert_eq!(b.ask, "H1");
+        assert_eq!(b.ask, "H2");
         let ra = object_refs::resolve(
             s.conn(),
             ObjectKind::HumanTask,
             &a.crew_id,
-            &format!("work:{}", &a.ask),
+            &format!("organization:{}", &a.ask),
         )
         .unwrap()
         .expect("new ask must have a durable global reference");
@@ -1347,7 +1369,7 @@ mod tests {
             s.conn(),
             ObjectKind::HumanTask,
             &b.crew_id,
-            &format!("work:{}", &b.ask),
+            &format!("organization:{}", &b.ask),
         )
         .unwrap()
         .expect("other crew must have a durable global reference");
@@ -1360,7 +1382,7 @@ mod tests {
                 s.conn(),
                 ObjectKind::HumanTask,
                 &a.crew_id,
-                &format!("work:{}", &a.ask)
+                &format!("organization:{}", &a.ask)
             )
             .unwrap(),
             Some(ra)
@@ -1410,7 +1432,7 @@ mod tests {
                 .unwrap();
         s.conn()
             .execute(
-                "INSERT INTO work_books(crew_id,state,updated_at) VALUES('crew-a',?1,'t')",
+                "UPDATE organization_work_book SET state=?1 WHERE singleton=1",
                 [&foreign],
             )
             .unwrap();
@@ -1425,7 +1447,7 @@ mod tests {
         assert_eq!(
             s.conn()
                 .query_row(
-                    "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                    "SELECT state FROM organization_work_book WHERE singleton=1",
                     [],
                     |r| r.get::<_, String>(0)
                 )
@@ -1455,7 +1477,7 @@ mod tests {
             s.conn(),
             ObjectKind::HumanTask,
             "crew-a",
-            &format!("work:{}", &old.ask),
+            &format!("organization:{}", &old.ask),
         )
         .unwrap()
         .unwrap();
@@ -1464,7 +1486,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         s.conn()
             .execute("DELETE FROM ask_meta WHERE crew_id='crew-a'", [])
@@ -1492,7 +1514,7 @@ mod tests {
                 s.conn(),
                 ObjectKind::HumanTask,
                 "crew-a",
-                &format!("work:{}", &old.ask)
+                &format!("organization:{}", &old.ask)
             )
             .unwrap(),
             Some(reference)
@@ -1511,7 +1533,7 @@ mod tests {
         let before: String = s
             .conn()
             .query_row(
-                "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                "SELECT state FROM organization_work_book WHERE singleton=1",
                 [],
                 |r| r.get(0),
             )
@@ -1526,7 +1548,7 @@ mod tests {
         assert_eq!(
             s.conn()
                 .query_row(
-                    "SELECT state FROM work_books WHERE crew_id='crew-a'",
+                    "SELECT state FROM organization_work_book WHERE singleton=1",
                     [],
                     |r| r.get::<_, String>(0)
                 )
@@ -1542,7 +1564,7 @@ mod tests {
             .execute("DELETE FROM object_refs WHERE crew_id='crew-a'", [])
             .unwrap();
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(matches!(
             err(&mut s, |tx| open(tx, "w-a1", q("must stay missing"))),
@@ -1573,14 +1595,14 @@ mod tests {
     fn successful_work_commands_persist_real_events_with_original_actor() {
         let mut s = store();
         ok(&mut s, |tx| open(tx, "w-a1", q("event witness")));
-        let events = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let events = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         assert_eq!(
             events.len(),
             1,
             "actual ask command must record its real event"
         );
         assert!(matches!(events[0].kind, EventKind::AskOpened { .. }));
-        assert_eq!(events[0].by, Actor::worker("w-a1"));
+        assert_eq!(events[0].by.session().map(|id| id.as_str()), Some("w-a1"));
         assert_eq!(events[0].at, Ts(crate::testkit::NOW));
     }
     #[test]
@@ -1590,7 +1612,7 @@ mod tests {
             .conn()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
-        s.conn().execute_batch("CREATE TRIGGER reject_work_event BEFORE INSERT ON work_events BEGIN SELECT RAISE(ABORT,'synthetic history fault'); END;").unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_work_event BEFORE INSERT ON organization_work_events BEGIN SELECT RAISE(ABORT,'synthetic history fault'); END;").unwrap();
         assert!(matches!(
             err(&mut s, |tx| open(tx, "w-a1", q("must not commit"))),
             CollabError::Store(_)
@@ -1601,7 +1623,7 @@ mod tests {
                 .unwrap(),
             before
         );
-        for table in ["work_books", "work_events", "object_refs"] {
+        for table in ["organization_work_events", "object_refs"] {
             assert_eq!(
                 s.conn()
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
@@ -1682,7 +1704,7 @@ mod tests {
     fn wake_write_failure_rolls_back_answer_released_work_and_events() {
         let mut s = store();
         let (ask, ids) = shared_blocked_work(&mut s);
-        let before = crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap();
+        let before = crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap();
         s.conn().execute_batch("CREATE TRIGGER reject_unblock_wake BEFORE INSERT ON wakes WHEN NEW.session_id='w-a2' BEGIN SELECT RAISE(ABORT,'synthetic unblock wake fault'); END;").unwrap();
         err(&mut s, |tx| answer(tx, "crew-a", &ask, "synthetic answer"));
         assert_eq!(
@@ -1690,7 +1712,7 @@ mod tests {
             AskStateView::Open
         );
         assert_eq!(
-            crewd_store::work_events::list(s.conn(), "crew-a", 0, 200).unwrap(),
+            crate::testkit::organization_events(s.conn(), "crew-a", 0, 200).unwrap(),
             before
         );
         assert!(wakes::list(s.conn(), None, 20).unwrap().is_empty());

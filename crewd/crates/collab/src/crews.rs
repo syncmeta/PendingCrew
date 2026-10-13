@@ -3120,6 +3120,7 @@ mod tests {
                 Ok(r.value.asks[0].to_string())
             })
         });
+        let h = crate::testkit::public_ask(&s, &h);
         match err(&mut s, |tx| archive(tx, "crew-x")) {
             CollabError::Conflict(r) => {
                 assert_eq!(r.code, crate::refusal::Code::AskRemoveBlocked);

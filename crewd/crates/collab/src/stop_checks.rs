@@ -338,7 +338,7 @@ mod tests {
         assert!(crate::run(&mut s, NOW, |tx| accept(tx, &c)).is_err());
         assert!(budget::get(s.conn(), "w-a1").unwrap().is_none());
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(candidate(s.conn(), "w-a1", NOW).is_err());
     }
@@ -512,7 +512,7 @@ mod tests {
         row.source = "work-stop:synthetic".into();
         row.note = original;
         s.conn()
-            .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+            .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
             .unwrap();
         assert!(render_note(s.conn(), &row, NOW).is_err());
     }

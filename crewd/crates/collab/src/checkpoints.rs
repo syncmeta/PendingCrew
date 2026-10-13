@@ -253,12 +253,16 @@ mod tests {
         wakes::list(s.conn(), Some("w-a1"), 100).unwrap()
     }
     fn missed(s: &crewd_store::Store, crew: &str) -> u32 {
-        asks::load(s.conn(), crew)
-            .unwrap()
-            .state()
+        let book = asks::load(s.conn(), crew).unwrap();
+        book.state()
             .items
-            .values()
-            .map(|i| i.missed_checks)
+            .iter()
+            .filter(|(id, _)| {
+                book.state()
+                    .item_crew(**id)
+                    .is_some_and(|c| c.as_str() == crew)
+            })
+            .map(|(_, i)| i.missed_checks)
             .sum()
     }
     fn lease(s: &mut crewd_store::Store, row: &wakes::WakeRow, now: i64) -> cr::Lease {
@@ -382,7 +386,7 @@ mod tests {
         ok_at(&mut s, NOW + MIN, enqueue_due);
         let r = rows(&s);
         let l = lease(&mut s, &r[0], NOW + MIN);
-        s.conn().execute_batch("CREATE TRIGGER reject_checkpoint_history BEFORE INSERT ON work_events BEGIN SELECT RAISE(ABORT,'synthetic checkpoint history fault'); END;").unwrap();
+        s.conn().execute_batch("CREATE TRIGGER reject_checkpoint_history BEFORE INSERT ON organization_work_events BEGIN SELECT RAISE(ABORT,'synthetic checkpoint history fault'); END;").unwrap();
         assert!(
             crate::run(&mut s, NOW + MIN, |tx| cr::ack_reserved_delivered(
                 tx,
@@ -453,11 +457,11 @@ mod tests {
             match mode {
                 "book" => {
                     s.conn()
-                        .execute("DELETE FROM work_books WHERE crew_id='crew-a'", [])
+                        .execute("DELETE FROM organization_work_book WHERE singleton=1", [])
                         .unwrap();
                 }
                 "item" => {
-                    s.conn().execute("UPDATE work_books SET state=json_remove(state,'$.items.W1') WHERE crew_id='crew-a'",[]).unwrap();
+                    s.conn().execute("UPDATE organization_work_book SET state=json_remove(state,'$.items.W1') WHERE singleton=1",[]).unwrap();
                 }
                 _ => unreachable!(),
             }

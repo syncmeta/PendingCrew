@@ -180,3 +180,27 @@ pub(crate) fn msg(
     .unwrap()
     .unwrap()
 }
+
+/// Read genuine organization events; legacy archive is intentionally not consulted.
+pub fn organization_events(
+    conn: &rusqlite::Connection,
+    crew: &str,
+    after: u64,
+    limit: usize,
+) -> crewd_store::Result<Vec<crewd_work::Event>> {
+    let mut q = conn.prepare("SELECT body FROM organization_work_events WHERE crew_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3")?;
+    let rows = q.query_map(rusqlite::params![crew, after as i64, limit as i64], |r| {
+        r.get::<_, String>(0)
+    })?;
+    rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+}
+pub fn public_ask(s: &crewd_store::Store, core: &str) -> String {
+    let r = crewd_store::work_organization::reference_for_core(
+        s.conn(),
+        crewd_store::object_refs::ObjectKind::HumanTask,
+        core,
+    )
+    .unwrap()
+    .unwrap();
+    format!("H{}", r.number)
+}
