@@ -19,6 +19,8 @@ pub mod work;
 pub use work::*;
 pub mod resources;
 pub use resources::*;
+pub mod channel_work;
+pub use channel_work::*;
 pub mod requirements;
 pub use requirements::*;
 pub mod work_patrol;
@@ -73,6 +75,19 @@ pub mod methods {
     pub const SESSION_USAGE: &str = "session.usage";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_GET: &str = "session.get";
+    pub const DOCUMENT_CREATE: &str = "document.create";
+    pub const DOCUMENT_GET: &str = "document.get";
+    pub const DOCUMENT_LIST: &str = "document.list";
+    pub const DOCUMENT_UPDATE: &str = "document.update";
+    pub const DOCUMENT_DELETE: &str = "document.delete";
+    pub const CHANNEL_WORK_LIST: &str = "channel.workList";
+    pub const CHANNEL_WORK_LINK: &str = "channel.workLink";
+    pub const CHANNEL_WORK_UNLINK: &str = "channel.workUnlink";
+    pub const FOLDER_LIST: &str = "viewFolder.list";
+    pub const FOLDER_CREATE: &str = "viewFolder.create";
+    pub const FOLDER_UPDATE: &str = "viewFolder.update";
+    pub const FOLDER_DELETE: &str = "viewFolder.delete";
+    pub const FOLDER_ASSIGN: &str = "viewFolder.assign";
     pub const WORK_CREATE: &str = "work.create";
     pub const WORK_UPDATE: &str = "work.update";
     pub const WORK_BLOCK: &str = "work.block";
@@ -125,6 +140,19 @@ pub mod methods {
         SESSION_USAGE,
         SESSION_LIST,
         SESSION_GET,
+        DOCUMENT_CREATE,
+        DOCUMENT_GET,
+        DOCUMENT_LIST,
+        DOCUMENT_UPDATE,
+        DOCUMENT_DELETE,
+        CHANNEL_WORK_LIST,
+        CHANNEL_WORK_LINK,
+        CHANNEL_WORK_UNLINK,
+        FOLDER_LIST,
+        FOLDER_CREATE,
+        FOLDER_UPDATE,
+        FOLDER_DELETE,
+        FOLDER_ASSIGN,
         WORK_CREATE,
         WORK_UPDATE,
         WORK_BLOCK,
@@ -174,8 +202,18 @@ pub mod events {
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
     pub const TOPICS: &[&str] = &[
-        "message", "channel", "crew", "badge", "ask", "session", "restart", "wake", "system",
+        "message",
+        "channel",
+        "crew",
+        "badge",
+        "ask",
+        "session",
+        "restart",
+        "wake",
+        "system",
         "work",
+        "documents",
+        "viewFolders",
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -188,6 +226,9 @@ pub mod events {
     pub const CREW_PURGED: &str = "crew.purged";
     pub const BADGE_CHANGED: &str = "badge.changed";
     pub const WORK_CHANGED: &str = "work.changed";
+    pub const CHANNEL_WORK_CHANGED: &str = "channel.workChanged";
+    pub const DOCUMENT_CHANGED: &str = "document.changed";
+    pub const FOLDER_CHANGED: &str = "viewFolder.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
     /// `SessionLive`，M3c 发。
     pub const SESSION_CHANGED: &str = "session.changed";
@@ -225,6 +266,10 @@ pub struct RpcErrorData {
     pub decision: Option<Box<DecisionView>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_work: Option<Box<WorkConflictFacts>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_document: Option<Box<DocumentSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_tree_revision: Option<String>,
 }
 
 impl RpcError {
@@ -255,6 +300,8 @@ impl RpcError {
             refusal: code.to_string(),
             decision: None,
             current_work: None,
+            current_document: None,
+            current_tree_revision: None,
         });
         self
     }
@@ -365,6 +412,9 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::BADGE_CHANGED, sub::<Badge>(g)),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
+        (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
+        (events::DOCUMENT_CHANGED, sub::<DocumentChanged>(g)),
+        (events::FOLDER_CHANGED, sub::<FolderChanged>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
         (events::RESTART_CHANGED, sub::<RestartPrompt>(g)),
         (events::LAGGED, sub::<Lagged>(g)),
@@ -570,6 +620,67 @@ pub fn api_schema() -> Value {
         (
             methods::SESSION_GET,
             m(sub::<SessionGetParams>(g), sub::<Session>(g)),
+        ),
+        (
+            methods::DOCUMENT_CREATE,
+            m(
+                sub::<DocumentCreateParams>(g),
+                sub::<DocumentCreateResult>(g),
+            ),
+        ),
+        (
+            methods::DOCUMENT_GET,
+            m(sub::<DocumentGetParams>(g), sub::<DocumentDetail>(g)),
+        ),
+        (
+            methods::DOCUMENT_LIST,
+            m(sub::<DocumentListParams>(g), sub::<DocumentPage>(g)),
+        ),
+        (
+            methods::DOCUMENT_UPDATE,
+            m(sub::<DocumentUpdateParams>(g), sub::<DocumentSummary>(g)),
+        ),
+        (
+            methods::DOCUMENT_DELETE,
+            m(sub::<DocumentDeleteParams>(g), sub::<DocumentSummary>(g)),
+        ),
+        (
+            methods::CHANNEL_WORK_LIST,
+            m(sub::<ChannelWorkListParams>(g), sub::<ChannelWorkPage>(g)),
+        ),
+        (
+            methods::CHANNEL_WORK_LINK,
+            m(
+                sub::<ChannelWorkLinkParams>(g),
+                sub::<ChannelWorkLinkReceipt>(g),
+            ),
+        ),
+        (
+            methods::CHANNEL_WORK_UNLINK,
+            m(
+                sub::<ChannelWorkLinkParams>(g),
+                sub::<ChannelWorkLinkReceipt>(g),
+            ),
+        ),
+        (
+            methods::FOLDER_LIST,
+            m(sub::<FolderListParams>(g), sub::<FolderSnapshot>(g)),
+        ),
+        (
+            methods::FOLDER_CREATE,
+            m(sub::<FolderCreateParams>(g), sub::<FolderSnapshot>(g)),
+        ),
+        (
+            methods::FOLDER_UPDATE,
+            m(sub::<FolderUpdateParams>(g), sub::<FolderSnapshot>(g)),
+        ),
+        (
+            methods::FOLDER_DELETE,
+            m(sub::<FolderDeleteParams>(g), sub::<FolderSnapshot>(g)),
+        ),
+        (
+            methods::FOLDER_ASSIGN,
+            m(sub::<FolderAssignParams>(g), sub::<FolderSnapshot>(g)),
         ),
         (
             methods::WORK_CREATE,

@@ -7,6 +7,8 @@ pub struct TodoCreateParams {
     pub request_id: String,
     pub crew_id: String,
     pub text: String,
+    #[serde(default)]
+    pub channel_id: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -33,4 +35,7 @@ pub struct RequirementDetail {
     #[serde(flatten)]
     pub todo: crate::Todo,
     pub closure: Option<RequirementClosure>,
+    /// Only creation receipts carry the current channel association.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_association: Option<crate::ChannelWorkAssociation>,
 }

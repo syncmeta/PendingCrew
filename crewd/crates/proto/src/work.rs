@@ -31,6 +31,9 @@ pub struct WorkEvidence {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkPlan {
+    /// Receipt-only association; work.get does not retain a channel projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_association: Option<crate::ChannelWorkAssociation>,
     pub id: String,
     pub crew_id: String,
     pub frozen: bool,
@@ -64,6 +67,8 @@ pub struct WorkPage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_association: Option<crate::ChannelWorkAssociation>,
     pub id: String,
     pub crew_id: String,
     pub frozen: bool,
@@ -84,6 +89,7 @@ pub struct WorkSummary {
 impl From<WorkPlan> for WorkSummary {
     fn from(p: WorkPlan) -> Self {
         Self {
+            channel_association: p.channel_association,
             id: p.id,
             crew_id: p.crew_id,
             frozen: p.frozen,
@@ -136,6 +142,10 @@ pub struct WorkEvidenceParam {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkCreateParams {
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub title: String,
     #[serde(default)]
