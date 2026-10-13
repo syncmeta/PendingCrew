@@ -13,6 +13,10 @@ final class CrewdWorkspace: ObservableObject {
         guard let self else {throw CancellationError()}
         return try await self.client.call(method,params)
     }
+    lazy var channelWork=CrewdChannelWorkStore { [weak self] method,params in
+        guard let self else{throw CancellationError()};return try await self.client.call(method,params)
+    }
+    @Published var channelLinkDrafts=CrewdChannelLinkDrafts()
     @Published var resourceDrafts=CrewdResourceDrafts()
     private var workDirty = true
     @Published var crews: [CrewdValue] = []
@@ -58,7 +62,8 @@ final class CrewdWorkspace: ObservableObject {
         client.onEvent = { [weak self] name, data in
             guard let self else { return }
             self.resources.handleEvent(name,data)
-            if name == "document.changed" || name == "viewFolder.changed" { return }
+            self.channelWork.handleEvent(name,data)
+            if name == "document.changed" || name == "viewFolder.changed" || name == "channel.workChanged" { return }
             if name.hasPrefix("message.") {
                 if let channel=data["channelId"].string,let crew=self.activityChannelCrews[channel] {
                     if !self.activityDirty || !self.activityAffected.isEmpty {self.activityAffected.insert(crew)}
@@ -71,13 +76,13 @@ final class CrewdWorkspace: ObservableObject {
                 if let id = item["id"].string, let index = self.runnerItems.firstIndex(where: {$0["id"].string == id}) { self.runnerItems[index] = item }
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
-                self.resources.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
+                self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
             guard let self, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
-            self.resources.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
+            self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
             let attempt = UUID(); self.reconnectID = attempt
@@ -146,11 +151,12 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     private func connectOnly() async throws {
-        resources.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
         workStore.configureCapabilities(client.capabilities)
         resources.configureCapabilities(client.capabilities)
+        channelWork.configureCapabilities(client.capabilities)
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         error = nil
         status = "已连接 · crewd \(client.version)"
@@ -163,6 +169,7 @@ final class CrewdWorkspace: ObservableObject {
     func selectCrew(_ id: String) {
         guard crewID != id else { return }
         workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
+        channelWork.selectChannel(crew:id,channel:"")
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
@@ -173,7 +180,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     var selectedMembers: [CrewdValue] { channelSummaries.first(where: {$0["channel"]["id"].string == channelID})?["members"].array ?? [] }
     func selectSession(_ id: String) { selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
-    func selectChannel(_ id: String) { selection = UUID(); channelID = id; messages = []; scheduleSync() }
+    func selectChannel(_ id: String) { selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id); messages = []; scheduleSync() }
 
     func scheduleSync(recoverHistory: Bool = false) {
         guard !sleeping, client.connected else { return }
@@ -250,6 +257,7 @@ final class CrewdWorkspace: ObservableObject {
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
         if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = channels.first(where: {$0["kind"].string == "human"})?["id"].string ?? channels.first?["id"].string ?? "" }
+        channelWork.selectChannel(crew:crew,channel:channelID)
         let session = sessionID, channel = channelID
         if !session.isEmpty {
             let view = try await client.call("session.inspect", .object(["sessionId": .string(session), "maxLines": .number(200)]))

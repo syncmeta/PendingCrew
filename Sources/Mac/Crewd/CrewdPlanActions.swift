@@ -4,7 +4,9 @@ import SwiftUI
 
 /// UI command drafts, never a work ledger or a copied status authority.
 struct CrewdPlanDrafts {
-    struct Key: Hashable {let crew:String;let object:String;let source:String}
+    struct Key: Hashable {let crew:String;let object:String;let source:String;let channel:String
+        init(crew:String,object:String,source:String,channel:String=""){self.crew=crew;self.object=object;self.source=source;self.channel=channel}
+    }
     enum Action:String,CaseIterable {case report="回报",assign="指派",reassignLost="失联重派",complete="完成",drop="放弃",block="阻塞"}
     struct Fields: Equatable {
         var action=Action.report
@@ -21,6 +23,11 @@ struct CrewdPlanDrafts {
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->Bool {!(unknown[key] ?? [:]).isEmpty}
+    func isCurrent(_ snapshot:Snapshot)->Bool {entries[snapshot.key]?.version == snapshot.version}
+    mutating func confirm(_ snapshot:Snapshot)->Bool {
+        guard !busy(snapshot.key),unknown[snapshot.key]?[snapshot.version] != nil else{return false}
+        pending[snapshot.key]=snapshot.version;return true
+    }
     func unknownSnapshots(_ key:Key)->[Snapshot] {(unknown[key] ?? [:]).values.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if entries[key]?.fields != fields {entries[key]=Entry(fields:fields,version:UUID())}}
     mutating func begin(_ key:Key)->Snapshot? {
@@ -37,16 +44,20 @@ struct CrewdPlanDrafts {
 }
 struct CrewdPlanTarget:Identifiable {
     let key:CrewdPlanDrafts.Key
-    var id:String {"\(key.crew)/\(key.object)/\(key.source)"}
+    var id:String {"\(key.crew)/\(key.object)/\(key.source)/\(key.channel)"}
 }
 /// Typed forms become ordinary human RPC commands. No raw JSON editor or inferred IDs.
 enum CrewdPlanCommand {
-    static func build(_ key:CrewdPlanDrafts.Key,_ f:CrewdPlanDrafts.Fields,revision:String?) throws -> (String,CrewdValue) {
+    static func build(_ key:CrewdPlanDrafts.Key,_ f:CrewdPlanDrafts.Fields,revision:String?,requestID:UUID?=nil) throws -> (String,CrewdValue) {
         func need(_ text:String,_ name:String)throws {if text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {throw CrewdClientError(message:"请填写"+name)}}
         if key.object.isEmpty {
             try need(f.title,"计划标题")
             guard CrewdWorkID(key.source,kind:.requirement) != nil else {throw CrewdClientError(message:"计划必须关联公共需求编号。")}
             var p:[String:CrewdValue]=["crewId":.string(key.crew),"title":.string(f.title),"goal":.string(f.goal),"acceptance":.string(f.acceptance),"sources":.array([.string(key.source)])]
+            if !key.channel.isEmpty {
+                guard let requestID else{throw CrewdClientError(message:"群内创建必须保留原始请求编号。",kind:.notSubmitted)}
+                p["channelId"] = .string(key.channel);p["requestId"] = .string(requestID.uuidString.lowercased())
+            }
             if !f.owner.isEmpty {p["owner"] = .string(f.owner)}
             if !f.parent.isEmpty {p["parent"] = .string(f.parent)}
             return ("work.create",.object(p))
@@ -86,6 +97,7 @@ struct CrewdPlanActions:View {
     @Binding var drafts:CrewdPlanDrafts
     let target:CrewdPlanTarget
     let members:[CrewdValue]
+    var crews:[CrewdValue]=[]
     @Environment(\.dismiss) private var dismiss
     @State private var revision:String?
     @State private var failure:String?
@@ -97,7 +109,7 @@ struct CrewdPlanActions:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text(key.object.isEmpty ? "从 \(key.source) 建计划":"\(key.object) · 计划操作").font(.title2)
-            Text("机组：\(key.crew)").font(.caption).foregroundStyle(.secondary)
+            Text("机组："+(crews.first(where:{$0["id"] == .string(key.crew)})?["title"].string ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
             if !key.object.isEmpty {
                 Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented)
                 HStack {Text("已读取版本："+(revision ?? "尚未读取")).font(.caption);Spacer();Button("核对当前详情"){Task {await load()}}.disabled(reading || drafts.busy(key))}
@@ -118,6 +130,10 @@ struct CrewdPlanActions:View {
                     VStack(alignment:.leading,spacing:3){
                         Text(snapshot.key.object.isEmpty ? "此前创建计划："+snapshot.fields.title:"此前操作："+snapshot.fields.action.rawValue).font(.caption).bold()
                         Text(unknownPayload(snapshot.fields)).font(.caption).textSelection(.enabled)
+                        if snapshot.key.object.isEmpty,!snapshot.key.channel.isEmpty {
+                            Button("确认这份原始群内创建请求") {if drafts.confirm(snapshot){submit(snapshot)}}
+                                .disabled(drafts.busy(key) || !store.capabilities.contains("channelWork") || store.selectedCrew != key.crew)
+                        }
                     }
                 }
                         }.frame(maxWidth:.infinity,alignment:.leading)
@@ -171,7 +187,7 @@ struct CrewdPlanActions:View {
         VStack(alignment:.leading,spacing:4) {
             Picker("负责人",selection:binding(\.owner)) {
                 Text("暂不指派").tag("")
-                ForEach(members.indices,id:\.self){i in let m=members[i];Text((m["displayName"].string ?? m["id"].string ?? "成员")+" · "+(m["crewId"].string ?? "")).tag(m["id"].string ?? "")}
+                ForEach(members.indices,id:\.self){i in let m=members[i];Text((m["displayName"].string ?? m["id"].string ?? "成员")+" · "+(crews.first(where:{$0["id"] == m["crewId"]})?["title"].string ?? "所属机组资料尚未加载")).tag(m["id"].string ?? "")}
             }
             Text("已加载的真实成员，不代表完整组织名册。").font(.caption).foregroundStyle(.secondary)
         }
@@ -196,8 +212,8 @@ struct CrewdPlanActions:View {
         let current=e.currentWork["revision"].string.map {"后台当前版本："+$0}
         return [e.message,e.code.map{"错误 \($0)"},e.refusal,current].compactMap{$0}.joined(separator:" · ")
     }
-    private func submit() {
-        guard let snapshot=drafts.begin(key) else {return}
+    private func submit(_ original:CrewdPlanDrafts.Snapshot?=nil) {
+        guard let snapshot=original ?? drafts.begin(key) else {return}
         let expected=revision
         Task {
             guard store.selectedCrew == key.crew else {drafts.finish(snapshot,accepted:false);return}
@@ -208,11 +224,16 @@ struct CrewdPlanActions:View {
                     guard latest.revision == expected else {throw CrewdClientError(message:"计划已变化，请核对当前详情后再次决定。",code:-32009,data:.object(["refusal":.string("work.revision_conflict")]))}
                     guard !latest.frozen else {throw CrewdClientError(message:"归档计划只读。",code:-32009)}
                 }
-                let (method,params)=try CrewdPlanCommand.build(key,snapshot.fields,revision:expected)
+                let (method,params)=try CrewdPlanCommand.build(key,snapshot.fields,revision:expected,requestID:snapshot.version)
                 guard store.selectedCrew == key.crew else {throw CancellationError()}
                 attempted = true
-                _ = try await store.mutate(method,params)
-                drafts.finish(snapshot,accepted:true);if store.selectedCrew == key.crew {dismiss()}
+                let receipt = try await store.mutate(method,params)
+                let wasCurrent=drafts.isCurrent(snapshot)
+                drafts.finish(snapshot,accepted:true)
+                if store.selectedCrew == key.crew {
+                    if receipt["channelAssociation"]["linked"] == .bool(false) {failure="原计划已确认，但此前群关联已解除；确认原请求不会重新关联。"}
+                    else if wasCurrent {dismiss()} else {failure="原提交已确认，当前编辑草稿仍保留。"}
+                }
             } catch {
                 drafts.finish(snapshot,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error))
                 if attempted && CrewdClientError.isUncertainSubmission(error) {reviewedUnknown=false}

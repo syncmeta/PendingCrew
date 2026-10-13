@@ -27,6 +27,8 @@ enum CrewdWorkStatusLabel {
         case "dropped":return "已放弃"
         case "needs_ruling":return "待裁定"
         case "closed":return "已关闭"
+        case "answered":return "已答复"
+        case "withdrawn":return "已撤回"
         default:return "状态待确认"
         }
     }
@@ -100,6 +102,14 @@ final class CrewdWorkStore: ObservableObject {
     private func failure(_ error: Error) -> CrewdClientError {
         (error as? CrewdClientError) ?? CrewdClientError(message: error.localizedDescription)
     }
+    private func withoutAssociation(_ value:CrewdValue)->CrewdValue {
+        guard case .object(var fields)=value else{return value};fields.removeValue(forKey:"channelAssociation");return .object(fields)
+    }
+    private func validateAssociation(_ value:CrewdValue,_ params:CrewdValue)throws {
+        guard let channel=params["channelId"].string else{return}
+        let association=value["channelAssociation"]
+        guard association["channelId"] == .string(channel),case .bool = association["linked"],let rev=association["linkRevision"].string,!rev.isEmpty,rev.allSatisfy({$0.isASCII && $0.isNumber}),(rev == "0" || rev.first != "0") else{throw CrewdClientError(message:"创建回执缺少当前会话的真实关联状态。")}
+    }
     private func parsePlan(_ value: CrewdValue, full: Bool) throws -> CrewdPlan {
         guard let raw = value["id"].string, let id = CrewdWorkID(raw, kind: .plan),
               let revision = value["revision"].string, !revision.isEmpty,
@@ -111,7 +121,8 @@ final class CrewdWorkStore: ObservableObject {
             guard let raw = $0.string else { return false }
             return CrewdWorkID(raw, kind: .requirement) != nil
         }) else { throw CrewdClientError(message: "工作摘要缺少公共来源编号；不能推断需求与计划关联。") }
-        return CrewdPlan(id: id, summary: value, detail: full ? value : nil)
+        let canonical=withoutAssociation(value)
+        return CrewdPlan(id: id, summary: canonical, detail: full ? canonical : nil)
     }
     private func parseRequirement(_ value: CrewdValue) throws -> CrewdWorkID {
         guard let raw = value["requirementId"].string,
@@ -129,12 +140,11 @@ final class CrewdWorkStore: ObservableObject {
         return id
     }
     /// The draft owner retains requestID across uncertain replies; the store never retries writes.
-    @discardableResult func createRequirement(requestID: UUID, text: String) async throws -> CrewdValue {
+    @discardableResult func createRequirement(requestID: UUID, text: String, channel:String="") async throws -> CrewdValue {
         guard !selectedCrew.isEmpty else { throw CrewdClientError(message: "请先选择机组。",kind:.notSubmitted) }
-        return try await mutate("todo.create", .object([
-            "requestId": .string(requestID.uuidString.lowercased()),
-            "crewId": .string(selectedCrew), "text": .string(text)
-        ]))
+        var params:[String:CrewdValue]=["requestId":.string(requestID.uuidString.lowercased()),"crewId":.string(selectedCrew),"text":.string(text)]
+        if !channel.isEmpty {params["channelId"] = .string(channel)}
+        return try await mutate("todo.create",.object(params))
     }
     @discardableResult func closeRequirement(_ id: CrewdWorkID, expectedStatus: String, note: String) async throws -> CrewdValue {
         guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
@@ -154,7 +164,7 @@ final class CrewdWorkStore: ObservableObject {
             throw CrewdClientError(message: "需求详情过期，已关闭的需求不能恢复为待处理。")
         }
         requirementEpoch = UUID()
-        requirements[id] = value
+        requirements[id] = withoutAssociation(value)
         return value
     }
     @discardableResult func withdrawTransfer(_ id:CrewdWorkID,expectedRevision:String) async throws -> CrewdValue {
@@ -164,6 +174,13 @@ final class CrewdWorkStore: ObservableObject {
     @discardableResult func resolveHuman(_ id:CrewdWorkID,crew:String,text:String,withdraw:Bool) async throws -> CrewdValue {
         guard id.kind == .human,!crew.isEmpty,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CrewdClientError(message:"请填写公共问题编号与答复或撤回理由。",code:-32602)}
         return try await mutate(withdraw ? "ask.withdraw":"ask.answer",.object(["crewId":.string(crew),"ask":.string(id.raw),withdraw ? "reason":"text":.string(text)]))
+    }
+    func humanDetail(_ id:CrewdWorkID,crew:String)async throws->CrewdValue {
+        guard id.kind == .human,capabilities.contains("channelWork") else{throw CrewdClientError(message:"配套后台尚未开放公共人类事项详情。",kind:.notSubmitted)}
+        let token=generation
+        let value=try await call("ask.get",.object(["crewId":.string(crew),"ask":.string(id.raw)]));try check(token)
+        guard value["ask"] == .string(id.raw),value["crewId"] == .string(crew),value["question"].string != nil,value["state"].string != nil else{throw CrewdClientError(message:"人类事项详情身份或原问题不符。")}
+        return value
     }
     func ownerHistory(_ id:CrewdWorkID,before:String?=nil) async throws -> CrewdValue {
         guard id.kind == .plan else {throw CrewdClientError(message:"交接记录必须使用公共计划编号。",code:-32602)}
@@ -269,6 +286,9 @@ final class CrewdWorkStore: ObservableObject {
             throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
         }
         if method == "work.reassignLost",!capabilities.contains(method) {throw CrewdClientError(message:"配套后台尚未开放核实失联后的重派操作。",kind:.notSubmitted)}
+        if params["channelId"] != .null {
+            guard capabilities.contains("channelWork"),let request=params["requestId"].string,UUID(uuidString:request) != nil else{throw CrewdClientError(message:"当前后台尚未开放具有稳定请求编号的群内创建。",kind:.notSubmitted)}
+        }
         guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。",kind:.notSubmitted) }
         let target = params["id"].string.flatMap { CrewdWorkID($0, kind: .plan) }
         if let target, plans[target]?.frozen == true { throw CrewdClientError(message: "已归档工作只读。", code: -32009, data: .object(["refusal": .string("crew.removed")])) }
@@ -279,6 +299,7 @@ final class CrewdWorkStore: ObservableObject {
         do {
             let value = try await call(method, params)
             try check(token)
+            try validateAssociation(value,params)
             if method == "work.block" { adopt(try parsePlan(value["item"], full: true)) }
             else if method.hasPrefix("work.") { adopt(try parsePlan(value, full: true)) }
             else if method.hasPrefix("ask.") {
@@ -301,7 +322,7 @@ final class CrewdWorkStore: ObservableObject {
                     }
                 }
                 requirementEpoch = UUID()
-                requirements[id] = value
+                requirements[id] = withoutAssociation(value)
             }
             activeMutations = 0; ownsMutation = false
             // Reconcile derived requirements and global human inbox by reads only.

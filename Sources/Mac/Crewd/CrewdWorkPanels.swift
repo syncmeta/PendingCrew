@@ -122,7 +122,7 @@ struct CrewdWorkPanels: View {
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme))
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
-        .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members)}
+        .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }
     private func describe(_ error:Error)->String {
         guard let e=error as? CrewdClientError else {return error.localizedDescription}

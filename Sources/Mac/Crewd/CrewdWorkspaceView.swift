@@ -128,8 +128,7 @@ struct CrewdWorkspaceView: View {
             }.frame(minWidth:350)
             VStack(alignment:.leading,spacing:8) {
                 DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
-                    Text("机组工作引用；群独立视图待接线").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                    CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,compact:true).frame(minHeight:100,maxHeight:.infinity)
+                    CrewdChannelTodoView(group:workspace.channelWork,work:workspace.workStore,linkDrafts:$workspace.channelLinkDrafts,requirementDrafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,openCrew:{id in workspace.selectCrew(id);tab = .todo}).frame(minHeight:100,maxHeight:.infinity)
                 }
                 Divider()
                 DisclosureGroup("本群成员",isExpanded:$membersExpanded) {
