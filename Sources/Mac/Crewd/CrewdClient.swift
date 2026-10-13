@@ -66,8 +66,10 @@ final class CrewdClient: ObservableObject {
         let current = generation
         let c = NWConnection(to: .unix(path: path), using: .tcp)
         connection = c
+        // Keep callback delivery FIFO on the main queue: an already received final
+        // reply must be ingested before a later transport failure clears pending calls.
         c.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 guard let self, self.generation == current else { return }
                 switch state {
                 case .ready:
@@ -91,16 +93,20 @@ final class CrewdClient: ObservableObject {
                 ready = continuation
                 c.start(queue: DispatchQueue(label: "pendingcrew.crewd.client"))
             }
+            guard generation == current, !Task.isCancelled else { throw CancellationError() }
             deadline.cancel()
             reachedBackend = true
             let hello = try await call("system.hello", .object(["client": .object(["name": .string("PendingCrew Mac"), "version": .string("Codex first")]), "apiVersion": .number(3)]))
+            guard generation == current, !Task.isCancelled else { throw CancellationError() }
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
             guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
             _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "restart", "system"].map(CrewdValue.string))]))
+            guard generation == current, !Task.isCancelled else { throw CancellationError() }
             lastError = nil
         } catch {
-            deadline.cancel(); fail(error.localizedDescription, notify: false)
+            deadline.cancel()
+            if generation == current { fail(error.localizedDescription, notify: false) }
             if reachedBackend { throw CrewdClientError(message: error.localizedDescription, kind: .backendHandshake) }
             throw error
         }
@@ -121,7 +127,7 @@ final class CrewdClient: ObservableObject {
             }
             c.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let error else { return }
-                Task { @MainActor in
+                DispatchQueue.main.async {
                     guard let self, self.generation == current else { return }
                     self.fail(error.localizedDescription, notify: true)
                 }
@@ -133,7 +139,7 @@ final class CrewdClient: ObservableObject {
 
     private func receive(_ current: UUID) {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 guard let self, self.generation == current else { return }
                 do {
                     if let data { try self.ingest(data) }
