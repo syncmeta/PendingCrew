@@ -17,6 +17,8 @@ pub mod orchestra;
 mod params;
 pub mod work;
 pub use work::*;
+pub mod work_patrol;
+pub use work_patrol::*;
 /// 唤醒行的状态转移表（不是线协议的一部分；放这里是因为 collab 与 server 都依赖本 crate，C24）。
 pub mod wake_lifecycle;
 
@@ -68,6 +70,7 @@ pub mod methods {
     pub const WORK_UPDATE: &str = "work.update";
     pub const WORK_ASSIGN: &str = "work.assign";
     pub const WORK_HISTORY: &str = "work.history";
+    pub const WORK_PATROL: &str = "work.patrol";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
     pub const ASK_LIST: &str = "ask.list";
@@ -110,6 +113,7 @@ pub mod methods {
         WORK_UPDATE,
         WORK_ASSIGN,
         WORK_HISTORY,
+        WORK_PATROL,
         WORK_LIST,
         WORK_GET,
         ASK_LIST,
@@ -558,6 +562,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_HISTORY,
             m(sub::<WorkHistoryParams>(g), sub::<WorkHistoryPage>(g)),
+        ),
+        (
+            methods::WORK_PATROL,
+            m(sub::<WorkPatrolParams>(g), sub::<WorkPatrolPage>(g)),
         ),
         (
             methods::WORK_LIST,
@@ -1213,6 +1221,7 @@ mod tests {
         let s = api_schema();
         let defs = s["$defs"].as_object().unwrap();
         let null_ok = [
+            methods::WORK_PATROL,
             methods::HELLO,
             methods::CREW_LIST,
             methods::RESTART_PENDING,

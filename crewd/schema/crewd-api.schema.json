@@ -4242,6 +4242,188 @@
       ],
       "type": "object"
     },
+    "WorkPatrolItem": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "longWaits": {
+          "description": "Open human blockers meeting the existing pinned-wait threshold. Maximum 8.",
+          "items": {
+            "$ref": "#/$defs/WorkPatrolWait"
+          },
+          "type": "array"
+        },
+        "longWaitsTruncated": {
+          "type": "boolean"
+        },
+        "lost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkPatrolLost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "stopEscalated": {
+          "description": "Global budget escalated AND this item has a current stop violation.",
+          "type": "boolean"
+        },
+        "unowned": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "unowned",
+        "stopEscalated",
+        "longWaits",
+        "longWaitsTruncated"
+      ],
+      "type": "object"
+    },
+    "WorkPatrolLost": {
+      "oneOf": [
+        {
+          "properties": {
+            "cause": {
+              "const": "unrecoverable",
+              "type": "string"
+            },
+            "resumeFailedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cause",
+            "resumeFailedAt"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cause": {
+              "const": "silent",
+              "type": "string"
+            },
+            "missedChecks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cause",
+            "missedChecks"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkPatrolPage": {
+      "properties": {
+        "includeRemoved": {
+          "type": "boolean"
+        },
+        "items": {
+          "description": "Includes scanned items with no findings; use work.get for authoritative detail.",
+          "items": {
+            "$ref": "#/$defs/WorkPatrolItem"
+          },
+          "type": "array"
+        },
+        "liveOnly": {
+          "description": "Only live work in non-removed crews is scanned. Excluded work is not cleared.",
+          "type": "boolean"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAt": {
+          "description": "One observation time for the whole page. Pagination is not a frozen snapshot.",
+          "type": "string"
+        },
+        "unavailableCategories": {
+          "description": "These pure-patrol categories are not evaluated by this projection.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "observedAt",
+        "liveOnly",
+        "includeRemoved",
+        "unavailableCategories",
+        "items"
+      ],
+      "type": "object"
+    },
+    "WorkPatrolParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "description": "Global W cursor. The limit bounds scanned live items, not findings.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "WorkPatrolWait": {
+      "description": "Issued global identity plus the existing ask.get readback handle.",
+      "properties": {
+        "askId": {
+          "description": "Use ask.get({crewId: row.crewId, askId}) for detail; not the global ID.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "askId"
+      ],
+      "type": "object"
+    },
     "WorkPendingTransfer": {
       "description": "Current offer, not evidence that the target accepted ownership.",
       "properties": {
@@ -5085,6 +5267,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPage"
+      }
+    },
+    "work.patrol": {
+      "params": {
+        "$ref": "#/$defs/WorkPatrolParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPatrolPage"
       }
     },
     "work.update": {

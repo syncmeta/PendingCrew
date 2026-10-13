@@ -449,6 +449,11 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: WorkHistoryParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::history(c, p)).await
         }
+        methods::WORK_PATROL => {
+            let p: WorkPatrolParams = parse_params_or_default(p)?;
+            let now = crewd_store::now_ms();
+            read(state, move |c| crewd_collab::work_patrol::read(c, p, now)).await
+        }
         methods::WORK_LIST => {
             let p: WorkListParams = parse_params(p)?;
             read(state, move |c| crewd_collab::work::list(c, p)).await

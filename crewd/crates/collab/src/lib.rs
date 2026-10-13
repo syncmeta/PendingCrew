@@ -27,6 +27,7 @@ pub mod todos;
 pub mod turn_trace;
 pub mod wakes;
 pub mod work;
+pub mod work_patrol;
 pub mod worldview;
 
 use crate::refusal::Refusal;
