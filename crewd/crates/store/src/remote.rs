@@ -96,7 +96,7 @@ pub fn authenticated_grant(
     conn: &Connection,
     authority: &str,
     tls_pin: &str,
-) -> Result<Option<(RemoteGrantScope, RemoteGrantSummary, String)>> {
+) -> Result<Option<(RemoteGrantSummary, String)>> {
     if !valid_spki_pin(tls_pin) {
         return Ok(None);
     }
@@ -139,4 +139,156 @@ pub fn audit(
 ) -> Result<()> {
     conn.execute("INSERT INTO remote_audit(authority_id,grant_id,action,request_id,at,facts_json) VALUES(?1,?2,?3,?4,?5,?6)", params![authority, grant, action, request, at, finite_facts_json])?;
     Ok(())
+}
+
+/// Immutable invitation witness; no private signing material is stored here.
+#[derive(Debug, Clone)]
+pub struct StoredInvitation {
+    pub challenge: String,
+    pub envelope_json: String,
+    pub expires_unix: i64,
+    pub consumed_at: Option<String>,
+}
+pub fn invitation(
+    conn: &Connection,
+    id: &str,
+    authority: &str,
+) -> Result<Option<StoredInvitation>> {
+    Ok(conn.query_row("SELECT challenge,envelope_json,expires_unix,consumed_at FROM remote_invitations WHERE id=?1 AND authority_id=?2", params![id, authority], |r| Ok(StoredInvitation { challenge: r.get(0)?, envelope_json: r.get(1)?, expires_unix: r.get(2)?, consumed_at: r.get(3)? })).optional()?)
+}
+pub fn issue_invitation(
+    conn: &Connection,
+    id: &str,
+    authority: &str,
+    challenge: &str,
+    envelope_json: &str,
+    expires_unix: i64,
+    now_unix: i64,
+    at: &str,
+) -> Result<()> {
+    if !valid_remote_uuid(id)
+        || challenge.len() > 128
+        || challenge.is_empty()
+        || envelope_json.len() > crewd_proto::MAX_REMOTE_ENVELOPE_BYTES * 2
+        || expires_unix <= now_unix
+        || expires_unix.saturating_sub(now_unix) > 300
+    {
+        return Err(StoreError::Invalid("invalid remote invitation".into()));
+    }
+    let pending: i64 = conn.query_row("SELECT COUNT(*) FROM remote_invitations WHERE authority_id=?1 AND consumed_at IS NULL AND expires_unix>?2", params![authority, now_unix], |r| r.get(0))?;
+    if pending >= crewd_proto::MAX_REMOTE_PENDING_INVITATIONS as i64 {
+        return Err(StoreError::Invalid(
+            "remote invitation limit exceeded".into(),
+        ));
+    }
+    conn.execute("INSERT INTO remote_invitations(id,authority_id,challenge,envelope_json,expires_unix,created_at) VALUES(?1,?2,?3,?4,?5,?6)", params![id, authority, challenge, envelope_json, expires_unix, at])?;
+    Ok(())
+}
+pub fn consume_invitation(
+    conn: &Connection,
+    id: &str,
+    authority: &str,
+    now_unix: i64,
+    at: &str,
+) -> Result<bool> {
+    Ok(conn.execute("UPDATE remote_invitations SET consumed_at=?1 WHERE id=?2 AND authority_id=?3 AND consumed_at IS NULL AND expires_unix>?4", params![at, id, authority, now_unix])? == 1)
+}
+
+pub fn insert_grant(
+    conn: &Connection,
+    authority: &str,
+    grant: &RemoteGrantSummary,
+    certificate_base64: &str,
+) -> Result<()> {
+    if !valid_remote_uuid(&grant.id)
+        || !valid_spki_pin(&grant.client_spki_sha256)
+        || grant.revision != "1"
+        || grant.revoked_at.is_some()
+        || grant.revoke_note.is_some()
+        || grant.device_label.trim().is_empty()
+        || grant.device_label.len() > crewd_proto::MAX_REMOTE_LABEL_BYTES
+        || certificate_base64.is_empty()
+        || certificate_base64.len() > crewd_proto::MAX_REMOTE_CERTIFICATE_BYTES * 2
+    {
+        return Err(StoreError::Invalid("invalid remote grant".into()));
+    }
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM remote_grants WHERE authority_id=?1",
+        [authority],
+        |r| r.get(0),
+    )?;
+    if total >= crewd_proto::MAX_REMOTE_GRANTS as i64 {
+        return Err(StoreError::Invalid("remote grant limit exceeded".into()));
+    }
+    conn.execute("INSERT INTO remote_grants(id,authority_id,device_label,client_spki_sha256,client_certificate_der_base64,revision,created_at) VALUES(?1,?2,?3,?4,?5,1,?6)", params![grant.id, authority, grant.device_label, grant.client_spki_sha256, certificate_base64, grant.created_at])?;
+    Ok(())
+}
+
+/// Compare-and-set a permanent tombstone. No API reactivates an existing grant.
+pub fn revoke_grant(
+    conn: &Connection,
+    id: &str,
+    authority: &str,
+    expected_revision: i64,
+    note: &str,
+    at: &str,
+) -> Result<bool> {
+    if expected_revision <= 0
+        || expected_revision == i64::MAX
+        || note.trim().is_empty()
+        || note.len() > 4096
+    {
+        return Err(StoreError::Invalid(
+            "invalid remote revoke parameters".into(),
+        ));
+    }
+    Ok(conn.execute("UPDATE remote_grants SET revision=revision+1,revoked_at=?1,revoke_note=?2 WHERE id=?3 AND authority_id=?4 AND revision=?5 AND revoked_at IS NULL", params![at, note, id, authority, expected_revision])? == 1)
+}
+
+pub fn configure(
+    conn: &Connection,
+    expected_revision: i64,
+    enabled: bool,
+    host: &str,
+    port: u16,
+) -> Result<bool> {
+    let endpoint = crewd_proto::RemoteEndpoint {
+        host: host.into(),
+        port,
+    };
+    if expected_revision <= 0 || expected_revision == i64::MAX || !endpoint.is_valid() {
+        return Err(StoreError::Invalid("invalid remote configuration".into()));
+    }
+    Ok(conn.execute("UPDATE remote_configuration SET revision=revision+1,enabled=?1,listen_host=?2,port=?3 WHERE singleton=1 AND revision=?4", params![enabled, host, port, expected_revision])? == 1)
+}
+
+/// Re-evaluate the authoritative binding and grant for an already authenticated
+/// TLS principal. Only actual server state supplies these expected identities.
+/// The runtime/listener generation check remains in the owning server adapter.
+pub fn live_grant(
+    conn: &Connection,
+    authority: &str,
+    db_id: &str,
+    server_pin: &str,
+    client_pin: &str,
+    grant_id: &str,
+    configuration_revision: &str,
+) -> Result<Option<RemoteGrantSummary>> {
+    let identity = identity(conn)?;
+    let configuration = configuration(conn)?;
+    if identity.as_ref().is_none_or(|i| {
+        i.authority_id != authority || i.db_id != db_id || i.spki_sha256 != server_pin
+    }) || !configuration.enabled
+        || configuration.revision != configuration_revision
+    {
+        return Ok(None);
+    }
+    let actual_db: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key='dbId'", [], |r| r.get(0))
+        .optional()?;
+    if actual_db.as_deref() != Some(db_id) {
+        return Ok(None);
+    }
+    Ok(grant(conn, grant_id, authority)?
+        .filter(|g| g.revoked_at.is_none() && g.client_spki_sha256 == client_pin))
 }
