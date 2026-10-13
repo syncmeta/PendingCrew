@@ -26,7 +26,9 @@ func require(_ yes: @autoclosure () -> Bool, _ message: String) { precondition(y
         require(store.plans[id]!.status == "blocked","real block state reflected")
         _ = try await store.mutate("ask.answer",.object(["crewId":.string(crew),"ask":.string(h),"text":.string("synthetic answer")]))
         require(store.humanTasks[CrewdWorkID(h,kind:.human)!] == nil,"answered H disappears from same organization inbox")
-        require(store.plans[id]!.status == "open","answer clears real blocker")
+        require(store.plans[id]!.status == "active", "answer resumes unblocked work with satisfied dependencies")
+        require(store.plans[id]!.value["blockedOn"] == .array([]), "last human blocker really cleared")
+        require(store.plans[id]!.value["nextCheckAt"].string != nil, "resumed active work retains mandatory checkpoint")
         let latest=store.plans[id]!.revision, count=calls.count
         do {
             _ = try await store.mutate("work.update",.object(["id":.string(id.raw),"expectedRevision":.string(initial),"status":.string("done")]))
