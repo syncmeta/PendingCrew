@@ -137,7 +137,7 @@ struct CrewdWorkPanels: View {
                                 _ = try await store.createRequirement(requestID:snapshot.requestID,text:snapshot.text)
                                 drafts.finish(snapshot,accepted:true)
                             } catch {
-                                drafts.finish(snapshot,accepted:false,uncertain:(error as? CrewdClientError)?.code == nil)
+                                drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
                                 if store.selectedCrew == snapshot.crew {failure=describe(error)}
                             }
                         }
@@ -158,7 +158,7 @@ struct CrewdWorkPanels: View {
                             _ = try await store.createRequirement(requestID:snapshot.requestID,text:snapshot.text)
                             drafts.finish(snapshot,accepted:true)
                         } catch {
-                            drafts.finish(snapshot,accepted:false,uncertain:(error as? CrewdClientError)?.code == nil)
+                            drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
                             if store.selectedCrew == snapshot.crew {failure=describe(error)}
                         }
                     }

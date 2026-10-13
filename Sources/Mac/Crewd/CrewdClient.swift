@@ -36,11 +36,16 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
 }
 
 struct CrewdClientError: LocalizedError {
-    enum Kind { case general, backendHandshake }
+    enum Kind { case general, backendHandshake, notSubmitted }
     let message: String
     var kind: Kind = .general
     var code: Int? = nil
     var data: CrewdValue = .null
+    static func isUncertainSubmission(_ error:Error)->Bool {
+        guard let e=error as? CrewdClientError else {return true}
+        if case .notSubmitted = e.kind {return false}
+        return e.code == nil
+    }
     var refusal: String? { data["refusal"].string }
     var currentWork: CrewdValue { data["currentWork"] }
     var errorDescription: String? { message }
@@ -119,9 +124,11 @@ final class CrewdClient: ObservableObject {
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
-        guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。") }
+        guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
         let id = nextID; nextID += 1
-        var data = try JSONEncoder().encode(CrewdValue.object(["id": .number(Double(id)), "method": .string(method), "params": params]))
+        var data:Data
+        do {data = try JSONEncoder().encode(CrewdValue.object(["id": .number(Double(id)), "method": .string(method), "params": params]))}
+        catch {throw CrewdClientError(message:"请求无法编码，尚未提交。",kind:.notSubmitted)}
         data.append(10)
         let current = generation
         return try await withCheckedThrowingContinuation { continuation in

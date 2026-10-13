@@ -89,7 +89,7 @@ struct CrewdHumanActions:View {
                 drafts.finish(snapshot,accepted:true)
                 if store.selectedCrew == key.scope {dismiss()}
             } catch {
-                drafts.finish(snapshot,accepted:false,uncertain:attempted && (error as? CrewdClientError)?.code == nil)
+                drafts.finish(snapshot,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error))
                 if store.selectedCrew == key.scope {reviewedUnknown=false;readUnknown=false;failure=describe(error)}
             }
         }

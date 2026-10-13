@@ -187,8 +187,8 @@ struct CrewdPlanActions:View {
                 _ = try await store.mutate(method,params)
                 drafts.finish(snapshot,accepted:true);if store.selectedCrew == key.crew {dismiss()}
             } catch {
-                drafts.finish(snapshot,accepted:false,uncertain:attempted && (error as? CrewdClientError)?.code == nil)
-                if attempted && (error as? CrewdClientError)?.code == nil {reviewedUnknown=false}
+                drafts.finish(snapshot,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error))
+                if attempted && CrewdClientError.isUncertainSubmission(error) {reviewedUnknown=false}
                 failure=describe(error)
             }
         }

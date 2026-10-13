@@ -127,7 +127,7 @@ final class CrewdWorkStore: ObservableObject {
     }
     /// The draft owner retains requestID across uncertain replies; the store never retries writes.
     @discardableResult func createRequirement(requestID: UUID, text: String) async throws -> CrewdValue {
-        guard !selectedCrew.isEmpty else { throw CrewdClientError(message: "请先选择机组。") }
+        guard !selectedCrew.isEmpty else { throw CrewdClientError(message: "请先选择机组。",kind:.notSubmitted) }
         return try await mutate("todo.create", .object([
             "requestId": .string(requestID.uuidString.lowercased()),
             "crewId": .string(selectedCrew), "text": .string(text)
@@ -263,9 +263,9 @@ final class CrewdWorkStore: ObservableObject {
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
     @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         guard ["work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
-            throw CrewdClientError(message: "不支持的工作写入操作。")
+            throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
         }
-        guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。") }
+        guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。",kind:.notSubmitted) }
         let target = params["id"].string.flatMap { CrewdWorkID($0, kind: .plan) }
         if let target, plans[target]?.frozen == true { throw CrewdClientError(message: "已归档工作只读。", code: -32009, data: .object(["refusal": .string("crew.removed")])) }
         generation = UUID(); refreshID = UUID(); loading = false; pendingDetails.removeAll()

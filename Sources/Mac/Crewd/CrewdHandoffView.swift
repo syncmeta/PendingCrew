@@ -9,6 +9,7 @@ struct CrewdHandoffView:View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var historyExpanded=false
     @State private var history:[CrewdValue]=[]
+    @State private var historyLoaded=false
     @State private var nextBefore:String?
     @State private var reading=false
     @State private var cancelling=false
@@ -52,7 +53,7 @@ struct CrewdHandoffView:View {
                     if reading {ProgressView().controlSize(.small)}
                     if nextBefore != nil {Button("更早的交接记录"){Task {await load(reset:false)}}.disabled(reading)}
                     Button("刷新交接记录"){Task {await load(reset:true)}}.disabled(reading)
-                    if history.isEmpty && !reading {Text("尚无负责人变更记录").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
+                    if historyLoaded && history.isEmpty && !reading {Text("尚无负责人变更记录").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                 }
             }
         }
@@ -78,7 +79,7 @@ struct CrewdHandoffView:View {
                 let known=Set(history.compactMap{$0["seq"].string})
                 history += page["items"].array.filter {item in item["seq"].string.map{!known.contains($0)} ?? false}
             }
-            nextBefore=page["nextBefore"].string;failure=nil
+            nextBefore=page["nextBefore"].string;historyLoaded=true;failure=nil
         } catch {if request == query,crew == store.selectedCrew,!(error is CancellationError) {failure=describe(error)}}
     }
     private func withdraw(_ original:CrewdPlan,_ offer:CrewdValue) {
@@ -97,7 +98,7 @@ struct CrewdHandoffView:View {
                 uncertain=false
                 if historyExpanded {await load(reset:true)}
             } catch {
-                if store.selectedCrew == crew {failure=describe(error);uncertain=attempted && (error as? CrewdClientError)?.code == nil}
+                if store.selectedCrew == crew {failure=describe(error);uncertain=attempted && CrewdClientError.isUncertainSubmission(error)}
             }
         }
     }
