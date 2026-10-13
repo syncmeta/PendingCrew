@@ -109,3 +109,14 @@ M6 source-only接线首次被自动审查以持续网络暴露/具体授权不�
 - 根核对既有实际fake copy SHA0e75fcbc0ff7e9f8bdb59bc41e8b937d3631317cb6dcba23581eaf64909e3d3e，使用已接受prepare工具为新fe680完整候选准备独立窗口材料：`/private/tmp/pcw-visible-gui.cd9aj8ec/session.json` 与待启动脚本。fresh home/work/data、固定GUI/helper/fake hashes；只prepare，没有launch或App控制。旧a9暂停窗口及全部证据保留。
 - 新正常运行/源整合/全平台CI/配套产物关口已接受；实际新窗口点击、真实provider任务、安装/日常迁移仍待完成，不缩减M3或全工程范围。
 - M6正式服务源码检查点d17766af已默认features定向check/proto通过，并合入公共2eee；QA接实际临时loopback生产路由整链，根不提前合main。客户端继续Native配对/Keychain/TLS/Root，后台继续M4，不等待离线用户窗口权限。
+
+
+## 2026-10-14：后续完整模块与非阻塞人类边界
+
+M6生产路由检查点d177已普通快进保存远端开发分支；M4 Core/native双进程登记检查点13c2a8b7已保存独立远端开发分支。均不提前合main或宣称完整M4/M6完成。M6质量线继续真正public backup/restore旧cert与旧accept UUID墓碑、attached身份拒绝；客户端接原生可信移动链，后台接完整bridge/ownership/lifecycle。
+
+资源回收已有两份明确清单：QA15个terminal显式Swift/Clang缓存释放0.904GiB；后台41个旧静态rlib释放1427738712bytes，保留每crate最新8且旧>1h。源/原日志/DB/图/实际二进制/witness/DD/xcresult保留；目标仍唯一。该资源用于后续原生平台门禁，不新建冷target或重跑已关闭的main门禁。
+
+M4 metadata原外部目标疑虑经同动作准确localhost环境证据复核通过，实际probe零mock请求并已回收，随后主题/dummy初始化到workspace-trust新边界。该信任动作CreateProcess前被自动审查明确拒绝，未执行，不能换路径/工具/代理绕过。拒绝原文 `/private/tmp/pcw-M4-metadata-trust-auto-review-rejection-01.json`：信任授予read/edit/execute，超出此前不含工具/权限批准的metadata许可。
+
+为用户可审阅的最终批准，作者只prepare固定目录 `/private/tmp/pcw-M4-metadata-human-scope-5xexpvh8`；根已读4个只观察文件、完整固定88a9 supervisor与prepared-scope.json。实际preparedOnly=true/CLI未启动/mock未绑定/awaitingHuman=true。根已提交非阻塞人类问题，只批准这次自有目录、dummy凭据、localhost mock、无模型/真实auth/日常配置的workspace-trust；尚无回复，不能按推荐选项或时间流逝当批准。真实build types仍unknown，bridge其他源码工作不停，全工程目标不暂停。
