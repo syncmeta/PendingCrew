@@ -75,3 +75,11 @@ Remaining gates before activation and delivery:
 3. Prove actual actor delivery with fake execution, including render/claim refusal after owner/revision/terminal changes. A queue row is not a delivery receipt.
 4. Switch schema 9 through the serialized migration/backup chain; run version-8 upgrade, reopen/idempotence, failure rollback and restoration fixtures. Run the final combined lint/workspace gate on a single source worktree.
 5. Integrate with original-style client and packaged runtime. Main integration, release, installation and real-account/day-data acceptance remain separate delivery gates.
+
+### Actual actor and staged version-marker checkpoint (2026-10-13)
+
+Independent actor tests commit `2efde806`, `/private/tmp/pcw-global-work-actor-01.log`, pass both scenarios. Last H answer leaves one owner-grouped message containing public H and both W identities; fake execution receives it, then an explicit success receipt transitions Inflight to durable Delivered. Completing both organization items after actual render but before claim drops the obsolete wake with attempts=0, no send and no extra executor launch. This is actual actor/fake-executor evidence, not a real model/account task.
+
+Root-owned staged schema wrapper/tests pass three cases, `/private/tmp/pcw-global-schema-staged-03.log`: conversion and marker 9 commit together; injected identity UPDATE refusal rolls back the schema/identities and marker to 8 and permits a clean retry; a pre-conversion SQLite snapshot retains true historical v8 state and can upgrade again. Fixture creates V1→V8 through the historical migrations rather than falsifying a new database's marker. Retry proof creates a real new organization item/event while legacy archive remains unchanged and verifies the new state/event survives another conversion call. This is staged transaction evidence: production SCHEMA_VERSION remains 8, and public Store::open/reopen/backup-refusal through the activated v9 chain still needs final validation.
+
+The next remaining product gate is public block/new-human/split creation plus review regression checks, followed by schema-chain activation and combined workspace validation. Earlier initial-blocker fixture boundaries remain explicit.

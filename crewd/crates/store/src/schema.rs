@@ -657,6 +657,17 @@ fn migrate_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+// Staged until production cutover gates pass. The transaction owns both the
+// organization conversion and its version marker; a failed conversion stays v8.
+#[cfg(test)]
+fn migrate_v9(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    crate::work_organization::migrate_in_tx(&tx, &crate::ts_from_ms(crate::now_ms()))?;
+    tx.execute_batch("PRAGMA user_version=9;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrate_guarded(conn, None)
 }
@@ -2061,5 +2072,186 @@ INSERT INTO messages(id,crew_id,sender_kind,sender_session_id,text,mentions,crea
             v(mentions("c4")),
             serde_json::json!([{"kind":"captain","targetId":"cap-n"}])
         );
+    }
+}
+
+#[cfg(test)]
+mod organization_version_tests {
+    use super::*;
+    use crewd_work::{Actor, Config, CrewId, EntryNo, NewItem, Ts, WorkBook};
+    use rusqlite::params;
+
+    fn legacy_v8() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        // Build the real historical v8 chain, even after the production latest
+        // version advances; never fake-downgrade a newer schema marker.
+        conn.execute_batch(V1).unwrap();
+        conn.execute_batch(V2).unwrap();
+        migrate_v3(&conn).unwrap();
+        migrate_v4(&conn).unwrap();
+        migrate_v5(&conn).unwrap();
+        migrate_v6(&conn).unwrap();
+        migrate_v7(&conn).unwrap();
+        migrate_v8(&conn).unwrap();
+        assert_eq!(version(&conn), 8);
+        conn.execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('a','A','t','t'),('b','B','t','t');").unwrap();
+        for crew in ["a", "b"] {
+            let mut book = WorkBook::new(CrewId::new(crew), Config::default());
+            book.register_entry(Ts(1000), EntryNo(1)).unwrap();
+            book.create_item(
+                &Actor::Human,
+                Ts(1000),
+                NewItem::titled(crew).from_entry(EntryNo(1)),
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO work_books(crew_id,state,updated_at) VALUES(?1,?2,'t')",
+                params![crew, serde_json::to_string(book.state()).unwrap()],
+            )
+            .unwrap();
+            for (kind, source) in [
+                (crate::object_refs::ObjectKind::Plan, "work:W1"),
+                (crate::object_refs::ObjectKind::Requirement, "work:#1"),
+            ] {
+                crate::object_refs::bind(&conn, kind, crew, source, "t").unwrap();
+            }
+        }
+        conn
+    }
+    fn version(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    }
+    fn issued(conn: &Connection) -> Vec<(i64, String, String, String)> {
+        conn.prepare("SELECT number,kind,crew_id,source_id FROM object_refs ORDER BY number")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+    #[test]
+    fn staged_v9_commits_version_with_authority_and_retries_without_archive_replay() {
+        let conn = legacy_v8();
+        let before = issued(&conn);
+        migrate_v9(&conn).unwrap();
+        assert_eq!(version(&conn), 9);
+        assert_eq!(issued(&conn), before);
+        let state = crate::work_organization::load(&conn).unwrap().unwrap();
+        assert_eq!(state.items.len(), 2);
+        assert_eq!(state.entries.len(), 2);
+        let mut book = WorkBook::restore(state, Config::default()).unwrap();
+        let mut item = NewItem::titled("created after migration");
+        item.crew_id = Some(CrewId::new("a"));
+        let created = book.create_item(&Actor::Human, Ts(2000), item).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::work_organization::bind_core(
+            &tx,
+            crate::object_refs::ObjectKind::Plan,
+            "a",
+            &created.value.to_string(),
+            "new-authority",
+        )
+        .unwrap();
+        crate::work_organization::save(&tx, book.state(), &created.events, "new-authority")
+            .unwrap();
+        tx.commit().unwrap();
+        let state = book.state().clone();
+        assert_eq!(state.items.len(), 3);
+        // Legacy archive still has just its two original items.
+        // The canonical map is an object; check each original state directly.
+        let mut q = conn.prepare("SELECT state FROM work_books").unwrap();
+        let originals: Vec<String> = q
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            originals
+                .iter()
+                .map(|raw| serde_json::from_str::<crewd_work::BookState>(raw)
+                    .unwrap()
+                    .items
+                    .len())
+                .sum::<usize>(),
+            2
+        );
+        drop(q);
+        // Retry the transaction, without replaying the immutable legacy states.
+        migrate_v9(&conn).unwrap();
+        let updated: String = conn
+            .query_row("SELECT updated_at FROM organization_work_book", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(updated, "new-authority");
+        assert_eq!(
+            crate::work_organization::load(&conn).unwrap().unwrap(),
+            state
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM organization_work_events", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn staged_v9_mid_conversion_failure_keeps_version_and_issued_ids_then_retries() {
+        let conn = legacy_v8();
+        let before = issued(&conn);
+        conn.execute_batch("CREATE TRIGGER reject_core BEFORE UPDATE ON object_refs BEGIN SELECT RAISE(ABORT,'injected identity refusal'); END;").unwrap();
+        assert!(migrate_v9(&conn).is_err());
+        assert_eq!(version(&conn), 8);
+        assert_eq!(issued(&conn), before);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='organization_work_book'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM work_books", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        conn.execute_batch("DROP TRIGGER reject_core;").unwrap();
+        migrate_v9(&conn).unwrap();
+        assert_eq!(version(&conn), 9);
+        assert_eq!(issued(&conn), before);
+    }
+    #[test]
+    fn staged_v9_pre_conversion_snapshot_restores_v8_objects_and_version() {
+        let conn = legacy_v8();
+        let before = issued(&conn);
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("pre-v9.db");
+        crate::backup::vacuum_into(&conn, &snapshot).unwrap();
+        migrate_v9(&conn).unwrap();
+        let old = Connection::open(&snapshot).unwrap();
+        assert_eq!(version(&old), 8);
+        assert_eq!(issued(&old), before);
+        assert_eq!(
+            old.query_row("SELECT COUNT(*) FROM work_books", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        let count: i64 = old
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='organization_work_book'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        migrate_v9(&old).unwrap();
+        assert_eq!(version(&old), 9);
+        assert_eq!(issued(&old), before);
     }
 }
