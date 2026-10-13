@@ -35,7 +35,9 @@ Own regressions additionally cover UUID uppercase normalization, unknown legacy-
 
 Earlier evidence remains: check-01 caught an adapter signature compile error; workflow-02 actor cases failed because the test fixture attempted a second captain in an occupied crew. The independent author corrected only the synthetic crew fixture, retaining the failure log. These are not claimed as product-behavior red baselines.
 
-Whole-workspace/lint and real daemon+Swift integration are the next integration gates, owned by root. Passing this unit does not complete the entire PendingCrew engineering project.
+Root whole-workspace run is retained at `/private/tmp/pcw-requirement-workspace-final-01.log`: 2505 passed / 4 failed / 8 ignored. The four failures were obsolete tool-count / client-method-coverage test fixtures. They were fixed with actual CLI creation/get/retry/conflict/closure assertions and real MCP reads under current worker/captain roles, rather than only adding method names. Targeted reruns passed: agent helper integration 1, all-client-method integration 1, agent RPC suite 32 (`pcw-requirement-final-{agent-e2e,client-e2e,agent-rpc}-01.log`). This is a composite **2509 passed / 0 unresolved failures / 8 ignored** result, not a second full-workspace invocation.
+
+Root-reported real normal-daemon + Swift integration passed (`/private/tmp/pcw-requirement-swift-backend-01.log`, followed by 02). Clippy's first final run caught only function placement after a test module; the function was moved before the module without a lint allow or behavior change. Strict workspace/all-target lint and format both passed (`/private/tmp/pcw-requirement-final-clippy-02.log`, `/private/tmp/pcw-requirement-final-fmt-02.log`); no full-workspace re-execution was needed after these test-only and function-order changes. Passing this unit does not complete the entire PendingCrew engineering project.
 
 
 ## 客户端整合与读竞态验收

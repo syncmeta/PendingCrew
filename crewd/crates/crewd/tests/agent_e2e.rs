@@ -12,6 +12,7 @@ use support::{Mcp, fire, launch};
 async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     let f = Fixture::new().await;
     f.spawn_socket().await;
+    let requirement=f.rpc("todo.create",json!({"requestId":"b53e7483-fec8-4f46-995c-cb8651b4643b","crewId":f.crew,"text":"role-read-source"})).await;
     let rt = tempfile::tempdir().unwrap();
     let w = launch(&f, &f.worker, rt.path());
     let c = launch(&f, &f.captain, rt.path());
@@ -42,9 +43,14 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 24);
-    assert_eq!(ct.len(), 35);
+    assert_eq!(wt.len(), 25);
+    assert_eq!(ct.len(), 36);
     for tools in [&wt, &ct] {
+        let get = tools
+            .iter()
+            .find(|tool| tool["name"] == "todo_get")
+            .expect("requirement read tool");
+        assert_eq!(get["annotations"]["readOnlyHint"], true);
         assert!(tools.iter().any(|tool| tool["name"] == "work_item_block"));
     }
     for t in wt.iter().chain(&ct) {
@@ -53,17 +59,31 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
             assert!(t["annotations"][k].is_boolean(), "{t}");
         }
     }
+    for m in [&mut wm, &mut cm] {
+        let (text, failed) = m
+            .call("todo_get", json!({"id":requirement["requirementId"]}))
+            .await;
+        assert!(!failed, "{text}");
+        assert!(text.contains("role-read-source"));
+    }
     assert!(wm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 35);
-    assert_eq!(cm.tools().await.len(), 24);
+    assert_eq!(wm.tools().await.len(), 36);
+    assert_eq!(cm.tools().await.len(), 25);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 24);
+    assert_eq!(wm.tools().await.len(), 25);
+    for m in [&mut wm, &mut cm] {
+        let (text, failed) = m
+            .call("todo_get", json!({"id":requirement["requirementId"]}))
+            .await;
+        assert!(!failed, "read survives current role changes: {text}");
+        assert!(text.contains("role-read-source"));
+    }
     wm.close().await;
     cm.close().await;
 }

@@ -439,6 +439,17 @@ fn rpc_drives_every_client_method() {
         ),
         ("directory.list", "null", Ok),
         (
+            "todo.create",
+            r#"{"requestId":"9f75cfe6-ef21-4c90-8d09-4ea8f03903e8","crewId":"local-aaaa","text":"  CLI source\n原文不变  "}"#,
+            Ok,
+        ),
+        ("todo.get", r##"{"id":"#999"}"##, Code(-32004)),
+        (
+            "todo.close",
+            r##"{"id":"#999","note":"not found ruling","expectedStatus":"unclaimed"}"##,
+            Code(-32004),
+        ),
+        (
             "todo.list",
             r#"{"crewId":"local-aaaa","ledger":"agent"}"#,
             Ok,
@@ -530,6 +541,45 @@ fn rpc_drives_every_client_method() {
             );
             created_work.push(second["id"].as_str().unwrap().to_owned());
             assert_ne!(created_work[0], created_work[1]);
+        } else if method == "todo.create" {
+            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            let id = first["requirementId"].as_str().unwrap();
+            assert!(id.starts_with('#'));
+            assert_eq!(first["text"], "  CLI source\n原文不变  ");
+            assert_eq!(first["status"], "unclaimed");
+            let detail = rpc(
+                data.path(),
+                "todo.get",
+                &serde_json::json!({"id":id}).to_string(),
+            );
+            assert_eq!(detail, first);
+            assert_eq!(rpc(data.path(), "todo.create", params), first);
+            let mut changed: serde_json::Value = serde_json::from_str(params).unwrap();
+            changed["text"] = serde_json::json!("changed original must conflict");
+            let conflict = crewd(data.path())
+                .args(["rpc", "todo.create", &changed.to_string()])
+                .output()
+                .unwrap();
+            assert!(!conflict.status.success());
+            assert!(String::from_utf8_lossy(&conflict.stderr).contains("(-32009)"));
+            let closed=rpc(data.path(),"todo.close",&serde_json::json!({"id":id,"expectedStatus":"unclaimed","note":"explicit CLI human ruling"}).to_string());
+            assert_eq!(closed["status"], "closed");
+            assert_eq!(closed["text"], first["text"]);
+            assert_eq!(closed["closure"]["note"], "explicit CLI human ruling");
+            assert!(closed["closure"]["at"].is_string());
+            assert_eq!(
+                rpc(
+                    data.path(),
+                    "todo.get",
+                    &serde_json::json!({"id":id}).to_string()
+                ),
+                closed
+            );
+            assert_eq!(
+                rpc(data.path(), "todo.create", params),
+                closed,
+                "same request returns the latest derived view"
+            );
         } else if method == "session.usage" {
             let evidence: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             assert_eq!(

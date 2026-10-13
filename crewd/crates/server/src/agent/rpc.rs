@@ -275,6 +275,31 @@ mod tests {
         assert_eq!(code, -32601, "attach 失败后仍是未 attach");
     }
 
+    async fn requirement_readable(f: &Fixture, c: &mut RpcClient) {
+        let detail=f.rpc("todo.create",json!({"requestId":"2188d9b0-cedb-4ed9-9b5e-ff8a73cf74fd","crewId":f.crew,"text":"role-current-source"})).await;
+        let tools = c.call(methods::TOOLS, json!(null)).await.unwrap();
+        let get = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "todo_get")
+            .unwrap();
+        assert_eq!(get["annotations"]["readOnlyHint"], true);
+        let read = c
+            .call(
+                methods::CALL,
+                json!({"tool":"todo_get","args":{"id":detail["requirementId"]}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["isError"], false, "{read}");
+        assert!(
+            read["text"]
+                .as_str()
+                .unwrap()
+                .contains("role-current-source")
+        );
+    }
     #[tokio::test]
     async fn attach_reports_identity_and_tools_follow_role() {
         let f = Fixture::new().await;
@@ -301,7 +326,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            24
+            25
         );
         let mut cap = attached(&f, &f.captain).await;
         assert_eq!(
@@ -311,8 +336,10 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            35
+            36
         );
+        requirement_readable(&f, &mut w).await;
+        requirement_readable(&f, &mut cap).await;
     }
 
     #[tokio::test]
@@ -347,6 +374,7 @@ mod tests {
         // Review Focus 4
         let f = Fixture::new().await;
         let mut w = attached(&f, &f.worker).await;
+        requirement_readable(&f, &mut w).await;
         f.set_role(&f.worker, Role::Captain).await;
         let ev = w
             .next_event(Duration::from_secs(5))
@@ -361,7 +389,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            35
+            36
         );
         let r = w
             .call(methods::CALL, json!({"tool": "list_sessions"}))
@@ -372,6 +400,7 @@ mod tests {
             text::r(Locale::Zh, "r.captain_only", &[("name", "list_sessions")]),
             "换成机长后马上能用"
         );
+        requirement_readable(&f, &mut w).await;
         f.set_role(&f.worker, Role::Worker).await;
         let ev = w.next_event(Duration::from_secs(5)).await.unwrap();
         assert_eq!(ev.data["role"], "worker");
@@ -380,6 +409,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r["isError"], true, "卸任后当场被拒，不靠 helper 刷新");
+        requirement_readable(&f, &mut w).await;
     }
 
     #[tokio::test]

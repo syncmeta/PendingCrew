@@ -1740,6 +1740,11 @@ pub async fn work_update(
     write(st, move |tx| crewd_collab::work::update(tx, &by, p)).await
 }
 
+pub async fn todo_get(st: &AppState, id: &str) -> PortResult<crewd_proto::RequirementDetail> {
+    let id = id.to_owned();
+    read(st, move |c| crewd_collab::requirements::get(c, &id)).await
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -3067,9 +3072,4 @@ mod tests {
             );
         }
     }
-}
-
-pub async fn todo_get(st: &AppState, id: &str) -> PortResult<crewd_proto::RequirementDetail> {
-    let id = id.to_owned();
-    read(st, move |c| crewd_collab::requirements::get(c, &id)).await
 }
