@@ -39,6 +39,10 @@ struct CrewdClientError: LocalizedError {
     enum Kind { case general, backendHandshake }
     let message: String
     var kind: Kind = .general
+    var code: Int? = nil
+    var data: CrewdValue = .null
+    var refusal: String? { data["refusal"].string }
+    var currentWork: CrewdValue { data["currentWork"] }
     var errorDescription: String? { message }
 }
 
@@ -103,7 +107,7 @@ final class CrewdClient: ObservableObject {
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
             guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
-            _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "restart", "system"].map(CrewdValue.string))]))
+            _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "work", "restart", "system"].map(CrewdValue.string))]))
             guard generation == current, !Task.isCancelled else { throw CancellationError() }
             lastError = nil
         } catch {
@@ -169,7 +173,7 @@ final class CrewdClient: ObservableObject {
             guard line.count <= 64 * 1024 * 1024 else { throw CrewdClientError(message: "响应超过大小上限。") }
             let frame = try JSONDecoder().decode(CrewdValue.self, from: line)
             if let id = frame["id"].int {
-                if frame["error"] != .null { finish(id, .failure(CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。"))) }
+                if frame["error"] != .null { finish(id, .failure(CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。", code: frame["error"]["code"].int, data: frame["error"]["data"]))) }
                 else { finish(id, .success(frame["result"])) }
             } else if let event = frame["event"].string { onEvent?(event, frame["data"]) }
         }

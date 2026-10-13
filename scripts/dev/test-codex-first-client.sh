@@ -15,7 +15,7 @@ fixture=$(mktemp -d /private/tmp/pcw-swift-client.XXXXXX)
 mkdir -p "$fixture/home" "$fixture/work" "$fixture/cache" "$fixture/data"
 echo "Full synthetic logs: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library "$root/Sources/Mac/Crewd/CrewdClient.swift" \
-    "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" "$root/scripts/dev/fixtures/crewd-client-smoke.swift" -o "$fixture/client-test"
+    "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" "$root/scripts/dev/fixtures/crewd-client-smoke.swift" -o "$fixture/client-test"
 python3 - "$fixture" "$server_program" "$fake_program" <<'PY'
 import os, pathlib, subprocess, sys, time
 fixture = pathlib.Path(sys.argv[1])
