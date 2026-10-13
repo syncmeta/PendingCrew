@@ -51,3 +51,13 @@ crewd Mac job115504649726 success：2533 run/2533 passed/8 skipped，随后docte
 窗口当前事实：实际点击0项。精确候选a9启动PID1352曾经由质量线只读ps核验；原生getApp调用2948.1秒后返回aborted by user，未返回App状态或获准/拒绝的许可结果，不能推断有人已批准或拒绝。根已暂停新窗口动作、保留独立fake应用/data/evidence，并将质量线转独立源码/运行证据验收。a9/b064包不重标新peer版本，正式修复候选须重新核验来源。没有安装、日常数据切换或新真实模型运行。
 
 后续大块继续：后端M4真实PTY/ACP全生命周期在独立树；客户端M6共享NDJSON及权威隔离、移动原四视图操作在独立树，质量线接共享wire/取消/authority seam。移动类型检查不代表网络配对/真实手机交付，Q11 TLS1.3双向SPKI/撤销/remote actor后台依赖仍明确。M5跟进调度保留后续责任，Jev和记忆仍仅方案。
+
+
+## 2026-10-14：整块后台修复冻结与新双平台 CI
+
+- 作者冻结 `2eeec9842803bbd96e07291d8d6b62040da8e3e1`，Rust 产品输入固定于 `278ec74b`；根核对 clean HEAD 与日志。
+- 本机最终 workspace05：78 suites、2547 PASS、0 fail、8 ignored；原失败日志保留。strict clippy 与 fmt 由作者实际执行 exit0，根核对日志。独立 QA 已接受此冻结范围，终端可见内容不能冒称原始字节证明；真实厂商内容 witness 仍归 M4。
+- 根普通快进推送既有修复分支并实际 dispatch `crewd.yml`。运行 `38478555783` 的 API headSha 与冻结一致，Linux job `115575221003`、macOS job `115575220779`；首次核对 Linux in_progress / Mac queued。尚未通过，不以本机结果替代远端。
+- 全工程开发分支已普通快进保存远端 `c1a913fc`；main 仍为 `67430035`，没有提前整合本次修复或安装新产物。
+- 原始证据：`/private/tmp/pcw-ci-native-submit-workspace-05.log`、`/private/tmp/pcw-ci-native-submit-clippy-02.log`、`/private/tmp/pcw-ci-native-submit-fmt-02.log`。
+- 后台线接续完整 M4；客户端/远程线继续 M6；质量线已实际重新启动接 M6 恢复信任、TLS/配对/在线撤销及共享操作独验。根接这次准确 CI 和组合交付。
