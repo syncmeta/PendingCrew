@@ -895,6 +895,7 @@ CREATE TABLE remote_grants(
   device_label TEXT NOT NULL,
   client_spki_sha256 TEXT NOT NULL CHECK(length(client_spki_sha256)=64),
   client_certificate_der_base64 TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'owner_workspace' CHECK(scope='owner_workspace'),
   revision INTEGER NOT NULL CHECK(revision>0),
   created_at TEXT NOT NULL,
   revoked_at TEXT,

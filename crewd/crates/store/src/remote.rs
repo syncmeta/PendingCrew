@@ -51,11 +51,12 @@ pub fn configuration(conn: &Connection) -> Result<RemoteConfiguration> {
 }
 
 const GRANT_FIELDS: &str =
-    "id,device_label,client_spki_sha256,revision,created_at,revoked_at,revoke_note";
+    "id,device_label,client_spki_sha256,revision,created_at,revoked_at,revoke_note,scope";
 fn grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteGrantSummary> {
     let revision: i64 = r.get(3)?;
     let pin: String = r.get(2)?;
-    if revision <= 0 || !valid_spki_pin(&pin) {
+    let scope: String = r.get(7)?;
+    if revision <= 0 || !valid_spki_pin(&pin) || scope != "owner_workspace" {
         return Err(rusqlite::Error::InvalidQuery);
     }
     Ok(RemoteGrantSummary {
@@ -99,7 +100,7 @@ pub fn authenticated_grant(
     if !valid_spki_pin(tls_pin) {
         return Ok(None);
     }
-    Ok(conn.query_row(&format!("SELECT {GRANT_FIELDS},client_certificate_der_base64 FROM remote_grants WHERE authority_id=?1 AND client_spki_sha256=?2 AND revoked_at IS NULL"), params![authority, tls_pin], |r| Ok((grant_row(r)?, r.get(7)?))).optional()?)
+    Ok(conn.query_row(&format!("SELECT {GRANT_FIELDS},client_certificate_der_base64 FROM remote_grants WHERE authority_id=?1 AND client_spki_sha256=?2 AND revoked_at IS NULL"), params![authority, tls_pin], |r| Ok((grant_row(r)?, r.get(8)?))).optional()?)
 }
 
 #[derive(Debug, Clone)]
