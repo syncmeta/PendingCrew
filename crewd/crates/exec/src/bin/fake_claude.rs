@@ -229,7 +229,22 @@ impl Fake {
         let shown = if self.input.is_empty() {
             format!("\x1b[2m{HINT}\x1b[22m")
         } else if std::env::var("FAKE_CLAUDE_FULL_INPUT").as_deref() == Ok("1") {
-            self.input.replace('\n', "\r\n")
+            // Synthetic full-input codec paints meaningful hard-line trailing
+            // blanks, which otherwise alias default grid padding. This is a
+            // visible fixture witness, not a production provider capability.
+            self.input
+                .split('\n')
+                .map(|line| {
+                    let plain = line.trim_end_matches(' ');
+                    let blanks = &line[plain.len()..];
+                    if blanks.is_empty() {
+                        line.to_owned()
+                    } else {
+                        format!("{plain}\x1b[4m{blanks}\x1b[24m")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\r\n")
         } else if self.input.contains('\n') || self.input.chars().count() > 60 {
             format!(
                 "[Pasted text #1 +{} lines]{}",

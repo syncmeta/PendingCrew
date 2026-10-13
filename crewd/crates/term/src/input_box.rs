@@ -163,7 +163,25 @@ impl Screen {
         if blocking_dialog(&rows).is_some() {
             return None;
         }
-        let input = input_row_index(&rows);
+        let input = input_row_index(&rows).or_else(|| {
+            // A fully visible multiline box may exceed the legacy 15-row prompt
+            // search. Admit only one actual marker immediately below a top border.
+            let mut candidates = rows.iter().enumerate().filter_map(|(i, row)| {
+                let text = strip(row);
+                (i > 0
+                    && text
+                        .chars()
+                        .next()
+                        .is_some_and(|c| INPUT_MARKERS.contains(&c))
+                    && parse_option(text).is_none()
+                    && rows[i - 1]
+                        .trim_start()
+                        .starts_with(['─', '━', '═', '╭', '┌', '╔']))
+                .then_some(i)
+            });
+            let one = candidates.next()?;
+            candidates.next().is_none().then_some(one)
+        });
         let start = input.or_else(|| {
             rows.iter()
                 .position(|text| body_tail_visible(body, std::slice::from_ref(text)))
@@ -172,7 +190,7 @@ impl Screen {
             rows.iter()
                 .enumerate()
                 .skip(start + 1)
-                .take(INPUT_SCAN_DEPTH)
+                .take(self.lines())
                 .find(|(_, r)| r.trim_start().starts_with(LOWER_EDGE_CHARS))
                 .map_or(start + 1, |(i, _)| i)
         } else {
@@ -195,7 +213,10 @@ impl Screen {
                         content: input.and_then(|at| self.visible_input_content(at, line, column)),
                     });
                 }
-                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                if !cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
                     prefix.push(if cell.c == '\0' { ' ' } else { cell.c });
                 }
             }
@@ -229,14 +250,15 @@ impl Screen {
             if from > to {
                 return None;
             }
-            let mut fragment: String =
-                (from..to)
-                    .filter_map(|col| {
-                        let cell = &row[Column(col)];
-                        (!cell.flags.contains(Flags::WIDE_CHAR_SPACER))
-                            .then_some(if cell.c == '\0' { ' ' } else { cell.c })
-                    })
-                    .collect();
+            let mut fragment: String = (from..to)
+                .filter_map(|col| {
+                    let cell = &row[Column(col)];
+                    (!cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER))
+                    .then_some(if cell.c == '\0' { ' ' } else { cell.c })
+                })
+                .collect();
             if line != cursor_line
                 && !row[Column(grid.columns() - 1)]
                     .flags
@@ -244,7 +266,23 @@ impl Screen {
             {
                 // Hard line breaks have blank grid padding. Meaningful trailing
                 // spaces on such lines remain ambiguous. This is visible normalization, not raw bytes.
-                fragment.truncate(fragment.trim_end().len());
+                let painted_end = (from..to).rev().find(|col| {
+                    let cell = &row[Column(*col)];
+                    !cell.c.is_whitespace() || cell.flags.contains(Flags::UNDERLINE)
+                });
+                // An explicitly painted trailing blank is distinguishable from
+                // default grid padding; unpainted hard-line blanks remain ambiguous.
+                let keep = painted_end.map_or(0, |end| {
+                    (from..=end)
+                        .filter(|col| {
+                            !row[Column(*col)].flags.intersects(
+                                Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
+                            )
+                        })
+                        .map(|col| row[Column(col)].c.len_utf8())
+                        .sum()
+                });
+                fragment.truncate(keep);
                 fragment.push('\n');
             }
             text.push_str(&fragment);
@@ -496,6 +534,11 @@ mod tests {
             "first\nsecond\n".to_owned(),
             "B".repeat(78),
             "漢".repeat(40),
+            format!("{}漢字{}", "a".repeat(77), "b".repeat(97)),
+            (0..19)
+                .map(|i| format!("long visible input {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ] {
             let frame = |text: &str| {
                 format!(
@@ -521,6 +564,21 @@ mod tests {
             assert_eq!(screen.input_echo(&body), Some(baseline));
         }
     }
+    #[test]
+    fn explicitly_painted_hard_line_blanks_remain_distinguishable() {
+        let body = "first \n  \nlast";
+        let mut screen = Screen::new(crate::ScreenConfig::default());
+        screen.feed("\x1b[2J\x1b[H────────\r\n".as_bytes());
+        screen.feed(
+            "❯ first\x1b[4m \x1b[24m\r\n\x1b[4m  \x1b[24m\r\nlast\x1b[7m \x1b[27m\r\n────────"
+                .as_bytes(),
+        );
+        assert_eq!(
+            screen.input_echo(body).unwrap().content.as_deref(),
+            Some(body)
+        );
+    }
+
     #[test]
     fn hard_line_padding_cannot_attest_meaningful_trailing_spaces() {
         let visible = |body: &str| {
