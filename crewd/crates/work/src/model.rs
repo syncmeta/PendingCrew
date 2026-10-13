@@ -311,6 +311,10 @@ pub struct StopStreak {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookState {
     pub crew: CrewId,
+    /// Organization migration pins this to 3. Legacy books omit it so their
+    /// original authority can be diagnosed before an explicit migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parent_depth: Option<u8>,
     pub items: BTreeMap<WorkId, WorkItem>,
     pub entries: BTreeMap<EntryNo, EntryTodo>,
     pub asks: BTreeMap<AskId, HumanAsk>,
@@ -327,6 +331,7 @@ impl BookState {
     pub fn empty(crew: CrewId) -> BookState {
         BookState {
             crew,
+            max_parent_depth: None,
             items: BTreeMap::new(),
             entries: BTreeMap::new(),
             asks: BTreeMap::new(),

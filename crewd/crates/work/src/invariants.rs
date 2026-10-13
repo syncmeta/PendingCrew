@@ -68,6 +68,11 @@ pub enum Violation {
     /// 待接受的转交挂在终结项 / 无主项上，或转给现负责人自己。
     StrayTransfer(WorkId),
     Cycle(Vec<WorkId>),
+    ParentDepth {
+        item: WorkId,
+        depth: usize,
+        limit: u8,
+    },
     /// 问 / 入口表里的键和记录自己的号不一致。
     AskKeyMismatch(AskId),
     EntryKeyMismatch(EntryNo),
@@ -125,6 +130,9 @@ impl std::fmt::Display for Violation {
             }
             DefaultedWithoutDefault(h) => write!(f, "{h} is marked defaulted but has no default"),
             DroppedWithoutReason(w) => write!(f, "{w} is dropped without a reason"),
+            ParentDepth { item, depth, limit } => {
+                write!(f, "{item} has parent depth {depth}, above limit {limit}")
+            }
             Cycle(ids) => {
                 f.write_str("cycle ")?;
                 for w in ids {
@@ -303,10 +311,43 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
             return Err(Violation::AskForUnknownItem { ask: *h, item });
         }
     }
-    match find_cycle(&adjacency(&s.items)) {
-        Some(cycle) => Err(Violation::Cycle(cycle)),
-        None => Ok(()),
+    if let Some(cycle) = find_cycle(&adjacency(&s.items)) {
+        return Err(Violation::Cycle(cycle));
     }
+    if let Some(limit) = s.max_parent_depth {
+        check_parent_depth(s, limit)?;
+    }
+    Ok(())
+}
+
+/// Explicit migration preflight, also enforced on every organization write.
+/// Root depth is 1. Only parent edges count; dependency chains are independent.
+/// Existing graphs must first pass the ordinary reference/cycle checks.
+pub fn check_parent_depth(s: &BookState, limit: u8) -> Result<(), Violation> {
+    for &id in s.items.keys() {
+        let mut depth = 1usize;
+        let mut parent = s.items[&id].parent;
+        let mut seen = BTreeSet::from([id]);
+        while let Some(next) = parent {
+            if !seen.insert(next) {
+                return Err(Violation::Cycle(seen.into_iter().collect()));
+            }
+            let ancestor = s.items.get(&next).ok_or(Violation::UnknownItemRef {
+                item: id,
+                missing: next,
+            })?;
+            depth += 1;
+            parent = ancestor.parent;
+        }
+        if depth > usize::from(limit) {
+            return Err(Violation::ParentDepth {
+                item: id,
+                depth,
+                limit,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// 检查上限（spec §4.2「nextCheckAt ≤ now + 上限」，写入时强制）：只看这一次命令**写入**的检查时间
@@ -422,6 +463,92 @@ mod tests {
 
     fn verdict(s: &BookState) -> Result<(), Violation> {
         check(s)
+    }
+
+    #[test]
+    fn organization_parent_limit_preserves_legacy_and_dependency_semantics() {
+        let mut nodes: Vec<_> = (1..=4).map(item).collect();
+        for (index, node) in nodes.iter_mut().enumerate().skip(1) {
+            node.parent = Some(WorkId(index as u32));
+        }
+        let legacy = book(nodes);
+        assert_eq!(check(&legacy), Ok(()));
+        assert_eq!(
+            check_parent_depth(&legacy, 3),
+            Err(Violation::ParentDepth {
+                item: WorkId(4),
+                depth: 4,
+                limit: 3,
+            })
+        );
+        let mut organization = legacy.clone();
+        organization.max_parent_depth = Some(3);
+        assert!(matches!(
+            check(&organization),
+            Err(Violation::ParentDepth { .. })
+        ));
+        assert_eq!(legacy.max_parent_depth, None); // Migration never truncates authority.
+        let mut nodes: Vec<_> = (1..=5).map(item).collect();
+        for (index, node) in nodes.iter_mut().enumerate().take(4) {
+            node.depends_on = vec![WorkId(index as u32 + 2)];
+        }
+        let mut dependencies = book(nodes);
+        dependencies.max_parent_depth = Some(3);
+        assert_eq!(check(&dependencies), Ok(()));
+        let mut parent = item(1);
+        parent.depends_on = vec![WorkId(2)];
+        let mut child = item(2);
+        child.parent = Some(WorkId(1));
+        let mut valid = book(vec![parent, child]);
+        valid.max_parent_depth = Some(3);
+        assert_eq!(check(&valid), Ok(())); // Parent -> child is the existing graph direction.
+        valid.items.get_mut(&WorkId(2)).unwrap().depends_on = vec![WorkId(1)];
+        assert!(matches!(check(&valid), Err(Violation::Cycle(_))));
+    }
+
+    #[test]
+    fn organization_fourth_level_command_rolls_back_identity_and_events() {
+        use crate::{Actor, Config, ItemRef, NewItem, WorkBook};
+        let mut state = BookState::empty(CrewId::new("organization"));
+        state.max_parent_depth = Some(3);
+        let mut core = WorkBook::restore(state, Config::default()).unwrap();
+        let root = core
+            .create_item(&Actor::Human, NOW, NewItem::titled("root"))
+            .unwrap()
+            .value;
+        let child = core
+            .create_item(
+                &Actor::Human,
+                NOW,
+                NewItem::titled("child").under(ItemRef::Id(root)),
+            )
+            .unwrap()
+            .value;
+        let leaf = core
+            .create_item(
+                &Actor::Human,
+                NOW,
+                NewItem::titled("leaf").under(ItemRef::Id(child)),
+            )
+            .unwrap()
+            .value;
+        core.take_log();
+        let before = core.state().clone();
+        assert!(matches!(
+            core.create_item(
+                &Actor::Human,
+                NOW,
+                NewItem::titled("too deep").under(ItemRef::Id(leaf))
+            ),
+            Err(crate::Rejected::Invariant(Violation::ParentDepth { .. }))
+        ));
+        assert_eq!(core.state(), &before);
+        assert!(core.take_log().is_empty());
+        let next = core
+            .create_item(&Actor::Human, NOW, NewItem::titled("next root"))
+            .unwrap()
+            .value;
+        assert_eq!(next, WorkId(4));
     }
 
     #[test]
