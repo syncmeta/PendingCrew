@@ -10,12 +10,15 @@ enum CrewdChatStyle {
 struct CrewdWorkPanels: View {
     @ObservedObject var store: CrewdWorkStore
     @Binding var drafts: CrewdRequirementDrafts
+    @Binding var planDrafts: CrewdPlanDrafts
+    var members:[CrewdValue]
     var progressOnly = false
     var compact = false
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
     @State private var showFolders=false
     @State private var failure:String?
+    @State private var actionTarget: CrewdPlanTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
@@ -42,6 +45,7 @@ struct CrewdWorkPanels: View {
                                     selectedRequirement = selectedRequirement == id ? nil : id
                                     if selectedRequirement != nil {Task {do {_ = try await store.requirementDetail(id)} catch {failure = describe(error)}}}
                                 } label: {Text("\(id.raw)  \(store.requirements[id]?["text"].string ?? "")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
+                                HStack {Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
                                 if selectedRequirement == id {requirementDetail(id)}
                                 Text(store.requirements[id]?["status"].string ?? "").font(.caption).foregroundStyle(.secondary)
                                 Text(store.plans(from:id).map {$0.id.raw}.joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)
@@ -71,6 +75,7 @@ struct CrewdWorkPanels: View {
                                         Text("依赖：" + detail["dependsOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         Text("卡点：" + detail["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
                                         if let evidence=detail["evidence"]["value"].string {Text(evidence).textSelection(.enabled)}
+                                        Button("计划操作") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))
                                     } else {Text("正在读取详情").font(.caption).foregroundStyle(.secondary)}
                                 }
                             }.padding(.leading,CGFloat(row.depth)*14).padding(.vertical,6)
@@ -93,6 +98,7 @@ struct CrewdWorkPanels: View {
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }
         }.padding(compact ? 8:16)
+        .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members)}
     }
     private func describe(_ error:Error)->String {
         guard let e=error as? CrewdClientError else {return error.localizedDescription}

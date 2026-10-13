@@ -20,6 +20,8 @@ final class CrewdWorkspace: ObservableObject {
     private var activityAffected: Set<String> = []
     private var activityChannelCrews: [String: String] = [:]
     @Published var requirementDrafts = CrewdRequirementDrafts()
+    @Published var planDrafts = CrewdPlanDrafts()
+    @Published private(set) var knownSessions: [String:CrewdValue] = [:]
     @Published var pendingAsks: [CrewdValue] = []
     @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
@@ -231,6 +233,7 @@ final class CrewdWorkspace: ObservableObject {
         guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
         guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
+        for row in newSessions.array {if let id=row["id"].string {knownSessions[id]=row}}
         sessions = newSessions.array; channelSummaries = newChannels.array; channels = newChannels.array.map { $0["channel"] }
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
         if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
