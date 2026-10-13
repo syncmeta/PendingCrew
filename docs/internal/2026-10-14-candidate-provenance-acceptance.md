@@ -19,3 +19,11 @@ M3 remains incomplete until the real builder/checker chain, consistent packaged 
 ## Configuration gate still pending
 
 Exact source inputs alone do not prove toolchain, target, profile or feature equivalence. The actual builder and prebuilt witness must retain the real configuration and compare it with the chosen candidate configuration. An explicitly selected debug local candidate is permitted; an all-features/testkit binary must not silently become a default-feature release artifact. Client and QA own this additional structural check and actual execution integration. The accepted `d5a3c283` synthetic controls are not evidence that this configuration gate is already implemented.
+
+## Configuration and actual record-tool execution accepted
+
+QA source `949716f8` extends structural checking to actual compiler configuration. `/private/tmp/pcw-provenance-checker-config-green-01.log` proves eighteen input/configuration mismatch refusals, including same-source mismatched toolchain, target, profile, default/explicit/effective features and testkit. The complete matched-prebuilt synthetic control remains accepted. This supersedes the earlier implementation-pending configuration note; it remains a structural control, not actual application build evidence.
+
+QA `193bb7ac` executes the record tool against a genuine small, dependency-free Git/Rust control with Rust 1.94 offline. `/private/tmp/pcw-build-record-actual-01.log` proves compiler-artifact/configuration/pre-sign binary/input witness recording on actual success, and actual syntax-failure Exit 101 with preserved snapshot/error log and no completed witness. `/private/tmp/pcw-rust-evidence-prepare-controls-01.log` separately proves modified or untracked Rust inputs are refused and preparation alone makes no completed-build claim. Unrelated non-Rust drafts are preserved.
+
+The compiler window returned to the backend owner; no second PendingCrew workspace was built. The actual record-tool branch is now exercised, but the real PendingCrew input/binary chain, immutable GUI builder, final pairing and runtime delivery remain pending the M2 freeze. Neither the small Rust control nor the synthetic GUI package can replace those gates.
