@@ -72,8 +72,8 @@ struct CrewdWorkspaceView: View {
                     Divider()
                     switch tab {
                     case .messages: messageLayout
-                    case .todo: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}))
-                    case .progress: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),progressOnly:true)
+                    case .todo: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}))
+                    case .progress: CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),progressOnly:true)
                     case .documents:
                         VStack(alignment:.leading,spacing:12) {
                             HStack {Label("文档",systemImage:"doc.text").font(.headline); Spacer(); Text("文件夹 · 待接线").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
@@ -132,7 +132,7 @@ struct CrewdWorkspaceView: View {
             VStack(alignment:.leading,spacing:8) {
                 DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
                     Text("机组工作引用；群独立视图待接线").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                    CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),compact:true).frame(minHeight:100,maxHeight:.infinity)
+                    CrewdWorkPanels(store:workspace.workStore,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),compact:true).frame(minHeight:100,maxHeight:.infinity)
                 }
                 Divider()
                 DisclosureGroup("本群成员",isExpanded:$membersExpanded) {

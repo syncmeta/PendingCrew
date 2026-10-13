@@ -22,6 +22,7 @@ struct CrewdWorkPanels: View {
     @ObservedObject var store: CrewdWorkStore
     @Binding var drafts: CrewdRequirementDrafts
     @Binding var planDrafts: CrewdPlanDrafts
+    @Binding var humanDrafts: CrewdHumanDrafts
     var members:[CrewdValue]
     var progressOnly = false
     var compact = false
@@ -30,6 +31,7 @@ struct CrewdWorkPanels: View {
     @State private var showFolders=false
     @State private var failure:String?
     @State private var actionTarget: CrewdPlanTarget?
+    @State private var humanTarget:CrewdHumanTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
@@ -107,11 +109,13 @@ struct CrewdWorkPanels: View {
                             let ask=store.humanTasks[id]?["ask"] ?? .null
                             Text("\(id.raw)  \(ask["question"].string ?? "")").textSelection(.enabled)
                             Text(ask["item"].string ?? ask["crewId"].string ?? "").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                            if let crew=ask["crewId"].string {Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw))}}
                         }
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme))
+        .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members)}
     }
     private func describe(_ error:Error)->String {

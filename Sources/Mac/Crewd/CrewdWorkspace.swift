@@ -22,6 +22,7 @@ final class CrewdWorkspace: ObservableObject {
     private var activityChannelCrews: [String: String] = [:]
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
+    @Published var humanDrafts = CrewdHumanDrafts()
     @Published private(set) var knownSessions: [String:CrewdValue] = [:]
     @Published var pendingAsks: [CrewdValue] = []
     @Published var restartPrompt: CrewdValue = .null

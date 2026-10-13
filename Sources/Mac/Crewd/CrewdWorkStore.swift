@@ -158,6 +158,10 @@ final class CrewdWorkStore: ObservableObject {
         guard id.kind == .plan else {throw CrewdClientError(message:"交接必须使用公共计划编号。",code:-32602)}
         return try await mutate("work.transferWithdraw",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision)]))
     }
+    @discardableResult func resolveHuman(_ id:CrewdWorkID,crew:String,text:String,withdraw:Bool) async throws -> CrewdValue {
+        guard id.kind == .human,!crew.isEmpty,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CrewdClientError(message:"请填写公共问题编号与答复或撤回理由。",code:-32602)}
+        return try await mutate(withdraw ? "ask.withdraw":"ask.answer",.object(["crewId":.string(crew),"ask":.string(id.raw),withdraw ? "reason":"text":.string(text)]))
+    }
     func ownerHistory(_ id:CrewdWorkID,before:String?=nil) async throws -> CrewdValue {
         guard id.kind == .plan else {throw CrewdClientError(message:"交接记录必须使用公共计划编号。",code:-32602)}
         let token=generation
@@ -273,6 +277,11 @@ final class CrewdWorkStore: ObservableObject {
             try check(token)
             if method == "work.block" { adopt(try parsePlan(value["item"], full: true)) }
             else if method.hasPrefix("work.") { adopt(try parsePlan(value, full: true)) }
+            else if method.hasPrefix("ask.") {
+                guard value["crewId"] == params["crewId"],value["ask"] == params["ask"],value["state"] == .string(method == "ask.answer" ? "answered":"withdrawn") else {throw CrewdClientError(message:"问题操作回执与所选公共问题或结果不符。")}
+                let field=method == "ask.answer" ? "answer":"withdrawReason"
+                guard value[field].string == params[method == "ask.answer" ? "text":"reason"].string?.trimmingCharacters(in:.whitespacesAndNewlines) else {throw CrewdClientError(message:"问题操作回执没有保留原始答复或撤回理由。")}
+            }
             else if method.hasPrefix("todo.") {
                 let id = try parseRequirement(value)
                 if method == "todo.close", params["id"].string != id.raw {
