@@ -196,7 +196,10 @@ fn opaque_same_count_suffix_and_cursor_change_cannot_acknowledge_space() {
     for body in ["x".repeat(9000), format!("first\n{}", "x".repeat(9000))] {
         let base = Instant::now();
         let mut core = Core::new(
-            CoreConfig::default(),
+            CoreConfig {
+                verified_collapsed_paste_codec: true,
+                ..CoreConfig::default()
+            },
             ScreenConfig::default(),
             base,
             vec![PendingText {
@@ -241,4 +244,72 @@ fn opaque_same_count_suffix_and_cursor_change_cannot_acknowledge_space() {
             "unsupported opaque body must terminate unknown within the existing budget"
         );
     }
+}
+
+#[test]
+fn normal_default_cannot_self_grant_collapsed_codec_and_late_paint_cannot_replace_input() {
+    let base = Instant::now();
+    let body = "first\nlast\n";
+    let config = CoreConfig::default();
+    assert!(!config.verified_collapsed_paste_codec);
+    let mut core = Core::new(
+        config,
+        ScreenConfig::default(),
+        base,
+        vec![PendingText {
+            id: 53,
+            subject: Subject::Brief,
+            text: body.into(),
+        }],
+        None,
+    );
+    core.on_output(&frame(""), base);
+    core.take_actions();
+    core.on_tick(at(base, 310));
+    let initial = core.take_actions();
+    assert_eq!(keys(&initial), vec![body.as_bytes().to_vec()]);
+    complete(&mut core, &initial, at(base, 310));
+    core.on_output(&frame("[Pasted text #1 +2 lines]"), at(base, 900));
+    let mut report = core.take_actions();
+    assert!(
+        keys(&report).is_empty(),
+        "normal runtime must not probe opaque paint using an unverified codec"
+    );
+    core.send(54, "NEXT", at(base, 950));
+    report.extend(core.take_actions());
+    core.on_output(&frame("[Pasted text #1 +3 lines]"), at(base, 1100));
+    report.extend(core.take_actions());
+    core.on_tick(at(base, 3500));
+    report.extend(core.take_actions());
+    assert!(keys(&report).is_empty() && !delivered(&report));
+    assert!(
+        report.iter().any(|a| matches!(
+            a,
+            Action::Event(SessionEvent::Delivery {
+                id: 53,
+                outcome: DeliveryOutcome::Unsubmitted(_),
+                ..
+            })
+        )),
+        "default unknown codec must report unconfirmed without extending the original budget"
+    );
+    core.on_output(&frame(""), at(base, 3600));
+    core.on_tick(at(base, 4000));
+    assert!(
+        keys(&core.take_actions()).is_empty(),
+        "late empty display alone cannot authorize replacing unconfirmed input with queued NEXT"
+    );
+    // This is an explicit authorized raw-input action at the Core seam; the
+    // real RPC identity permission is a separate existing controller contract.
+    core.raw(b"\x15");
+    core.take_actions();
+    core.on_output(&frame(""), at(base, 4100));
+    core.take_actions();
+    core.on_tick(at(base, 4450));
+    let next = core.take_actions();
+    assert_eq!(
+        keys(&next),
+        vec![b"NEXT".to_vec()],
+        "explicit raw clear plus fresh Empty may resume the queued job once"
+    );
 }
