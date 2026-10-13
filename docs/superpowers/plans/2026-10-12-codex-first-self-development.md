@@ -112,3 +112,12 @@ Codex 首版已补后台重启人工恢复入口与休眠后停止快照读取�
 经验：用实际身份、实际字节和事务提交做见证，避免“进程写完/忙闲/有文件/已入队”充当完成证据。确定性反例先把不可靠前提固定下来，再复验完整门禁；不靠反复重跑或降低阈值放行。
 
 Final offline gate: 2349 passed, 0 failed, 8 ignored; fmt/clippy passed. Evidence: /private/tmp/pcw-work-identity-final-check-03.log. Runtime migration/source-reference changes remain on codex/work-identity-20261013 until the next integration checkpoint.
+## 完成凭据可选规则对齐
+
+按 §24.1 的现行决定，工作负责人自报完成可以不附凭据。mark_done 接受可选凭据，旧 Evidence 参数调用继续兼容；缺省保留 None，不生成虚假的“已验证”文字。传入空白凭据仍拒绝，其他负责人、未完成子项、依赖关系和终态规则继续生效。行政角色事实关闭他人工作仍要求凭据；负责人本身不因此增加验收门禁。
+
+先红后绿：pcw-work-optional-evidence-red-01.log 证明旧不变量拒绝无凭据完成；工作核心新增负责人/他人权限、子项、解阻、恢复及事件兼容回归。历史 done 事件的 W 字符串 ID 和已提供凭据保持原编码，缺省凭据省略并按 None 读回。第一次事件夹具误用数字 ID 的失败保留在 pcw-work-optional-evidence-green-01.log，修正后工作核心通过 pcw-work-optional-evidence-green-02.log。
+
+本单元不改变事实性放弃/行政关闭的证据约束，不实现 Jev/记忆，不安装或启动真实数据实例。后续继续历史引用补齐、工作动作 API/MCP、持久工作事件和检查点/停下即检查接线；各单元以真实事务、源码和运行证据验收。
+
+Optional-evidence gate: 2352 passed, 0 failed, 8 ignored; fmt/clippy passed. Full log: /private/tmp/pcw-work-optional-evidence-full-check-01.log.

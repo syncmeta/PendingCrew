@@ -68,22 +68,36 @@ impl WorkBook {
         })
     }
 
-    /// 完成，证据必填。卡在这一项上的其它项随之放行；返回被放行的项。
+    /// Owner-reported completion; evidence is optional. Supplied evidence must be nonblank.
     pub fn mark_done(
         &mut self,
         by: &Actor,
         now: Ts,
         id: WorkId,
-        evidence: Evidence,
+        evidence: impl Into<Option<Evidence>>,
     ) -> Result<Applied<Vec<WorkId>>, Rejected> {
+        let evidence = evidence.into();
         self.transact(by, now, |d| {
             d.permit_on(Action::Done, id)?;
-            if evidence.is_blank() {
+            // Administrative closure of another owner's work remains factual.
+            if evidence.is_none()
+                && matches!(
+                    by,
+                    Actor::Session {
+                        role: crate::model::Role::Admin,
+                        ..
+                    }
+                )
+                && d.item(id)?.owner.as_ref() != by.session()
+            {
+                return Err(Rejected::Blank("evidence"));
+            }
+            if evidence.as_ref().is_some_and(|e| e.is_blank()) {
                 return Err(Rejected::Blank("evidence"));
             }
             let it = d.item_mut(id)?;
             it.status = Status::Done;
-            it.evidence = Some(evidence.clone());
+            it.evidence = evidence.clone();
             it.next_check_at = None;
             it.pending_transfer = None;
             it.blocked_on.clear();
@@ -400,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn done_needs_evidence_and_finished_children() {
+    fn supplied_evidence_must_be_nonblank_and_children_must_finish() {
         let mut b = book();
         let w = claim(&mut b, "a", &["parent"])[0];
         let child = b
@@ -456,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_closes_only_with_evidence() {
+    fn admin_factually_closes_other_owners_only_with_evidence() {
         let mut b = book();
         let ids = claim(&mut b, "a", &["x", "y"]);
         let admin = Actor::admin("d");
@@ -481,6 +495,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.item(ids[0]).unwrap().status, Status::Dropped);
+        assert_eq!(
+            b.mark_done(&admin, T1, ids[1], None),
+            Err(Rejected::Blank("evidence"))
+        );
         b.mark_done(&admin, T1, ids[1], commit()).unwrap();
         assert_eq!(b.item(ids[1]).unwrap().status, Status::Done);
     }
@@ -738,5 +756,55 @@ mod tests {
             Err(Rejected::Forbidden(Action::DropDecision)),
             "有人接了就不再是发起人能撤的"
         );
+    }
+    #[test]
+    fn owner_completion_without_evidence_unblocks_dependents_and_restores_honestly() {
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["first", "dependent"]);
+        b.block(
+            &Actor::worker("a"),
+            T1,
+            ids[1],
+            vec![BlockOn::Item(ids[0])],
+            Continuation::Nothing,
+        )
+        .unwrap();
+        let done = b.mark_done(&Actor::worker("a"), T1, ids[0], None).unwrap();
+        assert_eq!(done.value, vec![ids[1]]);
+        assert_eq!(b.item(ids[0]).unwrap().status, Status::Done);
+        assert_eq!(b.item(ids[0]).unwrap().evidence, None);
+        assert!(b.item(ids[1]).unwrap().blocked_on.is_empty());
+        assert!(matches!(
+            &done.events[0].kind,
+            EventKind::Done { evidence: None, .. }
+        ));
+        assert!(WorkBook::restore(b.state().clone(), crate::model::Config::default()).is_ok());
+    }
+    #[test]
+    fn omitted_evidence_does_not_bypass_owner_or_live_child_rules() {
+        let mut b = book();
+        let parent = claim(&mut b, "a", &["parent"])[0];
+        let before = b.state().clone();
+        assert!(
+            b.mark_done(&Actor::worker("other"), T1, parent, None)
+                .is_err()
+        );
+        assert_eq!(b.state(), &before);
+        let child = b
+            .create_item(
+                &Actor::worker("a"),
+                T1,
+                NewItem::titled("child")
+                    .under(ItemRef::Id(parent))
+                    .owned_by("a"),
+            )
+            .unwrap()
+            .value;
+        assert!(matches!(
+            b.mark_done(&Actor::worker("a"), T1, parent, None),
+            Err(Rejected::Invariant(Violation::LiveUnderTerminal { .. }))
+        ));
+        b.mark_done(&Actor::worker("a"), T1, child, None).unwrap();
+        b.mark_done(&Actor::worker("a"), T1, parent, None).unwrap();
     }
 }

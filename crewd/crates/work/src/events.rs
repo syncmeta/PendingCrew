@@ -75,7 +75,8 @@ pub enum EventKind {
     },
     Done {
         id: WorkId,
-        evidence: Evidence,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Evidence>,
     },
     Dropped {
         id: WorkId,
@@ -117,4 +118,20 @@ pub enum EventKind {
         ask: AskId,
         tier: WaitTier,
     },
+}
+
+#[cfg(test)]
+mod completion_codec_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn legacy_evidence_and_omitted_evidence_are_both_readable_without_fabrication() {
+        let old = json!({"type":"done","id":"W1","evidence":{"kind":"text","value":"existing"}});
+        let done: EventKind = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(done).unwrap(), old);
+        let bare = json!({"type":"done","id":"W1"});
+        let done: EventKind = serde_json::from_value(bare.clone()).unwrap();
+        assert!(matches!(&done, EventKind::Done { evidence: None, .. }));
+        assert_eq!(serde_json::to_value(done).unwrap(), bare);
+    }
 }

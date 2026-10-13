@@ -38,7 +38,7 @@ pub enum Violation {
     },
     /// nextCheckAt 只许出现在有负责人的 open / active 项上。
     CheckNotAllowed(WorkId),
-    DoneWithoutEvidence(WorkId),
+    BlankDoneEvidence(WorkId),
     ActiveBeforeDeps {
         item: WorkId,
         dep: WorkId,
@@ -99,7 +99,7 @@ impl std::fmt::Display for Violation {
                 at.0, limit.0
             ),
             CheckNotAllowed(w) => write!(f, "{w} may not have a next check in its state"),
-            DoneWithoutEvidence(w) => write!(f, "{w} is done without evidence"),
+            BlankDoneEvidence(w) => write!(f, "{w} is done with blank evidence"),
             ActiveBeforeDeps { item, dep } => write!(f, "{item} is active before {dep} is done"),
             BlockedWithoutBlocker(w) => write!(f, "{w} is blocked on nothing"),
             BlockerOnUnblocked(w) => write!(f, "{w} has blockers but is not blocked"),
@@ -220,8 +220,8 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
             }
             _ => {}
         }
-        if it.status == Status::Done && it.evidence.as_ref().is_none_or(|e| e.is_blank()) {
-            return Err(Violation::DoneWithoutEvidence(id));
+        if it.status == Status::Done && it.evidence.as_ref().is_some_and(|e| e.is_blank()) {
+            return Err(Violation::BlankDoneEvidence(id));
         }
         if it.status == Status::Active {
             for dep in &it.depends_on {
@@ -558,18 +558,15 @@ mod tests {
     }
 
     #[test]
-    fn done_needs_non_blank_evidence() {
+    fn done_allows_no_evidence_but_rejects_supplied_blank_evidence() {
         let mut d = owned(1, Status::Done);
         d.evidence = None;
-        assert_eq!(
-            verdict(&book(vec![d])),
-            Err(Violation::DoneWithoutEvidence(WorkId(1)))
-        );
+        assert_eq!(verdict(&book(vec![d])), Ok(()));
         let mut blank = owned(1, Status::Done);
         blank.evidence = Some(Evidence::Text(" ".into()));
         assert_eq!(
             verdict(&book(vec![blank])),
-            Err(Violation::DoneWithoutEvidence(WorkId(1)))
+            Err(Violation::BlankDoneEvidence(WorkId(1)))
         );
     }
 
