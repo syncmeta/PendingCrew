@@ -75,6 +75,14 @@ Jev 与个人/团队记忆保留为待讨论设计，不擅自实施，也不拿
 
 当前 primary 依据：[common fields](https://code.claude.com/docs/en/hooks#common-input-fields)、[hook failure](https://code.claude.com/docs/en/hooks#block-the-action-when-a-hook-fails)、[UserPromptSubmit](https://code.claude.com/docs/en/hooks#userpromptsubmit)、[Stop](https://code.claude.com/docs/en/hooks#stop)。作者与独立质量线负责整块启动/载入/审批/取消/停止/恢复与混合路由验收，不为该裁决停其他独立实现。
 
+## M4/M6 共同耐久版本链（2026-10-14 根裁决）
+
+自动原生执行采用 Core 既有 DB FIFO 的内部 execution receipt，不使用会被 prepare_claude 删除的临时 admission 目录，不另建团队工作账或默认模型上下文。helper 只提供事实，Core 是唯一写者；immutable body/witness、request身份、可信native session/runtime epoch、turn/phase与raw撤权在同一权威事务。自动输入/API/按键发出前等待耐久commit ACK。元数据与正文分离，列表/常规上下文不读取全文，诊断按权限按需读取。
+
+正式schema12串行接M6 schema11，禁止旁路DDL/倒序启用。M4作者拥有新增独立receipt模块与12迁移；公共schema/lib/DB route与M6作者明确唯一写者、串行接线。12只依赖11后台正式迁移/恢复及服务冻结，不等待全部手机/iPad/设备/Linux交付；不因此缩减M6平台范围。独立helper/fake纵向及staged receipt可并行实现。
+
+重启/restore/import对旧在途状态恢复unknown，不能把旧phase视为重投许可；旧自动accept/raw权限不得随旧备份复活，使用新不可回滚runtime绑定。正式版本验收要覆盖真实升级/失败回退、原始请求不重放、撤权和未知投递；缺真实CLI能力或恢复证据不宣称M4完成。
+
 ## M4 原生结构化控制优先路径（2026-10-14 根裁决）
 
 采用真正交互 Claude CLI 主进程内的 native Mod prompt/abort/turn receipt 作为自动控制优先方向，主进程始终保留真实 PTY、人工输入、审批和尺寸/ANSI。用户要求真实 PTY，不要求自动任务模拟键盘逐字输入；不转 SDK/headless/-p。ACP helper 通过私有登记桥接 native Mod，继续复用 Core 唯一耐久工作/进程账，不形成第二份团队账。
