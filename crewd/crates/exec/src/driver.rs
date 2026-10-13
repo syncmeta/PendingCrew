@@ -24,7 +24,9 @@ use crate::health::{
 use crate::launch::{
     AgentSessionArg, ClaudeSpec, LaunchFiles, new_agent_session_id, prepare_claude,
 };
-use crate::pty::{PtyMaster, SpawnSpec, spawn_pty};
+#[cfg(test)]
+use crate::pty::spawn_pty;
+use crate::pty::{PtyMaster, SpawnSpec, spawn_pty_gated};
 use crate::registry::{ProbeResult, ProcessRegistry, group_signal_refused, probe};
 use crate::resume::{AgentIdLedger, decide_resume};
 use crate::session::{
@@ -50,6 +52,10 @@ pub struct DriverConfig {
     pub registry: Option<Arc<ProcessRegistry>>,
     /// Trusted final outcome observation, called before event broadcast; no IO/await.
     pub delivery_observer: Option<Arc<dyn DeliverySuccessObserver>>,
+    /// Private ACP native-child barrier; the helper never writes the core registry.
+    pub native_birth_gate: Option<crate::acp::birth::BirthGate>,
+    /// Bounded terminal byte enqueue, separate from structured ACP control.
+    pub terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
 
 impl std::fmt::Debug for DriverConfig {
@@ -83,6 +89,8 @@ impl DriverConfig {
             auth_poll: AUTH_POLL_INTERVAL,
             registry: None,
             delivery_observer: None,
+            native_birth_gate: None,
+            terminal_observer: None,
         }
     }
 }
@@ -679,7 +687,7 @@ async fn launch(
         .map(|r| r.begin_enrollment())
         .transpose()
         .map_err(StartError::Registry)?;
-    let proc = spawn_pty(&spec).map_err(|source| {
+    let mut proc = spawn_pty_gated(&spec, config.native_birth_gate.as_ref()).map_err(|source| {
         let underlying = format!("{}: {source}", start.program.display());
         let health = launch_failure(
             LaunchVerdict::SpawnFailed,
@@ -689,6 +697,9 @@ async fn launch(
         .expect("SpawnFailed 一定有说明");
         StartError::Spawn { health, source }
     })?;
+    if let Some(observer) = &config.terminal_observer {
+        proc.master.observe_output(observer.clone());
+    }
     // No await between actual spawn and owning the unresolved enrollment obligation.
     if let Some(guard) = enrollment.as_mut() {
         guard.arm_owned();
