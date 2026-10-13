@@ -386,15 +386,25 @@ fn submit_echo_matches(
             .map(|p| (p.to_owned(), before.column.checked_sub(1))),
         _ => None,
     };
-    let full_plain =
-        match purpose {
-            DeliveryWritePurpose::Space { .. } => before.prefix.ends_with(body),
-            DeliveryWritePurpose::Backspace { .. } => before
-                .prefix
-                .strip_suffix(' ')
-                .is_some_and(|p| p.ends_with(body)),
+    let full_plain = match purpose {
+        DeliveryWritePurpose::Space { .. } => before.prefix.ends_with(body),
+        DeliveryWritePurpose::Backspace { .. } => before
+            .prefix
+            .strip_suffix(' ')
+            .is_some_and(|p| p.ends_with(body)),
+        _ => false,
+    } || (!body.is_empty()
+        && match purpose {
+            DeliveryWritePurpose::Space { .. } => before.content.as_deref() == Some(body),
+            DeliveryWritePurpose::Backspace { .. } => {
+                before
+                    .content
+                    .as_deref()
+                    .and_then(|text| text.strip_suffix(' '))
+                    == Some(body)
+            }
             _ => false,
-        } || (!body.is_empty() && body.trim() == body && before.content.as_deref() == Some(body));
+        });
     if full_plain
         && !paste_placeholder(before.content.as_deref().unwrap_or(""))
         && expected.is_some_and(|(prefix, col)| prefix == after.prefix && col == Some(after.column))

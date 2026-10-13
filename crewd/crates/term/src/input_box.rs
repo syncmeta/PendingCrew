@@ -152,6 +152,8 @@ fn trim_cells(cells: &[Cell]) -> &[Cell] {
 pub struct InputEcho {
     pub prefix: String,
     pub column: usize,
+    /// Visible input with hard-line grid padding removed. Not a raw-byte/content witness;
+    /// meaningful hard-line trailing spaces are not distinguishable from blank padding.
     pub content: Option<String>,
 }
 
@@ -190,10 +192,7 @@ impl Screen {
                     found = Some(InputEcho {
                         prefix: prefix.clone(),
                         column: (line - start) * grid.columns() + column,
-                        content: match self.input_draft() {
-                            InputDraft::Text(text) => Some(text),
-                            _ => None,
-                        },
+                        content: input.and_then(|at| self.visible_input_content(at, line, column)),
                     });
                 }
                 if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -202,6 +201,55 @@ impl Screen {
             }
         }
         found
+    }
+
+    fn visible_input_content(
+        &self,
+        start: usize,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) -> Option<String> {
+        let grid = self.term().grid();
+        let first = &grid[Line(start as i32)];
+        let marker =
+            (0..grid.columns()).find(|col| INPUT_MARKERS.contains(&first[Column(*col)].c))?;
+        let mut first_col = marker + 1;
+        if first_col < grid.columns() && first[Column(first_col)].c.is_whitespace() {
+            first_col += 1;
+        }
+        let mut text = String::new();
+        for line in start..=cursor_line {
+            let row = &grid[Line(line as i32)];
+            let from = if line == start { first_col } else { 0 };
+            let to = if line == cursor_line {
+                cursor_col
+            } else {
+                grid.columns()
+            };
+            if from > to {
+                return None;
+            }
+            let mut fragment: String =
+                (from..to)
+                    .filter_map(|col| {
+                        let cell = &row[Column(col)];
+                        (!cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+                            .then_some(if cell.c == '\0' { ' ' } else { cell.c })
+                    })
+                    .collect();
+            if line != cursor_line
+                && !row[Column(grid.columns() - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+            {
+                // Hard line breaks have blank grid padding. Meaningful trailing
+                // spaces on such lines remain ambiguous. This is visible normalization, not raw bytes.
+                fragment.truncate(fragment.trim_end().len());
+                fragment.push('\n');
+            }
+            text.push_str(&fragment);
+        }
+        Some(text)
     }
 
     /// 输入框里的草稿（[`InputDraft`]）。输入行同 [`input_row`]；输入行下面、到输入框下沿（[`LOWER_EDGE_CHARS`]
@@ -441,5 +489,56 @@ mod tests {
         // 只有反显、没有别的可见字：不知道是什么。
         let inverse = format!("{RULE}\r\n❯ \x1b[7mx\x1b[27m\r\n{RULE}{STATUS}");
         assert_eq!(draft(&inverse), InputDraft::Unknown);
+    }
+    #[test]
+    fn native_input_witness_preserves_hard_breaks_soft_wraps_and_cursor_consumption() {
+        for body in [
+            "first\nsecond\n".to_owned(),
+            "B".repeat(78),
+            "漢".repeat(40),
+        ] {
+            let frame = |text: &str| {
+                format!(
+                    "\x1b[2J\x1b[HClaude Code\r\n────────────────────\r\n❯ {}\x1b[7m \x1b[27m\r\n────────────────────",
+                    text.replace('\n', "\r\n")
+                )
+            };
+            let mut screen = Screen::new(crate::ScreenConfig::default());
+            screen.feed(frame(&body).as_bytes());
+            let baseline = screen
+                .input_echo(&body)
+                .expect("complete actual native input frame");
+            assert_eq!(baseline.content.as_deref(), Some(body.as_str()));
+            screen.feed(frame(&format!("{body} ")).as_bytes());
+            let after_space = screen.input_echo(&body).unwrap();
+            assert_eq!(
+                after_space.content.as_deref(),
+                Some(format!("{body} ").as_str())
+            );
+            assert_eq!(after_space.prefix, format!("{} ", baseline.prefix));
+            assert_eq!(after_space.column, baseline.column + 1);
+            screen.feed(frame(&body).as_bytes());
+            assert_eq!(screen.input_echo(&body), Some(baseline));
+        }
+    }
+    #[test]
+    fn hard_line_padding_cannot_attest_meaningful_trailing_spaces() {
+        let visible = |body: &str| {
+            let mut screen = Screen::new(crate::ScreenConfig::default());
+            screen.feed(
+                format!(
+                    "\x1b[2J\x1b[H────────\r\n❯ {}\x1b[7m \x1b[27m\r\n────────",
+                    body.replace('\n', "\r\n")
+                )
+                .as_bytes(),
+            );
+            screen.input_echo(body).unwrap().content.unwrap()
+        };
+        assert_eq!(visible("a\nb"), "a\nb");
+        assert_eq!(
+            visible("a \nb"),
+            "a\nb",
+            "the same visible grid cannot be promoted into raw-byte equality"
+        );
     }
 }

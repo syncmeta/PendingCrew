@@ -228,6 +228,8 @@ impl Fake {
         // 占位提示与底下的提示条照真 claude 上暗淡样式（SGR 2）：执行器的草稿闸靠样式分辨占位提示和人打的字。
         let shown = if self.input.is_empty() {
             format!("\x1b[2m{HINT}\x1b[22m")
+        } else if std::env::var("FAKE_CLAUDE_FULL_INPUT").as_deref() == Ok("1") {
+            self.input.replace('\n', "\r\n")
         } else if self.input.contains('\n') || self.input.chars().count() > 60 {
             format!(
                 "[Pasted text #1 +{} lines]{}",
