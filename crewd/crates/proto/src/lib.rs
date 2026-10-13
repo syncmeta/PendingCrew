@@ -17,6 +17,8 @@ pub mod orchestra;
 mod params;
 pub mod work;
 pub use work::*;
+pub mod resources;
+pub use resources::*;
 pub mod requirements;
 pub use requirements::*;
 pub mod work_patrol;
