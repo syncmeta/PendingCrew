@@ -28,6 +28,7 @@ final class CrewdWorkspace: ObservableObject {
     private var activityDirty = true
     private var activityAffected: Set<String> = []
     private var activityChannelCrews: [String: String] = [:]
+    @Published var messageDrafts = CrewdDrafts()
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
     @Published var humanDrafts = CrewdHumanDrafts()
@@ -129,7 +130,7 @@ final class CrewdWorkspace: ObservableObject {
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
         resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
-        client.disconnect(); status = "已切换连接"
+        client.retire(); status = "已切换连接"
     }
     func connect() async {
         guard !retired, !booting else { return }
@@ -319,17 +320,27 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    func perform(_ method: String, _ params: CrewdValue) async -> Bool {
-        guard !retired, !busy else { return false }
+    /// Typed result keeps submission certainty and backend facts with the caller.
+    /// The compatibility Bool entry remains for the original Mac controls.
+    func performValue(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
+        guard !retired, !busy else { throw CrewdClientError(message: "连接已关闭或正在提交，尚未发送本次操作。", kind: .notSubmitted) }
         let current = generation
         busy = true; defer { busy = false }; error = nil
         do {
             let result = try await client.call(method, params)
-            guard !retired, generation == current else { return false }
-            if method == "crew.create", let id = result["id"].string { selectCrew(id) }
-            if method == "session.start", let id = result["id"].string { selectSession(id) }
-            scheduleSync(); return true
+            guard !retired, generation == current else { throw CrewdClientError(message: "连接已切换，原操作结果需要在原团队核对。") }
+            if method == "crew.create" || method == "session.start" {
+                guard let id = result["id"].string, !id.isEmpty else { throw CrewdClientError(message: "创建回执缺少真实编号，结果需要核对。") }
+                if method == "crew.create" { selectCrew(id) } else { selectSession(id) }
+            }
+            scheduleSync(); return result
+        } catch {
+            if !retired, generation == current { self.error = error.localizedDescription; scheduleSync() }
+            throw error
         }
-        catch { if !retired, generation == current { self.error = error.localizedDescription; scheduleSync() }; return false }
+    }
+    func perform(_ method: String, _ params: CrewdValue) async -> Bool {
+        do { _ = try await performValue(method, params); return true }
+        catch { return false }
     }
 }

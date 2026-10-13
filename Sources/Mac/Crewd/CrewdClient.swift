@@ -98,6 +98,7 @@ final class CrewdClient: ObservableObject {
     var onDisconnect: (() -> Void)?
     private var connection: NWConnection?
     private var generation = UUID()
+    private var retired = false
     private var decoder = CrewdNDJSONDecoder()
     private var receivePending = false
     private var terminalFailure: String?
@@ -108,6 +109,7 @@ final class CrewdClient: ObservableObject {
 
     #if os(macOS)
     func connect(path: String) async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
         disconnect()
         guard !path.utf8.contains(0), path.utf8.count <= 103 else { throw CrewdClientError(message: "后台连接路径无效或过长。") }
         let current = generation
@@ -164,6 +166,7 @@ final class CrewdClient: ObservableObject {
     #endif
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
         guard !Task.isCancelled else { throw CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted) }
         guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
         let id = nextID; nextID += 1
@@ -200,6 +203,7 @@ final class CrewdClient: ObservableObject {
         }
     }
 
+    func retire() { retired = true; disconnect() }
     func disconnect() { fail("连接已断开。", notify: false); lastError = nil }
 
     private func transportEnded(_ message: String) {
