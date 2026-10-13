@@ -36,7 +36,9 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
 }
 
 struct CrewdClientError: LocalizedError {
+    enum Kind { case general, backendHandshake }
     let message: String
+    var kind: Kind = .general
     var errorDescription: String? { message }
 }
 
@@ -83,19 +85,25 @@ final class CrewdClient: ObservableObject {
             guard !Task.isCancelled, let self, self.generation == current, self.ready != nil else { return }
             self.fail("连接后台超时。", notify: true)
         }
+        var reachedBackend = false
         do {
             try await withCheckedThrowingContinuation { continuation in
                 ready = continuation
                 c.start(queue: DispatchQueue(label: "pendingcrew.crewd.client"))
             }
             deadline.cancel()
+            reachedBackend = true
             let hello = try await call("system.hello", .object(["client": .object(["name": .string("PendingCrew Mac"), "version": .string("Codex first")]), "apiVersion": .number(3)]))
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
             guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
             _ = try await call("events.subscribe", .object(["topics": .array(["crew", "session", "message", "channel", "ask", "restart", "system"].map(CrewdValue.string))]))
             lastError = nil
-        } catch { deadline.cancel(); fail(error.localizedDescription, notify: false); throw error }
+        } catch {
+            deadline.cancel(); fail(error.localizedDescription, notify: false)
+            if reachedBackend { throw CrewdClientError(message: error.localizedDescription, kind: .backendHandshake) }
+            throw error
+        }
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
