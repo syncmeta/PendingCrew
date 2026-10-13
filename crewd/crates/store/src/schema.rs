@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -659,6 +659,7 @@ fn migrate_v8(conn: &Connection) -> Result<()> {
 
 // Historical fixture construction is intentionally independent of the current
 // latest version. Only an empty caller-owned connection may use this path.
+#[cfg(test)]
 pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
     initialize_legacy_fixture(conn, 8)
 }
@@ -699,9 +700,8 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
     Ok(())
 }
 
-// Staged until production cutover gates pass. The transaction owns both the
-// organization conversion and its version marker; a failed conversion stays v8.
-#[cfg(test)]
+// The transaction owns both organization conversion and its version marker;
+// a failed conversion stays v8.
 fn migrate_v9(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     crate::work_organization::migrate_in_tx(&tx, &crate::ts_from_ms(crate::now_ms()))?;
@@ -755,6 +755,9 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     }
     if v < 8 {
         migrate_v8(conn)?;
+    }
+    if v < 9 {
+        migrate_v9(conn)?;
     }
     Ok(())
 }
@@ -2348,5 +2351,125 @@ mod organization_version_tests {
             serde_json::to_value(crate::runner_usage::list(&conn, "s", 0, 50).unwrap()).unwrap(),
             before_usage
         );
+    }
+    #[test]
+    fn public_v8_upgrade_backs_up_then_reopens_current_authority_without_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crewd.db");
+        let original = legacy_v8();
+        let issued_before = issued(&original);
+        crate::backup::vacuum_into(&original, &path).unwrap();
+        drop(original);
+        let store = crate::Store::open(&path).unwrap();
+        assert_eq!(version(store.conn()), 9);
+        assert_eq!(issued(store.conn()), issued_before);
+        let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(
+            backups[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("crewd-v8-pre-v9-")
+        );
+        let backup = Connection::open(&backups[0]).unwrap();
+        assert_eq!(version(&backup), 8);
+        assert_eq!(issued(&backup), issued_before);
+        assert_eq!(
+            backup
+                .query_row("SELECT COUNT(*) FROM work_books", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        let mut book = WorkBook::restore(
+            crate::work_organization::load(store.conn())
+                .unwrap()
+                .unwrap(),
+            Config::default(),
+        )
+        .unwrap();
+        let mut item = NewItem::titled("only in current organization");
+        item.crew_id = Some(CrewId::new("b"));
+        let created = book.create_item(&Actor::Human, Ts(2000), item).unwrap();
+        let tx = store.conn().unchecked_transaction().unwrap();
+        crate::work_organization::bind_core(
+            &tx,
+            crate::object_refs::ObjectKind::Plan,
+            "b",
+            &created.value.to_string(),
+            "t",
+        )
+        .unwrap();
+        crate::work_organization::save(&tx, book.state(), &created.events, "t").unwrap();
+        tx.commit().unwrap();
+        let current = book.state().clone();
+        drop(store);
+        let reopened = crate::Store::open(&path).unwrap();
+        assert_eq!(version(reopened.conn()), 9);
+        assert_eq!(
+            crate::work_organization::load(reopened.conn())
+                .unwrap()
+                .unwrap(),
+            current
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("backups"))
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            reopened
+                .conn()
+                .query_row("SELECT COUNT(*) FROM organization_work_events", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn public_v8_backup_refusal_leaves_original_version_and_work_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crewd.db");
+        let original = legacy_v8();
+        let before = issued(&original);
+        crate::backup::vacuum_into(&original, &path).unwrap();
+        drop(original);
+        std::fs::write(dir.path().join("backups"), "injected non-directory").unwrap();
+        assert!(matches!(
+            crate::Store::open(&path),
+            Err(StoreError::MigrationRefused { from: 8, .. })
+        ));
+        let untouched = Connection::open(&path).unwrap();
+        assert_eq!(version(&untouched), 8);
+        assert_eq!(issued(&untouched), before);
+        assert_eq!(
+            untouched
+                .query_row("SELECT COUNT(*) FROM work_books", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            untouched
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='organization_work_book'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        std::fs::remove_file(dir.path().join("backups")).unwrap();
+        drop(untouched);
+        let retried = crate::Store::open(&path).unwrap();
+        assert_eq!(version(retried.conn()), 9);
+        assert_eq!(issued(retried.conn()), before);
     }
 }

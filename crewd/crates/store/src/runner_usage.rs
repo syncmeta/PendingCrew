@@ -233,9 +233,7 @@ mod tests {
     #[test]
     fn v7_upgrade_has_formal_usage_schema_and_keeps_existing_state() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        conn.execute_batch("DROP TABLE runner_usage; PRAGMA user_version=7;")
-            .unwrap();
+        crate::schema::initialize_legacy_fixture(&conn, 7).unwrap();
         conn.execute(
             "INSERT INTO meta(key,value) VALUES('usage-migration-marker','kept')",
             [],
@@ -245,7 +243,7 @@ mod tests {
         assert_eq!(
             conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            8
+            crate::schema::SCHEMA_VERSION
         );
         assert_eq!(
             conn.query_row(
