@@ -296,3 +296,180 @@ async fn attached_owner_finishes_cross_crew_child_without_losing_other_human_blo
         .unwrap()
         .unwrap();
 }
+
+// Capture authoritative state and every durable effect relevant to refused writes.
+async fn effect_snapshot(f: &Fixture) -> Vec<String> {
+    f.state.db.call(|s| {
+        let mut out = Vec::new();
+        for query in [
+            "SELECT json_array(state,updated_at) FROM organization_work_book ORDER BY singleton",
+            "SELECT json_array(seq,crew_id,body) FROM organization_work_events ORDER BY seq",
+            "SELECT json_array(number,kind,crew_id,source_id,core_id) FROM object_refs ORDER BY number",
+            "SELECT json_array(name,seq) FROM sqlite_sequence ORDER BY name",
+            "SELECT json_array(id,session_id,kind,source,state,note,attempts) FROM wakes ORDER BY id",
+            "SELECT json_array(id,channel_id,text) FROM messages ORDER BY id",
+        ] {
+            out.push(query.to_owned());
+            let mut stmt = s.conn().prepare(query)?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for row in rows { out.push(row?); }
+        }
+        Ok::<_, crewd_store::StoreError>(out)
+    }).await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn public_attached_block_creates_human_and_split_then_reuses_cross_crew_refs_atomically() {
+    let f = Fixture::new().await;
+    f.state
+        .db
+        .call(|s| {
+            let tx = s.conn().unchecked_transaction()?;
+            crewd_store::work_organization::migrate_in_tx(&tx, "2026-10-13T00:00:00.000Z")?;
+            tx.commit()?;
+            Ok::<_, crewd_store::StoreError>(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let b = f.add_crew("public block B", None).await;
+    f.add_session(&b, "public-b-owner", Role::Worker, "B owner")
+        .await;
+    f.add_session(&b, "public-b-captain", Role::Captain, "B captain")
+        .await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let mut observer = RpcClient::connect(&socket).await;
+    rpc(
+        &mut observer,
+        "events.subscribe",
+        json!({"topics":["work","ask"]}),
+    )
+    .await;
+    let parent = rpc(
+        &mut human,
+        "work.create",
+        json!({"crewId":f.crew,"title":"public blocked parent","owner":f.worker}),
+    )
+    .await;
+    let another = rpc(
+        &mut human,
+        "work.create",
+        json!({"crewId":f.crew,"title":"reuse W and H","owner":f.worker}),
+    )
+    .await;
+    let dependency = rpc(
+        &mut human,
+        "work.create",
+        json!({"crewId":b,"title":"foreign dependency","owner":"public-b-owner"}),
+    )
+    .await;
+    let mut owner = attach(&f, &socket, &f.worker).await;
+    let receipt = tool(
+        &mut owner,
+        "work_item_block",
+        json!({
+            "id":parent["id"],"expected_revision":parent["revision"],
+            "on":[{"type":"new_human","question":"public H created by attached owner"}],
+            "can_continue":{"type":"split","items":[{"title":"independent split portion"}]}
+        }),
+    )
+    .await;
+    assert_eq!(receipt["item"]["status"], "blocked");
+    assert_eq!(receipt["humanTasks"].as_array().unwrap().len(), 1);
+    assert_eq!(receipt["split"].as_array().unwrap().len(), 1);
+    let h = receipt["humanTasks"][0].clone();
+    let child = receipt["split"][0].clone();
+    assert!(h.as_str().unwrap().starts_with('H'));
+    assert!(child.as_str().unwrap().starts_with('W'));
+    assert_ne!(child, parent["id"]);
+    assert_ne!(child, dependency["id"]);
+    let split = rpc(&mut human, "work.get", json!({"id":child})).await;
+    assert_eq!(split["parent"], parent["id"]);
+    assert_eq!(split["owner"], f.worker);
+    assert_eq!(split["crewId"], f.crew);
+    assert_eq!(
+        split["blockedOn"],
+        json!([]),
+        "independent split must actually be runnable"
+    );
+    let ask = rpc(&mut human, "ask.list", json!({})).await;
+    assert!(
+        ask.as_array().unwrap().iter().any(|a| a["ask"]["ask"] == h
+            && a["ask"]["question"] == "public H created by attached owner"
+            && a["ask"]["askedBy"] == f.worker
+            && a["ask"]["item"] == parent["id"]),
+        "created H must be visible through public ask query: {ask}"
+    );
+    let reused = tool(
+        &mut owner,
+        "work_item_block",
+        json!({
+            "id":another["id"],"expected_revision":another["revision"],
+            "on":[{"type":"work","id":dependency["id"]},{"type":"human","id":h}],
+            "can_continue":{"type":"nothing"}
+        }),
+    )
+    .await;
+    assert_eq!(reused["item"]["status"], "blocked");
+    let blockers = reused["item"]["blockedOn"].as_array().unwrap();
+    assert_eq!(blockers.len(), 2);
+    assert!(blockers.contains(&dependency["id"]));
+    assert!(blockers.contains(&h));
+    assert_eq!(
+        reused["humanTasks"],
+        json!([]),
+        "existing H reuse must not allocate another H"
+    );
+    assert_eq!(reused["split"], json!([]));
+    drain(&mut observer).await;
+    // Stale CAS attempt would allocate both H and split if the guard were after mutation.
+    let before = effect_snapshot(&f).await;
+    let stale = rpc(
+        &mut owner,
+        "agent.call",
+        json!({"tool":"work_item_block","args":{
+            "id":parent["id"],"expected_revision":parent["revision"],
+            "on":[{"type":"new_human","question":"must never be allocated"}],
+            "can_continue":{"type":"split","items":[{"title":"must never exist"}]}
+        }}),
+    )
+    .await;
+    assert_eq!(stale["isError"], true);
+    assert_eq!(
+        effect_snapshot(&f).await,
+        before,
+        "CAS refusal must preserve state/events/IDs/wakes/messages"
+    );
+    assert!(
+        drain(&mut observer).await.is_empty(),
+        "CAS refusal cannot publish changes"
+    );
+    let mut foreign = attach(&f, &socket, "public-b-captain").await;
+    let before = effect_snapshot(&f).await;
+    let denied = rpc(
+        &mut foreign,
+        "agent.call",
+        json!({"tool":"work_item_block","args":{
+            "id":parent["id"],"expected_revision":receipt["item"]["revision"],
+            "on":[{"type":"new_human","question":"foreign authority spoof"}],
+            "can_continue":{"type":"split","items":[{"title":"foreign spoof split"}]}
+        }}),
+    )
+    .await;
+    assert_eq!(denied["isError"], true);
+    assert_eq!(
+        effect_snapshot(&f).await,
+        before,
+        "foreign captain refusal must preserve all durable effects"
+    );
+    assert!(drain(&mut observer).await.is_empty());
+    drop((human, observer, owner, foreign));
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
