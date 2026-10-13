@@ -18,8 +18,13 @@ import Combine
     @Published private(set) var failure:CrewdClientError?
     private let call:Call
     private var generation=UUID(),query=UUID()
-    private var active=true
-    func setActive(_ value:Bool){active=value;if !value{refreshTask?.cancel()}}
+    private var activeOwners=Set<UUID>()
+    private let defaultActiveOwner=UUID()
+    func setActive(_ value:Bool,owner:UUID?=nil){
+        let owner=owner ?? defaultActiveOwner
+        if value{activeOwners.insert(owner)}else{activeOwners.remove(owner)}
+        if activeOwners.isEmpty{refreshTask?.cancel()}
+    }
     private var refreshTask:Task<Void,Never>?
     init(call:@escaping Call){self.call=call}
     func selectChannel(crew:String,channel:String){guard self.crew != crew || self.channel != channel else{return};generation=UUID();query=UUID();refreshTask?.cancel();self.crew=crew;self.channel=channel;items=[];linkRevision=nil;sourceRevision=nil;loaded=false;loading=false;failure=nil}
@@ -35,7 +40,7 @@ import Combine
     }
     func handleEvent(_ name:String,_ value:CrewdValue){
         guard name == "events.lagged" || (name == "channel.workChanged" && value["channelId"] == .string(channel)) || name.hasPrefix("work.") || name.hasPrefix("ask.") else{return}
-        guard active,capabilities.contains("channelWork"),!channel.isEmpty else{return}
+        guard !activeOwners.isEmpty,capabilities.contains("channelWork"),!channel.isEmpty else{return}
         refreshTask?.cancel();let token=generation
         refreshTask=Task{[weak self] in try? await Task.sleep(for:.milliseconds(150));guard let self,!Task.isCancelled,self.generation == token else{return};do{try await self.refresh()}catch{}}
     }
