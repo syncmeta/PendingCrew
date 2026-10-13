@@ -58,6 +58,7 @@ final class CrewdWorkspace: ObservableObject {
         client.onEvent = { [weak self] name, data in
             guard let self else { return }
             self.resources.handleEvent(name,data)
+            if name == "document.changed" || name == "viewFolder.changed" { return }
             if name.hasPrefix("message.") {
                 if let channel=data["channelId"].string,let crew=self.activityChannelCrews[channel] {
                     if !self.activityDirty || !self.activityAffected.isEmpty {self.activityAffected.insert(crew)}
