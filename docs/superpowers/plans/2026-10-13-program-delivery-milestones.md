@@ -26,10 +26,17 @@
 ## M2 已定整体政策（2026-10-14）
 
 - 同crew真实agent与Human共同CRUD文档/分类，作者只用于审计溯源，管理跨crew权限沿既有可信角色/作用域。冻结只读，修改与软删除用CAS，原文版本/事件保留。
-- 当前containerCrew的messages视图可独立分类真实可见跨crew DM，仅引用，不搬channel所属crew。写入及读取列表/详情都按实际actor即时可见性验证；不能通过folder标题、计数或引用绕过私聊权限。
+- 人写folder名称为本crew共同元数据，不添加第二套作者/私聊ACL；系统不得从隐藏channel自动推导分类名称，空folder可见但不返回隐藏项数。当前containerCrew的messages视图可独立分类真实可见跨crew DM，仅引用，不搬channel所属crew。写入及读取列表/详情都按实际actor即时可见性验证；不能通过folder标题、计数或引用绕过私聊权限。
 - 文档列表只metadata、全文按需get、不默认wake。可变文档的create幂等以不可变原始请求payload witness识别，不与已经被协作修改的当前正文比较；合法确认返回同doc当前metadata，冲突不得重新创建。
-- Folder按四视图独立树与typed对象引用组织，不改变Plan parent/状态/owner，不套Plan三层限制。删除文件夹只解散分类而不删除内容/历史；子folder提升父级、直接成员未分类，界面明确实际效果。
+- UI RPC可提供事务snapshot；MCP修改回执仅scope/revision/有限影响引用及partial，refs分页cursor绑定scope/treeRevision，元数据与全文按需，避免每次回灌整树。Folder按四视图独立树与typed对象引用组织，不改变Plan parent/状态/owner，不套Plan三层限制。删除文件夹只解散分类而不删除内容/历史；子folder提升父级、直接成员未分类，界面明确实际效果。
 - 后端进入正式schema升级/备份/失败回滚，客户端使用同一权威接口；完整公共CRUD/权限/故障/分类独立性/原生操作贯通由质量线验收，不以种子数据或占位页替代。
+
+## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
+
+- Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。
+- ACP core terminals是客户端工具进程协议，不承诺agent主交互TUI；官方SDK型claude-agent-acp不能直接当满足本聊真实PTY要求的产品。依据：[ACP terminals](https://agentclientprotocol.com/protocol/v1/terminals)、[SDK adapter source](https://github.com/agentclientprotocol/claude-agent-acp)。main中历史ACP研判的“PTY可消失”取舍已被本聊新决定覆盖，旧未提交文件保留仅读。
+- crewd继续统一工作/通信/权限/恢复，Claude保真实PTY生命周期，ACP可作为结构化控制投影，PTY数据与ACP消息隔离，审批不可绕。借用项目只按被实际验证的能力，不因握手/README就判整体兼容。
+- [claude-code-cli-acp候选](https://github.com/moabualruz/claude-code-cli-acp)的primary源码使用交互claude argv并拒print模式，具有PTY候选资格；动态resize/透明接管与完整approval/恢复一致性仍未证明。其Rust1.95要求与core1.94不一致，不能为候选先升级整个工程；复用/独立sidecar/最小补齐由后续M4成套验收决定，不先运行付费探针。
 
 ## 持续分工
 
