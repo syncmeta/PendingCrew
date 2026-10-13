@@ -109,6 +109,7 @@ impl WorkBook {
     ) -> Result<Applied<AskId>, Rejected> {
         let crew = item
             .and_then(|id| self.state.item_crew(id).cloned())
+            .or_else(|| self.default_crew().cloned())
             .or_else(|| by.home().cloned())
             .or_else(|| {
                 self.state
@@ -297,6 +298,7 @@ impl Draft {
         let crew = item
             .and_then(|id| self.s.item_crew(id).cloned())
             .or(attributed_crew)
+            .or_else(|| self.default_crew.clone())
             .or_else(|| self.by.home().cloned())
             .or_else(|| self.s.organization.is_none().then(|| self.s.crew.clone()))
             .ok_or(Rejected::Invalid(

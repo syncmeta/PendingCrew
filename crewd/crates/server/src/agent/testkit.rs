@@ -568,6 +568,7 @@ impl Fixture {
     /// 本机组 Agent 那本 Todo 加一条（M1 的 store 函数；M3 没有客户端建 Todo 的入口）。
     pub async fn add_agent_todo(&self, number: i64, text: &str) {
         let todo = crewd_proto::Todo {
+            requirement_id: None,
             id: format!("todo-{number}"),
             crew_id: self.crew.clone(),
             ledger: crewd_proto::Ledger::Agent,

@@ -198,3 +198,105 @@ pub async fn history(cx: &Ctx<'_>, v: Value) -> CallResult {
         .await,
     )
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Block {
+    id: String,
+    expected_revision: String,
+    on: Vec<BlockOn>,
+    can_continue: Continue,
+}
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum BlockOn {
+    Work {
+        id: String,
+    },
+    Human {
+        id: String,
+    },
+    NewHuman {
+        question: String,
+        default: Option<BlockDefault>,
+    },
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockDefault {
+    text: String,
+    after_minutes: i64,
+}
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum Continue {
+    Nothing,
+    Split { items: Vec<Create> },
+}
+pub async fn block(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: Block = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let on =
+        a.on.into_iter()
+            .map(|on| match on {
+                BlockOn::Work { id } => crewd_proto::WorkBlockOn::Work { id },
+                BlockOn::Human { id } => crewd_proto::WorkBlockOn::Human { id },
+                BlockOn::NewHuman { question, default } => crewd_proto::WorkBlockOn::NewHuman {
+                    question,
+                    default: default.map(|d| crewd_proto::AskDefault {
+                        text: d.text,
+                        after_minutes: d.after_minutes,
+                    }),
+                },
+            })
+            .collect();
+    let can_continue = match a.can_continue {
+        Continue::Nothing => crewd_proto::WorkContinuation::Nothing,
+        Continue::Split { items } => {
+            let mut mapped = Vec::with_capacity(items.len());
+            for p in items {
+                let crew = match p.crew {
+                    Some(arg) => match crew_arg(cx, &arg).await {
+                        Ok(c) => c.id,
+                        Err(e) => return e,
+                    },
+                    None => String::new(),
+                };
+                mapped.push(WorkCreateParams {
+                    crew_id: crew,
+                    title: p.title,
+                    goal: p.goal,
+                    level: p.level,
+                    acceptance: p.acceptance,
+                    owner: p.owner,
+                    parent: p.parent,
+                    depends_on: p.depends_on,
+                    sources: p.sources,
+                    next_check_at: p.next_check_at,
+                });
+            }
+            crewd_proto::WorkContinuation::Split { items: mapped }
+        }
+    };
+    receipt(
+        cx,
+        port::work_block(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkBlockParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+                on,
+                can_continue,
+            },
+        )
+        .await
+        .map(|reply| {
+            let mut item = crewd_proto::WorkSummary::from(reply.item);
+            item.note = None;
+            serde_json::json!({"item":item,"humanTasks":reply.human_tasks,"split":reply.split})
+        }),
+    )
+}

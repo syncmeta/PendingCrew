@@ -5,8 +5,8 @@ use crate::wakes::{self, WakeKind, WakePriority, WakeRequest};
 use crate::{Change, CollabError, Result, Sender, Tx, crews, sessions};
 use crewd_proto::{Ask, AskDefault, AskStateView, HumanWait, WaitTierView};
 use crewd_work::{
-    Actor, AskId, AskState, BookState, Config, CrewId, DefaultOption, EventKind, HumanAsk,
-    Rejected, Ts, WaitTier, WorkBook,
+    Actor, AskId, AskState, Config, CrewId, DefaultOption, EventKind, HumanAsk, Rejected, Ts,
+    WaitTier, WorkBook,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -23,82 +23,18 @@ fn ts(t: Ts) -> String {
     crewd_store::ts_from_ms(t.0)
 }
 
-// References witness identity; they never replace missing authoritative state.
-fn verify_book_references(conn: &Connection, crew: &str, state: Option<&BookState>) -> Result<()> {
-    let mut legacy = conn.prepare("SELECT ask FROM ask_meta WHERE crew_id=?1")?;
-    let rows = legacy.query_map([crew], |r| r.get::<_, String>(0))?;
-    for row in rows {
-        let key = row?;
-        if !state.is_some_and(|st| {
-            key.parse::<AskId>()
-                .is_ok_and(|id| st.asks.contains_key(&id))
-        }) {
-            return Err(crewd_store::StoreError::Invalid(
-                "work book is missing a legacy question identity".into(),
-            )
-            .into());
-        }
-    }
-    let mut statement = conn.prepare(
-        "SELECT kind,source_id FROM object_refs WHERE crew_id=?1 AND substr(source_id,1,5)='work:'",
-    )?;
-    let rows = statement.query_map([crew], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+/// Sole authority, irrespective of the request's crew scope. Legacy books are immutable evidence.
+pub(crate) fn load_org(conn: &Connection) -> Result<WorkBook> {
+    let state = crewd_store::work_organization::load(conn)?.ok_or_else(|| {
+        crewd_store::StoreError::Invalid("organization work authority is missing".into())
     })?;
-    for row in rows {
-        let (kind, source) = row?;
-        let alias = source
-            .strip_prefix("work:")
-            .expect("SQL selected the exact namespace");
-        let valid = state.is_some_and(|st| match kind.as_str() {
-            "human_task" => alias
-                .parse::<AskId>()
-                .is_ok_and(|id| st.asks.contains_key(&id)),
-            "plan" => alias
-                .parse::<crewd_work::WorkId>()
-                .is_ok_and(|id| st.items.contains_key(&id)),
-            "requirement" => alias
-                .parse::<crewd_work::EntryNo>()
-                .is_ok_and(|id| st.entries.contains_key(&id)),
-            _ => false,
-        });
-        if !valid {
-            return Err(crewd_store::StoreError::Invalid(
-                "work book is missing an issued object identity".into(),
-            )
-            .into());
-        }
-    }
-    Ok(())
+    crewd_store::work_organization::verify_references(conn, &state)?;
+    WorkBook::restore(state, Config::default())
+        .map_err(|v| CollabError::Work(Rejected::Invariant(v)))
 }
-
 pub(crate) fn load(conn: &Connection, crew: &str) -> Result<WorkBook> {
-    let state: Option<String> = conn
-        .query_row(
-            "SELECT state FROM work_books WHERE crew_id=?1",
-            [crew],
-            |r| r.get(0),
-        )
-        .optional()?;
-    match state {
-        None => {
-            verify_book_references(conn, crew, None)?;
-            Ok(WorkBook::new(CrewId::new(crew), Config::default()))
-        }
-        Some(s) => {
-            let st: BookState = serde_json::from_str(&s)?;
-            if st.crew.as_str() != crew {
-                return Err(crewd_store::StoreError::Invalid(
-                    "work book crew identity mismatch".into(),
-                )
-                .into());
-            }
-            // 读回来不合法 = 服务端的错（同账本不变式，终审 M4）：映射成 -32603，细节只进日志，不给客户端。
-            verify_book_references(conn, crew, Some(&st))?;
-            WorkBook::restore(st, Config::default())
-                .map_err(|v| CollabError::Work(Rejected::Invariant(v)))
-        }
-    }
+    crews::get(conn, crew)?;
+    load_org(conn)
 }
 
 /// 账本拒绝 → collab 的错误。号码格式对、账本里没有（H / W / #）= NotFound（R11：-32004，不是 -32602）；
@@ -122,37 +58,72 @@ pub fn with_book<R>(
     f: impl FnOnce(&mut WorkBook, Ts) -> std::result::Result<R, Rejected>,
 ) -> Result<R> {
     crews::get(tx.conn(), crew)?;
-    let mut book = load(tx.conn(), crew)?;
+    let mut book = load_org(tx.conn())?;
+    book.set_default_crew(CrewId::new(crew));
     let before = book.state().clone();
     let r = f(&mut book, Ts(tx.now_ms())).map_err(|e| rejected(crew, e))?;
-    let after = book.state();
-    if after.crew.as_str() != crew
-        || after.last_ask < before.last_ask
-        || after.last_item < before.last_item
-        || after.last_seq < before.last_seq
-        || before.items.keys().any(|id| !after.items.contains_key(id))
-        || before.asks.keys().any(|id| !after.asks.contains_key(id))
-        || before
-            .entries
-            .keys()
-            .any(|id| !after.entries.contains_key(id))
-    {
-        return Err(crewd_store::StoreError::Invalid(
-            "work command retired an issued identity".into(),
-        )
-        .into());
-    }
-    verify_book_references(tx.conn(), crew, Some(after))?;
     let events = book.take_log();
     if *book.state() == before {
         return Ok(r);
     }
-    tx.conn().execute(
-        "INSERT INTO work_books(crew_id,state,updated_at) VALUES(?1,?2,?3)
-         ON CONFLICT(crew_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-        params![crew, serde_json::to_string(book.state())?, tx.now_ts()],
-    )?;
-    crewd_store::work_events::append(tx.conn(), crew, &events)?;
+    for event in &events {
+        use crewd_store::object_refs::ObjectKind;
+        let state = book.state();
+        let identity = match &event.kind {
+            EventKind::EntryRegistered { entry } => Some((
+                ObjectKind::Requirement,
+                entry.to_string(),
+                state.entry_crew(*entry),
+            )),
+            EventKind::ItemCreated { id, .. } => {
+                Some((ObjectKind::Plan, id.to_string(), state.item_crew(*id)))
+            }
+            EventKind::AskOpened { ask, .. } => {
+                Some((ObjectKind::HumanTask, ask.to_string(), state.ask_crew(*ask)))
+            }
+            _ => None,
+        };
+        if let Some((kind, id, attributed)) = identity {
+            let attributed = attributed.ok_or_else(|| {
+                crewd_store::StoreError::Invalid("new object has no crew attribution".into())
+            })?;
+            crewd_store::work_organization::bind_core(
+                tx.conn(),
+                kind,
+                attributed.as_str(),
+                &id,
+                &tx.now_ts(),
+            )?;
+        }
+    }
+    crewd_store::work_organization::save(tx.conn(), book.state(), &events, &tx.now_ts())?;
+    // Derived requirement changes belong to the source object's crew, even
+    // when its implementing plan was created/completed in another crew.
+    let mut sources = std::collections::BTreeSet::new();
+    for (id, item) in &book.state().items {
+        if before.items.get(id) != Some(item) {
+            sources.extend(item.sources.iter().copied());
+            if let Some(old) = before.items.get(id) {
+                sources.extend(old.sources.iter().copied());
+            }
+        }
+    }
+    for source in sources {
+        if crewd_work::views::entry_view(&before, source) != book.entry_view(source) {
+            let r = crewd_store::work_organization::reference_for_core(
+                tx.conn(),
+                crewd_store::object_refs::ObjectKind::Requirement,
+                &source.to_string(),
+            )?
+            .ok_or_else(|| {
+                crewd_store::StoreError::Invalid("changed source has no published identity".into())
+            })?;
+            tx.note(Change::WorkChanged {
+                crew_id: r.crew_id.clone(),
+                id: r.id(),
+            });
+        }
+    }
     // Actual owner changes break the consecutive-no-improvement streak, but
     // cannot reset the total rewake budget by repeatedly editing a note.
     let owners: std::collections::BTreeSet<_> =
@@ -178,37 +149,15 @@ pub fn with_book<R>(
             }
         }
     }
-    // Identity metadata commits with the authoritative state, never as a second
-    // copy of status. Legacy local aliases remain valid during staged M4b cutover.
-    for event in events {
-        use crewd_store::object_refs::{self, ObjectKind};
-        let reference = match event.kind {
-            EventKind::EntryRegistered { entry } => {
-                Some((ObjectKind::Requirement, entry.to_string()))
-            }
-            EventKind::ItemCreated { id, .. } => Some((ObjectKind::Plan, id.to_string())),
-            EventKind::AskOpened { ask, .. } => Some((ObjectKind::HumanTask, ask.to_string())),
-            _ => None,
-        };
-        if let Some((kind, source)) = reference {
-            object_refs::bind(
-                tx.conn(),
-                kind,
-                crew,
-                &format!("work:{source}"),
-                &tx.now_ts(),
-            )?;
-        }
-    }
     Ok(r)
 }
 
 fn actor_of(conn: &Connection, session: &str) -> Result<Actor> {
-    Ok(match sessions::role_of(conn, session)? {
-        crewd_proto::Role::Captain => Actor::captain(session),
-        crewd_proto::Role::Worker => Actor::worker(session),
-        crewd_proto::Role::Admin => Actor::admin(session),
-    })
+    crate::work::actor(
+        conn,
+        &Sender::Session(session.into()),
+        &sessions::crew_of(conn, session)?,
+    )
 }
 
 /// 格式对、账本里没有的 H / W / # 号（R11：NotFound）。
@@ -220,17 +169,67 @@ fn unknown_id(crew: &str, id: impl std::fmt::Display) -> CollabError {
     )
 }
 
-fn parse_ask(ask: &str) -> Result<AskId> {
-    ask.parse().map_err(|e: crewd_work::ParseIdError| {
-        CollabError::Invalid(Refusal::new(Code::AskBadId).arg("input", e.input))
+fn ask_reference(
+    conn: &Connection,
+    crew: &str,
+    ask: &str,
+) -> Result<crewd_store::object_refs::ObjectReference> {
+    use crewd_store::object_refs::{self, ObjectKind};
+    let local = ask.strip_prefix("work:").unwrap_or(ask);
+    let numeric = local
+        .strip_prefix('H')
+        .or_else(|| local.strip_prefix('h'))
+        .and_then(|digits| {
+            digits
+                .parse::<i64>()
+                .ok()
+                .filter(|n| *n > 0 && digits == n.to_string())
+        })
+        .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::AskBadId).arg("input", ask)))?;
+    let canonical = format!("H{numeric}");
+    if !ask.starts_with("work:") {
+        return object_refs::get(conn, ObjectKind::HumanTask, numeric)?
+            .filter(|r| r.crew_id == crew)
+            .ok_or_else(|| unknown_id(crew, ask));
+    }
+    object_refs::resolve(
+        conn,
+        ObjectKind::HumanTask,
+        crew,
+        &format!("work:{canonical}"),
+    )?
+    .ok_or_else(|| unknown_id(crew, ask))
+}
+fn resolve_ask(conn: &Connection, crew: &str, ask: &str) -> Result<AskId> {
+    let r = ask_reference(conn, crew, ask)?;
+    crewd_store::work_organization::core_for_reference(
+        conn,
+        crewd_store::object_refs::ObjectKind::HumanTask,
+        r.number,
+    )?
+    .and_then(|id| id.parse().ok())
+    .ok_or_else(|| unknown_id(crew, ask))
+}
+fn public_ask(conn: &Connection, h: AskId) -> Result<crewd_store::object_refs::ObjectReference> {
+    crewd_store::work_organization::reference_for_core(
+        conn,
+        crewd_store::object_refs::ObjectKind::HumanTask,
+        &h.to_string(),
+    )?
+    .ok_or_else(|| {
+        crewd_store::StoreError::Invalid("question has no published identity".into()).into()
     })
+}
+fn meta_key(r: &crewd_store::object_refs::ObjectReference) -> &str {
+    r.source_id.strip_prefix("work:").unwrap_or(&r.source_id)
 }
 
 fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
+    let reference = public_ask(conn, a.id)?;
     let meta: Option<(Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT resume_note, message_id FROM ask_meta WHERE crew_id=?1 AND ask=?2",
-            params![crew, a.id.to_string()],
+            params![crew, meta_key(&reference)],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -258,7 +257,7 @@ fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
     };
     Ok(Ask {
         crew_id: crew.into(),
-        ask: a.id.to_string(),
+        ask: reference.id(),
         question: a.question.clone(),
         asked_by: a.asked_by.session().map(|s| s.to_string()),
         asked_at: ts(a.asked_at),
@@ -270,7 +269,12 @@ fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
             text: d.text.clone(),
             after_minutes: d.after_ms / 60_000,
         }),
-        item: a.item.map(|w| w.to_string()),
+        item: a
+            .item
+            .map(|w| {
+                crate::work::reference(conn, crewd_store::object_refs::ObjectKind::Plan, crew, w)
+            })
+            .transpose()?,
         resume_note,
         message_id,
     })
@@ -278,17 +282,35 @@ fn view(conn: &Connection, crew: &str, a: &HumanAsk) -> Result<Ask> {
 
 /// 这条消息是哪条问的公告（`ask_meta.message_id`）：(机组, H 号)。
 pub(crate) fn by_message(conn: &Connection, message_id: &str) -> Result<Option<(String, String)>> {
-    Ok(conn
+    let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT crew_id, ask FROM ask_meta WHERE message_id=?1",
+            "SELECT crew_id,ask FROM ask_meta WHERE message_id=?1",
             [message_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .optional()?)
+        .optional()?;
+    row.map(|(crew, key)| {
+        let source = if key.starts_with("organization:") {
+            key
+        } else {
+            format!("work:{key}")
+        };
+        let r = crewd_store::object_refs::resolve(
+            conn,
+            crewd_store::object_refs::ObjectKind::HumanTask,
+            &crew,
+            &source,
+        )?
+        .ok_or_else(|| {
+            crewd_store::StoreError::Invalid("ask announcement has no issued identity".into())
+        })?;
+        Ok((crew, r.id()))
+    })
+    .transpose()
 }
 
 pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
-    let h = parse_ask(ask)?;
+    let h = resolve_ask(conn, crew, ask)?;
     let book = load(conn, crew)?;
     let a = book.ask(h).ok_or_else(|| unknown_id(crew, ask))?;
     view(conn, crew, a)
@@ -316,18 +338,55 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
         }
         e => e,
     })?;
+    let reference = public_ask(tx.conn(), h)?;
     let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
         messages::announce_to_human(tx, &home, Sender::Session(asker.into()), question, "ask")?;
     tx.conn().execute(
         "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,?3,?4)",
-        params![crew.id, h.to_string(), o.resume_note, posted.message.id],
+        params![
+            crew.id,
+            meta_key(&reference),
+            o.resume_note,
+            posted.message.id
+        ],
     )?;
     tx.note(Change::AskChanged {
         crew_id: crew.id.clone(),
-        ask: h.to_string(),
+        ask: reference.id(),
     });
-    get(tx.conn(), &crew.id, &h.to_string())
+    get(tx.conn(), &crew.id, &reference.id())
+}
+
+/// Announcement and metadata for new work-block questions. Existing H references
+/// are never re-announced. Caller owns the same work/identity/message transaction.
+pub(crate) fn announce_block_questions(tx: &mut Tx<'_>, ids: &[AskId]) -> Result<Vec<String>> {
+    let book = load_org(tx.conn())?;
+    let mut out = Vec::new();
+    for id in ids {
+        let task = book
+            .ask(*id)
+            .ok_or_else(|| unknown_id("organization", id))?;
+        let reference = public_ask(tx.conn(), *id)?;
+        let crew = &reference.crew_id;
+        let sender = task
+            .asked_by
+            .session()
+            .map(|s| Sender::Session(s.to_string()))
+            .unwrap_or(Sender::Human);
+        let home = crews::home_of(tx.conn(), crew)?;
+        let posted = messages::announce_to_human(tx, &home, sender, task.question.clone(), "ask")?;
+        tx.conn().execute(
+            "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,NULL,?3)",
+            params![crew, meta_key(&reference), posted.message.id],
+        )?;
+        tx.note(Change::AskChanged {
+            crew_id: crew.clone(),
+            ask: reference.id(),
+        });
+        out.push(reference.id());
+    }
+    Ok(out)
 }
 
 /// session 还在、且没被标恢复失败：叫醒它它就能接着干。
@@ -379,16 +438,31 @@ fn closed(
     standalone: bool,
     events: &[crewd_work::Event],
 ) -> Result<Ask> {
+    let a = get(tx.conn(), crew, &public_ask(tx.conn(), h)?.id())?;
+    closed_view(tx, crew, standalone, events, a)
+}
+fn closed_view(
+    tx: &mut Tx<'_>,
+    crew: &str,
+    standalone: bool,
+    events: &[crewd_work::Event],
+    a: Ask,
+) -> Result<Ask> {
     let cleared: Vec<(String, Option<String>)> = events
         .iter()
         .filter_map(|e| match &e.kind {
-            EventKind::BlockerCleared { id, owner, .. } => {
-                Some((id.to_string(), owner.as_ref().map(|o| o.to_string())))
-            }
+            EventKind::BlockerCleared { id, owner, .. } => Some(
+                crate::work::reference(
+                    tx.conn(),
+                    crewd_store::object_refs::ObjectKind::Plan,
+                    crew,
+                    id,
+                )
+                .map(|id| (id, owner.as_ref().map(ToString::to_string))),
+            ),
             _ => None,
         })
-        .collect();
-    let a = get(tx.conn(), crew, &h.to_string())?;
+        .collect::<Result<_>>()?;
     crate::work::wake_cleared(
         tx,
         crew,
@@ -415,7 +489,7 @@ fn closed(
 }
 
 pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask> {
-    let h = parse_ask(ask)?;
+    let h = resolve_ask(tx.conn(), crew, ask)?;
     let (applied, standalone) = with_book(tx, crew, |b, now| {
         let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
         b.answer_ask(&Actor::Human, now, h, text)
@@ -428,25 +502,22 @@ pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask>
 /// 每个机组的机长，PM 2026-10-07）——别的机组的机长（另一棵树的、子机组的）、总机组的普通 session 在这本账上
 /// 只算普通 session（账本按提问者放行）。
 pub fn withdraw(tx: &mut Tx<'_>, by: &Sender, crew: &str, ask: &str, reason: &str) -> Result<Ask> {
-    let h = parse_ask(ask)?;
+    let h = resolve_ask(tx.conn(), crew, ask)?;
     let actor = match by {
-        Sender::Human => Actor::Human,
-        Sender::Session(s) if sessions::crew_of(tx.conn(), s)? == crew => actor_of(tx.conn(), s)?,
-        Sender::Session(s) if crews::is_management_captain(tx.conn(), s)? => Actor::captain(s),
-        Sender::Session(s) => Actor::worker(s),
         Sender::System => {
             return Err(CollabError::Forbidden(Refusal::new(
                 Code::AskSystemCannotWithdraw,
             )));
         }
+        _ => crate::work::actor(tx.conn(), by, crew)?,
     };
-    let canonical = h.to_string();
+    let canonical = public_ask(tx.conn(), h)?.id();
     with_book(tx, crew, |b, now| b.withdraw_ask(&actor, now, h, reason))
         .map_err(|e| withdraw_refused(e, &canonical))?;
     // 规范写法（"H1"），不是调用方原样给的（"h1"）：客户端按它对号（终审 M3）。
     tx.note(Change::AskChanged {
         crew_id: crew.into(),
-        ask: h.to_string(),
+        ask: canonical,
     });
     get(tx.conn(), crew, ask)
 }
@@ -476,11 +547,18 @@ fn withdraw_refused(e: CollabError, ask: &str) -> CollabError {
 /// 而下级必须先归档，所以归档到 home 时那里的问都已撤回。解档不重开。还卡着活项的问账本不让撤 →
 /// Conflict（归档整体失败，什么都不变）。每条撤回记 AskChanged。
 pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
-    let open: Vec<AskId> = load(tx.conn(), crew)?
+    let book = load_org(tx.conn())?;
+    let open: Vec<AskId> = book
         .state()
         .asks
         .iter()
-        .filter(|(_, a)| a.state == AskState::Open)
+        .filter(|(h, a)| {
+            a.state == AskState::Open
+                && book
+                    .state()
+                    .ask_crew(**h)
+                    .is_some_and(|c| c.as_str() == crew)
+        })
         .map(|(h, _)| *h)
         .collect();
     if open.is_empty() {
@@ -504,7 +582,7 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
         })?;
         tx.note(Change::AskChanged {
             crew_id: crew.into(),
-            ask: h.to_string(),
+            ask: public_ask(tx.conn(), h)?.id(),
         });
     }
     Ok(())
@@ -512,51 +590,97 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
 
 /// 默认方案到点的问按默认办（M3c 的定时拍按机组逐个调，控制者裁定 C7）。返回办了的 H 号。
 pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
-    let done: Vec<(AskId, bool, Vec<crewd_work::Event>)> = with_book(tx, crew, |b, now| {
-        let mut out = Vec::new();
-        for h in b.defaults_due(now) {
-            let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
-            let applied = b.apply_default(&Actor::System, now, h)?;
-            out.push((h, standalone, applied.events));
+    apply_defaults(tx, Some(crew))
+}
+/// One authority transaction per timer tick, not one full-book reload per crew.
+pub fn apply_all_due_defaults(tx: &mut Tx<'_>) -> Result<Vec<String>> {
+    apply_defaults(tx, None)
+}
+fn apply_defaults(tx: &mut Tx<'_>, only: Option<&str>) -> Result<Vec<String>> {
+    let active: std::collections::BTreeSet<_> = crews::list(tx.conn(), false)?
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    let before = load_org(tx.conn())?;
+    let due: Vec<_> = before
+        .defaults_due(Ts(tx.now_ms()))
+        .into_iter()
+        .filter_map(|h| {
+            let crew = before.state().ask_crew(h)?.as_str();
+            (active.contains(crew) && only.is_none_or(|want| want == crew))
+                .then(|| (h, crew.to_string()))
+        })
+        .collect();
+    let Some((_, scope)) = due.first() else {
+        return Ok(Vec::new());
+    };
+    let done = with_book(tx, scope, |b, now| {
+        let mut out = Vec::with_capacity(due.len());
+        for (h, crew) in &due {
+            let standalone = b.ask(*h).map(|a| a.standalone).unwrap_or(false);
+            out.push((
+                *h,
+                crew.clone(),
+                standalone,
+                b.apply_default(&Actor::System, now, *h)?.events,
+            ));
         }
         Ok(out)
     })?;
-    let mut ids = Vec::new();
-    for (h, standalone, events) in done {
-        ids.push(closed(tx, crew, h, standalone, &events)?.ask);
+    let after = load_org(tx.conn())?;
+    let mut ids = Vec::with_capacity(done.len());
+    for (h, crew, standalone, events) in done {
+        let a = view(
+            tx.conn(),
+            &crew,
+            after.ask(h).expect("applied existing ask"),
+        )?;
+        ids.push(closed_view(tx, &crew, standalone, &events, a)?.ask);
     }
     Ok(ids)
 }
 
 /// 人的待确认清单（`ask.list`）：`home` 给了就只看 home 是它的机组（它的人类群里的问）。等得久的在前。
 pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<HumanWait>> {
-    let mut st = conn.prepare("SELECT crew_id FROM work_books ORDER BY crew_id")?;
-    let crews_with_books: Vec<String> = st
-        .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let book = load_org(conn)?;
     let mut out = Vec::new();
-    for crew in crews_with_books {
+    for w in book.human_waits(Ts(now_ms)) {
+        let crew = book
+            .state()
+            .ask_crew(w.ask)
+            .ok_or_else(|| {
+                crewd_store::StoreError::Invalid("question has no crew attribution".into())
+            })?
+            .as_str();
         if let Some(h) = home
-            && crews::home_of(conn, &crew)? != h
+            && crews::home_of(conn, crew)? != h
         {
             continue;
         }
-        let book = load(conn, &crew)?;
-        for w in book.human_waits(Ts(now_ms)) {
-            let a = book.ask(w.ask).expect("human_waits 只列账本里的问");
-            out.push(HumanWait {
-                ask: view(conn, &crew, a)?,
-                items: w.items.iter().map(|i| i.to_string()).collect(),
-                owners: w.owners.iter().map(|o| o.to_string()).collect(),
-                waited_ms: w.waited_ms,
-                tier: match w.tier {
-                    WaitTier::Fresh => WaitTierView::Fresh,
-                    WaitTier::Pinned => WaitTierView::Pinned,
-                    WaitTier::StillWanted => WaitTierView::StillWanted,
-                },
-                default_due_at: w.default_due_at.map(ts),
-            });
-        }
+        let a = book.ask(w.ask).expect("human_waits lists existing asks");
+        out.push(HumanWait {
+            ask: view(conn, crew, a)?,
+            items: w
+                .items
+                .iter()
+                .map(|id| {
+                    crate::work::reference(
+                        conn,
+                        crewd_store::object_refs::ObjectKind::Plan,
+                        crew,
+                        id,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            owners: w.owners.iter().map(ToString::to_string).collect(),
+            waited_ms: w.waited_ms,
+            tier: match w.tier {
+                WaitTier::Fresh => WaitTierView::Fresh,
+                WaitTier::Pinned => WaitTierView::Pinned,
+                WaitTier::StillWanted => WaitTierView::StillWanted,
+            },
+            default_due_at: w.default_due_at.map(ts),
+        });
     }
     out.sort_by(|a, b| {
         b.waited_ms

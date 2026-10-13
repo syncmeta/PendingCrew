@@ -905,28 +905,8 @@ impl Port for DbPort {
     }
 
     async fn apply_due_defaults(&self) -> Result<()> {
-        // 已移除的机组不在列表里（只读，不按默认办）。
-        let crews: Vec<String> = self
-            .read(|c| {
-                Ok(collab::crews::list(c, false)?
-                    .into_iter()
-                    .map(|c| c.id)
-                    .collect())
-            })
-            .await?;
-        for crew in crews {
-            // 每个机组一个事务：一本账出错不连累别的机组。
-            let r = self
-                .write({
-                    let crew = crew.clone();
-                    move |tx| collab::asks::apply_due_defaults(tx, &crew).map(|_| ())
-                })
-                .await;
-            if let Err(e) = r {
-                eprintln!("crewd: 编排：机组 {crew} 的默认方案到点处理失败：{e:#}");
-            }
-        }
-        Ok(())
+        self.write(|tx| collab::asks::apply_all_due_defaults(tx).map(|_| ()))
+            .await
     }
 
     async fn prune_wakes(&self, before: Ms, limit: usize) -> Result<usize> {

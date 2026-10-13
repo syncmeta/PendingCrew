@@ -581,12 +581,21 @@ pub fn build_batch(
                     .source
                     .strip_prefix(SRC_ASK)
                     .and_then(|s| s.rsplit_once('/'));
-                let parsed = parsed.filter(|(_, ask)| ask.parse::<crewd_work::AskId>().is_ok());
+                let parsed = parsed.filter(|(_, ask)| {
+                    ask.strip_prefix('H')
+                        .and_then(|n| n.parse::<i64>().ok())
+                        .is_some_and(|n| n > 0 && *ask == format!("H{n}"))
+                });
                 let Some((crew, ask)) = parsed else {
                     unusable.push((r.id, format!("source {:?} is not an ask", r.source)));
                     continue;
                 };
-                let a = match asks::get(conn, crew, ask) {
+                let legacy: Option<String> = conn.query_row(
+                    "SELECT legacy_ask_alias FROM wakes WHERE id=?1",
+                    [r.id],
+                    |row| row.get(0),
+                )?;
+                let a = match asks::get(conn, crew, legacy.as_deref().unwrap_or(ask)) {
                     Ok(a) => a,
                     Err(CollabError::NotFound(why)) => {
                         // 原因进日志 / 排障：与上下几条 unusable 原因一样用英文（拒绝文字的 en 渲染）。

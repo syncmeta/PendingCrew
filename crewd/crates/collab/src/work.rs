@@ -26,7 +26,8 @@ pub(crate) fn reference(
     crew: &str,
     local: impl std::fmt::Display,
 ) -> Result<String> {
-    object_refs::resolve(conn, kind, crew, &format!("work:{local}"))?
+    let _ = crew; // Object crew is carried by the sole authority, not the caller's source scope.
+    crewd_store::work_organization::reference_for_core(conn, kind, &local.to_string())?
         .map(|r| r.id())
         .ok_or_else(|| invalid("work link has no issued global identity"))
 }
@@ -44,11 +45,7 @@ fn pending_view(t: &crewd_work::PendingTransfer, short: bool) -> crewd_proto::Wo
     }
 }
 fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<WorkPlan> {
-    let local = r
-        .source_id
-        .strip_prefix("work:")
-        .and_then(|id| id.parse().ok())
-        .ok_or_else(|| invalid("plan reference source identity is invalid"))?;
+    let local = core_plan(conn, r)?;
     let item: &WorkItem = book
         .state()
         .items
@@ -124,7 +121,7 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
 /// One trigger/owner produces one durable wake, even when many items are released.
 pub(crate) fn wake_cleared(
     tx: &mut crate::Tx<'_>,
-    crew: &str,
+    _crew: &str,
     events: &[crewd_work::Event],
     ready: &[(crewd_work::WorkId, crewd_work::SessionId)],
     kind: crate::wakes::WakeKind,
@@ -134,23 +131,39 @@ pub(crate) fn wake_cleared(
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for event in events {
         if let crewd_work::EventKind::BlockerCleared { id, owner, .. } = &event.kind {
-            let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
+            let reference = crewd_store::work_organization::reference_for_core(
+                tx.conn(),
+                ObjectKind::Plan,
+                &id.to_string(),
+            )?
+            .ok_or_else(|| invalid("released work has no issued identity"))?;
+            let id = reference.id();
             tx.note(crate::Change::WorkChanged {
-                crew_id: crew.into(),
+                crew_id: reference.crew_id.clone(),
                 id: id.clone(),
             });
-            if let Some(owner) = owner {
+            if let Some(owner) = owner
+                && !crews::is_archived(tx.conn(), &reference.crew_id)?
+            {
                 owners.entry(owner.to_string()).or_default().push(id);
             }
         }
     }
     for (id, owner) in ready {
-        let id = reference(tx.conn(), ObjectKind::Plan, crew, id)?;
+        let reference = crewd_store::work_organization::reference_for_core(
+            tx.conn(),
+            ObjectKind::Plan,
+            &id.to_string(),
+        )?
+        .ok_or_else(|| invalid("ready work has no issued identity"))?;
+        let id = reference.id();
         tx.note(crate::Change::WorkChanged {
-            crew_id: crew.into(),
+            crew_id: reference.crew_id.clone(),
             id: id.clone(),
         });
-        owners.entry(owner.to_string()).or_default().push(id);
+        if !crews::is_archived(tx.conn(), &reference.crew_id)? {
+            owners.entry(owner.to_string()).or_default().push(id);
+        }
     }
     for (owner, mut ids) in owners {
         // Purged owners have no runnable target. Preserve the answer and ledger;
@@ -248,27 +261,14 @@ pub(crate) fn followup_note(
         None if note.partial => return Ok(FollowupNote::Ordinary),
         None => return Err(invalid("work follow-up target count is invalid")),
     };
-    let mut books = BTreeMap::new();
+    let book = asks::load_org(conn)?;
     let mut current = Vec::new();
     for id in targets {
         let Some(r) = object_refs::get(conn, ObjectKind::Plan, number(&id)?)? else {
             continue;
         };
-        if !books.contains_key(&r.crew_id) {
-            books.insert(
-                r.crew_id.clone(),
-                (
-                    asks::load(conn, &r.crew_id)?,
-                    crews::is_archived(conn, &r.crew_id)?,
-                ),
-            );
-        }
-        let (book, frozen) = &books[&r.crew_id];
-        let local = r
-            .source_id
-            .strip_prefix("work:")
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| invalid("work follow-up source identity is invalid"))?;
+        let frozen = crews::is_archived(conn, &r.crew_id)?;
+        let local = core_plan(conn, &r)?;
         let item = book
             .state()
             .items
@@ -318,7 +318,7 @@ pub fn list(conn: &Connection, p: WorkListParams) -> Result<WorkPage> {
     if let Some(crew) = &p.crew_id {
         crews::get(conn, crew)?;
     }
-    let mut stmt = conn.prepare("SELECT r.number,r.crew_id,r.source_id,r.created_at FROM object_refs r LEFT JOIN work_books b ON b.crew_id=r.crew_id LEFT JOIN crews c ON c.id=r.crew_id WHERE r.kind='plan' AND r.number>?1 AND (?2 IS NULL OR r.crew_id=?2) AND (?3 IS NULL OR b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL OR json_extract(b.state,'$.items.'||substr(r.source_id,6)||'.owner')=?3) AND (?4=0 OR b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL OR json_extract(b.state,'$.items.'||substr(r.source_id,6)||'.status') NOT IN ('done','dropped')) AND (?6=1 OR c.archived_at IS NULL) ORDER BY r.number LIMIT ?5")?;
+    let mut stmt = conn.prepare("SELECT r.number,r.crew_id,r.source_id,r.created_at FROM object_refs r LEFT JOIN organization_work_book b ON b.singleton=1 LEFT JOIN crews c ON c.id=r.crew_id WHERE r.kind='plan' AND r.number>?1 AND (?2 IS NULL OR r.crew_id=?2) AND (?3 IS NULL OR b.state IS NULL OR json_type(b.state,'$.items.'||r.core_id) IS NULL OR json_extract(b.state,'$.items.'||r.core_id||'.owner')=?3) AND (?4=0 OR b.state IS NULL OR json_type(b.state,'$.items.'||r.core_id) IS NULL OR json_extract(b.state,'$.items.'||r.core_id||'.status') NOT IN ('done','dropped')) AND (?6=1 OR c.archived_at IS NULL) ORDER BY r.number LIMIT ?5")?;
     let mut refs = stmt
         .query_map(
             params![
@@ -347,18 +347,19 @@ pub fn list(conn: &Connection, p: WorkListParams) -> Result<WorkPage> {
     } else {
         None
     };
-    let mut books = BTreeMap::new();
+    let book = asks::load_org(conn)?;
     let mut items = Vec::with_capacity(refs.len());
     for r in refs {
-        if !books.contains_key(&r.crew_id) {
-            books.insert(r.crew_id.clone(), asks::load(conn, &r.crew_id)?);
-        }
-        items.push(project(conn, &r, &books[&r.crew_id])?.into());
+        items.push(project(conn, &r, &book)?.into());
     }
     Ok(WorkPage { items, next_after })
 }
-fn actor(conn: &Connection, by: &crate::Sender, crew: &str) -> Result<crewd_work::Actor> {
-    use crewd_work::Actor;
+pub(crate) fn actor(
+    conn: &Connection,
+    by: &crate::Sender,
+    _crew: &str,
+) -> Result<crewd_work::Actor> {
+    use crewd_work::{Actor, AuthorityScope, CrewId, Role};
     match by {
         crate::Sender::Human => Ok(Actor::Human),
         crate::Sender::System => Err(CollabError::Forbidden(Refusal::new(
@@ -367,15 +368,31 @@ fn actor(conn: &Connection, by: &crate::Sender, crew: &str) -> Result<crewd_work
         crate::Sender::Session(id) => {
             let session = crate::sessions::get(conn, id)?;
             crews::refuse_archived(conn, &session.crew_id)?;
-            if crews::acts_as_captain_of(conn, id, crew)? {
-                Ok(Actor::captain(id))
-            } else if session.crew_id == crew && session.role == crewd_proto::Role::Admin {
-                Ok(Actor::admin(id))
-            } else {
-                Ok(Actor::worker(id))
+            let mut roles = BTreeMap::new();
+            let mut q =
+                conn.prepare("SELECT id FROM crews WHERE archived_at IS NULL ORDER BY id")?;
+            for row in q.query_map([], |r| r.get::<_, String>(0))? {
+                let crew = row?;
+                if crews::acts_as_captain_of(conn, id, &crew)? {
+                    roles.insert(CrewId::new(crew), Role::Captain);
+                } else if session.crew_id == crew && session.role == crewd_proto::Role::Admin {
+                    roles.insert(CrewId::new(crew), Role::Admin);
+                }
             }
+            Ok(Actor::scoped(
+                id,
+                AuthorityScope {
+                    home: CrewId::new(session.crew_id),
+                    roles,
+                },
+            ))
         }
     }
+}
+pub(crate) fn core_plan(conn: &Connection, r: &ObjectReference) -> Result<crewd_work::WorkId> {
+    crewd_store::work_organization::core_for_reference(conn, ObjectKind::Plan, r.number)?
+        .and_then(|id| id.parse().ok())
+        .ok_or_else(|| invalid("plan reference has no authoritative core identity"))
 }
 fn timestamp(value: Option<&str>) -> Result<Option<crewd_work::Ts>> {
     value
@@ -386,7 +403,12 @@ fn timestamp(value: Option<&str>) -> Result<Option<crewd_work::Ts>> {
         })
         .transpose()
 }
-fn local_reference(conn: &Connection, kind: ObjectKind, crew: &str, id: &str) -> Result<String> {
+pub(crate) fn local_reference(
+    conn: &Connection,
+    kind: ObjectKind,
+    crew: &str,
+    id: &str,
+) -> Result<String> {
     let n = id
         .strip_prefix(kind.prefix())
         .and_then(|v| v.parse::<i64>().ok())
@@ -394,22 +416,22 @@ fn local_reference(conn: &Connection, kind: ObjectKind, crew: &str, id: &str) ->
         .ok_or_else(|| CollabError::Invalid(Refusal::new(Code::WorkBadId).arg("input", id)))?;
     let r = object_refs::get(conn, kind, n)?
         .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", id)))?;
-    if r.crew_id != crew {
-        return Err(CollabError::Invalid(
-            Refusal::new(Code::WorkLinkOtherCrew).arg("id", id),
-        ));
-    }
-    r.source_id
-        .strip_prefix("work:")
-        .map(str::to_owned)
-        .ok_or_else(|| invalid("work command reference source is invalid"))
+    let _ = crew;
+    crews::refuse_archived(conn, &r.crew_id)?;
+    crewd_store::work_organization::core_for_reference(conn, kind, n)?
+        .ok_or_else(|| invalid("work command reference has no core identity"))
 }
-fn local_plan(conn: &Connection, crew: &str, id: &str) -> Result<crewd_work::WorkId> {
+pub(crate) fn local_plan(conn: &Connection, crew: &str, id: &str) -> Result<crewd_work::WorkId> {
     local_reference(conn, ObjectKind::Plan, crew, id)?
         .parse()
         .map_err(|_| invalid("work command plan identity is invalid"))
 }
-fn changed(tx: &mut crate::Tx<'_>, by: &crate::Sender, crew: &str, id: &str) -> Result<()> {
+pub(crate) fn changed(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    crew: &str,
+    id: &str,
+) -> Result<()> {
     if let crate::Sender::Session(session) = by {
         crate::sessions::note_progress(tx, session, crate::ProgressKind::WorkItem)?;
     }
@@ -419,20 +441,20 @@ fn changed(tx: &mut crate::Tx<'_>, by: &crate::Sender, crew: &str, id: &str) -> 
     });
     Ok(())
 }
-pub fn create(
-    tx: &mut crate::Tx<'_>,
-    by: &crate::Sender,
+pub(crate) fn prepare_item(
+    conn: &Connection,
+    actor: &crewd_work::Actor,
     p: crewd_proto::WorkCreateParams,
-) -> Result<WorkPlan> {
+) -> Result<crewd_work::NewItem> {
     use crewd_work::{Body, ItemRef, NewItem, SessionId};
-    crews::refuse_archived(tx.conn(), &p.crew_id)?;
-    let actor = actor(tx.conn(), by, &p.crew_id)?;
+    crews::refuse_archived(conn, &p.crew_id)?;
     let owner = p.owner.or_else(|| actor.session().map(ToString::to_string));
     if let Some(owner) = &owner {
-        let owner = crate::sessions::get(tx.conn(), owner)?;
-        crews::refuse_archived(tx.conn(), &owner.crew_id)?;
+        let owner = crate::sessions::get(conn, owner)?;
+        crews::refuse_archived(conn, &owner.crew_id)?;
     }
-    let item = NewItem {
+    Ok(NewItem {
+        crew_id: Some(crewd_work::CrewId::new(&p.crew_id)),
         title: p.title,
         body: Body {
             goal: p.goal,
@@ -447,25 +469,34 @@ pub fn create(
         parent: p
             .parent
             .as_deref()
-            .map(|id| local_plan(tx.conn(), &p.crew_id, id).map(ItemRef::Id))
+            .map(|id| local_plan(conn, &p.crew_id, id).map(ItemRef::Id))
             .transpose()?,
         depends_on: p
             .depends_on
             .iter()
-            .map(|id| local_plan(tx.conn(), &p.crew_id, id).map(ItemRef::Id))
+            .map(|id| local_plan(conn, &p.crew_id, id).map(ItemRef::Id))
             .collect::<Result<_>>()?,
         sources: p
             .sources
             .iter()
             .map(|id| {
-                local_reference(tx.conn(), ObjectKind::Requirement, &p.crew_id, id)?
+                local_reference(conn, ObjectKind::Requirement, &p.crew_id, id)?
                     .parse()
                     .map_err(|_| invalid("work command requirement identity is invalid"))
             })
             .collect::<Result<_>>()?,
         next_check_at: timestamp(p.next_check_at.as_deref())?,
         channel: None,
-    };
+    })
+}
+
+pub fn create(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    p: crewd_proto::WorkCreateParams,
+) -> Result<WorkPlan> {
+    let actor = actor(tx.conn(), by, &p.crew_id)?;
+    let item = prepare_item(tx.conn(), &actor, p.clone())?;
     let local = asks::with_book(tx, &p.crew_id, |b, now| {
         b.create_item(&actor, now, item).map(|a| a.value)
     })?;
@@ -473,7 +504,7 @@ pub fn create(
     changed(tx, by, &p.crew_id, &id)?;
     get(tx.conn(), &id)
 }
-fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result<()> {
+pub(crate) fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result<()> {
     if item.revision != revision {
         let note = item
             .last_report
@@ -1548,7 +1579,7 @@ pub fn history(
     let r = object_refs::get(conn, ObjectKind::Plan, number(&p.id)?)?
         .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
     let book = asks::load(conn, &r.crew_id)?;
-    let local = local_plan(conn, &r.crew_id, &p.id)?;
+    let local = core_plan(conn, &r)?;
     let item = book
         .item(local)
         .ok_or_else(|| invalid("history plan has no authoritative item"))?;
@@ -1564,9 +1595,12 @@ pub fn history(
         let by = match &h.by {
             crewd_work::Actor::Human => A::Human,
             crewd_work::Actor::System => A::System,
-            crewd_work::Actor::Session { id, role } => A::Session {
-                id: id.to_string(),
-                role: match role {
+            actor => A::Session {
+                id: actor.session().expect("session actor").to_string(),
+                role: match actor
+                    .role_in(&crewd_work::CrewId::new(&r.crew_id), false)
+                    .expect("session role")
+                {
                     crewd_work::Role::Worker => crewd_proto::Role::Worker,
                     crewd_work::Role::Captain => crewd_proto::Role::Captain,
                     crewd_work::Role::Admin => crewd_proto::Role::Admin,

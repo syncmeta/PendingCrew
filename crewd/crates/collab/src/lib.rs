@@ -10,6 +10,8 @@ pub mod crews;
 pub mod cursor_reservations;
 pub mod cursors;
 pub mod directory;
+#[cfg(test)]
+mod global_workflow_core;
 pub mod hibernate;
 pub mod listens;
 pub mod message_provenance;
@@ -27,6 +29,7 @@ pub mod todos;
 pub mod turn_trace;
 pub mod wakes;
 pub mod work;
+pub mod work_block;
 pub mod work_patrol;
 pub mod worldview;
 

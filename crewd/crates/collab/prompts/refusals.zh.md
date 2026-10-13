@@ -432,3 +432,7 @@ git worktree add 失败: {path}. {detail}
 
 ## work.history_cursor
 历史游标应为正整数的规范字符串，请使用上一页返回的 nextBefore。
+
+## crew.work_referenced
+
+机组 {crew} 不能永久删除：其他机组仍有 {total} 个对象引用它的工作或 session。引用：{ids}。请先处理这些关系；已移除机组继续只读。

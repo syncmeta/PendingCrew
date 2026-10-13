@@ -297,13 +297,16 @@ pub struct TodoResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Todo {
+    /// Stable organization source reference; original per-crew number remains unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirement_id: Option<String>,
     pub id: String,
     pub crew_id: String,
     pub ledger: Ledger,
     /// 账内编号 #N；软删除的行也占号。
     pub number: i64,
     pub text: String,
-    /// "pending" | "in_progress" | "completed" | "blocked_on_human" | "dropped"
+    /// Agent requirements derive "unclaimed" | "in_progress" | "done" | "needs_ruling" | "closed" from organization plans; legacy human rows retain their original vocabulary.
     pub status: String,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]

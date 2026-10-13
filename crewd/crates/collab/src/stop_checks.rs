@@ -30,26 +30,25 @@ fn invalid(s: &str) -> crate::CollabError {
     StoreError::Invalid(s.into()).into()
 }
 fn targets(conn: &Connection, session: &str, now: i64) -> Result<Vec<Target>> {
-    // Include missing authority, rather than silently treating it as clean.
-    let crews = {
-        let mut q=conn.prepare("SELECT DISTINCT c.id FROM crews c LEFT JOIN work_books b ON b.crew_id=c.id WHERE c.archived_at IS NULL AND (EXISTS(SELECT 1 FROM json_each(b.state,'$.items') i WHERE json_extract(i.value,'$.owner')=?1) OR EXISTS(SELECT 1 FROM object_refs r WHERE r.crew_id=c.id AND r.kind='plan' AND (b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL))) ORDER BY c.id")?;
-        q.query_map([session], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let b = asks::load_org(conn)?;
     let mut out = Vec::new();
-    for crew in crews {
-        let b = asks::load(conn, &crew)?;
-        for v in b.stop_violations(&SessionId::new(session), Ts(now)) {
-            out.push(Target {
-                id: work::reference(conn, ObjectKind::Plan, &crew, v.item)?,
-                revision: b
-                    .item(v.item)
-                    .expect("violation has item")
-                    .revision
-                    .to_string(),
-                kind: v.kind,
-            });
+    for v in b.stop_violations(&SessionId::new(session), Ts(now)) {
+        let crew = b
+            .state()
+            .item_crew(v.item)
+            .ok_or_else(|| invalid("stop work lacks crew attribution"))?;
+        if crews::is_archived(conn, crew.as_str())? {
+            continue;
         }
+        out.push(Target {
+            id: work::reference(conn, ObjectKind::Plan, crew.as_str(), v.item)?,
+            revision: b
+                .item(v.item)
+                .expect("violation has item")
+                .revision
+                .to_string(),
+            kind: v.kind,
+        });
     }
     out.sort_by(|a, b| {
         (work::number(&a.id).expect("issued ID"), a.kind)

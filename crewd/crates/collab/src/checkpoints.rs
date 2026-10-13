@@ -4,7 +4,7 @@ use crewd_store::{
     StoreError,
     object_refs::{self, ObjectKind},
 };
-use crewd_work::{Actor, SessionId, Ts, WorkBook, WorkId};
+use crewd_work::{Actor, SessionId, Ts, WorkId};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,29 +52,20 @@ struct Resolved {
     local: WorkId,
 }
 fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Result<Vec<Resolved>> {
-    let mut books: BTreeMap<String, (WorkBook, BTreeSet<WorkId>, bool)> = BTreeMap::new();
+    let book = asks::load_org(conn)?;
+    let due: BTreeSet<WorkId> = book
+        .due_checkpoints(Ts(now))
+        .into_iter()
+        .filter(|d| d.owner.as_str() == row.session)
+        .flat_map(|d| d.items)
+        .collect();
     let mut out = Vec::new();
     for t in &n.checkpoint_targets {
         let Some(r) = object_refs::get(conn, ObjectKind::Plan, work::number(&t.id)?)? else {
             continue;
         };
-        if !books.contains_key(&r.crew_id) {
-            let book = asks::load(conn, &r.crew_id)?;
-            let due = book
-                .due_checkpoints(Ts(now))
-                .into_iter()
-                .filter(|d| d.owner.as_str() == row.session)
-                .flat_map(|d| d.items)
-                .collect();
-            let frozen = crate::crews::is_archived(conn, &r.crew_id)?;
-            books.insert(r.crew_id.clone(), (book, due, frozen));
-        }
-        let (book, due, frozen) = &books[&r.crew_id];
-        let local = r
-            .source_id
-            .strip_prefix("work:")
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| invalid("checkpoint source identity is invalid"))?;
+        let frozen = crate::crews::is_archived(conn, &r.crew_id)?;
+        let local = work::core_plan(conn, &r)?;
         let i = book
             .item(local)
             .ok_or_else(|| invalid("checkpoint target has no authoritative item"))?;
@@ -107,36 +98,47 @@ pub(crate) fn render_note(
     let total = targets.len();
     Ok(work::FollowupNote::Current(serde_json::json!({"dueWork":targets.iter().take(50).map(|t|&t.id).collect::<Vec<_>>(),"total":total,"partial":total>50}).to_string()))
 }
+#[cfg(test)]
 fn candidate_crews(conn: &Connection, now: i64) -> Result<Vec<String>> {
-    let crews = {
-        let mut q=conn.prepare("SELECT c.id FROM crews c LEFT JOIN work_books b ON b.crew_id=c.id WHERE c.archived_at IS NULL AND (EXISTS(SELECT 1 FROM json_each(b.state,'$.items') i WHERE json_extract(i.value,'$.owner') IS NOT NULL AND json_extract(i.value,'$.status') IN ('open','active') AND coalesce(json_extract(i.value,'$.missed_checks'),0)<?2 AND json_extract(i.value,'$.next_check_at') <= max(?1,json_extract(b.state,'$.clock'))) OR EXISTS(SELECT 1 FROM object_refs r WHERE r.crew_id=c.id AND r.kind='plan' AND (b.state IS NULL OR json_type(b.state,'$.items.'||substr(r.source_id,6)) IS NULL))) ORDER BY c.id")?;
-        q.query_map(
-            params![now, crewd_work::Config::default().missed_checks_limit],
-            |r| r.get::<_, String>(0),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    Ok(crews)
+    let book = asks::load_org(conn)?;
+    let mut crews = BTreeSet::new();
+    for due in book.due_checkpoints(Ts(now)) {
+        for id in due.items {
+            let crew = book
+                .state()
+                .item_crew(id)
+                .ok_or_else(|| invalid("due item lacks crew attribution"))?
+                .as_str();
+            if !crate::crews::is_archived(conn, crew)? {
+                crews.insert(crew.to_string());
+            }
+        }
+    }
+    Ok(crews.into_iter().collect())
 }
 /// One merged due reminder per owner across crews. Existing queued work never
 /// advances missedChecks; duplicate settled manifests do not restart fail loops.
 pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
-    let crews = candidate_crews(tx.conn(), tx.now_ms())?;
+    let book = asks::load_org(tx.conn())?;
     let mut owners: BTreeMap<String, Vec<Target>> = BTreeMap::new();
-    for crew in crews {
-        let book = asks::load(tx.conn(), &crew)?;
-        for due in book.due_checkpoints(Ts(tx.now_ms())) {
-            for local in due.items {
-                let i = book.item(local).expect("due item exists");
-                owners
-                    .entry(due.owner.to_string())
-                    .or_default()
-                    .push(Target {
-                        id: work::reference(tx.conn(), ObjectKind::Plan, &crew, local)?,
-                        revision: i.revision.to_string(),
-                        next_check_at: i.next_check_at.expect("due has a check").0,
-                    });
+    for due in book.due_checkpoints(Ts(tx.now_ms())) {
+        for local in due.items {
+            let crew = book
+                .state()
+                .item_crew(local)
+                .ok_or_else(|| invalid("due work lacks crew attribution"))?;
+            if crate::crews::is_archived(tx.conn(), crew.as_str())? {
+                continue;
             }
+            let i = book.item(local).expect("due item exists");
+            owners
+                .entry(due.owner.to_string())
+                .or_default()
+                .push(Target {
+                    id: work::reference(tx.conn(), ObjectKind::Plan, crew.as_str(), local)?,
+                    revision: i.revision.to_string(),
+                    next_check_at: i.next_check_at.expect("due has a check").0,
+                });
         }
     }
     let mut count = 0;
@@ -196,18 +198,15 @@ pub(crate) fn delivered(tx: &mut Tx<'_>, before: &[wakes::WakeRow]) -> Result<()
         if !delivered {
             continue;
         }
-        let mut crews: BTreeMap<String, Vec<Resolved>> = BTreeMap::new();
-        for t in current(tx.conn(), row, &n, tx.now_ms())? {
-            crews.entry(t.crew.clone()).or_default().push(t);
-        }
-        for (crew, targets) in crews {
+        let targets = current(tx.conn(), row, &n, tx.now_ms())?;
+        if let Some(first) = targets.first() {
             let ids: Vec<_> = targets.iter().map(|t| t.local).collect();
-            asks::with_book(tx, &crew, |b, now| {
+            asks::with_book(tx, &first.crew, |b, now| {
                 b.record_checkpoint_wake(&Actor::System, now, &SessionId::new(&row.session), &ids)
             })?;
             for t in targets {
                 tx.note(Change::WorkChanged {
-                    crew_id: crew.clone(),
+                    crew_id: t.crew,
                     id: t.id,
                 });
             }

@@ -432,3 +432,7 @@ Progress needs a note. Evidence applies only to done, and done cannot schedule a
 
 ## work.history_cursor
 History cursor must be a positive canonical sequence string; use nextBefore returned by the previous page.
+
+## crew.work_referenced
+
+Crew {crew} cannot be permanently deleted: {total} objects in other crews still refer to its work or sessions. References: {ids}. Resolve those relationships first; the removed crew remains read-only.

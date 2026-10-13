@@ -654,6 +654,98 @@ pub fn unarchive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     get(tx.conn(), id)
 }
 
+fn guard_organization_purge(conn: &Connection, crew: &str) -> Result<()> {
+    use crewd_store::object_refs::ObjectKind;
+    use crewd_work::{Blocker, CrewId};
+    let book = crate::asks::load_org(conn)?;
+    let state = book.state();
+    let org = state.organization.as_ref().expect("organization load");
+    let own = CrewId::new(crew);
+    let doomed_items: std::collections::BTreeSet<_> = org
+        .item_crews
+        .iter()
+        .filter(|(_, c)| **c == own)
+        .map(|(id, _)| *id)
+        .collect();
+    let doomed_asks: std::collections::BTreeSet<_> = org
+        .ask_crews
+        .iter()
+        .filter(|(_, c)| **c == own)
+        .map(|(id, _)| *id)
+        .collect();
+    let doomed_entries: std::collections::BTreeSet<_> = org
+        .entry_crews
+        .iter()
+        .filter(|(_, c)| **c == own)
+        .map(|(id, _)| *id)
+        .collect();
+    let sessions: std::collections::BTreeSet<String> = {
+        let mut q = conn.prepare("SELECT id FROM sessions WHERE crew_id=?1")?;
+        q.query_map([crew], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let mut ids = Vec::new();
+    let mut total = 0usize;
+    for item in state
+        .items
+        .values()
+        .filter(|i| state.item_crew(i.id) != Some(&own))
+    {
+        let hits = item.parent.is_some_and(|p| doomed_items.contains(&p))
+            || item.depends_on.iter().any(|p| doomed_items.contains(p))
+            || item.sources.iter().any(|e| doomed_entries.contains(e))
+            || item.blocked_on.iter().any(|b| match b {
+                Blocker::Item(w) => doomed_items.contains(w),
+                Blocker::Human(h) => doomed_asks.contains(h),
+            })
+            || item
+                .owner
+                .as_ref()
+                .is_some_and(|o| sessions.contains(o.as_str()))
+            || item
+                .pending_transfer
+                .as_ref()
+                .is_some_and(|t| sessions.contains(t.to.as_str()));
+        if hits {
+            total += 1;
+            if ids.len() < 20 {
+                ids.push(crate::work::reference(
+                    conn,
+                    ObjectKind::Plan,
+                    crew,
+                    item.id,
+                )?);
+            }
+        }
+    }
+    for ask in state
+        .asks
+        .values()
+        .filter(|a| state.ask_crew(a.id) != Some(&own))
+    {
+        if ask.item.is_some_and(|w| doomed_items.contains(&w)) {
+            total += 1;
+            if ids.len() < 20 {
+                ids.push(crate::work::reference(
+                    conn,
+                    ObjectKind::HumanTask,
+                    crew,
+                    ask.id,
+                )?);
+            }
+        }
+    }
+    if total > 0 {
+        return Err(CollabError::Conflict(
+            Refusal::new(Code::CrewWorkReferenced)
+                .arg("crew", crew)
+                .arg("ids", ids.join(", "))
+                .arg("total", total.to_string()),
+        ));
+    }
+    Ok(())
+}
+
 /// `purge` 的前置条件（只读、便宜）：机组存在、不是总机组、**已归档**、没有 desired=running 的 session。
 /// `crew.purge` 先跑它、再拍快照（N4：删不了就不拍整库快照），三步在同一个库线程任务里。
 pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
@@ -666,7 +758,8 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
     }
     refuse_running(conn, id)?;
     crate::cursor_reservations::guard_crew(conn, id)?;
-    crate::causal::guard_crew(conn, id)
+    crate::causal::guard_crew(conn, id)?;
+    guard_organization_purge(conn, id)
 }
 
 /// 永久删除（`crew.purge`，N4 的快照之后跑；只收已归档的机组，见 `check_purgeable`）。子机组的父边随之消失；
@@ -684,9 +777,47 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
         }
     }
     let around: Vec<String> = parents(tx.conn(), id)?.into_iter().chain(kids).collect();
+    let before = crate::asks::load_org(tx.conn())?;
+    let source_changes: std::collections::BTreeSet<_> = before
+        .state()
+        .items
+        .values()
+        .filter(|item| {
+            before
+                .state()
+                .item_crew(item.id)
+                .is_some_and(|c| c.as_str() == id)
+        })
+        .flat_map(|item| item.sources.iter().copied())
+        .filter(|source| {
+            before
+                .state()
+                .entry_crew(*source)
+                .is_some_and(|c| c.as_str() != id)
+        })
+        .collect();
     // 级联之前：它的 session 退出别的机组的群、交出群主（终审 I4）。
     let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
+    crewd_store::work_organization::purge_crew_in_tx(tx.conn(), id)?;
+    let after = crate::asks::load_org(tx.conn())?;
+    for source in source_changes {
+        if before.entry_view(source) != after.entry_view(source) {
+            let r = crewd_store::work_organization::reference_for_core(
+                tx.conn(),
+                crewd_store::object_refs::ObjectKind::Requirement,
+                &source.to_string(),
+            )?
+            .ok_or_else(|| {
+                crewd_store::StoreError::Invalid("purged plan source has no public identity".into())
+            })?;
+            tx.note(Change::WorkChanged {
+                crew_id: r.crew_id.clone(),
+                id: r.id(),
+            });
+        }
+    }
+
     // Message cascades have completed. Keep provenance for surviving foreign-channel history,
     // even when the source session was purged; only actual orphan messages lose their markers.
     crate::message_provenance::prune_orphans(tx)?;

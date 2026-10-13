@@ -90,6 +90,7 @@ refusal_codes! {
     CrewWakesInflight = "crew.wakes_inflight" ["crew", "count"],
     CrewParentRemoved = "crew.parent_removed" ["crew", "parents"],
     CrewNotRemoved = "crew.not_removed" ["crew"],
+    CrewWorkReferenced = "crew.work_referenced" ["crew", "ids", "total"],
     CrewSessionNotInCrew = "crew.session_not_in_crew" ["session", "crew"],
     CrewReorderMismatch = "crew.reorder_mismatch" ["current"],
     CrewNoCaptain = "crew.no_captain" ["crew"],

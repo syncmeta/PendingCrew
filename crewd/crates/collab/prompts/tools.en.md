@@ -1016,3 +1016,23 @@ Use nextBefore from the previous page to read older entries; omit for latest. Se
 
 ## work_item_history.limit
 Maximum entries, 1 to 200, default 20.
+
+## work_item_block
+
+Atomically block work on W items, existing H questions, or new human questions. State explicitly whether anything can continue; split work stays under the original item and inherits its owner unless specified. Uses the current revision and actual object permissions.
+
+## work_item_block.id
+
+Public W identity.
+
+## work_item_block.expected_revision
+
+Current revision as a decimal string; conflict returns current facts.
+
+## work_item_block.on
+
+One to sixteen work/human/new_human blockers. New defaults use text and after_minutes.
+
+## work_item_block.can_continue
+
+Required: type nothing, or type split with one to twenty work_item_create items; parent cannot be set.

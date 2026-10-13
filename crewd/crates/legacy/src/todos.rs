@@ -49,6 +49,7 @@ pub fn import(
         let deleted_at = t.deleted_at.as_deref().map(|x| norm_ts(cx, x));
         let n_resp = responses.len();
         let todo = Todo {
+            requirement_id: None,
             id: t.id,
             crew_id: crew_id.to_string(),
             ledger,

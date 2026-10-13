@@ -54,6 +54,7 @@ fn insert_rows(conn: &Connection, t: &Todo, extra: Option<&Value>) -> Result<()>
             ],
         )?;
     }
+    crate::work_organization::register_raw_entry(conn, t)?;
     Ok(())
 }
 
@@ -65,6 +66,7 @@ pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo
     let mut todos = stmt
         .query_map(params![crew_id, ledger.as_str()], |r| {
             Ok(Todo {
+                requirement_id: None,
                 id: r.get(0)?,
                 crew_id: r.get(1)?,
                 ledger,
@@ -79,6 +81,35 @@ pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    if ledger == Ledger::Agent {
+        let active:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='organization_work_book')",[],|r|r.get(0))?;
+        if active {
+            let state = crate::work_organization::load(conn)?.ok_or_else(|| {
+                crate::StoreError::Invalid("raw requirements have no organization authority".into())
+            })?;
+            crate::work_organization::verify_references(conn, &state)?;
+            let book = crewd_work::WorkBook::restore(state, crewd_work::Config::default())
+                .map_err(|v| crate::StoreError::Invalid(v.to_string()))?;
+            for todo in &mut todos {
+                let (core,public):(String,i64)=conn.query_row("SELECT core_id,number FROM object_refs WHERE raw_todo_id=?1 AND crew_id=?2 AND kind='requirement'",params![todo.id,todo.crew_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                let core = core.parse().map_err(|_| {
+                    crate::StoreError::Invalid("raw requirement core identity is invalid".into())
+                })?;
+                let view = book.entry_view(core).ok_or_else(|| {
+                    crate::StoreError::Invalid("raw requirement entry authority is missing".into())
+                })?;
+                todo.requirement_id = Some(format!("#{public}"));
+                todo.status = match view.status {
+                    crewd_work::EntryStatus::Unclaimed => "unclaimed",
+                    crewd_work::EntryStatus::InProgress => "in_progress",
+                    crewd_work::EntryStatus::Done => "done",
+                    crewd_work::EntryStatus::NeedsRuling => "needs_ruling",
+                    crewd_work::EntryStatus::Closed => "closed",
+                }
+                .into();
+            }
+        }
+    }
     let mut rstmt = conn.prepare(
         "SELECT id,session_id,sender_name,text,status,attachments,created_at
          FROM todo_responses WHERE todo_id=?1 ORDER BY ord",

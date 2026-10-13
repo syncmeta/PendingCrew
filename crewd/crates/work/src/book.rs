@@ -94,6 +94,7 @@ pub struct WorkBook {
     pub(crate) state: BookState,
     pub(crate) cfg: Config,
     log: Vec<Event>,
+    default_crew: Option<CrewId>,
 }
 
 /// 草稿：命令在它上面改；`transact` 负责校验与提交。
@@ -102,6 +103,7 @@ pub(crate) struct Draft {
     pub(crate) now: Ts,
     /// 调用方传进来的原始 now（只用于认出「现在就查」的占位）。
     raw_now: Ts,
+    pub(crate) default_crew: Option<CrewId>,
     pub(crate) by: Actor,
     events: Vec<EventKind>,
 }
@@ -112,6 +114,7 @@ impl WorkBook {
             state: BookState::empty(crew),
             cfg,
             log: Vec::new(),
+            default_crew: None,
         }
     }
 
@@ -131,7 +134,16 @@ impl WorkBook {
             state,
             cfg,
             log: Vec::new(),
+            default_crew: None,
         })
+    }
+
+    /// Trusted operation context only; never changes role or persisted attribution.
+    pub fn set_default_crew(&mut self, crew: CrewId) {
+        self.default_crew = Some(crew);
+    }
+    pub fn default_crew(&self) -> Option<&CrewId> {
+        self.default_crew.as_ref()
     }
 
     pub fn state(&self) -> &BookState {
@@ -189,6 +201,7 @@ impl WorkBook {
             s: self.state.clone(),
             now,
             raw_now,
+            default_crew: self.default_crew.clone(),
             by: by.clone(),
             events: Vec::new(),
         };
@@ -250,7 +263,13 @@ impl WorkBook {
 
     /// crewd 收到一条新的入口 Todo（#N）时登记。重复登记不报错、不产出事件（重启后对账用）。
     pub fn register_entry(&mut self, now: Ts, no: EntryNo) -> Result<Applied<bool>, Rejected> {
-        self.register_entry_in(now, no, self.state.crew.clone())
+        self.register_entry_in(
+            now,
+            no,
+            self.default_crew
+                .clone()
+                .unwrap_or_else(|| self.state.crew.clone()),
+        )
     }
     pub fn register_entry_in(
         &mut self,
@@ -268,6 +287,7 @@ impl WorkBook {
                 }
                 return Ok(false);
             }
+            d.s.last_entry = d.s.last_entry.max(no.0);
             if let Some(org) = &mut d.s.organization {
                 org.entry_crews.insert(no, crew);
             }
@@ -423,6 +443,7 @@ impl Draft {
                 && fixed_parent.is_none()
                 && extra_source.is_none()
                 && self.by.home().is_none()
+                && self.default_crew.is_none()
             {
                 return Err(Rejected::Invalid(
                     "organization work requires explicit crew attribution",
@@ -433,6 +454,7 @@ impl Draft {
                 .clone()
                 .or_else(|| fixed_parent.and_then(|p| self.s.item_crew(p).cloned()))
                 .or_else(|| extra_source.and_then(|e| self.s.entry_crew(e).cloned()))
+                .or_else(|| self.default_crew.clone())
                 .or_else(|| self.by.home().cloned())
                 .unwrap_or_else(|| self.s.crew.clone());
             if self.s.organization.is_none() && crew != self.s.crew {

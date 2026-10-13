@@ -438,6 +438,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_BLOCK => {
+            let p: WorkBlockParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work_block::block(tx, &Sender::Human, p)
+            })
+            .await
+        }
         methods::WORK_ASSIGN => {
             let p: WorkAssignParams = parse_params(p)?;
             write(state, move |tx| {

@@ -182,6 +182,15 @@ pub fn check(s: &BookState) -> Result<(), Violation> {
     {
         return Err(Violation::CounterBehind);
     }
+    if s.organization.is_some()
+        && (s.last_entry < 0
+            || s.entries
+                .keys()
+                .next_back()
+                .is_some_and(|e| e.0 > s.last_entry))
+    {
+        return Err(Violation::CounterBehind);
+    }
     for (key, e) in &s.entries {
         if *key != e.no {
             return Err(Violation::EntryKeyMismatch(*key));

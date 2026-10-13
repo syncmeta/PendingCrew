@@ -2,7 +2,7 @@
 //! 不渲染文字——给 agent 看的文案归 M4b 的模板）、到期检查点（§5，同一 session 合并一条）、负责人失联候选（§5）。
 use crate::book::WorkBook;
 use crate::ids::{EntryNo, SessionId, Ts, WorkId};
-use crate::model::{Blocker, Config, Status, WorkItem};
+use crate::model::{Blocker, BookState, Config, Status, WorkItem};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,44 +68,48 @@ pub struct LostOwner {
     pub cause: LostCause,
 }
 
+/// Projection from an existing state snapshot; no extra restore or state clone.
+pub fn entry_view(state: &BookState, no: EntryNo) -> Option<EntryView> {
+    let entry = state.entries.get(&no)?;
+    let linked: Vec<&WorkItem> = state
+        .items
+        .values()
+        .filter(|it| it.sources.contains(&no))
+        .collect();
+    let any_live = linked.iter().any(|it| it.status.is_live());
+    let done = linked.iter().filter(|it| it.status == Status::Done).count();
+    let status = if entry.closed.is_some() {
+        EntryStatus::Closed
+    } else if linked.is_empty() {
+        EntryStatus::Unclaimed
+    } else if any_live {
+        EntryStatus::InProgress
+    } else if done > 0 {
+        EntryStatus::Done
+    } else {
+        EntryStatus::NeedsRuling
+    };
+    let owners: BTreeSet<SessionId> = linked
+        .iter()
+        .filter(|it| it.status.is_live())
+        .filter_map(|it| it.owner.clone())
+        .collect();
+    Some(EntryView {
+        no,
+        status,
+        items: linked
+            .iter()
+            .filter(|it| it.status != Status::Dropped)
+            .map(|it| it.id)
+            .collect(),
+        done,
+        owners: owners.into_iter().collect(),
+    })
+}
+
 impl WorkBook {
     pub fn entry_view(&self, no: EntryNo) -> Option<EntryView> {
-        let entry = self.state.entries.get(&no)?;
-        let linked: Vec<&WorkItem> = self
-            .state
-            .items
-            .values()
-            .filter(|it| it.sources.contains(&no))
-            .collect();
-        let any_live = linked.iter().any(|it| it.status.is_live());
-        let done = linked.iter().filter(|it| it.status == Status::Done).count();
-        let status = if entry.closed.is_some() {
-            EntryStatus::Closed
-        } else if linked.is_empty() {
-            EntryStatus::Unclaimed
-        } else if any_live {
-            EntryStatus::InProgress
-        } else if done > 0 {
-            EntryStatus::Done
-        } else {
-            EntryStatus::NeedsRuling
-        };
-        let owners: BTreeSet<SessionId> = linked
-            .iter()
-            .filter(|it| it.status.is_live())
-            .filter_map(|it| it.owner.clone())
-            .collect();
-        Some(EntryView {
-            no,
-            status,
-            items: linked
-                .iter()
-                .filter(|it| it.status != Status::Dropped)
-                .map(|it| it.id)
-                .collect(),
-            done,
-            owners: owners.into_iter().collect(),
-        })
+        entry_view(&self.state, no)
     }
 
     pub fn entry_views(&self) -> Vec<EntryView> {

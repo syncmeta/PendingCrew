@@ -99,6 +99,7 @@ fn messages_list_after_seq_with_limit_roundtrips_unicode() {
 fn todos_insert_and_list_with_responses_in_order() {
     let s = store_with_crew();
     let t = Todo {
+        requirement_id: None,
         id: "t1".into(),
         crew_id: "a".into(),
         ledger: Ledger::Agent,
@@ -159,6 +160,7 @@ fn todos_insert_and_list_with_responses_in_order() {
 fn todos_duplicate_number_in_same_ledger_is_unique_violation() {
     let s = store_with_crew();
     let mk = |id: &str| Todo {
+        requirement_id: None,
         id: id.into(),
         crew_id: "a".into(),
         ledger: Ledger::Human,
@@ -209,6 +211,7 @@ fn todos_insert_is_atomic_when_a_response_fails() {
         created_at: "2026-10-01T00:01:00.000Z".into(),
     };
     let t = Todo {
+        requirement_id: None,
         id: "t1".into(),
         crew_id: "a".into(),
         ledger: Ledger::Agent,

@@ -23,6 +23,8 @@ pub enum Ty {
     /// `[{kind, target_id?}]`
     Mentions,
     Evidence,
+    WorkBlockers,
+    WorkContinuation,
     /// `[{text, category?}]`
     Messages,
 }
@@ -207,6 +209,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("next_check_at", Str, false),
             p("note", Str, false),
             p("evidence", Evidence, false),
+        ],
+    )),
+    idempotent(all(
+        "work_item_block",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("on", WorkBlockers, true),
+            p("can_continue", WorkContinuation, true),
         ],
     )),
     idempotent(all(
@@ -469,6 +480,25 @@ pub fn tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
         .collect()
 }
 
+fn work_blockers_schema() -> Value {
+    json!({"type":"array","minItems":1,"maxItems":16,"items":{"oneOf":[
+        {"type":"object","properties":{"type":{"type":"string","enum":["work"]},"id":{"type":"string"}},"required":["type","id"],"additionalProperties":false},
+        {"type":"object","properties":{"type":{"type":"string","enum":["human"]},"id":{"type":"string"}},"required":["type","id"],"additionalProperties":false},
+        {"type":"object","properties":{"type":{"type":"string","enum":["new_human"]},"question":{"type":"string"},"default":{"type":"object","properties":{"text":{"type":"string"},"after_minutes":{"type":"integer","minimum":1}},"required":["text","after_minutes"],"additionalProperties":false}},"required":["type","question"],"additionalProperties":false}
+    ]}})
+}
+fn work_continuation_schema(loc: Locale) -> Value {
+    let mut item = input_schema(find("work_item_create").expect("existing create"), loc);
+    item["properties"]
+        .as_object_mut()
+        .expect("create object")
+        .remove("parent");
+    json!({"oneOf":[
+        {"type":"object","properties":{"type":{"type":"string","enum":["nothing"]}},"required":["type"],"additionalProperties":false},
+        {"type":"object","properties":{"type":{"type":"string","enum":["split"]},"items":{"type":"array","minItems":1,"maxItems":20,"items":item}},"required":["type","items"],"additionalProperties":false}
+    ]})
+}
+
 pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
@@ -483,6 +513,8 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             Evidence => json!({"type":"object","properties":{
                 "kind":{"type":"string","enum":["commit","url","text"]},"value":{"type":"string"}
             },"required":["kind","value"],"additionalProperties":false}),
+            WorkBlockers => work_blockers_schema(),
+            WorkContinuation => work_continuation_schema(loc),
             Mentions => json!({"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -578,7 +610,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 34);
+        assert_eq!(CATALOG.len(), 35);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -611,8 +643,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 23);
-        assert_eq!(captain.len(), 34);
+        assert_eq!(worker.len(), 24);
+        assert_eq!(captain.len(), 35);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -668,6 +700,7 @@ mod tests {
             with(|t| t.idempotent && !t.read_only),
             [
                 "work_item_update",
+                "work_item_block",
                 "work_item_assign",
                 "channel_listen",
                 "set_session_profile",

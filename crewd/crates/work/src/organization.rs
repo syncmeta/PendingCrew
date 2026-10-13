@@ -119,7 +119,12 @@ pub fn merge_legacy_books(books: Vec<BookState>) -> Result<LegacyMerge, Migratio
         state.last_ask = ask_offset
             .checked_add(s.last_ask)
             .ok_or_else(|| exhausted("H"))?;
-        let last_entry = s.entries.keys().next_back().map_or(0, |id| id.0);
+        let last_entry = s
+            .entries
+            .keys()
+            .next_back()
+            .map_or(0, |id| id.0)
+            .max(s.last_entry);
         let next_entry_offset = entry_offset
             .checked_add(last_entry)
             .ok_or_else(|| exhausted("#"))?;
@@ -208,6 +213,7 @@ pub fn merge_legacy_books(books: Vec<BookState>) -> Result<LegacyMerge, Migratio
         }
         identities.insert(crew, map);
         entry_offset = next_entry_offset;
+        state.last_entry = entry_offset;
     }
     // last_seq = 0 describes only the new organization event stream. No Created
     // events are fabricated; old sequences and event payloads remain source evidence.

@@ -160,6 +160,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_history" => work::history(&cx, args).await,
         "work_item_create" => work::create(&cx, args).await,
         "work_item_update" => work::update(&cx, args).await,
+        "work_item_block" => work::block(&cx, args).await,
         "work_item_assign" => work::assign(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
         "read_channel" => messaging::read_channel(&cx, args).await,

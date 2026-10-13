@@ -1016,3 +1016,23 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 
 ## work_item_history.limit
 每页最多 1 到 200 条，默认 20 条。
+
+## work_item_block
+
+原子地把工作卡在 W 项、已有 H 问题或新的人类问题上。必答其余部分能否继续；拆分项固定挂在原项下，未指定负责人时继承原负责人。使用当前版本和对象的真实权限。
+
+## work_item_block.id
+
+公共 W 编号。
+
+## work_item_block.expected_revision
+
+当前版本的十进制字符串；冲突会返回当前事实。
+
+## work_item_block.on
+
+1 至 16 个 work/human/new_human 卡点；新问题默认方案使用 text 和 after_minutes。
+
+## work_item_block.can_continue
+
+必填：type 为 nothing，或 split 并提供 1 至 20 个 work_item_create 格式的项；不能另设 parent。

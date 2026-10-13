@@ -5,7 +5,7 @@ use crewd_proto::{
     WorkPatrolWait,
 };
 use crewd_store::{StoreError, object_refs::ObjectKind, work_stop_checks};
-use crewd_work::{LostCause, SessionId, Ts, WorkBook};
+use crewd_work::{LostCause, SessionId, Ts};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -22,23 +22,14 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
             ..Default::default()
         },
     )?;
-    let mut crews: BTreeMap<String, WorkBook> = BTreeMap::new();
+    let book = asks::load_org(conn)?;
     let mut owners: BTreeMap<SessionId, (Option<String>, bool)> = BTreeMap::new();
     let mut items = Vec::with_capacity(page.items.len());
     for row in page.items {
-        if let std::collections::btree_map::Entry::Vacant(entry) = crews.entry(row.crew_id.clone())
-        {
-            entry.insert(asks::load(conn, &row.crew_id)?);
-        }
-        let book = &crews[&row.crew_id];
         let reference =
             crewd_store::object_refs::get(conn, ObjectKind::Plan, work::number(&row.id)?)?
                 .ok_or_else(|| StoreError::Invalid("patrol item has no issued identity".into()))?;
-        let local: crewd_work::WorkId = reference
-            .source_id
-            .strip_prefix("work:")
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| StoreError::Invalid("patrol item identity is invalid".into()))?;
+        let local = work::core_plan(conn, &reference)?;
         let item =
             book.state().items.get(&local).ok_or_else(|| {
                 StoreError::Invalid("patrol item has no authoritative state".into())

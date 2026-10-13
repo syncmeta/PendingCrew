@@ -16,7 +16,12 @@ pub(crate) const MIN: i64 = 60_000;
 /// ```
 /// 大厅、机长指针、next_ext、游标由 `backfill_v3` 建好，总机组的标记由 `backfill_v4` 落定（与迁移同一条路）。
 pub(crate) fn store() -> Store {
-    let s = Store::open_in_memory().unwrap();
+    populate(Store::open_in_memory().unwrap())
+}
+pub(crate) fn v8_store() -> Store {
+    populate(crewd_store::testing::open_v8_store().unwrap())
+}
+fn populate(s: Store) -> Store {
     let c = s.conn();
     for (id, title, number, management, at) in [
         (

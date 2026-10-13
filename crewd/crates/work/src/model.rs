@@ -364,6 +364,9 @@ pub struct BookState {
     /// 最后发出的 W 号 / H 号 / 事件序号；号码只增不复用。
     pub last_item: u32,
     pub last_ask: u32,
+    /// Organization requirement identity high-water mark; purge never lowers it.
+    #[serde(default)]
+    pub last_entry: i64,
     pub last_seq: u64,
     /// 账本见过的最晚时间。命令用 max(传入的 now, clock)：墙钟往回跳不会让账本卡死（裁定 10）。
     pub clock: Ts,
@@ -402,6 +405,7 @@ impl BookState {
             asks: BTreeMap::new(),
             last_item: 0,
             last_ask: 0,
+            last_entry: 0,
             last_seq: 0,
             clock: Ts(0),
             stop_streaks: BTreeMap::new(),

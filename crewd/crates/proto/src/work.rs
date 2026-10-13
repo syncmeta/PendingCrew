@@ -235,3 +235,40 @@ pub struct WorkPendingTransfer {
     pub note_truncated: bool,
     pub at: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkBlockOn {
+    Work {
+        id: String,
+    },
+    Human {
+        id: String,
+    },
+    NewHuman {
+        question: String,
+        #[serde(default)]
+        default: Option<crate::AskDefault>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkContinuation {
+    Nothing,
+    Split { items: Vec<WorkCreateParams> },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkBlockParams {
+    pub id: String,
+    pub expected_revision: String,
+    pub on: Vec<WorkBlockOn>,
+    pub can_continue: WorkContinuation,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkBlockReply {
+    pub item: WorkPlan,
+    pub human_tasks: Vec<String>,
+    pub split: Vec<String>,
+}
