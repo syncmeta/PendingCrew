@@ -6,19 +6,22 @@ case "$mode" in graceful|crash) ;; *) echo "expected graceful or crash" >&2; exi
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/crewd/target}
 (cd "$root/crewd" && cargo build --locked -p crewd -p crewd-exec --bins)
+server_program=${PENDINGCREW_TEST_CREWD_PROGRAM:-$target/debug/crewd}
+[ -x "$server_program" ] || { echo "synthetic backend program is not executable" >&2; exit 2; }
 fixture=$(mktemp -d /private/tmp/pcw-swift-restart.XXXXXX)
 mkdir -p "$fixture/home" "$fixture/work" "$fixture/cache" "$fixture/data"
 echo "Full synthetic logs: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache/swift" -parse-as-library \
     "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdWorkspace.swift" \
     "$root/scripts/dev/fixtures/crewd-client-restart.swift" -o "$fixture/client-test"
-python3 - "$target" "$fixture" "$mode" <<'PYTHON'
+python3 - "$target" "$fixture" "$mode" "$server_program" <<'PYTHON'
 import os, pathlib, socket, subprocess, sys, time
 target, fixture = map(pathlib.Path, sys.argv[1:3])
 mode = sys.argv[3]
+server_program = sys.argv[4]
 env = {'PATH':'/usr/bin:/bin:/usr/sbin:/sbin','HOME':str(fixture/'home'),
        'SHELL':'/usr/bin/false','PENDINGCREW_DATA_DIR':str(fixture/'legacy')}
-args = [str(target/'debug/crewd'),'--data-dir',str(fixture/'data'),'serve',
+args = [server_program,'--data-dir',str(fixture/'data'),'serve',
         '--codex',str(target/'debug/fake_codex'),'--claude','/usr/bin/false',
         '--codex-env','HOME='+str(fixture/'home'),'--codex-env','SHELL=/usr/bin/false',
         '--codex-env','FAKE_CODEX_LOG='+str(fixture/'rpc.log')]
