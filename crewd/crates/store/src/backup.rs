@@ -152,13 +152,18 @@ pub fn vacuum_into(conn: &Connection, dest: &Path) -> Result<()> {
 
 /// 同 `vacuum_into`，另外要求拍完之后还剩 `reserve` 字节可用空间。
 pub fn vacuum_into_reserving(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
-    snapshot_steps(conn, dest, reserve).map_err(|e| StoreError::Snapshot {
+    snapshot_steps(conn, dest, reserve, false).map_err(|e| StoreError::Snapshot {
         dest: dest.to_path_buf(),
         source: Box::new(e),
     })
 }
 
-fn snapshot_steps(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
+fn snapshot_steps(
+    conn: &Connection,
+    dest: &Path,
+    reserve: u64,
+    invalidate_remote_trust: bool,
+) -> Result<()> {
     let dir = dest
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -197,6 +202,26 @@ fn snapshot_steps(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
                 .open(&tmp)?;
         }
         conn.execute("VACUUM INTO ?1", [tmp_str])?;
+        if invalidate_remote_trust {
+            // Never install an old active grant even if the process crashes just
+            // after rename. Transform only this private staging copy, not the backup.
+            let mut copy =
+                Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            let mode: String = copy.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
+            if !mode.eq_ignore_ascii_case("delete") {
+                return Err(StoreError::Invalid(
+                    "restore staging journal mode unavailable".into(),
+                ));
+            }
+            copy.execute_batch(if crate::FULLFSYNC {
+                "PRAGMA synchronous=FULL; PRAGMA fullfsync=ON; PRAGMA foreign_keys=ON;"
+            } else {
+                "PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;"
+            })?;
+            let tx = copy.transaction()?;
+            crate::remote::invalidate_for_work_replacement(&tx, "work_restore", &crate::now_ts())?;
+            tx.commit()?;
+        }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
         {
             let copy = open_for_check(&tmp)?;
@@ -666,7 +691,10 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     } else {
         None
     };
-    vacuum_into(&src, &db)?;
+    snapshot_steps(&src, &db, 0, true).map_err(|e| StoreError::Snapshot {
+        dest: db.clone(),
+        source: Box::new(e),
+    })?;
     let id_path = data_dir.join(crate::ID_FILE);
     match src_id {
         Some(id) => fsutil::atomic_write(&id_path, format!("{id}\n").as_bytes(), 0o600)?,

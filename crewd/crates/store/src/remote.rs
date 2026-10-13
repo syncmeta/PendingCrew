@@ -292,3 +292,49 @@ pub fn live_grant(
     Ok(grant(conn, grant_id, authority)?
         .filter(|g| g.revoked_at.is_none() && g.client_spki_sha256 == client_pin))
 }
+
+/// Work replacement cannot roll back device revocation. Execute this inside the
+/// owning restore staging transaction or legacy-import work transaction. Source
+/// backups and unrelated work/event/clock/revision facts remain unchanged.
+pub fn invalidate_for_work_replacement(conn: &Connection, reason: &str, at: &str) -> Result<()> {
+    if !matches!(reason, "work_restore" | "work_import") {
+        return Err(StoreError::Invalid(
+            "invalid remote trust invalidation reason".into(),
+        ));
+    }
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_grants')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(());
+    } // Pre-M6 work snapshots contain no remote trust.
+    let overflow: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM remote_grants WHERE revoked_at IS NULL AND revision>=9223372036854775807) OR EXISTS(SELECT 1 FROM remote_configuration WHERE revision>=9223372036854775807)", [], |r| r.get(0))?;
+    if overflow {
+        return Err(StoreError::Invalid(
+            "remote trust revision exhausted".into(),
+        ));
+    }
+    conn.execute(
+        "UPDATE remote_configuration SET enabled=0,revision=revision+1 WHERE singleton=1",
+        [],
+    )?;
+    conn.execute("UPDATE remote_grants SET revision=revision+1,revoked_at=?1,revoke_note='工作数据已替换，请重新配对' WHERE revoked_at IS NULL", [at])?;
+    conn.execute(
+        "UPDATE remote_invitations SET consumed_at=?1 WHERE consumed_at IS NULL",
+        [at],
+    )?;
+    if let identity = identity(conn)? {
+        audit(
+            conn,
+            &identity.authority_id,
+            None,
+            reason,
+            None,
+            at,
+            r#"{"remoteTrustInvalidated":true}"#,
+        )?;
+    }
+    Ok(())
+}
