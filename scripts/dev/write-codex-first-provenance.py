@@ -27,6 +27,8 @@ def logcheck(root,value):
   if [line[len(field)+2:] for line in lines if line.startswith(field+': ')] != [want]:raise ValueError('Actual build log '+field+' differs')
  commands=[line[9:] for line in lines if line.startswith('Command: ')]
  if len(commands)!=1 or 'cargo' not in commands[0] or 'crewd' not in commands[0]:raise ValueError('Actual Rust build command missing')
+ configs=[json.loads(line[len('BuildConfiguration: '):]) for line in lines if line.startswith('BuildConfiguration: ')]
+ if configs != [value.get('buildConfiguration')]:raise ValueError('Actual logged Rust configuration differs')
 def requested_configuration():
  rust=subprocess.check_output([os.environ.get('RUSTC','rustc'),'-Vv'],text=True).strip()
  host=next(line[6:] for line in rust.splitlines() if line.startswith('host: '))
@@ -96,6 +98,7 @@ def main():
    if sha(pathlib.Path(artifact['executable']))!=backend['preSignSHA256']:raise ValueError('Recorded actual Cargo executable differs from packaged input')
    config=dict(requested);config.update(artifactFeatures=sorted(set(artifact.get('features',[]))),artifactProfile=artifact['profile'],workspaceFeatures=workspace)
    complete_configuration(config);manifest['backendBuildConfiguration']=config;backend['buildConfiguration']=config
+   with (out/'backend-build.log').open('a') as log:log.write('BuildConfiguration: '+json.dumps(config,sort_keys=True,separators=(',',':'))+'\n')
    backend.update(buildLog='backend-build.log',buildLogSHA256=sha(out/'backend-build.log'))
    evidence=out/'rust-evidence';snap=evidence/root.name;snap.mkdir(parents=True)
    shutil.copytree(root/'crewd',snap/'crewd');shutil.copyfile(out/'crewd.pre-sign',evidence/'crewd.input');shutil.copyfile(out/'backend-build.log',evidence/'backend-build.log')
