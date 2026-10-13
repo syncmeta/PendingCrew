@@ -38,6 +38,8 @@ def main():
   write(out/'input-witness.json',{'format':1,'sourceRef':ref,'evidenceDirectory':out.name,'snapshotDirectory':snapshot.name,'files':rows,'rustInputDigest':digest(rows)})
   print('PREPARED (no build):',out,'RustInputDigest:',digest(rows))
  elif mode=='build':
+  completed=out.parent/(out.name+'-witness.json')
+  if completed.exists():raise ValueError('completed witness already exists; do not overwrite evidence')
   binary=pathlib.Path(sys.argv[4]).resolve();argv=sys.argv[5:]
   if argv[:2]!=['cargo','build'] or '--offline' not in argv or '--locked' not in argv:raise ValueError('explicit offline locked Cargo build argv required')
   if '--message-format=json' not in argv:raise ValueError('actual compiler-artifact JSON evidence required')
@@ -81,9 +83,26 @@ def main():
   if not binary.is_file() or binary.is_symlink():raise ValueError('expected actual crewd binary missing')
   saved=out/'crewd-presign';shutil.copy2(binary,saved)
   evidence.update(buildConfiguration=configuration,toolchainFile="rustc-version.txt",toolchainSHA256=sha(out/"rustc-version.txt"),binaryFile=saved.name,binarySHA256=sha(saved),buildLog=log.name,buildLogSHA256=sha(log))
-  write(out/'backend-witness.json',evidence)
-  print('BUILT with actual command/exit/input/binary evidence:',out/'backend-witness.json')
- else:raise ValueError('expected prepare or build')
+  write(completed,evidence)
+  print('BUILT with actual command/exit/input/binary evidence:',completed)
+ elif mode=='export':
+  # Explicit upgrade of the first recorded layout; never a checker/builder fallback.
+  completed=out.parent/(out.name+'-witness.json')
+  if completed.exists():raise ValueError('completed witness already exists')
+  evidence=json.loads((out/'backend-witness.json').read_text())
+  rows=inputs(out/evidence['snapshotDirectory'])
+  if rows!=evidence['files'] or digest(rows)!=evidence['rustInputDigest']:raise ValueError('recorded source snapshot mismatch')
+  if evidence.get('evidenceDirectory')!=out.name:raise ValueError('evidence directory identity mismatch')
+  for file_key,hash_key in [('binaryFile','binarySHA256'),('buildLog','buildLogSHA256'),('toolchainFile','toolchainSHA256')]:
+   name=evidence[file_key]
+   if pathlib.Path(name).name!=name or sha(out/name)!=evidence[hash_key]:raise ValueError('recorded binary/log evidence mismatch')
+  log=(out/evidence['buildLog']).read_text()
+  cfg=json.dumps(evidence['buildConfiguration'],sort_keys=True,separators=(',',':'))
+  for line in ['Snapshot: '+evidence['snapshotDirectory'],'InputDigest: '+evidence['rustInputDigest'],'Exit: 0','BuildConfiguration: '+cfg]:
+   if line not in log.splitlines():raise ValueError('recorded successful build/configuration marker missing')
+  if not any(line.startswith('Command: ') and 'cargo build' in line for line in log.splitlines()):raise ValueError('recorded actual Cargo command missing')
+  write(completed,evidence);print('EXPORTED existing verified evidence without rebuilding:',completed)
+ else:raise ValueError('expected prepare, build or explicit export')
 try:main()
 except (ValueError,OSError,KeyError,IndexError,subprocess.CalledProcessError) as e:
  print('FAIL:',e,file=sys.stderr);sys.exit(1)

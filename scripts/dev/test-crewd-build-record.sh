@@ -22,9 +22,9 @@ def run(stage,out,ref,want):
  p=subprocess.run(['python3',str(record),'build',str(repo),str(out),str(base/'tiny-target/debug/crewd'),'cargo','build','-p','crewd','--locked','--offline','--message-format=json'],env=env,capture_output=True,text=True)
  (base/(stage+'.log')).write_text(p.stdout+p.stderr);assert (p.returncode==0)==want,(stage,p.stdout,p.stderr)
  if want:
-  v=json.loads((out/'backend-witness.json').read_text());cfg=v['buildConfiguration'];assert cfg['profile']=='debug' and cfg['defaultFeatures'] and not cfg['allFeatures'];assert cfg['artifactProfile']['test'] is False and cfg['workspaceFeatures']=={'crewd':[]};assert (out/v['binaryFile']).is_file();assert 'Exit: 0' in (out/v['buildLog']).read_text()
+  v=json.loads((out.parent/(out.name+'-witness.json')).read_text());cfg=v['buildConfiguration'];assert cfg['profile']=='debug' and cfg['defaultFeatures'] and not cfg['allFeatures'];assert cfg['artifactProfile']['test'] is False and cfg['workspaceFeatures']=={'crewd':[]};assert (out/v['binaryFile']).is_file();assert 'Exit: 0' in (out/v['buildLog']).read_text()
  else:
-  assert not (out/'backend-witness.json').exists(),'failed compiler must not emit a completed build witness';assert 'Exit: 101' in (out/'cargo-build.log').read_text()
+  assert not (out.parent/(out.name+'-witness.json')).exists(),'failed compiler must not emit a completed build witness';assert 'Exit: 101' in (out/'cargo-build.log').read_text()
 run('actual-success',base/'success-evidence',commit('valid synthetic source'),True)
 source.write_text('fn main() { deliberate invalid syntax }\n')
 run('actual-failure',base/'failure-evidence',commit('real compiler failure control'),False)
