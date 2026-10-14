@@ -1,5 +1,24 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 停手与接手检查点（2026-10-14，优先于下文在途状态）
+
+用户明确要求本会话收尾、总结后停手，剩余由另一个session继续。不得据下文“持续推进”条款、旧heartbeat或已恢复磁盘空间自行恢复。本工程未完成；Jev/记忆仍只保留方案，Codex内部通信仍延期，Claude仍须真实交互PTY。
+
+已完成本次收尾：
+
+- main仍为已推送并完整CI通过的 `fe68022f`；本轮新的schema11与Native客户端尚未合main、安装或切换日常数据。用户README/设计/旧ACP未提交资料保留。
+- 根隔离树 `/Users/hey/.codex/worktrees/global-work-flow-20261013/PendingCrew` 的后台11候选 `cf22e789` 已保存远端，当前已再接覆盖修正 `2001ac91`（原 `c42828e3`）。只整合crewd，未带未验Native客户端。
+- 正常后台28cc源/360完整Rust输入/实际默认features构建与二进制来源独核通过。正式normal10→11升级、保护备份失败、第二DDL回滚、副本重试、旧版拒写、业务与UUID重开全部实际通过。旧normal28 witness只证明其原输入，不能倒推后来test-only源码。
+- 最终后台CI `38494334844` 精确 `c42828e3` 已success：Linux/Mac均2557pass/10skip，Linux1leaky分类，Mac无leaky；fmt/严格lint/doctest同run通过。原完整日志 `/private/tmp/pcw-M6-backend-ci-c42828e3-green.log`。observer63184终态0，不再轮询或重跑。
+- 普通配置Xcode26.5 CI `38492408688` 精确 `28ccf9c7` 已success：Mac3202总/3187pass/15skip/0fail、iOS Simulator BUILD SUCCEEDED、工程同步通过。原日志 `/private/tmp/pcw-M6-native-ci-28ccf9c7-green.log`；observer54017终态0。不是专用候选条件或实际窗口证明。
+- 实际临时TLS生产配对/撤销/同身份恢复信任失效、kernel阻塞writer/排队旧写拒绝/有限全局drain，以及Apple内存vault→真实Network TLS13→Core工作/事件→撤销完整链已通过。原normal迁移与Apple链交接在M6文档，原RED保留。
+- M6源码工作树 `/Users/hey/.codex/worktrees/m6-client-20261014/PendingCrew` clean最终 `e1ea6fc8`。交接 `docs/internal/2026-10-14-m6-stopped-handoff.md`；完整v2 recipe/checker已实现并有结构负对照，实际候选配置仅settings查询通过，完整条件构建/包/窗口/真机仍未验。额外all-features测试因errno28未跑完，不用标准CI冒称该范围已验。
+- M4工作树 `/Users/hey/.codex/worktrees/claude-pty-acp-20261014/PendingCrew` clean最终 `c2fbd2bd`：已保存helper/receipt组件、Core FIFO证据并接11；25 ACP/PTY+6 SQL receipt+1 Core FIFO是组件证据，不是完整M4。schema12仍未激活，M5仍未完成。交接见 `docs/internal/2026-10-14-claude-acp-native-foundation.md`末段。
+- 人类已批准原 `/private/tmp/pcw-M4-metadata-human-scope-5xexpvh8` 的假凭据/本机mock/无模型metadata信任测试。两次已启动受控尝试均完成回收、mock0/types0；实际trust未确认，原生接口类型仍unknown。许可不扩为真实账号或模型任务，下次先按交接核当前菜单与exact scope，不在本会话重启。
+- 所有自有编译、metadata与CI观察句柄已终态；三个子代理已收尾。原源、日志、数据库、图、SDK实际对象、二进制、候选与witness保留。可再生缓存回收都有清单；恢复空间不是恢复开发授权。
+
+下一session从现有检查点接续，优先整合完整源码/正常helper来源一致的候选，完成专用条件全目标构建、实际v2包及窗口/设备验收；M4完成正式12接线、完整生命周期与全帧deadline边界，再接M5。保留泛厂商通信、原微信式布局与既有授权边界，不重新开发已验模块。当前目标与pendingcrew自动跟进在收尾后暂停，不能标全工程完成。
+
 本节为当前工程推进依据。后面的历史记录保留证据和决定，不能覆盖当前依赖顺序。原始设计规范、用户原布局、通用跨厂商、原始数据与权限边界仍然有效；不得把整个工程改成只完成已经写好的模块。
 
 ## 最终工程目标与近期交付关口
