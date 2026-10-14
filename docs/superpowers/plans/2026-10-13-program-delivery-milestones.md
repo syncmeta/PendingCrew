@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 Core14默认失败整块因果修复冻结
+
+双平台默认CI原11个不同失败已完成整块源码与本机影响验收，独立报告 `/private/tmp/pcw-M14-default-ci-whole-fix-20/independent-whole-acceptance.json` SHA `ef0c6bbc9584e23371d162f7bbf3b714e365dac2763796beddc7ced2ee394b16`。390完整输入、12变更路径、20份实际证据核齐；whole.patch SHA `9c7d299980d318745378ec64144a5a6406f10e1070cfd4feb300d7f013ffd125`。根核整个diff一致后保存并普通推送 `0a6a0521330ace1647b2678c09d0738777aede1b`，开发树干净。DDL、proto/API与8c逐字相同，Native15不混入。
+
+读EOF先立即关闭输入权限并撤物理fence，输出仅按原有限预算排空原已接受响应/事件；排队旧actor的write/resize/claim/approval/respond/start与原子首消息均拒、零SQL副作用，hard revoke不能复活输入。真实半关连接合法reclaim/旧Unknown不冒零字节、新reader写入/原birth退出及daemon0；slow TLS部分帧撤权和排队零effects闭合。默认32×400模拟保原RNG/覆盖，无增栈或减断言；出生耐久ACK/全表回滚/损坏与未知WAL保护/历史迁移断言保持。此接受是源码与本机affected机制层，不是完整双host默认CI或新normal来源。
+
+客户端候选配置与实际iOS日志就绪/晚authority回调同批尚在冻结；required journal未就绪不发布可写adapter、所有write typed notSubmitted，无fallback/replay，保原自身socket只读诊断，await赋值前核captured epoch/scope/authority，不停止daemon或丢ownedIPC。待客户端整块QA接受后整合准确fullref，唯一后台作者新normal、完整原前端候选和一次必要双host默认验证含doctest；旧8c normal06/package12与CI失败保原来源，不重标。已验Linux隔离迁移与稳定业务不重复，额外all-features仍未验。磁盘实核10GiB，无容量阻断、未清理。B人工前台确认、SDK06具体授权仍未答；安装、日常切换、main产品、公开发布、真机及完整Native ACP仍未交付。
+
 ## 2026-10-15 新normal/Apple12来源接受但默认回归真实阻断
 
 准确8c906dc50b2993e71ddeba186799e0dbeec3dfca新strongnormal06实际84140 terminal0/46.68s；binarybf92e57d26d03c0579c7c12c517f02545c7d8287373c1458f4181efeb60bbd67/witness8b9aac1f8d04e52f5da958b2a7b5c1b72484ec03a1acc33e3f6d710193fac9b7/390digesta00d2ae94e234d9381c7249945a39cb08c398dad9ebab08f2733c5177316bb9d、raw12ownfresh/defaultDebug全来源独验接受，报告/private/tmp/pcw-M14-normal8c906dc5-independent-06.json。完整/private/tmp/pcw-original-frontend-candidate14-8c906dc5-12队列28157三target实际0，1346Gitinputs/3738SPM前后/GUI与helper compiled8c/六postsign加载文件及deepseal/两unsignedmobile SDK配置产品来源独核齐；whole报告/private/tmp/pcw-original-front14-12-wholeApple-independent.json SHA9d7606da50d3b764b4b27d855b1108fcc932a5f19e0d7694b80ee654d30b8a95。来源准备层接受，不冒新窗口/运行/设备/最终产品。
