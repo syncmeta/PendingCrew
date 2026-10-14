@@ -11,9 +11,15 @@
 # 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
 # 按 Rust 改动触发，互不拖累，也互不遮挡。
 name: crewd
+run-name: "${{ inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
 
 on:
   workflow_dispatch:
+    inputs:
+      linux_candidate_only:
+        description: Build and verify the Linux development candidate only (not full CI)
+        type: boolean
+        default: false
   # **push 上不设 paths 过滤**，理由同 ci.yml 里那段长注释：push 上的 paths 按这一推
   # 的 head 提交判，纯 .md 的收尾提交会让一次推 28 笔代码的流水线整条不触发。
   # 省下的只是几分钟免费机器时间，赔进去的是「main 被验过」这个前提。
@@ -41,6 +47,7 @@ env:
 
 jobs:
   check:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true) }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -121,3 +128,37 @@ jobs:
           name: crewd-junit-${{ matrix.name }}
           path: crewd/target/nextest/ci/junit.xml
           if-no-files-found: ignore
+
+  linux-candidate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read repository toolchain
+        id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' crewd/rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd
+      - name: Resolve locked dependencies into existing runner cache
+        working-directory: crewd
+        run: cargo fetch --locked
+      - name: Build actual normal release and packaged synthetic recovery
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+        run: python3 scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/crewd-linux-candidate"
+      - name: Preserve candidate and complete build/runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-linux-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/crewd-linux-candidate
+          if-no-files-found: error
+          retention-days: 14
