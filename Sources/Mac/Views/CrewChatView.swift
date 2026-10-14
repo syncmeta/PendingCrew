@@ -452,9 +452,7 @@ struct CrewChatView: View {
     /// 进屏取回本 crew 记着的草稿。文本 / 已挂上的 @ / 正在回复谁一起取 —— 只取文本的话
     /// 恢复出来的 `@某人` 就成了一串没有目标的字（看着 @ 了，发出去谁也没 @ 到）。
     private var draftStorageKey: String {
-        #if os(macOS)
         if let backend = appModel.crewdBackend { return backend.workspace.presentationNamespace + "/" + crewId }
-        #endif
         return crewId
     }
 
@@ -470,11 +468,9 @@ struct CrewChatView: View {
 
     /// 存回去（草稿一动就存；发送成功后由 `send()` 清）。
     private func saveDraft() {
-        #if os(macOS)
         if let workspace = appModel.crewdBackend?.workspace {
             workspace.messageDrafts.set(draft, for: .message(crew: crewId, channel: crewId + "/lobby", session: ""))
         }
-        #endif
         CrewComposerDraftStore.shared.save(
             .init(text: draft, stagedMentions: stagedMentions, replyTarget: replyTarget),
             for: draftStorageKey)
@@ -645,6 +641,22 @@ struct CrewChatView: View {
     /// 这一刻的可达性事实。判定本身在纯函数里（`CrewMessageReferencePills`），
     /// 这里只负责从活状态里把事实取出来。
     private func pillContext(for entry: CrewWhiteboardEntry) -> CrewMessageReferencePills.Context {
+        if let workspace = appModel.crewdBackend?.workspace {
+            // Resolve only identities supplied by this authority. Legacy crew
+            // numbers/Todo IDs cannot be looked up in a second local ledger.
+            let sessions = Dictionary(workspace.sessions.compactMap { row -> (String, String)? in
+                guard let id = row["id"].string else { return nil }
+                return (id, row["title"].string ?? row["displayName"].string ?? id)
+            }, uniquingKeysWith: { first, _ in first })
+            var targets: [String: CrewMessageReferencePills.Target] = [:]
+            for reference in entry.references ?? [] where reference.resolvedKind == .crew {
+                guard let row = workspace.crews.first(where: { $0["id"].string == reference.targetId }),
+                      let id = row["id"].string else { continue }
+                targets[reference.targetId] = .init(crewId: id, title: row["title"].string ?? id, sessionId: nil)
+            }
+            return .init(selfMessageId: entry.id, loadedMessageIds: Set(entries.map(\.id)),
+                         openableSessions: sessions, crewTargets: targets, externalTodos: [:])
+        }
         #if os(macOS)
         // 只认**这个群里在跑的** session：跳右栏靠 run 的 runID，没有 run 就跳不过去。
         let sessions = Dictionary(
@@ -738,6 +750,17 @@ struct CrewChatView: View {
         #if os(macOS)
         let here = CrewChatReturnTrail.Stop(
             crewId: crewId, crewTitle: crewTitle, messageId: entry.id)
+        if let workspace = appModel.crewdBackend?.workspace {
+            // Old reference numbers cannot open a legacy Todo store. Show the
+            // actual authority panel without pretending to resolve an old ID.
+            switch pill.action {
+            case .todo: workspace.originalSection = "Todo"; return
+            case .crossCrewTodo(let source, _, _, _):
+                onJumpToCrew?(source, here); workspace.originalSection = "Todo"; return
+            case .plan: workspace.originalSection = "进展"; return
+            default: break
+            }
+        }
         switch pill.action {
         case .todo(let ledger, let number):
             CrewTodoDetailWindowPresenter.shared.open(

@@ -67,6 +67,8 @@ final class CrewdWorkspace: ObservableObject {
     @Published var crewID = ""
     @Published var sessionID = ""
     @Published var channelID = ""
+    @Published var originalObservedUnread: [String: Int] = [:]
+    private var observedMessageIDs = Set<String>()
     @Published var originalSection = "消息"
     @Published var inspection: CrewdValue = .null
     @Published var runnerItems: [CrewdValue] = []
@@ -80,7 +82,6 @@ final class CrewdWorkspace: ObservableObject {
     let dataDirectory: URL?
     typealias Connector = @MainActor (CrewdClient) async throws -> Void
     private let connector: Connector
-    private var continuousOwnedConnection = false
     private var retired = false
     var isRetired: Bool { retired }
     private var generation = UUID()
@@ -116,6 +117,10 @@ final class CrewdWorkspace: ObservableObject {
         self.connector = connector
         client.onEvent = { [weak self] name, data in
             guard let self, !self.retired else { return }
+            if name == "message.appended", let id = data["id"].string, self.observedMessageIDs.insert(id).inserted,
+               let sender = data["senderSessionId"].string, sender != self.sessionID {
+                self.originalObservedUnread[sender, default: 0] += 1
+            }
             self.authorityEvents.send((name, data))
             self.resources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
@@ -137,7 +142,6 @@ final class CrewdWorkspace: ObservableObject {
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
-            self?.continuousOwnedConnection = false
             guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
@@ -217,7 +221,7 @@ final class CrewdWorkspace: ObservableObject {
             try p.run(); backend = p; try log.close()
             for _ in 0..<30 {
                 try await Task.sleep(for: .milliseconds(100))
-                do { try await connectOnly(); continuousOwnedConnection = true; return } catch { if sleeping || Task.isCancelled { return } }
+                do { try await connectOnly(); return } catch { if sleeping || Task.isCancelled { return } }
                 if !p.isRunning { throw CrewdClientError(message: "后台启动失败，请查看连接信息中的日志。") }
             }
             throw CrewdClientError(message: "后台启动后未能建立连接，请检查后台日志。")
@@ -227,25 +231,13 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    /// No path/UUID guessing: a dropped/retired IPC cannot prove a new server
-    /// is this Process. Keep Quit pending until the owning process can be confirmed.
+    /// The current NWConnection transport exposes no kernel peer identity.
+    /// A running child plus a matching IPC path does not prove that this
+    /// connection reaches that child. Until an authenticated kernel association
+    /// exists, preserve pending Quit rather than send hibernate to a rival daemon.
     func quitOwnedLocalHelper() async throws {
         guard let owned = backend, owned.isRunning else { return }
-        guard !retired, continuousOwnedConnection, client.connected else {
-            throw CrewdClientError(message: "本 App 启动的本机后台仍在运行，但原连接已丢失，尚不能确认安全退出。不会停止其它后台。", kind: .notSubmitted)
-        }
-        sleeping = true; reconnect?.cancel(); sync?.cancel()
-        do { _ = try await submitRPC("crewd.hibernate", .object([:])) }
-        catch {
-            // Preserve the command's unknown snapshot. Actual Process exit is
-            // the only termination confirmation, not an RPC timeout or window close.
-            if !CrewdClientError.isUncertainSubmission(error) { sleeping = false; throw error }
-        }
-        for _ in 0..<300 {
-            if !owned.isRunning { backend = nil; return }
-            try await Task.sleep(for: .milliseconds(100))
-        }
-        throw CrewdClientError(message: "尚未确认本 App 的后台已退出；休眠结果保留为待核对，不强制杀进程。")
+        throw CrewdClientError(message: "本 App 启动的本机后台仍在运行，但当前连接尚无内核进程身份核对，无法确认安全退出。退出请求保留待核对，不会停止其它后台。", kind: .notSubmitted)
     }
     #endif
     private func connectOnly() async throws {

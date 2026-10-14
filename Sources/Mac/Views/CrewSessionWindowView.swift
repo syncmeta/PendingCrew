@@ -81,11 +81,13 @@ struct CrewSessionWindowView: View {
         .task {
             // Read-only detection. The explicit notice owns both confirmation
             // clicks; merely opening this pane must never install a CLI.
+            guard !appModel.usesCrewdAuthority || appModel.crewdBackend?.workspace.dataDirectory != nil else { return }
             if cliVersions.codexProvisioningState == nil {
                 await cliVersions.refresh(.codex)
             }
         }
         .task {
+            guard !appModel.usesCrewdAuthority else { return }
             while !Task.isCancelled {
                 let dir = LocalWhiteboardStore.defaultDirectory
                 let table = await Task.detached(priority: .utility) {
@@ -98,6 +100,7 @@ struct CrewSessionWindowView: View {
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
         .onChange(of: sessionRunner.selectedRunId) { _, newId in
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
+                if appModel.usesCrewdAuthority { appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return }
                 SessionUnreadStore.shared.markViewed(run.sessionId)
             }
         }
@@ -759,6 +762,7 @@ struct CrewSessionWindowView: View {
     private func badgeCount(for run: CrewSessionRun) -> Int {
         _ = badgeTick // 依赖 tick，白板变更事件到来时让 SwiftUI 重算
         if run.runID == sessionRunner.selectedRunId { return 0 }
+        if appModel.usesCrewdAuthority { return appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] ?? 0 }
         return SessionUnreadStore.shared.unreadCount(
             crewId: run.crewId, sessionId: run.sessionId,
             whiteboard: .shared)
@@ -1582,6 +1586,9 @@ private struct SessionRunContentView: View {
         let (text, color): (String, Color) = {
             switch status {
             case .running: return ("running", .blue)
+            case .inactive:
+                if let backend = run.backend as? CrewdOriginalSessionBackend, !backend.hasObservedLive { return ("正在核对后台状态", .secondary) }
+                return ("未运行 · 结束结果未确认", .secondary)
             case .completed:
                 if let code = exitCode {
                     return code == 0 ? ("退出 0", .green) : ("退出 \(code)", .orange)

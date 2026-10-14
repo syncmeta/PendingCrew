@@ -27,10 +27,10 @@ final class SessionHost: ObservableObject {
     /// `ownsAppUpdater` = 本进程是不是那个「更新 app」的进程。**daemon 传 false**：
     /// 更新是窗口那一侧的事，而且碰 `AppUpdater.shared` 会把 Sparkle 拉起来 ——
     /// 一个没有 `NSApplication` 的进程里不该有它。
-    init(runner: CrewSessionRunner? = nil,
+    init(presentationOnly: Bool = false, runner: CrewSessionRunner? = nil,
          usage: LocalAgentUsageMonitor? = nil,
          ownsAppUpdater: Bool = true) {
-        self.runner = runner ?? CrewSessionRunner()
+        self.runner = runner ?? CrewSessionRunner(presentationOnly: presentationOnly)
         self.usage = usage ?? LocalAgentUsageMonitor()
         self.ownsAppUpdater = ownsAppUpdater
     }

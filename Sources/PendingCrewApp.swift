@@ -19,7 +19,7 @@ struct PendingCrewApp: App {
     #if os(macOS)
     /// 长期职责的唯一所有者（spec §6）。**必须挂在 App 上而不是任何视图上** ——
     /// 挂视图上就会随视图生灭，那正是我们要修的病。
-    @StateObject private var sessionHost = SessionHost()
+    @StateObject private var sessionHost: SessionHost
     /// 菜单栏那个数字（P5b·B）。挂在 App 上而不是任何视图上 —— 它要在主窗口
     /// 关着的时候仍然在数，那正是这个功能存在的理由。
     @StateObject private var menuBarAttention = MenuBarAttentionModel()
@@ -35,6 +35,9 @@ struct PendingCrewApp: App {
         let appModel = AppModel()
         _model = StateObject(wrappedValue: appModel)
         _crewStore = StateObject(wrappedValue: CrewStore(appModel: appModel))
+        #if os(macOS)
+        _sessionHost = StateObject(wrappedValue: SessionHost(presentationOnly: appModel.usesCrewdAuthority))
+        #endif
         #if os(macOS)
         // 启动即挂 Sparkle 定时检查，不等登录 —— 此前只在 MacRootView.onAppear
         // 才首次触达 AppUpdater.shared，未登录的装机永远不会跑后台检查

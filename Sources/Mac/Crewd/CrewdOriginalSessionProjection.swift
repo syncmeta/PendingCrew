@@ -21,6 +21,7 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     var isBusy: Bool { isWorking }
     private(set) var hasObservedLaunchSignal = false
     private var lastScreen: String?
+    private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind
         terminalView = kind == .codex ? nil : TerminalMirrorView(frame: .zero)
@@ -31,8 +32,15 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     }
     func update(live: CrewdValue, inspection: CrewdValue, items: [CrewdValue]) {
         guard live["sessionId"].string == sessionID else { return }
+        hasObservedLive = true
         status = live["running"] == .bool(true) ? .running : .exited(nil)
         isWorking = live["working"] == .bool(true)
+        let kinds: [String: CrewSessionHealth.Kind] = ["auth_required": .authRequired, "usage_limit": .usageLimit,
+            "rate_limited": .rateLimited, "launch_failed": .launchFailed, "brief_undelivered": .briefUndelivered,
+            "prompt_undelivered": .promptUndelivered, "turn_failed": .turnFailed, "version_incompatible": .cliVersionIncompatible]
+        if let raw = live["health"]["kind"].string, let kind = kinds[raw], let detail = live["health"]["detail"].string {
+            health = CrewSessionHealth(kind: kind, detail: detail)
+        } else { health = nil }
         if let screen = inspection["screen"].string, screen != lastScreen {
             lastScreen = screen; hasObservedLaunchSignal = !screen.isEmpty
             let bytes = Array(("\u{1b}[2J\u{1b}[H" + screen).utf8)
@@ -73,6 +81,12 @@ final class CrewdOriginalSessionProjection {
         self.workspace = workspace; self.runner = runner
         observation = workspace.objectWillChange.sink { [weak self] _ in Task { @MainActor [weak self] in self?.publish() } }
         publish()
+    }
+    deinit {
+        // Queued actor work cannot revive a retired projection; observation
+        // cancellation leaves every real crewd session untouched.
+        let old = Array(projections.values)
+        Task { @MainActor in old.forEach { $0.retireCrewdDisplayObservation() } }
     }
     func publish() {
         guard let runner else { return }
