@@ -252,3 +252,25 @@ Linux formal true old12→new13 uses the reused immutable production binaries an
 Evidence: /private/tmp/pcw-M5-whole-remaining-independent-4c356b78.json, /private/tmp/pcw-M5-{linux,macos}-remaining-4c356b78-success.log and precise GitHub run metadata. New archives are retained singly: Linux266910476B and Mac40645441B. Only new small evidence was extracted (Linux7171604B, Mac1198653B); all original payload files (Linux767, Mac387) and all three new runtime copies were stream-hashed directly from ZIP against existing archives/pinned binaries. Report /private/tmp/pcw-M5-remaining-zip-independent-4c356b78.json. Full old sources/normals were not expanded twice, no binary/proof/cache was deleted, and no duplicate compiler/test run occurred.
 
 The compiled normal sources remain original2bf13 and a76 old12;4c records composition/consumer/fake/physical/migration qualification and does not relabel an old proof as a new normal build. Actual new M4 native SDK/trust and whole ACP lifecycle, schema14 public durable requests/terminal/custody/kernel peer, original frontend final source/package/window/mobile device, installation/daily-data switch/public release and historical all-features full suite remain separate pending units. Actual metadata human readiness is not trust proof: at the current observation the exact authorized scope still has no attempt04 receipt, and QA does not start another native CLI.
+
+
+## Human-confirmed isolated metadata trust: actual two attempts retained
+
+Human explicitly reported already trusting the directory, and QA independently checked the exact original fake scope /private/tmp/pcw-M4-metadata-human-scope-5xexpvh8 rather than treating that report as compatibility proof. The first manual command failed the required real120-column/22-row terminal size guard before native launch; no agent changed terminal dimensions or started native. Two subsequent actual native receipts are retained chronologically by receipt mtime, not selected only for success. Both use reviewed relay7f82c23afa2bf8c50548037b5b1b5f353b72d4286f2c764092378f30a40bad97 and unchanged native2.1.296 SHA c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937.
+
+- First native manual attempt04-human-visible-reviewed-s_c29ydq, PID/PGID/SID1544, receipt2026-10-14T06:37:53.774370Z: one actual human arrow3bytes, then unknown terminal control before confirmation. It refused further input, elapsed12.022386083s, own native reaped exit-9, exact private trust record absent and types0.
+- Second04-human-visible-reviewed-8i2b1c8v, PID/PGID/SID1575, receipt2026-10-14T06:38:04.317184Z: human arrow3bytes on the exact No pane, followed by one Enter1byte on the new exact Yes paint. It permanently locked input, observed generated type bytes, elapsed7.542571792s and reaped own native exit-9. The actual private .claude.json exactROOT project has hasTrustDialogAccepted=true.
+
+Both preserve empty errors, the four observer files' original before/after SHA equality, zero mock requests, no model prompt and verified-owned TERM/KILL cleanup. The mock is the fixed localhost503 handler with no forwarding, and no request occurred. Additional read-only kernel ps inspection found zero remaining exact PID or PGID1544/1575 matches. QA did not start native, send keys, invoke a model, read real profile/session credentials or alter trust files. Complete independent record /private/tmp/pcw-M4-metadata-human-actual-independent-20261014.json references both original receipts and their SHA256.
+
+Actual stable nonempty generated metadata, readPending empty and canonical scope/symlink checks valid, has this manifest:
+
+| Exact generated path under the approved scope | Bytes | SHA256 |
+|---|---:|---|
+| owned-metadata-mod/.claude-plugin/types/claude-code/index.d.ts |621847|ea634205532548aa90020ff3a941e570bff5bec8ae242fb96d09dbcc8fc1bfad|
+| owned-metadata-mod/.claude-plugin/types/claude-code-mcp/index.d.ts |412|0cab298516885f406c7762cf83b84334b5f5f02e1207abc79a02d136f518354b|
+| owned-metadata-mod/.claude-plugin/types/claude-code-tools/index.d.ts |175131|f48996aa14c6525ef0a350aa8764aa45e82b8ff6f5b4bc256798578e274e532a|
+
+Root authorized only offline read-only ABI inspection of these actual type files and the manifest was handed directly to backend. This establishes trust only for the fake private exact directory plus metadata byte generation; declaration completeness/type compilation/actual middleware registration/full SDK lifecycle/real model/native consumption are not established. Earlier three bounded automatic trust failures and these two manual native attempts remain separate evidence. No further native/model startup is authorized by this record.
+
+Actual global M5 integration00acd846 completed and was pushed by root after whole crewd/consumer equality and four-mode workflow composition review. It reuses the accepted normal13 M5 evidence; main/final candidate/original frontend and daily deployment do not follow from that development integration.
