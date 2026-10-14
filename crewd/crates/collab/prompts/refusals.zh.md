@@ -501,3 +501,6 @@ expectedStatus 必须是原始需求状态。
 
 ## channel.work_cursor_expired
 群工作引用已经变化。请刷新当前群的工作视图再重试。
+
+## work.owner_required
+请先指派负责人，再将工作推进为进行中或标为阻塞。

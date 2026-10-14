@@ -42,6 +42,7 @@ refusal_codes! {
     WorkLinkOtherCrew = "work.link_other_crew" ["id"],
     WorkBadTime = "work.bad_time" ["value"],
     WorkBadUpdate = "work.bad_update" [],
+    WorkOwnerRequired = "work.owner_required" [],
     WorkBadId = "work.bad_id" ["input"],
     WorkNotFound = "work.not_found" ["id"],
     WorkBadLimit = "work.bad_limit" [],
