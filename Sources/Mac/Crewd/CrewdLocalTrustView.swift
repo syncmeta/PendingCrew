@@ -61,7 +61,7 @@ struct CrewdLocalTrustView: View {
                     "mode": .string(publisher ? "publisher" : "exactCode"),
                     "expectedCdHash": .string(current.cdHash),
                     "expectedTeam": publisher ? current.team.map(CrewdValue.string) ?? .null : .null
-                ]))
+                ]), crew: "")
                 guard workspace.acceptsObservation(epoch), receipt.phase == .committed, !receipt.historical,
                       let id = receipt.value["result"]["trust"]["id"].string else { throw CrewdClientError(message: "原授权尚未确认；请只读核对回执。") }
                 trustID = id; result = "后台已保存此授权：\(id)。真实新PID恢复仍需实际验收。"
@@ -76,7 +76,7 @@ struct CrewdLocalTrustView: View {
         Task {
             defer { busy = false }
             do {
-                let receipt = try await workspace.submitPublicCommand(.localClientTrustRevoke, params: .object(["trustId": .string(id)]))
+                let receipt = try await workspace.submitPublicCommand(.localClientTrustRevoke, params: .object(["trustId": .string(id)]), crew: "")
                 guard workspace.acceptsObservation(epoch), receipt.phase == .committed, !receipt.historical,
                       receipt.value["result"]["trustId"] == .string(id),
                       receipt.value["result"]["revokedInStore"] == .bool(true) else { throw CrewdClientError(message: "原授权撤销尚未确认；请只读核对。") }
