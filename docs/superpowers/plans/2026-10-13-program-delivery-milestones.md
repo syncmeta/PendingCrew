@@ -4,7 +4,7 @@
 
 用户再次明确要求在原 PendingCrew 前端基础上推进。保留实际 PendingCrewApp → RootView → MacThreePaneView 与原通讯录/消息/群聊/会话视图，客户端底层迁移至唯一 crewd authority，再将 Todo、文档、进展融入原布局。独立 Native 工作区只保留为迁移与验证材料，不作为最终产品入口。已验后台和稳定业务证据复用，不因前端纠偏重做后台；独立新窗口通过不能代替原前端完整流程验收。
 
-此方向同样覆盖已约定 iPhone/iPad：实际原 IPadShell、IOSRemotePairingView、IOSRemoteSessionView 应保留视图/导航基础并接同一可信 crewd remote authority，新增工作视图融入原平台布局。当前 RootView 的 iOS 分支仍是 CrewdRemoteMobileRoot，不计原移动前端迁移完成；不能保留旧 RemoteBackend 协议/本地账本作为 fallback。已有 TLS/配对/撤销证据复用，新增移动 UI/authority 流程与真机交付分别验收。
+此方向同样覆盖已约定 iPhone/iPad：实际原 IPadShell、IOSRemotePairingView、IOSRemoteSessionView 应保留视图/导航基础并接同一可信 crewd remote authority，新增工作视图融入原平台布局。client 已冻结的原前端源码 a9859d405ccf03bb5ba0246ab3692ac85488c159 中，实际 Sources/PendingCrewApp.swift 的 RootView iOS 分支已恢复 IPadShell；独立 CrewdNativeApp 仍仅为验证入口。原前端权限与旧账切断独审发现缺口，作者正在整块修复，因此尚不计原移动前端迁移验收完成；不能保留旧 RemoteBackend 协议/本地账本作为 fallback。已有 TLS/配对/撤销证据复用，新增移动 UI/authority 流程与真机交付分别验收。
 
 客户端线拥有原视图、Swift 接线与候选构建；后端线唯一拥有公共协议、schema 与真实执行/恢复能力；质量线按原前端真实用户流程独验。当前公共 crew.create/message.post/session.start 没有 requestId/status，客户端 UUID 不等于服务端幂等：暂用 single-submit、保留原 authority 与 unknown snapshot、只读核对及人工确认，禁止旧本地 outbox/rollback/跨群重放。最终耐久交付依赖正式公共可靠请求与恢复接口。真实 PTY 输入/resize/观察仍是 M4 既定交付缺口，不将只读屏幕冒完整交互终端。附件上传仍遵守既有非空 attachments 拒绝政策，完整上传协议未定，不以静默丢附件或客户端文件路径绕过。
 
