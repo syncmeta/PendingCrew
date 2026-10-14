@@ -2537,7 +2537,7 @@ mod organization_version_tests {
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("crewd-v8-pre-v10-")
+                .starts_with(&format!("crewd-v8-pre-v{SCHEMA_VERSION}-"))
         );
         let backup = Connection::open(&backups[0]).unwrap();
         assert_eq!(version(&backup), 8);
