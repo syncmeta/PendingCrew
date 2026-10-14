@@ -141,3 +141,10 @@ The failure chain remains preserved instead of rewriting past run conclusions:
 3. e871→59f→a76 changes only the four affected permission assertions in production Rust files; independent diff confirms the stricter canonical WorkActorForbidden code assertion replaces the obsolete wrapper while original unchanged-state and lawful actor continuation assertions remain. No production input changes need a repeated stable2602-case run. The exact follow-up closes those three cases and previously blocked doctests, and additionally executes the specific crewd/testkit CLI difference on both platforms.
 
 This combined evidence completes the agreed Core platform verification scope for that production freeze. It is not a new full CI success run, does not finish the historically interrupted workspace all-features suite, does not establish full SDK trust/history/approval/Stop execution delivery, and covers none of the subsequent M5 dirty production inputs. Core normal binary provenance remains separately bounded by its recorded snapshot and the shared-own-cache limitation.
+
+
+## Frozen Core12 merge source and recipe verification
+
+Independent whole-source check of842283b17ab912489aeb78d327e74dd2c9971728: crewd tree e000c596f1ffbc3a00c92eb30ae07a3c8808bd04 equals exacta76; workflow blob46ab86ba04ee21de3427e35615ee8aea5cf05e8d equals client8bb5ceb6, retaining default full checks, explicit mutually exclusive candidate/follow-up scopes and dual-option refusal. Sources/Tests/Package/project/Xcode/Info and scripts/dev have no diff from first parent. Global was clean; client dirty original-front and laterM5 inputs were not imported.
+
+This verifies source/recipe integration, without compilation or repeated business tests. Actual a76 affected results and earlier stable evidence remain scope-bound; development merge does not establish main installation/data switch/public release.

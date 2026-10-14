@@ -10,6 +10,10 @@ Core12 原子迁移、正常后台和私有持久收件子单元已有独立证�
 
 用户已明确授权普通推送到现有三条 codex 开发分支；不扩为 main 推送、安装、日常数据切换、公开发布或真实模型验收。
 
+当前整合结果：global `842283b17ab912489aeb78d327e74dd2c9971728` 已保存远端，完整 crewd tree 与已验 a76 相同，workflow 与 client 冻结8bb合成相同；无 M5/原前端 dirty 混入。client 已接此精确组合，继续原前端整块实现。独立质量源码比对通过；未重复稳定业务。main 保持原状态。
+
+公共可靠命令与真实 terminal control 作为既定交付缺口授权后端整块实现，独立新增 schema14，必须13→14顺序，不改冻12/13。采用 typed crew.createFirstMessage，同Tx创建crew/首消息/receipt；optional Start另按外部真实生命周期记录。terminal typed方法与 command.submit/lookup 共用唯一durable机制，真实 actor/principal、原 scope/generation与不可变payload绑定。普通 PTY write只证明内核接受精确字节，不能称原生reader已消费或命令已成功；partial/unknown绝不自动重写剩余bytes。lookup先权限，notfound不允许自动retry；restore不能把旧执行结果提升为当前完成。所有能力仅在实际生产接线/正常配置/完整权限恢复流程冻结后广告。Jev、个人记忆、团队知识依旧仅待决方案。
+
 ## 2026-10-14 新会话明确恢复与三线固定责任
 
 用户在新会话明确要求从现有检查点持续推进完整工程。此授权恢复下节停手记录所暂停的工程，不抹去原始停手、失败及未知证据。新目标保持 active；主代理只统筹范围、接口、冻结、整合与交付，不代写日常实现。
