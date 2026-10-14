@@ -135,6 +135,14 @@ fn active(tx: &Transaction<'_>, runtime: &str) -> Result<(bool, i64)> {
         _ => Err(invalid("native runtime revoked or unknown")),
     }
 }
+/// Read the current immutable native birth projection. Historical/revoked
+/// rows cannot become a new physical or automatic authority on reopening.
+pub fn current_runtime(conn: &rusqlite::Connection, session: &str) -> Result<Option<Runtime>> {
+    Ok(conn.query_row(
+        "SELECT runtime_id,session_id,generation,native_epoch,native_pid,native_start,native_boot FROM native_execution_runtimes WHERE session_id=?1 AND revoked=0",
+        [session], |row| Ok(Runtime { id:row.get(0)?,session:row.get(1)?,generation:row.get(2)?,epoch:u64::try_from(row.get::<_,i64>(3)?).map_err(|_|rusqlite::Error::IntegralValueOutOfRange(3,-1))?,native_pid:row.get(4)?,native_start:u64::try_from(row.get::<_,i64>(5)?).map_err(|_|rusqlite::Error::IntegralValueOutOfRange(5,-1))?,native_boot:row.get(6)? })
+    ).optional()?)
+}
 fn affected(actual: usize, expected: usize) -> Result<()> {
     if actual != expected {
         return Err(invalid(

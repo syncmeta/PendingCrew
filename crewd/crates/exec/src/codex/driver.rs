@@ -536,6 +536,9 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
     match cmd {
         Command::Send { id, text, context } => t.core.send(id, &text, context, now),
         Command::Raw(bytes) => t.core.raw(&bytes, now),
+        Command::RawConfirmed { reply, .. } => {
+            let _ = reply.send(crate::driver::RawWriteOutcome::Unsupported);
+        }
         Command::Interrupt => t.core.interrupt(now),
         // 没有终端，尺寸无意义。
         Command::Resize { .. } => {}
@@ -547,7 +550,13 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.transcript_text(max_lines));
         }
+        Command::ManualHold { reply } => {
+            let _ = reply.send(false);
+        }
         Command::Snapshot { reply } => {
+            let _ = reply.send(None);
+        }
+        Command::TerminalCut { reply } => {
             let _ = reply.send(None);
         }
         Command::AnswerChoice {

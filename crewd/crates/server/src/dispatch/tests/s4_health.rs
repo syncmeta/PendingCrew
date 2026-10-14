@@ -420,3 +420,45 @@ async fn s4_h1_actual_collab_snapshot_storage_error_is_not_lost_by_transparency(
         Some("disk_full"),
     );
 }
+
+#[tokio::test]
+async fn m14_actual_hello_keeps_opened_db_identity_after_fifo_close_without_work_claim() {
+    let mut rig = Rig::new().await;
+    let state = &rig.fixture.as_ref().unwrap().state;
+    let db_id = rig
+        .db
+        .call_result(|store| crewd_store::meta_get(store.conn(), "dbId"))
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("actual opened store identity");
+    let identity = crewd_proto::commands::RuntimeIdentity {
+        db_id,
+        runtime_binding_id: state.runtime_binding_id.clone(),
+    };
+    state.runtime_identity.set(identity.clone()).unwrap();
+    let before = rig.hello(1411).await.unwrap();
+    let db = rig.db.clone();
+    tokio::task::spawn_blocking(move || db.shutdown())
+        .await
+        .unwrap();
+    let unavailable = rig.db.call(|_| 1u8).await;
+    let after = rig.hello(1412).await.unwrap();
+    let cleanup = rig.close().await;
+    assert_eq!(cleanup, Ok(()));
+    assert!(matches!(
+        unavailable,
+        Err(crewd_store::StoreError::DbClosed)
+    ));
+    let expected = serde_json::to_value(identity).unwrap();
+    assert_eq!(before["result"]["runtimeIdentity"], expected);
+    assert!(after.get("error").is_none());
+    assert_eq!(
+        after["result"]["runtimeIdentity"], expected,
+        "cached identity identifies the original opened store/instance, without accessing the failed FIFO"
+    );
+    assert_eq!(
+        after["result"]["daemonHealth"]["lastDbError"]["kind"], "db_closed",
+        "instance diagnostics are not a work-availability or committed-receipt claim"
+    );
+}

@@ -89,7 +89,7 @@ mod tests {
     fn old12() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         crate::schema::migrate(&c).unwrap();
-        c.execute_batch("DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; PRAGMA user_version=12;").unwrap();
+        c.execute_batch("DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; PRAGMA user_version=12;").unwrap();
         c
     }
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         let path = dir.path().join("crewd.db");
         {
             let source = crate::Store::open(&path).unwrap();
-            source.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('kept','authoritative old12 source','old','old'); DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; PRAGMA user_version=12;").unwrap();
+            source.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('kept','authoritative old12 source','old','old'); DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; PRAGMA user_version=12;").unwrap();
         }
         std::fs::write(
             dir.path().join("backups"),

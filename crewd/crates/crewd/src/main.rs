@@ -25,6 +25,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Private, kernel-bound provider helper; never opens a work database.
+    #[command(hide = true)]
+    NativeHelper,
     /// 前台运行服务
     Serve {
         #[arg(long, env = "CREWD_CODEX")]
@@ -127,6 +130,11 @@ async fn run() -> anyhow::Result<()> {
         }
         Err(e) => e.exit(),
     };
+    if matches!(cli.cmd, Cmd::NativeHelper) {
+        return crewd_exec::acp::helper_boot::run(tokio::io::stdin())
+            .await
+            .map_err(Into::into);
+    }
     if let Cmd::Hook(args) = &cli.cmd {
         hook_cmd::install_panic_guard(args.event().to_string());
     }
@@ -139,6 +147,7 @@ async fn run() -> anyhow::Result<()> {
         (Err(e), _) => return Err(e),
     };
     match &cli.cmd {
+        Cmd::NativeHelper => unreachable!("private helper handled before data-dir lookup"),
         Cmd::Serve {
             claude,
             claude_env,
@@ -227,7 +236,13 @@ async fn run() -> anyhow::Result<()> {
             let db = dir.join(crewd_store::DB_FILE);
             let dest =
                 backup::backups_dir_for(&db).join(backup::manual_name(crewd_store::now_ms()));
-            backup::backup_db(&db, &dest)?;
+            let offline_lock = crewd_server::try_lock_data_dir(&dir)?;
+            if offline_lock.is_some() {
+                backup::backup_db_quiescent(&db, &dest)?;
+            } else {
+                // A live daemon owns the lock: preserve online snapshot semantics.
+                backup::backup_db(&db, &dest)?;
+            }
             println!("{}", dest.display());
         }
         Cmd::Restore { from } => {

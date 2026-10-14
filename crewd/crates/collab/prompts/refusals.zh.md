@@ -531,3 +531,6 @@ expectedStatus 必须是原始需求状态。
 
 ## work.terminal
 此工作已经结束；不能再次回报、阻塞或指派，请创建后续工作。
+
+## command.receipt_capacity
+请求记录容量已满。请先读取已有记录并由人处理未知结果；不要换编号重发。

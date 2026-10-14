@@ -87,6 +87,11 @@ impl BirthGate {
             timeout_ms: ms,
         })
     }
+    /// Read only after spawn_pty_gated returned: its exact pre-exec Core ACK
+    /// has completed before this epoch may label native output.
+    pub(crate) fn acknowledged_epoch(&self) -> u64 {
+        self.next.load(Ordering::Acquire)
+    }
     pub(crate) fn prepare(&self) -> io::Result<PreparedBirth> {
         let old = self
             .next

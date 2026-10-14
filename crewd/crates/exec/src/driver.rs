@@ -265,9 +265,150 @@ pub enum ResizeOutcome {
     InvalidSize,
     Unsupported,
     NotRunning,
+    Unknown,
     Failed { errno: Option<i32> },
 }
 
+/// Kernel acceptance only: neither PTY echo nor a complete write proves that
+/// the application consumed input or completed any command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RawWriteOutcome {
+    Written { bytes: usize },
+    Unknown { written_bytes: usize },
+    InvalidInput,
+    Unsupported,
+    NotRunning,
+}
+/// A Core-owned manual lease gate. Revoke waits for any current bounded syscall;
+/// after it returns, no additional write may enter under this permit. Callers
+/// persist manual revocation before giving the permit to a physical driver.
+#[derive(Clone)]
+pub struct ManualWritePermit {
+    active: Arc<Mutex<bool>>,
+    deadline: Instant,
+    expected_native: Option<crate::registry::ProcessIdentity>,
+    connection: Option<Arc<Mutex<bool>>>,
+    shared_fence: Option<crate::acp::manual_fence::ManualFence>,
+    helper_core: Option<crate::registry::ProcessIdentity>,
+}
+impl ManualWritePermit {
+    pub fn new(deadline: Instant) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            deadline,
+            expected_native: None,
+            connection: None,
+            shared_fence: None,
+            helper_core: None,
+        }
+    }
+    /// Public native custody supplies an already kernel-verified immutable birth,
+    /// never a PID/birth taken from client JSON.
+    pub fn for_native(deadline: Instant, native: crate::registry::ProcessIdentity) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            deadline,
+            expected_native: Some(native),
+            connection: None,
+            shared_fence: None,
+            helper_core: None,
+        }
+    }
+    /// The server owns this connection lifetime; it is not a client-selected
+    /// lease identifier. Disconnect closes it synchronously before another chunk.
+    pub fn for_native_connection(
+        deadline: Instant,
+        native: crate::registry::ProcessIdentity,
+        connection: Arc<Mutex<bool>>,
+    ) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            deadline,
+            expected_native: Some(native),
+            connection: Some(connection),
+            shared_fence: None,
+            helper_core: None,
+        }
+    }
+    /// The helper receives this read-only fence only from its kernel-verified
+    /// Core channel. Core owns durable admission and connection revocation.
+    pub fn for_native_shared(
+        deadline: Instant,
+        native: crate::registry::ProcessIdentity,
+        fence: crate::acp::manual_fence::ManualFence,
+        verified_core: crate::registry::ProcessIdentity,
+    ) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            deadline,
+            expected_native: Some(native),
+            connection: None,
+            shared_fence: Some(fence),
+            helper_core: Some(verified_core),
+        }
+    }
+    pub fn for_native_fenced(
+        deadline: Instant,
+        native: crate::registry::ProcessIdentity,
+        fence: crate::acp::manual_fence::ManualFence,
+        connection: Arc<Mutex<bool>>,
+    ) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            deadline,
+            expected_native: Some(native),
+            connection: Some(connection),
+            shared_fence: Some(fence),
+            helper_core: None,
+        }
+    }
+    fn shared_chunk(
+        &self,
+    ) -> Option<std::io::Result<crate::acp::manual_fence::ManualFenceGuard<'_>>> {
+        self.shared_fence.as_ref().map(|fence| {
+            fence.admit_chunk(
+                self.deadline
+                    .min(Instant::now() + Duration::from_millis(10)),
+            )
+        })
+    }
+    pub(crate) fn is_native_bound(&self) -> bool {
+        self.expected_native.is_some()
+    }
+    pub(crate) fn is_connection_bound(&self) -> bool {
+        self.connection.is_some() || self.shared_fence.is_some()
+    }
+    fn current_native(&self, actual_pid: Option<u32>) -> bool {
+        if self.helper_core.as_ref().is_some_and(|expected| {
+            !matches!(crate::registry::probe(expected.pid),crate::registry::ProbeResult::Found(current)
+                if current.pid==expected.pid && current.pgid==expected.pgid && current.start_time==expected.start_time && current.boot_id==expected.boot_id)
+            || !matches!(crate::registry::parent(std::process::id() as i32),crate::registry::ParentProbe::Found{parent,..}
+                if parent==expected.pid)
+        }) { return false; }
+        self.expected_native.as_ref().is_none_or(|expected| {
+            actual_pid.is_none_or(|pid| i32::try_from(pid).ok() == Some(expected.pid))
+                && matches!(crate::registry::probe(expected.pid), crate::registry::ProbeResult::Found(actual)
+                    if actual.pid == expected.pid && actual.pgid == expected.pgid && actual.start_time == expected.start_time && actual.boot_id == expected.boot_id)
+        })
+    }
+    pub fn revoke(&self) {
+        if let Ok(mut active) = self.active.lock() {
+            *active = false;
+        }
+    }
+    fn allowed(&self) -> bool {
+        let connection = self.connection.as_ref().map(|live| live.lock());
+        if connection
+            .as_ref()
+            .is_some_and(|gate| !matches!(gate, Ok(live) if **live))
+        {
+            return false;
+        }
+        self.active
+            .lock()
+            .is_ok_and(|active| *active && Instant::now() < self.deadline)
+    }
+}
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
     AnswerChoice {
@@ -289,6 +430,11 @@ pub(crate) enum Command {
         context: UntrustedContext,
     },
     Raw(Vec<u8>),
+    RawConfirmed {
+        bytes: Vec<u8>,
+        permit: ManualWritePermit,
+        reply: oneshot::Sender<RawWriteOutcome>,
+    },
     Interrupt,
     Resize {
         cols: u16,
@@ -297,6 +443,7 @@ pub(crate) enum Command {
     ResizeConfirmed {
         cols: u16,
         lines: u16,
+        permit: Option<ManualWritePermit>,
         reply: oneshot::Sender<ResizeOutcome>,
     },
     Stop,
@@ -305,8 +452,14 @@ pub(crate) enum Command {
         max_lines: usize,
         reply: oneshot::Sender<String>,
     },
+    ManualHold {
+        reply: oneshot::Sender<bool>,
+    },
     Snapshot {
         reply: oneshot::Sender<Option<Snapshot>>,
+    },
+    TerminalCut {
+        reply: oneshot::Sender<Option<crate::acp::terminal::TerminalCut>>,
     },
     Status {
         reply: oneshot::Sender<SessionStatus>,
@@ -332,6 +485,7 @@ pub struct SessionHandle {
     /// claude 的 raw 入队与实际 PTY syscall 共用这道锁：raw 一入队就撤销旧正文的写权限。
     /// codex 无 PTY，不装这道闸。
     raw_fence: Option<Arc<Mutex<u64>>>,
+    terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
 
 impl SessionHandle {
@@ -341,6 +495,7 @@ impl SessionHandle {
             tx,
             next_id: Arc::new(AtomicU64::new(BRIEF_DELIVERY_ID + 1)),
             raw_fence: None,
+            terminal_observer: None,
         }
     }
 
@@ -411,6 +566,35 @@ impl SessionHandle {
             self.cmd(Command::Raw(bytes))
         } else {
             self.cmd(Command::Raw(bytes))
+        }
+    }
+
+    /// Enqueue once, preserving the existing raw FIFO/fence. A closed driver or
+    /// missing reply leaves the dispatched command unknown and is never replayed.
+    pub fn raw_confirmed(
+        &self,
+        bytes: Vec<u8>,
+        permit: ManualWritePermit,
+    ) -> impl std::future::Future<Output = Result<RawWriteOutcome, Closed>> + Send + 'static {
+        let (reply, rx) = oneshot::channel();
+        let sent = if bytes.is_empty() || bytes.len() > 64 * 1024 {
+            let _ = reply.send(RawWriteOutcome::InvalidInput);
+            Ok(())
+        } else if let Some(fence) = &self.raw_fence {
+            let mut epoch = fence.lock().expect("raw fence poisoned");
+            *epoch += 1;
+            self.cmd(Command::RawConfirmed {
+                bytes,
+                permit,
+                reply,
+            })
+        } else {
+            let _ = reply.send(RawWriteOutcome::Unsupported);
+            Ok(())
+        };
+        async move {
+            sent?;
+            rx.await.map_err(|_| Closed)
         }
     }
 
@@ -496,7 +680,28 @@ impl SessionHandle {
     /// ACP extension resize, bounded and acknowledged after the actual PTY ioctl.
     pub async fn resize_confirmed(&self, cols: u16, lines: u16) -> Result<ResizeOutcome, Closed> {
         let (reply, rx) = oneshot::channel();
-        self.cmd(Command::ResizeConfirmed { cols, lines, reply })?;
+        self.cmd(Command::ResizeConfirmed {
+            cols,
+            lines,
+            permit: None,
+            reply,
+        })?;
+        rx.await.map_err(|_| Closed)
+    }
+
+    pub async fn resize_controlled(
+        &self,
+        cols: u16,
+        lines: u16,
+        permit: ManualWritePermit,
+    ) -> Result<ResizeOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::ResizeConfirmed {
+            cols,
+            lines,
+            permit: Some(permit),
+            reply,
+        })?;
         rx.await.map_err(|_| Closed)
     }
 
@@ -520,6 +725,32 @@ impl SessionHandle {
     pub async fn snapshot(&self) -> Result<Option<Snapshot>, Closed> {
         let (reply, rx) = oneshot::channel();
         self.cmd(Command::Snapshot { reply })?;
+        rx.await.map_err(|_| Closed)
+    }
+
+    pub fn manual_pty(&self) -> bool {
+        self.raw_fence.is_some() && self.terminal_observer.is_some()
+    }
+    pub fn terminal_output(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<crate::acp::wire::TerminalFrame>> {
+        self.terminal_observer.as_ref()?.subscribe_output()
+    }
+    /// Revoke the pending physical body fence BEFORE waiting for the driver
+    /// pause ACK. No synthetic byte is written or used as an echo proof.
+    pub async fn hold_automatic(&self) -> Result<bool, Closed> {
+        let fence = self.raw_fence.as_ref().ok_or(Closed)?;
+        let (reply, rx) = oneshot::channel();
+        {
+            let mut epoch = fence.lock().map_err(|_| Closed)?;
+            *epoch = epoch.checked_add(1).ok_or(Closed)?;
+            self.cmd(Command::ManualHold { reply })?;
+        }
+        rx.await.map_err(|_| Closed)
+    }
+    pub async fn terminal_cut(&self) -> Result<Option<crate::acp::terminal::TerminalCut>, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::TerminalCut { reply })?;
         rx.await.map_err(|_| Closed)
     }
 
@@ -577,6 +808,7 @@ pub async fn start_claude(
     let raw_fence = Arc::new(Mutex::new(0));
     let mut handle = SessionHandle::new(tx);
     handle.raw_fence = Some(raw_fence.clone());
+    handle.terminal_observer = config.terminal_observer.clone();
     tokio::spawn(run(Task {
         start,
         config,
@@ -720,6 +952,11 @@ async fn launch(
         StartError::Spawn { health, source }
     })?;
     if let Some(observer) = &config.terminal_observer {
+        if let Some(gate) = &config.native_birth_gate {
+            observer.begin_incarnation(gate.acknowledged_epoch());
+        } else {
+            observer.begin_owned_spawn();
+        }
         proc.master.observe_output(observer.clone());
     }
     // No await between actual spawn and owning the unresolved enrollment obligation.
@@ -819,6 +1056,23 @@ struct PendingWrite {
     bytes: Vec<u8>,
     offset: usize,
     delivery: Option<(u64, DeliveryWriteToken)>,
+    manual: Option<(ManualWritePermit, oneshot::Sender<RawWriteOutcome>)>,
+}
+impl PendingWrite {
+    fn confirm_written(&mut self) {
+        if let Some((_, reply)) = self.manual.take() {
+            let _ = reply.send(RawWriteOutcome::Written { bytes: self.offset });
+        }
+    }
+}
+impl Drop for PendingWrite {
+    fn drop(&mut self) {
+        if let Some((_, reply)) = self.manual.take() {
+            let _ = reply.send(RawWriteOutcome::Unknown {
+                written_bytes: self.offset,
+            });
+        }
+    }
 }
 
 struct Task {
@@ -1230,15 +1484,68 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
             }
             t.core.raw(&bytes);
         }
+        Command::RawConfirmed {
+            bytes,
+            permit,
+            reply,
+        } => {
+            // Every admitted raw increments the same epoch, even when its lease
+            // was revoked before the actor reached it. No old automatic body
+            // gains permission from a skipped command.
+            t.input_epoch += 1;
+            if !t.core.is_running() {
+                let _ = reply.send(RawWriteOutcome::NotRunning);
+            } else if !permit.allowed() || !permit.current_native(Some(t.running.pid)) {
+                let _ = reply.send(RawWriteOutcome::Unknown { written_bytes: 0 });
+            } else {
+                // Drain prior Core actions before applying raw authority. The
+                // confirmed input itself is queued exactly once below.
+                let actions = t.core.take_actions();
+                t.write_refused |= dispatch(t, actions);
+                t.core.admit_manual_raw(&bytes);
+                let actions = t.core.take_actions();
+                t.write_refused |= dispatch(t, actions);
+                t.writes.push_back(PendingWrite {
+                    bytes,
+                    offset: 0,
+                    delivery: None,
+                    manual: Some((permit, reply)),
+                });
+            }
+        }
         Command::Interrupt => t.core.interrupt(),
         Command::Resize { cols, lines } => t.core.resize(cols, lines),
-        Command::ResizeConfirmed { cols, lines, reply } => {
-            let outcome = if !t.core.is_running() {
+        Command::ResizeConfirmed {
+            cols,
+            lines,
+            permit,
+            reply,
+        } => {
+            // The same ordering as raw: connection gate, then exclusive lease.
+            // Hold both only across this bounded ioctl, never an observation wait.
+            let connection_gate = permit
+                .as_ref()
+                .and_then(|permit| permit.connection.as_ref().map(|live| live.lock()));
+            let lease_gate = permit.as_ref().map(|permit| permit.active.lock());
+            let shared_gate = permit.as_ref().and_then(ManualWritePermit::shared_chunk);
+            let revoked = shared_gate.as_ref().is_some_and(Result::is_err)
+                || connection_gate
+                    .as_ref()
+                    .is_some_and(|gate| !matches!(gate,Ok(live) if **live))
+                || lease_gate
+                    .as_ref()
+                    .is_some_and(|gate| !matches!(gate,Ok(active) if **active))
+                || permit.as_ref().is_some_and(|permit| {
+                    Instant::now() >= permit.deadline || !permit.current_native(Some(t.running.pid))
+                });
+            let outcome = if revoked {
+                ResizeOutcome::Unknown
+            } else if !t.core.is_running() {
                 ResizeOutcome::NotRunning
             } else if cols == 0 || lines == 0 || cols > 512 || lines > 256 {
                 ResizeOutcome::InvalidSize
             } else {
-                match t.running.master.resize(cols, lines) {
+                match t.running.master.resize_confirmed(cols, lines) {
                     Ok(()) => {
                         t.core.resize_observed(cols, lines);
                         ResizeOutcome::Applied
@@ -1255,8 +1562,29 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.screen_text(max_lines));
         }
+        Command::ManualHold { reply } => {
+            t.input_epoch = t
+                .input_epoch
+                .checked_add(1)
+                .expect("manual input epoch exhausted");
+            t.core.hold_automatic();
+            let _ = reply.send(true);
+        }
         Command::Snapshot { reply } => {
             let _ = reply.send(Some(t.core.snapshot()));
+        }
+        Command::TerminalCut { reply } => {
+            let cut = t
+                .config
+                .terminal_observer
+                .as_ref()
+                .and_then(|observer| observer.cut())
+                .map(|(epoch, sequence)| crate::acp::terminal::TerminalCut {
+                    epoch,
+                    sequence,
+                    screen: t.core.snapshot(),
+                });
+            let _ = reply.send(cut);
         }
         Command::Control { op, reply } => {
             let _ = reply.send(ControlOutcome::Unsupported(format!(
@@ -1387,6 +1715,35 @@ fn write_ready_with_budget(
         if *epoch != input_epoch {
             return Ok(None);
         }
+        let manual_permit = writes
+            .front()
+            .and_then(|write| write.manual.as_ref().map(|(permit, _)| permit.clone()));
+        // Hold the lease gate across only the nonblocking, at most 4 KiB syscall.
+        // Revocation and expiry reject this remainder, not the remote session.
+        let connection_gate = manual_permit
+            .as_ref()
+            .and_then(|permit| permit.connection.as_ref().map(|live| live.lock()));
+        let manual_gate = manual_permit.as_ref().map(|permit| permit.active.lock());
+        let shared_gate = manual_permit
+            .as_ref()
+            .and_then(ManualWritePermit::shared_chunk);
+        if shared_gate.as_ref().is_some_and(Result::is_err)
+            || connection_gate
+                .as_ref()
+                .is_some_and(|gate| !matches!(gate, Ok(live) if **live))
+            || manual_gate
+                .as_ref()
+                .is_some_and(|gate| !matches!(gate, Ok(active) if **active))
+            || manual_permit
+                .as_ref()
+                .is_some_and(|permit| Instant::now() >= permit.deadline)
+            || manual_permit
+                .as_ref()
+                .is_some_and(|permit| !permit.current_native(None))
+        {
+            writes.pop_front();
+            continue;
+        }
         let write = writes.front_mut().expect("checked queue");
         if write.offset == write.bytes.len() {
             let complete = write.delivery.map(|(id, token)| WriteProgress {
@@ -1395,6 +1752,7 @@ fn write_ready_with_budget(
                 complete: true,
                 actual_bytes: 0,
             });
+            write.confirm_written();
             writes.pop_front();
             return Ok(complete); // Legal empty body: no syscall or invented positive progress.
         }
@@ -1411,6 +1769,7 @@ fn write_ready_with_budget(
             actual_bytes: n,
         });
         if write.offset == write.bytes.len() {
+            write.confirm_written();
             writes.pop_front();
         }
         return Ok(progress);
@@ -1426,11 +1785,13 @@ fn enqueue_write_action(writes: &mut VecDeque<PendingWrite>, action: &Action) ->
             bytes: bytes.clone(),
             offset: 0,
             delivery: None,
+            manual: None,
         },
         Action::DeliveryWrite { id, token, bytes } => PendingWrite {
             bytes: bytes.clone(),
             offset: 0,
             delivery: Some((*id, *token)),
+            manual: None,
         },
         _ => return false,
     };
@@ -3253,6 +3614,7 @@ mod output_drain_tests {
                 bytes,
                 offset: 0,
                 delivery: Some((1, token)),
+                manual: None,
             }]);
             let fence = Arc::new(Mutex::new(0));
             let (tx, mut rx) = mpsc::unbounded_channel();
@@ -3286,6 +3648,7 @@ mod output_drain_tests {
                 bytes: b"ok".to_vec(),
                 offset: 0,
                 delivery: None,
+                manual: None,
             });
             write_ready(&p.master, &mut core, &fence, 1, &mut writes).unwrap();
             assert!(writes.is_empty(), "ordinary writes remain available");
@@ -3324,6 +3687,7 @@ mod output_drain_tests {
             bytes: bytes.clone(),
             offset: 0,
             delivery: Some((id, token)),
+            manual: None,
         }]);
         let fence = Mutex::new(0);
         let completed = write_ready(fixture.master(), &mut core, &fence, 0, &mut writes).unwrap();
@@ -3385,6 +3749,7 @@ mod output_drain_tests {
             bytes: bytes.clone(),
             offset: 0,
             delivery: Some((id, token)),
+            manual: None,
         }]);
         assert_eq!(
             write_ready(fixture.master(), &mut fresh, &fence, 0, &mut writes).unwrap(),
@@ -3464,6 +3829,7 @@ mod output_drain_tests {
             bytes: bytes.clone(),
             offset: 0,
             delivery: Some((id, token)),
+            manual: None,
         }]);
         let fence = Mutex::new(0);
         let mut blocked = false;
@@ -3935,5 +4301,210 @@ mod output_drain_tests {
         );
         assert_eq!(capture, b"BOT \x7f\r");
         assert!(receipt.contains("trailing_bytes=0"));
+    }
+
+    #[tokio::test]
+    async fn manual_written_receipt_requires_all_real_kernel_bytes() {
+        let (_dir, process) = readable_output(b"").await;
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            Instant::now(),
+            vec![],
+            None,
+        );
+        let permit = ManualWritePermit::new(Instant::now() + Duration::from_secs(5));
+        let (reply, mut receipt) = oneshot::channel();
+        let mut queue = VecDeque::from([PendingWrite {
+            bytes: b"exact-kernel-input".to_vec(),
+            offset: 0,
+            delivery: None,
+            manual: Some((permit, reply)),
+        }]);
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        write_ready(&process.master, &mut core, &Mutex::new(0), 0, &mut queue).unwrap();
+        assert!(queue.is_empty());
+        assert_eq!(
+            receipt.await.unwrap(),
+            RawWriteOutcome::Written { bytes: 18 }
+        );
+        // The owned child is sleeping, not an input consumer. This outcome is
+        // therefore expressly kernel acceptance, never application consumption.
+        stop(process).await;
+    }
+    #[tokio::test]
+    async fn manual_partial_kernel_write_then_revoke_settles_unknown_without_remainder() {
+        let (_dir, process) = readable_output(b"").await;
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            Instant::now(),
+            vec![],
+            None,
+        );
+        let permit = ManualWritePermit::new(Instant::now() + Duration::from_secs(5));
+        let (reply, mut receipt) = oneshot::channel();
+        let mut queue = VecDeque::from([PendingWrite {
+            bytes: vec![b'x'; 8192],
+            offset: 0,
+            delivery: None,
+            manual: Some((permit.clone(), reply)),
+        }]);
+        let fence = Mutex::new(0);
+        write_ready(&process.master, &mut core, &fence, 0, &mut queue).unwrap();
+        let written = queue.front().unwrap().offset;
+        assert!(written > 0 && written <= 4096);
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        permit.revoke();
+        write_ready(&process.master, &mut core, &fence, 0, &mut queue).unwrap();
+        assert!(
+            queue.is_empty(),
+            "revoked remainder cannot remain replayable"
+        );
+        assert_eq!(
+            receipt.await.unwrap(),
+            RawWriteOutcome::Unknown {
+                written_bytes: written
+            }
+        );
+        assert!(core.is_running(), "lease revocation is not a session Stop");
+        stop(process).await;
+    }
+    #[tokio::test]
+    async fn manual_expiry_before_first_syscall_has_zero_bytes_and_no_stop() {
+        let (_dir, process) = readable_output(b"").await;
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            Instant::now(),
+            vec![],
+            None,
+        );
+        let permit = ManualWritePermit::new(Instant::now());
+        let (reply, receipt) = oneshot::channel();
+        let mut queue = VecDeque::from([PendingWrite {
+            bytes: b"must-not-write".to_vec(),
+            offset: 0,
+            delivery: None,
+            manual: Some((permit, reply)),
+        }]);
+        write_ready(&process.master, &mut core, &Mutex::new(0), 0, &mut queue).unwrap();
+        assert!(queue.is_empty());
+        assert_eq!(
+            receipt.await.unwrap(),
+            RawWriteOutcome::Unknown { written_bytes: 0 }
+        );
+        assert!(core.is_running());
+        stop(process).await;
+    }
+    #[tokio::test]
+    async fn manual_real_native_birth_connection_close_stops_remainder_without_session_stop() {
+        let (_dir, process) = readable_output(b"").await;
+        let native = match crate::registry::probe(process.pid as i32) {
+            crate::registry::ProbeResult::Found(native) => native,
+            other => panic!("owned native birth: {other:?}"),
+        };
+        let connection = Arc::new(Mutex::new(true));
+        let permit = ManualWritePermit::for_native_connection(
+            Instant::now() + Duration::from_secs(5),
+            native,
+            connection.clone(),
+        );
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            Instant::now(),
+            vec![],
+            None,
+        );
+        let (reply, receipt) = oneshot::channel();
+        let mut queue = VecDeque::from([PendingWrite {
+            bytes: vec![b'x'; 8192],
+            offset: 0,
+            delivery: None,
+            manual: Some((permit, reply)),
+        }]);
+        let fence = Mutex::new(0);
+        write_ready(&process.master, &mut core, &fence, 0, &mut queue).unwrap();
+        let accepted = queue.front().unwrap().offset;
+        assert!(accepted > 0 && accepted <= 4096);
+        *connection.lock().unwrap() = false;
+        write_ready(&process.master, &mut core, &fence, 0, &mut queue).unwrap();
+        assert!(queue.is_empty());
+        assert_eq!(
+            receipt.await.unwrap(),
+            RawWriteOutcome::Unknown {
+                written_bytes: accepted
+            }
+        );
+        assert!(core.is_running(), "only this connection custody closes");
+        stop(process).await;
+    }
+    #[tokio::test]
+    async fn manual_real_native_birth_mismatch_rejects_before_first_kernel_byte() {
+        let (_dir, process) = readable_output(b"").await;
+        let mut native = match crate::registry::probe(process.pid as i32) {
+            crate::registry::ProbeResult::Found(native) => native,
+            other => panic!("owned native birth: {other:?}"),
+        };
+        native.start_time = native.start_time.checked_add(1).unwrap();
+        let permit = ManualWritePermit::for_native_connection(
+            Instant::now() + Duration::from_secs(5),
+            native,
+            Arc::new(Mutex::new(true)),
+        );
+        let mut core = Core::new(
+            CoreConfig::default(),
+            ScreenConfig::default(),
+            Instant::now(),
+            vec![],
+            None,
+        );
+        let (reply, receipt) = oneshot::channel();
+        let mut queue = VecDeque::from([PendingWrite {
+            bytes: b"stale-birth".to_vec(),
+            offset: 0,
+            delivery: None,
+            manual: Some((permit, reply)),
+        }]);
+        write_ready(&process.master, &mut core, &Mutex::new(0), 0, &mut queue).unwrap();
+        assert!(queue.is_empty());
+        assert_eq!(
+            receipt.await.unwrap(),
+            RawWriteOutcome::Unknown { written_bytes: 0 }
+        );
+        assert!(core.is_running());
+        stop(process).await;
+    }
+
+    #[tokio::test]
+    async fn confirmed_raw_never_maps_codex_escape_to_interrupt_or_accepts_oversize() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = SessionHandle::new(tx);
+        let permit = ManualWritePermit::new(Instant::now() + Duration::from_secs(5));
+        assert_eq!(
+            handle
+                .raw_confirmed(vec![0x1b], permit.clone())
+                .await
+                .unwrap(),
+            RawWriteOutcome::Unsupported
+        );
+        assert_eq!(
+            handle
+                .raw_confirmed(vec![b'x'; 65537], permit)
+                .await
+                .unwrap(),
+            RawWriteOutcome::InvalidInput
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 }

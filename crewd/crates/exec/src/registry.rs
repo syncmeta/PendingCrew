@@ -392,6 +392,18 @@ impl ProcessRegistry {
         self.persist(&entries)
     }
 
+    /// Fallible public-control evidence read. A poisoned private registry is
+    /// unknown ownership, never permission or an actor-task panic.
+    pub fn try_entries(&self) -> io::Result<Vec<(String, ProcessIdentity)>> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| io::Error::other("process registry unavailable"))?;
+        Ok(entries
+            .iter()
+            .map(|(key, birth)| (key.clone(), birth.clone()))
+            .collect())
+    }
     pub fn entries(&self) -> Vec<(String, ProcessIdentity)> {
         let entries = self.entries.lock().expect("登记表锁中毒");
         entries

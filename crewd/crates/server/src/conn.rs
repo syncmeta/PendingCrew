@@ -69,6 +69,12 @@ impl Caller {
             Self::Remote(principal) => principal.authorize(state, method).await,
         }
     }
+    fn command_actor(&self) -> crate::public_commands::Actor {
+        match self {
+            Self::Local(peer) => crate::public_commands::Actor::Local(peer.clone()),
+            Self::Remote(principal) => crate::public_commands::Actor::Remote(principal.clone()),
+        }
+    }
     fn remote(&self) -> Option<&crate::remote::Principal> {
         match self {
             Self::Remote(principal) => Some(principal),
@@ -88,17 +94,25 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    // Every exit path (including task abort/panic) closes only this connection's
+    // custody/watch lifetime. It does not Stop the remote crew or replay writes.
+    let connection_scope = peer.command_actor().connection_scope().clone();
+    let connection_guard = connection_scope.guard();
+    let writer_scope = connection_scope.clone();
     let remote_writer = peer.remote().cloned();
     let writer_state = state.clone();
 
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let (writer_done_tx, mut writer_done) = oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
+        let _connection_guard = writer_scope.guard();
         let _done = writer_done_tx;
         let mut changes = remote_writer.as_ref().and_then(|p| p.changes().ok());
+        let mut locally_closed = writer_scope.closed_signal();
         'frames: loop {
             let frame = tokio::select! {
                 biased;
+                _=locally_closed.changed()=>break,
                 _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
                     if let Some(principal) = &remote_writer
                         && principal.check_live(&writer_state).await.is_err() { break; }
@@ -106,6 +120,9 @@ where
                 },
                 frame = rx.recv() => match frame { Some(frame) => frame, None => break },
             };
+            if !writer_scope.is_live() {
+                break;
+            }
             if let Some(principal) = &remote_writer
                 && principal.check_live(&writer_state).await.is_err()
             {
@@ -136,8 +153,18 @@ where
                         },
                     }
                 }
-            } else if wr.write_all(&line).await.is_err() {
-                break;
+            } else {
+                // A local signed-client grant revoke/slow-watch close cancels
+                // even an already partial frame. Never finish or replay it later.
+                let write = wr.write_all(&line);
+                tokio::pin!(write);
+                tokio::select! {
+                    biased;
+                    _=locally_closed.changed()=>break,
+                    result=tokio::time::timeout(std::time::Duration::from_secs(5),&mut write)=>{
+                        if !matches!(result,Ok(Ok(()))){break;}
+                    }
+                }
             }
         }
     });
@@ -159,6 +186,9 @@ where
     )
     .await;
 
+    // Close custody before any slow watcher/writer drain. A peer EOF cannot
+    // leave manual bytes enabled while unrelated output is being flushed.
+    drop(connection_guard);
     // 无论怎么退出（EOF、读错误、行过长）都要收尾。
     if let Some(f) = forwarder {
         if !*drain.borrow() {
@@ -340,6 +370,55 @@ async fn request_step(
                 )
                 .with_refusal("remote.local_human_only"),
             ))
+        }
+        Ok(req) if req.method == crewd_proto::commands::SESSION_TERMINAL_WATCH => {
+            let id = req.id;
+            if agent.is_attached() {
+                return RequestStep::Reply(ServerFrame::Response(Response::err(
+                    id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "agent cannot read Human terminal watch",
+                    ),
+                )));
+            }
+            let p = match parse_params(req.params) {
+                Ok(p) => p,
+                Err(e) => return RequestStep::Reply(ServerFrame::Response(Response::err(id, e))),
+            };
+            match crate::public_terminal::watch(state, &peer.command_actor(), p, tx.clone()).await {
+                Ok((ack, ready)) => {
+                    if tx
+                        .send(ServerFrame::Response(Response::ok(
+                            id,
+                            serde_json::to_value(ack).unwrap(),
+                        )))
+                        .await
+                        .is_err()
+                    {
+                        return RequestStep::Closed;
+                    }
+                    let _ = ready.send(());
+                    return RequestStep::Continue;
+                }
+                Err(e) => ServerFrame::Response(Response::err(id, e)),
+            }
+        }
+        Ok(req) if crate::public_commands::is_method(&req.method) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "agent connection cannot submit Human commands",
+                    )
+                    .with_refusal("command.human_only"),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::public_commands::handle(state, &peer.command_actor(), req).await,
+                )
+            }
         }
         Ok(req) if req.method == methods::SUBSCRIBE => {
             #[cfg(any(test, feature = "testkit"))]

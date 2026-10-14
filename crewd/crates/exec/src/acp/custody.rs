@@ -354,6 +354,25 @@ impl Custody {
     }
     /// Core/helper channel binding is checked against custody's canonical
     /// launch scope, never against an expected value supplied by peer JSON.
+    /// Current kernel birth, not merely the previously enrolled projection.
+    pub fn current_native_binding(
+        &self,
+        epoch: u64,
+    ) -> io::Result<super::ownership::NativeBinding> {
+        if self.closed {
+            return Err(denied("native admission closed"));
+        }
+        let binding = self.native_binding(epoch)?;
+        let actual = self.actual_native(&BirthReport {
+            pid: binding.native.pid,
+            epoch,
+            nonce: self.nonce,
+        })?;
+        if !same_birth(&actual, &binding.native) {
+            return Err(denied("native birth changed"));
+        }
+        Ok(binding)
+    }
     pub fn verify_helper_channel(
         &self,
         session: &str,

@@ -149,6 +149,9 @@ impl<P: Port> Core<P> {
             }
         }
         let record = HibernateRecord {
+            // The authority store normalizes this discriminator to Hibernate.
+            // Keep the in-memory record identical for durable owned-Quit ACK.
+            reason: crewd_proto::RestartReason::Hibernate,
             at_ms: now.0,
             sessions: entries,
             ..Default::default()
@@ -288,8 +291,10 @@ impl<P: Port> Core<P> {
             eprintln!("crewd: 编排：休眠记录（这一轮的结局）写不进去：{e:#}");
         }
         if self.live.is_empty() && self.starting.is_empty() && self.preparing == 0 {
+            self.finish_public_hibernate(true).await;
             self.finish_hibernate(true);
         } else if self.hibernation.as_ref().is_some_and(|h| now >= h.give_up) {
+            self.finish_public_hibernate(false).await;
             self.finish_hibernate(false);
         }
     }
