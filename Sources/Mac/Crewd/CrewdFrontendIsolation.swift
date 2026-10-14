@@ -17,7 +17,13 @@ enum CrewdFrontendIsolation {
     }
     static func prepare() {
         let env = ProcessInfo.processInfo.environment
-        let old = env["PENDINGCREW_DATA_DIR"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew").path
+        #if os(macOS)
+        let defaultLegacy = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew")
+        #else
+        // iOS supplies the application sandbox home, never a server/local Mac path.
+        let defaultLegacy = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support/PendingCrew")
+        #endif
+        let old = env["PENDINGCREW_DATA_DIR"] ?? defaultLegacy.path
         setenv("PENDINGCREW_LEGACY_DATA_DIR", old, 1)
         let authority = CrewdFrontendConfiguration.directory ??
             FileManager.default.temporaryDirectory.appendingPathComponent("pcw-invalid-frontend-" + UUID().uuidString)

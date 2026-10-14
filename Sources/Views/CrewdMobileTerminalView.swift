@@ -58,6 +58,8 @@ struct CrewdMobileTerminalView: UIViewRepresentable {
         func scrolled(source: TerminalView, position: Double) {}
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
         func bell(source: TerminalView) {}
+        // SwiftTerm owns drawing; visual range notifications do not submit input.
+        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
     }
 }
 #endif
