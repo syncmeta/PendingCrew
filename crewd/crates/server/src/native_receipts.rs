@@ -483,6 +483,7 @@ impl CoreNativeReceipts {
     /// or unblock automatic input. The existing Core custody owner must stop
     /// and kernel-settle the registered process group separately.
     pub async fn disconnected(&mut self) -> io::Result<()> {
+        self.effective_content = None;
         self.closed = true;
         self.custody
             .lock()
@@ -1192,20 +1193,38 @@ os.close(master)
         BufReader::new(wire).read_until(b'\n', &mut echoed).unwrap();
         route.observation_frame(&echoed).await.unwrap()
     }
+    async fn observed_content_frame(
+        route: &mut CoreNativeReceipts,
+        frame: &serde_json::Value,
+    ) -> io::Result<Option<n::Receipt>> {
+        let mut wire = route.socket.try_clone()?;
+        wire.write_all(&serde_json::to_vec(frame).map_err(io::Error::other)?)?;
+        wire.write_all(b"\n")?;
+        let mut echoed = Vec::new();
+        BufReader::new(wire).read_until(b'\n', &mut echoed)?;
+        route.content_chunk_frame(&echoed).await
+    }
     #[tokio::test]
     async fn actual_enrolled_pty_proxy_core_fifo_exact_content_cancel_late_start_raw_and_disconnect()
      {
-        actual_flow(false, false).await;
+        actual_flow(false, false, None).await;
     }
     #[tokio::test]
     async fn actual_enrolled_proxy_cancelled_fifo_waiter_is_unknown_and_cannot_reemit() {
-        actual_flow(true, false).await;
+        actual_flow(true, false, None).await;
     }
     #[tokio::test]
     async fn actual_enrolled_proxy_full_body_chunks_commit_only_after_complete_authenticated_cut() {
-        actual_flow(false, true).await;
+        actual_flow(false, true, None).await;
     }
-    async fn actual_flow(cancel_waiter: bool, chunked: bool) {
+    #[tokio::test]
+    async fn actual_enrolled_proxy_partial_content_cancel_gap_and_foreign_identity_never_ack_or_replay()
+     {
+        for refusal in ["cancel", "gap", "foreign"] {
+            actual_flow(false, true, Some(refusal)).await;
+        }
+    }
+    async fn actual_flow(cancel_waiter: bool, chunked: bool, partial_case: Option<&str>) {
         let dir = tempfile::tempdir().unwrap();
         let registry = Arc::new(ProcessRegistry::load(&dir.path().join("processes.json")).unwrap());
         let listener = UnixListener::bind(dir.path().join("proxy.sock")).unwrap();
@@ -1356,6 +1375,84 @@ os.close(master)
         let (same, retry) = route.prepare(request.clone(), body.clone()).await.unwrap();
         assert!(retry);
         assert_eq!(same, prepared);
+        if let Some(refusal) = partial_case {
+            let mut chunks = crewd_exec::acp::content_chunks::encode(
+                &request,
+                prepared.revision,
+                &prompt,
+                std::str::from_utf8(&body).unwrap(),
+            )
+            .unwrap()
+            .into_iter();
+            let first = chunks.next().unwrap();
+            let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":1,"chunk":first});
+            assert!(
+                observed_content_frame(&mut route, &frame)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let expected = if refusal == "cancel" {
+                route
+                    .cancel(request.clone(), prepared.revision)
+                    .await
+                    .unwrap()
+                    .phase
+            } else {
+                n::Phase::Prepared
+            };
+            let mut second = chunks.next().unwrap();
+            match refusal {
+                "cancel" => {} // discarded first chunk; remainder cannot start a new call
+                "gap" => second.index += 1,
+                "foreign" => second.prompt = uuid::Uuid::new_v4().to_string(),
+                _ => unreachable!(),
+            }
+            let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":2,"chunk":second});
+            assert!(observed_content_frame(&mut route, &frame).await.is_err());
+            assert!(route.closed);
+            assert!(route.effective_content.is_none());
+            let rid = request.clone();
+            let saved = db
+                .call_result(move |store| n::get(store.conn(), &rid))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                saved.phase, expected,
+                "poisoned content cannot advance durable phase"
+            );
+            assert!(
+                route.prepare(request.clone(), body.clone()).await.is_err(),
+                "same route cannot replay remainder"
+            );
+            route.disconnected().await.unwrap();
+            let rid = request.clone();
+            let unknown = db
+                .call_result(move |store| n::get(store.conn(), &rid))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(unknown.phase, n::Phase::Unknown);
+            let slot = match &route.peer {
+                NativeReceiptPeer::Proxy(peer) => peer.enrollment().slot(),
+                NativeReceiptPeer::Direct(_) => panic!("actual proxy fixture lost kernel proxy"),
+            };
+            route.socket.write_all(b"Q\n").unwrap();
+            physical.channel.write_all(b"Q").unwrap();
+            assert!(physical.child.wait().unwrap().success());
+            {
+                let mut owned = custody.lock().unwrap();
+                owned.forget_reaped_bridge(1, slot).unwrap();
+                owned.forget_reaped_native(1).unwrap();
+                owned.forget_reaped_helper().unwrap();
+            }
+            assert!(registry.entries().is_empty());
+            db.shutdown();
+            return;
+        }
         let mut next_sequence = 1;
         let accepted = if chunked {
             let chunks = crewd_exec::acp::content_chunks::encode(
