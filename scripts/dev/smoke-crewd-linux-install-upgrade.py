@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Ordinary-user isolated install/11->13/unknown/rollback/Core recovery unit."""
+"""Ordinary-user isolated two-version install/unknown/rollback/Core recovery unit."""
 import argparse,contextlib,fcntl,importlib.util,hashlib,json,os,pathlib,signal,socket,sqlite3,subprocess,sys,time,uuid
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
- a=argparse.ArgumentParser();a.add_argument('old_package');a.add_argument('new_package');a.add_argument('output');a.add_argument('--new-schema',type=int,choices=[13,14],default=13);args=a.parse_args()
+ a=argparse.ArgumentParser();a.add_argument('old_package');a.add_argument('new_package');a.add_argument('output');a.add_argument('--new-schema',type=int,choices=[13,14],default=13);a.add_argument('--old-schema',type=int,choices=[11,13],default=11);args=a.parse_args()
  old,new=pathlib.Path(args.old_package).resolve(),pathlib.Path(args.new_package).resolve();out=pathlib.Path(args.output).resolve()
  if os.getuid()!=os.geteuid() or os.geteuid()==0:raise ValueError('actual ordinary nonroot runner identity required; sudo cannot establish personal installation acceptance')
  if sys.platform!='linux':raise ValueError('actual Linux lifecycle required')
@@ -109,7 +109,7 @@ def main():
   (out/'daemon-terminal-witnesses.json').write_text(json.dumps(terminal_witnesses,sort_keys=True,indent=2)+'\n')
   records.append({'phase':'managed-wrapper-death-child-survival','ownChildPID':pid,'birth':observed,'wrapperExit':r.returncode,'liveChildLeaseRetained':True})
  @contextlib.contextmanager
- def serve(label):
+ def serve(label, crash=False):
   cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false','--codex-env','HOME='+str(home),'--claude-env','HOME='+str(home)]
   with (out/(label+'.log')).open('w') as log:
    p=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None;live_daemons.add(p.pid)
@@ -136,10 +136,10 @@ def main():
     finally:f.close();s.close();s=None
    finally:
     if s:s.close()
-    if p.poll() is None:p.send_signal(signal.SIGTERM)
+    if p.poll() is None:p.send_signal(signal.SIGKILL if crash else signal.SIGTERM)
     try:p.wait(timeout=20)
     except subprocess.TimeoutExpired:p.kill();p.wait();raise ValueError('installed shutdown exceeded deadline')
-    if p.returncode!=0:raise ValueError('installed shutdown failed')
+    if p.returncode!=(-signal.SIGKILL if crash else 0):raise ValueError('installed shutdown outcome differs from explicit crash/normal contract')
     live_daemons.discard(p.pid);terminal_witnesses.append({'phase':label,'pid':p.pid,'waitExit':p.returncode,'physicallyReaped':True})
     (out/'daemon-terminal-witnesses.json').write_text(json.dumps(terminal_witnesses,sort_keys=True,indent=2)+'\n')
  # Controlled related-process metadata negatives are distinct from actual
@@ -184,17 +184,17 @@ def main():
  try:module.private_directory(alias);raise AssertionError('aliased prefix accepted')
  except ValueError:pass
  (control/'result.json').write_text(json.dumps({'controlledMetadata':True,'unrelatedUIDAllowed':True,'relatedUnreadableRefused':True,'relatedLiveRefused':True,'birthChangedRefused':True,'wideModeRefused':True,'symlinkRefused':True,'actualPIDReuseTested':False},indent=2)+'\n')
- first=str(uuid.uuid4());made=install('install11','install',first,None,package=old);active=made['currentActivation']
+ first=str(uuid.uuid4());made=install('install-old','install',first,None,package=old);active=made['currentActivation']
  request=str(uuid.uuid4())
- with serve('installed11') as call:
+ with serve('installed-old') as call:
   remote=call('remote.status',{});assert not remote['listening'] and not remote['configuration']['enabled']
   crew=call('crew.create',{'title':'Installer lifecycle synthetic work','workingDirectory':str(work)})['id']
-  params={'crewId':crew,'requestId':request,'text':'pre12 exact requirement'};requirement=call('todo.create',params)['requirementId']
+  params={'crewId':crew,'requestId':request,'text':'baseline exact requirement'};requirement=call('todo.create',params)['requirementId']
   install('running-runtime-refusal','install',str(uuid.uuid4()),active,package=new,want=False)
   assert status(first)['currentActivation']==active
  wrapper_survival()
- assert dbversion()==11
- cli('backup11','backup');backup11=max((data/'backups').glob('crewd-manual-*.db'),key=lambda p:p.stat().st_mtime_ns);assert dbversion(backup11)==11
+ assert dbversion()==args.old_schema
+ cli('backup-old','backup');backup11=max((data/'backups').glob('crewd-manual-*.db'),key=lambda p:p.stat().st_mtime_ns);assert dbversion(backup11)==args.old_schema
  install('cas-refusal','install',str(uuid.uuid4()),'activations/'+str(uuid.uuid4()),package=new,want=False)
  # A real obstacle after durable preparation prevents pointer replacement.
  prepared=str(uuid.uuid4());(prefix/('.current-'+prepared)).mkdir()
@@ -205,12 +205,44 @@ def main():
  observed=status(upgrade);assert observed['outcome']=='committed-current';upactive=observed['currentActivation']
  before=len(list((prefix/'activations').iterdir()));install('same-request-readback','install',upgrade,active,package=new);assert len(list((prefix/'activations').iterdir()))==before
  install('request-payload-conflict','install',upgrade,active,package=old,want=False);assert status(upgrade)['currentActivation']==upactive
- postrequest=str(uuid.uuid4());postparams={'crewId':crew,'requestId':postrequest,'text':'post12 preserved requirement'}
+ postrequest=str(uuid.uuid4());postparams={'crewId':crew,'requestId':postrequest,'text':'upgraded preserved requirement'}
  with serve('installed-new-upgrade') as call:
   assert call('todo.create',params)['requirementId']==requirement
   post=call('todo.create',postparams)['requirementId']
   remote=call('remote.status',{});assert not remote['listening'] and not remote['configuration']['enabled']
  assert dbversion()==args.new_schema,'formal Core migrations required; never set PRAGMA or count two same-schema packages as upgrade'
+ if args.old_schema == 13 and args.new_schema == 14:
+  crash_request=str(uuid.uuid4());crash_params={'crewId':crew,'requestId':crash_request,'text':'managed14 crash durable requirement'}
+  with serve('managed14-real-SIGKILL',crash=True) as call:
+   crash_requirement=call('todo.create',crash_params)['requirementId']
+  wal=data/'crewd.db-wal';assert wal.is_file() and wal.stat().st_size>32,'actual SIGKILL must leave nonempty WAL, not a clean-restart substitute'
+  crash_files={p.name:{'sha256':sha(p),'size':p.stat().st_size,'mode':p.stat().st_mode&0o777} for p in data.glob('crewd.db*') if p.is_file()}
+  import shutil
+  faultroot=out/'crash-fault-copies';faultroot.mkdir(mode=0o700)
+  for label in ['bad-wal','future-main']:
+   target=faultroot/label;target.mkdir(mode=0o700)
+   for file in data.glob('crewd.db*'):
+    if file.is_file():shutil.copy2(file,target/file.name)
+   file=target/('crewd.db-wal' if label=='bad-wal' else 'crewd.db');raw=bytearray(file.read_bytes())
+   if label=='bad-wal':raw[0]^=255
+   else:raw[60:64]=(15).to_bytes(4,'big')
+   file.write_bytes(raw)
+   before={p.name:{'sha256':sha(p),'size':p.stat().st_size,'mode':p.stat().st_mode&0o777} for p in target.glob('crewd.db*') if p.is_file()}
+   command=[str(prefix/'bin/crewd'),'--data-dir',str(target),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false']
+   rejected=subprocess.run(command,env=env,capture_output=True,timeout=30);(out/('managed14-'+label+'-refusal.log')).write_bytes(rejected.stdout+rejected.stderr)
+   assert rejected.returncode!=0
+   after={p.name:{'sha256':sha(p),'size':p.stat().st_size,'mode':p.stat().st_mode&0o777} for p in target.glob('crewd.db*') if p.is_file()}
+   assert before==after,'Core14 or managed wrapper touched rejected future/bad-WAL original files or modes'
+   (out/('managed14-'+label+'-no-touch.json')).write_text(json.dumps({'fault':'synthetic copy of actual SIGKILL WAL data','before':before,'after':after,'exit':rejected.returncode,'command':command},indent=2)+'\n')
+  # Managed offline readers must not open a pending WAL. Only the exact
+  # certified Core14 Store guard may validate/recover it under the data lease.
+  cli('pending-WAL-offline-backup-refused','backup',want=False)
+  cli('pending-WAL-offline-check-refused','check',want=False)
+  assert crash_files=={p.name:{'sha256':sha(p),'size':p.stat().st_size,'mode':p.stat().st_mode&0o777} for p in data.glob('crewd.db*') if p.is_file()}
+  with serve('managed14-same-version-crash-recovery') as call:
+   assert call('todo.create',crash_params)['requirementId']==crash_requirement,'recovery/readback must retain exact durable UUID identity'
+  assert dbversion()==14
+  (out/'managed14-crash-recovery.json').write_text(json.dumps({'actualSIGKILL':True,'crashedWaitExit':-signal.SIGKILL,'beforeRecoveryFiles':crash_files,'offlineReadersRefusedWithoutPhysicalChange':True,'sameVersionManagedRecovery':True,'requirementId':crash_requirement,'requestId':crash_request,'finalVersion':14},indent=2)+'\n')
  cli('backup-new','backup');backup_new=max((data/'backups').glob('crewd-manual-*.db'),key=lambda p:p.stat().st_mtime_ns);assert dbversion(backup_new)==args.new_schema
  # Concurrent writers receive the same activation CAS. Exactly one may commit;
  # the other must refuse without changing DB bytes or overwriting the winner.
@@ -232,19 +264,19 @@ def main():
  assert beforedb=={p.name:sha(p) for p in data.glob('crewd.db*') if p.is_file()},'installer may never modify databases'
  before_refusal=refusal_snapshot()
  (out/'old-refusal-before.json').write_text(json.dumps(before_refusal,sort_keys=True,indent=2)+'\n')
- refused=cli('old11-refuses-new','serve','--codex','/usr/bin/false','--claude','/usr/bin/false',want=False)
+ refused=cli('old-version-refuses-new','serve','--codex','/usr/bin/false','--claude','/usr/bin/false',want=False)
  after_refusal=refusal_snapshot()
  (out/'old-refusal-after.json').write_text(json.dumps(after_refusal,sort_keys=True,indent=2)+'\n')
- assert 'managed.future_schema: database version '+str(args.new_schema)+' exceeds supported 11; old program not launched' in (refused.stdout+refused.stderr).decode(),'managed old version must refuse before old RW SQLite open'
+ assert 'managed.future_schema: database version '+str(args.new_schema)+' exceeds supported '+str(args.old_schema)+'; old program not launched' in (refused.stdout+refused.stderr).decode(),'managed old version must refuse before old RW SQLite open'
  assert before_refusal['logical']==after_refusal['logical'],'old binary changed domain/schema/integrity despite refusal'
  assert before_refusal['physical']==after_refusal['physical'],'old binary changed physical DB files after closed-observer baseline; retain precise phase evidence'
- # The currently activated old11 binary must not restore a newer DB. Activate
+ # The currently activated old binary must not restore a newer DB. Activate
  # the authoritative new binary first, then use its explicit normal restore CLI.
  restore_authority=str(uuid.uuid4());new_again=install('reactivate-new-for-formal-restore','install',restore_authority,rolled['currentActivation'],package=new)
- cli('formal-new-restores11','restore','--from',str(backup11));assert dbversion()==11
+ cli('formal-new-restores-old','restore','--from',str(backup11));assert dbversion()==args.old_schema
  assert any(dbversion(p)==args.new_schema for p in data.glob('crewd.db.replaced-*') if p.is_file() and not p.name.endswith(('-wal','-shm')))
  old_again=install('reactivate-old-after-formal-restore','rollback',str(uuid.uuid4()),new_again['currentActivation'],source=oldmeta['sourceRef'])
- with serve('recovered11') as call:assert call('todo.create',params)['requirementId']==requirement
+ with serve('recovered-old') as call:assert call('todo.create',params)['requirementId']==requirement
  forward=str(uuid.uuid4());current=install('reactivate-new','install',forward,old_again['currentActivation'],package=new)
  cli('formal-new-restores-new-backup','restore','--from',str(backup_new))
  with serve('recovered-new') as call:
@@ -252,7 +284,7 @@ def main():
  assert dbversion()==args.new_schema
  observer_quiescent(data/'crewd.db')
  with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro&immutable=1',uri=True)) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
- (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[11,args.new_schema,11,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'managedOldVersionRefusedBeforeExec':True,'rawOldBinaryFutureSidecarLimitRetained':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'phaseRecords':records},indent=2)+'\n')
+ (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[args.old_schema,args.new_schema,args.old_schema,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'managedOldVersionRefusedBeforeExec':True,'rawOldBinaryFutureSidecarLimitRetained':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'managedSameVersionCrashRecovery':args.old_schema==13 and args.new_schema==14,'phaseRecords':records},indent=2)+'\n')
  print('PASS ordinary-user explicit Linux install/upgrade/failure/unknown/rollback/authoritative Core restore/restart; no system service or model')
 try:main()
 except (ValueError,OSError,KeyError,AssertionError,subprocess.SubprocessError) as e:raise SystemExit('FAIL retained installer lifecycle evidence: '+str(e))

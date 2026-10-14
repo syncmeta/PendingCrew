@@ -2,6 +2,9 @@
 import fcntl, hashlib, json, os, pathlib, re, stat, sys
 sys.dont_write_bytecode = True
 DB_COMMANDS = {'serve', 'backup', 'check', 'restore', 'import'}
+# This whole production input was independently accepted for Store's no-touch
+# WAL guard/recovery. A future/schema label alone never grants delegation.
+CORE14_RECOVERY_INPUT = '8dfa60de8ed9097b3478b659085fe059f1fef96fd69a1ae72812161a7c183910'
 
 def sha(path):
     h = hashlib.sha256()
@@ -67,7 +70,46 @@ def supported_schema(package):
     if len(matches) != 1 or int(matches[0]) < 1: raise ValueError('unknown package schema authority')
     return int(matches[0])
 
-def readonly_header(data, maximum):
+def certified_core14_recovery(package, maximum):
+    if maximum != 14: return False
+    candidate = json.loads((package / 'candidate.json').read_text())
+    witness_path = package / 'normal-build-witness.json'
+    if sha(witness_path) != candidate['witnessSHA256'] or sha(package / 'bin/crewd') != candidate['binarySHA256']:
+        raise ValueError('Core recovery proof/binary changed')
+    witness = json.loads(witness_path.read_text())
+    if candidate.get('sourceProofTier') != 'fresh-owning-workspace-production-graph' or witness.get('binarySHA256') != candidate['binarySHA256'] or witness.get('sourceRef') != candidate['sourceRef']:
+        raise ValueError('recovery requires original source/binary/fresh proof pairing')
+    if witness.get('rustInputDigest') != CORE14_RECOVERY_INPUT or witness.get('freshWorkspaceArtifacts') is not True:
+        return False
+    configuration = witness['buildConfiguration']
+    expected = ('x86_64-unknown-linux-gnu', 'release') if sys.platform == 'linux' else ('aarch64-apple-darwin', 'debug')
+    if (configuration.get('target'), configuration.get('profile')) != expected:
+        raise ValueError('recovery requires actual host normal configuration')
+    if configuration.get('defaultFeatures') is not True or configuration.get('allFeatures') is not False or configuration.get('features') != [] or configuration.get('artifactFeatures') != [] or any(features for features in configuration.get('workspaceFeatures', {}).values()) or configuration.get('artifactProfile', {}).get('test') is not False:
+        raise ValueError('recovery requires default non-test normal build')
+    for field in ['evidenceDirectory', 'snapshotDirectory']:
+        value = pathlib.PurePosixPath(witness[field])
+        if value.is_absolute() or '..' in value.parts: raise ValueError('recovery proof path escape')
+    evidence = package / witness['evidenceDirectory']
+    rows = witness['files']
+    if len(rows) != 390 or len({row['path'] for row in rows}) != len(rows):
+        raise ValueError('complete certified Core14 production inputs required')
+    for row in rows:
+        relative = pathlib.PurePosixPath(row['path'])
+        if relative.is_absolute() or '..' in relative.parts or not row['path'].startswith('crewd/'):
+            raise ValueError('recovery input path escape')
+        source = evidence / witness['snapshotDirectory'] / relative
+        if source.resolve() != source or sha(source) != row['sha256']: raise ValueError('certified recovery source changed or aliased')
+    digest = hashlib.sha256(''.join(row['path'] + '\t' + row['sha256'] + '\n' for row in sorted(rows, key=lambda row: row['path'])).encode()).hexdigest()
+    if digest != CORE14_RECOVERY_INPUT: raise ValueError('recovery production input digest mismatch')
+    for name in ['productionGraph', 'sourcePreflight', 'workspaceArtifacts']:
+        file = pathlib.PurePosixPath(witness[name + 'File'])
+        if file.is_absolute() or '..' in file.parts: raise ValueError('recovery sidecar escape')
+        path = evidence / file
+        if path.resolve() != path or sha(path) != witness[name + 'SHA256']: raise ValueError('fresh-source recovery sidecar changed or aliased')
+    return True
+
+def readonly_header(data, maximum, pending_wal_recovery=False):
     private(data, True)
     for suffix in ['.id', '-shm']:
         path = data / ('crewd.db' + suffix)
@@ -76,7 +118,8 @@ def readonly_header(data, maximum):
         path = data / ('crewd.db' + suffix)
         if path.exists() or path.is_symlink():
             info = private(path)
-            if info.st_size: raise ValueError('managed database has pending WAL/journal; preserve files and use authoritative newer recovery')
+            if info.st_size and not (suffix == '-wal' and pending_wal_recovery):
+                raise ValueError('managed database has pending WAL/journal; preserve files and use authoritative newer recovery')
     db = data / 'crewd.db'
     if not db.exists() and not db.is_symlink(): return
     return inspect_header(db, maximum)
@@ -139,6 +182,9 @@ def main(prefix, argv):
         private(locks / name)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); os.set_inheritable(fd, True)
         maximum = supported_schema(package)
-        readonly_header(data, maximum)
+        # Only the exact certified Core14 serve route enters Store's validated
+        # private WAL-copy guard. Offline readers are not substitutes for it.
+        recover = argv[2] == 'serve' and certified_core14_recovery(package, maximum)
+        readonly_header(data, maximum, pending_wal_recovery=recover)
         source_guard(data, argv[2], argv[3:], maximum)
     os.execv(str(package / 'bin/crewd'), [str(package / 'bin/crewd'), *argv])

@@ -2,13 +2,18 @@
 # 本机与完整检查共用 crewd/scripts/check.sh；默认不跑真实模型或 ignored 测试。
 # 已完成的临时 Core/M5/candidate 补验保留历史来源和本地脚本，不再暴露重复入口。
 name: crewd
-run-name: "${{ inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
+run-name: "${{ inputs.linux14_install_recovery == true && 'Linux14 fresh package and managed13-to14 crash recovery (explicit; not full CI)' || inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
 
 on:
   workflow_dispatch:
     inputs:
       linux_install_upgrade:
-        description: Run the required isolated Linux11 to13 install, lease, unknown, rollback and restore flow instead of full checks
+        description: Historical Linux11 to13 install, lease, unknown, rollback and restore flow instead of full checks
+        type: boolean
+        default: false
+
+      linux14_install_recovery:
+        description: Build the exact normal Linux14 package once and verify managed13-to14, unknown, rollback, backup/restore and nonempty-WAL crash recovery
         type: boolean
         default: false
 
@@ -25,7 +30,7 @@ env:
 
 jobs:
   check:
-    if: ${{ inputs.linux_install_upgrade != true }}
+    if: ${{ inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -108,7 +113,7 @@ jobs:
           if-no-files-found: ignore
 
   linux-install-upgrade:
-    if: ${{ inputs.linux_install_upgrade == true }}
+    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -193,5 +198,96 @@ jobs:
             ${{ runner.temp }}/linux-install-new13/reused-normal13.json
             ${{ runner.temp }}/linux-install-lifecycle.tar.gz
             ${{ runner.temp }}/linux-install-lifecycle.tar.gz.json
+          if-no-files-found: error
+          retention-days: 14
+
+  invalid-linux-scope:
+    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery == true }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo 'Choose one exact historical13 or current14 scope; no build started.' >&2; exit 1
+
+  linux14-install-recovery:
+    if: ${{ inputs.linux14_install_recovery == true && inputs.linux_install_upgrade != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_INCREMENTAL: '0'
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Prepare exact original13 metadata evidence root
+        run: mkdir -m 700 "$RUNNER_TEMP/linux-install-original-meta"
+      - name: Verify original failed run with successful actual normal13 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/38541835255 > "$RUNNER_TEMP/linux-install-original-meta/normal13-run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/11882857926 > "$RUNNER_TEMP/linux-install-original-meta/normal13-artifact.json"
+          gh api repos/${{ github.repository }}/actions/runs/38541835255/jobs > "$RUNNER_TEMP/linux-install-original-meta/normal13-jobs.json"
+          python3 - <<'PYVERIFY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-install-original-meta'
+          r=json.loads((p/'normal13-run.json').read_text());a=json.loads((p/'normal13-artifact.json').read_text());jobs=json.loads((p/'normal13-jobs.json').read_text())['jobs']
+          assert r['id']==38541835255 and r['run_attempt']==1 and r['head_sha']=='4e80134b9b5ff5a9b759aed1446f61da489efc4c' and r['conclusion']=='failure'
+          assert a['id']==11882857926 and not a['expired'] and a['workflow_run']['id']==r['id'] and a['workflow_run']['head_sha']==r['head_sha']
+          assert a['name']=='crewd-linux-install-upgrade-'+r['head_sha']
+          job=next(j for j in jobs if j['name']=='linux-install-upgrade')
+          assert next(x for x in job['steps'] if x['name']=='Build actual new default release with fresh owning-workspace proof and packaged recovery')['conclusion']=='success'
+          PYVERIFY
+      - name: Retrieve original artifact ZIP without expanding duplicated activation payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/actions/artifacts/11882857926/zip > "$RUNNER_TEMP/linux-install-normal13-original.zip"
+      - name: Verify complete actual historical13 source and raw fresh proof as baseline only
+        run: python3 -B scripts/dev/prepare-crewd-linux-install-reuse.py "$RUNNER_TEMP/linux-install-normal13-original.zip" "$RUNNER_TEMP/linux14-baseline13" --baseline13
+      - name: Read pinned production Rust toolchain
+        id: toolchain
+        run: |
+          python3 - <<'PYTOOLCHAIN'
+          import os,pathlib,tomllib
+          channel=tomllib.loads(pathlib.Path('crewd/rust-toolchain.toml').read_text())['toolchain']['channel']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:out.write('channel='+channel+'\n')
+          PYTOOLCHAIN
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd -> target
+          cache-on-failure: true
+      - name: Build actual current14 default release once with complete owning-workspace fresh source proof
+        run: python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux14-current-release"
+      - name: Actual ordinary-user managed13-to14 upgrade, unknown, rollback, restore and SIGKILL WAL recovery
+        id: lifecycle
+        run: |
+          parent=$(mktemp -d /tmp/pl14.XXXXXX)
+          chmod 700 "$parent"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          python3 -B scripts/dev/smoke-crewd-linux-install-upgrade.py "$RUNNER_TEMP/linux14-baseline13/crewd-linux-x86_64" "$RUNNER_TEMP/linux14-current-release/crewd-linux-x86_64" "$parent/flow" --old-schema 13 --new-schema 14
+      - name: Archive exact private lifecycle without dereferencing activation references
+        if: ${{ always() && steps.lifecycle.outputs.parent != '' }}
+        run: python3 -B scripts/dev/archive-crewd-linux-lifecycle.py '${{ steps.lifecycle.outputs.parent }}/flow' "$RUNNER_TEMP/linux14-lifecycle.tar.gz"
+      - name: Retain full actual package provenance and precise lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-linux14-install-recovery-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/linux-install-original-meta
+            ${{ runner.temp }}/linux14-baseline13/reused-normal13.json
+            ${{ runner.temp }}/linux14-baseline13/original4e-normal13.tar.gz
+            ${{ runner.temp }}/linux14-current-release/crewd-linux-x86_64-*.tar.gz
+            ${{ runner.temp }}/linux14-current-release/archive-sha256.txt
+            ${{ runner.temp }}/linux14-current-release/runtime-smoke/*.log
+            ${{ runner.temp }}/linux14-current-release/runtime-smoke/result.json
+            ${{ runner.temp }}/linux14-lifecycle.tar.gz
+            ${{ runner.temp }}/linux14-lifecycle.tar.gz.json
           if-no-files-found: error
           retention-days: 14
