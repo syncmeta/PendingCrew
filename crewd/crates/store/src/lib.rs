@@ -12,6 +12,7 @@ pub mod fsutil;
 pub mod local_clients;
 pub mod messages;
 pub mod native_execution;
+pub mod native_history;
 pub mod object_refs;
 pub mod remote;
 pub mod runner_usage;

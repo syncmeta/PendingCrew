@@ -6,7 +6,7 @@ use crate::registry::ProcessIdentity;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io};
 
-const MAX_BODY: usize = 1_048_576;
+pub(crate) const MAX_BODY: usize = 1_048_576;
 const MAX_REQUESTS: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
