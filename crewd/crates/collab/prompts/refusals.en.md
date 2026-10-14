@@ -501,3 +501,6 @@ Channel work references changed. Refresh the current channel work view before re
 
 ## channel.work_cursor_expired
 Channel work references changed. Refresh the current channel work view before retrying.
+
+## work.owner_required
+Assign an owner before starting or blocking this work.

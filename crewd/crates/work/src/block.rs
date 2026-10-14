@@ -46,6 +46,9 @@ impl WorkBook {
     ) -> Result<Applied<BlockResult>, Rejected> {
         self.transact(by, now, |d| {
             d.permit_on(Action::Block, id)?;
+            if d.item(id)?.owner.is_none() {
+                return Err(Rejected::OwnerRequired);
+            }
             if on.is_empty() {
                 return Err(Rejected::Invalid("block needs at least one blocker"));
             }
@@ -375,6 +378,34 @@ impl Draft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unowned_block_is_a_domain_refusal_before_ask_and_split_effects() {
+        let mut b = crate::testkit::book();
+        let id = b
+            .create_item(
+                &Actor::Human,
+                crate::testkit::T1,
+                NewItem::titled("unowned"),
+            )
+            .unwrap()
+            .value;
+        let before = b.state().clone();
+        assert_eq!(
+            b.block(
+                &Actor::Human,
+                crate::testkit::T1,
+                id,
+                vec![BlockOn::NewAsk {
+                    question: "must not be allocated".into(),
+                    default: None
+                }],
+                Continuation::Split(vec![NewItem::titled("must not be created")])
+            ),
+            Err(Rejected::OwnerRequired)
+        );
+        assert_eq!(b.state(), &before);
+    }
+
     use super::*;
     use crate::ids::{EntryNo, HOUR};
     use crate::invariants::Violation;

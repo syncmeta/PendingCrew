@@ -635,6 +635,14 @@ pub(crate) fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result
     }
     Ok(())
 }
+pub(crate) fn owner_refusal(error: CollabError) -> CollabError {
+    match error {
+        CollabError::Work(crewd_work::Rejected::OwnerRequired) => {
+            CollabError::Conflict(Refusal::new(Code::WorkOwnerRequired))
+        }
+        other => other,
+    }
+}
 pub fn update(
     tx: &mut crate::Tx<'_>,
     by: &crate::Sender,
@@ -736,7 +744,8 @@ pub fn update(
             return Ok((ap.events, ready));
         }
         Ok((Vec::new(), Vec::new()))
-    })?;
+    })
+    .map_err(owner_refusal)?;
     wake_cleared(
         tx,
         &r.crew_id,

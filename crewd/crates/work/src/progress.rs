@@ -39,6 +39,9 @@ impl WorkBook {
             if r.next_check_at.is_some_and(|t| t <= now) {
                 return Err(Rejected::NextCheckNotFuture);
             }
+            if r.status == Some(Progress::Active) && d.item(id)?.owner.is_none() {
+                return Err(Rejected::OwnerRequired);
+            }
             let it = d.item_mut(id)?;
             let from = it.status;
             if let Some(p) = r.status {
@@ -266,6 +269,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unowned_active_report_is_a_domain_refusal_without_any_effect() {
+        let mut b = book();
+        let id = b
+            .create_item(&Actor::Human, T1, NewItem::titled("unowned"))
+            .unwrap()
+            .value;
+        let before = b.state().clone();
+        assert_eq!(
+            b.report(
+                &Actor::Human,
+                T1,
+                id,
+                report(
+                    Some(Progress::Active),
+                    Some(T1.plus(HOUR)),
+                    "actual progress"
+                )
+            ),
+            Err(Rejected::OwnerRequired)
+        );
+        assert_eq!(b.state(), &before);
+        b.report(
+            &Actor::Human,
+            T1,
+            id,
+            report(Some(Progress::Open), None, "still unassigned"),
+        )
+        .unwrap();
+        assert!(b.item(id).unwrap().owner.is_none());
+    }
     #[test]
     fn reporting_starts_work_with_a_next_check() {
         let mut b = book();
