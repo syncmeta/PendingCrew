@@ -618,6 +618,15 @@ fn rpc_drives_every_client_method() {
             r#"{"grantId":"44444444-4444-4444-8444-444444444444","expectedRevision":"1","note":"No grant has been accepted"}"#,
             Code(-32009),
         ),
+        // These closed public methods are advertised on both supported hosts.
+        // Null must reach their typed parser and fail before any durable effect;
+        // production payload/lifecycle coverage lives in the public physical gate.
+        ("command.submit", "null", Code(-32602)),
+        ("command.lookup", "null", Code(-32602)),
+        ("command.listUnknown", "null", Code(-32602)),
+        ("session.controlTarget", "null", Code(-32602)),
+        ("session.terminal.inspect", "null", Code(-32602)),
+        ("session.terminal.watch", "null", Code(-32602)),
         // Hibernate ends the server, so it is the final method in this table.
         ("crewd.hibernate", "null", Ok),
     ];

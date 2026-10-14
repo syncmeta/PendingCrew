@@ -1111,6 +1111,184 @@
       ],
       "type": "object"
     },
+    "CommandListUnknownParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "dbId"
+      ],
+      "type": "object"
+    },
+    "CommandLookupParams": {
+      "additionalProperties": false,
+      "properties": {
+        "dbId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "dbId"
+      ],
+      "type": "object"
+    },
+    "CommandPhase": {
+      "enum": [
+        "reserved",
+        "committed",
+        "admitted",
+        "dispatched",
+        "launched",
+        "written",
+        "resized",
+        "confirmed",
+        "unknown",
+        "suppressed",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "CommandRuntimeTarget": {
+      "additionalProperties": false,
+      "description": "A target is issued by Core and pins an actual runtime. Client-selected session\nIDs or an old receipt cannot target a new generation or a replacement turn.",
+      "properties": {
+        "controlRevision": {
+          "description": "Core mutation epoch invalidates delayed controls after a new turn/input.",
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessionId",
+        "generation",
+        "controlRevision"
+      ],
+      "type": "object"
+    },
+    "CommandSubmitParams": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/PublicCommand"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "runtimeBindingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "dbId",
+        "runtimeBindingId",
+        "command"
+      ],
+      "type": "object"
+    },
+    "CommandSummary": {
+      "description": "A bounded summary cannot expose or concatenate large original body/result\nframes. Full read-only lookup remains separate and re-authorized.",
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "historical": {
+          "type": "boolean"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "payloadSha256": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/CommandPhase"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "runtimeBindingId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtimeBindingId",
+        "requestId",
+        "dbId",
+        "operation",
+        "payloadSha256",
+        "phase",
+        "createdAt",
+        "updatedAt",
+        "historical"
+      ],
+      "type": "object"
+    },
+    "CommandUnknownPage": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CommandSummary"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
     "Crew": {
       "properties": {
         "captainExecutor": {
@@ -1919,6 +2097,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/TerminalWatchEvent"
+            },
+            "event": {
+              "const": "session.terminal.output",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/SystemShutdown"
             },
             "event": {
@@ -2205,6 +2399,22 @@
           "type": "object"
         }
       ]
+    },
+    "FirstMessageParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crew": {
+          "$ref": "#/$defs/CrewCreateParams"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crew",
+        "text"
+      ],
+      "type": "object"
     },
     "FolderAssignParams": {
       "additionalProperties": false,
@@ -2534,6 +2744,17 @@
           ],
           "description": "Present only on a mutually authenticated, durably granted remote connection."
         },
+        "runtimeIdentity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Actual work DB and Core-generated current daemon correlation. Absence on\nold daemons is unconfirmed; this JSON is not a kernel peer credential."
+        },
         "server": {
           "type": "string"
         },
@@ -2825,6 +3046,58 @@
         "human"
       ],
       "type": "string"
+    },
+    "LocalClientTrustMode": {
+      "enum": [
+        "exactCode",
+        "publisher"
+      ],
+      "type": "string"
+    },
+    "LocalClientTrustParams": {
+      "additionalProperties": false,
+      "properties": {
+        "clientPid": {
+          "default": null,
+          "description": "Selection only; OS kernel PID/birth/UID/code are independently verified.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expectedCdHash": {
+          "type": "string"
+        },
+        "expectedTeam": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/LocalClientTrustMode"
+        }
+      },
+      "required": [
+        "mode",
+        "expectedCdHash"
+      ],
+      "type": "object"
+    },
+    "LocalClientTrustRevokeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "trustId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "trustId"
+      ],
+      "type": "object"
     },
     "LocaleView": {
       "description": "设置的语言。",
@@ -3237,6 +3510,329 @@
         "title",
         "decision",
         "sinceMs"
+      ],
+      "type": "object"
+    },
+    "PublicCommand": {
+      "description": "Closed typed whitelist. Resource-specific requestId/CAS methods keep their\nexisting contracts; this is not an arbitrary RPC proxy.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "local.clientTrust",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/LocalClientTrustParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "local.clientTrustRevoke",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/LocalClientTrustRevokeParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Explicit local owned-child Quit only. Remote clients cancel their own\nconnection/watch/lease instead of stopping the remote team.",
+          "properties": {
+            "operation": {
+              "const": "crewd.hibernate",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/HibernateParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "crew.create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CrewCreateParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "crew.createFirstMessage",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/FirstMessageParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "message.post",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/MessagePostParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.start",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionStartParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.stop",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RuntimeStopParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.resume",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CommandRuntimeTarget"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.interrupt",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CommandRuntimeTarget"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.answer",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RuntimeDecisionParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.respondRunnerRequest",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RuntimeDecisionParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.terminal.claim",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/TerminalClaimParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.terminal.release",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/TerminalReleaseParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.terminal.write",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/TerminalWriteParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.terminal.resize",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/TerminalResizeParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PublicCommandReceipt": {
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/PublicCommand"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "historical": {
+          "description": "A copied historical receipt never proves current external completion.",
+          "type": "boolean"
+        },
+        "payloadSha256": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/CommandPhase"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "result": true,
+        "runtimeBindingId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtimeBindingId",
+        "requestId",
+        "dbId",
+        "command",
+        "payloadSha256",
+        "phase",
+        "createdAt",
+        "updatedAt",
+        "historical"
       ],
       "type": "object"
     },
@@ -4052,9 +4648,14 @@
         "method": {
           "type": "string"
         },
-        "params": true
+        "params": true,
+        "runnerRequestId": {
+          "description": "The actual structured runner request ID; never inferred from the screen or fingerprint.",
+          "type": "string"
+        }
       },
       "required": [
+        "runnerRequestId",
         "fingerprint",
         "method",
         "params"
@@ -4148,6 +4749,61 @@
         "threadId",
         "tokenUsageJson",
         "observedAt"
+      ],
+      "type": "object"
+    },
+    "RuntimeDecisionParams": {
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "description": "Exact structured runner request, never inferred from rendered TUI text.",
+          "type": "string"
+        },
+        "response": true,
+        "runnerRequestId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "fingerprint",
+        "runnerRequestId",
+        "response"
+      ],
+      "type": "object"
+    },
+    "RuntimeIdentity": {
+      "description": "Correlation issued by this exact daemon instance. Clients bind it only after\nkernel peer/child-birth validation (local) or verified pairing (remote).\nJSON alone never proves process ownership or grants authority to shut down.",
+      "properties": {
+        "dbId": {
+          "type": "string"
+        },
+        "runtimeBindingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dbId",
+        "runtimeBindingId"
+      ],
+      "type": "object"
+    },
+    "RuntimeStopParams": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "reason"
       ],
       "type": "object"
     },
@@ -4748,6 +5404,276 @@
         "running",
         "inflightWakeIds",
         "writesQueued"
+      ],
+      "type": "object"
+    },
+    "TerminalClaimParams": {
+      "additionalProperties": false,
+      "properties": {
+        "previousLeaseId": {
+          "default": null,
+          "description": "Explicit controlled handoff; never guessed or silently stolen.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "TerminalInspectParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "TerminalInspection": {
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "manualControlAvailable": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "oldestCursor": {
+          "type": "string"
+        },
+        "outputKind": {
+          "$ref": "#/$defs/TerminalOutputKind"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "screen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenBytesBase64": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target",
+        "outputKind",
+        "oldestCursor",
+        "nextCursor",
+        "truncated",
+        "exited",
+        "manualControlAvailable"
+      ],
+      "type": "object"
+    },
+    "TerminalOutput": {
+      "properties": {
+        "bytesBase64": {
+          "description": "Lossless output, bounded to64KiB decoded per complete encoded frame.",
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target",
+        "cursor",
+        "nextCursor",
+        "bytesBase64",
+        "truncated",
+        "exited"
+      ],
+      "type": "object"
+    },
+    "TerminalOutputKind": {
+      "enum": [
+        "pty",
+        "runner",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "TerminalReleaseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "leaseId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "leaseId"
+      ],
+      "type": "object"
+    },
+    "TerminalResizeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cols": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaseId": {
+          "type": "string"
+        },
+        "rows": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "leaseId",
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TerminalWatchEvent": {
+      "properties": {
+        "closed": {
+          "type": "boolean"
+        },
+        "output": {
+          "$ref": "#/$defs/TerminalOutput"
+        },
+        "watchId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "watchId",
+        "output",
+        "closed"
+      ],
+      "type": "object"
+    },
+    "TerminalWatchParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "TerminalWatchStarted": {
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "initialSnapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalInspection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "watchId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "watchId",
+        "target",
+        "after"
+      ],
+      "type": "object"
+    },
+    "TerminalWriteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "bytesBase64": {
+          "type": "string"
+        },
+        "leaseId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "leaseId",
+        "bytesBase64"
       ],
       "type": "object"
     },
@@ -6509,6 +7435,9 @@
     "session.runnerProfile": {
       "$ref": "#/$defs/RunnerProfile"
     },
+    "session.terminal.output": {
+      "$ref": "#/$defs/TerminalWatchEvent"
+    },
     "system.shutdown": {
       "$ref": "#/$defs/SystemShutdown"
     },
@@ -6647,6 +7576,37 @@
       },
       "result": {
         "$ref": "#/$defs/ChannelWorkLinkReceipt"
+      }
+    },
+    "command.listUnknown": {
+      "params": {
+        "$ref": "#/$defs/CommandListUnknownParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CommandUnknownPage"
+      }
+    },
+    "command.lookup": {
+      "params": {
+        "$ref": "#/$defs/CommandLookupParams"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PublicCommandReceipt"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "command.submit": {
+      "params": {
+        "$ref": "#/$defs/CommandSubmitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PublicCommandReceipt"
       }
     },
     "crew.adopt": {
@@ -6971,6 +7931,14 @@
         "$ref": "#/$defs/SessionAnswerResult"
       }
     },
+    "session.controlTarget": {
+      "params": {
+        "$ref": "#/$defs/TerminalInspectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CommandRuntimeTarget"
+      }
+    },
     "session.get": {
       "params": {
         "$ref": "#/$defs/SessionGetParams"
@@ -7044,6 +8012,22 @@
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session.terminal.inspect": {
+      "params": {
+        "$ref": "#/$defs/TerminalInspectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TerminalInspection"
+      }
+    },
+    "session.terminal.watch": {
+      "params": {
+        "$ref": "#/$defs/TerminalWatchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TerminalWatchStarted"
       }
     },
     "session.usage": {
