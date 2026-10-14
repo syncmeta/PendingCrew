@@ -156,6 +156,17 @@ targets:
       # never instantiate a GUI view or launch an agent process.
       - path: Sources/Stores/CrewSessionRequests.swift
       - path: Sources/Mac/Services/CrewSessionRunner.swift
+      # The real runner's crewd presentation boundary uses the actual typed
+      # client/workspace/projection. Compile those production dependencies into
+      # this standalone bundle; never substitute a fake workspace or bypass role
+      # guards. Product scene/integration roots are not part of this test bundle.
+      - path: Sources/Mac/Crewd
+        excludes:
+          - CrewdFrontendIsolation.swift
+          - CrewdOriginalConnectionIntegration.swift
+          - CrewdOriginalWorkIntegration.swift
+          - CrewdMobileWorkspaceView.swift
+          - CrewdWorkspaceView.swift
       - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
       - path: Sources/Mac/Services/ModelCatalogCenter.swift
       - path: Sources/Mac/Services/QuotaCenter.swift
