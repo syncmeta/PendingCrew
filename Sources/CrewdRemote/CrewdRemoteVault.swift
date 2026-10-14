@@ -44,7 +44,10 @@ final class CrewdRemoteMemoryCredentials: CrewdRemoteCredentialStore {
 enum CrewdRemoteCredentials {
     private static let isolated = CrewdRemoteMemoryCredentials()
     static func application() -> CrewdRemoteCredentialStore {
-        #if PENDINGCREW_NATIVE_CANDIDATE
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        guard let scope = try? CrewdDeliveryValidation.qualified() else { return CrewdRefusedCredentials() }
+        return CrewdValidationCredentials(scope: scope)
+        #elseif PENDINGCREW_NATIVE_CANDIDATE
         return isolated
         #else
         // Explicit isolated fixture opt-in is separate from HOME or data paths.
@@ -68,10 +71,28 @@ final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
             #endif
         }
     }
+    static func canonicalAccount(_ id: UUID) -> String { id.uuidString.lowercased() }
+    static func matchesReturnedAccount(_ result: Any?, id: UUID) -> Bool {
+        guard let attributes = result as? [String: Any] else { return false }
+        return attributes[kSecAttrAccount as String] as? String == canonicalAccount(id)
+    }
     private func query(_ id: UUID? = nil) -> [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrSynchronizable as String: false]
-        if let id { query[kSecAttrAccount as String] = id.uuidString.lowercased() }
+        if let id { query[kSecAttrAccount as String] = Self.canonicalAccount(id) }
         return query
+    }
+    /// Exact approved accounts only; never a service-wide credential enumeration.
+    func boundedRecords(_ ids: [UUID]) throws -> [UUID] {
+        var present: [UUID] = []
+        for id in ids {
+            var request = query(id); request[kSecReturnAttributes as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(request as CFDictionary, &result)
+            if status == errSecItemNotFound { continue }
+            guard status == errSecSuccess, Self.matchesReturnedAccount(result, id: id) else { throw CrewdRemoteError.unavailableCredential }
+            present.append(id)
+        }
+        return present
     }
     func records() throws -> [UUID] {
         var request = query(); request[kSecReturnAttributes as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitAll

@@ -4,6 +4,9 @@ import Foundation
 /// credentials stay isolated; selecting a directory never imports legacy data.
 enum CrewdFrontendConfiguration {
     static var directory: URL? {
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        return try? CrewdDeliveryValidation.qualified().data
+        #else
         #if PENDINGCREW_NATIVE_CANDIDATE
         guard let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
               ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
@@ -22,6 +25,7 @@ enum CrewdFrontendConfiguration {
         // source. Strict owner/mode/alias validation happens before any store.
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("PendingCrewCore").standardizedFileURL
+        #endif
         #endif
     }
 }

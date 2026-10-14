@@ -529,6 +529,7 @@
 		95C3C445435C868A3AC5D917 /* CrewChatReturnTrail.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF86AC53CE78FB4C2CC168B3 /* CrewChatReturnTrail.swift */; };
 		95CD81185B683FA0FD1E74C4 /* PendingComposerAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85FDABD0C0A7910C75C39C8 /* PendingComposerAttachment.swift */; };
 		96036076F069CEFCC6C62C42 /* CrewMessageSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBED74A798C78B9A069F6E42 /* CrewMessageSearch.swift */; };
+		9621DB45E88A35FCB2DA6BA2 /* CrewdDeliveryValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C197ED02C73C8ED79C925F7B /* CrewdDeliveryValidation.swift */; };
 		96595233C2A7F0F7DC4BA240 /* AgentTerminalLaunchFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581482E75D6BBD5082976B77 /* AgentTerminalLaunchFailureTests.swift */; };
 		9784D71E9DBD98F8CEA30145 /* McpPermissionHookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36E53A3EEA55369A75ADB82 /* McpPermissionHookTests.swift */; };
 		979E36E1B187AC362BE87F7F /* TodoListPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4FBE88C4EE22D059C9E4D0 /* TodoListPresentation.swift */; };
@@ -1357,6 +1358,7 @@
 		C064AF13ACBDEE1BE53CA1A3 /* WorkerAssignmentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerAssignmentStoreTests.swift; sourceTree = "<group>"; };
 		C1519C3CB1865ADF702068B0 /* WorkdirTrustPromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkdirTrustPromptTests.swift; sourceTree = "<group>"; };
 		C19238A59905552A4248BCEE /* AppThemeAlias.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppThemeAlias.swift; sourceTree = "<group>"; };
+		C197ED02C73C8ED79C925F7B /* CrewdDeliveryValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdDeliveryValidation.swift; sourceTree = "<group>"; };
 		C19AB68BF7E4D689CEAF0A0F /* CrewSessionRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewSessionRunner.swift; sourceTree = "<group>"; };
 		C2007986259A1E37560F6DF0 /* CrewTodoAttachmentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewTodoAttachmentViews.swift; sourceTree = "<group>"; };
 		C29945C33D737B477262CEAF /* ManualPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualPairingTests.swift; sourceTree = "<group>"; };
@@ -1368,6 +1370,7 @@
 		C4DE21A508095E7F001EE023 /* CrewdNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNativeApp.swift; sourceTree = "<group>"; };
 		C4E631C983F130551C5D0995 /* CrewMessageCategoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageCategoryTests.swift; sourceTree = "<group>"; };
 		C545E2A3810B952ECB28E6F0 /* TodoLandingFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoLandingFlow.swift; sourceTree = "<group>"; };
+		C5872E91829C4F7039FC4EBA /* DeliveryValidation.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = DeliveryValidation.xcconfig; sourceTree = "<group>"; };
 		C634D67C3DBDBB99D75EC2BD /* CockpitPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitPageView.swift; sourceTree = "<group>"; };
 		C663477E1765B5EAD359BBD9 /* CrewdResources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdResources.swift; sourceTree = "<group>"; };
 		C6FC31002114ED06F42018B2 /* AgentQuotaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentQuotaTests.swift; sourceTree = "<group>"; };
@@ -1822,6 +1825,7 @@
 		59981AC6D7E6FF40DC0F1A72 /* Config */ = {
 			isa = PBXGroup;
 			children = (
+				C5872E91829C4F7039FC4EBA /* DeliveryValidation.xcconfig */,
 				AA70E6E610C5C10E032B512F /* NativeCandidate.xcconfig */,
 				DB20C6F3D1CA40298B44A2FF /* Signing.xcconfig */,
 			);
@@ -1977,6 +1981,7 @@
 		916B8E8246B25FAA9F49D330 /* CrewdRemote */ = {
 			isa = PBXGroup;
 			children = (
+				C197ED02C73C8ED79C925F7B /* CrewdDeliveryValidation.swift */,
 				C4DE21A508095E7F001EE023 /* CrewdNativeApp.swift */,
 				00067E85D453D3D64937B60B /* CrewdRemoteAdmin.swift */,
 				2E80A1F46EAF04004D5CD879 /* CrewdRemoteCertificate.swift */,
@@ -2737,6 +2742,7 @@
 				50CA5BBD290AD80DAB151F83 /* CrewdChannelTodoView.swift in Sources */,
 				BA734DC3655CE77291F02094 /* CrewdChannelWorkStore.swift in Sources */,
 				4931675C8C5E6114A69A73B7 /* CrewdClient.swift in Sources */,
+				9621DB45E88A35FCB2DA6BA2 /* CrewdDeliveryValidation.swift in Sources */,
 				108DED7F1B54DB729B91C6DA /* CrewdDocumentsView.swift in Sources */,
 				B3DDF33BDE3578090B6B246A /* CrewdDrafts.swift in Sources */,
 				7119E1444100180EFE7A429B /* CrewdFolderControls.swift in Sources */,
@@ -3483,6 +3489,66 @@
 			};
 			name = NativeCandidate;
 		};
+		2F332092D1F0425940B7ACF2 /* DeliveryValidation */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C5872E91829C4F7039FC4EBA /* DeliveryValidation.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.43;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = DeliveryValidation;
+		};
 		80DC3E3131D9A4D408131B29 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3617,6 +3683,27 @@
 			};
 			name = Debug;
 		};
+		AF4F2582DB09AB4FFE15793D /* DeliveryValidation */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pendingname.pendingcrew.tests;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = macosx;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "";
+				TEST_HOST = "";
+			};
+			name = DeliveryValidation;
+		};
 		B8BD68C8CF6D2D0546F0CFEB /* NativeCandidate */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3658,6 +3745,29 @@
 				TEST_HOST = "";
 			};
 			name = Release;
+		};
+		D32226EDF1BA1B3E19945B40 /* DeliveryValidation */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/DeliveryValidation-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pendingname.pendingcrew.native-candidate";
+				PRODUCT_NAME = PendingCrew;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = DeliveryValidation;
 		};
 		E44E3507A8D9A6726AE17DF3 /* NativeCandidate */ = {
 			isa = XCBuildConfiguration;
@@ -3792,6 +3902,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A86D65172FD75D0C60F216A6 /* Debug */,
+				2F332092D1F0425940B7ACF2 /* DeliveryValidation */,
 				E44E3507A8D9A6726AE17DF3 /* NativeCandidate */,
 				F6427DD3B86962FA7125BF09 /* Release */,
 			);
@@ -3802,6 +3913,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				8A4A6BDFB1F96E716B8C809A /* Debug */,
+				D32226EDF1BA1B3E19945B40 /* DeliveryValidation */,
 				05FD92D0D34C06EB858E028E /* NativeCandidate */,
 				80DC3E3131D9A4D408131B29 /* Release */,
 			);
@@ -3812,6 +3924,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AF04179D342056CF1693A2E7 /* Debug */,
+				AF4F2582DB09AB4FFE15793D /* DeliveryValidation */,
 				B8BD68C8CF6D2D0546F0CFEB /* NativeCandidate */,
 				BF956BF94DD90F6B7B1D9616 /* Release */,
 			);

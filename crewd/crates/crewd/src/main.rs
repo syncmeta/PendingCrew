@@ -65,6 +65,11 @@ enum Cmd {
         /// JSON 参数，缺省 null
         params: Option<String>,
     },
+    /// Offline orphan diagnostics/reconciliation; no signals or ordinary work.
+    Recovery {
+        #[command(subcommand)]
+        action: RecoveryAction,
+    },
     /// 打印 API 契约
     Schema,
     /// 前台起一个 claude 会话（M2b 验收 / 调试；会话事件打到 stdout）
@@ -75,6 +80,20 @@ enum Cmd {
     Mcp(mcp_cmd::McpArgs),
     /// claude hook：读 stdin JSON，转给 crewd，打印要给 claude 的输出（永远 exit 0）
     Hook(hook_cmd::HookArgs),
+}
+
+#[derive(Subcommand)]
+enum RecoveryAction {
+    /// Read registry/kernel state without opening the database or changing entries.
+    Inspect {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire only kernel-confirmed absent obligations; zero process signals.
+    Reconcile {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn runtime_dir(data: &std::path::Path) -> anyhow::Result<PathBuf> {
@@ -148,6 +167,23 @@ async fn run() -> anyhow::Result<()> {
     };
     match &cli.cmd {
         Cmd::NativeHelper => unreachable!("private helper handled before data-dir lookup"),
+        Cmd::Recovery { action } => {
+            let reconcile = matches!(action, RecoveryAction::Reconcile { .. });
+            let value = crewd_server::recovery::maintenance(&dir, reconcile)?;
+            let json = match action {
+                RecoveryAction::Inspect { json } | RecoveryAction::Reconcile { json } => *json,
+            };
+            if json {
+                println!("{}", serde_json::to_string(&value)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            if reconcile && value["resolved"] != true {
+                bail!(
+                    "unresolved orphan obligations retained; no ordinary admission or automatic recovery"
+                );
+            }
+        }
         Cmd::Serve {
             claude,
             claude_env,

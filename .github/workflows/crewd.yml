@@ -2,11 +2,19 @@
 # 本机与完整检查共用 crewd/scripts/check.sh；默认不跑真实模型或 ignored 测试。
 # 已完成的临时 Core/M5/candidate 补验保留历史来源和本地脚本，不再暴露重复入口。
 name: crewd
-run-name: "${{ inputs.linux14_install_recovery == true && 'Linux14 fresh package and managed13-to14 crash recovery (explicit; not full CI)' || inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
+run-name: "${{ inputs.recovery_gate == true && 'Linux Core14 orphan recovery (explicit affected scope; not full CI)' || inputs.linux14_install_recovery == true && 'Linux14 fresh package and managed13-to14 crash recovery (explicit; not full CI)' || inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      recovery_gate:
+        description: Exact reviewed Core14 Linux orphan registry, Store, startup and public/closed recovery scope; not full CI
+        type: boolean
+        default: false
+      reviewed_ref:
+        description: Required complete reviewed commit SHA only for recovery_gate; must match the immutable run and checkout
+        type: string
+        default: ''
       linux_install_upgrade:
         description: Historical Linux11 to13 install, lease, unknown, rollback and restore flow instead of full checks
         type: boolean
@@ -30,7 +38,7 @@ env:
 
 jobs:
   check:
-    if: ${{ inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true }}
+    if: ${{ inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -113,7 +121,7 @@ jobs:
           if-no-files-found: ignore
 
   linux-install-upgrade:
-    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery != true }}
+    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -202,13 +210,13 @@ jobs:
           retention-days: 14
 
   invalid-linux-scope:
-    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery == true }}
+    if: ${{ (inputs.linux_install_upgrade == true && inputs.linux14_install_recovery == true) || (inputs.recovery_gate == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true)) }}
     runs-on: ubuntu-24.04
     steps:
-      - run: echo 'Choose one exact historical13 or current14 scope; no build started.' >&2; exit 1
+      - run: echo 'Choose exactly one explicit install or orphan-recovery scope; no build started.' >&2; exit 1
 
   linux14-install-recovery:
-    if: ${{ inputs.linux14_install_recovery == true && inputs.linux_install_upgrade != true }}
+    if: ${{ inputs.linux14_install_recovery == true && inputs.linux_install_upgrade != true && inputs.recovery_gate != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -301,5 +309,176 @@ jobs:
             ${{ runner.temp }}/linux14-current-release/runtime-smoke/result.json
             ${{ runner.temp }}/linux14-lifecycle.tar.gz
             ${{ runner.temp }}/linux14-lifecycle.tar.gz.json
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-core14-recovery:
+    if: ${{ inputs.recovery_gate == true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+      PENDINGCREW_BUILD_BACKEND_PROFILE: debug
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Qualify exact reviewed recovery source before tooling, cache or build
+        env:
+          REVIEWED_REF: ${{ inputs.reviewed_ref }}
+        run: |
+          python3 - <<'PYREF'
+          import json,os,pathlib,re,subprocess
+          expected=os.environ['REVIEWED_REF'];run=os.environ['GITHUB_SHA']
+          actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert re.fullmatch('[0-9a-f]{40}',expected) and expected==run==actual
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'core14-recovery';root.mkdir(mode=0o700)
+          (root/'reviewed-source.json').write_text(json.dumps({'reviewedRef':expected,'runRef':run,'checkoutRef':actual,'sourceQualifiedBeforeTooling':True},indent=2))
+          PYREF
+      - name: Read exact source-pinned Rust toolchain
+        id: toolchain
+        run: |
+          python3 - <<'PYTOOLCHAIN'
+          import os,pathlib,tomllib
+          channel=tomllib.loads(pathlib.Path('crewd/rust-toolchain.toml').read_text())['toolchain']['channel']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('channel='+channel+'\n')
+          PYTOOLCHAIN
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd -> target
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Prepare complete locked dependencies once before offline compilation
+        run: |
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/core14-recovery/locked-before.sha256"
+          cargo fetch --locked --manifest-path crewd/Cargo.toml > "$RUNNER_TEMP/core14-recovery/fetch.log" 2>&1
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/core14-recovery/locked-after.sha256"
+          cmp "$RUNNER_TEMP/core14-recovery/locked-before.sha256" "$RUNNER_TEMP/core14-recovery/locked-after.sha256"
+          git status --porcelain > "$RUNNER_TEMP/core14-recovery/checkout-after-fetch.txt"
+          test ! -s "$RUNNER_TEMP/core14-recovery/checkout-after-fetch.txt"
+      - name: Default whole workspace formatting and strict all-target lint
+        run: |
+          cargo fmt --manifest-path crewd/Cargo.toml --all -- --check > "$RUNNER_TEMP/core14-recovery/fmt.log" 2>&1
+          cargo clippy --manifest-path crewd/Cargo.toml --locked --offline --workspace --all-targets -- -D warnings > "$RUNNER_TEMP/core14-recovery/clippy.log" 2>&1
+      - name: Exact recovery registry, Store and startup affected matrix
+        run: |
+          rm -f crewd/target/nextest/ci/junit.xml
+          cargo nextest run --manifest-path crewd/Cargo.toml --locked --offline --profile ci -E '(package(crewd-exec) & test(registry::)) | (package(crewd-store) & test(recovery_guard_tests::)) | (package(crewd-server) & test(startup_reaps_registry_entries_and_clears_them))' > "$RUNNER_TEMP/core14-recovery/affected-nextest.log" 2>&1
+      - name: Retain affected JUnit even on a failed matrix
+        if: always()
+        run: |
+          if [ -f crewd/target/nextest/ci/junit.xml ] && [ -d "$RUNNER_TEMP/core14-recovery" ]; then
+            cp crewd/target/nextest/ci/junit.xml "$RUNNER_TEMP/core14-recovery/affected-junit.xml"
+          fi
+      - name: One accurate default normal with complete fresh owning-workspace proof
+        run: |
+          python3 -B scripts/dev/record-crewd-build.py prepare "$GITHUB_WORKSPACE" "$RUNNER_TEMP/core14-recovery/normal" "$GITHUB_SHA"
+          python3 -B scripts/dev/record-crewd-build.py build "$GITHUB_WORKSPACE" "$RUNNER_TEMP/core14-recovery/normal" "$GITHUB_WORKSPACE/crewd/target/debug/crewd" cargo build --offline --locked -p crewd --message-format=json
+          python3 - <<'PYVERIFY'
+          import hashlib,importlib.util,json,os,pathlib,subprocess
+          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);e=pathlib.Path(os.environ['RUNNER_TEMP'])/'core14-recovery'
+          spec=importlib.util.spec_from_file_location('proof',repo/'scripts/dev/write-codex-first-provenance.py');p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+          w=json.loads((e/'normal-witness.json').read_text())
+          assert w['sourceRef']==os.environ['GITHUB_SHA'] and len(w['files'])==393
+          tracked=subprocess.check_output(['git','ls-tree','-r','--name-only',os.environ['GITHUB_SHA'],'--','crewd']).decode().splitlines()
+          current=[{'path':path,'sha256':hashlib.sha256(subprocess.check_output(['git','show',os.environ['GITHUB_SHA']+':'+path])).hexdigest()} for path in sorted(tracked)]
+          assert sorted(w['files'],key=lambda row:row['path'])==current
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          value,root=p.verify_witness(e/'normal-witness.json',e/'normal/crewd-presign',w['rustInputDigest'],p.requested_configuration(repo/'crewd'),require_fresh=True)
+          graph=json.loads((e/'normal/normal-production-graph.json').read_text())
+          assert len(graph['requiredWorkspacePackages'])==11 and sum(len(x['targets']) for x in graph['requiredWorkspacePackages'])==12
+          (e/'normal-independent-consumer.json').write_text(json.dumps({'sourceRef':value['sourceRef'],'rustInputs':393,'ownPackages':11,'ownTargets':12,'freshSourceVerified':True,'normalProfile':'debug'},indent=2))
+          PYVERIFY
+      - name: Separate synthetic producer artifacts with actual feature, source and hash proof
+        run: |
+          cargo build --manifest-path crewd/Cargo.toml --offline --locked -p crewd-exec --features testkit --bin fake_codex --bin fake_claude --message-format=json > "$RUNNER_TEMP/core14-recovery/fake-build.log" 2>&1
+          python3 - <<'PYFAKE'
+          import hashlib,json,os,pathlib,shutil,subprocess
+          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);e=pathlib.Path(os.environ['RUNNER_TEMP'])/'core14-recovery'
+          meta=json.loads(subprocess.check_output(['cargo','metadata','--manifest-path','crewd/Cargo.toml','--no-deps','--locked','--offline','--format-version=1'],text=True))
+          package=next(x for x in meta['packages'] if x['name']=='crewd-exec');saved=e/'fakes';saved.mkdir(mode=0o700);rows={}
+          for line in (e/'fake-build.log').read_text().splitlines():
+              try:v=json.loads(line)
+              except json.JSONDecodeError:continue
+              name=v.get('target',{}).get('name')
+              if v.get('reason')!='compiler-artifact' or name not in ['fake_codex','fake_claude'] or not v.get('executable'):continue
+              target=next(t for t in package['targets'] if t['name']==name)
+              assert v['package_id']==package['id'] and pathlib.Path(v['manifest_path']).resolve()==pathlib.Path(package['manifest_path']).resolve()
+              assert pathlib.Path(v['target']['src_path']).resolve()==pathlib.Path(target['src_path']).resolve() and v['profile']['test'] is False and v['features']==['testkit'] and v['fresh'] is False
+              assert name not in rows
+              source=pathlib.Path(v['executable']);dest=saved/name;shutil.copy2(source,dest)
+              rows[name]={'packageID':v['package_id'],'manifestPath':v['manifest_path'],'sourcePath':v['target']['src_path'],'features':v['features'],'profile':v['profile'],'fresh':v['fresh'],'path':str(dest),'sha256':hashlib.sha256(dest.read_bytes()).hexdigest()}
+          assert set(rows)=={'fake_codex','fake_claude'}
+          (e/'fake-artifacts.json').write_text(json.dumps(rows,indent=2))
+          PYFAKE
+      - name: Actual portable public and closed CLI recovery with true original group census
+        id: physical
+        run: |
+          parent=$(mktemp -d /tmp/pcr.XXXXXX)
+          chmod 700 "$parent"
+          mkdir -m 700 "$parent/flow"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          exec > "$RUNNER_TEMP/core14-recovery/physical-driver.log" 2>&1
+          set -x
+          recovery_codex_sha=$(python3 -c 'import json,os,pathlib;print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"core14-recovery/fake-artifacts.json").read_text())["fake_codex"]["sha256"])')
+          recovery_claude_sha=$(python3 -c 'import json,os,pathlib;print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"])/"core14-recovery/fake-artifacts.json").read_text())["fake_claude"]["sha256"])')
+          python3 -B scripts/dev/fixtures/crewd-recovery-public-restart.py --binary "$RUNNER_TEMP/core14-recovery/normal/crewd-presign" --witness "$RUNNER_TEMP/core14-recovery/normal-witness.json" --expected-source-ref "$GITHUB_SHA" --fake-codex "$RUNNER_TEMP/core14-recovery/fakes/fake_codex" --fake-codex-sha "$recovery_codex_sha" --fake-claude "$RUNNER_TEMP/core14-recovery/fakes/fake_claude" --fake-claude-sha "$recovery_claude_sha" --out "$parent/flow/public"
+          python3 -B scripts/dev/fixtures/crewd-recovery-public-stop.py --binary "$RUNNER_TEMP/core14-recovery/normal/crewd-presign" --witness "$RUNNER_TEMP/core14-recovery/normal-witness.json" --expected-source-ref "$GITHUB_SHA" --fake-codex "$RUNNER_TEMP/core14-recovery/fakes/fake_codex" --fake-codex-sha "$recovery_codex_sha" --fake-claude "$RUNNER_TEMP/core14-recovery/fakes/fake_claude" --fake-claude-sha "$recovery_claude_sha" --out "$parent/flow/stop"
+          python3 -B scripts/dev/fixtures/crewd-recovery-closed-guards.py --binary "$RUNNER_TEMP/core14-recovery/normal/crewd-presign" --witness "$RUNNER_TEMP/core14-recovery/normal-witness.json" --expected-source-ref "$GITHUB_SHA" --source-data "$parent/flow/public/data" --out "$parent/flow/guards"
+          python3 - <<'PYSTABLE'
+          import hashlib,json,os,pathlib
+          e=pathlib.Path(os.environ['RUNNER_TEMP'])/'core14-recovery';normal=json.loads((e/'normal-witness.json').read_text())
+          assert hashlib.sha256((e/'normal/crewd-presign').read_bytes()).hexdigest()==normal['binarySHA256']
+          for row in json.loads((e/'fake-artifacts.json').read_text()).values():assert hashlib.sha256(pathlib.Path(row['path']).read_bytes()).hexdigest()==row['sha256']
+          (e/'runtime-binaries-stable.json').write_text(json.dumps({'normalUnchanged':True,'fakeInputsUnchanged':True,'sourceRef':os.environ['GITHUB_SHA']},indent=2))
+          PYSTABLE
+      - name: Archive diagnostic physical facts without deleting special inodes or dereferencing links
+        if: ${{ always() && steps.physical.outputs.parent != '' }}
+        env:
+          PHYSICAL_ROOT: ${{ steps.physical.outputs.parent }}/flow
+        run: |
+          python3 -B scripts/dev/archive-crewd-linux-lifecycle.py "$PHYSICAL_ROOT" "$RUNNER_TEMP/core14-recovery/physical.tar.gz" --diagnostic-special-inodes
+          python3 - <<'PYARCHIVE'
+          import hashlib,json,os,pathlib,tarfile
+          evidence=pathlib.Path(os.environ['RUNNER_TEMP'])/'core14-recovery'
+          path=evidence/'physical.tar.gz';manifest=json.loads(path.with_suffix('.gz.json').read_text())
+          assert manifest['diagnosticSpecialInodes'] is True and manifest['restorableCompleteFilesystem'] is False and manifest['specialContentsCaptured'] is False
+          assert manifest['dereference'] is False and manifest['sourceDirectory']==os.environ['PHYSICAL_ROOT']
+          assert hashlib.sha256(path.read_bytes()).hexdigest()==manifest['archiveSHA256']
+          with tarfile.open(path) as archive:
+              members={m.name.removeprefix('flow/'):m for m in archive.getmembers() if m.name!='flow'}
+              for member in archive.getmembers():
+                  p=pathlib.PurePosixPath(member.name)
+                  assert not p.is_absolute() and '..' not in p.parts and (member.isdir() or member.isfile() or member.issym())
+              for row in manifest['members']:
+                  if row['kind']=='special-metadata':
+                      assert row['inodeType'] in ['socket','fifo'] and row['contentsCaptured'] is False and row['restored'] is False and row['path'] not in members
+                      assert all(k in row for k in ['mode','uid','gid','device','inode','size','mtimeNS','ctimeNS'])
+                  elif row['kind']=='file':
+                      member=members[row['path']];assert member.isfile() and member.size==row['size']
+                      assert hashlib.sha256(archive.extractfile(member).read()).hexdigest()==row['sha256']
+                  else:
+                      member=members[row['path']];assert member.issym() and member.linkname==row['target']
+              assert {name for name,m in members.items() if not m.isdir()}=={row['path'] for row in manifest['members'] if row['kind']!='special-metadata'}
+          (evidence/'diagnostic-archive-consumer.json').write_text(json.dumps({'archiveSHA256':manifest['archiveSHA256'],'allRegularAndLinkMembersVerified':True,'specialInodesMetadataOnly':True,'restorableCompleteFilesystem':False},indent=2))
+          PYARCHIVE
+      - name: Retain complete raw provenance and bounded physical results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-core14-orphan-recovery-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/core14-recovery
           if-no-files-found: error
           retention-days: 14

@@ -7,7 +7,7 @@ set -eu
 
 PLIST="${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}"
 if [ ! -f "$PLIST" ]; then
-    if [ "${CONFIGURATION:-}" = "NativeCandidate" ]; then
+    if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
         echo "error: NativeCandidate product Info.plist is missing"
         exit 1
     fi
@@ -15,8 +15,9 @@ if [ ! -f "$PLIST" ]; then
 	exit 0
 fi
 
-if [ "${CONFIGURATION:-}" = "NativeCandidate" ]; then
+if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
     COMMIT=${PENDINGCREW_CANDIDATE_SOURCE_REF:-}
+    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then COMMIT=${PENDINGCREW_VALIDATION_SOURCE_REF:-}; fi
     case "$COMMIT" in
         *[!0-9a-f]*|"") echo "error: NativeCandidate requires a reviewed full source ref"; exit 1 ;;
     esac
@@ -27,7 +28,12 @@ if [ "${CONFIGURATION:-}" = "NativeCandidate" ]; then
     /usr/libexec/PlistBuddy -c "Delete :PendingCrewSourceRef" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Delete :PendingCrewNativeCandidate" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Add :PendingCrewSourceRef string $COMMIT" "$PLIST"
-    /usr/libexec/PlistBuddy -c "Add :PendingCrewNativeCandidate bool true" "$PLIST"
+    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
+        /usr/libexec/PlistBuddy -c "Delete :PendingCrewDeliveryValidation" "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy -c "Add :PendingCrewDeliveryValidation bool true" "$PLIST"
+    else
+        /usr/libexec/PlistBuddy -c "Add :PendingCrewNativeCandidate bool true" "$PLIST"
+    fi
 elif ! COMMIT=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
 	echo "warning: stamp-build-info: $SRCROOT 不是 git 仓库（或没装 git），本次构建不带版本戳"
 	exit 0

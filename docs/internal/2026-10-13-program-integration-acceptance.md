@@ -1,5 +1,20 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 已验恢复04、验证入口与限定工作流一次精确组合
+
+后端final04完整源码/Mac机制及portable最后清理闭环已独验接受，报告/private/tmp/pcw-Core14-recovery-whole-freeze-04/independent-whole-acceptance-04.json SHA24142d66a126fc48c50d40b07c390b47b3c2c47ec175538b29f9723156609470；patchb362962442e19e4346458919910c1f6545a09f1662f09a35e2c4429c0dcc4c8d。393 Rust输入全核、225证据一致；完整成员UID/birth/boot/PGID双遍与Store guard、Mac PID-count/即时errno、真实25kernel/public30/晚rename可见变更但Err拒、lint及timeout清理receipt闭合。原02/03及所有原FAIL保，不改标。Linux/proc实际可用性/真实foreignuser未验，非原子birth→killpg TOCTOU仍明确。作者已将13owned路径普通保存push为69248d25f8691260387a30c00aa89aaa6c732572，祖先Native15 WIP保持未激活；根只取已验Core14 patch，不整枝合该树。
+
+客户端bc89完整13路径源码/资格接受沿用b2e947报告；client8f10e9b9fe0091f77bed9c6695e201290d27a5c2工作流/诊断归档完整接受沿用03报告ed76b3a5a37a3d359b1c3f5f9dbe0ff191058ff1bc415536cc344fcd2765f86f及04复核，现已普通pushclean。3owned门禁路径、8scope/6SHA资格及真实socketFIFO归档/消费者/原inode保持、默认strict与外逃拒准确；scope仅manual/defaultfalse/全互斥，reviewed_ref在tooling前等于github.sha/HEAD。诊断特殊inode仅metadata且非可恢复FS，标准安装行为不放宽。
+
+根已实际一次apply client5431→8f10的16路径与final04的13路径到开发global，记录/private/tmp/pcw-accepted-whole-combination-ut3o6_px/combination.json。完整393 Rust集合/逐SHA、client16路径逐字及已验patchhash核零差，schema/proto/Cargo默认不变，Native15全排除；未合main、未碰主目录人类改动。此组合待本次commit后冻结作唯一Linux限定实际gate的准确输入；旧normal07/候选13/默认全CI准确sourceRef永远0f，不改标成新HEAD。
+
+Linux真实gate独立于Mac包装，root唯一必要dispatch，build/defaultDebug强normal完整393/raw11ownpkg12targets全部fresh=false/config/toolchain/full输入前后，fake binaries独立testkitfeatures/hash，限定registry/Store/startup与portable public/closedCLI真实group/noReplay/guard和完整失败归档。尚未派发/构建/实际通过，不能从Mac源与配置控制外推。
+
+Mac完整DeliveryValidation包装仍有真实工具依赖：旧build-crewd-native-macos.py仅Debug+NativeCandidate(memory)，不能补标Release验证通道。client在独立树继续完整专用packager/consumer源码实现与资格证明，沿原warm DD/SPM/fullGit/normal primitives，不实际build/sign/Keychain/App。包装源接受后另准确fullref才生成唯一Mac finalnormal及完整包；若Rust字节不变，已验Linux机制按影响复用，不能重标Linux编译ref。假service/account未来动作已private预列，但真实normal/GUI/server DB/authority/SPKI/endpoint及签名输入待实际生成，未造信任或请求空泛授权。
+
+目标仍完整：原App实际窗口/双进程fake persistent/生产publisher新PID、移动TLS真机、main产品、安装/日常数据/发布/真实模型、Native15 mandatory producer生命周期和额外all-features未完成。A13本次解锁与SDK06/newprobe实际授权仍未答，只阻依赖步骤。此为完整已验源码整合，不冒最终产物或工程交付；本次Linux源码冻结期间global停止移动。
+
+
 ## 2026-10-15 原App验证源码整块接受、恢复权限合同补齐中
 
 客户端最终bc89bc3a548f0ec0719baa657c83f06dd5035915完整13路径源码/资格控制单元已独验接受并普通push（5431→bc89）。报告/private/tmp/pcw-delivery-validation-source-unit-01/independent-whole-source-closure-02.json SHAb2e947debdc695004f414fa34f069946dbe9dbc4e90c8ead68ff81c8332139cd；closure binding SHA9d0a73f7afaf1ec2cc3c3ceb72e704ff7384eba6427c7ba30cf053ae0944aee7。7原路径逐字复用、6路径修复，37新证据核齐：actual account属性形状/大小写、strict整数format、helper override拒、既有候选ID/marker准入、真实Appleanchor完整requirement和ordinary memory optin源码闭合。21资格控制/三SDK仅变源类型检查/三settings/七默认plan与拒绝均准确分层，旧9bf的370全源证据不重标。没有真实SecItem/sign/App或设备网络；新完整包、双App假service持久、真实publisher PID与移动TLS设备仍需具体动作与验收。

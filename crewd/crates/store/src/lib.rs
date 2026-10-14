@@ -230,7 +230,88 @@ pub struct Store {
     backups: Option<std::path::PathBuf>,
 }
 
+/// Read-only original-file guard for orphan recovery before any registry
+/// mutation/signal. Valid WAL verification may use ONLY the existing private
+/// copy; this never opens the original SQLite connection or performs migration.
+pub struct RecoveryInputGuard {
+    guard: version_guard::Guard,
+    database_present: bool,
+}
+impl RecoveryInputGuard {
+    pub fn recheck(&self) -> Result<()> {
+        self.guard.recheck()
+    }
+    pub fn database_present(&self) -> bool {
+        self.database_present
+    }
+}
+
 impl Store {
+    pub fn recovery_input_guard(dir: &Path) -> Result<RecoveryInputGuard> {
+        let db = dir.join(DB_FILE);
+        let guard = version_guard::preflight(&db)?;
+        let record = read_id_file(&dir.join(ID_FILE))?;
+        let database_present = if exists_strict(&db)? {
+            std::fs::metadata(&db)?.len() > 0
+        } else {
+            false
+        };
+        if !database_present
+            && (record.is_some() || backup::has_backups(&dir.join(backup::BACKUPS_DIR))?)
+        {
+            return Err(StoreError::DbMissing {
+                dir: dir.to_path_buf(),
+                why: "recovery cannot establish the existing database".into(),
+            });
+        }
+        if database_present {
+            version_guard::with_quiescent_copy(&db, |copy| {
+                refuse_foreign(copy)?;
+                let integrity: String =
+                    copy.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+                if integrity != "ok" {
+                    return Err(StoreError::Integrity {
+                        check: "recovery private-copy quick_check",
+                        problems: vec![integrity],
+                    });
+                }
+                if let Some(expected) = &record {
+                    let found = meta_get(copy, "dbId")?;
+                    match found {
+                        Some(found) if found != expected.id => {
+                            return Err(StoreError::DbIdMismatch {
+                                dir: dir.to_path_buf(),
+                                expected: expected.id.clone(),
+                                found,
+                            });
+                        }
+                        None => {
+                            return Err(StoreError::DbUnmarked {
+                                dir: dir.to_path_buf(),
+                                expected: expected.id.clone(),
+                            });
+                        }
+                        _ => (),
+                    }
+                    if let Some(ino) = expected.ino
+                        && wal_has_frames(&db)?
+                        && inode_of(&db)? != ino
+                    {
+                        return Err(StoreError::Invalid(
+                            "recovery database inode does not own its WAL".into(),
+                        ));
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        guard.recheck()?;
+        Ok(RecoveryInputGuard {
+            guard,
+            database_present,
+        })
+    }
+
     /// 打开（必要时新建）库文件。旧版本的非空库迁移前先在 `backups/` 拍快照（S20）。
     /// 库文件和它的 -wal / -shm 一律只给本用户读写（0600；PM 2026-10-07）。
     pub fn open(path: &Path) -> Result<Self> {
@@ -968,3 +1049,6 @@ mod tests {
         assert!(t.ends_with('Z'));
     }
 }
+
+#[cfg(test)]
+mod recovery_guard_tests;
