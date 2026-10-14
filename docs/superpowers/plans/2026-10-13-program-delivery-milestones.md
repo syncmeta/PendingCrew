@@ -12,7 +12,7 @@ Core12 原子迁移、正常后台和私有持久收件子单元已有独立证�
 
 用户已明确授权普通推送到现有三条 codex 开发分支；不扩为 main 推送、安装、日常数据切换、公开发布或真实模型验收。
 
-当前整合结果：global `842283b17ab912489aeb78d327e74dd2c9971728` 已保存远端，完整 crewd tree 与已验 a76 相同，workflow 与 client 冻结8bb合成相同；无 M5/原前端 dirty 混入。client 已接此精确组合，继续原前端整块实现。独立质量源码比对通过；未重复稳定业务。main 保持原状态。
+Core12当时整合结果：global `842283b17ab912489aeb78d327e74dd2c9971728` 已保存远端，完整 crewd tree 与已验 a76 相同，workflow 与 client 冻结8bb合成相同；无 M5/原前端 dirty 混入。client 已接此精确组合，继续原前端整块实现。独立质量源码比对通过；未重复稳定业务。main 保持原状态。
 
 公共可靠命令与真实 terminal control 作为既定交付缺口授权后端整块实现，独立新增 schema14，必须13→14顺序，不改冻12/13。采用 typed crew.createFirstMessage，同Tx创建crew/首消息/receipt；optional Start另按外部真实生命周期记录。terminal typed方法与 command.submit/lookup 共用唯一durable机制，真实 actor/principal、原 scope/generation与不可变payload绑定。普通 PTY write只证明内核接受精确字节，不能称原生reader已消费或命令已成功；partial/unknown绝不自动重写剩余bytes。lookup先权限，notfound不允许自动retry；restore不能把旧执行结果提升为当前完成。所有能力仅在实际生产接线/正常配置/完整权限恢复流程冻结后广告。Jev、个人记忆、团队知识依旧仅待决方案。
 
@@ -22,11 +22,13 @@ M5 剩余双平台物理流程与 Linux 正式12→13采用 client source-review
 
 原前端旧 authority 整块切断 source-review freeze `bf1c0537535f6482d88bb7e705f6974592c0f988`已交质量线按 a985 缺口影响独审；原 Mac/iPhone/iPad 组件保留，完整358源 Mac/iPhoneOS 类型检查实际 exit0。仍待独审、schema14 receipt/交互终端/kernel peer绑定、完整组合候选包及窗口/设备验收；类型检查不代表整块产品交付。
 
-最新根整合冻结 `00acd8469b0d1aa558a5b248425b6a6dcd891135` 已普通推送：完整 M5 normal13 模块进入 global，整个 crewd tree 与独验4c相同，consumer同4c；四scope工作流由client唯一writer合成、质量线仅复核组合差异接受。无 schema14、原前端或Linux安装草稿混入。main及用户未提交资料保持原状态；不为相同Rust树重复已验业务流程。
+M5首次根整合冻结 `00acd8469b0d1aa558a5b248425b6a6dcd891135` 已普通推送：完整 M5 normal13 模块进入 global，整个 crewd tree 与独验4c相同，consumer同4c；四scope工作流由client唯一writer合成、质量线仅复核组合差异接受。无 schema14、原前端或Linux安装草稿混入。main及用户未提交资料保持原状态；不为相同Rust树重复已验业务流程。
 
 人类在专用可见终端完成原批准scope的实际信任确认：04-human-visible-reviewed-8i2b1c8v实际 private.hasTrustDialogAccepted=true，三份稳定非空d.ts，readPending为空；observer未变、mockRequests为空、没有模型提示，自有process group已TERM/KILL并reaped。此前04-human-visible-reviewed-s_c29ydq在确认前中止，trustfalse/types0，原失败保留。只证明该隔离目录信任与元数据字节获取，完整接口/ACP/审批/恢复兼容仍待，后端只读实际类型继续既定模块，不能扩为真实账号或模型启动许可。
 
 根已读取 actual SDK 2.1.296 ABI整块契约并裁定：M4完整历史/ACP恢复需要独立持久历史投影，批准显式schema15在14冻结后顺序14→15，不改冻12/13及批准14DDL。15只承载实际native rows/source/session/generation/coverage，不成为第二WorkBook或effect账。SDK newest4096与可被skip的append观察不能证明完整历史；桥自增序列连续也不证明native全rows，含新空origin仍需实际source完整cut/row census或已验证owned稳定transcript及parent/fork/compaction祖先链。缺证/丢事件/未知block必须保持incomplete且M4未完成，不静默截断。1MiB正文仍无损。后端先完整方案/source/fake与实际格式证明计划；新SDK调用仍须具体隔离no-model scope核授权，真实模型/账号未授权。
+
+最新完整源码组合冻结 `cb85fd0410559927fab6432d566c6a86b4cddf5a` 已普通推送根开发分支：完整原Mac/iPhone/iPad前端与必要HumanActions/PlanActions/M6/Stores/journal前置同client6804，不拆36文件；whole crewd保持独验4c/2bf的13版、无14实现；旧祖先135行Linuxinstaller草案排除，但client实际源与新版草案/private备份保留，未带入安装草案。质量线仅核组合差异接受。7c隔离socket流只证明共享Client资格/订阅/传输unknown，fake message.post非正式channelId域事务，不称真实WorkBook业务。原App初始化/SessionRunner同UUID投影清理/journal重启/专用候选全目标构建/不可变包/窗口设备以及14真实receipt-terminal-ownQuit仍待；独立Native材料继续非产品交付入口。main与用户资料保持原状态。
 
 ## 2026-10-14 新会话明确恢复与三线固定责任
 
