@@ -75,6 +75,14 @@ final class CrewdPresentationJournal {
         }
         return id
     }
+    /// Prepare before any original frontend singleton can create a cache directory.
+    /// This is presentation storage, separate from both crewd and unknown observations.
+    static func prepareUICache(directory: URL) throws -> URL {
+        _ = try localNamespace(directory: directory)
+        let cache = directory.appendingPathComponent("frontend-presentation/ui-cache")
+        try privateDirectory(cache)
+        return cache
+    }
     private static func privateDirectory(_ directory: URL) throws {
         let fm = FileManager.default
         if !fm.fileExists(atPath: directory.path) {

@@ -1,5 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-14 原前端完整 Apple 准备单元整合
+
+实际不可变 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07 的 Mac58283、iPhoneOS42703、Simulator51928 均真实 terminal exit0。质量线已独核Mac正式checker/codesign deep strict、1314完整Gitinputs逐字同5cdf、3738SPM前后同、DebugNative/SDK27/arm64；两个移动SDK51/55实际产物及来源/settings/log/unsigned/family1,2一致。报告 /private/tmp/pcw-original-front-5cdf8af6-mac-independent-01.json 及对应iphone/simulator独验报告。新CrewStore缓存构造切断确在这个包输入中，不拿旧822包代证。
+
+根已将整棵 Sources 同步至实际编译GUI来源5cdf8af6233408760142e9f0416ce52602f7dd29（七个实际文件差异，其余原前端相同）；全crewd输入与该冻结同，仍正常schema13。此为源码组合，不重复构建、不重标组合Git ref已被编译。签名helper仍原compiled2bf正常Debug/rawfresh/374Rust证明，未14。未带入客户端在途managed/Linux脚本，不改变main产品源码。
+
+完整Apple准备层已接受，不冒实际窗口、设备、安装、日常数据或完整M4交付。822现场保留且人类解锁尚未答；07未启动。质量线先准备新private fake-only初次launch精确清单交根审，不能复用旧包/旧guard、不试解锁或触日常数据。Linux受管保护与后端14整体冻结继续并行，之后按影响验证；公共schema及构建唯一写者不变。
+
+
 ## 2026-10-14 实际 Linux 新因果与交付继续点
 
 唯一必要 run38555435325 / HEAD5cdf8af6233408760142e9f0416ce52602f7dd29 已 terminal failure；只有 linux-install-upgrade，完整 crewd skipped，无 Cargo 编译。原4e实际 normal13 默认 release 的整棵 Rust 输入与强来源复用通过，不能重标为5cdf新编译。归档与证据上传成功，artifact11890101163 / 56,456,212B / SHA4a5016146f87bec83d6092cd173bd055524cea9b021228ed490138c040a25d7f。

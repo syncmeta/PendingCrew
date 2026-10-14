@@ -47,7 +47,14 @@ struct MacThreePaneView: View {
             if model.usesCrewdAuthority {
                 if let workspace = model.crewdBackend?.workspace {
                     CrewdOriginalConnectionStatus(workspace: workspace)
-                } else { Text(model.crewdDirectory == nil ? "这个候选版本缺少来源信息，连接未建立。" : "正在连接当前后台").font(.caption).padding(8) }
+                } else {
+                    HStack {
+                        Text(model.connectingAuthority ? "正在连接当前后台" : model.backendConfigurationError ?? "后台尚未连接")
+                        if !model.connectingAuthority {
+                            Button("重试连接") { Task { await model.connectCrewdAuthority() } }
+                        }
+                    }.font(.caption).padding(8)
+                }
             } else { OrchestrationNoticeBar() }
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
