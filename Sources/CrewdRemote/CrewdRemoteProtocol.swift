@@ -76,6 +76,12 @@ enum CrewdRemoteText {
         return parser.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
     static func uuid(_ value: String) -> Bool { UUID(uuidString: value)?.uuidString.lowercased() == value }
+    // Store generates lower(hex(randomblob(16))); database identity is opaque
+    // and existing meta.dbId is preserved, rather than reformatted as UUID.
+    static func databaseID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 256 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
     static func revision(_ value: String) -> Bool { Int64(value).map { $0 > 0 && String($0) == value } ?? false }
     static func pin(_ value: String) -> Bool { value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }
 }

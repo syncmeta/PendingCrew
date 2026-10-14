@@ -17,7 +17,7 @@ final class CrewdRemotePairing {
         let preview = try JSONDecoder().decode(CrewdRemoteInvitation.self, from: payload)
         let certificate = try CrewdRemoteCertificate.decode(preview.server.certificateDerBase64)
         let invite = try CrewdRemoteCertificate.verify(envelope, certificate: certificate, role: .server, expectedPin: preview.server.spkiSha256, as: CrewdRemoteInvitation.self)
-        guard CrewdRemoteText.uuid(invite.invitationId), CrewdRemoteText.uuid(invite.server.authorityId), CrewdRemoteText.uuid(invite.server.dbId),
+        guard CrewdRemoteText.uuid(invite.invitationId), CrewdRemoteText.uuid(invite.server.authorityId), CrewdRemoteText.databaseID(invite.server.dbId),
               invite.endpoint.valid, CrewdRemoteText.pin(invite.server.spkiSha256), !invite.challenge.isEmpty, invite.challenge.utf8.count <= 256,
               !invite.computerLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, invite.computerLabel.utf8.count <= 256,
               let expires = CrewdRemoteText.date(invite.expiresAt) else { throw CrewdRemoteError.invalidExchange }
