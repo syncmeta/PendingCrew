@@ -1001,7 +1001,7 @@ mod action_tests {
                 &Sender::Session("w-a2".into()),
                 finish(&p)
             )),
-            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+            CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
         ));
         assert!(matches!(
             err(&mut s, |tx| update(
@@ -1009,7 +1009,7 @@ mod action_tests {
                 &Sender::Session("cap-b".into()),
                 finish(&p)
             )),
-            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+            CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
         ));
         assert_eq!(get(s.conn(), &p.id).unwrap(), p);
         let done = ok(&mut s, |tx| update(tx, &by, finish(&p)));
@@ -1627,7 +1627,7 @@ mod assignment_tests {
                     &Sender::Session(actor.into()),
                     input(&claimed, owner)
                 )),
-                CollabError::Work(crewd_work::Rejected::Forbidden(_))
+                CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
             ));
         }
         let moved = ok(&mut s, |tx| {
