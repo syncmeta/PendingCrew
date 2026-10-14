@@ -8,6 +8,13 @@
 
 后端14生产helper/custody/lease/watch继续，尚无defaultnormal14或模块freeze；未来15完整历史方案未激活。独立质量已核manifest02全部13345旧自有MH_OBJECT硬链接路径/3481完整inode组与78actualbinary保护，根批准仅确切终态再生清单回收；执行仍须作者exclusivelease和metadata再核，actualremoved/protectedafter/statvfs留证。系统锁屏只阻窗口操作，不暂停源码、Linux因果或后端装配。所有证据范围与未定方案/授权边界保持。
 
+
+### 完整来源准备与资源回执收束（2026-10-14）
+
+质量线已收束822全部Apple准备来源：Mac签名/fullchecker/1312inputs+3738SPM，iPhoneOS/sim实际51/55产物哈希/SourceDigest/settings/SDK27/Native条件/BUILD0，实际GUI仍822而非后续文档b833；移动端不代表安装/runtime。4e Linux实际normal13 defaultrelease rawfresh 11packages/12targets+3sidecars/374Rust/Git输入独验通过，entirecrewd同2bf，规范tar SHA cc73c54b606181f7f2c2ea500cbe0665f2aeb07138ee3c74db5553dec1ad129a、binary d891b4d84b5e8b35c9f502504ae5da5569ee330c7f23ba489c746cc8f6a5b8e5；后续只复用这些确切已验产物补剩余Linux主链，不重标新脚本freeze为Core新编译。旧refusal真实typed拒、50table logicalsame不补缺失physicalbefore证据、不称restore已跑。原窗口Maclocked待humanreply和真实Cua恢复，不自动retry/重启。
+
+后端已实际执行仅清单02的13345paths/3481完整oldownMH_OBJECT组回收，78actualbinary哈希相同、error=null，回执 /private/tmp/pcw-M14-terminal-own-hardlinks-removed-02.json，statvfs1450070016→2603147264B，最新df约2.6GiB。不删SDK/thirdparty/rlib/rmeta/source/DB/log/proofs/current/newest，不据理论stblocks宣称实际空间。14新增生产私有helper入口仍源码/轻量check层，Core唯一factory/lease/watch生产装配与whole14normal迁移尚未冻结。
+
 ## CI 成本与运行方式纠正（2026-10-14，用户最新决定）
 
 用户明确重点是避免不必要的CI麻烦及GitHub时长消耗，而非仅减邮件。根已核当前in-progress运行为空；两workflow现存push main/PR自动触发，最近失败则均为我们手动派发。main实际protected=false、required_status_checks contexts/checks为空，不存在必须保留自动触发的分支保护依赖。客户端唯一workflow writer正在将重型检查改为完整模块冻结后显式按需要手动运行，清理已完成阶段的临时scope和重复自动全量；本机必要质量、确需真实Linux/指定Apple环境的剩余交付验证仍保留。新Linux6c源码/本地前置接受不等实际链通过，目前尚未派发，等待精简后的新完整冻结。
