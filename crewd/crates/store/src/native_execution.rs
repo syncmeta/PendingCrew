@@ -626,6 +626,120 @@ mod tests {
         assert!(!active(&tx, &r.id).unwrap().0);
         tx.rollback().unwrap();
     }
+    #[tokio::test]
+    async fn core_fifo_requires_commit_ack_and_unknown_reply_never_replays_input() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let store = crate::Store::open_in_memory().unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('receipt-crew','fixture','now','now'); INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('receipt-session','receipt-crew','worker','claude','now');").unwrap();
+        // Explicit staged fixture installation, not the production version chain.
+        store.conn().execute_batch(V12_DDL).unwrap();
+        let runtime = Runtime {
+            id: id(),
+            session: "receipt-session".into(),
+            generation: id(),
+            epoch: 1,
+            native_pid: 42,
+            native_start: 123,
+            native_boot: "fixture-birth".into(),
+        };
+        let tx = store.conn().unchecked_transaction().unwrap();
+        register(&tx, &runtime).unwrap();
+        tx.commit().unwrap();
+        let db = crate::Db::spawn(store).unwrap();
+        let request = id();
+        let expected_request = request.clone();
+        let runtime_id = runtime.id.clone();
+        let (entered, waiting) = tokio::sync::oneshot::channel();
+        let (release, hold) = std::sync::mpsc::channel();
+        let emitted = Arc::new(AtomicBool::new(false));
+        let sent = emitted.clone();
+        let owned_db = db.clone();
+        let task = tokio::spawn(async move {
+            let result = owned_db
+                .call_result(move |store| -> Result<Receipt> {
+                    let tx = store.conn().unchecked_transaction()?;
+                    let (receipt, reused) =
+                        prepare(&tx, &runtime_id, &request, b"exact immutable body", "now")?;
+                    assert!(!reused);
+                    entered.send(()).unwrap();
+                    hold.recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    tx.commit()?;
+                    Ok(receipt)
+                })
+                .await;
+            if result.as_ref().is_ok_and(|inner| inner.is_ok()) {
+                sent.store(true, Ordering::SeqCst);
+            }
+            result
+        });
+        waiting.await.unwrap();
+        assert!(
+            !emitted.load(Ordering::SeqCst),
+            "no native effect while commit is held"
+        );
+        // Losing an already admitted caller is an unknown response, not a
+        // rollback promise or permission to resend native input.
+        task.abort();
+        let _ = task.await;
+        release.send(()).unwrap();
+        let runtime_id = runtime.id.clone();
+        let request = expected_request.clone();
+        let confirmation = db
+            .call_result(move |store| -> Result<(Receipt, bool)> {
+                let tx = store.conn().unchecked_transaction()?;
+                let value = prepare(&tx, &runtime_id, &request, b"exact immutable body", "later")?;
+                tx.commit()?;
+                Ok(value)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(confirmation.1);
+        assert_eq!(confirmation.0.phase, Phase::Prepared);
+        assert!(
+            !emitted.load(Ordering::SeqCst),
+            "unknown response did not emit or replay"
+        );
+        let runtime_id = runtime.id.clone();
+        db.call_result(move|store|->Result<()> {
+            assert_eq!(list_metadata(store.conn(),&runtime_id,None,64)?.len(),1);
+            store.conn().execute_batch("CREATE TRIGGER deny_raw_phase BEFORE UPDATE ON native_execution_receipts BEGIN SELECT RAISE(IGNORE); END;")?;
+            Ok(())
+        }).await.unwrap().unwrap();
+        let runtime_id = runtime.id.clone();
+        let refused = db
+            .call_result(move |store| -> Result<()> {
+                let tx = store.conn().unchecked_transaction()?;
+                revoke_before_raw(&tx, &runtime_id, 0, "now")?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            refused.is_err(),
+            "failed durable raw phase cannot return an ACK"
+        );
+        let runtime_id = runtime.id.clone();
+        let state = db
+            .call_result(move |store| -> Result<(bool, i64)> {
+                let tx = store.conn().unchecked_transaction()?;
+                active(&tx, &runtime_id)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state,
+            (false, 0),
+            "the same Core FIFO rolled back the earlier raw write"
+        );
+        db.shutdown();
+    }
     #[test]
     fn actual_sql_ignore_cannot_issue_content_or_raw_commit_permission() {
         let (c, r) = setup();
