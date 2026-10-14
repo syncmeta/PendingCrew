@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit Linux candidate prefix only. Never access DBs or manage services."""
+"""Explicit Linux candidate prefix only. Never modify DBs or manage services; managed launches inspect raw headers."""
 import argparse,fcntl,hashlib,json,os,pathlib,platform,re,shutil,subprocess,sys,tempfile,uuid,stat
 
 def digest(root):
@@ -106,7 +106,7 @@ def main():
  private_directory(prefix,create=True)
  for name in ['.install.lock','.runtime.lock']:
   if (prefix/name).is_symlink():raise ValueError('prefix locks cannot be links')
- for name in ['releases','activations']:
+ for name in ['releases','activations','.data-leases']:
   p=prefix/name
   if p.is_symlink():raise ValueError('prefix control directories cannot be links')
   private_directory(p,create=True)
@@ -150,19 +150,21 @@ def main():
   # A controlled launcher holds a shared runtime lock before resolving current.
   bindir=prefix/'bin';private_directory(bindir,create=True)
   launcher=bindir/'crewd'
-  launcher_source='''#!/usr/bin/env python3
-import fcntl,os,pathlib,stat,sys
-prefix=pathlib.Path(__file__).resolve().parents[1]
-info=prefix.stat()
-if os.getuid()!=os.geteuid() or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o700:raise SystemExit("owner-private prefix required")
-fd=os.open(prefix/".runtime.lock",os.O_RDWR|os.O_NOFOLLOW)
-info=os.fstat(fd)
-if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o600:raise SystemExit("private runtime lease required")
-fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
-os.set_inheritable(fd,True)
-program=prefix/"current/bin/crewd"
-os.execv(str(program),[str(program),*sys.argv[1:]])
-'''
+  module=bindir/'crewd_managed_launch.py'
+  module_source=pathlib.Path(__file__).with_name('crewd_managed_launch.py').read_bytes()
+  if module.exists():
+   if module.is_symlink() or module.read_bytes()!=module_source:raise ValueError('managed launch module differs; refuse overwrite')
+  else:
+   fd=os.open(module,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+   with os.fdopen(fd,'wb') as f:f.write(module_source);f.flush();os.fsync(f.fileno())
+   syncdir(bindir)
+  launcher_source="""#!/usr/bin/env python3
+import pathlib,sys
+sys.dont_write_bytecode=True
+from crewd_managed_launch import main
+try:main(pathlib.Path(__file__).resolve().parents[1],sys.argv[1:])
+except (ValueError,OSError,KeyError) as e:raise SystemExit('REFUSED managed launch: '+str(e))
+"""
   if launcher.exists():
    if launcher.is_symlink() or launcher.read_text()!=launcher_source:raise ValueError('controlled launcher differs; refuse overwrite')
   else:

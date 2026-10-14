@@ -235,7 +235,7 @@ def main():
  refused=cli('old11-refuses-new','serve','--codex','/usr/bin/false','--claude','/usr/bin/false',want=False)
  after_refusal=refusal_snapshot()
  (out/'old-refusal-after.json').write_text(json.dumps(after_refusal,sort_keys=True,indent=2)+'\n')
- assert '数据库版本 '+str(args.new_schema)+' 比本程序支持的 11 新，拒绝打开' in (refused.stdout+refused.stderr).decode(),'old binary must give the actual future-schema refusal'
+ assert 'managed.future_schema: database version '+str(args.new_schema)+' exceeds supported 11; old program not launched' in (refused.stdout+refused.stderr).decode(),'managed old version must refuse before old RW SQLite open'
  assert before_refusal['logical']==after_refusal['logical'],'old binary changed domain/schema/integrity despite refusal'
  assert before_refusal['physical']==after_refusal['physical'],'old binary changed physical DB files after closed-observer baseline; retain precise phase evidence'
  # The currently activated old11 binary must not restore a newer DB. Activate
@@ -252,7 +252,7 @@ def main():
  assert dbversion()==args.new_schema
  observer_quiescent(data/'crewd.db')
  with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro&immutable=1',uri=True)) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
- (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[11,args.new_schema,11,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'oldBinaryRefusedNewSchema':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'phaseRecords':records},indent=2)+'\n')
+ (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[11,args.new_schema,11,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'managedOldVersionRefusedBeforeExec':True,'rawOldBinaryFutureSidecarLimitRetained':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'phaseRecords':records},indent=2)+'\n')
  print('PASS ordinary-user explicit Linux install/upgrade/failure/unknown/rollback/authoritative Core restore/restart; no system service or model')
 try:main()
 except (ValueError,OSError,KeyError,AssertionError,subprocess.SubprocessError) as e:raise SystemExit('FAIL retained installer lifecycle evidence: '+str(e))
