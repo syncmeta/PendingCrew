@@ -86,6 +86,117 @@ fn mac_pid_count(n: i32, capacity: usize, errno: i32) -> Result<usize, i32> {
     Ok(n as usize)
 }
 
+// Only a kernel ESRCH permits excluding a disappeared enumerated PID.
+#[cfg(any(target_os = "linux", test))]
+fn census_candidate(pgid: i32, observed: Result<i32, i32>) -> Result<bool, i32> {
+    match observed {
+        Ok(actual) => Ok(actual == pgid),
+        Err(libc::ESRCH) => Ok(false),
+        Err(errno) => Err(errno),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn kernel_pgid(pid: i32) -> Result<i32, i32> {
+    // SAFETY: read-only kernel process-group lookup; capture errno immediately.
+    let pgid = unsafe { libc::getpgid(pid) };
+    if pgid < 0 {
+        Err(io::Error::last_os_error().raw_os_error().unwrap_or(0))
+    } else {
+        Ok(pgid)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+std::thread_local! {
+    // Pure memory: no stderr/pipe I/O can block the global recovery deadline.
+    static CENSUS_NOTES: std::cell::RefCell<Vec<(i32, &'static str, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn census_unknown(pid: i32, stage: &'static str, errno: i32) -> GroupObservation {
+    CENSUS_NOTES.with(|notes| {
+        let mut notes = notes.borrow_mut();
+        if notes.len() < 16 {
+            notes.push((pid, stage, errno));
+        }
+    });
+    GroupObservation::Unknown(errno)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn qualified_proc_view() -> io::Result<()> {
+    // Supported scope: procfs exposes the caller's active PID namespace,
+    // procfs is mounted at /proc with no hidepid/restrictive view or per-PID
+    // overlays. This is not a proof for arbitrary virtualized proc views.
+    let pid = std::process::id();
+    let self_link = std::fs::read_link("/proc/self")?;
+    if self_link
+        .to_str()
+        .and_then(|value| value.parse::<u32>().ok())
+        != Some(pid)
+    {
+        return Err(io::Error::from_raw_os_error(libc::EXDEV));
+    }
+    // NSpid starts in the namespace of this procfs mount. One entry equal
+    // to getpid excludes an ancestor-mounted view of this caller.
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    let ns_pids = status
+        .lines()
+        .find_map(|line| line.strip_prefix("NSpid:"))
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::ENOTSUP))?;
+    let fields: Vec<_> = ns_pids.split_whitespace().collect();
+    if fields != [pid.to_string()] {
+        return Err(io::Error::from_raw_os_error(libc::EXDEV));
+    }
+    let mounts = std::fs::read_to_string("/proc/self/mountinfo")?;
+    qualified_proc_mounts(&mounts).map_err(io::Error::from_raw_os_error)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn qualified_proc_mounts(mounts: &str) -> Result<(), i32> {
+    let mut qualified = false;
+    for line in mounts.lines() {
+        let (left, right) = line.split_once(" - ").ok_or(libc::EINVAL)?;
+        let fields: Vec<_> = left.split_whitespace().collect();
+        let fs: Vec<_> = right.split_whitespace().collect();
+        if fields.len() < 6 || fs.len() < 3 {
+            return Err(libc::EINVAL);
+        }
+        if let Some(suffix) = fields[4].strip_prefix("/proc/") {
+            let first = suffix.split('/').next().unwrap_or("");
+            let boot_path = "/proc/sys/kernel/random/boot_id";
+            if first.parse::<u32>().is_ok()
+                || matches!(first, "self" | "thread-self")
+                || boot_path.starts_with(&format!("{}/", fields[4]))
+                || fields[4] == boot_path
+            {
+                return Err(libc::ENOTSUP);
+            }
+        }
+        if fields[4] != "/proc" {
+            continue;
+        }
+        if qualified || fields[3] != "/" || fs[0] != "proc" {
+            return Err(libc::ENOTSUP);
+        }
+        for option in fields[5].split(',').chain(fs[2].split(',')) {
+            if option.starts_with("hidepid=") && option != "hidepid=0" && option != "hidepid=off" {
+                return Err(libc::EACCES);
+            }
+            if option.starts_with("subset=") {
+                return Err(libc::ENOTSUP);
+            }
+        }
+        qualified = true;
+    }
+    if qualified {
+        Ok(())
+    } else {
+        Err(libc::ENOTSUP)
+    }
+}
+
 /// A complete bounded group census, with boot before/after and kernel identity
 /// for every returned member. Races/truncation/permission preserve Unknown.
 pub fn observe_group(pgid: i32) -> GroupObservation {
@@ -140,11 +251,14 @@ pub fn observe_group_until(pgid: i32, deadline: Instant) -> GroupObservation {
             }
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
+        if let Err(error) = qualified_proc_view() {
+            return census_unknown(0, "proc-view", error.raw_os_error().unwrap_or(0));
+        }
         let entries = match std::fs::read_dir("/proc") {
             Ok(v) => v,
-            Err(e) => return unknown(e),
+            Err(e) => return census_unknown(0, "proc-enumerate", e.raw_os_error().unwrap_or(0)),
         };
         let mut seen = 0usize;
         for entry in entries {
@@ -153,7 +267,9 @@ pub fn observe_group_until(pgid: i32, deadline: Instant) -> GroupObservation {
             }
             let entry = match entry {
                 Ok(v) => v,
-                Err(e) => return unknown(e),
+                Err(e) => {
+                    return census_unknown(0, "proc-enumerate", e.raw_os_error().unwrap_or(0));
+                }
             };
             let Some(pid) = entry
                 .file_name()
@@ -164,20 +280,37 @@ pub fn observe_group_until(pgid: i32, deadline: Instant) -> GroupObservation {
             };
             seen += 1;
             if seen > 16384 {
-                return GroupObservation::Unknown(0);
+                return census_unknown(0, "proc-capacity", libc::EOVERFLOW);
+            }
+            match census_candidate(pgid, kernel_pgid(pid)) {
+                Ok(false) => continue,
+                Err(errno) => return census_unknown(pid, "getpgid", errno),
+                Ok(true) => (),
             }
             match super::probe(pid) {
                 ProbeResult::Found(identity)
                     if identity.pgid == pgid && identity.boot_id == before =>
                 {
-                    members.push(identity)
+                    // A target member must stay readable and in this group.
+                    // ESRCH here is a changed target cut, not an unrelated
+                    // tombstone: this observation remains Unknown.
+                    match kernel_pgid(pid) {
+                        Ok(actual) if actual == pgid => members.push(identity),
+                        Ok(_) => return census_unknown(pid, "target-changed", 0),
+                        Err(errno) => return census_unknown(pid, "target-recheck", errno),
+                    }
                 }
-                ProbeResult::Found(_) => (),
-                // A disappearing process cannot be silently excluded from a
-                // completeness claim about an active group.
-                _ => return GroupObservation::Unknown(0),
+                ProbeResult::Unreadable(errno) => {
+                    return census_unknown(pid, "target-identity", errno);
+                }
+                ProbeResult::Missing => return census_unknown(pid, "target-missing", libc::ESRCH),
+                ProbeResult::Found(_) => return census_unknown(pid, "target-identity-changed", 0),
             }
         }
+    }
+    #[cfg(target_os = "linux")]
+    if let Err(error) = qualified_proc_view() {
+        return census_unknown(0, "proc-view-recheck", error.raw_os_error().unwrap_or(0));
     }
     members.sort_by_key(|member| member.pid);
     members.dedup_by_key(|member| member.pid);
@@ -330,6 +463,8 @@ fn recover_for_uid(
     verify_store: &dyn Fn() -> io::Result<()>,
     expected_uid: u32,
 ) -> io::Result<Vec<RecoveryReport>> {
+    #[cfg(any(target_os = "linux", test))]
+    CENSUS_NOTES.with(|notes| notes.borrow_mut().clear());
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut reports = Vec::new();
     let mut pending = Vec::new();
@@ -418,6 +553,19 @@ fn recover_for_uid(
             .detail
             .push_str("; finite deadline ended with obligation retained");
     }
+    #[cfg(any(target_os = "linux", test))]
+    CENSUS_NOTES.with(|notes| {
+        let notes = notes.borrow();
+        if let Some(report) = reports.iter_mut().find(|r| !r.confirmed_gone) {
+            for (pid, stage, errno) in notes.iter() {
+                use std::fmt::Write;
+                let _ = write!(
+                    report.detail,
+                    "; census pid={pid} stage={stage} errno={errno}"
+                );
+            }
+        }
+    });
     Ok(reports)
 }
 
@@ -503,10 +651,100 @@ mod tests {
     }
 
     #[test]
+    fn real_target_neighbor_and_reaped_tombstone_classification() {
+        let mut target = OwnedChild::new();
+        let mut neighbor = OwnedChild::new();
+        assert_eq!(
+            census_candidate(target.original.pgid, kernel_pgid(target.original.pid)),
+            Ok(true)
+        );
+        assert_eq!(
+            census_candidate(target.original.pgid, kernel_pgid(neighbor.original.pid)),
+            Ok(false)
+        );
+        neighbor.child.kill().unwrap();
+        neighbor.child.wait().unwrap();
+        assert_eq!(kernel_pgid(neighbor.original.pid), Err(libc::ESRCH));
+        assert_eq!(
+            census_candidate(target.original.pgid, kernel_pgid(neighbor.original.pid)),
+            Ok(false)
+        );
+        assert!(target.child.try_wait().unwrap().is_none());
+        target.child.kill().unwrap();
+        target.child.wait().unwrap();
+        assert_eq!(kernel_pgid(target.original.pid), Err(libc::ESRCH));
+        assert_eq!(
+            census_candidate(target.original.pgid, Err(libc::EPERM)),
+            Err(libc::EPERM)
+        );
+        assert_eq!(
+            census_candidate(target.original.pgid, Err(libc::EACCES)),
+            Err(libc::EACCES)
+        );
+        assert_eq!(
+            census_candidate(target.original.pgid, Err(libc::ENOENT)),
+            Err(libc::ENOENT)
+        );
+    }
+
+    #[test]
+    fn census_diagnostics_are_bounded_memory_only() {
+        CENSUS_NOTES.with(|notes| notes.borrow_mut().clear());
+        for pid in 1..=100 {
+            assert_eq!(
+                census_unknown(pid, "controlled-error", libc::EPERM),
+                GroupObservation::Unknown(libc::EPERM)
+            );
+        }
+        CENSUS_NOTES.with(|notes| assert_eq!(notes.borrow().len(), 16));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn linux_view_guard_does_not_admit_missing_procfs() {
+        assert!(qualified_proc_view().is_err());
+    }
+
+    #[test]
+    fn restricted_or_incomplete_proc_mounts_are_unknown() {
+        let normal = "1 0 0:1 / /proc rw,nosuid - proc proc rw";
+        assert_eq!(qualified_proc_mounts(normal), Ok(()));
+        assert_eq!(
+            qualified_proc_mounts(&format!(
+                "{normal}\n2 1 0:2 / /proc/sys/fs/binfmt_misc rw - binfmt_misc binfmt_misc rw"
+            )),
+            Ok(())
+        );
+        assert_eq!(
+            qualified_proc_mounts(&format!(
+                "{normal}\n2 1 0:2 / /proc/sys ro - tmpfs tmpfs ro"
+            )),
+            Err(libc::ENOTSUP)
+        );
+        assert_eq!(
+            qualified_proc_mounts(&normal.replace("proc rw", "proc rw,hidepid=2")),
+            Err(libc::EACCES)
+        );
+        assert_eq!(qualified_proc_mounts(""), Err(libc::ENOTSUP));
+        assert_eq!(
+            qualified_proc_mounts(&format!(
+                "{normal}\n2 1 0:2 / /proc/123 ro - tmpfs tmpfs ro"
+            )),
+            Err(libc::ENOTSUP)
+        );
+        assert_eq!(
+            qualified_proc_mounts(&normal.replace("proc rw", "proc rw,subset=pid")),
+            Err(libc::ENOTSUP)
+        );
+    }
+
+    #[test]
     fn actual_single_member_census_preserves_real_birth_and_boot() {
         let child = OwnedChild::new();
-        let GroupObservation::Present(members) = observe_group(child.original.pgid) else {
-            panic!("actual complete single-member group was not observed")
+        let observation = observe_group(child.original.pgid);
+        let GroupObservation::Present(members) = observation else {
+            CENSUS_NOTES.with(|notes| panic!("actual complete single-member group was not observed: {observation:?}; bounded diagnostics={:?}", notes.borrow()));
+            unreachable!()
         };
         assert_eq!(members.len(), 1);
         assert!(same_identity(&members[0], &child.original));

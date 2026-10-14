@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 Linux census 修复整块接受，准确新输入待专项运行
+
+实际 Linux run 38647080589 / job 116136487047、来源 1f9c22666b07d2676897eb6b4376f060acffbc31 已终态 FAILURE：28 项中 26 PASS、2 FLKY-FL；两项重试通过仍按原规则失败。新 normal、fake 构建及公开恢复物理链未执行。原日志没有 offending PID/stage/errno，不能把旁组进程退出假说称为已证明根因。原失败范围独核报告 /private/tmp/pcw-Core14-recovery-linux-1f9c2266-failed-01/independent-failure-scope-01.json，SHA c03228509052e7b4bc40a98f6889c33b602b9f19dfbfc8f1a5a157f6965e0d8b。
+
+后端 correction02 两路径整块已独验接受，报告 /private/tmp/pcw-Core14-linux-census-correction-freeze-02/independent-whole-impact-acceptance-01.json，SHA e61c3432ba63d9776627e48f19209202bcd5e5ceba41ae7ffe5d97d0b8652e4b；patch SHA 87da9be6b2a6c1b81f92caa33041e90f7fe0be8d0eb4852fbad204862ea296de。根已精确应用并核 393 完整输入逐 SHA 与作者冻结一致。真实 getpgid 仅 ESRCH 排除消失枚举项、实际其他 PGID 排除旁组；目标缺读、错误及受限当前 proc 视图保持 Unknown。双遍完整成员身份/UID、leader、Store guard、全局 2 秒与原重试/断言保持；最多 16 条内存诊断不在预算内做日志 I/O。Mac 影响矩阵 29 PASS、exec all-targets strict clippy 通过，不能外推 Linux 实际成功。
+
+支持边界为普通受管同一 PID namespace 连续运行/恢复；当前 NSpid/self/mount 资格不是历史 registry namespace 证明，跨 namespace 搬迁既不受支持也没有已实现的自动拒绝保证。membership/birth→killpg 非原子 TOCTOU 限界继续明确。Native15 WIP 不合入，schema/proto/Cargo、workflow 与稳定 M5 schema13 模块保持；M5 已验实现不重新开发。
+
+本次提交后按准确新 HEAD 冻结，由根唯一派发一次必要 Linux recovery_gate，保持 fail-if-flaky/LEAK 规则与完整失败归档，并实际跑新的强 normal/fake/public 恢复链。客户端 DeliveryValidation 包装器仍在独立树补最终 sealed helper 与强 normal 输入的来源绑定，未通过整块验收、未合入此 Linux 输入；不等待该独立模块。磁盘实测约 6.8 GiB，不清理保护对象。旧 normal07、候选13和默认 CI 来源仍为 0f，不重标。main、安装、日常数据、发布、真实模型及待具体动作保持未交付。
+
 ## 2026-10-15 已验恢复04、验证入口与限定工作流一次精确组合
 
 后端final04完整源码/Mac机制及portable最后清理闭环已独验接受，报告/private/tmp/pcw-Core14-recovery-whole-freeze-04/independent-whole-acceptance-04.json SHA24142d66a126fc48c50d40b07c390b47b3c2c47ec175538b29f9723156609470；patchb362962442e19e4346458919910c1f6545a09f1662f09a35e2c4429c0dcc4c8d。393 Rust输入全核、225证据一致；完整成员UID/birth/boot/PGID双遍与Store guard、Mac PID-count/即时errno、真实25kernel/public30/晚rename可见变更但Err拒、lint及timeout清理receipt闭合。原02/03及所有原FAIL保，不改标。Linux/proc实际可用性/真实foreignuser未验，非原子birth→killpg TOCTOU仍明确。作者已将13owned路径普通保存push为69248d25f8691260387a30c00aa89aaa6c732572，祖先Native15 WIP保持未激活；根只取已验Core14 patch，不整枝合该树。
