@@ -209,7 +209,7 @@ pub fn verify_envelope<T: DeserializeOwned>(
     )
     .verify(&payload, &signed)
     .map_err(|_| anyhow::anyhow!("invalid pairing signature"))?;
-    Ok(serde_json::from_slice(&payload).context("invalid signed pairing fields")?)
+    serde_json::from_slice(&payload).context("invalid signed pairing fields")
 }
 
 /// Random challenge is not a Human capability or a work authentication token.

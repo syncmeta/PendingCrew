@@ -21,21 +21,12 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[derive(Default)]
 struct ListenerState {
     endpoint: Option<RemoteEndpoint>,
     failure: Option<String>,
     task: Option<JoinHandle<()>>,
     socket: Option<Arc<TcpListener>>,
-}
-impl Default for ListenerState {
-    fn default() -> Self {
-        Self {
-            endpoint: None,
-            failure: None,
-            task: None,
-            socket: None,
-        }
-    }
 }
 impl Drop for ListenerState {
     fn drop(&mut self) {
@@ -520,13 +511,15 @@ impl Manager {
                 s.with_tx(|tx| {
                     facts::issue_invitation(
                         tx,
-                        &invitation.invitation_id,
-                        &authority,
-                        &invitation.challenge,
-                        &saved.to_string(),
-                        expires.timestamp(),
-                        now.timestamp(),
-                        &crewd_store::now_ts(),
+                        facts::NewInvitation {
+                            id: &invitation.invitation_id,
+                            authority: &authority,
+                            challenge: &invitation.challenge,
+                            envelope_json: &saved.to_string(),
+                            expires_unix: expires.timestamp(),
+                            now_unix: now.timestamp(),
+                            at: &crewd_store::now_ts(),
+                        },
                     )?;
                     facts::record_request(
                         tx,

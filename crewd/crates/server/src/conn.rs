@@ -100,17 +100,16 @@ where
             let frame = tokio::select! {
                 biased;
                 _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
-                    if let Some(principal) = &remote_writer {
-                        if principal.check_live(&writer_state).await.is_err() { break; }
-                    }
+                    if let Some(principal) = &remote_writer
+                        && principal.check_live(&writer_state).await.is_err() { break; }
                     continue;
                 },
                 frame = rx.recv() => match frame { Some(frame) => frame, None => break },
             };
-            if let Some(principal) = &remote_writer {
-                if principal.check_live(&writer_state).await.is_err() {
-                    break;
-                }
+            if let Some(principal) = &remote_writer
+                && principal.check_live(&writer_state).await.is_err()
+            {
+                break;
             }
             let mut line = match serde_json::to_vec(&frame) {
                 Ok(l) => l,
@@ -152,8 +151,10 @@ where
         &tx,
         &mut forwarder,
         &mut forward_guard,
-        &mut drain,
-        &mut writer_done,
+        ConnectionSignals {
+            drain: &mut drain,
+            writer_done: &mut writer_done,
+        },
         &peer,
     )
     .await;
@@ -174,16 +175,21 @@ fn parse_error(msg: &str) -> ServerFrame {
     ServerFrame::Response(Response::err(0, RpcError::new(RpcError::PARSE, msg)))
 }
 
+struct ConnectionSignals<'a> {
+    drain: &'a mut watch::Receiver<bool>,
+    writer_done: &'a mut oneshot::Receiver<()>,
+}
+
 async fn read_loop<R: AsyncRead + Unpin>(
     state: &Arc<AppState>,
     rd: R,
     tx: &mpsc::Sender<ServerFrame>,
     forwarder: &mut Option<JoinHandle<()>>,
     forward_guard: &mut Option<AbortOnDrop>,
-    drain: &mut watch::Receiver<bool>,
-    writer_done: &mut oneshot::Receiver<()>,
+    signals: ConnectionSignals<'_>,
     peer: &Caller,
 ) -> anyhow::Result<()> {
+    let ConnectionSignals { drain, writer_done } = signals;
     let mut rd = BufReader::new(rd);
     let mut buf: Vec<u8> = Vec::new();
     // 同一条连接上的 agent.* 请求共享一份状态（attach 过没有、推送任务）；连接结束时随之 drop。
@@ -457,18 +463,15 @@ async fn request_step(
             let id = req.id;
             let is_hello = req.method == methods::HELLO;
             let mut response = crate::dispatch::handle(state, req).await;
-            if is_hello {
-                if let (Some(principal), crewd_proto::Outcome::Result(value)) =
+            if is_hello
+                && let (Some(principal), crewd_proto::Outcome::Result(value)) =
                     (peer.remote(), &mut response.outcome)
-                {
-                    if let Some(object) = value.as_object_mut() {
-                        object.insert(
-                            "remoteBinding".into(),
-                            serde_json::to_value(&principal.binding)
-                                .expect("finite authenticated binding"),
-                        );
-                    }
-                }
+                && let Some(object) = value.as_object_mut()
+            {
+                object.insert(
+                    "remoteBinding".into(),
+                    serde_json::to_value(&principal.binding).expect("finite authenticated binding"),
+                );
             }
             #[cfg(test)]
             {

@@ -156,16 +156,25 @@ pub fn invitation(
 ) -> Result<Option<StoredInvitation>> {
     Ok(conn.query_row("SELECT challenge,envelope_json,expires_unix,consumed_at FROM remote_invitations WHERE id=?1 AND authority_id=?2", params![id, authority], |r| Ok(StoredInvitation { challenge: r.get(0)?, envelope_json: r.get(1)?, expires_unix: r.get(2)?, consumed_at: r.get(3)? })).optional()?)
 }
-pub fn issue_invitation(
-    conn: &Connection,
-    id: &str,
-    authority: &str,
-    challenge: &str,
-    envelope_json: &str,
-    expires_unix: i64,
-    now_unix: i64,
-    at: &str,
-) -> Result<()> {
+pub struct NewInvitation<'a> {
+    pub id: &'a str,
+    pub authority: &'a str,
+    pub challenge: &'a str,
+    pub envelope_json: &'a str,
+    pub expires_unix: i64,
+    pub now_unix: i64,
+    pub at: &'a str,
+}
+pub fn issue_invitation(conn: &Connection, input: NewInvitation<'_>) -> Result<()> {
+    let NewInvitation {
+        id,
+        authority,
+        challenge,
+        envelope_json,
+        expires_unix,
+        now_unix,
+        at,
+    } = input;
     if !valid_remote_uuid(id)
         || challenge.len() > 128
         || challenge.is_empty()
