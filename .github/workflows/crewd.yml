@@ -179,17 +179,19 @@ jobs:
         run: |
           mkdir -p target/core-followup-evidence
           if [ -f target/nextest/ci/junit.xml ]; then cp target/nextest/ci/junit.xml target/core-followup-evidence/three-permission-junit.xml; fi
+      - name: Complete workspace doctests previously blocked by unit failures
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --workspace --doc 2>&1 | tee target/core-followup-evidence/doctests.log
       - name: Explicit testkit CLI enrollment workflow only (not all features)
+        if: ${{ !cancelled() }}
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
         run: |
           set -euo pipefail
           cargo fetch --locked
           bash ../scripts/dev/test-crewd-cli-enrollment-feature.sh "$RUNNER_TEMP/core-testkit-enrollment"
-      - name: Complete workspace doctests previously blocked by unit failures
-        run: |
-          set -euo pipefail
-          cargo test --workspace --doc 2>&1 | tee target/core-followup-evidence/doctests.log
       - name: Preserve exact affected-scope evidence
         if: always()
         uses: actions/upload-artifact@v4
