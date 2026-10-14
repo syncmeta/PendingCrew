@@ -18,12 +18,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var crewdBackend: CrewdPendingCrewBackend?
     lazy var crewdWindow = CrewdRemoteWindow()
     private var authorityObservation: AnyCancellable?
-    private var connectingAuthority = false
+    @Published private(set) var connectingAuthority = false
     private lazy var localBackend = LocalBackend(store: .shared, whiteboard: .shared)
 
     var crewdDirectory: URL? {
         #if os(macOS)
-        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty { return URL(fileURLWithPath: explicit).standardizedFileURL.resolvingSymlinksInPath() }
+        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty { return URL(fileURLWithPath: explicit).standardizedFileURL }
         guard let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
               ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNativeCandidates").appendingPathComponent(ref)
@@ -55,7 +55,13 @@ final class AppModel: ObservableObject {
         guard usesCrewdAuthority, !connectingAuthority else { return }
         connectingAuthority = true; defer { connectingAuthority = false }
         #if os(macOS)
-        guard let directory = crewdDirectory else { return }
+        guard let directory = crewdDirectory else {
+            crewdWindow.error = "这个候选版本缺少来源信息，连接未建立。"
+            return
+        }
+        do { try CrewdFrontendIsolation.prepareAuthority(directory: directory) }
+        catch { crewdWindow.error = error.localizedDescription; return }
+        crewdWindow.error = nil
         await crewdWindow.selectLocal(directory: directory)
         #else
         crewdWindow.refresh()

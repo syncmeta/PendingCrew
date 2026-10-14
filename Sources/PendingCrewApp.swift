@@ -26,13 +26,14 @@ struct PendingCrewApp: App {
     #endif
     /// Captain 模板池(BYOK 模式的"本机 captain 池",spec v2 §5.2)。
     /// 登录态下也注入但 UI 不消费 —— 登录态走真 bot 库(后续 task)。
-    @StateObject private var captainTemplates = CaptainTemplateStore.shared
+    @StateObject private var captainTemplates: CaptainTemplateStore
     /// App-wide appearance override (跟随系统/浅/深)，设置里改。
     /// `.system` → nil → 跟随 OS。对齐 PendingBot #299。
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
     init() {
         let appModel = AppModel()
+        _captainTemplates = StateObject(wrappedValue: appModel.usesCrewdAuthority ? CaptainTemplateStore(presentationOnly: true) : CaptainTemplateStore.shared)
         _model = StateObject(wrappedValue: appModel)
         _crewStore = StateObject(wrappedValue: CrewStore(appModel: appModel))
         #if os(macOS)
