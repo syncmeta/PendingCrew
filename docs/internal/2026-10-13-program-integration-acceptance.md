@@ -1,5 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 持久验证入口整块独验拒收与真实恢复矩阵推进
+
+客户端完成13路径clean源码冻结9bf68cad3ce8e9df430282c60588adc232aeeee2；whole binding /private/tmp/pcw-delivery-validation-source-unit-01/whole-source-review-binding.json SHA0f15fd3ef66bd7a810caa4a04ddcb54aa707b7ad1ab5d013f2bebd58a342b41c。三平台各370完整输入typecheck终态0、17实际factory资格控制、普通/candidate工厂选择、3settings、stamp及默认sign-only plan/输入拒绝已封存；没有真实SecItem/sign/App/设备/network。独立整块报告independent-whole-source-review-01.json SHAf3ac4dfd3549372f5ace5181b2c8f0c3eeaae0ad5d5febf92880e40f43b8e781核齐13源/71证据，但暂拒收：真实record account大小写不一致、format1.5误收、签包仅Authority文本不足Appleanchor资格、独立validationID不能沿现有本机信任准入、helper override未闭合fake-only资格。不能因factory/typecheck绿把9bf称可运行交付；未push/整合或新包，作者同模块一次收口修复。
+
+根接口裁决：仅新DeliveryValidation配置使用既有native-candidate允许ID，保持独立marker/sourceRef/private fake-persistent scope与Release型编译，既有普通/NativeCandidate配置保持；后端allowlist不扩。Mac validation拒任何helper程序override，仅用后续完整包受审embedded normal。sign-only静态资格沿实际公共publisher Appleanchor/prodidentifier/批准Team/DeveloperID证书OID规则由OS验证，仍须hardened/no-debug/deep封口；静态包不冒真实新PID动态准入。普通实际application()已独立读源码确认PENDINGCREW_ISOLATED_CREDENTIALS=memory显式分支可达，在未来具体批准的prodID App action manifest用于发布者机制验证；只内存，不证明持久Vault。候选validation两App进程假service持久单元独立，后续实际动作仍核精确授权。未执行任何新签名或Keychain访问。
+
+后端当前WIP全恢复Mac真实kernel8场景矩阵11410终态0，Store/入口保护已终态，仍待真实closedCLI/publicrestart、strictlint和排除Native15的完整patch冻结；不能称模块完成。唯一诊断default build78570/cargo49707已实际启动，根ps核49707存活；目录/private/tmp/pcw-M4-recovery-closed-cli-build-06，仅供该整套机制运行，明确不是最终normal、不进候选13。Linux无本机执行面，保完整冻结后一次必要限定真实gate，由client唯一workflow作者/root唯一dispatch，不反复全CI。
+
+作者随后核原78570终态0、完整输入前后同；closed CLI/public hard-kill-restart整套实际56293已在新/private/tmp/pcw-rcr07启动，尚待终态，不触原App。
+
+global产品继续准确0f，normal07/候选13/已验默认双平台CI来源不改。A13本次解锁仍未答、SDK06/新producer取证未获执行授权；只阻实际依赖。main产品、真实签名/Vault/窗口/设备、安装/日常切换/发布/真实模型及all-features范围仍未完成。本段是完整模块拒收与接口裁决检查点，不把小测试算工程交付。
+
+
 ## 2026-10-15 后续完整恢复与三平台验证入口并行推进
 
 根只读实核：global仍d97e63018ed6d2159f59c0ccebbc9e1210fffcbd干净，既有normal07/候选13/默认双平台CI的实际compiled来源永远0f303a45；主目录仍fe68022f及README/design/旧ACP人类改动，未修改。当前磁盘约7.76M KiB，不清理。A13 GUI44774/helper44804实际仍存活，未收到本次解锁答复，未操作UI；旧候选现场保留。
