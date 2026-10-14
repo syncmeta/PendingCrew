@@ -43,3 +43,14 @@ Actual cd7 Linux run38535878565 preserved canonical11 validation and clean ownin
 The builder now imports sys. Before another remote dispatch the complete source-backed `test-crewd-linux-delivery-preflight.py` batch executes all five parser/help entry points, original reader RED/fixed GREEN and tracked/untracked dirty diagnostics, existing output/unsupported platform, private0700/root/alias/uncontrolled pointer/invalid action and the shared production safe-tar validator's seven malicious structures plus canonical hash refusal. No Rust compilation, daemon, model or installation occurs. On Mac only the supported-platform query of the before-Cargo refusal path is controlled; that is explicitly not native Linux evidence. Original canonical accepted extraction retains its prior complete proof.
 
 The exact batch input file hashes and owning HEAD are recorded separately from committed selection; pre-freeze working-byte controls are never relabeled as a frozen run. Actual final local batch evidence is under `/private/tmp/pcw-linux-complete-delivery-preflight-02`. Quality accepted the complete batch scope before source freeze. The workflow runs this same complete batch on real Linux before the new release build, retains every diagnostic/raw source/input hash and refuses if the actual owning checkout changed. Genuine Linux release/lease/two-version lifecycle remains pending; stable M5/Apple/business gates are not repeated.
+
+
+## 真实 ordinary Linux 拒绝观察与剩余闭环源码冻结
+
+实际run38541835255/source4e的强来源default release与packaged recovery通过；完整安装主链已执行到binary rollback后old11给出“数据库版本13比本程序支持11新，拒绝打开”。原fixture随后对所有crewd.db*物理hash失败，原beforehash仅在内存，没有完整阶段文件，不能推断究竟哪个sidecar变化。QA对实际post DB与pre-old backup使用immutable只读/显式close核对：version13、全schema和50表全部rows相同、integrity通过。这不把当次完整链改标PASS。
+
+验收observer现在用contextlib.closing；拒绝基线明确拒非空WAL，不代程序checkpoint。old command前后各保存完整physical SHA/size与immutable schema/application/version/all-table rows/integrity，校验真实future-version拒绝、零域变更及严格物理一致。没有忽略sidecar/hash，也没有改已冻结old11。实际Linux该新阶段仍须运行；本机只能证实际SQLite观察连接已关闭、完整census稳定/变更检出、非空WAL拒绝。
+
+剩余工作只复用原4e实际规范normal13 tar，compiledRef仍4e，run38541835255/artifact11882857926/tarSHA cc73c54b606181f7f2c2ea500cbe0665f2aeb07138ee3c74db5553dec1ad129a；完整当前crewd Git/working inputs必须逐字等于原374输入且raw own fresh12targets/defaultrelease证明通过。无新normal编译或重标新fixture源码；不重复旧完整CI/本地16门禁。实际原ZIP→唯一canonicaltar→完整消费来源已本机正向验证，错误ZIP与既有output拒绝。
+
+归档此前upload跟随activation/current引用而重复复制同release。新producer将private lifecycle root封为dereference=false tar，保相对指针/激活请求、真实双方release完整来源、DB/backup/log，不递归上传这些链接。每实际regular文件校验byteSHA，每链接核内部相对指向并验证tar仍是链接，附archiveSHA/member manifest。本机actual模块控制证保留3引用但只有1 retained fixturebinary，外部escape拒绝无output。证据 `/private/tmp/pcw-linux-observer-archive-controls-01` 和 `/private/tmp/pcw-linux-normal13-reuse-control-01.log`；不代表实际Linux恢复链完成。

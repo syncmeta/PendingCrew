@@ -35,7 +35,23 @@ def main():
   if (r.returncode==0)!=want:raise ValueError('packaged CLI result mismatch: '+label)
   return r
  def dbversion(path=data/'crewd.db'):
-  with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as c:return c.execute('PRAGMA user_version').fetchone()[0]
+  with contextlib.closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as c:return c.execute('PRAGMA user_version').fetchone()[0]
+ def refusal_snapshot():
+  # Finished daemon and explicitly closed observers precede this immutable read.
+  # Never ignore a nonempty WAL or checkpoint on behalf of the old program.
+  wal=data/'crewd.db-wal'
+  if wal.exists() and wal.stat().st_size:raise ValueError('refusal baseline has nonempty WAL; preserve it instead of assuming main DB authority')
+  with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?immutable=1&mode=ro',uri=True)) as c:
+   schema=c.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+   tables={}
+   for kind,name,_,_ in schema:
+    if kind!='table':continue
+    quoted='"'+name.replace('"','""')+'"'
+    rows=c.execute('SELECT * FROM '+quoted).fetchall()
+    def encode(v):return {'bytesHex':v.hex()} if isinstance(v,bytes) else v
+    tables[name]=sorted([[encode(v) for v in row] for row in rows],key=lambda row:json.dumps(row,sort_keys=True))
+   logical={'version':c.execute('PRAGMA user_version').fetchone()[0],'applicationId':c.execute('PRAGMA application_id').fetchone()[0],'schema':schema,'tables':tables,'integrity':c.execute('PRAGMA integrity_check').fetchall()}
+  return {'logical':logical,'physical':{p.name:{'sha256':sha(p),'size':p.stat().st_size} for p in sorted(data.glob('crewd.db*')) if p.is_file()}}
  def birth(pid):
   text=pathlib.Path('/proc',str(pid),'stat').read_text();return text[text.rfind(')')+2:].split()[19]
  def lease_held(pid):
@@ -197,8 +213,14 @@ def main():
  beforedb={p.name:sha(p) for p in data.glob('crewd.db*') if p.is_file()}
  rollback=str(uuid.uuid4());rolled=install('binary-pointer-rollback','rollback',rollback,upactive,source=oldmeta['sourceRef']);assert rolled['outcome']=='committed-current'
  assert beforedb=={p.name:sha(p) for p in data.glob('crewd.db*') if p.is_file()},'installer may never modify databases'
- cli('old11-refuses-new','serve','--codex','/usr/bin/false','--claude','/usr/bin/false',want=False)
- assert beforedb=={p.name:sha(p) for p in data.glob('crewd.db*') if p.is_file()},'old binary must refuse before touching new schema'
+ before_refusal=refusal_snapshot()
+ (out/'old-refusal-before.json').write_text(json.dumps(before_refusal,sort_keys=True,indent=2)+'\n')
+ refused=cli('old11-refuses-new','serve','--codex','/usr/bin/false','--claude','/usr/bin/false',want=False)
+ after_refusal=refusal_snapshot()
+ (out/'old-refusal-after.json').write_text(json.dumps(after_refusal,sort_keys=True,indent=2)+'\n')
+ assert '数据库版本 '+str(args.new_schema)+' 比本程序支持的 11 新，拒绝打开' in (refused.stdout+refused.stderr).decode(),'old binary must give the actual future-schema refusal'
+ assert before_refusal['logical']==after_refusal['logical'],'old binary changed domain/schema/integrity despite refusal'
+ assert before_refusal['physical']==after_refusal['physical'],'old binary changed physical DB files after closed-observer baseline; retain precise phase evidence'
  # The currently activated old11 binary must not restore a newer DB. Activate
  # the authoritative new binary first, then use its explicit normal restore CLI.
  restore_authority=str(uuid.uuid4());new_again=install('reactivate-new-for-formal-restore','install',restore_authority,rolled['currentActivation'],package=new)
@@ -211,7 +233,7 @@ def main():
  with serve('recovered-new') as call:
   assert call('todo.create',params)['requirementId']==requirement and call('todo.create',postparams)['requirementId']==post
  assert dbversion()==args.new_schema
- with sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro',uri=True) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
+ with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro',uri=True)) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
  (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[11,args.new_schema,11,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'oldBinaryRefusedNewSchema':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'phaseRecords':records},indent=2)+'\n')
  print('PASS ordinary-user explicit Linux install/upgrade/failure/unknown/rollback/authoritative Core restore/restart; no system service or model')
 try:main()
