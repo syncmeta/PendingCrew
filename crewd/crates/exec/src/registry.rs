@@ -933,7 +933,12 @@ mod tests {
         let status = orphan.wait().unwrap();
         assert_eq!(
             std::os::unix::process::ExitStatusExt::signal(&status),
-            Some(libc::SIGKILL)
+            Some(libc::SIGKILL),
+            "bounded recovery signal/diagnostics: {:?}",
+            reports
+                .iter()
+                .map(|r| (r.signal_sent, &r.detail))
+                .collect::<Vec<_>>()
         );
         assert!(
             innocent.try_wait().unwrap().is_none(),
