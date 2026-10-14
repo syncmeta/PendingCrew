@@ -11,7 +11,7 @@ IDENTIFIER='com.pendingname.pendingcrew.native-candidate'
 CONDITION='PENDINGCREW_DELIVERY_VALIDATION'
 DD='/private/tmp/pcw-codex-first-xcode'
 SPM='/private/tmp/pcw-codex-first-spm'
-TOOLS=['build-crewd-delivery-validation-macos.py','check-crewd-delivery-validation-macos.py','build-crewd-native-macos.py','write-codex-first-provenance.py']
+TOOLS=['build-crewd-delivery-validation-macos.py','check-crewd-delivery-validation-macos.py','build-crewd-native-macos.py','write-codex-first-provenance.py','crewd-macho-seal-equivalence.py']
 
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def save(p,v):p.write_text(json.dumps(v,sort_keys=True,indent=2)+'\n')
@@ -98,7 +98,7 @@ def prepare(args,repo):
  return out,native,proof
 
 def command(snapshot,args):
- return ['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme',SCHEME,'-configuration',CONFIG,'-destination','platform=macOS,arch=arm64','-derivedDataPath',args.derived_data,'-clonedSourcePackagesDirPath',args.spm,'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','ARCHS=arm64','CODE_SIGNING_ALLOWED=NO','CODE_SIGN_IDENTITY=-','CODE_SIGN_STYLE=Manual','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=','ENABLE_HARDENED_RUNTIME=YES','ENABLE_DEBUG_DYLIB=NO','ENABLE_PREVIEWS=NO','PENDINGCREW_VALIDATION_SOURCE_REF='+args.ref]
+ return ['/usr/bin/xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme',SCHEME,'-configuration',CONFIG,'-destination','platform=macOS,arch=arm64','-derivedDataPath',args.derived_data,'-clonedSourcePackagesDirPath',args.spm,'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','ARCHS=arm64','CODE_SIGNING_ALLOWED=NO','CODE_SIGN_IDENTITY=-','CODE_SIGN_STYLE=Manual','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=','ENABLE_HARDENED_RUNTIME=YES','ENABLE_DEBUG_DYLIB=NO','ENABLE_PREVIEWS=NO','PENDINGCREW_VALIDATION_SOURCE_REF='+args.ref]
 
 def main():
  args=arguments();repo=pathlib.Path(__file__).resolve().parents[2];out,native,proof=prepare(args,repo)
@@ -124,7 +124,7 @@ def main():
  dependencies=native.regular_inventory(deps)
  if native.external_dependency_inventory(spm,pins)!=dependencies:raise ValueError('SPM differs before build')
  argv=command(snapshot,args);native.query(argv+['-showBuildSettings','-json'],snapshot,out/'settings.log',out/'settings.json');settings=settings_check(json.loads((out/'settings.json').read_text()),args.ref)
- tool={'xcodeVersion':native.query(['xcodebuild','-version'],snapshot,out/'toolchain.log'),'sdkVersion':native.query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'toolchain.log')};sdk_check(settings,tool);save(out/'toolchain.json',tool)
+ tool={'xcodeVersion':native.query(['/usr/bin/xcodebuild','-version'],snapshot,out/'toolchain.log'),'sdkVersion':native.query(['/usr/bin/xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'toolchain.log')};sdk_check(settings,tool);save(out/'toolchain.json',tool)
  manifest={'format':1,'sourceRef':args.ref,'sourceSelection':'committed-archive','files':sources,'sourceInputDigest':proof.digest(sources),'rustInputDigest':proof.digest(rust),'dependencyFiles':dependencies,'dependencyInputDigest':proof.digest(dependencies),'packagePins':pins,'externalSPM':args.spm,'derivedData':args.derived_data,'scheme':SCHEME,'configuration':CONFIG,'compileCondition':CONDITION,'backendProfile':args.backend_profile,'backendBuildConfiguration':witness['buildConfiguration'],'command':argv+['build'],'toolchain':tool};save(out/'build-inputs.json',manifest)
  native.run(argv+['build'],snapshot,out/'build.log')
  after=native.external_dependency_inventory(spm,pins)
@@ -136,12 +136,22 @@ def main():
  info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
  if info.get('CFBundleIdentifier')!=IDENTIFIER or info.get('PendingCrewDeliveryValidation') is not True or info.get('PendingCrewSourceRef')!=args.ref or info.get('BuildStampCommit')!=args.ref:raise ValueError('actual compiled Info marker/ID/source differs; do not repair it after build')
  exe=app/'Contents/MacOS'/info['CFBundleExecutable'];shutil.copy2(exe,out/'gui.pre-sign');save(out/'gui-pre-sign-products.json',products(app));helper=app/'Contents/Helpers/crewd';helper.parent.mkdir(exist_ok=True);shutil.copy2(out/'crewd.pre-sign',helper)
- native.run(['codesign','--force','--deep','--sign','-','--options','runtime',str(app)],snapshot,out/'adhoc-sign.log');native.run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
- native.query(['codesign','--display','--verbose=4',str(app)],snapshot,out/'signature-display.log');native.query(['codesign','--display','--entitlements',':-',str(app)],snapshot,out/'entitlements.log',out/'entitlements.plist')
+ preseal=out/'seal-pre-sign-code';preseal.mkdir(mode=0o700);code_sources=[]
+ for row in loaded_code(app,products(app)):
+  if pathlib.PurePosixPath(row['path']).name=='CodeResources':continue
+  target=preseal/row['path'];target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(app/row['path'],target)
+  if sha(target)!=row['sha256']:raise ValueError('pre-seal code capture changed')
+  code_sources.append(row)
+ save(out/'seal-code-inputs.json',code_sources)
+ native.run(['/usr/bin/codesign','--force','--deep','--sign','-','--options','runtime',str(app)],snapshot,out/'adhoc-sign.log');native.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
+ native.query(['/usr/bin/codesign','--display','--verbose=4',str(app)],snapshot,out/'signature-display.log');native.query(['/usr/bin/codesign','--display','--entitlements',':-',str(app)],snapshot,out/'entitlements.log',out/'entitlements.plist')
  ent=plistlib.loads((out/'entitlements.plist').read_bytes()) if (out/'entitlements.plist').read_bytes().strip() else {}
  if ent:raise ValueError('validation bundle must not carry production/debug/shared entitlements')
+ seal=load(repo/'scripts/dev/crewd-macho-seal-equivalence.py','validation_seal');equivalence=[]
+ for row in code_sources:equivalence.append({'path':row['path'],'comparison':seal.equivalent_files(preseal/row['path'],app/row['path'])})
+ save(out/'seal-code-equivalence.json',equivalence)
  final=products(app);save(out/'packaged-products.json',final)
- files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist']
+ files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json']
  save(out/'build-provenance.json',{'format':1,'sourceRef':args.ref,'appDirectory':app.name,'files':{name:sha(out/name) for name in files},'allLoadedCode':loaded_code(app,final),'actualArtifactBuilt':True,'signatureMode':'explicit-adhoc','publisherEligible':False,'actualKeychainUsed':False,'AppLaunched':False,'installed':False,'published':False})
  checker=load(repo/'scripts/dev/check-crewd-delivery-validation-macos.py','validation_consumer');checker.check(out,args.ref)
  print('BUILT private DeliveryValidation artifact; no Keychain/App launch/install/publisher action:',app)

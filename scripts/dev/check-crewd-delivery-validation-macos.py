@@ -18,12 +18,14 @@ def check(base,ref):
  manifest=json.loads((base/'build-inputs.json').read_text());receipt=json.loads((base/'build-provenance.json').read_text())
  if type(manifest.get('format')) is not int or manifest['format']!=1 or type(receipt.get('format')) is not int or receipt['format']!=1:raise ValueError('closed proof version required')
  if manifest.get('sourceRef')!=ref or receipt.get('sourceRef')!=ref or manifest.get('sourceSelection')!='committed-archive':raise ValueError('explicit source attribution mismatch')
- required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist'}
+ required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json'}
  if set(receipt.get('files',{}))!=required:raise ValueError('complete evidence file set required')
  for name,digest in receipt['files'].items():
   p=base/name
   if p.is_symlink() or not p.is_file() or b.sha(p)!=digest:raise ValueError('proof evidence bytes mismatch: '+name)
- snapshot=base/'source-inputs';sources=native.regular_inventory(snapshot)
+ snapshot=base/'source-inputs'
+ if snapshot.is_symlink() or (base/'dependency-inputs').is_symlink():raise ValueError('evidence snapshot aliases forbidden')
+ sources=native.regular_inventory(snapshot)
  paths=b.git(repo,'ls-tree','-r','--name-only',ref).decode().splitlines()
  actual=[{'path':name,'sha256':__import__('hashlib').sha256(b.git(repo,'show',ref+':'+name)).hexdigest()} for name in sorted(paths)]
  if sources!=actual or manifest['files']!=sources or manifest['sourceInputDigest']!=proof.digest(sources):raise ValueError('all Git blobs/source snapshot mismatch')
@@ -54,7 +56,7 @@ def check(base,ref):
  tool=json.loads((base/'toolchain.json').read_text())
  if tool!=manifest['toolchain'] or set(tool)!= {'xcodeVersion','sdkVersion'} or not all(tool.values()):raise ValueError('toolchain evidence mismatch')
  b.sdk_check(settings,tool)
- text=logged(base/'toolchain.log',[['xcodebuild','-version'],['xcrun','--sdk','macosx','--show-sdk-version']])
+ text=logged(base/'toolchain.log',[['/usr/bin/xcodebuild','-version'],['/usr/bin/xcrun','--sdk','macosx','--show-sdk-version']])
  if not all(value in text for value in tool.values()):raise ValueError('actual toolchain output missing')
  name=receipt.get('appDirectory')
  if name!='PendingCrew Delivery Validation.app':raise ValueError('dedicated package identity missing')
@@ -72,15 +74,29 @@ def check(base,ref):
  if final!=json.loads((base/'packaged-products.json').read_text()) or b.loaded_code(app,final)!=receipt.get('allLoadedCode'):raise ValueError('complete sealed product/loaded code inventory mismatch')
  loaded={row['path'] for row in receipt['allLoadedCode']}
  if not {'Contents/MacOS/'+executable,'Contents/Helpers/crewd','Contents/_CodeSignature/CodeResources'}.issubset(loaded):raise ValueError('complete GUI/helper/seal objects missing')
- logged(base/'adhoc-sign.log',[['codesign','--force','--deep','--sign','-','--options','runtime',str(app)]])
- logged(base/'signature-check.log',[['codesign','--verify','--deep','--strict',str(app)]])
- signature=logged(base/'signature-display.log',[['codesign','--display','--verbose=4',str(app)]])
+ seal=b.load(repo/'scripts/dev/crewd-macho-seal-equivalence.py','validation_seal_consumer')
+ code_inputs=json.loads((base/'seal-code-inputs.json').read_text());preseal=base/'seal-pre-sign-code'
+ if preseal.is_symlink() or not preseal.is_dir():raise ValueError('pre-seal code archive missing or aliased')
+ staged=native.regular_inventory(preseal)
+ if staged!=sorted(code_inputs,key=lambda row:row['path']):raise ValueError('complete pre-seal code bytes differ from declared inputs')
+ if {row['path'] for row in code_inputs}!={row['path'] for row in receipt['allLoadedCode'] if pathlib.PurePosixPath(row['path']).name!='CodeResources'}:raise ValueError('not every final loaded MachO has a pre-seal input')
+ baseline={row['path']:row for row in presign};comparisons=[]
+ for row in code_inputs:
+  name=row['path'];before=preseal/name;after=app/name
+  if name=='Contents/Helpers/crewd':
+   if b.sha(before)!=witness['binarySHA256'] or before.read_bytes()!=(base/'crewd.pre-sign').read_bytes():raise ValueError('staged helper is not the exact strong normal binary')
+  elif baseline.get(name,{}).get('sha256')!=row['sha256']:raise ValueError('staged GUI code is not the actual Xcode target code')
+  comparisons.append({'path':name,'comparison':seal.equivalent_files(before,after)})
+ if comparisons!=json.loads((base/'seal-code-equivalence.json').read_text()):raise ValueError('producer equivalence differs from independent recomputation')
+ logged(base/'adhoc-sign.log',[['/usr/bin/codesign','--force','--deep','--sign','-','--options','runtime',str(app)]])
+ logged(base/'signature-check.log',[['/usr/bin/codesign','--verify','--deep','--strict',str(app)]])
+ signature=logged(base/'signature-display.log',[['/usr/bin/codesign','--display','--verbose=4',str(app)]])
  if 'Identifier='+b.IDENTIFIER not in signature or 'Signature=adhoc' not in signature or 'TeamIdentifier=not set' not in signature or 'runtime)' not in signature or not re.search(r'^CDHash=[0-9a-f]{40}$',signature,re.M):raise ValueError('actual ad-hoc identity/runtime/code hash missing')
- logged(base/'entitlements.log',[['codesign','--display','--entitlements',':-',str(app)]])
+ logged(base/'entitlements.log',[['/usr/bin/codesign','--display','--entitlements',':-',str(app)]])
  content=(base/'entitlements.plist').read_bytes()
  if content.strip() and plistlib.loads(content):raise ValueError('production/debug/shared entitlements entered validation product')
  if receipt.get('actualArtifactBuilt') is not True or receipt.get('signatureMode')!='explicit-adhoc' or any(receipt.get(key) is not False for key in ['publisherEligible','actualKeychainUsed','AppLaunched','installed','published']):raise ValueError('evidence layer or execution boundary mismatch')
- subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
+ subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)],check=True)
  print('PASS complete DeliveryValidation source/config/SPM/strong normal/products/loaded code/ad-hoc seal; no persistent runtime or publisher claim')
  return {'sourceRef':ref,'sourceCount':len(sources),'signatureMode':'explicit-adhoc','persistentRuntimeProven':False,'publisherEligible':False}
 
