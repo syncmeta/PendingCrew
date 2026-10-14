@@ -26,6 +26,8 @@ M5 剩余双平台物理流程与 Linux 正式12→13采用 client source-review
 
 人类在专用可见终端完成原批准scope的实际信任确认：04-human-visible-reviewed-8i2b1c8v实际 private.hasTrustDialogAccepted=true，三份稳定非空d.ts，readPending为空；observer未变、mockRequests为空、没有模型提示，自有process group已TERM/KILL并reaped。此前04-human-visible-reviewed-s_c29ydq在确认前中止，trustfalse/types0，原失败保留。只证明该隔离目录信任与元数据字节获取，完整接口/ACP/审批/恢复兼容仍待，后端只读实际类型继续既定模块，不能扩为真实账号或模型启动许可。
 
+根已读取 actual SDK 2.1.296 ABI整块契约并裁定：M4完整历史/ACP恢复需要独立持久历史投影，批准显式schema15在14冻结后顺序14→15，不改冻12/13及批准14DDL。15只承载实际native rows/source/session/generation/coverage，不成为第二WorkBook或effect账。SDK newest4096与可被skip的append观察不能证明完整历史；桥自增序列连续也不证明native全rows，含新空origin仍需实际source完整cut/row census或已验证owned稳定transcript及parent/fork/compaction祖先链。缺证/丢事件/未知block必须保持incomplete且M4未完成，不静默截断。1MiB正文仍无损。后端先完整方案/source/fake与实际格式证明计划；新SDK调用仍须具体隔离no-model scope核授权，真实模型/账号未授权。
+
 ## 2026-10-14 新会话明确恢复与三线固定责任
 
 用户在新会话明确要求从现有检查点持续推进完整工程。此授权恢复下节停手记录所暂停的工程，不抹去原始停手、失败及未知证据。新目标保持 active；主代理只统筹范围、接口、冻结、整合与交付，不代写日常实现。
