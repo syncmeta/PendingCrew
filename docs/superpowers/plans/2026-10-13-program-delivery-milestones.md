@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 新normal/Apple12来源接受但默认回归真实阻断
+
+准确8c906dc50b2993e71ddeba186799e0dbeec3dfca新strongnormal06实际84140 terminal0/46.68s；binarybf92e57d26d03c0579c7c12c517f02545c7d8287373c1458f4181efeb60bbd67/witness8b9aac1f8d04e52f5da958b2a7b5c1b72484ec03a1acc33e3f6d710193fac9b7/390digesta00d2ae94e234d9381c7249945a39cb08c398dad9ebab08f2733c5177316bb9d、raw12ownfresh/defaultDebug全来源独验接受，报告/private/tmp/pcw-M14-normal8c906dc5-independent-06.json。完整/private/tmp/pcw-original-frontend-candidate14-8c906dc5-12队列28157三target实际0，1346Gitinputs/3738SPM前后/GUI与helper compiled8c/六postsign加载文件及deepseal/两unsignedmobile SDK配置产品来源独核齐；whole报告/private/tmp/pcw-original-front14-12-wholeApple-independent.json SHA9d7606da50d3b764b4b27d855b1108fcc932a5f19e0d7694b80ee654d30b8a95。来源准备层接受，不冒新窗口/运行/设备/最终产品。
+
+唯一默认workspace双hostrun38610743724实际terminalFAIL/精确8c：两OS均2653run/2644pass/9fail/12skip；Linux2flakyfail+1leaky、Mac3flakyfail，fmt/clippy过但nextest未过、doctest未执行。并集11不同case，七共同/Linux二/Mac二；不是18个不同bug，更不是allfeatures已验。原完整日志/private/tmp/pcw-core14-default-linux-8c906-job-failure-01.log、对应macos同名日志；后端整块因果修复在global移动源，尚未freeze，Root仅doc保存不带dirtyRust，不盲重CI。
+
+已核真实conn shutdown缺口：readloop结束dropguard令scope.close同时使writer在queued原response/finalevent flush前退出。裁决readEOF立即物理fence/lease权限失效保持，输出可有限drain原accepted请求/事件、同原ID/noReplay/no新派发；不得延迟权限关闭救flush或削断言。corrupt源保护要恢复typedCorrupt不能吞Invalid。历史M5测试固定13/pre-v13陈旧只更新版本链契约，已验M5/真实迁移/Linux全链复用。kill9活daemon observer不能RW重开生产库，须正式read路径/准确因果。
+
+sim默认栈溢出本机真实复现，不加栈/超时掩盖，作者定位poll/frame链。Mac custody真实REPORT read EAGAIN，birth/durable-beforeACK原guard不削，用有限frame readiness；lost rollback全库snapshot受独立actor合法状态更新/owner_lost跟进影响，需真实actor观察cut与目标Tx零effects/完成后render拒，不删表/减断言。QA完整ordering矩阵已交作者，源码/fixture由唯一作者修；整块freeze后质量影响验收，再生成新准确来源，旧06/12/8c原FAIL不能重标。
+
+12未launch，A11/B83979现场保持；B人类前台确认与SDK06新动作授权两问题均尚未答复，不作同意。现候选codeguest窄脚本仅prepare、不为已知将变8c重复运行，最终新normal后具体hash审再核。两实际iPhone断连/DDI不可用/无iPad、unsigned移动非安装就绪；S仅正式TLS/fakeClaudePTY计划待最终包/normal/真实route。Native15源码backend737独立继续、DDL未激活/SDK未stage或调用/无模型。main产品、安装/日常切换/公开发布、真机和完整ACP仍未交付。
+
 ## 2026-10-15 完整客户端投影与Core14标准检查源冻结
 
 完整f047bdcf49f4d8d126b75ee39935aca01e34077c已独立接受并精准整合4ba5e7b895d9dc0a35328ed4488cfcf79dfde4ef：11Swift/369完整输入三平台实际typecheck0、真实A原prepared/outcome/store副本journal/projection复水0RPC/A原字节不改；实际receipt /human选择、标准kind名称、capturedauthorityepoch与channelsready通知、原request只读恢复一次收口。源层不冒新包/实际窗口，旧11实际projectionFAIL现场保持不重发。报告/private/tmp/pcw-app14-projection-source-review-01/independent-acceptance.json。
