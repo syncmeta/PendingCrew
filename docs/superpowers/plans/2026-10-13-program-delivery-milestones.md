@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 原前端14组合与实际正常构建检查点
+
+客户端修复冻结7d5350396440cc8ab08790f173253f31aff23b4e已普通推送；07窗口发现的默认目录/旧sidebar与sweep/正式Todo composer/channel-folder四项源码切线独审接受，但尚无对应新包或窗口复验。根决定不再生成短寿命13中间候选，客户端按公共合同02组合完整14适配器及正式原前端配置，复用原Xcode/SPM目录。生产配置仍待实现与实际交付，不把旧candidate memory vault/临时namespace当正式产品。
+
+后端实际干净WIP86e3d77ecefd35ee731ae2ebe66fed57a20b077b已普通推送origin。新增权限、签名前端可信重连、ownedQuit与持久receipt/恢复源码切线独审接受，四DTO同不可变合同02；源码报告 /private/tmp/pcw-M14-authority-receipt-source-review-86e3d77e-01.json。正常默认Debug实际构建40.10s终态0，完整390输入/11自有包12targets全fresh=false、原Cargo记录和3sidecar独核接受；binary SHA cc928cdea54c966deac88105dd46d397050fac5eb2bc2cdddd0c07ad43535576，input digest502e5fc72e1914c402be86749b9d2eadfbe93d09c0a108adc8256f693b43c537，witness48f67217704ac583cafce56e55174cfe5c6cccf928bbbf91b3af97b7e2fa0ee1。报告 /private/tmp/pcw-M14-normal86-independent-provenance-01.json；产物 /private/tmp/pcw-M14-normal-wip86e3d77e-fresh-01/crewd-presign。此前dirty诊断01不作为此证明。
+
+这仅关闭真实normal来源门禁，不是整个14冻结。作者实际生产public03发现ownedHibernationRecord内存Restart与耐久Hibernate不一致，已修为86，实际38790复验owned退出/真实childbirth/restart/historicalunknown/query不重放；结果未终态接受。正式13→14迁移、真实签名前端新PID/权限反例、原App完整窗口及完整Native ACP producer/历史/审批仍待。旧稳定业务、Linux13和CI不因此重跑；额外all-features历史ENOSPC仍未验。
+
+精确终态自有object清单05经独立核与根批准实际回收149paths，79实际bin哈希不变，实际增加160612352B；仅此已批准清单。normal86之后当前约1.3GiB，不宣称容量风险消失，不扩大SDK/第三方缓存回收。Rust目标仍唯一后端作者，客户端重构期间不抢编译窗口。根整合树仍69d267c7产品输入（原5cdf/后台13），尚未把7d/86源码整合或合产品main、安装、切日常数据、发布。
+
 ## 2026-10-14 原窗口整块发现与14可信重连裁决
 
 根完整受管Linux维护整合已普通推送5951c4c4；该模块实际平台及独证接受，无额外CI/编译。07已批准隔离上下文真实Human-only/privatework流程显示actualcrew/lobby首消息与preparedjournal replyObserved、本群需求1→无owner/noexecute计划W2且Todo/进展同W2、Doc原文create/read与独立Docfolder（其他view不混）。这只支持对应真实原UI接线，不等窗口整体验收。
