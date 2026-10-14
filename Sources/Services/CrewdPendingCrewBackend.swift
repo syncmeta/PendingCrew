@@ -11,12 +11,27 @@ final class CrewdPendingCrewBackend: PendingCrewBackend {
     private var messages: [String: [CrewdValue]] = [:]
     init(workspace: CrewdWorkspace) {
         self.workspace = workspace
-        selectionToken = workspace.$channelID.dropFirst().sink { [weak self] _ in
-            Task { @MainActor [weak self] in self?.listeners.values.forEach { $0.yield(()) } }
-        }
+        selectionToken = Publishers.CombineLatest3(workspace.$crewID, workspace.$channelID, workspace.$channels)
+            .dropFirst().sink { [weak self] _ in
+                guard let self else { return }
+                let epoch = self.workspace.observationGeneration
+                // @Published fires before assignment. Yield after the complete
+                // response has installed both IDs and validated Channel rows.
+                Task { @MainActor [weak self] in
+                    guard let self, self.workspace.acceptsObservation(epoch),
+                          !self.workspace.channelID.isEmpty,
+                          self.workspace.channels.contains(where: { $0["id"].string == self.workspace.channelID }) else { return }
+                    self.listeners.values.forEach { $0.yield(()) }
+                }
+            }
         changeToken = workspace.authorityEvents.sink { [weak self] event in
             guard event.0.hasPrefix("message.") || event.0.hasPrefix("session.") || event.0.hasPrefix("channel.") || event.0 == "events.lagged" else { return }
-            Task { @MainActor [weak self] in self?.listeners.values.forEach { $0.yield(()) } }
+            guard let self else { return }
+            let epoch = self.workspace.observationGeneration
+            Task { @MainActor [weak self] in
+                guard let self, self.workspace.acceptsObservation(epoch) else { return }
+                self.listeners.values.forEach { $0.yield(()) }
+            }
         }
     }
     private func call(_ method: String, _ fields: [String: CrewdValue] = [:]) async throws -> CrewdValue {

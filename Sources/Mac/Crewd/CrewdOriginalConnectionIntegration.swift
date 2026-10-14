@@ -12,6 +12,7 @@ struct CrewdOriginalConnectionIntegration: ViewModifier {
 private struct CrewdOriginalConnectionControls: ViewModifier {
     @ObservedObject var window: CrewdRemoteWindow
     let directory: URL
+    @EnvironmentObject private var crewStore: CrewStore
     @State private var admin: CrewdRemoteAdmin?
     @State private var previousAdmins: [CrewdRemoteAdmin] = []
     @State private var managing = false
@@ -44,7 +45,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
         }.sheet(isPresented: $recovering) {
             if let current = window.workspace {
-                ScrollView { CrewdPublicRecoveryView(workspace: current).padding(20) }.frame(minWidth: 520, minHeight: 360)
+                ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)
             }
         }.sheet(isPresented: $trusting) {
             if let current = window.workspace { CrewdLocalTrustView(workspace: current).padding(20).frame(minWidth: 500) }

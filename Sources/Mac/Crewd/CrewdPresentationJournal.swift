@@ -136,7 +136,15 @@ final class CrewdPresentationJournal {
         let result = Outcome(format: 1, observationID: record.id, preparedSHA256: Self.hash(try Data(contentsOf: prepared)), state: state, observedAt: Date(), detail: detail)
         try Self.immutableWrite(encoder.encode(result), to: directory.appendingPathComponent("outcomes").appendingPathComponent(record.id.uuidString.lowercased() + ".json"))
     }
-    func unknownRecords() throws -> [Prepared] {
+    func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
+    /// Original successful-observation snapshots remain available for lookup;
+    /// their existence is not a durable server success or a replay permission.
+    func firstMessageRecords() throws -> [Prepared] {
+        Array(try records(includeObservedFirstMessages: true)
+            .filter { $0.method == "command.submit" && $0.params["command"]["operation"].string == "crew.createFirstMessage" }
+            .sorted { $0.preparedAt > $1.preparedAt }.prefix(64))
+    }
+    private func records(includeObservedFirstMessages: Bool) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -149,6 +157,8 @@ final class CrewdPresentationJournal {
             let outcome = try decoder.decode(Outcome.self, from: Data(contentsOf: result))
             guard outcome.format == 1, outcome.observationID == record.id, outcome.preparedSHA256 == Self.hash(bytes) else { throw StorageError.refused("原前端历史结果与提交快照不符。") }
             if outcome.state == "unknown" { rows.append(record) }
+            else if includeObservedFirstMessages, outcome.state == "replyObserved",
+                    record.method == "command.submit", record.params["command"]["operation"].string == "crew.createFirstMessage" { rows.append(record) }
             else if !["replyObserved", "refused"].contains(outcome.state) { throw StorageError.refused("原前端历史出现未知状态。") }
         }
         return rows

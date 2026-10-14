@@ -108,7 +108,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                         ForEach(visibleChannels.compactMap { $0["id"].string }, id: \.self) { id in
                             if let row = visibleChannels.first(where: { $0["id"].string == id }) {
                                 Button { workspace.selectConversation(id) } label: {
-                                    Text(row["name"].string ?? row["title"].string ?? id)
+                                    Text(CrewdConversationProjection.title(row))
                                         .fontWeight(id == workspace.channelID ? .semibold : .regular)
                                 }.buttonStyle(.bordered)
                             }

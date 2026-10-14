@@ -1,0 +1,19 @@
+# Original frontend first-message projection source cut
+
+This is a source-review checkpoint, not a new package or a successful App window. The sealed 11 package compiled `440ffc67`, its helper compiled `8a1255ac`; both remain unchanged. A GUI 72180/helper 72198 and the original failed projection are retained.
+
+## Actual cause and resulting source behavior
+
+A request `eaf40f38-5c47-4226-bd6d-bf457f2a7417` committed one crew and one message. Its authoritative message channel is `crew-53bd71f819e847cfac4fadb414fcabef/human`. The original frontend subsequently selected `/lobby`; sidebar previews only read `/lobby`. The two standard channels intentionally have empty names. The existing adapter listened only for channel-ID publication, which occurred before the validated channel rows were installed and did not notify the original chat when those rows arrived.
+
+The cut selects the exact channel returned by the atomic receipt, retains that choice in both original Mac and iPad roots, uses authoritative channel kind for standard display names, and reads readable channel messages for sidebar previews. The adapter observes channel-row readiness together with crew/channel IDs, defers the Published pre-assignment callback, and checks the captured authority generation. Sidebar asynchronous reads check the same generation before accepting any result. Group Todo continues to bind the actual selected channel. No ledger or backend data is changed by these projections.
+
+Original first-message prepared/outcome snapshots remain immutable. The recovery view can rehydrate their original request/db/runtime/command and perform read-only receipt lookup, then explicitly open the original crew/channel after current authority readability checks. It does not resubmit, infer current presence from a historical receipt, or promote a local reply observation to server success. An already settled outcome is not overwritten by the Unknown-acknowledgement action. A late callback cannot steal selection after another user selection or connection generation.
+
+## Evidence and remaining gate
+
+`/private/tmp/pcw-app14-original-projection-controls-01` contains copied actual A SQL fact fields and original prepared/outcome bytes, exact production projection/journal source inputs, a Foundation control executable and result. It confirms the intentional empty names, actual human channel, preservation of original request/runtime and exact immutable bytes, settled first-message rehydration, and no Unknown promotion. There are zero RPC calls and no writes to A. The first control-driver compile error is retained; the corrected driver completed successfully.
+
+`/private/tmp/pcw-app14-projection-whole-typecheck-03` binds final changed-source SHA values and the complete original source list in each actual Mac, iPhoneOS and Simulator compiler configuration. It reuses the existing DerivedData and SPM caches. All three final typechecks terminated with exit 0. This is a typecheck gate only; full linking, new immutable source proof, signing and affected real-window verification remain necessary. Earlier typecheck 01/02 evidence belongs only to its recorded copies. `/private/tmp/pcw-app14-projection-source-review-01/input-binding.json` records the author base and final source-input hashes.
+
+The next package waits for the backend complete lint-source cut and its new accurate normal witness. Old normal05 and Linux1533 evidence retain their original compiled inputs. The original A request will be read back and its message displayed through the new projection; it must not be automatically replayed. Unchanged requirement/plan/document CRUD and the completed Linux14 unit need no repeated full verification. New-PID admission, non-owned/owned Quit, terminal input/resize/revocation, actual devices and production signing/vault/installation remain distinct delivery gates.
