@@ -23,11 +23,28 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let selected = self.crewdWindow.workspace
-                if self.crewdBackend?.workspace !== selected { self.crewdBackend = selected.map(CrewdPendingCrewBackend.init) }
-                if let selected, let directory = self.crewdDirectory {
+                if let selected {
                     selected.originalJournalRequired = true
+                    guard let directory = self.crewdDirectory else {
+                        self.crewdBackend = nil
+                        let message = "当前后台数据目录配置不可用，连接未建立。"
+                        if self.crewdWindow.error != message { self.crewdWindow.error = message }
+                        self.objectWillChange.send()
+                        return
+                    }
+                    let epoch = selected.observationGeneration, connection = selected.client.connectionEpoch
                     await selected.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions"))
+                    guard self.crewdWindow.workspace === selected, selected.acceptsObservation(epoch), selected.client.connectionEpoch == connection else { return }
+                    guard selected.originalJournalReady else {
+                        self.crewdBackend = nil
+                        let message = selected.error ?? "原提交历史尚未就绪；连接仅供只读核对。"
+                        if self.crewdWindow.error != message { self.crewdWindow.error = message }
+                        self.objectWillChange.send()
+                        return
+                    }
                 }
+                guard self.crewdWindow.workspace === selected else { return }
+                if self.crewdBackend?.workspace !== selected { self.crewdBackend = selected.map(CrewdPendingCrewBackend.init) }
                 self.objectWillChange.send()
             }
         }
@@ -35,7 +52,6 @@ final class AppModel: ObservableObject {
     func connectCrewdAuthority() async {
         guard usesCrewdAuthority, !connectingAuthority else { return }
         connectingAuthority = true; defer { connectingAuthority = false }
-        #if os(macOS)
         guard let directory = crewdDirectory else {
             crewdWindow.error = "当前后台数据目录配置不可用，连接未建立。"
             return
@@ -43,6 +59,7 @@ final class AppModel: ObservableObject {
         do { try CrewdFrontendIsolation.prepareAuthority(directory: directory) }
         catch { crewdWindow.error = error.localizedDescription; return }
         crewdWindow.error = nil
+        #if os(macOS)
         await crewdWindow.selectLocal(directory: directory)
         #else
         crewdWindow.refresh()
@@ -50,7 +67,14 @@ final class AppModel: ObservableObject {
         #endif
         if let workspace = crewdWindow.workspace {
             workspace.originalJournalRequired = true
-            if let directory = crewdDirectory { await workspace.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions")) }
+            let epoch = workspace.observationGeneration, connection = workspace.client.connectionEpoch
+            await workspace.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions"))
+            guard crewdWindow.workspace === workspace, workspace.acceptsObservation(epoch), workspace.client.connectionEpoch == connection else { return }
+            guard workspace.originalJournalReady else {
+                crewdBackend = nil
+                crewdWindow.error = workspace.error ?? "原提交历史尚未就绪；连接仅供只读核对。"
+                return
+            }
             if crewdBackend?.workspace !== workspace { crewdBackend = CrewdPendingCrewBackend(workspace: workspace) }
         }
     }

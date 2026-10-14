@@ -77,7 +77,7 @@ def verify_candidate_entry(snapshot):
  if not configuration.is_file() or not credentials.is_file(): raise ValueError('candidate authority/credential factories missing')
  storage=configuration.read_text();vault=credentials.read_text()
  if ('CrewdFrontendIsolation.prepare()' not in body or 'PendingCrewApp.main()' not in body
-     or '#if PENDINGCREW_NATIVE_CANDIDATE && os(macOS)' not in storage
+     or ('#if PENDINGCREW_NATIVE_CANDIDATE && os(macOS)' not in storage and '#if PENDINGCREW_NATIVE_CANDIDATE\n' not in storage)
      or 'PendingCrewNativeCandidates' not in storage or 'PendingCrewCore' not in storage
      or '#if PENDINGCREW_NATIVE_CANDIDATE' not in vault or 'return isolated' not in vault
      or 'return CrewdRemoteKeychain()' not in vault):

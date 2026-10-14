@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 原前端候选配置与耐久关闭完整单元接受、最终组合冻结
+
+客户端5431dd3957bb1fc1e77b5e0d2cf3809a74161b3c已独立质量接受，报告 `/private/tmp/pcw-mobile-staging-source-unit-01/independent-whole-source-acceptance-06.json` SHA2ae1f44d037165e3e3f051bba9ccb52d9f8d28cda5d38642843c93c99465dc06；binding06 SHA91b1a7a850e1e484d6f8bb7f80f74affaa5af43b140c0c2dcf3a080a4eabef9e。原target新增NativeCandidate配置/scheme、unsigned/noLocal/no生产共享容器、sourceRef缺坏失败关闭、来源目录与显式同DBauthority恢复；required journal完整恢复后才发布可写adapter，失败只读与typed notSubmitted、晚代际回调拒及无反馈重试保持。12路径中10逐字复用4c全配置/FS证据；仅MacQuit与记录变化，最终Mac369输入typecheck0、四生产方法控制通过。原4c ownedQuit真实回归报告保留，未把旧移动typecheck或包12重标。
+
+Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只准固定hibernate envelope沿正式receipt，同原journal未知结果保留；发送前重核ownership/peer，普通sleep写仍拒。晚结果只等待原Process且字段仅原epoch/backend仍同才清，非owner与journalFail零submit/Stop，晚epoch不清新owner。controls是真实自有sleep子进程birth+模型RPC/peer，不冒实际App/daemon Quit。
+
+根按ab083→5431完整patch整合并核12源SHA逐个相同，crewd全树仍逐字准确0a6a0521330ace1647b2678c09d0738777aede1b，不带Native15。保存本次完整组合clean fullref后唯一后端作者生成defaultDebug强normal、390输入/raw11pkg12targets/fresh/toolchain/flags/features/source前后；独核后客户端沿原Xcode/SPM缓存一次完整Mac/iPhoneOS/sim新不可变候选，冻结期间global所有源码/文档停止修改。根只派发一次必要默认双host验证含doctest，两Linux安装入口false，已验Linux恢复与稳定业务不重复。旧8c normal06/package12及原CI失败保准确来源，额外all-features范围仍未验。
+
+当前A72180/helper72198与B83979原kernelbirth/path只读复核保持，无UI输入或Quit。B人工前台确认、SDK06具体新动作授权仍未答；Native mandatory producer/完整历史/审批/恢复、真实新App/Pub/窗口与设备、main产品、安装/日常切换和公开发布仍未完成。根已审Native架构方案，只同意A Core唯一producer继续研究、B真实PTY为必要外壳，C不实现不降目标；额外producer故障取证另列具体scope待审授权。
+
 ## 2026-10-15 客户端整块配置验收阻断与Native15强制入口待决
 
 客户端原target候选配置与journal发布整块4c5f06726be1e0969706f4a895d32d14f183c21b静止；12源绑定、9settings/ordinary六配置与sourcephase逐值同、stamp6/namespace7/实际私有目录/A原历史副本0RPC保全、最终369输入三平台typecheck0已核。独立04报告 `/private/tmp/pcw-mobile-staging-source-unit-01/independent-whole-source-review-04.json` SHA92f50fda22271cd17162a92d1ae5306e902c5a4bc84a6af17246ec22d1c84c14，但整块不接受、不整合、不打包：真实ownedQuit先sleeping=true，使新增requiredjournalReady拒绝随后正式hibernate。作者同批修，须进入sleeping前捕获并再核ownbirth/scope/epoch/runtime与journal就绪；保持正式receipt/Unknown/有限关闭、不开放其它sleeping写、不raw绕日志、不授nonowner休眠权限。修后只做实际影响复验，未变配置证据复用。原socket日志失败只读/typed notSubmitted规则继续，不Kill/Stop后台。

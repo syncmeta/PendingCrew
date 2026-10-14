@@ -7,7 +7,21 @@ final class CrewdWorkspace: ObservableObject {
     let authorityEvents = PassthroughSubject<(String, CrewdValue), Never>()
     var originalJournalRequired = false
     private var originalJournal: CrewdPresentationJournal?
-    private var preparingJournal = false
+    private var preparingJournal: UUID?
+    private var journalFailureConnection: UUID?
+    var originalJournalReady: Bool {
+        guard originalJournal != nil, let scope = presentationScope,
+              preparingJournal == nil, acceptsObservation(generation) else { return false }
+        if client.capabilities.contains("command.receipts"), scope.databaseID != client.runtimeIdentity["dbId"].string { return false }
+        if dataDirectory == nil {
+            let current = client.authorityBinding
+            guard scope.authorityID == current["authorityId"].string,
+                  scope.databaseID == current["dbId"].string,
+                  scope.grantID == current["grantId"].string,
+                  scope.grantRevision == current["grantRevision"].string else { return false }
+        }
+        return true
+    }
     @Published private(set) var durableUnknown: [CrewdPresentationJournal.Prepared] = []
     @Published private(set) var originalFirstMessageHistory: [CrewdPresentationJournal.Prepared] = []
     @Published private(set) var presentationScope: CrewdPresentationJournal.Scope?
@@ -54,6 +68,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     func publicCommandBinding(for connection: CrewdClient) throws -> CrewdPublicCommands.Binding {
         guard !retired, client.connected, connection.connected,
+              (!originalJournalRequired || originalJournalReady),
               connection.capabilities.contains("command.receipts"),
               let scope = presentationScope,
               let db = connection.runtimeIdentity["dbId"].string, !db.isEmpty,
@@ -367,13 +382,67 @@ final class CrewdWorkspace: ObservableObject {
               client.runtimeIdentity["runtimeBindingId"].string == binding.runtimeBindingID else {
             throw CrewdClientError(message: "本 App 的后台尚无当前内核连接与进程实例的完整核对，退出保留待确认，不会停止其它后台。", kind: .notSubmitted)
         }
+        // Capture ready authority/journal while normal submission is still open.
+        // Sleeping blocks all ordinary writes; only this fixed owned hibernate
+        // envelope may use the captured qualification, revalidated before send.
+        let captured = try publicCommandBinding(for: client)
+        guard let journal = originalJournal, originalJournalReady else {
+            throw CrewdClientError(message: "原关闭历史尚未就绪；退出未提交。", kind: .notSubmitted)
+        }
+        let epoch = generation
+        let envelope = try CrewdPublicCommandEnvelope(request: UUID(), binding: client.runtimeIdentity,
+                                                     operation: .hibernate, params: .object([:]))
         sleeping = true; reconnect?.cancel(); sync?.cancel()
-        do { _ = try await submitRPC("crewd.hibernate", .object([:])) }
+        let closingBinding: () throws -> CrewdPublicCommands.Binding = { [weak self, weak owned] in
+            guard let self, let owned, self.sleeping, !self.retired,
+                  self.generation == epoch, self.backend === owned,
+                  self.client.connectionEpoch == captured.connectionEpoch,
+                  self.client.runtimeIdentity["dbId"].string == captured.databaseID,
+                  self.client.runtimeIdentity["runtimeBindingId"].string == captured.runtimeBindingID,
+                  self.presentationScope == captured.scope, self.originalJournal === journal,
+                  self.ownedChildIdentity == birth, self.hasVerifiedOwnedLocalHelper else {
+                throw CrewdClientError(message: "原关闭作用域或真实后台拥有关系已改变；未重新提交。", kind: .notSubmitted)
+            }
+            return captured
+        }
+        let closing = CrewdPublicCommands(binding: closingBinding,
+        ownsDaemon: { [weak self] in self?.hasVerifiedOwnedLocalHelper == true },
+        call: { [weak self] method, params in
+            guard let self, method == "command.submit", params == envelope.value else {
+                throw CrewdClientError(message: "关闭作用域只允许这项固定休眠原请求。", kind: .notSubmitted)
+            }
+            _ = try closingBinding()
+            return try await self.client.call(method, params)
+        }, prepare: { proposed, crew in
+            guard proposed.value == envelope.value else { throw CrewdPublicWire.invalid() }
+            return try journal.prepare(method: "command.submit", params: proposed.value, crew: crew)
+        }, finish: { [weak self] record, state, detail in
+            try journal.finish(record, state: state, detail: detail)
+            if let self, self.generation == epoch, self.client.connectionEpoch == captured.connectionEpoch,
+               self.originalJournal === journal, state == "unknown" { self.durableUnknown = try journal.unknownRecords() }
+        })
+        do {
+            let receipt = try await closing.submit(envelope, crew: crewID)
+            guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
+                throw CrewdClientError(message: "关闭原请求结果尚未确认；仅等待本 App 的原后台实际退出。")
+            }
+            if [.suppressed, .rejected].contains(receipt.phase) {
+                throw CrewdClientError(message: "原关闭请求已拒绝，后台保留。", kind: .notSubmitted, code: -32009, data: receipt.value["result"])
+            }
+        }
         catch {
-            if !CrewdClientError.isUncertainSubmission(error) { sleeping = false; throw error }
+            if !CrewdClientError.isUncertainSubmission(error) {
+                if generation == epoch, backend === owned { sleeping = false }
+                throw error
+            }
         }
         for _ in 0..<300 {
-            if !owned.isRunning { backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil; return }
+            if !owned.isRunning {
+                if generation == epoch, backend === owned {
+                    backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil
+                }
+                return
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         throw CrewdClientError(message: "尚未确认本 App 的后台已退出；休眠结果待核对，不强制终止进程。")
@@ -552,23 +621,34 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     func prepareOriginalJournal(root: URL) async {
-        guard originalJournalRequired, originalJournal == nil, !preparingJournal, client.connected, !retired else { return }
-        preparingJournal = true; defer { preparingJournal = false }
+        let epoch = generation, connection = client.connectionEpoch, runtime = client.runtimeIdentity, binding = client.authorityBinding
+        guard originalJournalRequired, originalJournal == nil, preparingJournal != connection,
+              journalFailureConnection != connection, client.connected, !retired else { return }
+        preparingJournal = connection
+        defer { if preparingJournal == connection { preparingJournal = nil } }
         do {
             let identity: CrewdValue
             if dataDirectory != nil { identity = try await readValue("remote.status")["identity"] }
             else { identity = client.authorityBinding }
-            guard !retired else { throw CancellationError() }
+            guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
             let scope = CrewdPresentationJournal.Scope(namespace: authorityRecordID,
                 localDirectory: dataDirectory?.standardizedFileURL.resolvingSymlinksInPath().path,
                 authorityID: identity["authorityId"].string, databaseID: client.runtimeIdentity["dbId"].string ?? identity["dbId"].string,
                 grantID: identity["grantId"].string, grantRevision: identity["grantRevision"].string)
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
             let unknown = try journal.unknownRecords()
-            originalJournal = journal; presentationScope = scope; durableUnknown = unknown
-            originalFirstMessageHistory = try journal.firstMessageRecords()
+            let history = try journal.firstMessageRecords()
             if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
-        } catch { self.error = "原前端提交历史未就绪：" + error.localizedDescription }
+            guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            originalJournal = journal; presentationScope = scope; durableUnknown = unknown
+            originalFirstMessageHistory = history; journalFailureConnection = nil
+        } catch {
+            if acceptsObservation(epoch), client.connectionEpoch == connection {
+                journalFailureConnection = connection
+                let message = "原前端提交历史未就绪：" + error.localizedDescription
+                if self.error != message { self.error = message }
+            }
+        }
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
@@ -593,7 +673,7 @@ final class CrewdWorkspace: ObservableObject {
             }
             return result
         }
-        guard !originalJournalRequired || originalJournal != nil else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
+        guard !originalJournalRequired || originalJournalReady else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
         let prepared: CrewdPresentationJournal.Prepared?
         do { prepared = try originalJournal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }

@@ -1,0 +1,9 @@
+// Isolated staging; no personal Local.xcconfig, Team or Keychain policy import.
+// Explicit device signing requires a reviewed command-line Team/profile input.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+CODE_SIGN_ENTITLEMENTS =
+CODE_SIGNING_ALLOWED = NO
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) DEBUG PENDINGCREW_NATIVE_CANDIDATE
+PENDINGCREW_CANDIDATE_SOURCE_REF =

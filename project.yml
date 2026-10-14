@@ -38,7 +38,12 @@ packages:
 # 「target 设置 > target xcconfig > project 设置 > project xcconfig」——
 # 只要 DEVELOPMENT_TEAM 还留在 settings.base，它就会盖掉 xcconfig，本地覆盖
 # 永远不生效。所以这几个键必须从 settings 里**彻底移走**。
+configs:
+  Debug: debug
+  Release: release
+  NativeCandidate: debug
 configFiles:
+  NativeCandidate: Config/NativeCandidate.xcconfig
   Debug: Config/Signing.xcconfig
   Release: Config/Signing.xcconfig
 settings:
@@ -125,6 +130,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ENABLE_PREVIEWS: YES
         SUPPORTS_MACCATALYST: NO
+      configs:
+        NativeCandidate:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
+          INFOPLIST_FILE: Config/NativeCandidate-Info.plist
   # PendingCrewTests —— macOS-only XCTest bundle for LocalRunner module.
   # 不挂 iOS，因为待测代码全在 `#if os(macOS)` guard 后面。
   PendingCrewTests:
@@ -544,3 +553,21 @@ targets:
         # standalone test bundle —— 不挂 host app
         TEST_HOST: ""
         BUNDLE_LOADER: ""
+
+# Explicit isolated staging of the original application; never the ordinary
+# production scheme and never an automatic simulator/device action.
+schemes:
+  PendingCrewNativeCandidate:
+    build:
+      targets:
+        PendingCrew: all
+    run:
+      config: NativeCandidate
+    test:
+      config: NativeCandidate
+    profile:
+      config: NativeCandidate
+    analyze:
+      config: NativeCandidate
+    archive:
+      config: NativeCandidate
