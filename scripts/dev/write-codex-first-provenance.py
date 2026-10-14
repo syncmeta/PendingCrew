@@ -44,7 +44,44 @@ def complete_configuration(value):
  if not isinstance(value,dict) or not isinstance(value.get('artifactFeatures'),list) or not isinstance(value.get('artifactProfile'),dict) or not value['artifactProfile'] or not isinstance(value.get('workspaceFeatures'),dict) or not value['workspaceFeatures']:raise ValueError('Actual compiler-artifact effective configuration is missing')
  return value
 
-def verify_witness(path,binary,expected,requested):
+def verify_fresh_source(evidence,value,required=False):
+ if value.get('freshWorkspaceArtifacts') is not True:
+  if required:raise ValueError('Fresh owning-workspace compilation proof required for a new candidate')
+  return 'legacy-byte-inventory-only'
+ sides={}
+ for field in ['sourcePreflight','productionGraph','workspaceArtifacts']:
+  file=evidence/base(value[field+'File'])
+  if file.is_symlink() or not file.is_file() or sha(file)!=value[field+'SHA256']:raise ValueError('Fresh compilation sidecar missing/changed: '+field)
+  sides[field]=json.loads(file.read_text())
+ pre=sides['sourcePreflight'];owner=pathlib.Path(pre['ownerWorkspace']);repo=owner.parent
+ if not owner.is_absolute() or owner.name!='crewd' or pre['sourceRef']!=value['sourceRef']:raise ValueError('Owning workspace identity mismatch')
+ if [{'path':r['path'],'sha256':r['sha256']} for r in pre['files']]!=value['files']:raise ValueError('Fresh preflight differs from complete frozen Rust input')
+ for row in pre['files']:
+  if row['absolutePath']!=str(repo/row['path']) or row['buildMtimeNS']<=row['priorMtimeNS']:raise ValueError('Fresh source preflight did not invalidate every owning input')
+ graph=sides['productionGraph'];packages=graph['requiredWorkspacePackages'];required_targets=set();seen=set();actual=[]
+ if not packages or graph['rootPackageID'] not in {p['packageID'] for p in packages}:raise ValueError('Required production graph/root missing')
+ source_paths={str(repo/r['path']) for r in value['files']}
+ for package in packages:
+  if package['manifestPath'] not in source_paths or not package['targets']:raise ValueError('Production package outside frozen source')
+  for target in package['targets']:
+   if target['sourcePath'] not in source_paths:raise ValueError('Production target outside frozen source')
+   key=(package['packageID'],package['manifestPath'],target['sourcePath'],target['name'],tuple(target['kind']))
+   if key in required_targets:raise ValueError('Duplicate required production target')
+   required_targets.add(key)
+ package_ids={p['packageID'] for p in packages}
+ for line in (evidence/base(value['buildLog'])).read_text().splitlines():
+  try:message=json.loads(line)
+  except json.JSONDecodeError:continue
+  if not isinstance(message,dict) or message.get('reason')!='compiler-artifact':continue
+  if message.get('package_id') not in package_ids:
+   if pathlib.Path(message.get('manifest_path','')).is_relative_to(owner):raise ValueError('Unexpected workspace artifact outside required normal graph')
+   continue
+  target=message.get('target',{});key=(message['package_id'],message.get('manifest_path'),target.get('src_path'),target.get('name'),tuple(target.get('kind',[])))
+  if key not in required_targets or message.get('fresh') is not False or message.get('profile',{}).get('test') is not False:raise ValueError('Actual Cargo workspace artifact lacks correct owning source/fresh production provenance')
+  seen.add(key);actual.append({'packageID':key[0],'manifestPath':key[1],'sourcePath':key[2],'target':key[3],'fresh':False})
+ if seen!=required_targets or actual!=sides['workspaceArtifacts']:raise ValueError('Actual raw Cargo artifacts differ from complete required graph or summary')
+ return 'fresh-owning-workspace-production-graph'
+def verify_witness(path,binary,expected,requested,require_fresh=False):
  value=json.loads(path.read_text())
  if value.get('format')!=1 or not re.fullmatch('[0-9a-f]{40}',value.get('sourceRef','')):raise ValueError('Prebuilt witness format/ref missing')
  evidence=path.parent/base(value['evidenceDirectory']);root=evidence/base(value['snapshotDirectory'])
@@ -55,6 +92,7 @@ def verify_witness(path,binary,expected,requested):
  old=evidence/base(value['binaryFile'])
  if old.is_symlink() or not old.is_file() or sha(old)!=value['binarySHA256'] or sha(binary)!=value['binarySHA256']:raise ValueError('Prebuilt binary does not match actual witness')
  logcheck(evidence,value)
+ verify_fresh_source(evidence,value,required=require_fresh)
  config=complete_configuration(value.get('buildConfiguration'))
  if any(config.get(key)!=want for key,want in requested.items()):raise ValueError('Prebuilt toolchain/target/profile/features differ from explicit build intent')
  return value,evidence
