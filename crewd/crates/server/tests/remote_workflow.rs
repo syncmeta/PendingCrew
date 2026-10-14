@@ -751,7 +751,53 @@ async fn native_apple_pairing_tls_work_event_and_revoke() {
     );
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Native remote service evidence: {}", root.display());
-    let mut running = service(&root).await;
+    // Actual desktop mode exposes the typed local-admin capability. Both
+    // providers are explicitly disabled executables; no account fallback.
+    for name in ["home", "runtime", "projects"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+    }
+    let mut options = crewd_server::OrchestraServe::default();
+    options.codex =
+        crewd_server::orchestra::exec_codex::CodexProgram::Path("/usr/bin/false".into());
+    options.claude =
+        crewd_server::orchestra::exec_claude::ClaudeProgram::Path("/usr/bin/false".into());
+    options.helper = Some(std::path::PathBuf::from(
+        "/private/tmp/pcw-M3-immutable-candidate-20261014-fe68022f-02/PendingCrew Codex First.app/Contents/Helpers/crewd",
+    ));
+    options.runtime_dir = Some(root.join("runtime"));
+    options.claude_projects_dir = Some(root.join("projects"));
+    options.codex_env.insert(
+        "HOME".into(),
+        root.join("home").to_string_lossy().into_owned(),
+    );
+    options.claude_env = options.codex_env.clone();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server_root = root.clone();
+    let task = tokio::spawn(async move {
+        crewd_server::serve_with(
+            server_root,
+            crewd_server::ServeOptions {
+                orchestra: Some(options),
+                ..Default::default()
+            },
+            async {
+                let _ = stopping.await;
+            },
+        )
+        .await
+    });
+    let socket = root.join("crewd.sock");
+    for _ in 0..400 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut running = Service {
+        owner: RpcClient::connect(&socket).await,
+        stop,
+        task,
+    };
     let _ = enabled(&mut running.owner).await;
     let output = tokio::time::timeout(
         Duration::from_secs(40),

@@ -122,3 +122,14 @@ The packaged normal schema10 helper is also actually tested against the closed r
 ## Message recovery correction on the native shared source
 
 The same valid-channel physical-EOF RED02 input passes on1e51045a: `/private/tmp/pcw-M6-message-unknown-retention-green-01.log`, source/raw transport `/private/tmp/pcw-M6-mobile-flow.S2J7h2`. It preserves complete original method/params/snapshot after editing newer text, including original channel/text/mentions; the current newer draft stays intact. Independent received-request parsing finds exactly one message.post. This closes the shared transport/draft retention defect only. Mac view reconstruction, Native remote TLS, Root routing and actual device/window interactions are not inferred from it.
+
+
+## First actual Apple native execution and contract RED
+
+The frozen1e51045a production Apple source plus memory-vault QA peer was compiled and linked using the author's actual Mac SDK/SPM objects, without a cold dependency build. `/private/tmp/pcw-M6-native-peer-compile-01.log` exits0; source, actual compile command, source/module/object hashes and executable remain `/private/tmp/pcw-M6-native-peer.10n25rdl`. This is an actual executable, not merely SDK type checking.
+
+Actual runtime01 rejected the fixture's initial local typed-client handshake because the library no-Orchestra service does not advertise session.respondRunnerRequest. Its log/root are preserved; no product handshake was weakened. Only the Native harness was corrected to match genuine desktop Orchestra mode, with both provider programs explicitly /usr/bin/false, fixed normal helper and isolated HOME/projects/runtime; it has no account fallback.
+
+Actual runtime02 then fails with the real Native invalidExchange result. `/private/tmp/pcw-M6-native-peer-runtime-02.log`, immutable service/source `/private/tmp/pcw-M6-native-service.lq96dtr9` and raw runtime `.tmpTgL8vC` are preserved. Independent actual public metadata shows dbId=b3749a9096cdc55530601c2fd847aacc,32 lower-hex digits. The frozen Native Pairing.invitation incorrectly requires this backend dbId to satisfy a hyphenated UUID validator. The real certificate/signature verification precedes that metadata guard. This contract discrepancy was sent directly to the product author, who will correct the database-ID validation without relaxing UUID validation for authority/invitation/grant IDs or exact receipt binding. Apple mutual TLS/work/event/revoke runtime is not declared passed yet.
+
+The unique Cargo target was explicitly returned for full backend workspace/lint/normal-helper gates. Native GUI/App/Keychain/device acceptance remains a separate layer; the memory vault execution has not written the user's Keychain, opened a visible App or invoked a model.
