@@ -46,6 +46,12 @@ def check(app):
   if command.count(key)!=1 or command[command.index(key)+1]!=want:p.fail('Native command '+key+' mismatch')
  for token in ['ARCHS=arm64','-disableAutomaticPackageResolution','-skipPackageUpdates','CODE_SIGNING_ALLOWED=NO','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE']:
   if command.count(token)!=1:p.fail('Native locked build command missing '+token)
+ external=manifest.get('externalDependencyPath')
+ if not isinstance(external,str) or not pathlib.Path(external).is_absolute() or command.count('-clonedSourcePackagesDirPath')!=1 or command[command.index('-clonedSourcePackagesDirPath')+1]!=external:p.fail('Native external dependency build path mismatch')
+ di=p.regular(base,proof.get('dependencyInventoryFile'))
+ if p.sha(di)!=p.hexsha(proof.get('dependencyInventorySHA256')):p.fail('Native dependency build inventory hash mismatch')
+ dv=json.loads(di.read_text())
+ if dv!={'externalPath':external,'before':manifest['dependencyFiles'],'after':manifest['dependencyFiles']}:p.fail('Native complete dependencies changed during actual build')
  # Actual settings evidence is required rather than trusting requested options.
  settings=p.regular(base,gui.get('buildSettingsFile'))
  if p.sha(settings)!=p.hexsha(gui.get('buildSettingsSHA256')):p.fail('Native actual build-settings hash mismatch')

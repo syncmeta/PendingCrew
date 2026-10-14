@@ -46,6 +46,24 @@ def regular_inventory(root):
    rows.append({'path':relative,'sha256':sha(p)})
  return rows
 
+def external_dependency_inventory(spm,pins):
+ rows=[]
+ def inspect(source,prefix):
+  root=source.resolve()
+  def walk(path,relative,ancestors):
+   resolved=path.resolve()
+   if not resolved.is_relative_to(root): raise ValueError('dependency symlink escapes its input tree')
+   if path.is_dir():
+    if resolved in ancestors: raise ValueError('dependency directory link cycle')
+    for child in sorted(path.iterdir()):
+     if child.name!='.git': walk(child,relative+'/'+child.name,ancestors|{resolved})
+   elif path.is_file(): rows.append({'path':relative,'sha256':sha(path)})
+   else: raise ValueError('dependency input must be a regular file/directory')
+  walk(source,prefix,set())
+ for pin in pins: inspect(spm/'checkouts'/pin['identity'],'checkouts/'+pin['identity'])
+ if (spm/'artifacts').exists(): inspect(spm/'artifacts','artifacts')
+ return sorted(rows,key=lambda row:row['path'])
+
 def main():
  a=argparse.ArgumentParser();a.add_argument('output');a.add_argument('--ref',default='HEAD');a.add_argument('--backend',required=True);a.add_argument('--witness',required=True);a.add_argument('--spm',required=True);a.add_argument('--derived-data',required=True);a.add_argument('--execute',action='store_true');args=a.parse_args()
  repo=pathlib.Path(__file__).resolve().parents[2];out=pathlib.Path(args.output).resolve()
@@ -78,6 +96,7 @@ def main():
   copied_inputs(checkout,deps/'checkouts'/name);pins.append({'identity':name,'revision':actual})
  if (spm/'artifacts').exists(): copied_inputs(spm/'artifacts',deps/'artifacts')
  dependency_rows=regular_inventory(deps)
+ if external_dependency_inventory(spm,pins)!=dependency_rows: raise ValueError('external package inventory differs before build')
  entry=(snapshot/'Sources/PendingCrewEntry.swift')
  if not entry.exists():
   candidates=list(snapshot.rglob('PendingCrewEntry.swift'))
@@ -86,7 +105,7 @@ def main():
  if 'PENDINGCREW_NATIVE_CANDIDATE' not in entry.read_text(): raise ValueError('candidate compile entry is not frozen in selected source')
  toolchain={'xcodeVersion':query(['xcodebuild','-version'],snapshot,out/'gui-toolchain.log'),'sdkVersion':query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'gui-toolchain.log')}
  save(out/'gui-toolchain.json',toolchain)
- manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
+ manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'externalDependencyPath':str(spm),'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
  save(out/'build-inputs.json',manifest);(out/'source-head.txt').write_text(ref+'\n');(out/'source-changes.patch').write_text('')
  if not args.execute:
   print('PREPARED only (no compilation or application launch):',out);return
@@ -96,10 +115,9 @@ def main():
  query(argv[:-1]+['-showBuildSettings','-json'],snapshot,out/'gui-build-settings.log',out/'gui-build-settings.json')
  run(argv,snapshot,out/'gui-build.log')
  if regular_inventory(snapshot)!=source_rows: raise ValueError('target build changed its source snapshot')
- # Check every actual external package/artifact byte against the copied proof.
- for r in dependency_rows:
-  p=spm/r['path']
-  if not p.is_file() or sha(p)!=r['sha256']: raise ValueError('package input changed during build: '+r['path'])
+ dependency_after=external_dependency_inventory(spm,pins)
+ if dependency_after!=dependency_rows: raise ValueError('complete package inventory changed during build')
+ save(out/'dependency-build-inventory.json',{'externalPath':str(spm),'before':dependency_rows,'after':dependency_after})
  built=dd/'Build/Products/Debug/PendingCrew.app'
  if not built.is_dir(): raise ValueError('actual Xcode target app missing')
  app=out/'PendingCrew Native Candidate.app';shutil.copytree(built,app,symlinks=True)
@@ -111,7 +129,7 @@ def main():
  info.write_bytes(plistlib.dumps(plist))
  run(['codesign','--force','--deep','--sign','-',str(app)],snapshot,out/'signing.log')
  run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
- save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log'),'buildSettingsFile':'gui-build-settings.json','buildSettingsSHA256':sha(out/'gui-build-settings.json'),'buildSettingsLog':'gui-build-settings.log','buildSettingsLogSHA256':sha(out/'gui-build-settings.log'),'toolchainFile':'gui-toolchain.json','toolchainSHA256':sha(out/'gui-toolchain.json'),'toolchainLog':'gui-toolchain.log','toolchainLogSHA256':sha(out/'gui-toolchain.log')},'backend':{'mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
+ save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'dependencyInventoryFile':'dependency-build-inventory.json','dependencyInventorySHA256':sha(out/'dependency-build-inventory.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log'),'buildSettingsFile':'gui-build-settings.json','buildSettingsSHA256':sha(out/'gui-build-settings.json'),'buildSettingsLog':'gui-build-settings.log','buildSettingsLogSHA256':sha(out/'gui-build-settings.log'),'toolchainFile':'gui-toolchain.json','toolchainSHA256':sha(out/'gui-toolchain.json'),'toolchainLog':'gui-toolchain.log','toolchainLogSHA256':sha(out/'gui-toolchain.log')},'backend':{'mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
  (out/'artifact-sha256.txt').write_text(sha(original)+'  '+str(original)+'\n'+sha(helper)+'  '+str(helper)+'\n')
  print('BUILT isolated candidate; not launched/installed/released:',app)
 if __name__=='__main__':
