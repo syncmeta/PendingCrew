@@ -289,8 +289,14 @@ final class CrewStore: ObservableObject {
             selectedCrewId = pendingCrew.id
             return
         }
-        let root = Self.defaultCrewGroundRoot
-        let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+        // crewd titles are a projection of the selected authority, not names
+        // discovered by enumerating the real user's legacy CrewGround.
+        let existing: Set<String>
+        if usesCrewdAuthority { existing = Set(crews.map(\.title)) }
+        else {
+            let root = Self.defaultCrewGroundRoot
+            existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+        }
         let name = PlaceNames.all.shuffled().first { !existing.contains($0) }
             ?? "Crew-\(UUID().uuidString.prefix(8))"
         let draft = PendingCrewDraft(id: "pending-\(UUID().uuidString)", title: name,
@@ -318,8 +324,9 @@ final class CrewStore: ObservableObject {
         if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
     }
 
-    /// The first message is the commit point. Failure rolls back this attempt;
-    /// a second click cannot overlap it or start another captain.
+    /// Schema13 submits create and post separately and preserves an unknown
+    /// outcome. It never rolls back/replays or starts a member implicitly.
+    /// Atomic first-message receipts remain a schema14 integration dependency.
     private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
         guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
               let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }

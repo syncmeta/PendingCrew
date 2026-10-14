@@ -58,6 +58,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
     @Published var requirementDrafts = CrewdRequirementDrafts()
+    @Published var composerRequirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
     @Published var humanDrafts = CrewdHumanDrafts()
     @Published private(set) var knownSessions: [String:CrewdValue] = [:]
@@ -118,6 +119,16 @@ final class CrewdWorkspace: ObservableObject {
         })
     }
     #endif
+    /// A local folder chooser starts inside the selected authority's private
+    /// presentation root. Remote paths are opaque server paths, never a local
+    /// filesystem chooser or a fallback to Documents/CrewGround.
+    func localDirectoryPickerRoot() throws -> URL {
+        guard !retired, client.connected, let dataDirectory else {
+            throw CrewdClientError(message: "请明确填写所连接电脑上的完整工作目录，不能浏览本机目录。", kind: .notSubmitted)
+        }
+        return try CrewdPresentationJournal.prepareUICache(directory: dataDirectory)
+    }
+
     /// One instance per paired authority. Switching authorities retires this
     /// instance and creates another; public W/#/H numbers never share caches.
     convenience init(authorityRecordID: UUID, connect: @escaping Connector) {

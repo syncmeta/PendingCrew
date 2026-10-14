@@ -285,17 +285,27 @@ private struct PendingCrewChatView: View {
             Spacer()
             HStack(spacing: 8) {
                 Image(systemName: "folder")
-                Text(draft.workingDirectory ?? "~/CrewGround/\(draft.title)")
-                    .lineLimit(1).truncationMode(.middle)
+                Group {
+                if crewStore.usesCrewdAuthority, crewStore.crewdWorkspace?.dataDirectory == nil {
+                    TextField("所连接电脑上的完整工作目录", text: Binding(
+                        get: { draft.workingDirectory ?? "" },
+                        set: { crewStore.setPendingWorkingDirectory($0) }))
+                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil)
+                } else {
+                    Text(draft.workingDirectory ?? (crewStore.usesCrewdAuthority ? "请明确选择工作目录" : "~/CrewGround/\(draft.title)"))
+                }
+                }.lineLimit(1).truncationMode(.middle)
                 Spacer()
                 if draft.workingDirectory != nil {
-                    Button("恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
+                    Button(crewStore.usesCrewdAuthority ? "清除选择" : "恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
                         .disabled(crewStore.pendingCrewDelivery != nil
                                   || crewStore.pendingCrewRollbackError != nil)
                 }
-                Button("选择目录…") { chooseDirectory() }
-                    .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
-                              || crewStore.pendingCrewRollbackError != nil)
+                if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
+                    Button("选择目录…") { chooseDirectory() }
+                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
+                                  || crewStore.pendingCrewRollbackError != nil)
+                }
             }
             .font(.callout)
             .padding(.horizontal, 18)
@@ -370,11 +380,21 @@ private struct PendingCrewChatView: View {
     }
 
     private func chooseDirectory() {
+        let selected = crewStore.crewdWorkspace
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        if crewStore.usesCrewdAuthority {
+            guard let selected else { error = "请先连接当前后台。"; return }
+            do { panel.directoryURL = try selected.localDirectoryPickerRoot() }
+            catch { self.error = error.localizedDescription; return }
+        }
         if panel.runModal() == .OK, let url = panel.url {
+            if crewStore.usesCrewdAuthority {
+                guard crewStore.crewdWorkspace === selected, selected?.isRetired == false,
+                      crewStore.pendingCrew?.id == draft.id else { return }
+            }
             crewStore.setPendingWorkingDirectory(url.path)
         }
     }

@@ -6,10 +6,14 @@ import Combine
 final class CrewdPendingCrewBackend: PendingCrewBackend {
     let workspace: CrewdWorkspace
     private var changeToken: AnyCancellable?
+    private var selectionToken: AnyCancellable?
     private var listeners: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var messages: [String: [CrewdValue]] = [:]
     init(workspace: CrewdWorkspace) {
         self.workspace = workspace
+        selectionToken = workspace.$channelID.dropFirst().sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.listeners.values.forEach { $0.yield(()) } }
+        }
         changeToken = workspace.authorityEvents.sink { [weak self] event in
             guard event.0.hasPrefix("message.") || event.0.hasPrefix("session.") || event.0.hasPrefix("channel.") || event.0 == "events.lagged" else { return }
             Task { @MainActor [weak self] in self?.listeners.values.forEach { $0.yield(()) } }
@@ -85,9 +89,18 @@ final class CrewdPendingCrewBackend: PendingCrewBackend {
             memberKind: "human", userId: LocalWhiteboardStore.localUserId, botId: nil, codeSessionId: nil,
             displayName: "人", role: nil, status: "active", representsCrewId: nil, sessionStatus: nil)])
     }
+    private func selectedChannel(_ crew: String) throws -> String {
+        guard workspace.crewID == crew, !workspace.channelID.isEmpty,
+              workspace.channels.contains(where: { $0["id"].string == workspace.channelID }) else {
+            throw CrewdClientError(message: "当前会话尚未由后台确认。", kind: .notSubmitted)
+        }
+        return workspace.channelID
+    }
     func listCrewWhiteboard(crewId: String) async throws -> [CrewWhiteboardEntry] {
-        let channel = crewId + "/lobby"
+        let channel = try selectedChannel(crewId)
+        let epoch = workspace.observationGeneration
         let response = try await call("message.list", ["channelId": .string(channel), "limit": .integer(1000)])
+        guard !Task.isCancelled, workspace.acceptsObservation(epoch), try selectedChannel(crewId) == channel else { throw CancellationError() }
         let rows = response.array
         messages[crewId] = rows
         return try rows.map { row in
@@ -114,10 +127,11 @@ final class CrewdPendingCrewBackend: PendingCrewBackend {
         localAttachments: [LocalWhiteboardAttachment], extraReferences: [CrewMessageReference]) async throws -> String? {
         guard localAttachments.isEmpty else { throw CrewdClientError(message: "当前后台尚未开放附件提交；附件仍留在输入中。", kind: .notSubmitted) }
         guard extraReferences.isEmpty else { throw CrewdClientError(message: "请使用正式工作项关联入口。", kind: .notSubmitted) }
-        var fields: [String: CrewdValue] = ["channelId": .string(crewId + "/lobby"), "text": .string(text),
+        let channel = try selectedChannel(crewId)
+        var fields: [String: CrewdValue] = ["channelId": .string(channel), "text": .string(text),
             "mentions": .array(mentions.map { m in var value: [String: CrewdValue] = ["kind": .string(m.kind)]; if let id = m.targetId { value["targetId"] = .string(id) }; return .object(value) })]
         if let replyToId { fields["inReplyTo"] = .string(replyToId) }
-        let context = CrewdDrafts.Context.message(crew: crewId, channel: crewId + "/lobby", session: "")
+        let context = CrewdDrafts.Context.message(crew: crewId, channel: channel, session: "")
         workspace.messageDrafts.set(text, for: context)
         _ = try await workspace.submitOriginalText(.object(fields), snapshot: workspace.messageDrafts.snapshot(for: context))
         return nil

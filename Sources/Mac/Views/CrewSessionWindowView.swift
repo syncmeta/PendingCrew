@@ -332,8 +332,14 @@ struct CrewSessionWindowView: View {
             if let crewId = crewStore.selectedDetail?.crew.id {
                 VSplitView {
                     ScrollView {
-                        CrewTodoPanel(crewId: crewId, runner: sessionRunner,
-                                      crewName: crewStore.selectedDetail?.crew.title)
+                        if appModel.usesCrewdAuthority {
+                            if let workspace = crewStore.crewdWorkspace {
+                                CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)
+                            } else { Text("当前后台未连接，Todo 尚未确认。") }
+                        } else {
+                            CrewTodoPanel(crewId: crewId, runner: sessionRunner,
+                                          crewName: crewStore.selectedDetail?.crew.title)
+                        }
                     }
                     .background(CrewTodoPagePalette.background)
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
@@ -822,7 +828,9 @@ struct CrewSessionWindowView: View {
 
     @ViewBuilder
     private var admissionRecoveryMenu: some View {
-        if let detail = crewStore.selectedDetail {
+        if appModel.usesCrewdAuthority {
+            Text("自动跟进由当前后台维护").font(.caption).foregroundStyle(.secondary)
+        } else if let detail = crewStore.selectedDetail {
             Menu {
                 if let run = sessionRunner.runs.first(where: {
                     $0.runID == sessionRunner.selectedRunId

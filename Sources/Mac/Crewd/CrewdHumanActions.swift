@@ -259,7 +259,9 @@ struct CrewdCrewCreationView: View {
                 if workspace.dataDirectory != nil {
                     Button("选择…") {
                         let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true
-                        if panel.runModal() == .OK {input(\.directory).wrappedValue=panel.url?.path ?? ""}
+                        do { panel.directoryURL = try workspace.localDirectoryPickerRoot() }
+                        catch { workspace.error = error.localizedDescription; return }
+                        if panel.runModal() == .OK, !workspace.isRetired {input(\.directory).wrappedValue=panel.url?.path ?? ""}
                     }
                 }
             }
