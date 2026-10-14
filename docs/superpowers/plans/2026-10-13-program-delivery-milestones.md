@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## Linux 实际拒写边界与 14 恢复保护裁决（2026-10-14）
+
+必要剩余 run38547586374/exact8d37be29fd9cd04792fc174bea2343ab6495df9e 实际仍 terminal failure；原4e normal严格复用成功、归档804文件/链接核对通过，只下载新56MB档及110KB阶段证据。安装11→运行13/backup→安装未知回执readback→并发writer一commit一EAGAIN/CAS conflict→仅pointer rollback11已实际走到；恢复11/再升13/reopen尾段尚未执行。旧11 typed拒13是真的，mainDB/.id SHA和size、schema/50table/integrity前后相同，但before0B WAL/32768B SHM在after消失，严格物理门禁未通过，不改标成功。canonical旧11确在futureguard前open RW/pinWAL；旧产物不改、不重标物理零触碰。
+
+根批准先完成观察器的实际因果收口而不削弱旧版物理判据：actual8d副本上旧mode=ro能否生成同侧文件、新immutable只在真实daemon已停/独立backup且nonempty WAL严格拒绝时零副作用；还必须核任何observer之前实际停法是否已留下cache，不能仅凭旧RO可以创建就归因本次。系统Apple SQLite控制CANTOPEN与bundledSQLite生成侧文件的差异诚实保留，不冒Linux实际结果。已有正常Mac二进制用于fake-only本地完整停态控制，无UI重启/SDK/模型/新编译；无法确证或仍真实rawdiff则转managed-launch在旧binary前的只读版本安全方案，保护所有原files/unknownWAL拒绝，不允许移除侧文件断言来过关。未派新CI。
+
+14 Store未来版保护最小整块已裁决：原header稳定只读预检，明确future在原chmod/RW/pragmas前拒；nonempty WAL在协作DataDirLock内稳定私有副本并核官方validframe/commitcut与bundledSQLite恢复实际版本，验证可支持的同版crash才恢复原库，未知/复制失败保原data。不能忽略活WAL、不能把合作锁冒防任意外部写者或把所有crash一律拒绝。12/13DDL不动，14 helper/factory/lease/watch同模块继续；新增5例实际bundled控制为作者内部影响证据，仍非whole14/defaultnormal14或完整M4完成。主要参考SQLite官方 WAL及文件格式，不扩真实模型/真实数据授权。Mac锁屏问题仍只阻原窗口业务，工程其他线继续。
+
 ## 最新实际交付检查点：原窗口已连接，Linux 主链仍未闭合（2026-10-14）
 
 原前端修复冻结822a72c84e6ce3adec5fbf1c2e811a378404297e，原Mac/iPhoneOS/Simulator专用完整增量构建均真实terminal0；Mac不可变包 /private/tmp/pcw-original-frontend-candidate13-822a72c8-05 已独立验1312Gitinputs与822一致、3738SPM前后相同及实际签名/config。GUI来源822，Mac helper仍实际编译2bf/defaultDebug/完整374Rust相同，不重标822 normal。新私有scope已具体审准一次launch，GUI54307/helper54337真实birth/parent/kernelpeer/privatecwd/env/fakeCodex/claudefalse均资格，正常13 hello/api3，原Root显示已连接；legacy-preserved仍空。初始化阻断解除，非完整窗口验收：首次UI动作遇Maclocked，人类手动解锁待答，保持同一live场景，不试密码/绕锁/重启。14 receipts/terminal/ownedQuit及实际设备/安装/日常数据仍未验。
