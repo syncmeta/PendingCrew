@@ -641,24 +641,28 @@ os.close(master)
         report
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "owned private Core/helper subprocess only"]
-    fn actual_ledger_runtime_child() {
+    async fn actual_ledger_runtime_child() {
         use crewd_exec::resume::AgentIdLedger;
         use std::os::fd::FromRawFd;
         let fd: i32 = std::env::var("PCW_CORE_FD").unwrap().parse().unwrap();
-        // SAFETY: only the owned parent provides this inherited descriptor.
-        let socket = unsafe { UnixStream::from_raw_fd(fd) };
+        // SAFETY: only the owned parent provides this single inherited descriptor.
+        let mut inherited = unsafe { UnixStream::from_raw_fd(fd) };
+        // Actual writer evidence for the Linux negative socketpair control.
+        inherited.write_all(b"H").unwrap();
         let core = serde_json::from_str(&std::env::var("PCW_CORE_BIRTH").unwrap()).unwrap();
         let nonce = serde_json::from_str(&std::env::var("PCW_CORE_NONCE").unwrap()).unwrap();
-        let ledger = crewd_exec::acp::helper::CoreLedger::new(
-            socket,
+        let path = std::path::PathBuf::from(std::env::var_os("PCW_CORE_SOCKET").unwrap());
+        let ledger = crewd_exec::acp::helper::CoreLedger::connect(
+            &path,
             "helper-ledger".into(),
             std::env::var("PCW_CORE_GENERATION").unwrap(),
             nonce,
             core,
             std::time::Duration::from_secs(5),
         )
+        .await
         .unwrap();
         assert_eq!(ledger.recorded().unwrap(), None);
         ledger.record("genuine-isolated-session").unwrap();
@@ -686,8 +690,11 @@ os.close(master)
         let registry = Arc::new(ProcessRegistry::load(&dir.path().join("processes.json")).unwrap());
         let nonce = *uuid::Uuid::new_v4().as_bytes();
         let generation = uuid::Uuid::new_v4();
-        let (mut socket, inherited) = UnixStream::pair().unwrap();
-        socket
+        let path = dir.path().join("core-ledger.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (mut creator_pair, inherited) = UnixStream::pair().unwrap();
+        creator_pair
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();
         let fd = inherited.as_raw_fd();
@@ -703,6 +710,7 @@ os.close(master)
             ])
             .env_clear()
             .env("PCW_CORE_FD", fd.to_string())
+            .env("PCW_CORE_SOCKET", &path)
             .env("PCW_CORE_BIRTH", serde_json::to_string(&core).unwrap())
             .env("PCW_CORE_NONCE", serde_json::to_string(&nonce).unwrap())
             .env("PCW_CORE_GENERATION", generation.to_string());
@@ -723,7 +731,7 @@ os.close(master)
         drop(inherited);
         let mut physical = Peer {
             child,
-            channel: socket.try_clone().unwrap(),
+            channel: creator_pair.try_clone().unwrap(),
             native: None,
         };
         let owned = Custody::enroll_helper(
@@ -735,6 +743,62 @@ os.close(master)
         )
         .unwrap();
         let custody = Arc::new(Mutex::new(owned));
+        let mut marker = [0];
+        creator_pair.read_exact(&mut marker).unwrap();
+        assert_eq!(marker, [b'H']);
+        #[cfg(target_os = "linux")]
+        {
+            let mut value = std::mem::MaybeUninit::<libc::ucred>::uninit();
+            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            // SAFETY: live owned socket and exact ucred output buffer.
+            assert_eq!(
+                unsafe {
+                    libc::getsockopt(
+                        creator_pair.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_PEERCRED,
+                        value.as_mut_ptr().cast(),
+                        &mut len,
+                    )
+                },
+                0
+            );
+            assert_eq!(len as usize, std::mem::size_of::<libc::ucred>());
+            // SAFETY: full successful kernel write above.
+            let credentials = unsafe { value.assume_init() };
+            assert_eq!(credentials.pid, std::process::id() as i32);
+            assert_ne!(credentials.pid, physical.child.id() as i32);
+            assert!(
+                crewd_exec::acp::bridge::HelperPeer::authenticate(
+                    &creator_pair,
+                    &custody.lock().unwrap()
+                )
+                .is_err(),
+                "actual child wrote H but inherited creator credentials must NOT authenticate helper"
+            );
+            eprintln!(
+                "Linux inherited socketpair creator PID {} is not actual writer helper PID {}; guard rejected as required",
+                credentials.pid,
+                physical.child.id()
+            );
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                Err(e) => panic!("actual helper connect absent: {e}"),
+            }
+        };
+        socket.set_nonblocking(false).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
         let store = crewd_store::Store::open_in_memory().unwrap();
         store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('c','fixture','now','now'); INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('helper-ledger','c','worker','claude','now');").unwrap();
         let db = Db::spawn(store).unwrap();

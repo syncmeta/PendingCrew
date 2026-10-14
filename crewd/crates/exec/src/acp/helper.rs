@@ -103,6 +103,29 @@ fn core_pid(_: &UnixStream) -> io::Result<i32> {
     ))
 }
 impl CoreLedger {
+    /// A genuinely child-created connection is required when Core must verify
+    /// the helper socket PID. On Linux an inherited socketpair retains its
+    /// creator credentials and cannot establish the reverse helper identity.
+    pub async fn connect(
+        path: &std::path::Path,
+        session: String,
+        generation: String,
+        nonce: [u8; 16],
+        core: ProcessIdentity,
+        timeout: Duration,
+    ) -> io::Result<Self> {
+        if !path.is_absolute() || timeout.is_zero() || timeout > Duration::from_secs(30) {
+            return Err(denied("invalid private Core connect scope"));
+        }
+        let stream = tokio::time::timeout(timeout, tokio::net::UnixStream::connect(path))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "private Core connect deadline")
+            })??;
+        let stream = stream.into_std()?;
+        stream.set_nonblocking(false)?;
+        Self::new(stream, session, generation, nonce, core, timeout)
+    }
     pub fn new(
         stream: UnixStream,
         session: String,
