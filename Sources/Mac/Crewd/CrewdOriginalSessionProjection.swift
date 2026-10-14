@@ -5,7 +5,7 @@ import Combine
 
 /// Original session UI projection. This object owns no model process or wake queue.
 @MainActor
-final class CrewdOriginalSessionBackend: SessionBackend {
+final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     let workspace: CrewdWorkspace
     let sessionID: String
     let kind: LocalCodingAgentKind
