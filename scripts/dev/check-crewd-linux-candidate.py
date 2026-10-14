@@ -15,6 +15,8 @@ def main():
  if value['sourceRef']!=manifest['sourceRef'] or cfg.get('target')!='x86_64-unknown-linux-gnu' or cfg.get('profile')!='release' or cfg.get('defaultFeatures') is not True or cfg.get('allFeatures') is not False or cfg.get('features')!=[] or cfg.get('artifactProfile',{}).get('test') is not False:raise ValueError('normal Linux build configuration mismatch')
  expected={k:cfg[k] for k in ['toolchain','cargoVersion','target','profile','defaultFeatures','features','allFeatures']}
  p.verify_witness(witness,binary,value['rustInputDigest'],expected)
- print('PASS actual Linux ELF/default release/full Rust input/log/binary provenance')
+ tier=p.verify_fresh_source(witness.parent/value['evidenceDirectory'],value)
+ if manifest.get('sourceProofTier') and manifest['sourceProofTier']!=tier:raise ValueError('Linux backend source-proof tier mismatch')
+ print('PASS actual Linux ELF/default release/full Rust input/log/binary provenance; source tier: '+tier)
 try:main()
 except (ValueError,OSError,KeyError) as e:raise SystemExit('FAIL: '+str(e))

@@ -15,9 +15,10 @@ def main():
  subprocess.run(['python3',str(record),'prepare',str(repo),str(evidence),ref],check=True)
  subprocess.run(['python3',str(record),'build',str(repo),str(evidence),str(target/'release/crewd'),'cargo','build','--offline','--locked','--release','-p','crewd','--message-format=json'],env=dict(os.environ,CARGO_TARGET_DIR=str(target)),check=True)
  package=out/'crewd-linux-x86_64';(package/'bin').mkdir(parents=True);shutil.copy2(evidence/'crewd-presign',package/'bin/crewd')
+ if json.loads((out/'normal-build-witness.json').read_text()).get('freshWorkspaceArtifacts') is not True:raise ValueError('new Linux candidate requires fresh owning-workspace source proof')
  shutil.copytree(evidence,package/'normal-build');shutil.copy2(out/'normal-build-witness.json',package/'normal-build-witness.json')
  (package/'README.txt').write_text('PendingCrew development Linux backend candidate\nSource: '+ref+'\nUnpacking never installs a service or migrates data.\nRun bin/crewd --help to inspect commands. For explicit isolated use:\n  bin/crewd --data-dir /absolute/fresh-directory serve\nRemote access is disabled by default. Pairing requires an explicit authenticated local invitation and configuration.\nKeep normal-build/ and normal-build-witness.json with the binary.\nDo not replace a daily database or start a system service without separate authorization.\n')
- manifest={'format':1,'sourceRef':ref,'platform':'linux-x86_64','binary':'bin/crewd','binarySHA256':sha(package/'bin/crewd'),'witness':'normal-build-witness.json','witnessSHA256':sha(package/'normal-build-witness.json'),'distribution':'development-candidate','installed':False,'published':False}
+ manifest={'format':1,'sourceProofTier':'fresh-owning-workspace-production-graph','sourceRef':ref,'platform':'linux-x86_64','binary':'bin/crewd','binarySHA256':sha(package/'bin/crewd'),'witness':'normal-build-witness.json','witnessSHA256':sha(package/'normal-build-witness.json'),'distribution':'development-candidate','installed':False,'published':False}
  (package/'candidate.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
  subprocess.run(['python3',str(repo/'scripts/dev/check-crewd-linux-candidate.py'),str(package)],check=True)
  subprocess.run(['python3',str(repo/'scripts/dev/smoke-crewd-linux-candidate.py'),str(package),str(out/'runtime-smoke')],check=True)

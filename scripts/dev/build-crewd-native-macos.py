@@ -82,7 +82,7 @@ def main():
  source_rows=regular_inventory(snapshot);rust_rows=[r for r in source_rows if r['path'].startswith('crewd/')]
  requested=proof.requested_configuration(snapshot/'crewd')
  backend=pathlib.Path(args.backend).resolve();witness=pathlib.Path(args.witness).resolve()
- value,evidence=proof.verify_witness(witness,backend,proof.digest(rust_rows),requested)
+ value,evidence=proof.verify_witness(witness,backend,proof.digest(rust_rows),requested,require_fresh=True)
  # Carry the original complete compiler inputs/log/toolchain/binary proof.
  shutil.copytree(evidence,out/'backend-evidence');value['evidenceDirectory']='backend-evidence';save(out/'backend-witness.json',value)
  spm=pathlib.Path(args.spm).resolve();deps=out/'dependency-inputs';deps.mkdir()
@@ -129,7 +129,7 @@ def main():
  info.write_bytes(plistlib.dumps(plist))
  run(['codesign','--force','--deep','--sign','-',str(app)],snapshot,out/'signing.log')
  run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
- save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'dependencyInventoryFile':'dependency-build-inventory.json','dependencyInventorySHA256':sha(out/'dependency-build-inventory.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log'),'buildSettingsFile':'gui-build-settings.json','buildSettingsSHA256':sha(out/'gui-build-settings.json'),'buildSettingsLog':'gui-build-settings.log','buildSettingsLogSHA256':sha(out/'gui-build-settings.log'),'toolchainFile':'gui-toolchain.json','toolchainSHA256':sha(out/'gui-toolchain.json'),'toolchainLog':'gui-toolchain.log','toolchainLogSHA256':sha(out/'gui-toolchain.log')},'backend':{'mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
+ save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'dependencyInventoryFile':'dependency-build-inventory.json','dependencyInventorySHA256':sha(out/'dependency-build-inventory.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log'),'buildSettingsFile':'gui-build-settings.json','buildSettingsSHA256':sha(out/'gui-build-settings.json'),'buildSettingsLog':'gui-build-settings.log','buildSettingsLogSHA256':sha(out/'gui-build-settings.log'),'toolchainFile':'gui-toolchain.json','toolchainSHA256':sha(out/'gui-toolchain.json'),'toolchainLog':'gui-toolchain.log','toolchainLogSHA256':sha(out/'gui-toolchain.log')},'backend':{'sourceProofTier':'fresh-owning-workspace-production-graph','mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
  (out/'artifact-sha256.txt').write_text(sha(original)+'  '+str(original)+'\n'+sha(helper)+'  '+str(helper)+'\n')
  print('BUILT isolated candidate; not launched/installed/released:',app)
 if __name__=='__main__':
