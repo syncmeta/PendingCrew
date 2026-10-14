@@ -69,7 +69,13 @@ def log(base,item,snapshot,input_digest,kind):
 
 def main():
  app=pathlib.Path(sys.argv[1]).resolve();base=app.parent
- manifest_path=regular(base,'build-inputs.json');manifest=load(manifest_path);proof=load(regular(base,'build-provenance.json'))
+ manifest_path=regular(base,'build-inputs.json')
+ with manifest_path.open() as f:format_value=json.load(f).get('format')
+ if format_value==2:
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('native_proof',pathlib.Path(__file__).with_name('check-crewd-native-provenance.py'))
+  module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);module.check(app);return
+ manifest=load(manifest_path);proof=load(regular(base,'build-provenance.json'))
  source=hexsha(manifest.get('sourceRef'),40)
  if manifest.get('sourceSelection')!='committed-archive' or proof.get('sourceRef')!=source:fail('GUI/backend source selection mismatch')
  if (base/'source-head.txt').read_text()!=source+'\n':fail('source-head does not bind frozen input')
@@ -111,6 +117,7 @@ def main():
  packaged=proof.get('packaged',{})
  if packaged.get('guiSHA256')!=sha(app/'Contents/MacOS'/executable) or packaged.get('helperSHA256')!=sha(app/'Contents/Helpers/crewd'):fail('packaged binary hashes differ from build proof')
  print('PASS: immutable full GUI/Rust inputs, actual pre-sign evidence, logs and packaged digests pair')
-try:main()
-except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError) as e:
- print('FAIL: '+str(e),file=sys.stderr);sys.exit(1)
+if __name__=='__main__':
+ try:main()
+ except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError) as e:
+  print('FAIL: '+str(e),file=sys.stderr);sys.exit(1)
