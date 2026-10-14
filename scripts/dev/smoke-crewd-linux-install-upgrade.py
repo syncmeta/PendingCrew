@@ -16,7 +16,7 @@ def main():
  oldmeta=json.loads((old/'candidate.json').read_text());newmeta=json.loads((new/'candidate.json').read_text())
  if oldmeta['sourceRef']==newmeta['sourceRef'] or oldmeta['binarySHA256']==newmeta['binarySHA256']:raise ValueError('two real immutable versions required; same tar is not upgrade acceptance')
  env={'PATH':'/usr/bin:/bin','HOME':str(home),'XDG_CACHE_HOME':str(home/'cache'),'SHELL':'/usr/bin/false'}
- records=[]
+ records=[];live_daemons=set();terminal_witnesses=[];observer_witnesses=[]
  def install(label,action,request,expected,package=None,source=None,want=True):
   cmd=[sys.executable,str(installer),action,'--prefix',str(prefix),'--request-id',request,'--expected-current',expected or 'none']
   if package:cmd+=['--package',str(package)]
@@ -34,13 +34,26 @@ def main():
   r=subprocess.run(cmd,env=env,capture_output=True,timeout=30);(out/(label+'.log')).write_bytes(r.stdout+r.stderr)
   if (r.returncode==0)!=want:raise ValueError('packaged CLI result mismatch: '+label)
   return r
+ def observer_quiescent(path):
+  if live_daemons:raise ValueError('immutable observer requires physically terminal fixture daemons')
+  for suffix in ['-wal','-journal']:
+   side=pathlib.Path(str(path)+suffix)
+   if side.exists() and side.stat().st_size:raise ValueError('immutable observer refuses nonempty pending '+suffix+'; no cleanup or stale-main read')
  def dbversion(path=data/'crewd.db'):
-  with contextlib.closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as c:return c.execute('PRAGMA user_version').fetchone()[0]
+  # Every call is after a confirmed daemon stop, completed normal CLI, or an
+  # independent finished backup. mode=ro alone creates empty WAL/SHM observers.
+  observer_quiescent(path)
+  before={p.name:sha(p) for p in path.parent.glob(path.name+'*') if p.is_file()}
+  with contextlib.closing(sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1',uri=True)) as c:version=c.execute('PRAGMA user_version').fetchone()[0]
+  after={p.name:sha(p) for p in path.parent.glob(path.name+'*') if p.is_file()}
+  observer_witnesses.append({'path':str(path),'version':version,'before':before,'after':after,'terminalDaemons':list(terminal_witnesses)})
+  (out/'observer-witnesses.json').write_text(json.dumps(observer_witnesses,sort_keys=True,indent=2)+'\n')
+  assert before==after,'version observer changed physical files'
+  return version
  def refusal_snapshot():
   # Finished daemon and explicitly closed observers precede this immutable read.
   # Never ignore a nonempty WAL or checkpoint on behalf of the old program.
-  wal=data/'crewd.db-wal'
-  if wal.exists() and wal.stat().st_size:raise ValueError('refusal baseline has nonempty WAL; preserve it instead of assuming main DB authority')
+  observer_quiescent(data/'crewd.db')
   with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?immutable=1&mode=ro',uri=True)) as c:
    schema=c.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
    tables={}
@@ -71,7 +84,7 @@ def main():
   log=out/'wrapper-child.log'
   wrapper='import subprocess,sys; f=open(sys.argv[1],"wb"); p=subprocess.Popen(sys.argv[2:],stdout=f,stderr=f); print(p.pid,flush=True)'
   r=subprocess.run([sys.executable,'-c',wrapper,str(log),*cmd],env=env,capture_output=True,text=True,check=True,timeout=10)
-  pid=int(r.stdout.strip());observed=birth(pid)
+  pid=int(r.stdout.strip());observed=birth(pid);live_daemons.add(pid)
   try:
    for _ in range(200):
     assert birth(pid)==observed
@@ -92,12 +105,14 @@ def main():
     except FileNotFoundError:break
     time.sleep(.05)
    else:raise ValueError('own wrapper child did not physically exit')
+  live_daemons.discard(pid);terminal_witnesses.append({'phase':'owned-wrapper-child','pid':pid,'birth':observed,'state':'physically gone or zombie; exit status unavailable'})
+  (out/'daemon-terminal-witnesses.json').write_text(json.dumps(terminal_witnesses,sort_keys=True,indent=2)+'\n')
   records.append({'phase':'managed-wrapper-death-child-survival','ownChildPID':pid,'birth':observed,'wrapperExit':r.returncode,'liveChildLeaseRetained':True})
  @contextlib.contextmanager
  def serve(label):
   cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false','--codex-env','HOME='+str(home),'--claude-env','HOME='+str(home)]
   with (out/(label+'.log')).open('w') as log:
-   p=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None
+   p=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None;live_daemons.add(p.pid)
    try:
     for _ in range(200):
      if p.poll() is not None:raise ValueError('installed runtime exited: '+label)
@@ -125,6 +140,8 @@ def main():
     try:p.wait(timeout=20)
     except subprocess.TimeoutExpired:p.kill();p.wait();raise ValueError('installed shutdown exceeded deadline')
     if p.returncode!=0:raise ValueError('installed shutdown failed')
+    live_daemons.discard(p.pid);terminal_witnesses.append({'phase':label,'pid':p.pid,'waitExit':p.returncode,'physicallyReaped':True})
+    (out/'daemon-terminal-witnesses.json').write_text(json.dumps(terminal_witnesses,sort_keys=True,indent=2)+'\n')
  # Controlled related-process metadata negatives are distinct from actual
  # managed daemon acceptance below; no forced real PID reuse is claimed.
  spec=importlib.util.spec_from_file_location('installer_control',installer);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -233,7 +250,8 @@ def main():
  with serve('recovered-new') as call:
   assert call('todo.create',params)['requirementId']==requirement and call('todo.create',postparams)['requirementId']==post
  assert dbversion()==args.new_schema
- with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro',uri=True)) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
+ observer_quiescent(data/'crewd.db')
+ with contextlib.closing(sqlite3.connect((data/'crewd.db').as_uri()+'?mode=ro&immutable=1',uri=True)) as c:assert c.execute('PRAGMA integrity_check').fetchone()==('ok',)
  (out/'result.json').write_text(json.dumps({'passed':True,'oldSourceRef':oldmeta['sourceRef'],'newSourceRef':newmeta['sourceRef'],'oldBinarySHA256':oldmeta['binarySHA256'],'newBinarySHA256':newmeta['binarySHA256'],'schemas':[11,args.new_schema,11,args.new_schema],'explicitIsolatedPrefix':str(prefix),'runtimeSwitchRefused':True,'preparedFailureUnknownRetained':True,'droppedReceiptReadback':True,'requestPayloadConflictRefused':True,'rollbackNeverTouchedDB':True,'oldBinaryRefusedNewSchema':True,'ordinaryUID':os.geteuid(),'managedLeaseAcrossExec':True,'wrapperDeathChildLease':True,'concurrentWriterSingleCASWinner':True,'formalCoreRestoreOnly':True,'requestIdentitiesPreserved':[requirement,post],'phaseRecords':records},indent=2)+'\n')
  print('PASS ordinary-user explicit Linux install/upgrade/failure/unknown/rollback/authoritative Core restore/restart; no system service or model')
 try:main()

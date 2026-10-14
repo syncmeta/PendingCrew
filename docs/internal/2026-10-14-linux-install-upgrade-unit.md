@@ -57,3 +57,16 @@ The exact batch input file hashes and owning HEAD are recorded separately from c
 
 
 归档影响审找到真实smoke source-controls `/proc/123/exe` 保留同flow内部绝对dangling引用。原“任何绝对链接都拒”的规则会使已完成业务链的归档必失败。修复不改原证据链接：manifest保originalTarget，tar只将同ownedroot内绝对引用序列化为等效内部相对target；内相对引用原样保留，任何外逃仍拒。实际直接执行production smoke的整个source-controls block再交production archive与private extract consumer，覆盖原绝对dangling、内部绝对existing、relative dangling/alias、outside absolute拒绝无output；源target未改变。证据 `/private/tmp/pcw-linux-actual-smoke-archive-shapes-02/result.json`。这是归档真实形状准备层，不改原4e failure为安装PASS，不复跑旧业务。
+
+
+## 8d拒绝物理RED与观察器因果闭环
+
+实际run38547586374/source8d复用4e规范normal13，没有编译；来源消费与804成员不解引用归档通过。old11真实拒绝13>11。阶段证据确认main DB 503808B与db.id 45B完全相同，version13、全schema和50表rows相同；before的0B WAL与32768B SHM在old11退出后消失。严格物理断言仍RED，恢复尾段未执行，原日志/ZIP/阶段证据不改标。
+
+只复制QA提供的实际8d DB/id，未改原证据。旧production dbversion(mode=ro)在现有bundled Python/SQLite3.53.1上生成与阶段完全相同的0B WAL和32768B SHM（SHA fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb），main/id未变；immutable读不创建侧文件。系统Apple SQLite3.54对此副本mode=ro返回CANTOPEN，未作为正向证据。证明 `/private/tmp/pcw-linux-actual-observer-immutable-controls-03/actual8d-production-cause.json`，明确平台差异，不替代实际Linux复验。
+
+另用既有实际Mac normal13与old11，在新私有fake-only根执行smoke相同serve/SIGTERM/wait：normal13物理退出0后、任何SQLite观察前，DB/id存在但无WAL/SHM。三个独立副本分别证明：无observer→old11拒绝全部物理不变；旧RO observer→生成上述侧文件→old11拒绝后侧文件消失；immutable observer→old11拒绝全部物理不变。自有daemon均已退出、没有模型调用，remote.status确认不监听。证明 `/private/tmp/pcw-obs-mac13-ptjhmplw/result.json` 和 daemon-terminal-before-observer.json；这是Mac停法及原观察入口的因果证据，不冒Linux安装通过。临时控制前三次资格/参数/断言编写错误及日志保留，最终完整矩阵GREEN。
+
+smoke统一dbversion、拒绝snapshot和最后integrity为显式close的immutable观察；只允许fixture daemon已确认物理终态或独立完成backup。跟踪全部自有活daemon与wait/退场事实，非空WAL/journal拒绝，不cleanup、不读过时main。dbversion保存所有DB相关文件前后SHA并要求完全相等；原old11 full physical/schema/all-table断言及恢复尾段保留。实际新production函数对8d副本、Mac停态数据、独立backup均零物理/域副作用；live daemon和非空WAL/journal四负例拒绝，证明 `/private/tmp/pcw-linux-actual-observer-immutable-controls-03/new-production/result.json`。SQLite官方[immutable语义](https://www.sqlite.org/uri.html)和[readonly WAL行为](https://sqlite.org/wal.html)提供机制依据，实际结论以上述控制为准。
+
+只冻结fixture及记录，不改old11、不放宽侧文件保护、不重编4e normal、不重跑已足证CI/16本地门禁。真实Linux终态和恢复尾段仍待质量接受后唯一必要剩余运行；若仍有物理差异，停止observer重试并交兼容安全方案裁决。
