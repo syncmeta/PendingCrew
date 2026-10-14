@@ -321,16 +321,20 @@ impl Manager {
             }
             "remote.grants" => {
                 parse_no_params(params)?;
-                let identity = self.ensure_identity().await?;
-                let authority = identity.public.authority_id.clone();
-                serde_json::to_value(
-                    self.db
-                        .call(move |s| facts::grants(s.conn(), &authority))
-                        .await
-                        .map_err(store_error)?
-                        .map_err(store_error)?,
-                )
-                .map_err(dispatch::internal)
+                // A directory read must not create private credentials or bind
+                // a new authority while remote access is still disabled.
+                let grants = self
+                    .db
+                    .call(|s| -> crewd_store::Result<_> {
+                        match facts::identity(s.conn())? {
+                            Some(identity) => facts::grants(s.conn(), &identity.authority_id),
+                            None => Ok(Vec::new()),
+                        }
+                    })
+                    .await
+                    .map_err(store_error)?
+                    .map_err(store_error)?;
+                serde_json::to_value(grants).map_err(dispatch::internal)
             }
             "remote.configure" => self.configure(parse_params(params)?).await,
             "remote.invite" => self.invite(parse_params(params)?).await,
