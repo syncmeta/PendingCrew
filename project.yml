@@ -494,6 +494,7 @@ targets:
       - path: Sources/Chat/Vendored/Platform.swift
       - path: Sources/Chat/Vendored/ColorHex.swift
       - path: Sources/Chat/Vendored/ColorHash.swift
+      - path: Sources/Mac/Design/CrewColorHash.swift
       - path: Sources/Chat/Vendored/AppearanceMode.swift
       - path: Sources/Chat/Vendored/Theme.swift
       - path: Sources/Chat/Vendored/AppThemeAlias.swift

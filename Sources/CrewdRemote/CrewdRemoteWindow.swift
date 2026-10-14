@@ -14,7 +14,7 @@ import Combine
     private var selectionEpoch=UUID()
     private var selectedReceipt:CrewdRemoteReceipt?
     let pairing: CrewdRemotePairing
-    init(pairing: CrewdRemotePairing = CrewdRemotePairing(credentials: CrewdRemoteKeychain())) {
+    init(pairing: CrewdRemotePairing = CrewdRemotePairing(credentials: CrewdRemoteCredentials.application())) {
         self.pairing = pairing
         changes=NotificationCenter.default.publisher(for:CrewdRemotePairing.changed).sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }

@@ -404,6 +404,7 @@
 		775479DE376FC7E120BBD12D /* DaemonLaunchRace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2C22C2425851962C0C794F9 /* DaemonLaunchRace.swift */; };
 		775B015401EFF85683E86364 /* PendingCrewBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3431B4DF325BB67DBBFAFA45 /* PendingCrewBackend.swift */; };
 		77630015074853443A2E4F45 /* QuotaRingsFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93CD26BD9526E89ECB13D98F /* QuotaRingsFooter.swift */; };
+		77E543AA893CA03D07C78C2F /* CrewColorHash.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35628BFE9FF1852C997981E /* CrewColorHash.swift */; };
 		77FB4BFAB3B9F44465A53DDB /* AgentSessionResumeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F120113417554A5AFE182C8F /* AgentSessionResumeTests.swift */; };
 		7868143E494C5BB3E71A5B1A /* CaptainBriefDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BC3153376478000FA529F3 /* CaptainBriefDeliveryTests.swift */; };
 		797555301B1D57CE5DBCE75C /* AgentTerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0F5E7501DDF890EA04C5EA /* AgentTerminalSession.swift */; };
@@ -3004,6 +3005,7 @@
 				1AAB1B34C5492E9C39349B3D /* CrewChildCreationTargetTests.swift in Sources */,
 				373C9A7E3824631F2AFFA26F /* CrewCockpitWritePermission.swift in Sources */,
 				456CE7BDCE23260B94849FDE /* CrewCockpitWritePermissionTests.swift in Sources */,
+				77E543AA893CA03D07C78C2F /* CrewColorHash.swift in Sources */,
 				381AC8C5FBF55D883BF7EB0B /* CrewCommandDrainLogTests.swift in Sources */,
 				A5094CA030EC72BE9EE591D2 /* CrewCommunicationViewTests.swift in Sources */,
 				4F0CFAB07657B8164B0CCE15 /* CrewComposerDraftStoreTests.swift in Sources */,
