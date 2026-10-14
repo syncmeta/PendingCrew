@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 实际新窗口与Linux14独立推进检查点
+
+最终11实际新A launch经具体guard/root审与automaticreview允许，require_escalated/TTY一次产生GUI72180/helper72198真实birth/父子/包code/env/cwd/UnixFD14hello资格。namespace/UIcache0700、legacy空/无旧业务副作用、实际exactCodepin与私有chooser通过；不冒新PID/publisher/ownedQuit。真实atomic请求eaf40f38-5c47-4226-bd6d-bf457f2a7417已committed，实际crew/首消息唯一且channel=/human。
+
+原前端整块domain仍FAIL：emptychannel labels/未显示首消息/未确认composer，实际workList选/lobby与首消息/human不一致。客户端唯一作者修完整投影/当前频道路径并保原request不重放；旧11和liveA现场不重启、不造DTO、不启动模型。QA两个owned记录已更新事实与安全停点；B新PID/非ownerQuit、AownedQuit、S正式TLS真实PTY及设备等仍未执行。
+
+Linux14完整平台六路径299b09bc532cf7b75a23ca6650930fa74775cdc3已质量接受，根精确整合为d010c1472fd85db4f15c9a1c941ca7c15453e372、6files==299/crewd==8a并普通push。唯一必要run38600963667实际HEADd010、linux14_install_recovery=true/oldfalse、单Linuxjob在途；新defaultrelease来源与13→14/真实WALcrash/未知/CAS/物理拒旧13/restore13-old-reopen/restore14-new-reopen完整尾段未验。Maccausal02和历史13来源reader仅前置，不冒Linux产物。自动push/PR仍关闭，不重复旧11→13/Apple/fullCI。Native15继续源码与下一精确SDK零forward无模型提案准备，未激活/调用。新根文档提交不改变实际11compiled440或runHEADd010。
+
 ## 2026-10-15 原前端14完整Apple产物准备单元接受
 
 最终不可变11目录 /private/tmp/pcw-original-frontend-candidate14-440ffc67-11，GUI实际完整输入440ffc67c2288aff9b5947991711fb22cf3f56df、inputdigest4ac7ed2728efabf81366df2bc52c10003072510b67124c44dd679a6cc369bebd；Mac8529/iPhoneOS87105/Simulator31475三完整target均实际terminal0。独立报告 /private/tmp/pcw-original-front14-11-wholeApple-independent.json 接受准备层：1343 Gitfiles与3738 SPM前后、完整settings/commands/logs/actualSDK27 arm64，Mac deepstrict签名及实际debug/preview dylib/CodeResources核齐。后台如实复用normal05 compiled8a、390输入与原强证明，不把GUI全ref或本文后续doc提交称后台新编译。11实际产物已静止，后续构建文件改变不改旧来源。
