@@ -255,6 +255,47 @@ pub fn apply_with(
     ApplyOutcome::Failed(single.err().unwrap_or(0))
 }
 
+/// One logical runner can own a helper and several native incarnations.
+/// Slots are core-generated, never a provider-supplied file path or team identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessParticipant {
+    AcpHelper {
+        generation: uuid::Uuid,
+    },
+    AcpNative {
+        generation: uuid::Uuid,
+        epoch: u64,
+    },
+    AcpBridge {
+        generation: uuid::Uuid,
+        epoch: u64,
+        slot: u64,
+    },
+}
+impl ProcessParticipant {
+    pub(crate) fn key(self) -> io::Result<String> {
+        match self {
+            Self::AcpHelper { generation } if !generation.is_nil() => {
+                Ok(format!("@acp/{generation}/helper"))
+            }
+            Self::AcpNative { generation, epoch } if !generation.is_nil() && epoch != 0 => {
+                Ok(format!("@acp/{generation}/native/{epoch}"))
+            }
+            Self::AcpBridge {
+                generation,
+                epoch,
+                slot,
+            } if !generation.is_nil() && epoch != 0 && slot != 0 => {
+                Ok(format!("@acp/{generation}/bridge/{epoch}/{slot}"))
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid process participant",
+            )),
+        }
+    }
+}
+
 /// 「如果我下一秒崩了，回来之后该去看哪些 pid」。JSON 文件，0600，整份原子替换。
 #[derive(Debug)]
 pub struct ProcessRegistry {
@@ -298,6 +339,35 @@ impl ProcessRegistry {
         let mut entries = self.entries.lock().expect("登记表锁中毒");
         entries.insert(session_id.to_string(), identity);
         self.persist(&entries)
+    }
+
+    /// The sole core writer records both process groups without overwriting one
+    /// orphan obligation. Runtime authority retains the actual logical session.
+    pub fn record_participant(
+        &self,
+        session_id: &str,
+        participant: ProcessParticipant,
+        identity: ProcessIdentity,
+    ) -> io::Result<String> {
+        crate::resume::check_agent_session_id(session_id)?;
+        let key = participant.key()?;
+        self.restrict_birth(session_id, identity.clone())?;
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| io::Error::other("process registry unavailable"))?;
+        if let Some(existing) = entries.get(&key) {
+            if existing != &identity {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "process participant already owned",
+                ));
+            }
+        } else {
+            entries.insert(key.clone(), identity);
+        }
+        self.persist(&entries)?;
+        Ok(key)
     }
 
     /// Actual kernel birth only; this restrictive history is never removed by forget.
@@ -424,6 +494,70 @@ mod tests {
             boot_id: String::new(),
             command: "claude".to_string(),
         }
+    }
+
+    #[test]
+    fn participants_preserve_both_orphan_groups_and_one_logical_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.json");
+        let registry = ProcessRegistry::load(&path).unwrap();
+        let generation = uuid::Uuid::new_v4();
+        registry.record("legacy", identity(10, 10)).unwrap();
+        let helper = registry
+            .record_participant(
+                "worker",
+                ProcessParticipant::AcpHelper { generation },
+                identity(20, 20),
+            )
+            .unwrap();
+        let native = registry
+            .record_participant(
+                "worker",
+                ProcessParticipant::AcpNative {
+                    generation,
+                    epoch: 1,
+                },
+                identity(30, 30),
+            )
+            .unwrap();
+        assert_ne!(helper, native);
+        assert_eq!(registry.entries().len(), 3);
+        let authority = registry.authority_snapshot().unwrap();
+        assert_eq!(
+            authority
+                .spawned
+                .iter()
+                .filter(|(source, _)| source == "worker")
+                .count(),
+            2
+        );
+        assert!(
+            registry
+                .record_participant(
+                    "worker",
+                    ProcessParticipant::AcpNative {
+                        generation,
+                        epoch: 1
+                    },
+                    identity(31, 31)
+                )
+                .is_err()
+        );
+        assert_eq!(
+            registry
+                .entries()
+                .iter()
+                .find(|(key, _)| key == &native)
+                .unwrap()
+                .1
+                .pid,
+            30
+        );
+        registry.forget(&helper).unwrap();
+        let reloaded = ProcessRegistry::load(&path).unwrap();
+        assert_eq!(reloaded.entries().len(), 2);
+        assert!(reloaded.entries().iter().any(|(key, _)| key == &native));
+        assert!(reloaded.entries().iter().any(|(key, _)| key == "legacy"));
     }
 
     /// 记下每次「发信号」调用、从不真发的杀手。

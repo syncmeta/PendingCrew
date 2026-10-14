@@ -7,6 +7,7 @@ pub mod control;
 pub mod dispatch;
 pub mod hub;
 pub mod ledger;
+pub mod native_receipts;
 pub mod orchestra;
 pub(crate) mod peer;
 pub(crate) mod remote;
@@ -375,7 +376,15 @@ async fn serve_with_hooks_inner(
     if let Some(o) = &opts.orchestra {
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
     }
-    let db = Db::spawn(Store::open_data_dir(&data_dir)?)?;
+    let store = Store::open_data_dir(&data_dir)?;
+    // Registry recovery and the data-directory lock precede this transaction.
+    // Stored birth/session receipts are observations, never fresh authority.
+    {
+        let tx = store.conn().unchecked_transaction()?;
+        crewd_store::native_execution::invalidate_unknown(&tx)?;
+        tx.commit()?;
+    }
+    let db = Db::spawn(store)?;
     let hooks = hooks.unwrap_or_else(|| orchestra::hooks::Hooks {
         extras: Arc::new(orchestra::work_context::WorkContext(db.clone())),
         idle: Arc::new(orchestra::work_idle::WorkIdle(db.clone())),
@@ -812,6 +821,78 @@ mod tests {
         assert!(err.to_string().contains("另一个 crewd"), "{err}");
         drop(first);
         lock_data_dir(root.path()).unwrap();
+    }
+    #[tokio::test]
+    async fn actual_daemon_restart_revokes_native_receipts_before_socket_ready() {
+        use crewd_store::native_execution as n;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let id = || uuid::Uuid::new_v4().to_string();
+        let runtime = n::Runtime {
+            id: id(),
+            session: "restart-native".into(),
+            generation: id(),
+            epoch: 1,
+            native_pid: 42,
+            native_start: 123,
+            native_boot: "synthetic-kernel-fixture".into(),
+        };
+        let request = id();
+        {
+            let store = Store::open_data_dir(&data).unwrap();
+            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('restart-crew','fixture','now','now'); INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('restart-native','restart-crew','worker','claude','now');").unwrap();
+            let tx = store.conn().unchecked_transaction().unwrap();
+            n::register(&tx, &runtime).unwrap();
+            n::prepare(&tx, &runtime.id, &request, b"restart never replay", "now").unwrap();
+            tx.commit().unwrap();
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(serve(data.clone(), async {
+            let _ = rx.await;
+        }));
+        let stream = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Ok(s) = tokio::net::UnixStream::connect(data.join("crewd.sock")).await {
+                    break s;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let conn = rusqlite::Connection::open(data.join(crewd_store::DB_FILE)).unwrap();
+        let receipt = n::get(&conn, &request).unwrap().unwrap();
+        assert_eq!(receipt.phase, n::Phase::Unknown);
+        let state: (i64, i64) = conn
+            .query_row(
+                "SELECT revoked,manual FROM native_execution_runtimes WHERE runtime_id=?1",
+                [&runtime.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, (1, 1));
+        drop(conn);
+        drop(stream);
+        tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+        let store = Store::open_data_dir(&data).unwrap();
+        let dbtx = store.conn().unchecked_transaction().unwrap();
+        assert!(
+            n::accept_content(
+                &dbtx,
+                &runtime.id,
+                &request,
+                receipt.revision,
+                &id(),
+                b"restart never replay",
+                "later"
+            )
+            .is_err()
+        );
+        assert!(n::revoke_before_raw(&dbtx, &runtime.id, 1, "later").is_err());
+        assert_eq!(n::invalidate_unknown(&dbtx).unwrap(), 0);
+        dbtx.commit().unwrap();
     }
     #[tokio::test]
     async fn t11_shutdown_closes_idle_client_connections() {

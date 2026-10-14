@@ -39,6 +39,7 @@ pub struct PtyProcess {
 /// PTY 主端。
 pub struct PtyMaster {
     fd: AsyncFd<OwnedFd>,
+    observer: Option<std::sync::Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
 
 fn winsize(cols: u16, lines: u16) -> Winsize {
@@ -52,6 +53,16 @@ fn winsize(cols: u16, lines: u16) -> Winsize {
 
 /// 起进程。必须在 tokio 运行时里调用（主端要注册到 reactor）。
 pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
+    spawn_pty_gated(spec, None)
+}
+/// An optional controlled native birth barrier is completed before exec; default launches unchanged.
+pub fn spawn_pty_gated(
+    spec: &SpawnSpec,
+    gate: Option<&crate::acp::birth::BirthGate>,
+) -> io::Result<PtyProcess> {
+    let birth = gate
+        .map(crate::acp::birth::BirthGate::prepare)
+        .transpose()?;
     let pty = rustix_openpty::openpty(None, Some(&winsize(spec.cols, spec.lines)))?;
     let (master, slave) = (pty.controller, pty.user);
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -76,9 +87,12 @@ pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
         .stderr(Stdio::from(slave));
     // SAFETY: 闭包只做 async-signal-safe 的裸系统调用（setsid、ioctl），不分配内存。
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             rustix::process::setsid()?;
             rustix::process::ioctl_tiocsctty(rustix::stdio::stdin())?;
+            if let Some(gate) = &birth {
+                gate.wait_before_exec()?;
+            }
             Ok(())
         });
     }
@@ -91,17 +105,35 @@ pub fn spawn_pty(spec: &SpawnSpec) -> io::Result<PtyProcess> {
     Ok(PtyProcess {
         child,
         pid,
-        master: PtyMaster { fd },
+        master: PtyMaster { fd, observer: None },
     })
 }
 
 impl PtyMaster {
+    /// Attach before the owning driver begins reading; every read path observes exactly once.
+    pub fn observe_output(
+        &mut self,
+        observer: std::sync::Arc<dyn crate::acp::terminal::TerminalObserver>,
+    ) {
+        self.observer = Some(observer);
+    }
+    fn observed(&self, bytes: &[u8]) {
+        if !bytes.is_empty()
+            && let Some(observer) = &self.observer
+        {
+            observer.observe(bytes);
+        }
+    }
+
     /// 不等：此刻读得到就读一块（`Some(n)`，`Some(0)` = 从端全关了），读不到 = `None`。直接对 fd 做一次非阻塞读，
     /// 不看 tokio 的就绪缓存（缓存可能还没反映刚到的字节）；之后 `read` 遇到过期的就绪会自己清掉再等。
     pub fn try_read(&self, buf: &mut [u8]) -> io::Result<Option<usize>> {
         loop {
             match rustix::io::read(self.fd.get_ref(), &mut *buf).map_err(io::Error::from) {
-                Ok(n) => return Ok(Some(n)),
+                Ok(n) => {
+                    self.observed(&buf[..n]);
+                    return Ok(Some(n));
+                }
                 Err(e) if e.raw_os_error() == Some(libc::EIO) => return Ok(Some(0)),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
@@ -117,7 +149,10 @@ impl PtyMaster {
             match guard
                 .try_io(|fd| rustix::io::read(fd.get_ref(), &mut *buf).map_err(io::Error::from))
             {
-                Ok(Ok(n)) => return Ok(n),
+                Ok(Ok(n)) => {
+                    self.observed(&buf[..n]);
+                    return Ok(n);
+                }
                 Ok(Err(e)) if e.raw_os_error() == Some(libc::EIO) => return Ok(0),
                 Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Ok(Err(e)) => return Err(e),
@@ -170,6 +205,39 @@ impl PtyMaster {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn raw_tap_observes_real_pty_once_across_async_and_drain_reads() {
+        use crate::acp::terminal::TerminalTap;
+        let mut p = spawn_pty(&sh("printf '\\033[32m原生🙂\\033[0m'; exit 0")).unwrap();
+        let tap = std::sync::Arc::new(TerminalTap::new(1, 64).unwrap());
+        let mut observed = tap.subscribe();
+        p.master.observe_output(tap);
+        let mut actual = Vec::new();
+        let mut buf = [0u8; 3];
+        let n = p.master.read(&mut buf).await.unwrap();
+        actual.extend_from_slice(&buf[..n]);
+        loop {
+            match p.master.try_read(&mut buf).unwrap() {
+                Some(0) => break,
+                Some(n) => actual.extend_from_slice(&buf[..n]),
+                None => {
+                    let n = p.master.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    actual.extend_from_slice(&buf[..n]);
+                }
+            }
+        }
+        assert!(p.child.wait().await.unwrap().success());
+        let mut mirrored = Vec::new();
+        while let Ok(frame) = observed.try_recv() {
+            mirrored.extend_from_slice(&frame.bytes);
+        }
+        assert_eq!(actual, "\x1b[32m原生🙂\x1b[0m".as_bytes());
+        assert_eq!(mirrored, actual);
+    }
 
     fn sh(script: &str) -> SpawnSpec {
         let mut env = BTreeMap::new();

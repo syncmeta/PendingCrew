@@ -1,5 +1,32 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 原前端交付方向纠偏（2026-10-14，当前优先）
+
+用户再次明确要求在原 PendingCrew 前端基础上推进。保留实际 PendingCrewApp → RootView → MacThreePaneView 与原通讯录/消息/群聊/会话视图，客户端底层迁移至唯一 crewd authority，再将 Todo、文档、进展融入原布局。独立 Native 工作区只保留为迁移与验证材料，不作为最终产品入口。已验后台和稳定业务证据复用，不因前端纠偏重做后台；独立新窗口通过不能代替原前端完整流程验收。
+
+客户端线拥有原视图、Swift 接线与候选构建；后端线唯一拥有公共协议、schema 与真实执行/恢复能力；质量线按原前端真实用户流程独验。当前公共 crew.create/message.post/session.start 没有 requestId/status，客户端 UUID 不等于服务端幂等：暂用 single-submit、保留原 authority 与 unknown snapshot、只读核对及人工确认，禁止旧本地 outbox/rollback/跨群重放。最终耐久交付依赖正式公共可靠请求与恢复接口。真实 PTY 输入/resize/观察仍是 M4 既定交付缺口，不将只读屏幕冒完整交互终端。附件上传仍遵守既有非空 attachments 拒绝政策，完整上传协议未定，不以静默丢附件或客户端文件路径绕过。
+
+Core12 原子迁移、正常后台和私有持久收件子单元已有独立证据，整块 M4 尚未完成。M5 schema13 与原前端、Linux 安装升级分别继续，只有真实依赖等待。当前 Core follow-up run38509489542 精确 a76cae4804cb26c62f4e2a64c993dbe18822758f，只验证受影响三例、严格 lint、doctest 和 CLI testkit 差异，不能称全量 CI 或历史 all-features 成功。候选来源还须区分旧完整字节输入证明与新的自有依赖实际重新编译证明；不重标旧 normal 包。
+
+用户已明确授权普通推送到现有三条 codex 开发分支；不扩为 main 推送、安装、日常数据切换、公开发布或真实模型验收。
+
+## 2026-10-14 新会话明确恢复与三线固定责任
+
+用户在新会话明确要求从现有检查点持续推进完整工程。此授权恢复下节停手记录所暂停的工程，不抹去原始停手、失败及未知证据。新目标保持 active；主代理只统筹范围、接口、冻结、整合与交付，不代写日常实现。
+
+接手实核：global `351797245677802d3c41e97396c97dc964c7c09d`、client `e1ea6fc8c0eb3ae0a4dd2396703033d9c0ffcbdd`、backend `c2fbd2bdef6678d21fb74bae2a18b394a92410fe` 均 clean，实时远端同 SHA；main 本地与远端均 `fe68022f3cfc9af368282d90a44e69f1d8ce8f0a`。main 的 README、design 与旧 ACP 未提交资料仍保留。磁盘实核约 5 GiB 可用。只读进程核验发现旧 a9 GUI PID1352/helper1396 和旧 helper77539 仍运行，无 Cargo/rustc/Xcode/Claude；不停止、不认作新候选证据。原交接的自有句柄终态不能外推所有历史应用退出。
+
+固定唯一写者与完成责任：
+
+- backend：M4 完整 PTY/ACP、Core 持久收件、正式 11→12、审批/取消/停止/恢复/混合路由；随后 M5 确定性事实跟进与调度。独占 Rust 产品、公共 schema/proto/Core/server 与 Cargo/Rust 构建文件。当前唯一共享 Rust 编译所有者，目录 `/private/tmp/pcw-decision-target`，交接必须明确。
+- client_delivery：完整 Swift/Native 客户端、Xcode/SPM/project 与候选 recipe/checker、平台分发。先组合 schema11 最终修正与 Native 全部源码，保留 global 后续 QA 资产；完成专用候选全目标构建、对应完整输入的 normal helper、新不可变 v2 包。M4 冻结后只按影响范围更新最终组合。随后窗口/设备与剩余平台交付；不自行修改公共 Rust。
+- quality：独立权限、耐久性、未知结果、恢复、完整生命周期、最终产物来源和用户流程验收。新增独立质量资产；不兼任产品实现。缺陷直接交作者修复复验，源码冻结按影响范围检查，复用已验稳定业务。
+- root：global 统筹文档与 Git 整合唯一写者，维护依赖/接口/版本/最终交付。作者内部小项继续本模块，只在模块冻结、实际阻断或架构决策时交根。
+
+正式12只依赖已验11后台，不等待全部设备/分发。schema11 专用构建和交付准备不等待整个 M4。旧 normal28 witness 不能覆盖后来 test-only 输入；新包必须保留完整实际 Rust/GUI/SPM/SDK/配置与二进制证明。标准 CI 成功不覆盖因 ENOSPC 中断的额外 all-features 测试。
+
+复用现有 Xcode/SPM 缓存，不另建冷编译目录。仅按明确清单回收终态可再生缓存，保留源码、数据库、日志、实际二进制、SDK对象与来源证据。安装、日常数据切换、公开发布、真实模型验收分别核具体授权；App 权限等待只阻塞相关流程。原固定 metadata 假凭据/local mock/no-model 范围授权保留，trust 未确认/types unknown；下一步只按原 scope 实际菜单逐键检查。Jev/个人记忆/团队知识保留待决方案，不实施、不计已完成。Codex 内部通信延期，Claude 必须真实交互 PTY，既定微信式布局与四视图保留。
+
 ## 停手与接手检查点（2026-10-14，优先于下文在途状态）
 
 用户明确要求本会话收尾、总结后停手，剩余由另一个session继续。不得据下文“持续推进”条款、旧heartbeat或已恢复磁盘空间自行恢复。本工程未完成；Jev/记忆仍只保留方案，Codex内部通信仍延期，Claude仍须真实交互PTY。

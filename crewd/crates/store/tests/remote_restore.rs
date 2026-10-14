@@ -15,7 +15,7 @@ fn restoring_an_active_backup_does_not_revive_revoked_remote_trust() {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        11
+        crewd_store::schema::SCHEMA_VERSION
     );
     let identity = RemotePublicIdentity {
         authority_id: "11111111-1111-4111-8111-111111111111".into(),
