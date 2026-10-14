@@ -50,6 +50,7 @@ pub async fn run(data_dir: &Path, args: CodexArgs) -> anyhow::Result<()> {
     let _lock = crewd_server::lock_data_dir(data_dir)?;
     let (registry, reports) = crewd_server::reap_orphans(data_dir)?;
     crewd_server::log_reap_reports(&reports);
+    crewd_server::recovery::require_settled(&registry)?;
     // thread/start 的 cwd 由 codex 解析：相对路径先在这里转成绝对路径。
     let workdir = std::fs::canonicalize(&args.workdir)
         .with_context(|| format!("工作目录 {} 不可用", args.workdir.display()))?;

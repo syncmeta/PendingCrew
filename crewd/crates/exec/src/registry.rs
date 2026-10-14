@@ -16,6 +16,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+pub mod recovery;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessIdentity {
@@ -24,7 +26,8 @@ pub struct ProcessIdentity {
     /// 这把锁：macOS = 微秒时间戳，Linux = 开机以来的时钟滴答。
     pub start_time: u64,
     /// Linux：开机标识（`/proc/sys/kernel/random/boot_id`）。`start_time` 是开机以来的滴答，
-    /// 换一次开机就可能碰巧相同，必须连开机标识一起对。macOS 的启动时刻是绝对时间，留空。
+    /// 换一次开机就可能碰巧相同，必须连开机标识一起对。macOS 新记录取真实 boot session UUID；
+    /// 旧空值不会被恢复器自动补成当前 boot。
     pub boot_id: String,
     /// 进程短名。只给人看，不参与判定（会截断、会重名）。
     pub command: String,
@@ -80,11 +83,15 @@ fn os_probe(pid: i32) -> ProbeResult {
         .take_while(|&&c| c != 0)
         .map(|&c| c as u8)
         .collect();
+    let boot_id = match recovery::boot_id() {
+        Ok(value) => value,
+        Err(error) => return ProbeResult::Unreadable(error.raw_os_error().unwrap_or(0)),
+    };
     ProbeResult::Found(ProcessIdentity {
         pid,
         pgid: info.pbi_pgid as i32,
         start_time: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
-        boot_id: String::new(),
+        boot_id,
         command: String::from_utf8_lossy(&comm).into_owned(),
     })
 }
@@ -160,7 +167,7 @@ pub fn describe(session_id: &str, recorded: &ProcessIdentity, decision: &OrphanD
             format!("「{session_id}」的进程（pid {pid}）已经不在了，无需处理。")
         }
         OrphanDecision::Reap => format!(
-            "「{session_id}」的进程（pid {pid}）启动时刻与登记一致，已回收其进程组 {}。",
+            "「{session_id}」的进程（pid {pid}）启动时刻与登记一致，允许尝试向进程组发信号；尚未证明组消失： {}。",
             recorded.pgid
         ),
         OrphanDecision::PidReused(now) => format!(
@@ -185,8 +192,8 @@ pub enum KillTarget {
 pub enum ApplyOutcome {
     /// 不是 `Reap`，没发信号。
     NotAttempted,
-    /// 信号发出了（或目标在发之前恰好已经没了）。
-    Killed,
+    /// 信号系统调用被接受（或 ESRCH）；不证明原 birth 或整个组已消失。
+    SignalSent,
     /// 判定是 `Reap`，但目标太危险（见 `apply_with`），一个信号都没发。
     Refused(String),
     /// 进程组和单杀都失败了（errno）。
@@ -246,11 +253,11 @@ pub fn apply_with(
     let done = |r: &Result<(), i32>| matches!(r, Ok(()) | Err(libc::ESRCH));
     let group = kill(KillTarget::Group(recorded.pgid));
     if done(&group) {
-        return ApplyOutcome::Killed;
+        return ApplyOutcome::SignalSent;
     }
     let single = kill(KillTarget::Process(recorded.pid));
     if done(&single) {
-        return ApplyOutcome::Killed;
+        return ApplyOutcome::SignalSent;
     }
     ApplyOutcome::Failed(single.err().unwrap_or(0))
 }
@@ -315,8 +322,8 @@ impl ProcessRegistry {
                     io::ErrorKind::InvalidData,
                     format!(
                         "进程登记表 {} 坏了（{e}）。crewd 拒绝启动，而不是冒险按一张读不懂的表\
-                         去杀进程（可能杀到不相干的进程）。处理办法：把这个文件挪到别处（比如改名加 \
-                         .bad）再启动；上次留下的 claude 进程若还活着，需要人自己看一眼、手动结束。",
+                         去杀进程（可能杀到不相干的进程）。保留原文件与进程证据，使用 recovery inspect；\
+                         无法证明归属时由人类独立核验并明确授权 OS 处理，不删除登记文件绕过保护。",
                         path.display()
                     ),
                 )
@@ -386,10 +393,14 @@ impl ProcessRegistry {
 
     pub fn forget(&self, session_id: &str) -> io::Result<()> {
         let mut entries = self.entries.lock().expect("登记表锁中毒");
-        if entries.remove(session_id).is_none() {
+        let Some(original) = entries.remove(session_id) else {
             return Ok(());
+        };
+        if let Err(error) = self.persist(&entries) {
+            entries.insert(session_id.to_owned(), original);
+            return Err(error);
         }
-        self.persist(&entries)
+        Ok(())
     }
 
     /// Fallible public-control evidence read. A poisoned private registry is
@@ -434,6 +445,7 @@ impl ProcessRegistry {
 
 /// 一条回收结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub struct OrphanReport {
     pub session_id: String,
     pub decision: OrphanDecision,
@@ -457,17 +469,24 @@ pub fn describe_outcome(
             "「{session_id}」的进程（pid {}）判定应回收，但发信号失败（errno {errno}），没有杀掉；登记留着，下次再试。",
             recorded.pid
         ),
+        ApplyOutcome::SignalSent => format!(
+            "「{session_id}」pid {} 仅信号已请求，物理消失尚未确认；登记必须保留。",
+            recorded.pid
+        ),
         _ => describe(session_id, recorded, decision),
     }
 }
 
 /// 启动时调用（必须持有数据目录锁，确认没有别的 crewd 活着）：逐条判定、执行、清账。
 /// 读不到身份的、拒绝执行的、杀失败的，都留在表里，下次再看。
-pub fn reap_orphans(registry: &ProcessRegistry) -> io::Result<Vec<OrphanReport>> {
-    reap_orphans_with(registry, &probe, &mut |rec, dec| apply(dec, rec))
+pub fn reap_orphans(registry: &ProcessRegistry) -> io::Result<Vec<recovery::RecoveryReport>> {
+    // Low-level kernel-only helper. Production Store/version protection is
+    // supplied by server::recovery before using recover_bounded directly.
+    recovery::recover_bounded(registry, true, &|| Ok(()))
 }
 
 /// `reap_orphans` 的可测内核：探测与执行都可换。
+#[cfg(test)]
 pub fn reap_orphans_with(
     registry: &ProcessRegistry,
     probe: &dyn Fn(i32) -> ProbeResult,
@@ -478,7 +497,10 @@ pub fn reap_orphans_with(
         let decision = decide(&recorded, &probe(recorded.pid));
         let outcome = apply(&recorded, &decision);
         let keep = matches!(decision, OrphanDecision::Unreadable(_))
-            || matches!(outcome, ApplyOutcome::Refused(_) | ApplyOutcome::Failed(_));
+            || matches!(
+                outcome,
+                ApplyOutcome::Refused(_) | ApplyOutcome::Failed(_) | ApplyOutcome::SignalSent
+            );
         if !keep {
             registry.forget(&session_id)?;
         }
@@ -490,6 +512,51 @@ pub fn reap_orphans_with(
         });
     }
     Ok(reports)
+}
+
+#[cfg(test)]
+pub(crate) struct TestOwnedGroup {
+    child: std::process::Child,
+    birth: Option<ProcessIdentity>,
+}
+#[cfg(test)]
+impl TestOwnedGroup {
+    pub(crate) fn new(child: std::process::Child) -> Self {
+        let birth = match probe(child.id() as i32) {
+            ProbeResult::Found(value) => Some(value),
+            _ => None,
+        };
+        Self { child, birth }
+    }
+}
+#[cfg(test)]
+impl std::ops::Deref for TestOwnedGroup {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+#[cfg(test)]
+impl std::ops::DerefMut for TestOwnedGroup {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+#[cfg(test)]
+impl Drop for TestOwnedGroup {
+    fn drop(&mut self) {
+        if let Some(birth) = &self.birth
+            && matches!(decide(birth, &probe(birth.pid)), OrphanDecision::Reap)
+        {
+            let _ = apply(&OrphanDecision::Reap, birth);
+        }
+        // This exact unreaped Child belongs to the fixture. A failed identity
+        // observation never authorizes a process-group signal.
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
 }
 
 #[cfg(test)]
@@ -658,7 +725,7 @@ mod tests {
                 4999,
                 &mut recorder(&calls)
             ),
-            ApplyOutcome::Killed
+            ApplyOutcome::SignalSent
         );
         assert_eq!(*calls.borrow(), vec![KillTarget::Group(4242)]);
         // 进程组杀失败 → 退而单杀；都失败 = Failed，不能谎称已回收。
@@ -676,7 +743,7 @@ mod tests {
         let outcome = apply_with(&OrphanDecision::Reap, &rec, 5000, 4999, &mut |_| {
             Err(libc::ESRCH)
         });
-        assert_eq!(outcome, ApplyOutcome::Killed);
+        assert_eq!(outcome, ApplyOutcome::SignalSent);
         // 非 Reap 一律不动。
         let calls = std::cell::RefCell::new(Vec::new());
         assert_eq!(
@@ -711,19 +778,24 @@ mod tests {
             &mut |rec: &ProcessIdentity, decision: &OrphanDecision| match rec.pid {
                 101 => ApplyOutcome::Failed(libc::EPERM),
                 102 => ApplyOutcome::Refused("test".to_string()),
-                _ if *decision == OrphanDecision::Reap => ApplyOutcome::Killed,
+                _ if *decision == OrphanDecision::Reap => ApplyOutcome::SignalSent,
                 _ => ApplyOutcome::NotAttempted,
             },
         )
         .unwrap();
         assert_eq!(reports.len(), 5);
         let kept: Vec<String> = reg.entries().into_iter().map(|(k, _)| k).collect();
-        assert_eq!(kept, vec!["failed", "refused", "unreadable"]);
+        assert_eq!(kept, vec!["failed", "killed", "refused", "unreadable"]);
         let failed = reports.iter().find(|r| r.session_id == "failed").unwrap();
         assert!(!failed.message.contains("已回收"), "{}", failed.message);
         assert!(failed.message.contains("没有杀掉"), "{}", failed.message);
         let killed = reports.iter().find(|r| r.session_id == "killed").unwrap();
-        assert!(killed.message.contains("已回收"), "{}", killed.message);
+        assert!(!killed.message.contains("已回收"), "{}", killed.message);
+        assert!(
+            killed.message.contains("仅信号已请求"),
+            "{}",
+            killed.message
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -741,7 +813,8 @@ mod tests {
         let reg = ProcessRegistry::load(&dir.path().join("registry.json")).unwrap();
         reg.record("launchd", identity(1, 1)).unwrap();
         let reports = reap_orphans(&reg).unwrap();
-        assert!(matches!(reports[0].decision, OrphanDecision::Unreadable(_)));
+        assert!(!reports[0].confirmed_gone);
+        assert!(!reports[0].signal_sent);
         assert_eq!(reg.entries().len(), 1, "读不到身份的那条留着");
     }
 
@@ -835,7 +908,7 @@ mod tests {
         let mut orphan = Command::new("/bin/sh");
         orphan.arg("-c").arg("sleep 30");
         std::os::unix::process::CommandExt::process_group(&mut orphan, 0);
-        let mut orphan = orphan.spawn().unwrap();
+        let mut orphan = TestOwnedGroup::new(orphan.spawn().unwrap());
         let pid = orphan.id() as i32;
         let ProbeResult::Found(real) = probe(pid) else {
             panic!("刚起的进程读不到");
@@ -846,13 +919,14 @@ mod tests {
         let mut innocent = Command::new("/bin/sh");
         innocent.arg("-c").arg("sleep 30");
         std::os::unix::process::CommandExt::process_group(&mut innocent, 0);
-        let mut innocent = innocent.spawn().unwrap();
+        let mut innocent = TestOwnedGroup::new(innocent.spawn().unwrap());
         let ipid = innocent.id() as i32;
         let ProbeResult::Found(mut fake) = probe(ipid) else {
             panic!();
         };
+        let innocent_real = fake.clone();
         fake.start_time += 1;
-        reg.record("reused", fake).unwrap();
+        reg.record("reused", fake.clone()).unwrap();
 
         let reports = reap_orphans(&reg).unwrap();
         assert_eq!(reports.len(), 2);
@@ -865,9 +939,47 @@ mod tests {
             innocent.try_wait().unwrap().is_none(),
             "复用的 pid 绝不能被杀"
         );
-        assert!(reg.entries().is_empty(), "处理过的都清账");
-        innocent.kill().unwrap();
+        assert!(
+            reg.entries()
+                .iter()
+                .any(|(key, birth)| key == "reused" && birth == &fake),
+            "unproven reused group remains, never cleared just because PID differs"
+        );
+        assert!(
+            !reports
+                .iter()
+                .find(|report| report.key == "reused")
+                .unwrap()
+                .signal_sent
+        );
+        // Exact test-owned real identity, never the deliberately forged registry
+        // record. Kill the entire own group so the shell's sleep cannot leak
+        // inherited nextest capture pipes. RAII also cleans exact fixture-owned
+        // children on assertion failure, never using the forged registry row.
+        assert_eq!(
+            apply(&decide(&innocent_real, &probe(ipid)), &innocent_real),
+            ApplyOutcome::SignalSent
+        );
         innocent.wait().unwrap();
+        let reconciled = recovery::recover_bounded(&reg, false, &|| Ok(())).unwrap();
+        assert!(reconciled.iter().all(|report| !report.signal_sent));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        for pgid in [real.pgid, innocent_real.pgid] {
+            while !matches!(
+                recovery::observe_group_until(pgid, deadline),
+                recovery::GroupObservation::Absent
+            ) && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(
+                matches!(
+                    recovery::observe_group(pgid),
+                    recovery::GroupObservation::Absent
+                ),
+                "whole fixture group must be physically absent, not merely shell wait"
+            );
+        }
     }
 
     #[test]
@@ -889,9 +1001,25 @@ mod tests {
         std::fs::write(&path, b"{not json").unwrap();
         let err = ProcessRegistry::load(&path).expect_err("坏掉的登记表不能当空表");
         let msg = err.to_string();
-        // 人看到这条报错要知道怎么办：挪开它再启动；以及为什么不自己处理掉。
+        // Official recovery path never instructs deleting/moving evidence to bypass startup. They must independently authorize OS handling.
         assert!(msg.contains(&path.display().to_string()), "{msg}");
-        assert!(msg.contains("挪"), "要告诉人怎么办：{msg}");
+        assert!(
+            msg.contains("recovery inspect"),
+            "official diagnostic path: {msg}"
+        );
+        assert!(
+            msg.contains("人类独立核验"),
+            "diagnostic cannot grant kill authority: {msg}"
+        );
+        assert!(
+            msg.contains("不删除登记文件"),
+            "unknown evidence must remain: {msg}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"{not json",
+            "corruption refusal must preserve original bytes"
+        );
         assert!(msg.contains("不相干的进程"), "要说清为什么拒绝启动：{msg}");
     }
 }
@@ -939,12 +1067,16 @@ pub fn parent(pid: i32) -> ParentProbe {
         };
     }
     let info = unsafe { info.assume_init() };
+    let boot_id = match recovery::boot_id() {
+        Ok(value) => value,
+        Err(error) => return ParentProbe::Unreadable(error.raw_os_error().unwrap_or(0)),
+    };
     ParentProbe::Found {
         identity: ProcessIdentity {
             pid,
             pgid: info.pbi_pgid as i32,
             start_time: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
-            boot_id: String::new(),
+            boot_id,
             command: String::new(),
         },
         parent: info.pbi_ppid as i32,
