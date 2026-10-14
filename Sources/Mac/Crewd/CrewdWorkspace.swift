@@ -7,7 +7,21 @@ final class CrewdWorkspace: ObservableObject {
     let authorityEvents = PassthroughSubject<(String, CrewdValue), Never>()
     var originalJournalRequired = false
     private var originalJournal: CrewdPresentationJournal?
-    private var preparingJournal = false
+    private var preparingJournal: UUID?
+    private var journalFailureConnection: UUID?
+    var originalJournalReady: Bool {
+        guard originalJournal != nil, let scope = presentationScope,
+              preparingJournal == nil, acceptsObservation(generation) else { return false }
+        if client.capabilities.contains("command.receipts"), scope.databaseID != client.runtimeIdentity["dbId"].string { return false }
+        if dataDirectory == nil {
+            let current = client.authorityBinding
+            guard scope.authorityID == current["authorityId"].string,
+                  scope.databaseID == current["dbId"].string,
+                  scope.grantID == current["grantId"].string,
+                  scope.grantRevision == current["grantRevision"].string else { return false }
+        }
+        return true
+    }
     @Published private(set) var durableUnknown: [CrewdPresentationJournal.Prepared] = []
     @Published private(set) var originalFirstMessageHistory: [CrewdPresentationJournal.Prepared] = []
     @Published private(set) var presentationScope: CrewdPresentationJournal.Scope?
@@ -54,6 +68,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     func publicCommandBinding(for connection: CrewdClient) throws -> CrewdPublicCommands.Binding {
         guard !retired, client.connected, connection.connected,
+              (!originalJournalRequired || originalJournalReady),
               connection.capabilities.contains("command.receipts"),
               let scope = presentationScope,
               let db = connection.runtimeIdentity["dbId"].string, !db.isEmpty,
@@ -552,23 +567,34 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     func prepareOriginalJournal(root: URL) async {
-        guard originalJournalRequired, originalJournal == nil, !preparingJournal, client.connected, !retired else { return }
-        preparingJournal = true; defer { preparingJournal = false }
+        let epoch = generation, connection = client.connectionEpoch, runtime = client.runtimeIdentity, binding = client.authorityBinding
+        guard originalJournalRequired, originalJournal == nil, preparingJournal != connection,
+              journalFailureConnection != connection, client.connected, !retired else { return }
+        preparingJournal = connection
+        defer { if preparingJournal == connection { preparingJournal = nil } }
         do {
             let identity: CrewdValue
             if dataDirectory != nil { identity = try await readValue("remote.status")["identity"] }
             else { identity = client.authorityBinding }
-            guard !retired else { throw CancellationError() }
+            guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
             let scope = CrewdPresentationJournal.Scope(namespace: authorityRecordID,
                 localDirectory: dataDirectory?.standardizedFileURL.resolvingSymlinksInPath().path,
                 authorityID: identity["authorityId"].string, databaseID: client.runtimeIdentity["dbId"].string ?? identity["dbId"].string,
                 grantID: identity["grantId"].string, grantRevision: identity["grantRevision"].string)
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
             let unknown = try journal.unknownRecords()
-            originalJournal = journal; presentationScope = scope; durableUnknown = unknown
-            originalFirstMessageHistory = try journal.firstMessageRecords()
+            let history = try journal.firstMessageRecords()
             if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
-        } catch { self.error = "原前端提交历史未就绪：" + error.localizedDescription }
+            guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            originalJournal = journal; presentationScope = scope; durableUnknown = unknown
+            originalFirstMessageHistory = history; journalFailureConnection = nil
+        } catch {
+            if acceptsObservation(epoch), client.connectionEpoch == connection {
+                journalFailureConnection = connection
+                let message = "原前端提交历史未就绪：" + error.localizedDescription
+                if self.error != message { self.error = message }
+            }
+        }
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
@@ -593,7 +619,7 @@ final class CrewdWorkspace: ObservableObject {
             }
             return result
         }
-        guard !originalJournalRequired || originalJournal != nil else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
+        guard !originalJournalRequired || originalJournalReady else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
         let prepared: CrewdPresentationJournal.Prepared?
         do { prepared = try originalJournal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }
