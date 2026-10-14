@@ -11,6 +11,7 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     let kind: LocalCodingAgentKind
     let terminalView: TerminalMirrorView?
     let transcript: CodexTranscript?
+    let publicTerminal: CrewdPublicTerminal?
     @Published private(set) var status: SessionStatus = .exited(nil)
     @Published private(set) var isWorking = false
     @Published private(set) var health: CrewSessionHealth?
@@ -21,15 +22,31 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     var isBusy: Bool { isWorking }
     private(set) var hasObservedLaunchSignal = false
     private var lastScreen: String?
+    private var renderingCoreOutput = false
     private var retired = false
     private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind
         terminalView = kind == .codex ? nil : TerminalMirrorView(frame: .zero)
         transcript = kind == .codex ? CodexTranscript() : nil
-        // Public raw-input/resize custody has not frozen yet. Actual inspect
-        // snapshots are read-only; this is not full terminal delivery.
-        terminalView?.onSendBytes = nil; terminalView?.onResize = nil
+        publicTerminal = kind != .codex && workspace.client.capabilities.contains("session.terminal")
+            ? CrewdPublicTerminal(workspace: workspace, sessionID: sessionID) : nil
+        terminalView?.onSendBytes = { [weak publicTerminal] bytes in publicTerminal?.enqueueInput(Data(bytes)) }
+        terminalView?.onResize = { [weak self] cols, rows in
+            guard let self, !self.renderingCoreOutput else { return }
+            Task { await self.publicTerminal?.resize(columns: cols, rows: rows) }
+        }
+        publicTerminal?.onSnapshot = { [weak self] snapshot in
+            guard let self else { return }
+            self.renderingCoreOutput = true; defer { self.renderingCoreOutput = false }
+            let bytes = [UInt8]([27, 91, 50, 74, 27, 91, 72]) + Array(snapshot.bytes ?? Data((snapshot.text ?? "").utf8))
+            self.terminalView?.feedFromCore(bytes[...])
+        }
+        publicTerminal?.onBytes = { [weak self] bytes in
+            guard let self else { return }
+            self.renderingCoreOutput = true; defer { self.renderingCoreOutput = false }
+            let bytes = Array(bytes); self.terminalView?.feedFromCore(bytes[...])
+        }
     }
     func update(live: CrewdValue, inspection: CrewdValue, items: [CrewdValue]) {
         guard !retired, workspace.acceptsObservation(workspace.observationGeneration), live["sessionId"].string == sessionID else { return }
@@ -42,10 +59,12 @@ final class CrewdOriginalSessionBackend: SessionBackend {
         if let raw = live["health"]["kind"].string, let kind = kinds[raw], let detail = live["health"]["detail"].string {
             health = CrewSessionHealth(kind: kind, detail: detail)
         } else { health = nil }
-        if let screen = inspection["screen"].string, screen != lastScreen {
+        if publicTerminal?.connected != true, let screen = inspection["screen"].string, screen != lastScreen {
             lastScreen = screen; hasObservedLaunchSignal = !screen.isEmpty
             let bytes = Array(("\u{1b}[2J\u{1b}[H" + screen).utf8)
+            renderingCoreOutput = true
             terminalView?.feedFromCore(bytes[...])
+            renderingCoreOutput = false
         }
         for item in items {
             guard let raw = item.pretty.data(using: .utf8),
@@ -53,17 +72,27 @@ final class CrewdOriginalSessionBackend: SessionBackend {
             transcript?.apply(method: "item/completed", params: ["item": decoded])
         }
     }
-    func send(_ text: String) { failure = "请通过机组消息发送；终端输入须等待正式控制权协议。" }
+    func send(_ text: String) { failure = "请通过机组消息发送，或在此原会话页明确取得手工终端控制。" }
     func submitWake(_ text: String) async -> SessionWakeSubmission { .blocked }
     func interrupt() { command("session.interrupt", ["sessionId": .string(sessionID)]) }
     func stop() { command("session.stop", ["sessionId": .string(sessionID), "reason": .string("人类在原窗口明确停止")]) }
+    func resume() { command("session.resume", ["sessionId": .string(sessionID)]) }
     func retireDisplay() {
         retired = true
+        publicTerminal?.retire()
         terminalView?.onSendBytes = nil; terminalView?.onResize = nil
     }
     private func command(_ method: String, _ fields: [String: CrewdValue]) {
         let epoch = workspace.observationGeneration
         guard !retired, workspace.acceptsObservation(epoch) else { return }
+        var fields = fields
+        if workspace.client.capabilities.contains("command.receipts") {
+            guard let target = workspace.controlTargets[sessionID] else { failure = "当前真实代际尚未读取，控制尚未提交。"; return }
+            fields.removeValue(forKey: "sessionId")
+            if method == "session.interrupt" || method == "session.resume" {
+                guard case .object(let current) = target.value else { return }; fields = current
+            } else { fields["target"] = target.value }
+        }
         Task {
             // Authority may have switched while this main-actor task was queued.
             guard !retired, workspace.acceptsObservation(epoch) else { return }
@@ -85,6 +114,10 @@ final class CrewdOriginalSessionBackend: SessionBackend {
             guard !retired, workspace.acceptsObservation(epoch) else { return }
             let inspection = try await workspace.readValue("session.inspect", .object(["sessionId": .string(sessionID)]))
             guard !retired, workspace.acceptsObservation(epoch) else { return }
+            if workspace.client.capabilities.contains("command.receipts") {
+                _ = try await workspace.refreshControlTarget(sessionID)
+                guard !retired, workspace.acceptsObservation(epoch) else { return }
+            }
             update(live: live, inspection: inspection, items: inspection["items"].array)
         } catch {
             guard !retired, workspace.acceptsObservation(epoch) else { return }

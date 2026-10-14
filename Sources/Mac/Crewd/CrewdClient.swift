@@ -135,6 +135,7 @@ final class CrewdClient: ObservableObject {
         #endif
     }
     private var generation = UUID()
+    var connectionEpoch: UUID { generation }
     private var qualifiedForWork = true
     private var retired = false
     private var decoder = CrewdNDJSONDecoder()

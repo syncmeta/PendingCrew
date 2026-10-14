@@ -324,9 +324,9 @@ final class CrewStore: ObservableObject {
         if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
     }
 
-    /// Schema13 submits create and post separately and preserves an unknown
-    /// outcome. It never rolls back/replays or starts a member implicitly.
-    /// Atomic first-message receipts remain a schema14 integration dependency.
+    /// Public14 uses its atomic SQL crew/first-message receipt; protocol13
+    /// compatibility truthfully keeps split create/post with unknown snapshots.
+    /// Neither route replays, rolls back or implicitly starts a member.
     private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
         guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
               let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
@@ -351,6 +351,22 @@ final class CrewStore: ObservableObject {
         }
         do {
             let crewID: String
+            if workspace.client.capabilities.contains("command.receipts") {
+                var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]
+                if let parent = draft.parentCrewId { fields["parentId"] = .string(parent) }
+                let receipt = try await workspace.submitPublicCommand(.firstMessage,
+                    params: .object(["crew": .object(fields), "text": .string(text)]), crew: "")
+                guard !receipt.historical, receipt.phase == .committed,
+                      let actual = receipt.value["result"]["crew"]["id"].string,
+                      receipt.value["result"]["message"]["text"].string == text else {
+                    throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
+                }
+                update(.accepted, crew: actual)
+                guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
+                pendingCrew = nil; selectedCrewId = actual
+                await refreshList(); await refreshDetail(actual)
+                return
+            }
             if let known = existing?.crewID { crewID = known }
             else {
                 var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]

@@ -27,6 +27,7 @@ private struct IOSRemoteSessionDetail: View {
     @State private var loadError: String?
     @State private var loading = false
     @State private var controlsBusy = false
+    @State private var terminal: CrewdPublicTerminal?
     private var scopeIsCurrent: Bool { workspace.crewID != "" && !workspace.isRetired }
     private var decision: CrewdValue { inspection["live"]["pendingDecision"] }
     private var controlEnabled: Bool { scopeIsCurrent && workspace.client.connected && workspace.client.capabilities.contains("orchestra") && !controlsBusy }
@@ -40,13 +41,27 @@ private struct IOSRemoteSessionDetail: View {
                 Button("刷新会话") { Task { await refresh() } }.disabled(loading || !workspace.client.connected || !scopeIsCurrent)
             }
             Section("终端") {
-                ScrollView(.horizontal) {
+                if let terminal {
+                    CrewdTerminalControlBar(control: terminal)
+                    if terminal.snapshot?.kind == .pty {
+                        CrewdMobileTerminalView(control: terminal).frame(minHeight: 280)
+                    } else {
+                        Text(terminal.snapshot?.text ?? "后台尚未提供PTY屏幕。")
+                            .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                    }
+                } else {
                     Text(inspection["screen"].string ?? "正在等待真实会话快照…")
                         .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(minHeight: 180)
-                Text("当前为后台提供的只读快照；完整终端输入和实时流尚未交付。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    Text("当前后台未开放终端控制；仅显示真实只读快照。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if !inspection["items"].array.isEmpty {
+                Section("成员输出") {
+                    ForEach(inspection["items"].array.indices, id: \.self) { index in
+                        CrewdRunnerItemView(item: inspection["items"].array[index])
+                    }
+                }
             }
             if decision != .null {
                 Section("终端等待选择") {
@@ -68,11 +83,22 @@ private struct IOSRemoteSessionDetail: View {
             Section("会话控制") {
                 Button("中断当前回合") { command("session.interrupt") }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
                 Button("停止成员", role: .destructive) { command("session.stop", fields: ["reason": .string("人类在移动会话页明确停止")]) }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
+                if inspection["live"] != .null, inspection["live"]["running"] != .bool(true) {
+                    Button("恢复这个原会话") { command("session.resume") }
+                        .disabled(!controlEnabled || workspace.controlTargets[sessionID] == nil)
+                }
                 Text("离开此页面或关闭手机 App 不会停止电脑上的私人团队。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .task(id: sessionID) { workspace.selectSession(sessionID); await refresh() }
+        .task(id: sessionID) {
+            workspace.selectSession(sessionID)
+            if workspace.client.capabilities.contains("session.terminal") {
+                terminal?.retire(); terminal = CrewdPublicTerminal(workspace: workspace, sessionID: sessionID)
+            }
+            await refresh()
+        }
+        .onDisappear { terminal?.retire(); terminal = nil }
         .onReceive(workspace.authorityEvents) { event in
             if event.1["sessionId"] == .string(sessionID) { Task { await refresh() } }
         }
@@ -80,20 +106,38 @@ private struct IOSRemoteSessionDetail: View {
     private func refresh() async {
         guard !loading, scopeIsCurrent else { return }
         loading = true; defer { loading = false }
+        let epoch = workspace.observationGeneration
         do {
             let next = try await workspace.readValue("session.inspect", .object(["sessionId": .string(sessionID)]))
-            guard !Task.isCancelled, scopeIsCurrent else { return }
+            guard !Task.isCancelled, scopeIsCurrent, workspace.acceptsObservation(epoch) else { return }
+            if workspace.client.capabilities.contains("command.receipts") {
+                _ = try await workspace.refreshControlTarget(sessionID)
+                guard workspace.acceptsObservation(epoch) else { return }
+            }
             inspection = next; loadError = nil
         } catch { loadError = error.localizedDescription }
     }
     private func command(_ method: String, fields: [String: CrewdValue] = [:]) {
-        guard controlEnabled else { return }; controlsBusy = true
-        var params = fields; params["sessionId"] = .string(sessionID)
+        guard controlEnabled else { return }
+        let epoch = workspace.observationGeneration
+        var params = fields
+        if workspace.client.capabilities.contains("command.receipts") {
+            guard let target = workspace.controlTargets[sessionID] else { loadError = "原代际尚未读取；未提交控制。"; return }
+            if method == "session.interrupt" || method == "session.resume" {
+                guard case .object(let value) = target.value else { return }; params = value
+            } else if method == "session.answer" {
+                // A TUI numbered decision is not a structured runner request.
+                loadError = "此选择没有正式结构化请求身份；请取得手工终端控制后处理。"; return
+            } else { params["target"] = target.value }
+        } else { params["sessionId"] = .string(sessionID) }
+        controlsBusy = true
         Task {
             defer { controlsBusy = false }
+            guard workspace.acceptsObservation(epoch) else { return }
             do { _ = try await workspace.performValue(method, .object(params)); await refresh() }
-            catch { loadError = error.localizedDescription }
+            catch { if workspace.acceptsObservation(epoch) { loadError = error.localizedDescription } }
         }
     }
+
 }
 #endif

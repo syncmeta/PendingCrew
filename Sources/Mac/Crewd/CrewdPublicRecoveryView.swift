@@ -1,0 +1,61 @@
+import SwiftUI
+
+/// Original-scope recovery reads the actual server receipt. Neither not-found,
+/// historical results nor an external Unknown authorizes replay.
+struct CrewdPublicRecoveryView: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @State private var found: [UUID: CrewdPublicReceipt] = [:]
+    @State private var missing = Set<UUID>()
+    @State private var checking = Set<UUID>()
+    @State private var failure: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("原请求核对").font(.headline)
+            Text("保留原数据库、请求身份与内容。此处仅查找；不会重新发送、补写终端字节或启动成员。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
+            ForEach(workspace.durableUnknown.filter { $0.method == "command.submit" }, id: \.id) { record in
+                let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(record.params["command"]["operation"].string ?? "原命令").font(.subheadline.bold())
+                    Text(record.params["requestId"].string ?? "缺少请求身份").font(.caption).textSelection(.enabled)
+                    DisclosureGroup("原作用域与内容") {
+                        Text(record.params.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    }
+                    if let id, let receipt = found[id] {
+                        Text("后台阶段：\(receipt.phase.rawValue)\(receipt.historical ? " · 历史实例" : "")")
+                        DisclosureGroup("后台原回执") { Text(receipt.value.pretty).font(.caption).textSelection(.enabled) }
+                        if !receipt.historical && [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase) {
+                            Button("已核对原回执，结束此项待确认") { acknowledge(record, receipt) }
+                        }
+                    } else if let id, missing.contains(id) {
+                        Text("后台没有返回该原请求；结果仍未确认，不能据此再次发送。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    Button("只读查找原请求") { inspect(record) }
+                        .disabled(id == nil || id.map { checking.contains($0) } == true || !workspace.client.connected || workspace.isRetired)
+                }.padding(8).background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .onChange(of: workspace.observationGeneration) { _, _ in found.removeAll(); missing.removeAll(); failure = nil }
+    }
+    private func inspect(_ record: CrewdPresentationJournal.Prepared) {
+        guard let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:)), !checking.contains(id) else { return }
+        let epoch = workspace.observationGeneration
+        checking.insert(id)
+        Task {
+            defer { checking.remove(id) }
+            do {
+                let receipt = try await workspace.lookupOriginalCommand(record)
+                guard workspace.acceptsObservation(epoch) else { return }
+                if let receipt { found[id] = receipt; missing.remove(id) }
+                else { missing.insert(id) }
+                failure = nil
+            } catch { if workspace.acceptsObservation(epoch) { failure = error.localizedDescription } }
+        }
+    }
+    private func acknowledge(_ record: CrewdPresentationJournal.Prepared, _ receipt: CrewdPublicReceipt) {
+        do { try workspace.acknowledgeOriginalCommand(record, receipt: receipt); found.removeValue(forKey: receipt.requestID) }
+        catch { failure = error.localizedDescription }
+    }
+}

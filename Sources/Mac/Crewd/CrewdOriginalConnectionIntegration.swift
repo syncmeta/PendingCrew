@@ -17,6 +17,8 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var managing = false
     @State private var adding = false
     @State private var reviewing = false
+    @State private var recovering = false
+    @State private var trusting = false
     @State private var pending: CrewdRemotePairSummary?
     func body(content: Content) -> some View {
         content
@@ -35,7 +37,17 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
             }
+            if let current = window.workspace, current.client.capabilities.contains("command.receipts") {
+                Button("原请求核对") { recovering = true }
+                if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
+            }
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
+        }.sheet(isPresented: $recovering) {
+            if let current = window.workspace {
+                ScrollView { CrewdPublicRecoveryView(workspace: current).padding(20) }.frame(minWidth: 520, minHeight: 360)
+            }
+        }.sheet(isPresented: $trusting) {
+            if let current = window.workspace { CrewdLocalTrustView(workspace: current).padding(20).frame(minWidth: 500) }
         }.sheet(isPresented: $reviewing) {
             VStack(alignment:.leading,spacing:12) {
                 HStack {Text("原连接的输入").font(.title2);Spacer();Button("关闭"){reviewing=false}}

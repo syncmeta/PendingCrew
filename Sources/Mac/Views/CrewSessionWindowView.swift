@@ -100,7 +100,10 @@ struct CrewSessionWindowView: View {
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
         .onChange(of: sessionRunner.selectedRunId) { _, newId in
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
-                if appModel.usesCrewdAuthority { appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return }
+                if appModel.usesCrewdAuthority {
+                    appModel.crewdBackend?.workspace.selectSession(run.sessionId)
+                    appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return
+                }
                 SessionUnreadStore.shared.markViewed(run.sessionId)
             }
         }
@@ -1417,6 +1420,10 @@ private struct SessionRunContentView: View {
                 header
             }
             Divider()
+            if let backend = run.backend as? CrewdOriginalSessionBackend {
+                CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
+                if let control = backend.publicTerminal { CrewdTerminalControlBar(control: control) }
+            }
             if let terminalView = run.terminalView {
                 // 左右留白：终端网格自绘不透明底,贴边显得挤。padding 区用
                 // Theme.canvas 补色 —— AgentTerminalView.applyTheme 的底色就是

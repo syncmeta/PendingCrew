@@ -15,6 +15,96 @@ final class CrewdWorkspace: ObservableObject {
         return authorityRecordID.uuidString + "/" + (scope?.authorityID ?? "unconfirmed") + "/" + (scope?.databaseID ?? "unconfirmed") + "/" + (scope?.grantRevision ?? "local")
     }
 
+    lazy var publicCommands = CrewdPublicCommands(
+        binding: { [weak self] in
+            guard let self else { throw CrewdClientError(message: "原连接已释放，未提交命令。", kind: .notSubmitted) }
+            return try self.publicCommandBinding(for: self.client)
+        },
+        ownsDaemon: { [weak self] in self?.hasVerifiedOwnedLocalHelper == true },
+        call: { [weak self] method, params in
+            guard let self else { throw CrewdClientError(message: "原连接已释放，未发送命令。", kind: .notSubmitted) }
+            return try await self.client.call(method, params)
+        },
+        prepare: { [weak self] envelope, crew in
+            guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪，未发送。", kind: .notSubmitted) }
+            return try journal.prepare(method: "command.submit", params: envelope.value, crew: crew)
+        },
+        finish: { [weak self] record, state, detail in
+            guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪。") }
+            try journal.finish(record, state: state, detail: detail)
+            if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
+        })
+    func makeTerminalCommands(for connection: CrewdClient) -> CrewdPublicCommands {
+        CrewdPublicCommands(binding: { [weak self, weak connection] in
+            guard let self, let connection else { throw CrewdClientError(message: "原终端连接已关闭，尚未提交。", kind: .notSubmitted) }
+            return try self.publicCommandBinding(for: connection)
+        }, ownsDaemon: { false }, call: { [weak connection] method, params in
+            guard let connection else { throw CrewdClientError(message: "原终端连接已关闭，尚未提交。", kind: .notSubmitted) }
+            return try await connection.call(method, params)
+        }, prepare: { [weak self] envelope, crew in
+            guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原终端历史未就绪，未发送。", kind: .notSubmitted) }
+            return try journal.prepare(method: "command.submit", params: envelope.value, crew: crew)
+        }, finish: { [weak self] record, state, detail in
+            guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原终端历史未就绪。") }
+            try journal.finish(record, state: state, detail: detail)
+            if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
+        })
+    }
+    func publicCommandBinding(for connection: CrewdClient) throws -> CrewdPublicCommands.Binding {
+        guard !retired, client.connected, connection.connected,
+              connection.capabilities.contains("command.receipts"),
+              let scope = presentationScope,
+              let db = connection.runtimeIdentity["dbId"].string, !db.isEmpty,
+              scope.databaseID == db,
+              connection.runtimeIdentity["dbId"] == client.runtimeIdentity["dbId"],
+              connection.runtimeIdentity["runtimeBindingId"] == client.runtimeIdentity["runtimeBindingId"],
+              let instance = connection.runtimeIdentity["runtimeBindingId"].string else {
+            throw CrewdClientError(message: "当前连接尚未具备真实公开命令与数据库资格；尚未提交。", kind: .notSubmitted)
+        }
+        return .init(scope: scope, databaseID: db, runtimeBindingID: instance, connectionEpoch: connection.connectionEpoch)
+    }
+    /// A dedicated authenticated observer/control socket owns its watches and
+    /// leases. Closing it cannot stop the main business connection or team.
+    func openTerminalConnection() async throws -> CrewdClient {
+        guard client.capabilities.contains("session.terminal") else { throw CrewdClientError(message: "当前后台尚未开放实际终端机制。", kind: .notSubmitted) }
+        let epoch = generation
+        let observer = CrewdClient()
+        do {
+            try await connector(observer)
+            guard acceptsObservation(epoch) else { throw CancellationError() }
+            _ = try publicCommandBinding(for: observer)
+            return observer
+        } catch { observer.disconnect(); throw error }
+    }
+    var hasVerifiedOwnedLocalHelper: Bool {
+        #if os(macOS)
+        guard let owned = backend, owned.isRunning, !retired, client.connected,
+              let birth = ownedChildIdentity, let binding = ownedIPCBinding, binding.generation == generation,
+              owned.processIdentifier == birth.pid,
+              (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth,
+              (try? client.verifiedLocalPeerIdentity()) == binding.peer, binding.peer == birth,
+              client.runtimeIdentity["dbId"].string == binding.dbID,
+              client.runtimeIdentity["runtimeBindingId"].string == binding.runtimeBindingID else { return false }
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private final class WeakTerminal {
+        weak var value: CrewdPublicTerminal?
+        init(_ value: CrewdPublicTerminal) { self.value = value }
+    }
+    private var terminalDisplays: [WeakTerminal] = []
+    func registerTerminalDisplay(_ display: CrewdPublicTerminal) {
+        terminalDisplays.removeAll { $0.value == nil }
+        terminalDisplays.append(WeakTerminal(display))
+    }
+    private func closeTerminalDisplays() {
+        terminalDisplays.removeAll { $0.value == nil }
+        for display in terminalDisplays { display.value?.deactivate() }
+        controlTargets.removeAll()
+    }
     lazy var workStore = CrewdWorkStore { [weak self] method, params in
         guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.submitRPC(method, params)
@@ -65,6 +155,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var pendingAsks: [CrewdValue] = []
     @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
+    @Published private(set) var controlTargets: [String: CrewdCommandTarget] = [:]
     @Published var crewID = ""
     @Published var sessionID = ""
     @Published var channelID = ""
@@ -160,11 +251,13 @@ final class CrewdWorkspace: ObservableObject {
                 if let id = item["id"].string, let index = self.runnerItems.firstIndex(where: {$0["id"].string == id}) { self.runnerItems[index] = item }
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
+                self.closeTerminalDisplays()
                 self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
+            self?.closeTerminalDisplays()
             guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
@@ -188,6 +281,7 @@ final class CrewdWorkspace: ObservableObject {
     /// Retain unknown inputs in this old scope for inspection; never replay them
     /// into the next authority or let a late reconnect reactivate a retired one.
     func retire() {
+        closeTerminalDisplays()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
@@ -296,6 +390,7 @@ final class CrewdWorkspace: ObservableObject {
     private func connectOnly() async throws {
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         #if os(macOS)
         ownedIPCBinding = nil
@@ -464,18 +559,37 @@ final class CrewdWorkspace: ObservableObject {
             guard !retired else { throw CancellationError() }
             let scope = CrewdPresentationJournal.Scope(namespace: authorityRecordID,
                 localDirectory: dataDirectory?.standardizedFileURL.resolvingSymlinksInPath().path,
-                authorityID: identity["authorityId"].string, databaseID: identity["dbId"].string,
+                authorityID: identity["authorityId"].string, databaseID: client.runtimeIdentity["dbId"].string ?? identity["dbId"].string,
                 grantID: identity["grantId"].string, grantRevision: identity["grantRevision"].string)
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
             let unknown = try journal.unknownRecords()
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
+            if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
         } catch { self.error = "原前端提交历史未就绪：" + error.localizedDescription }
     }
     private func isReadOnly(_ method: String) -> Bool {
-        method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe"].contains(method)
+        if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) { return try await client.call(method, params) }
+        if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
+            let receipt = try await submitPublicCommand(operation, params: params, crew: params["crewId"].string ?? crewID)
+            guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
+                throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。")
+            }
+            if [.suppressed, .rejected].contains(receipt.phase) {
+                throw CrewdClientError(message: "原命令未执行：" + (receipt.value["result"]["refusal"].string ?? "当前权限或代际已改变。"), code: -32009, data: receipt.value["result"])
+            }
+            let result = receipt.value["result"]
+            if operation == .sessionStart {
+                guard let id = result["sessionId"].string else { throw CrewdClientError(message: "会话分配回执缺少正式身份；保留原请求核对。") }
+                guard case .object(var fields) = result else { throw CrewdClientError(message: "会话回执结构不完整。") }
+                fields["id"] = .string(id) // Existing presentation model only, no minted ID.
+                return .object(fields)
+            }
+            return result
+        }
         guard !originalJournalRequired || originalJournal != nil else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
         let prepared: CrewdPresentationJournal.Prepared?
@@ -498,12 +612,54 @@ final class CrewdWorkspace: ObservableObject {
             throw error
         }
     }
+    func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
+        _ = try publicCommandBinding(for: client)
+        let envelope: CrewdPublicCommandEnvelope
+        do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }
+        catch { throw CrewdClientError(message: "命令参数尚未满足正式契约，未发送：" + error.localizedDescription, kind: .notSubmitted) }
+        return try await publicCommands.submit(envelope, crew: crew)
+    }
+    @discardableResult func refreshControlTarget(_ id: String) async throws -> CrewdCommandTarget {
+        guard client.capabilities.contains("command.receipts") else { throw CrewdClientError(message: "当前后台尚无正式代际控制。", kind: .notSubmitted) }
+        let epoch = generation
+        let value = try await readValue("session.controlTarget", .object(["sessionId": .string(id)]))
+        guard acceptsObservation(epoch) else { throw CancellationError() }
+        let target = try CrewdCommandTarget(value)
+        guard target.sessionID == id else { throw CrewdClientError(message: "控制目标返回其它会话，未接受。") }
+        controlTargets[id] = target; return target
+    }
+    func lookupOriginalCommand(_ record: CrewdPresentationJournal.Prepared) async throws -> CrewdPublicReceipt? {
+        _ = try publicCommandBinding(for: client)
+        guard record.scope == presentationScope, record.method == "command.submit", let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:)) else {
+            throw CrewdClientError(message: "原请求不属于当前可信作用域，未查找。", kind: .notSubmitted)
+        }
+        try publicCommands.restore([record])
+        guard let observation = publicCommands.observations[id] else { throw CrewdPublicWire.invalid() }
+        return try await publicCommands.lookup(observation)
+    }
+    func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) throws {
+        _ = try publicCommandBinding(for: client)
+        guard record.scope == presentationScope, !receipt.historical,
+              record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
+              record.params["dbId"].string == receipt.databaseID,
+              record.params["command"] == receipt.value["command"],
+              [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
+              let journal = originalJournal else { throw CrewdPublicWire.invalid() }
+        try journal.finish(record, state: "replyObserved", detail: "人类明确核对原后台回执；没有重放。")
+        durableUnknown = try journal.unknownRecords()
+    }
+    func isCurrentOriginalObservation(_ record: CrewdPresentationJournal.Prepared) -> Bool {
+        record.scope == presentationScope
+    }
     func hasOriginalUnknown(method: String, crew: String, channel: String? = nil) -> Bool {
         durableUnknown.contains { record in
-            guard record.method == method else { return false }
+            guard isCurrentOriginalObservation(record) else { return false }
+            let operation = record.method == "command.submit" ? record.params["command"]["operation"].string : record.method
+            let params = record.method == "command.submit" ? record.params["command"]["params"] : record.params
+            guard operation == method || (method == "crew.create" && operation == "crew.createFirstMessage") else { return false }
             if method == "crew.create" { return true }
-            if let channel { return record.params["channelId"].string == channel }
-            return record.params["crewId"].string == crew || record.crew == crew
+            if let channel { return params["channelId"].string == channel }
+            return params["crewId"].string == crew || record.crew == crew
         }
     }
 

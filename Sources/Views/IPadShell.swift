@@ -27,6 +27,7 @@ struct IPadShell: View {
 
     @State private var selectedCrewId: String?
     @State private var showingPairing = false
+    @State private var showingRecovery = false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
 
@@ -39,6 +40,9 @@ struct IPadShell: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("连接电脑", systemImage: "link") { showingPairing = true }
+                        if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true {
+                            Button("原请求核对") { showingRecovery = true }
+                        }
                     }
                 }
         } detail: {
@@ -59,6 +63,11 @@ struct IPadShell: View {
             crewStore.retireOriginalAuthorityPresentation()
             selectedCrewId = nil; selectedRemoteSessionID = nil
             Task { await crewStore.refreshList() }
+        }
+        .sheet(isPresented: $showingRecovery) {
+            if let workspace = appModel.crewdBackend?.workspace {
+                ScrollView { CrewdPublicRecoveryView(workspace: workspace).padding() }
+            }
         }
         .sheet(isPresented: $showingPairing) {
             IOSRemotePairingView()

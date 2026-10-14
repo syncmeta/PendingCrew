@@ -146,20 +146,64 @@ struct CrewdHumanRequestView: View {
                 Button("提交答复") {
                     let response = CrewdValue.object(["answers": .object(answers.mapValues { .object(["answers": .array([.string($0)])]) })])
                     send(method: "session.respondRunnerRequest", extra: ["response": response])
-                }.disabled(workspace.busy || request["params"]["questions"].array.contains(where: { (answers[$0["id"].string ?? ""] ?? "").isEmpty }))
+                }.disabled(!canSubmit || request["params"]["questions"].array.contains(where: { (answers[$0["id"].string ?? ""] ?? "").isEmpty }))
             } else {
                 Text(decision["summary"].string ?? "请确认当前请求").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 ForEach(decision["options"].array.indices, id: \.self) { i in
-                    Button(decision["options"].array[i].string ?? "选项") { send(method: "session.answer", extra: ["choice": .number(Double(i))]) }.disabled(workspace.busy)
+                    Button(decision["options"].array[i].string ?? "选项") { send(method: "session.answer", extra: ["choice": .number(Double(i))]) }.disabled(!canSubmit)
                 }
             }
-        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }.onChange(of: request["runnerRequestId"]) { _, _ in answers.removeAll() }
+        .onChange(of: request["fingerprint"]) { _, _ in answers.removeAll() }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
     private func binding(_ id: String) -> Binding<String> { Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0 }) }
-    private func send(method: String, extra: [String: CrewdValue]) {
-        var params = extra; params["sessionId"] = .string(workspace.sessionID); params["fingerprint"] = request["fingerprint"]
-        Task { _ = await workspace.perform(method, .object(params)) }
+    private var canSubmit: Bool {
+        guard !workspace.busy, workspace.client.connected, !workspace.isRetired else { return false }
+        if !workspace.client.capabilities.contains("command.receipts") { return true }
+        let alreadySubmitted = workspace.publicCommands.observations.values.contains { row in
+            guard workspace.isCurrentOriginalObservation(row.prepared),
+                  [.sessionAnswer, .sessionRespond].contains(row.envelope.operation),
+                  row.envelope.params["runnerRequestId"] == request["runnerRequestId"],
+                  row.envelope.params["fingerprint"] == request["fingerprint"] else { return false }
+            if let phase = row.receipt?.phase { return ![.suppressed, .rejected].contains(phase) }
+            return true
+        }
+        guard !alreadySubmitted else { return false }
+        return request["runnerRequestId"].string != nil && request["fingerprint"].string != nil
+            && workspace.controlTargets[workspace.sessionID] != nil
     }
+    private func send(method: String, extra: [String: CrewdValue]) {
+        guard canSubmit else { return }
+        let epoch = workspace.observationGeneration
+        let session = workspace.sessionID
+        let originalRequest = request
+        var params = extra
+        params["fingerprint"] = originalRequest["fingerprint"]
+        if workspace.client.capabilities.contains("command.receipts") {
+            guard let target = workspace.controlTargets[session],
+                  let id = originalRequest["runnerRequestId"].string else { return }
+            params["target"] = target.value
+            params["runnerRequestId"] = .string(id)
+            if method == "session.answer" {
+                params["response"] = .object(["choice": extra["choice"] ?? .null])
+                params.removeValue(forKey: "choice")
+            }
+        } else { params["sessionId"] = .string(session) }
+        Task {
+            guard workspace.acceptsObservation(epoch), workspace.sessionID == session else { return }
+            do {
+                let current = try await workspace.readValue("session.inspect", .object(["sessionId": .string(session)]))
+                guard workspace.acceptsObservation(epoch), workspace.sessionID == session,
+                      current["runnerRequest"]["fingerprint"] == originalRequest["fingerprint"],
+                      current["runnerRequest"]["runnerRequestId"] == originalRequest["runnerRequestId"] else {
+                    workspace.error = "原审批请求已改变；草稿未转交新请求，未提交。"; return
+                }
+                _ = await workspace.perform(method, .object(params))
+            } catch { if workspace.acceptsObservation(epoch) { workspace.error = error.localizedDescription } }
+        }
+    }
+
 }
 
 struct CrewdRunnerItemView: View {

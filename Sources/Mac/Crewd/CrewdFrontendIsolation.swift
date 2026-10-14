@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// Old frontend preferences/caches are isolated from both the daily legacy data
@@ -20,19 +19,11 @@ enum CrewdFrontendIsolation {
         let env = ProcessInfo.processInfo.environment
         let old = env["PENDINGCREW_DATA_DIR"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew").path
         setenv("PENDINGCREW_LEGACY_DATA_DIR", old, 1)
-        let authority: URL
-        if let explicit = env["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty { authority = URL(fileURLWithPath: explicit) }
-        else if let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
-                ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) {
-            authority = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNativeCandidates").appendingPathComponent(ref)
-        } else {
-            // Invalid candidate metadata remains disconnected, including its caches.
-            authority = FileManager.default.temporaryDirectory.appendingPathComponent("pcw-invalid-frontend-" + UUID().uuidString)
-        }
+        let authority = CrewdFrontendConfiguration.directory ??
+            FileManager.default.temporaryDirectory.appendingPathComponent("pcw-invalid-frontend-" + UUID().uuidString)
         // Point away from daily data even if private preparation is refused.
         // No existing directory is chmodded or adopted on failure.
         setenv("PENDINGCREW_DATA_DIR", authority.appendingPathComponent("frontend-presentation/ui-cache").path, 1)
         MainActor.assumeIsolated { try? prepareAuthority(directory: authority) }
     }
 }
-#endif
