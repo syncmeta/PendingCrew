@@ -261,6 +261,17 @@ jobs:
         with:
           workspaces: crewd -> target
           cache-on-failure: true
+      - name: Prepare exact locked registry/source dependencies before offline metadata and build
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/linux14-dependency-preparation"
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/linux14-dependency-preparation/locked-inputs-before.sha256"
+          git status --porcelain > "$RUNNER_TEMP/linux14-dependency-preparation/checkout-before.txt"
+          test ! -s "$RUNNER_TEMP/linux14-dependency-preparation/checkout-before.txt"
+          cargo fetch --locked --manifest-path crewd/Cargo.toml > "$RUNNER_TEMP/linux14-dependency-preparation/fetch.log" 2>&1
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/linux14-dependency-preparation/locked-inputs-after.sha256"
+          cmp "$RUNNER_TEMP/linux14-dependency-preparation/locked-inputs-before.sha256" "$RUNNER_TEMP/linux14-dependency-preparation/locked-inputs-after.sha256"
+          git status --porcelain > "$RUNNER_TEMP/linux14-dependency-preparation/checkout-after.txt"
+          test ! -s "$RUNNER_TEMP/linux14-dependency-preparation/checkout-after.txt"
       - name: Build actual current14 default release once with complete owning-workspace fresh source proof
         run: python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux14-current-release"
       - name: Actual ordinary-user managed13-to14 upgrade, unknown, rollback, restore and SIGKILL WAL recovery
@@ -281,6 +292,7 @@ jobs:
           include-hidden-files: true
           path: |
             ${{ runner.temp }}/linux-install-original-meta
+            ${{ runner.temp }}/linux14-dependency-preparation
             ${{ runner.temp }}/linux14-baseline13/reused-normal13.json
             ${{ runner.temp }}/linux14-baseline13/original4e-normal13.tar.gz
             ${{ runner.temp }}/linux14-current-release/crewd-linux-x86_64-*.tar.gz
