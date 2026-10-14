@@ -442,10 +442,10 @@ jobs:
           proof=json.loads(pathlib.Path(sys.argv[1]).read_text());host=next(line[6:] for line in subprocess.check_output(['rustc','-Vv'],text=True).splitlines() if line.startswith('host: '));assert host==proof['expectedRuntimeTarget']
           HOST
           cargo fetch --locked
-          python3 - "$RUNNER_TEMP/m5-original-scope/_temp/m5-normal13-witness.json" "$RUNNER_TEMP/m5-remaining-evidence/testkit-source-preflight.json" <<'OWNER'
+          python3 - "$RUNNER_TEMP/m5-remaining-evidence/composition.json" "$RUNNER_TEMP/m5-remaining-evidence/testkit-source-preflight.json" <<'OWNER'
           import importlib.util,json,os,pathlib,subprocess,sys
           spec=importlib.util.spec_from_file_location('pcw_record','../scripts/dev/record-crewd-build.py');record=importlib.util.module_from_spec(spec);spec.loader.exec_module(record)
-          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);value=json.loads(pathlib.Path(sys.argv[1]).read_text());ref=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);composition=json.loads(pathlib.Path(sys.argv[1]).read_text());original=next(row for row in composition['normalArtifacts'] if row['schema']=='13');value=json.loads(pathlib.Path(original['originalWitness']).read_text());ref=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           before=record.source_preflight(repo,value['files'],pathlib.Path(os.environ['CARGO_TARGET_DIR']),ref);before['scope']='testkit compilation only; reused normals remain original compiled source'
           pathlib.Path(sys.argv[2]).write_text(json.dumps(before,indent=2)+'\n')
           OWNER
@@ -467,9 +467,9 @@ jobs:
           pathlib.Path(sys.argv[3]).write_text(json.dumps({'binary':str(binary),'sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'artifact':artifacts[0]},indent=2)+'\n')
           FAKE
           TMPDIR="$RUNNER_TEMP/m5-physical" PCW_M5_NORMAL_CREWD="$RUNNER_TEMP/m5-remaining-evidence/normal13-used/crewd" cargo test --locked -p crewd --features testkit --test s1_literal_enrollment m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact -- --ignored --exact --nocapture 2>&1 | tee target/m5-followup-evidence/normal-physical.log
-          python3 - "$RUNNER_TEMP/m5-original-scope/_temp/m5-normal13-witness.json" "$RUNNER_TEMP/m5-remaining-evidence/normal13-used/crewd" <<'HASH'
+          python3 - "$RUNNER_TEMP/m5-remaining-evidence/composition.json" "$RUNNER_TEMP/m5-remaining-evidence/normal13-used/crewd" <<'HASH'
           import hashlib,json,pathlib,sys
-          proof=json.loads(pathlib.Path(sys.argv[1]).read_text());assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==proof['binarySHA256']
+          composition=json.loads(pathlib.Path(sys.argv[1]).read_text());proof=next(row for row in composition['normalArtifacts'] if row['schema']=='13');assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==proof['binarySHA256']
           HASH
           python3 - target/m5-followup-evidence/fake-claude-proof.json <<'FAKEHASH'
           import hashlib,json,pathlib,sys
@@ -491,8 +491,8 @@ jobs:
           PENDINGCREW_TEST_CREWD_PROGRAM: ${{ runner.temp }}/m5-remaining-evidence/normal13-used/crewd
         run: |
           set -euo pipefail
-          export PENDINGCREW_TEST_OLD_CREWD_SHA256=$(python3 -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/m5-original-scope/_temp/m5-normal12-witness.json"))["binarySHA256"])')
-          export PENDINGCREW_TEST_CREWD_SHA256=$(python3 -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/m5-original-scope/_temp/m5-normal13-witness.json"))["binarySHA256"])')
+          export PENDINGCREW_TEST_OLD_CREWD_SHA256=$(python3 -c 'import json,os;print(next(row for row in json.load(open(os.environ["RUNNER_TEMP"]+"/m5-remaining-evidence/composition.json"))["normalArtifacts"] if row["schema"]=="12")["binarySHA256"])')
+          export PENDINGCREW_TEST_CREWD_SHA256=$(python3 -c 'import json,os;print(next(row for row in json.load(open(os.environ["RUNNER_TEMP"]+"/m5-remaining-evidence/composition.json"))["normalArtifacts"] if row["schema"]=="13")["binarySHA256"])')
           bash ../scripts/dev/test-crewd-followup-migration.sh 2>&1 | tee target/m5-followup-evidence/linux-formal-migration.log
       - name: Preserve original provenance plus new remaining-flow composition evidence
         if: always()
