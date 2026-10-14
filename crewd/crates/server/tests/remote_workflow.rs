@@ -756,21 +756,22 @@ async fn native_apple_pairing_tls_work_event_and_revoke() {
     for name in ["home", "runtime", "projects"] {
         std::fs::create_dir(root.join(name)).unwrap();
     }
-    let mut options = crewd_server::OrchestraServe::default();
-    options.codex =
-        crewd_server::orchestra::exec_codex::CodexProgram::Path("/usr/bin/false".into());
-    options.claude =
-        crewd_server::orchestra::exec_claude::ClaudeProgram::Path("/usr/bin/false".into());
-    options.helper = Some(std::path::PathBuf::from(
-        "/private/tmp/pcw-M3-immutable-candidate-20261014-fe68022f-02/PendingCrew Codex First.app/Contents/Helpers/crewd",
-    ));
-    options.runtime_dir = Some(root.join("runtime"));
-    options.claude_projects_dir = Some(root.join("projects"));
-    options.codex_env.insert(
+    let child_env = std::collections::BTreeMap::from([(
         "HOME".into(),
         root.join("home").to_string_lossy().into_owned(),
-    );
-    options.claude_env = options.codex_env.clone();
+    )]);
+    let options = crewd_server::OrchestraServe {
+        codex: crewd_server::orchestra::exec_codex::CodexProgram::Path("/usr/bin/false".into()),
+        claude: crewd_server::orchestra::exec_claude::ClaudeProgram::Path("/usr/bin/false".into()),
+        helper: Some(std::path::PathBuf::from(
+            "/private/tmp/pcw-M3-immutable-candidate-20261014-fe68022f-02/PendingCrew Codex First.app/Contents/Helpers/crewd",
+        )),
+        runtime_dir: Some(root.join("runtime")),
+        claude_projects_dir: Some(root.join("projects")),
+        codex_env: child_env.clone(),
+        claude_env: child_env,
+        ..Default::default()
+    };
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let server_root = root.clone();
     let task = tokio::spawn(async move {
