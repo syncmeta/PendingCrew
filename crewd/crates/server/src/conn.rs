@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::net::UnixStream;
 #[cfg(test)]
 use tokio::net::unix::OwnedReadHalf;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 /// 单行请求的上限；超过且仍没有换行就回错误并断开。
@@ -92,14 +92,16 @@ where
     let writer_state = state.clone();
 
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
+    let (writer_done_tx, mut writer_done) = oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
+        let _done = writer_done_tx;
         let mut changes = remote_writer.as_ref().and_then(|p| p.changes().ok());
-        loop {
+        'frames: loop {
             let frame = tokio::select! {
                 biased;
                 _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
                     if let Some(principal) = &remote_writer {
-                        if principal.check_live(&writer_state).await.is_err() { let _ = wr.shutdown().await; break; }
+                        if principal.check_live(&writer_state).await.is_err() { break; }
                     }
                     continue;
                 },
@@ -107,7 +109,6 @@ where
             };
             if let Some(principal) = &remote_writer {
                 if principal.check_live(&writer_state).await.is_err() {
-                    let _ = wr.shutdown().await;
                     break;
                 }
             }
@@ -116,7 +117,27 @@ where
                 Err(_) => continue,
             };
             line.push(b'\n');
-            if wr.write_all(&line).await.is_err() {
+            if let Some(principal) = &remote_writer {
+                // Keep one write future across unrelated grant changes. Cancelling a
+                // partial frame closes this connection; it must never be replayed.
+                let write = wr.write_all(&line);
+                tokio::pin!(write);
+                let deadline = tokio::time::sleep(std::time::Duration::from_secs(5));
+                tokio::pin!(deadline);
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
+                            if principal.check_live(&writer_state).await.is_err() { break 'frames; }
+                        },
+                        _ = &mut deadline => break 'frames,
+                        result = &mut write => {
+                            if result.is_err() { break 'frames; }
+                            break;
+                        },
+                    }
+                }
+            } else if wr.write_all(&line).await.is_err() {
                 break;
             }
         }
@@ -132,6 +153,7 @@ where
         &mut forwarder,
         &mut forward_guard,
         &mut drain,
+        &mut writer_done,
         &peer,
     )
     .await;
@@ -159,6 +181,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     forwarder: &mut Option<JoinHandle<()>>,
     forward_guard: &mut Option<AbortOnDrop>,
     drain: &mut watch::Receiver<bool>,
+    writer_done: &mut oneshot::Receiver<()>,
     peer: &Caller,
 ) -> anyhow::Result<()> {
     let mut rd = BufReader::new(rd);
@@ -181,6 +204,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
         let n = tokio::select! {
             biased;
             _ = drain.changed() => return Ok(()),
+            _ = &mut *writer_done => return Ok(()),
             _ = async { match changes.as_mut() { Some(changes) => { let _ = changes.changed().await; }, None => std::future::pending().await } } => {
                 if let Some(principal) = peer.remote() { principal.check_live(state).await.map_err(|_| anyhow::anyhow!("remote connection authorization expired"))?; }
                 continue;
