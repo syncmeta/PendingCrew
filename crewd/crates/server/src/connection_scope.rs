@@ -10,6 +10,7 @@ use std::{
 pub(crate) struct ConnectionScope {
     pub id: String,
     live: Arc<Mutex<bool>>,
+    output_live: Arc<Mutex<bool>>,
     closed_signal: tokio::sync::watch::Sender<bool>,
     fences: Arc<Mutex<BTreeMap<String, ManualFence>>>,
     watches: Arc<Mutex<BTreeMap<String, tokio::task::AbortHandle>>>,
@@ -19,6 +20,7 @@ impl ConnectionScope {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             live: Arc::new(Mutex::new(true)),
+            output_live: Arc::new(Mutex::new(true)),
             closed_signal: tokio::sync::watch::channel(false).0,
             fences: Arc::new(Mutex::new(BTreeMap::new())),
             watches: Arc::new(Mutex::new(BTreeMap::new())),
@@ -40,7 +42,15 @@ impl ConnectionScope {
     }
     pub(crate) fn close_until(&self, deadline: Instant) -> std::io::Result<()> {
         *self.live.lock().map_err(|_| closed())? = false;
+        *self.output_live.lock().map_err(|_| closed())? = false;
         self.closed_signal.send_replace(true);
+        self.fence_input_until(deadline)
+    }
+    /// EOF/server drain ends every input/custody/watch authority immediately.
+    /// Already accepted replies may still flush under the writer's finite budget.
+    /// Grant revocation/slow-client closure use close_until and stop output too.
+    pub(crate) fn fence_input_until(&self, deadline: Instant) -> std::io::Result<()> {
+        *self.live.lock().map_err(|_| closed())? = false;
         for (_, watch) in std::mem::take(&mut *self.watches.lock().map_err(|_| closed())?) {
             watch.abort();
         }
@@ -72,6 +82,9 @@ impl ConnectionScope {
     }
     pub fn is_live(&self) -> bool {
         self.live.lock().is_ok_and(|live| *live)
+    }
+    pub(crate) fn output_is_live(&self) -> bool {
+        self.output_live.lock().is_ok_and(|live| *live)
     }
     /// Keep the close/enable order atomic: a closed connection can NEVER enable
     /// a fence after Drop already disabled it. Authority commits separately.

@@ -527,6 +527,98 @@ mod tests {
         (state, Actor::Local(peer), db)
     }
     #[tokio::test]
+    async fn eof_fenced_actor_cannot_dispatch_while_accepted_output_drains() {
+        let (state, actor, db) = state_actor().await;
+        let queued_actor = actor.clone();
+        let scope = actor.connection_scope().clone();
+        let guard = scope.guard();
+        scope
+            .fence_input_until(std::time::Instant::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(!scope.is_live());
+        assert!(scope.output_is_live(), "already accepted output may drain");
+        assert_eq!(
+            queued_actor.principal(&state).await.unwrap_err().code,
+            RpcError::FORBIDDEN
+        );
+        for operation in [
+            "session.terminal.write",
+            "session.terminal.resize",
+            "session.terminal.claim",
+            "session.answer",
+            "session.respondRunnerRequest",
+            "session.start",
+        ] {
+            assert_eq!(
+                queued_actor
+                    .authorize(&state, operation)
+                    .await
+                    .unwrap_err()
+                    .code,
+                RpcError::FORBIDDEN
+            );
+            let actor = queued_actor.clone();
+            let state_for_tx = state.clone();
+            assert!(
+                state
+                    .db
+                    .call(move |store| actor.authorize_tx(&state_for_tx, store.conn(), operation))
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+        let pending = CommandSubmitParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            runtime_binding_id: state.runtime_binding_id.clone(),
+            db_id: db,
+            command: PublicCommand::CrewCreateFirstMessage(FirstMessageParams {
+                crew: crewd_proto::CrewCreateParams {
+                    title: "queued after read EOF".into(),
+                    working_directory: "/private/tmp".into(),
+                    parent_id: None,
+                },
+                text: "must never dispatch".into(),
+            }),
+        };
+        assert_eq!(
+            submit_sql(&state, &queued_actor, pending)
+                .await
+                .unwrap_err()
+                .code,
+            RpcError::FORBIDDEN
+        );
+        let counts = state
+            .db
+            .call(|store| -> rusqlite::Result<Vec<i64>> {
+                ["crews", "channels", "messages", "public_command_receipts"]
+                    .into_iter()
+                    .map(|table| {
+                        store.conn().query_row(
+                            &format!("SELECT COUNT(*) FROM {table}"),
+                            [],
+                            |row| row.get(0),
+                        )
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(counts, vec![0, 0, 0, 0]);
+        scope.close();
+        assert!(
+            !scope.output_is_live(),
+            "revoke/hard closure also cancels output"
+        );
+        assert!(
+            !*scope.liveness().lock().unwrap(),
+            "closing output never revives input"
+        );
+        drop(guard);
+        state.db.clone().shutdown();
+    }
+    #[tokio::test]
     async fn first_message_and_receipt_commit_once_under_real_kernel_human_actor() {
         let (s, a, db) = state_actor().await;
         let p = CommandSubmitParams {

@@ -240,6 +240,13 @@ pub enum CollabFact {
 }
 
 pub enum Input {
+    /// Test-only scheduler cut; preserves Core state and queues subsequent inputs.
+    /// The release guard must drop even on assertion failure. No public method.
+    #[cfg(feature = "testkit")]
+    PauseForTest {
+        entered: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    },
     Exec {
         session: String,
         generator: u64,
@@ -926,6 +933,12 @@ impl<P: Port> Core<P> {
             self.due.clear();
         }
         let r = match input {
+            #[cfg(feature = "testkit")]
+            Input::PauseForTest { entered, release } => {
+                let _ = entered.send(());
+                let _ = release.await;
+                Ok(())
+            }
             Input::Exec {
                 session,
                 generator,

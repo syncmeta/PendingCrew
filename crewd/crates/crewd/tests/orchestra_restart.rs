@@ -128,9 +128,15 @@ fn start_pair(f: &Fixture) -> (String, String, String) {
     (crew["id"].as_str().unwrap().to_string(), cap, worker)
 }
 fn message_ids(f: &Fixture) -> Vec<(i64, String)> {
-    let store = crewd_store::Store::open_data_dir(&f.data).unwrap();
-    let mut statement = store
-        .conn()
+    // This observer runs while the owned test daemon is live. Store open is a
+    // stopped-state recovery/version operation with stable-file preconditions.
+    // A normal read-only SQLite connection reads the live committed WAL instead.
+    let conn = rusqlite::Connection::open_with_flags(
+        f.data.join("crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut statement = conn
         .prepare("SELECT seq,id FROM messages ORDER BY seq")
         .unwrap();
     statement

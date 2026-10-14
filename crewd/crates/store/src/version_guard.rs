@@ -259,8 +259,20 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
         return Ok(guard);
     }
     let mut h = [0u8; 100];
-    main.read_exact(&mut h).map_err(|_| unknown())?;
-    let fields = header(&h)?;
+    let corrupt_header = || {
+        if wal_nonempty || journal_nonempty {
+            // A recovery sidecar can change classification; without a verified
+            // complete format/cut, retain the prior unknown fail-closed result.
+            unknown()
+        } else {
+            StoreError::Integrity {
+                check: "SQLite file header",
+                problems: vec!["nonempty main file does not contain a valid SQLite header".into()],
+            }
+        }
+    };
+    main.read_exact(&mut h).map_err(|_| corrupt_header())?;
+    let fields = header(&h).map_err(|_| corrupt_header())?;
     version(fields.0)?;
     // A hot rollback journal needs a separate verified recovery contract. Never
     // let an unclassified journal change the source during a version probe.

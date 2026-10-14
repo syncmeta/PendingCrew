@@ -1297,7 +1297,15 @@ impl Walk {
         )?;
         Ok(())
     }
-    async fn apply(&mut self, r: &mut Rig, op: Op) -> Result<bool, String> {
+    // Select the nested fault sequence before entering the large ordinary-op
+    // async dispatcher. In unoptimized builds their separate poll frames used
+    // to stack (~0xbf000 + 0x79000) although the futures themselves were small.
+    // Keep identical target/live RNG draws and all original fault assertions.
+    fn apply<'a>(
+        &'a mut self,
+        r: &'a mut Rig,
+        op: Op,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + 'a>> {
         let sessions: Vec<_> = r.port.lock().sessions.keys().cloned().collect();
         let session = sessions[self.rng.index(sessions.len())].clone();
         let lives: Vec<_> = sessions
@@ -1311,6 +1319,19 @@ impl Walk {
             Some(lives[self.rng.index(lives.len())].clone())
         };
         self.record(format!("{op:?} target={session} live={live:?}"));
+        if op == Op::FaultLatch {
+            Box::pin(self.latch_fault_sequence(r))
+        } else {
+            Box::pin(self.apply_selected(r, op, session, live))
+        }
+    }
+    async fn apply_selected(
+        &mut self,
+        r: &mut Rig,
+        op: Op,
+        session: String,
+        live: Option<String>,
+    ) -> Result<bool, String> {
         match op {
             Op::HumanMention | Op::SessionMention | Op::Dm | Op::Listener => {
                 let (channel, sender, mentions) = match op {
@@ -1539,7 +1560,9 @@ impl Walk {
                     return Ok(false);
                 }
             }
-            Op::FaultLatch => return self.latch_fault_sequence(r).await,
+            Op::FaultLatch => {
+                unreachable!("fault sequence dispatched before ordinary operation future")
+            }
             Op::FaultClaim
             | Op::FaultAck
             | Op::FaultAckCursor
