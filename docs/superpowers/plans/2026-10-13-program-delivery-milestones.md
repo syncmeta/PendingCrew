@@ -18,7 +18,7 @@ Core12 原子迁移、正常后台和私有持久收件子单元已有独立证�
 
 原前端完整退出交付依赖 schema14 的真实本地 IPC/ownProcess 关联：Mac 客户端以受支持 AF_UNIX fd 的 kernel peer PID/uid、实际进程 birth/boot session，匹配自身 spawn 捕获的 child PID/birth/direct parent；握手前后与 Quit 前重核，再关联 Core 产生的同 server instance/runtime binding。路径、launch UUID 和 JSON hello PID 不授权。断联或 kernel 关联未证保持 pending，不杀旧 helper；remote Quit 只撤自身连接/watch/lease。物理退出和账面 hibernation 分别留证。此为两作者已对齐的工程契约，尚未实际验收；不把必要安全退出缩小为永远不退出后台。Swift transport 归 client，server/runtime 归 backend。
 
-M5 剩余双平台物理流程与 Linux 正式12→13采用 client source-review freeze `884a1c9bacd32b5903ce82f6738b2b1357835530`；质量线一次完整来源门禁审接受。原 run38516501175 实时仍为 completed/failure/attempt1/exact2bf，两固定来源 artifact 未过期。补验绑定原来源，拒绝 current crewd tree 变动，保留原 raw fresh/正常配置/完整输入证明，不重标为新源码编译；只补缺失真实流程，不重复已验100项影响测试/doctest。source-review 通过不等于 actual closure 通过。backend 精确组合 b822bdfb13b954e2a606025f7a051585ee33a709 由 client 唯一 writer 合成并获质量线差异审接受；整个 crewd tree 与原2bf一致。根已派发 run38520913233（m5_remaining_only=true），实时 queued/exactb822，实际剩余流程仍待终态。
+M5 剩余双平台物理流程与 Linux 正式12→13采用 client source-review freeze `884a1c9bacd32b5903ce82f6738b2b1357835530`；质量线一次完整来源门禁审接受。原 run38516501175 实时仍为 completed/failure/attempt1/exact2bf，两固定来源 artifact 未过期。补验绑定原来源，拒绝 current crewd tree 变动，保留原 raw fresh/正常配置/完整输入证明，不重标为新源码编译；只补缺失真实流程，不重复已验100项影响测试/doctest。source-review 通过不等于 actual closure 通过。backend 精确组合 b822bdfb13b954e2a606025f7a051585ee33a709 由 client 唯一 writer 合成并获质量线差异审接受；整个 crewd tree 与原2bf一致。根已派发 run38520913233（m5_remaining_only=true），起初 queued/exactb822，后续实际两平台 completed/failure：完整来源复用 consumer 核验通过，官方 download-artifact 单ID默认具名子目录与后续 OWNER/HASH/MIGSHA 固定 flat 路径不一致，OWNER FileNotFound，物理与正式迁移尚未执行。质量线已保存双平台原始失败并直接交 client 唯一构建作者修整块布局；不放宽来源证明，不重已通过范围。
 
 ## 2026-10-14 新会话明确恢复与三线固定责任
 
