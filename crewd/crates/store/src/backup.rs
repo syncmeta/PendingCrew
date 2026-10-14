@@ -221,6 +221,7 @@ fn snapshot_steps(
             let tx = copy.transaction()?;
             crate::remote::invalidate_for_work_replacement(&tx, "work_restore", &crate::now_ts())?;
             crate::native_execution::invalidate_unknown(&tx)?;
+            crate::work_followups::restored(&tx)?;
             tx.commit()?;
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。

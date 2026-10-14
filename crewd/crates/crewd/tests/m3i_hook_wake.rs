@@ -55,6 +55,7 @@ struct Rig {
     lobby: String,
     home: tempfile::TempDir,
     progress_seen: Arc<std::sync::atomic::AtomicUsize>,
+    clock: Arc<ManualClock>,
 }
 impl Drop for Rig {
     fn drop(&mut self) {
@@ -83,7 +84,7 @@ impl Rig {
             Arc::new(DbPort::new(f.state.clone(), f.data_dir().join("crewd.db"))),
             Executors::new().with("claude", Arc::new(fake.clone())),
             Hooks::default(),
-            clock,
+            clock.clone(),
             OrchestraConfig {
                 stagger_ms: 0,
                 heartbeat_ms: 10,
@@ -149,6 +150,7 @@ impl Rig {
             lobby,
             home,
             progress_seen,
+            clock,
         };
         for id in [rig.captain.clone(), rig.worker.clone()] {
             rig.wait_running(&id).await;
@@ -1754,5 +1756,469 @@ async fn work_reminder_changed_after_actual_render_never_reaches_executor() {
             "{mode}: obsolete body reached executor"
         );
         assert_eq!(launches, 1, "{mode}: stale body triggered another launch");
+    }
+}
+
+/// Real Core actor, DB transaction, rendering, shared cause lease and delivery
+/// receipt; the provider alone is fake. No account or model is started.
+#[tokio::test]
+async fn deterministic_followup_actual_actor_delivery_unknown_and_prune_never_reinject_old_fact() {
+    use crewd_collab::{Sender, wakes, work, work_followups};
+    for delivered in [true, false] {
+        let rig = Rig::new().await;
+        let crew = rig.f.crew.clone();
+        let owner = rig.worker.clone();
+        let p = rig
+            .f
+            .state
+            .collab(move |tx| {
+                let p = work::create(
+                    tx,
+                    &Sender::Human,
+                    crewd_proto::WorkCreateParams {
+                        crew_id: crew,
+                        title: "PRIVATE_SOURCE_BODY_NOT_IN_REMINDER_b2d2".into(),
+                        owner: Some(owner.clone()),
+                        ..Default::default()
+                    },
+                )?;
+                tx.conn().execute(
+                    "UPDATE sessions SET resume_failed_at=?1 WHERE id=?2",
+                    rusqlite::params!["genuine-isolated-recovery-failure", owner],
+                )?;
+                // Existing production heartbeat collects the new fact; no explicit collector shortcut.
+                Ok(p)
+            })
+            .await
+            .unwrap();
+        rig.h.collab(CollabFact::WakeEnqueued {
+            session: rig.captain.clone(),
+        });
+        timeout(LIMIT, async {
+            while !rig
+                .fake
+                .sent(&rig.captain)
+                .iter()
+                .any(|body| body.contains(&p.id))
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let sent = rig.fake.sent(&rig.captain);
+        assert_eq!(sent.iter().filter(|body| body.contains(&p.id)).count(), 1);
+        assert!(
+            !sent
+                .iter()
+                .any(|body| body.contains("PRIVATE_SOURCE_BODY_NOT_IN_REMINDER_b2d2"))
+        );
+        let recipient = rig.captain.clone();
+        let row = rig
+            .f
+            .state
+            .db
+            .call_result(move |s| {
+                Ok::<_, crewd_collab::CollabError>(
+                    wakes::list(s.conn(), Some(&recipient), 100)?
+                        .into_iter()
+                        .find(|r| r.source.starts_with("work-followup:"))
+                        .unwrap(),
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let id = rig.fake.last_send_id(&rig.captain);
+        rig.fake.emit(
+            &rig.captain,
+            SessionEvent::Delivery {
+                id,
+                subject: Subject::Steer,
+                outcome: if delivered {
+                    DeliveryOutcome::Delivered
+                } else {
+                    DeliveryOutcome::Abandoned("unknown actual consumption".into())
+                },
+            },
+        );
+        if !delivered {
+            // Abandoned is intentionally provisional until a real executor exit;
+            // settle the actual typed exit rather than forging a terminal receipt.
+            rig.fake.emit(
+                &rig.captain,
+                SessionEvent::Exited(crewd_exec::session::ExitInfo {
+                    status: crewd_exec::session::ExitStatusKind::Code(1),
+                    stopped_by_user: false,
+                    hit_limit: false,
+                }),
+            );
+        }
+        let effect_result = timeout(LIMIT, async {
+            loop {
+                let wake = row.id;
+                let effect = rig
+                    .f
+                    .state
+                    .db
+                    .call(move |s| {
+                        s.conn().query_row(
+                            "SELECT effect FROM work_followup_facts WHERE original_wake_id=?1",
+                            [wake],
+                            |r| r.get::<_, String>(0),
+                        )
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if effect == if delivered { "delivered" } else { "unknown" } {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if effect_result.is_err() {
+            let wake = row.id;
+            let evidence=rig.f.state.db.call(move|s| {
+                let mut q=s.conn().prepare("SELECT effect,wake_id,original_wake_id FROM work_followup_facts ORDER BY id")?;
+                let facts=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,Option<i64>>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                let state=s.conn().query_row("SELECT state,attempts,last_error FROM wakes WHERE id=?1",[wake],|r|Ok((r.get::<_,String>(0)?,r.get::<_,u32>(1)?,r.get::<_,Option<String>>(2)?)))?;
+                Ok::<_,rusqlite::Error>((facts,state))
+            }).await.unwrap().unwrap();
+            panic!(
+                "actual delivery={delivered}, send id={id}, wake={}, persisted {evidence:?}",
+                row.id
+            );
+        }
+        // Advance the same existing engine clock beyond retry/settlement time;
+        // an unknown result must become stale instead of manufacturing input.
+        rig.clock.advance(60_000);
+        rig.h.collab(CollabFact::WakeEnqueued {
+            session: rig.captain.clone(),
+        });
+        timeout(LIMIT, async {
+            loop {
+                let wake = row.id;
+                let state = rig
+                    .f
+                    .state
+                    .db
+                    .call_result(move |s| wakes::by_ids(s.conn(), &[wake]))
+                    .await
+                    .unwrap()
+                    .unwrap()[0]
+                    .state;
+                if state
+                    == if delivered {
+                        wakes::WakeState::Delivered
+                    } else {
+                        wakes::WakeState::Dropped
+                    }
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        rig.f
+            .state
+            .collab(move |tx| wakes::prune(tx, tx.now_ms() + 120_000, 100))
+            .await
+            .unwrap();
+        assert_eq!(
+            rig.f.state.collab(work_followups::enqueue).await.unwrap(),
+            0
+        );
+        rig.h.collab(CollabFact::WakeEnqueued {
+            session: rig.captain.clone(),
+        });
+        rig.h.latches().await.unwrap();
+        assert_eq!(
+            rig.fake
+                .sent(&rig.captain)
+                .iter()
+                .filter(|body| body.contains(&p.id))
+                .count(),
+            1
+        );
+        rig.close().await;
+    }
+}
+
+#[tokio::test]
+async fn deterministic_followup_existing_system_budget_holds_until_explicit_human_recovery() {
+    use crewd_collab::{Sender, work, work_followups};
+    use crewd_wake::LatchScope;
+    let rig = Rig::new().await;
+    let crew = rig.f.crew.clone();
+    let owner = rig.worker.clone();
+    let p = rig
+        .f
+        .state
+        .collab(move |tx| {
+            work::create(
+                tx,
+                &Sender::Human,
+                crewd_proto::WorkCreateParams {
+                    crew_id: crew,
+                    title: "bounded deterministic fact".into(),
+                    owner: Some(owner),
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let max = crewd_wake::breaker::LOOP_LIMITS.target_max;
+    for round in 0..=max {
+        let owner = rig.worker.clone();
+        let count = rig
+            .f
+            .state
+            .collab(move |tx| {
+                tx.conn().execute(
+                    "UPDATE sessions SET resume_failed_at=?1 WHERE id=?2",
+                    rusqlite::params![format!("synthetic distinct actual failure {round}"), owner],
+                )?;
+                work_followups::enqueue(tx)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        rig.h.collab(CollabFact::WakeEnqueued {
+            session: rig.captain.clone(),
+        });
+        if round < max {
+            timeout(LIMIT, async {
+                while rig
+                    .fake
+                    .sent(&rig.captain)
+                    .iter()
+                    .filter(|s| s.contains("deterministicFollowup"))
+                    .count()
+                    < round + 1
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let id = rig.fake.last_send_id(&rig.captain);
+            rig.fake.emit(
+                &rig.captain,
+                SessionEvent::Delivery {
+                    id,
+                    subject: Subject::Steer,
+                    outcome: DeliveryOutcome::Delivered,
+                },
+            );
+            timeout(LIMIT, async {
+                loop {
+                    let expected = i64::try_from(round + 1).unwrap();
+                    let actual = rig
+                        .f
+                        .state
+                        .db
+                        .call(move |s| {
+                            s.conn().query_row(
+                                "SELECT count(*) FROM work_followup_facts WHERE effect='delivered'",
+                                [],
+                                |r| r.get::<_, i64>(0),
+                            )
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if actual == expected {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    }
+    timeout(LIMIT, async {
+        while !rig.h.latches().await.unwrap().iter().any(|l| {
+            l.scope == LatchScope::Edge
+                && l.id == crewd_wake::breaker::edge_id(crewd_wake::breaker::SYSTEM, &rig.captain)
+        }) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let before = rig
+        .fake
+        .sent(&rig.captain)
+        .iter()
+        .filter(|s| s.contains("deterministicFollowup"))
+        .count();
+    assert_eq!(before, max);
+    assert_eq!(
+        rig.f.state.collab(work_followups::enqueue).await.unwrap(),
+        0,
+        "held existing facts are not new facts"
+    );
+    rig.clock
+        .advance(crewd_wake::breaker::LOOP_LIMITS.window_ms + 60_000);
+    rig.h.collab(CollabFact::WakeEnqueued {
+        session: rig.captain.clone(),
+    });
+    rig.h.latches().await.unwrap();
+    assert_eq!(
+        rig.fake
+            .sent(&rig.captain)
+            .iter()
+            .filter(|s| s.contains("deterministicFollowup"))
+            .count(),
+        max,
+        "time cannot clear existing Human-only latch"
+    );
+    assert!(
+        rig.h
+            .recover(
+                LatchScope::Edge,
+                crewd_wake::breaker::edge_id(crewd_wake::breaker::SYSTEM, &rig.captain)
+            )
+            .await
+            .unwrap()
+    );
+    timeout(LIMIT, async {
+        while rig
+            .fake
+            .sent(&rig.captain)
+            .iter()
+            .filter(|s| s.contains("deterministicFollowup"))
+            .count()
+            != max + 1
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let id = rig.fake.last_send_id(&rig.captain);
+    rig.fake.emit(
+        &rig.captain,
+        SessionEvent::Delivery {
+            id,
+            subject: Subject::Steer,
+            outcome: DeliveryOutcome::Delivered,
+        },
+    );
+    rig.h.latches().await.unwrap();
+    assert_eq!(
+        rig.f.state.collab(work_followups::enqueue).await.unwrap(),
+        0
+    );
+    assert!(rig.fake.sent(&rig.captain).last().unwrap().contains(&p.id));
+    rig.close().await;
+}
+
+#[tokio::test]
+async fn deterministic_followup_role_stop_or_resolution_after_render_never_claims_or_sends() {
+    use crewd_collab::{Sender, crews, wakes, work, work_followups};
+    for mode in ["role", "stop", "done"] {
+        let rig = Rig::new().await;
+        let mut gate = rig.f.caller_gate(&rig.captain, CallerStage::WakeRendered);
+        let crew = rig.f.crew.clone();
+        let owner = rig.worker.clone();
+        let p = rig
+            .f
+            .state
+            .collab(move |tx| {
+                let p = work::create(
+                    tx,
+                    &Sender::Human,
+                    crewd_proto::WorkCreateParams {
+                        crew_id: crew,
+                        title: "synthetic scope race".into(),
+                        owner: Some(owner.clone()),
+                        ..Default::default()
+                    },
+                )?;
+                tx.conn().execute(
+                    "UPDATE sessions SET resume_failed_at='synthetic scope failure' WHERE id=?1",
+                    [owner],
+                )?;
+                work_followups::enqueue(tx)?;
+                Ok(p)
+            })
+            .await
+            .unwrap();
+        let rendered = timeout(LIMIT, gate.entered()).await.unwrap();
+        assert!(rendered.text.contains(&p.id));
+        let recipient = rig.captain.clone();
+        let id = p.id.clone();
+        let rev = p.revision.clone();
+        let crew = rig.f.crew.clone();
+        let new_captain = rig.worker.clone();
+        rig.f
+            .state
+            .collab(move |tx| {
+                match mode {
+                    "role" => {
+                        crews::set_captain(tx, &crew, &new_captain)?;
+                    }
+                    "stop" => {
+                        wakes::human_stop(tx, &recipient)?;
+                    }
+                    _ => {
+                        work::update(
+                            tx,
+                            &Sender::Human,
+                            crewd_proto::WorkUpdateParams {
+                                id,
+                                expected_revision: rev,
+                                status: Some(crewd_proto::WorkUpdateStatus::Done),
+                                ..Default::default()
+                            },
+                        )?;
+                    }
+                };
+                Ok(())
+            })
+            .await
+            .unwrap();
+        gate.release();
+        let recipient = rig.captain.clone();
+        let row = timeout(LIMIT, async {
+            loop {
+                let target = recipient.clone();
+                let rows = rig
+                    .f
+                    .state
+                    .db
+                    .call_result(move |s| wakes::list(s.conn(), Some(&target), 100))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if let Some(row) = rows.into_iter().find(|r| {
+                    r.source.starts_with("work-followup:") && r.state == wakes::WakeState::Dropped
+                }) {
+                    break row;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            row.attempts, 0,
+            "{mode}: invalid reminder must not be claimed"
+        );
+        assert!(
+            !rig.fake
+                .sent(&rig.captain)
+                .iter()
+                .any(|body| body.contains(&p.id)),
+            "{mode}: stale/forbidden input reached fake provider"
+        );
+        rig.close().await;
     }
 }

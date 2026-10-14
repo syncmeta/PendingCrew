@@ -495,6 +495,9 @@ pub fn claim_reserved(
             ));
         }
     }
+    for row in rows.iter().filter(|r| wake_ids.contains(&r.id)) {
+        crate::checkpoints::capture_for_claim(tx, row)?;
+    }
     wakes::claim(tx, &ids)?;
     let token = uuid::Uuid::new_v4().to_string();
     state.active = Some(Active {
