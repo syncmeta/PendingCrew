@@ -51,13 +51,17 @@ def check(app):
  if p.sha(settings)!=p.hexsha(gui.get('buildSettingsSHA256')):p.fail('Native actual build-settings hash mismatch')
  settings_log=p.regular(base,gui.get('buildSettingsLog'))
  if p.sha(settings_log)!=p.hexsha(gui.get('buildSettingsLogSHA256')):p.fail('Native actual settings log hash mismatch')
- slines=settings_log.read_text().splitlines();sc=[shlex.split(x[9:]) for x in slines if x.startswith('Command: ')]
+ settings_text=settings_log.read_text()
+ if settings.read_text() not in settings_text:p.fail('Native settings output not present in actual query log')
+ slines=settings_text.splitlines();sc=[shlex.split(x[9:]) for x in slines if x.startswith('Command: ')]
  if sc!=[command[:-1]+['-showBuildSettings','-json']] or [x[6:] for x in slines if x.startswith('Exit: ')]!=['0']:p.fail('Native settings were not queried from identical actual build inputs')
  tool=p.regular(base,gui.get('toolchainFile'))
  if p.sha(tool)!=p.hexsha(gui.get('toolchainSHA256')) or json.loads(tool.read_text())!={'xcodeVersion':cfg['xcodeVersion'],'sdkVersion':cfg['sdkVersion']}:p.fail('Native actual SDK/toolchain output mismatch')
  tlog=p.regular(base,gui.get('toolchainLog'))
  if p.sha(tlog)!=p.hexsha(gui.get('toolchainLogSHA256')):p.fail('Native toolchain query log mismatch')
- tlines=tlog.read_text().splitlines();tc=[shlex.split(x[9:]) for x in tlines if x.startswith('Command: ')]
+ tool_text=tlog.read_text()
+ if not all(v in tool_text for v in [cfg['xcodeVersion'],cfg['sdkVersion']]):p.fail('Native SDK/toolchain output not present in actual query log')
+ tlines=tool_text.splitlines();tc=[shlex.split(x[9:]) for x in tlines if x.startswith('Command: ')]
  if tc!=[['xcodebuild','-version'],['xcrun','--sdk','macosx','--show-sdk-version']] or [x[6:] for x in tlines if x.startswith('Exit: ')]!=['0','0']:p.fail('Native actual toolchain query commands missing')
  rows=json.loads(settings.read_text());targets=[x.get('buildSettings',{}) for x in rows if x.get('target')=='PendingCrew']
  if len(targets)!=1:p.fail('Native actual target settings missing')
