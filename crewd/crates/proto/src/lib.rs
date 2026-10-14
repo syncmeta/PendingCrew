@@ -17,6 +17,8 @@ pub mod orchestra;
 mod params;
 pub mod work;
 pub use work::*;
+pub mod remote;
+pub use remote::*;
 pub mod resources;
 pub use resources::*;
 pub mod channel_work;
@@ -46,6 +48,12 @@ pub const MIN_API_VERSION: u32 = 3;
 
 pub mod methods {
     pub const HELLO: &str = "system.hello";
+    pub const REMOTE_STATUS: &str = "remote.status";
+    pub const REMOTE_CONFIGURE: &str = "remote.configure";
+    pub const REMOTE_INVITE: &str = "remote.invite";
+    pub const REMOTE_ACCEPT: &str = "remote.accept";
+    pub const REMOTE_GRANTS: &str = "remote.grants";
+    pub const REMOTE_REVOKE: &str = "remote.revoke";
     pub const CREW_LIST: &str = "crew.list";
     pub const CREW_GET: &str = "crew.get";
     pub const CREW_CREATE: &str = "crew.create";
@@ -117,6 +125,12 @@ pub mod methods {
     /// 客户端可调的全部方法（契约测试与 `crewd rpc` 端到端都按它逐个核）。
     pub const ALL: &[&str] = &[
         HELLO,
+        REMOTE_STATUS,
+        REMOTE_CONFIGURE,
+        REMOTE_INVITE,
+        REMOTE_ACCEPT,
+        REMOTE_GRANTS,
+        REMOTE_REVOKE,
         CREW_LIST,
         CREW_GET,
         CREW_CREATE,
@@ -538,6 +552,33 @@ pub fn api_schema() -> Value {
     let methods: serde_json::Map<String, Value> = [
         (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),
         (
+            methods::REMOTE_STATUS,
+            m(sub::<NoParams>(g), sub::<RemoteStatus>(g)),
+        ),
+        (
+            methods::REMOTE_CONFIGURE,
+            m(
+                sub::<RemoteConfigureParams>(g),
+                sub::<RemoteConfiguration>(g),
+            ),
+        ),
+        (
+            methods::REMOTE_INVITE,
+            m(sub::<RemoteInviteParams>(g), sub::<RemoteSignedEnvelope>(g)),
+        ),
+        (
+            methods::REMOTE_ACCEPT,
+            m(sub::<RemoteAcceptParams>(g), sub::<RemoteAcceptResult>(g)),
+        ),
+        (
+            methods::REMOTE_GRANTS,
+            m(sub::<NoParams>(g), many(sub::<RemoteGrantSummary>(g))),
+        ),
+        (
+            methods::REMOTE_REVOKE,
+            m(sub::<RemoteRevokeParams>(g), sub::<RemoteGrantSummary>(g)),
+        ),
+        (
             methods::CREW_LIST,
             m(sub::<CrewListParams>(g), many(sub::<Crew>(g))),
         ),
@@ -870,6 +911,7 @@ mod tests {
             },
             capabilities: vec!["orchestra".into()],
             daemon_health: None,
+            remote_binding: None,
         };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["minApiVersion"], MIN_API_VERSION);
@@ -1401,6 +1443,8 @@ mod tests {
         let s = api_schema();
         let defs = s["$defs"].as_object().unwrap();
         let null_ok = [
+            methods::REMOTE_STATUS,
+            methods::REMOTE_GRANTS,
             methods::WORK_PATROL,
             methods::HELLO,
             methods::CREW_LIST,

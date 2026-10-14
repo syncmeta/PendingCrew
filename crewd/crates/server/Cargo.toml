@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.22.1"
+crewd-remote = { version = "0.1.0", path = "../remote" }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 crewd-collab = { version = "0.1.0", path = "../collab" }
 crewd-exec = { version = "0.1.0", path = "../exec" }

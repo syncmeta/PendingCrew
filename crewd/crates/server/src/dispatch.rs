@@ -163,6 +163,14 @@ fn current_db_health(state: &AppState) -> Option<DaemonHealth> {
 }
 
 async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
+    if req.method.starts_with("remote.") {
+        let remote = state
+            .remote
+            .get()
+            .ok_or_else(|| RpcError::new(RpcError::METHOD_NOT_FOUND, "远程组件未初始化"))?;
+        return remote.local_route(&req.method, req.params).await;
+    }
+
     let p = req.params;
     match req.method.as_str() {
         methods::HELLO => {
@@ -215,6 +223,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 build: crate::build_info::build_info(),
                 capabilities,
                 daemon_health: current_db_health(state),
+                remote_binding: None,
             })
         }
         methods::CREW_LIST => {

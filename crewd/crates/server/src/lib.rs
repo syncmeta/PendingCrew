@@ -9,6 +9,7 @@ pub mod hub;
 pub mod ledger;
 pub mod orchestra;
 pub(crate) mod peer;
+pub(crate) mod remote;
 pub mod token;
 pub(crate) mod wake_adapter;
 
@@ -37,6 +38,8 @@ pub struct AppState {
     /// M3c 的编排句柄：AppState 先建、编排后起（编排的 Port 要持有 AppState），所以晚到、放 OnceLock。
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
     pub(crate) peer_policy: std::sync::OnceLock<Arc<peer::PeerPolicy>>,
+    pub(crate) remote: std::sync::OnceLock<Arc<remote::Manager>>,
+    pub(crate) runtime_binding_id: String,
     #[cfg(any(test, feature = "testkit"))]
     s5_request_fault: Arc<std::sync::Mutex<Option<u64>>>,
     #[cfg(test)]
@@ -58,6 +61,8 @@ impl AppState {
             agent: agent::AgentRuntime::default(),
             orchestra: std::sync::OnceLock::new(),
             peer_policy: std::sync::OnceLock::new(),
+            remote: std::sync::OnceLock::new(),
+            runtime_binding_id: uuid::Uuid::new_v4().to_string(),
             #[cfg(any(test, feature = "testkit"))]
             s5_request_fault: Default::default(),
             #[cfg(test)]
@@ -489,6 +494,15 @@ async fn serve_with_hooks_inner(
     match listener {
         Err(e) => fatal = Some(anyhow::Error::from(e)),
         Ok(listener) => {
+            match remote::Manager::new(&state, data_dir.clone(), drain_rx.clone()).await {
+                Ok(remote) => {
+                    let _ = state.remote.set(remote.clone());
+                    remote.start_persisted().await;
+                }
+                Err(error) => {
+                    let _ = dispatch::log_internal(error);
+                }
+            }
             #[cfg(any(test, feature = "testkit"))]
             if let Some(ready) = opts.test_s5_fault_ready.take() {
                 ready(S5RequestFaultControl {
@@ -576,6 +590,9 @@ async fn serve_with_hooks_inner(
     {
         conns.abort_all();
         while conns.join_next().await.is_some() {}
+    }
+    if let Some(remote) = state.remote.get() {
+        remote.shutdown(limit).await;
     }
     if let Some(f) = forwarder {
         f.abort();

@@ -20,6 +20,9 @@ pub struct Hello {
     /// S4: optional DB-independent fault history; old replies and no-fault replies omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_health: Option<DaemonHealth>,
+    /// Present only on a mutually authenticated, durably granted remote connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_binding: Option<crate::RemoteHelloBinding>,
 }
 
 /// Historical latest DB failure; absence does not assert that the daemon is healthy.

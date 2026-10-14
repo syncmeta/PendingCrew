@@ -132,3 +132,11 @@ Native 客户端固定源码 `1e51045a7e5de6a9b04ec0d74ea7d87091e0c19d` 的原 M
 实际 workflow_dispatch `38488956854` 精确源码 `778e5d5c4699a023319ae808ef9d8d960aca5bd6` 已 terminal failure，唯一 observer55258 exit1，不再轮询。工程同步 job115609340590通过；build/test job115609341157完成Mac编译，但3202测试/15跳过/3断言失败，全部来自同一 `testPagedLazyHistoryLongMessageMovesOnlyByWheelDistance` 旧NaN测量；后续iOS步骤未执行。原始失败日志 `/private/tmp/pcw-M6-native-ci-778e5d5c-failed.log`，观察日志 `/private/tmp/pcw-M6-native-ci-778e5d5c-watch.log` 全部保留。
 
 根核实 M6 没有 main 已验 `37d199f4`（实际祖先检查exit1），对应测试diff正是旧离屏lazy行测量，不能当新增Native产品缺陷或删测。根派CI前漏核该基线；作者直接同步已经通过真实CI的修正/已验main `fe68022f`，继续自身模块。新完整冻结后再派平台CI，不能盲重跑旧ref。后续组合冻结必须核对最新已验main及相关修正实际包含情况，再判断必要新门禁。
+
+## 后台11隔离整合：业务/正式升级已验，main仍等待平台门禁
+
+生产冻结 `28ccf9c7` 的normal helper已实际构建，根独立核对完整360个Rust输入与Git tree集合及每文件SHA、build log/binary SHA、default features与test=false，通过记录 `/private/tmp/pcw-M6-normal-backend-28ccf9c7-root-proof.json`。正常二进制SHA `4b2e9f183bd29bdda9e76e3a3c9446fc58cba0a81b56643ebd4a5caf7ee2084d`。QA实际正常10→11升级、备份失败保护、第二DDL失败原子回滚、只在副本重试、旧版拒写与业务/UUID见证重开整块通过，原日志 `/private/tmp/pcw-M6-normal-schema11-migration-04.log`、原根 `/private/tmp/pcw-remote-migration.ZMLLlK`，原验收提交 `d9f84043`；实际TLS/撤销/排队/慢writer/全局drain/同身份恢复信任不复活证据仍保留。
+
+根仅在隔离global树整合 `fe68022f..28ccf9c7` 的crewd范围，未带入未验Native客户端、未合main或切换真实数据。此候选可供M4接正式11→12；不宣布全部M6或正式交付通过。新实际CI为Rust `38492408715`（observer93795）和Swift `38492408688`（observer54017），均固定28cc；Linux job115620470451已完整2555pass/2fail/10skip/1leaky，缺口是新6项remote方法未入CLI全覆盖表、旧v8升级备份prefix仍硬编码v10。原日志 `/private/tmp/pcw-M6-linux-ci-28ccf9c7.log`；作者/质量线补齐真实覆盖与版本断言，禁止跳过。Mac与Swift剩余job保持观察，main须在完整平台门禁收束后再合。
+
+本机errno28的全workspace未运行测试，保留原失败。资源回收仅明确终态可再生缓存，包含root SDK2174文件221329501bytes manifest `/private/tmp/pcw-M6-terminal-sdk-module-cache-cleanup-20261014.json`、QA03及M4 incremental/rlib/rmeta清单；原始源、数据库、日志、实际SDK对象/二进制、normal与候选/witness均保留。全量检查移到实际CI，本机不盲重跑全workspace。
