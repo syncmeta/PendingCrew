@@ -46,7 +46,9 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
         let remote = CrewdClient()
         try await CrewdRemoteTransport.connector(id: id, pairing: pairing)(remote)
         precondition(remote.connected)
-        let crew = try await remote.call("crew.create", .object(["title": .string("Native TLS QA crew")]))
+        let work = root.appendingPathComponent("native-work")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let crew = try await remote.call("crew.create", .object(["title": .string("Native TLS QA crew"), "workingDirectory": .string(work.path)]))
         guard let crewID = crew["id"].string else { fatalError("actual crew receipt missing") }
         let requirement = try await remote.call("todo.create", .object(["requestId": .string(UUID().uuidString.lowercased()), "crewId": .string(crewID), "text": .string("Native Apple TLS requirement")]))
         let current = try await remote.call("todo.get", .object(["id": requirement["requirementId"]]))
