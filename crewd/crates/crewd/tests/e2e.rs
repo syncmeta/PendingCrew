@@ -304,6 +304,13 @@ fn rpc_drives_every_client_method() {
         String::from_utf8_lossy(&out.stderr)
     );
     let _d = start(data.path());
+    let remote_status = rpc(data.path(), "remote.status", "null");
+    let remote_configuration = serde_json::json!({
+        "requestId":"11111111-1111-4111-8111-111111111111",
+        "expectedRevision":remote_status["configuration"]["revision"],
+        "enabled":false,"listenHost":"127.0.0.1","port":7423
+    })
+    .to_string();
     enum Want {
         Ok,
         Code(i32),
@@ -591,6 +598,26 @@ fn rpc_drives_every_client_method() {
         ("settings.get", "null", Ok),
         ("settings.set", r#"{"maxLiveSessions":null}"#, Ok),
         ("message.receipts", r#"{"messageId":"m1"}"#, Ok),
+        // Remote setup remains disabled: these are real public CLI handlers,
+        // with explicit negative controls for no listener/invalid reply/no grant.
+        ("remote.status", "null", Ok),
+        ("remote.grants", "null", Ok),
+        ("remote.configure", remote_configuration.as_str(), Ok),
+        (
+            "remote.invite",
+            r#"{"requestId":"22222222-2222-4222-8222-222222222222"}"#,
+            Code(-32602),
+        ),
+        (
+            "remote.accept",
+            r#"{"requestId":"33333333-3333-4333-8333-333333333333","responseEnvelope":{"format":1,"payload":"","signature":""}}"#,
+            Code(-32602),
+        ),
+        (
+            "remote.revoke",
+            r#"{"grantId":"44444444-4444-4444-8444-444444444444","expectedRevision":"1","note":"No grant has been accepted"}"#,
+            Code(-32009),
+        ),
         // Hibernate ends the server, so it is the final method in this table.
         ("crewd.hibernate", "null", Ok),
     ];
