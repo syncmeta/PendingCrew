@@ -11,7 +11,7 @@ struct CrewdRemoteMobileRoot: View {
     var body: some View {
         Group {
             if let workspace = window.workspace {
-                CrewdMobileWorkspaceView(workspace: workspace)
+                CrewdMobileWorkspaceView(workspace: workspace).id(ObjectIdentifier(workspace))
                     .overlay(alignment: .topTrailing) {
                         Button { computersSheet = true } label: { Label("电脑", systemImage: "desktopcomputer") }
                             .buttonStyle(.bordered).padding(8).accessibilityLabel("切换连接电脑")
@@ -24,6 +24,7 @@ struct CrewdRemoteMobileRoot: View {
             }
         }
         .task { window.refresh() }
+        .onDisappear {window.close()}
         .onChange(of: phase) { _, value in if value == .active { window.refresh() } }
         .sheet(isPresented: $computersSheet) {
             NavigationStack {

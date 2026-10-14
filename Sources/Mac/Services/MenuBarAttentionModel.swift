@@ -31,6 +31,7 @@ final class MenuBarAttentionModel: ObservableObject {
             : "数据读不出来，显示的是上次读取的未解决 Todo 数。\(count.summary)"
     }
 
+    private var readingCrewd = false
     private var timer: Timer?
     private weak var crewStore: CrewStore?
 
@@ -39,6 +40,13 @@ final class MenuBarAttentionModel: ObservableObject {
 
     func start(crewStore: CrewStore) {
         self.crewStore = crewStore
+        if crewStore.usesCrewdAuthority {
+            timer?.invalidate(); refresh()
+            timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
+            return
+        }
         timer?.invalidate()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
@@ -53,6 +61,11 @@ final class MenuBarAttentionModel: ObservableObject {
 
     private func refresh() {
         guard let crewStore else { return }
+        if crewStore.usesCrewdAuthority {
+            guard !readingCrewd else { return }; readingCrewd = true
+            Task { await refreshCrewd(crewStore: crewStore); readingCrewd = false }
+            return
+        }
         do {
             let todos = try HumanAttentionTally.readRecords(
                 crewIds: HumanAttentionTally.loadCrewIds(
@@ -69,6 +82,35 @@ final class MenuBarAttentionModel: ObservableObject {
             // **数字不动。** 见类型注释：读不动的时候刷成 0 就是在说「没事了」。
             staleReason = (error as? CrewDirectory.Unavailable)?.message
                 ?? error.localizedDescription
+        }
+    }
+
+    private func refreshCrewd(crewStore: CrewStore) async {
+        guard let workspace = crewStore.crewdWorkspace, workspace.client.connected else { staleReason = "当前后台未连接，未解决事项未知"; return }
+        do {
+            let crews = try await workspace.readValue("crew.list")
+            guard case .array(let crewRows) = crews else { throw CrewdClientError(message: "组织列表回复无效") }
+            var identities = Set<String>()
+            for crew in crewRows {
+                guard let id = crew["id"].string else { throw CrewdClientError(message: "组织条目缺少正式编号") }
+                let requirements = try await workspace.readValue("todo.list", .object(["crewId": .string(id), "ledger": .string("agent")]))
+                guard case .array(let rows) = requirements else { throw CrewdClientError(message: "需求回复无效") }
+                for row in rows where row["deletedAt"] == .null && row["status"] != .string("closed") {
+                    guard row["crewId"] == .string(id), let raw = row["requirementId"].string, CrewdWorkID(raw, kind: .requirement) != nil else { throw CrewdClientError(message: "需求来源身份无效") }
+                    // Done plans still await the source human's closure.
+                    identities.insert(raw)
+                }
+            }
+            let humans = try await workspace.readValue("ask.list", .object([:]))
+            guard case .array(let rows) = humans else { throw CrewdClientError(message: "人类事项回复无效") }
+            for row in rows where row["ask"]["state"] == .string("open") {
+                guard let id = row["ask"]["ask"].string, CrewdWorkID(id, kind: .human) != nil else { throw CrewdClientError(message: "人类事项来源身份无效") }
+                identities.insert(id)
+            }
+            guard crewStore.crewdWorkspace === workspace, !workspace.isRetired else { return }
+            count = HumanAttentionCount(todos: identities.count); lastGoodAt = Date(); staleReason = nil
+        } catch {
+            if crewStore.crewdWorkspace === workspace { staleReason = error.localizedDescription }
         }
     }
 

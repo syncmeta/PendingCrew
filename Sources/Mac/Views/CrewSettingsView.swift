@@ -3,14 +3,20 @@ import SwiftUI
 
 /// PendingCrew macOS 设置窗口（⌘,）。
 struct CrewSettingsView: View {
+    @EnvironmentObject private var model: AppModel
     var body: some View {
         TabView {
             GeneralSettingsTab()
                 .tabItem { Label("通用", systemImage: "gearshape") }
+            if !model.usesCrewdAuthority {
             CodingToolsSettingsTab()
                 .tabItem { Label("编码工具", systemImage: "terminal") }
             BackendsSettingsTab()
                 .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
+            } else {
+                Form { Text("当前机组和执行由 crewd 管理。连接、权限和撤销请使用主窗口的电脑与设备连接入口。") }
+                    .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
+            }
         }
         .frame(width: 560, height: 540)
     }
@@ -18,6 +24,7 @@ struct CrewSettingsView: View {
 
 /// 通用：外观 + 危险区。
 private struct GeneralSettingsTab: View {
+    @EnvironmentObject private var model: AppModel
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
     @State private var showResetConfirm = false
 
@@ -41,6 +48,7 @@ private struct GeneralSettingsTab: View {
                 Text("外观")
             }
 
+            if !model.usesCrewdAuthority {
             Section {
                 Button(role: .destructive) {
                     showResetConfirm = true
@@ -62,6 +70,7 @@ private struct GeneralSettingsTab: View {
                     LocalDataReset.performReset()
                 }
                 Button("取消", role: .cancel) {}
+            }
             }
         }
         .formStyle(.grouped)

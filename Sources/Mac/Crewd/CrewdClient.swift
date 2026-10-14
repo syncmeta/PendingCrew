@@ -107,11 +107,33 @@ final class CrewdNDJSONDecoder {
 final class CrewdClient: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var version = ""
+    @Published private(set) var authorityBinding: CrewdValue = .null
     @Published private(set) var capabilities:Set<String>=[]
+    /// The authoritative hello advertises the orchestra capability group,
+    /// not an individual capability named after every session RPC.
+    var supportsSessionStart: Bool { Self.sessionStartSupported(connected: connected, capabilities: capabilities) }
+    static func sessionStartSupported(connected: Bool, capabilities: Set<String>) -> Bool {
+        connected && capabilities.contains("orchestra")
+    }
     @Published private(set) var lastError: String?
     var onEvent: ((String, CrewdValue) -> Void)?
     var onDisconnect: (() -> Void)?
     private var connection: NWConnection?
+    #if os(macOS)
+    private var localConnection: CrewdLocalIPC?
+    func verifiedLocalPeerIdentity() throws -> CrewdKernelProcessIdentity {
+        guard connected, let localConnection else { throw CrewdLocalIPCError(message: "当前连接没有可信本机内核对端。") }
+        return try localConnection.verifiedPeer()
+    }
+    #endif
+    @Published private(set) var runtimeIdentity: CrewdValue = .null
+    private var hasTransport: Bool {
+        #if os(macOS)
+        return connection != nil || localConnection != nil
+        #else
+        return connection != nil
+        #endif
+    }
     private var generation = UUID()
     private var qualifiedForWork = true
     private var retired = false
@@ -125,8 +147,33 @@ final class CrewdClient: ObservableObject {
 
     #if os(macOS)
     func connect(path: String) async throws {
-        guard !path.utf8.contains(0), path.utf8.count <= 103 else { throw CrewdClientError(message: "后台连接路径无效或过长。", kind: .notSubmitted) }
-        try await connect(NWConnection(to: .unix(path: path), using: .tcp), clientName: "PendingCrew Mac", expectedRemote: nil)
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        disconnect(); qualifiedForWork = false
+        let current = generation
+        let local: CrewdLocalIPC
+        do { local = try await CrewdLocalIPC.connect(path: path) }
+        catch { throw CrewdClientError(message: error.localizedDescription, kind: .notSubmitted) }
+        guard generation == current, !retired, !Task.isCancelled else { local.close(); throw CancellationError() }
+        localConnection = local
+        local.onData = { [weak self] data in
+            guard let self, self.generation == current else { return }
+            do { try self.ingest(data) }
+            catch { self.fail("后台响应无法解析：\(error.localizedDescription)", notify: true) }
+        }
+        local.onEnd = { [weak self] message in
+            guard let self, self.generation == current else { return }
+            do { try self.decoder.finish(); self.fail(message, notify: true) }
+            catch { self.fail(error.localizedDescription, notify: true) }
+        }
+        connected = true; local.startReading()
+        do {
+            _ = try local.verifiedPeer()
+            try await acceptHello(clientName: "PendingCrew Mac", expectedRemote: nil, current: current)
+            _ = try local.verifiedPeer()
+        } catch {
+            if generation == current { fail(error.localizedDescription, notify: false) }
+            throw CrewdClientError(message: error.localizedDescription, kind: .backendHandshake)
+        }
     }
     #endif
 
@@ -182,20 +229,7 @@ final class CrewdClient: ObservableObject {
                     throw CrewdClientError(message: "连接没有使用所需的安全协议。")
                 }
             }
-            let hello = try await call("system.hello", .object(["client": .object(["name": .string(clientName), "version": .string("Codex first")]), "apiVersion": .number(3)]))
-            guard generation == current, !Task.isCancelled else { throw CancellationError() }
-            guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
-            if let expectedRemote {
-                guard expectedRemote.accepts(hello["remoteBinding"]) else { throw CrewdClientError(message: "电脑身份或设备授权已改变，请重新配对。") }
-                qualifiedForWork = true
-            }
-            guard expectedRemote != nil || hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
-            version = hello["version"].string ?? "未知"
-            capabilities=Set(hello["capabilities"].array.compactMap(\.string))
-            let topics=["crew", "session", "message", "channel", "ask", "work", "restart", "system"] + ["documents","viewFolders"].filter {capabilities.contains($0)}
-            _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
-            guard generation == current, !Task.isCancelled else { throw CancellationError() }
-            lastError = nil
+            try await acceptHello(clientName: clientName, expectedRemote: expectedRemote, current: current)
         } catch {
             deadline.cancel()
             if generation == current { fail(error.localizedDescription, notify: false) }
@@ -204,11 +238,47 @@ final class CrewdClient: ObservableObject {
         }
     }
 
+    private func acceptHello(clientName: String, expectedRemote: CrewdRemoteBindingExpectation?, current: UUID) async throws {
+        let hello = try await call("system.hello", .object(["client": .object(["name": .string(clientName), "version": .string("Codex first")]), "apiVersion": .number(3)]))
+        guard generation == current, !Task.isCancelled else { throw CancellationError() }
+        guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3,
+              (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
+        if let expectedRemote {
+            guard expectedRemote.accepts(hello["remoteBinding"]) else { throw CrewdClientError(message: "电脑身份或设备授权已改变，请重新配对。") }
+        } else {
+            #if os(macOS)
+            // The same live descriptor must still have the kernel peer observed
+            // before hello. This qualifies local work, not child ownership/Quit.
+            _ = try verifiedLocalPeerIdentity()
+            #endif
+            guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else {
+                throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。")
+            }
+        }
+        let instance = hello["runtimeIdentity"]
+        if instance != .null {
+            guard let db = instance["dbId"].string, !db.isEmpty, db.utf8.count <= 256,
+                  let binding = instance["runtimeBindingId"].string, UUID(uuidString: binding) != nil else {
+                throw CrewdClientError(message: "后台实例信息不完整；连接尚未取得工作资格。")
+            }
+        }
+        runtimeIdentity = instance // Correlation only; no kernel ownership grant.
+        authorityBinding = hello["remoteBinding"]
+        version = hello["version"].string ?? "未知"
+        capabilities = Set(hello["capabilities"].array.compactMap(\.string))
+        qualifiedForWork = true
+        let topics = ["crew", "session", "message", "channel", "ask", "work", "restart", "system"]
+            + ["documents", "viewFolders"].filter { capabilities.contains($0) }
+        _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
+        guard generation == current, !Task.isCancelled else { throw CancellationError() }
+        lastError = nil
+    }
+
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
         guard !Task.isCancelled else { throw CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted) }
         guard qualifiedForWork || method == "system.hello" else { throw CrewdClientError(message: "尚未核实电脑身份，操作未提交。", kind: .notSubmitted) }
-        guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
+        guard connected, terminalFailure == nil, hasTransport else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
         let id = nextID; nextID += 1
         var data:Data
         do {data = try JSONEncoder().encode(CrewdValue.object(["id": .number(Double(id)), "method": .string(method), "params": params]))}
@@ -227,6 +297,11 @@ final class CrewdClient: ObservableObject {
                 guard !Task.isCancelled, let self, self.generation == current else { return }
                 self.finish(id, .failure(CrewdClientError(message: "请求超时，结果未知；请检查当前状态后再决定是否重试。")))
             }
+            #if os(macOS)
+            if let local = localConnection {
+                do { try local.send(data) }
+                catch { finish(id, .failure(CrewdClientError(message: error.localizedDescription, kind: .notSubmitted))) }
+            } else if let c = connection {
             c.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let error else { return }
                 DispatchQueue.main.async {
@@ -234,6 +309,18 @@ final class CrewdClient: ObservableObject {
                     self.transportEnded(error.localizedDescription)
                 }
             })
+            }
+            #else
+            if let c = connection {
+            c.send(content: data, completion: .contentProcessed { [weak self] error in
+                guard let error else { return }
+                DispatchQueue.main.async {
+                    guard let self, self.generation == current else { return }
+                    self.transportEnded(error.localizedDescription)
+                }
+            })
+            }
+            #endif
             }
         } onCancel: {
             Task { @MainActor [weak self] in
@@ -284,10 +371,15 @@ final class CrewdClient: ObservableObject {
         pending.removeValue(forKey: id)?.resume(with: result)
     }
     private func fail(_ message: String, notify: Bool) {
-        let hadConnection = connection != nil
+        let hadConnection = hasTransport
         generation = UUID()
         let c = connection; connection = nil
         c?.stateUpdateHandler = nil; c?.cancel()
+        #if os(macOS)
+        let local = localConnection; localConnection = nil
+        local?.onData = nil; local?.onEnd = nil; local?.close()
+        #endif
+        runtimeIdentity = .null; authorityBinding = .null
         qualifiedForWork = false
         connected = false; capabilities=[]; receivePending = false; terminalFailure = nil; decoder = CrewdNDJSONDecoder(); lastError = message
         ready?.resume(throwing: CrewdClientError(message: message)); ready = nil

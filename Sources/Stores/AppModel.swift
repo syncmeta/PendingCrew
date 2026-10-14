@@ -1,57 +1,78 @@
 import Foundation
 import SwiftUI
+import Combine
 
-/// PendingCrew 顶层状态。
-///
-/// **本地为家**（接合 v2，spec 2026-06-10）：
-/// - macOS 上 `backend` **恒为 `LocalBackend`** —— 本地 crew 永远在、永远显示。
-/// - iOS 没有本地账本；有持久配对时使用 `RemotePendingCrewBackend`，否则显式报未配置。
-///
-/// #63 第二期之前这里还挂着整片凭据层（`credential` / `isAuthenticated` /
-/// `imageAuth` / `loggedAPIClient()` / `ensureRunnerHost` / `apiBaseURL` /
-/// `currentUserId` / 家族 SSO）。跨端遥控整层删除后一个都不剩，这个类退化成
-/// 「谁是当前 backend」这一个问题的答案。
-///
-/// **不要**回到老 PendingCrew 的 10+ @Published 字典爆炸路径
-/// （那是 codex 留下的待重构债务）。新增状态应归并成结构化 model
-/// （如 `CrewDetail` 容器），见 spec v2 §6.2 / roadmap §11。
+/// Original frontend state with one selected crewd authority. The legacy local
+/// backend remains available only to the ordinary, unconverted Mac configuration.
 @MainActor
 final class AppModel: ObservableObject {
-    /// 启动时一次性构造,不在 each-call 时 new(LocalBackend.store 是 shared singleton)。
-    private lazy var localBackend: LocalBackend = LocalBackend(store: .shared, whiteboard: .shared)
-    #if os(iOS)
-    private var remoteBackend: RemotePendingCrewBackend?
-    @Published private(set) var backendConfigurationError: String?
+    let usesCrewdAuthority: Bool = {
+        #if os(iOS)
+        true
+        #elseif PENDINGCREW_NATIVE_CANDIDATE
+        true
+        #else
+        ProcessInfo.processInfo.arguments.contains("--crewd-ui")
+        #endif
+    }()
+    @Published private(set) var crewdBackend: CrewdPendingCrewBackend?
+    lazy var crewdWindow = CrewdRemoteWindow()
+    private var authorityObservation: AnyCancellable?
+    private var connectingAuthority = false
+    private lazy var localBackend = LocalBackend(store: .shared, whiteboard: .shared)
 
-    init() { reloadRemoteBackend() }
-
-    func reloadRemoteBackend() {
-        remoteBackend?.disconnect()
-        do {
-            guard let configuration = try RemoteBackendConfiguration.production() else {
-                remoteBackend = nil
-                backendConfigurationError = "尚未配对远端 Mac。请导入 Mac 生成的一次性邀请。"
-                return
+    var crewdDirectory: URL? {
+        #if os(macOS)
+        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty { return URL(fileURLWithPath: explicit).standardizedFileURL.resolvingSymlinksInPath() }
+        guard let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
+              ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNativeCandidates").appendingPathComponent(ref)
+        #else
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("PendingCrewFrontend").standardizedFileURL.resolvingSymlinksInPath()
+        #endif
+    }
+    var backendConfigurationError: String? { crewdWindow.error ?? crewdBackend?.workspace.error ?? "尚未连接已配对的电脑。" }
+    init() {
+        guard usesCrewdAuthority else { return }
+        #if os(macOS)
+        AppQuitLifecycle.shared.crewdQuit = { [weak self] in try await self?.crewdWindow.quitOwnedLocalHelpers() }
+        #endif
+        authorityObservation = crewdWindow.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let selected = self.crewdWindow.workspace
+                if self.crewdBackend?.workspace !== selected { self.crewdBackend = selected.map(CrewdPendingCrewBackend.init) }
+                if let selected, let directory = self.crewdDirectory {
+                    selected.originalJournalRequired = true
+                    await selected.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions"))
+                }
+                self.objectWillChange.send()
             }
-            remoteBackend = RemotePendingCrewBackend(configuration: configuration)
-            backendConfigurationError = nil
-        } catch {
-            remoteBackend = nil
-            backendConfigurationError = "远端配置不可用：\(error.localizedDescription)"
         }
     }
-
-    var remoteSessionBackend: RemotePendingCrewBackend? { remoteBackend }
-    #endif
-
-    /// 当前生效的 backend。
-    /// - macOS:恒为 `LocalBackend` —— 本地 crew 是常驻 home。
-    /// - iOS:从 Keychain 身份 + trust/backend 持久记录构造安全远端 backend。
+    func connectCrewdAuthority() async {
+        guard usesCrewdAuthority, !connectingAuthority else { return }
+        connectingAuthority = true; defer { connectingAuthority = false }
+        #if os(macOS)
+        guard let directory = crewdDirectory else { return }
+        await crewdWindow.selectLocal(directory: directory)
+        #else
+        crewdWindow.refresh()
+        if crewdWindow.workspace == nil, let known = crewdWindow.computers.first(where: \.paired) { await crewdWindow.select(known.id) }
+        #endif
+        if let workspace = crewdWindow.workspace {
+            workspace.originalJournalRequired = true
+            if let directory = crewdDirectory { await workspace.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions")) }
+            if crewdBackend?.workspace !== workspace { crewdBackend = CrewdPendingCrewBackend(workspace: workspace) }
+        }
+    }
     var backend: PendingCrewBackend? {
+        if usesCrewdAuthority { return crewdBackend }
         #if os(macOS)
         return localBackend
         #else
-        return remoteBackend
+        return nil
         #endif
     }
 }

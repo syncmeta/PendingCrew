@@ -101,12 +101,14 @@ struct CrewDetailInspector: View {
                         Image(systemName: "arrow.up.right.square")
                     }
                     .buttonStyle(.borderless)
-                    .help("在 Finder 中打开")
+                    .help(crewStore.usesCrewdAuthority && crewStore.crewdWorkspace?.dataDirectory == nil ? "电脑上的路径不能在本机打开" : "在 Finder 中打开")
+                    .disabled(crewStore.usesCrewdAuthority && crewStore.crewdWorkspace?.dataDirectory == nil)
                 }
                 // 仓库搬家用的：改目录 + 把 agent 侧上下文（会话/记忆/目录信任）一起迁过去。
                 Button("更改工作目录…") { showingWorkdirSheet = true }
                     .buttonStyle(.link)
-                    .help("换一个工作目录，并把成员的 agent 会话、项目记忆、目录信任一起迁过去")
+                    .help(crewStore.usesCrewdAuthority ? "当前后台尚未开放会话上下文迁移，不使用旧本机迁移服务" : "换一个工作目录，并把成员的 agent 会话、项目记忆、目录信任一起迁过去")
+                    .disabled(crewStore.usesCrewdAuthority)
             }
         }
     }
@@ -242,6 +244,7 @@ struct CrewDetailInspector: View {
     }
 
     private func revealInFinder(_ path: String) {
+        guard !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil else { return }
         let expanded = (path as NSString).expandingTildeInPath
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: expanded)])
     }

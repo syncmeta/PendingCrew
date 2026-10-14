@@ -178,7 +178,7 @@ final class CrewStore: ObservableObject {
     @Published private(set) var humanTodoAttention: [String: CrewHumanTodoAttention] = [:]
 
     /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
-    private let lastMessageCache = CrewLastMessageCache(store: .shared)
+    private lazy var lastMessageCache = CrewLastMessageCache(store: .shared)
     /// 人类 Todo 未回应数的同款指纹门控缓存（同一套 `FileFingerprintCache`）。
     private let humanTodoCache = CrewHumanTodoAttentionCache()
     /// 刷新在这条队列上做 —— stat + 解码都是磁盘 IO，不许上主线程；串行也顺带
@@ -196,10 +196,37 @@ final class CrewStore: ObservableObject {
     /// 本进程 append（人类发送 / relay 搬入）的即时信号 —— 目录监听有 250ms 合流
     /// 窗口，自己发的消息不该等它。
     private var localWhiteboardWatch: AnyCancellable?
+    private var selectedAuthorityChanges: AnyCancellable?
+    private var crewdDirectoryChanges: AnyCancellable?
+    private var readingCrewdPreviews = false
 
     init(appModel: AppModel) {
         self.appModel = appModel
+        selectedAuthorityChanges = appModel.$crewdBackend.sink { [weak self] backend in
+            Task { @MainActor [weak self] in
+                guard let self, self.appModel.crewdBackend === backend else { return }
+                self.crewdDirectoryChanges?.cancel()
+                guard let workspace = backend?.workspace else { return }
+                self.crewdDirectoryChanges = workspace.authorityEvents.sink { [weak self] event in
+                    if event.0.hasPrefix("crew.") || event.0.hasPrefix("message.") || event.0.hasPrefix("ask.") || event.0 == "events.lagged" {
+                        Task { @MainActor [weak self] in await self?.refreshList() }
+                    }
+                }
+            }
+        }
     }
+
+    func retireOriginalAuthorityPresentation() {
+        guard usesCrewdAuthority else { return }
+        crews = []; details = [:]; chiefLayer = nil; subjects = []; machines = []
+        selectedCrewId = nil; chatReturnTrail.clear(); chatSearchRequest = nil
+        lastWhiteboardMessages = [:]; humanTodoAttention = [:]
+        // Unknown payloads belong to their retained workspace/journal, not the new authority.
+        pendingCrew = nil; pendingCrewSending = false; pendingCrewDelivery = nil
+    }
+
+    var usesCrewdAuthority: Bool { appModel.usesCrewdAuthority }
+    var crewdWorkspace: CrewdWorkspace? { appModel.crewdBackend?.workspace }
 
     // MARK: - Derived
 
@@ -207,7 +234,7 @@ final class CrewStore: ObservableObject {
         guard let id = selectedCrewId else { return nil }
         // 总机组不在 `crews` 里（那是设计），但它选得中 —— 这里补上它那一条，
         // 否则中栏拿不到 summary，顶栏标题会空掉。
-        if id == LocalCrew.chiefCrewId { return chiefLayer }
+        if id == chiefLayer?.id { return chiefLayer }
         return crews.first(where: { $0.id == id })
     }
 
@@ -290,7 +317,52 @@ final class CrewStore: ObservableObject {
 
     /// The first message is the commit point. Failure rolls back this attempt;
     /// a second click cannot overlap it or start another captain.
+    private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
+        guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
+              let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard let directory = draft.workingDirectory, !directory.isEmpty else {
+            throw CrewdClientError(message: "请先选择这个机组的实际工作目录。", kind: .notSubmitted)
+        }
+        if workspace.hasOriginalUnknown(method: "crew.create", crew: "") || workspace.originalFirstMessages.contains(where: { $0.draftID == draftID && $0.phase == .unknown }) {
+            throw CrewdClientError(message: "此前创建或首条消息结果未确认。请只读核对原连接；不会自动重发或删除机组。", kind: .notSubmitted)
+        }
+        pendingCrewSending = true; defer { pendingCrewSending = false }
+        let existing = workspace.originalFirstMessages.last { $0.draftID == draftID && $0.phase == .refused && $0.crewID != nil }
+        let recordID = UUID()
+        workspace.originalFirstMessages.append(.init(id: recordID, draftID: draftID, title: draft.title,
+            directory: directory, text: text, crewID: existing?.crewID, phase: .creating))
+        func update(_ phase: CrewdWorkspace.OriginalFirstMessage.Phase, crew: String? = nil, failure: String? = nil) {
+            guard let index = workspace.originalFirstMessages.firstIndex(where: { $0.id == recordID }) else { return }
+            workspace.originalFirstMessages[index].phase = phase
+            if let crew { workspace.originalFirstMessages[index].crewID = crew }
+            workspace.originalFirstMessages[index].failure = failure
+        }
+        do {
+            let crewID: String
+            if let known = existing?.crewID { crewID = known }
+            else {
+                var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]
+                if let parent = draft.parentCrewId { fields["parentId"] = .string(parent) }
+                let created = try await workspace.performValue("crew.create", .object(fields))
+                guard let actual = created["id"].string else { throw CrewdClientError(message: "创建回执缺少真实编号，结果未确认。") }
+                crewID = actual; update(.created, crew: actual)
+            }
+            update(.posting)
+            _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
+            update(.accepted)
+            guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
+            pendingCrew = nil; selectedCrewId = crewID
+            await refreshList(); await refreshDetail(crewID)
+        } catch {
+            update(CrewdClientError.isUncertainSubmission(error) ? .unknown : .refused, failure: error.localizedDescription)
+            throw error
+        }
+    }
+
     func commitPendingCrew(_ text: String, draftId: String) async throws {
+        if usesCrewdAuthority { try await commitCrewdPendingCrew(text, draftID: draftId); return }
         try pendingRollbackGuard.check()
         guard let draft = pendingCrew, draft.id == draftId, !pendingCrewSending else { return }
         if pendingCrewDelivery != nil { throw PendingCrewCommitError.deliveryStillPending }
@@ -382,6 +454,14 @@ final class CrewStore: ObservableObject {
 
     /// The outbox retry only flushes the saved message; it never calls create or post.
     func checkPendingCrewDelivery() async throws {
+        if usesCrewdAuthority {
+            guard let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
+            _ = try await workspace.readValue("crew.list")
+            for record in workspace.originalFirstMessages where record.phase == .unknown {
+                if let crew = record.crewID { _ = try await workspace.readValue("message.list", .object(["channelId": .string(crew + "/lobby")])) }
+            }
+            throw CrewdClientError(message: "已读取原连接。现协议没有请求状态查询，同文本不等于原请求已受理；保留未知记录，不自动重发。", kind: .notSubmitted)
+        }
         guard let draft = pendingCrew, let outcome = pendingDeliveryOutcome,
               let text = pendingDeliveryText, !pendingCrewSending else { return }
         guard let backend = currentBackend() as? LocalBackend else {
@@ -431,6 +511,7 @@ final class CrewStore: ObservableObject {
     /// unreadable or incomplete intent remains a visible block, not permission
     /// to create a second crew whose first send may already have happened.
     private func restorePendingCrewIfNeeded() {
+        guard !usesCrewdAuthority else { return }
         guard pendingCrew == nil else { return }
         do {
             guard let record = try pendingRecovery.load() else { return }
@@ -520,6 +601,7 @@ final class CrewStore: ObservableObject {
     // MARK: - Refresh
 
     func refreshList() async {
+        let authority = crewdWorkspace
         restorePendingCrewIfNeeded()
         startRenameWatchIfNeeded()   // crew-naming：首刷时挂上改名监听（仅 macOS，幂等）
         error = nil
@@ -528,16 +610,19 @@ final class CrewStore: ObservableObject {
         defer { loadingList = false }
         do {
             let result = try await backend.listCrews()
+            guard !usesCrewdAuthority || crewdWorkspace === authority else { return }
             crews = result
             // 总机组那一层单独取 —— 它按口径不在上面那份列表里。
-            chiefLayer = try await backend.chiefLayer()
+            let chief = try await backend.chiefLayer()
+            guard !usesCrewdAuthority || crewdWorkspace === authority else { return }
+            chiefLayer = chief
             error = nil
             // 列表变了（新 crew / 删掉的 crew）→ 末条消息快照跟着补齐一次，
             // 否则新 crew 的预览要等下一次目录 tick 才出现。
             refreshLastWhiteboardMessages()
             // 选中项消失（比如刚被删）的话清掉。**判据在 `CrewSelectionRule`** ——
             // 「不在列表里」和「没了」不是一回事：总机组按设计永远不在列表里。
-            if selectedCrewId != pendingCrew?.id && CrewSelectionRule.shouldClearSelection(
+            if selectedCrewId != pendingCrew?.id && selectedCrewId != chiefLayer?.id && CrewSelectionRule.shouldClearSelection(
                 selected: selectedCrewId, listedIds: result.map(\.id)) {
                 selectedCrewId = nil
             }
@@ -553,11 +638,13 @@ final class CrewStore: ObservableObject {
     }
 
     func refreshDetail(_ crewId: String) async {
+        let authority = crewdWorkspace
         guard let backend = currentBackend() else { return }
         loadingDetailIds.insert(crewId)
         defer { loadingDetailIds.remove(crewId) }
         do {
             let detail = try await backend.getCrew(crewId)
+            guard !usesCrewdAuthority || crewdWorkspace === authority else { return }
             details[crewId] = detail
         } catch {
             self.error = "加载 crew 详情失败：\(error.localizedDescription)"
@@ -583,6 +670,13 @@ final class CrewStore: ObservableObject {
     /// machine 选择（本地态恒不显示）。这个属性留着不是为了「以后可能有别的机器」，
     /// 是因为侧栏分组和建 crew 页现在真读它。
     func refreshMachines() async {
+        if usesCrewdAuthority, let workspace = crewdWorkspace, workspace.dataDirectory == nil {
+            let paired = appModel.crewdWindow.computers.first { $0.id == workspace.authorityRecordID }
+            machines = [Machine(id: workspace.authorityRecordID.uuidString, kind: "computer", deviceId: nil,
+                displayName: paired?.name ?? "已配对电脑", flyMachineId: nil,
+                status: workspace.client.connected ? "online" : "disconnected", lastSeenAt: nil)]
+            return
+        }
         machines = [Machine(
             id: DeviceIdentity.current,
             kind: Machine.Kind.computer.rawValue,
@@ -624,6 +718,12 @@ final class CrewStore: ObservableObject {
     /// 藏的正好是当前选中的那个（或它连带消失的子）时把选中清掉：人说的是「我不想
     /// 再看见它」，侧栏没了、中栏还开着它，那句话就只兑现了一半。
     func hideCrewFromUI(_ crewId: String) async {
+        if usesCrewdAuthority {
+            guard let workspace = crewdWorkspace else { error = "尚未连接当前后台。"; return }
+            do { _ = try await workspace.performValue("crew.update", .object(["crewId": .string(crewId), "hidden": .bool(true)])); await refreshList(); await refreshDetail(crewId) }
+            catch { self.error = error.localizedDescription }
+            return
+        }
         LocalCrewStore.shared.setManuallyHidden(crewId, hidden: true)
         await refreshList()
         if let selected = selectedCrewId,
@@ -635,11 +735,23 @@ final class CrewStore: ObservableObject {
     /// 从「已隐藏的群」列表把它取回侧栏。取回是**显式动作** —— 点进去看一眼不算
     /// （看和取回是两件事，见 `CrewHiding` / `CrewViewedStore`）。
     func unhideCrewFromUI(_ crewId: String) async {
+        if usesCrewdAuthority {
+            guard let workspace = crewdWorkspace else { error = "尚未连接当前后台。"; return }
+            do { _ = try await workspace.performValue("crew.update", .object(["crewId": .string(crewId), "hidden": .bool(false)])); await refreshList(); await refreshDetail(crewId) }
+            catch { self.error = error.localizedDescription }
+            return
+        }
         LocalCrewStore.shared.setManuallyHidden(crewId, hidden: false)
         await refreshList()
     }
 
     func renameCrewFromUI(_ crewId: String, title: String) async {
+        if usesCrewdAuthority {
+            guard let workspace = crewdWorkspace else { error = "尚未连接当前后台。"; return }
+            do { _ = try await workspace.performValue("crew.update", .object(["crewId": .string(crewId), "title": .string(title)])); await refreshList(); await refreshDetail(crewId) }
+            catch { self.error = error.localizedDescription }
+            return
+        }
         LocalCrewStore.shared.setTitle(crewId, title, source: .human)
         await refreshList()
         await refreshDetail(crewId)
@@ -669,7 +781,7 @@ final class CrewStore: ObservableObject {
         // 建完请求自动起机长（detail 已 refresh，three-pane 观察到就拉起 captain）。
         // 当前建 crew 必带 systemGenerated captain；用 detail.captain 兜底判断，
         // 防将来出现无 captain 的 crew 也误触发。
-        if autostartCaptain, details[response.crewId]?.captain != nil {
+        if !usesCrewdAuthority, autostartCaptain, details[response.crewId]?.captain != nil {
             enqueue(CaptainAutostartRequest(
                 crewId: response.crewId,
                 childTitle: details[response.crewId]?.crew.title ?? response.crewId), into: captainAutostartRequests)
@@ -751,6 +863,7 @@ final class CrewStore: ObservableObject {
     /// → 排空落地到 `LocalCrewStore` + 刷新侧栏。启动先排空一次，兜住 app 没开时写入的改名。
     /// `setTitle` 写的是 `local-crews.json`（另一目录），不触发白板目录监听 → 不成环。
     private func startRenameWatchIfNeeded() {
+        guard !usesCrewdAuthority else { return }
         #if os(macOS)
         guard !didStartRenameWatch else { return }
         didStartRenameWatch = true
@@ -784,7 +897,45 @@ final class CrewStore: ObservableObject {
     /// 指纹门控在 `CrewLastMessageCache` 里：先 stat 一遍（28 次 stat），只有白板
     /// 文件的 mtime+size 真变了的那个 crew 才重新读+解码。主线程这边只剩一次
     /// 字典比较 + 可能的一次赋值。
+    /// Pure projections into the original sidebar models; no legacy file reads.
+    private func refreshCrewdPreviews() async {
+        guard !readingCrewdPreviews, let workspace = crewdWorkspace else { return }
+        readingCrewdPreviews = true; defer { readingCrewdPreviews = false }
+        do {
+            var last: [String: LocalWhiteboardMessage] = [:], activities: [String: LocalWhiteboardMessage] = [:]
+            for crew in crews {
+                let raw = try await workspace.readValue("message.list", .object(["channelId": .string(crew.id + "/lobby"), "limit": .integer(200)]))
+                guard case .array(let rows) = raw else { throw CrewdClientError(message: "群消息投影回复无效") }
+                let values = try rows.map { row -> LocalWhiteboardMessage in
+                    guard let id = row["id"].string, let created = row["createdAt"].string, let text = row["text"].string, let kind = row["senderKind"].string else { throw CrewdClientError(message: "群消息缺少正式身份或时间") }
+                    return LocalWhiteboardMessage(id: id, senderKind: kind == "human" ? "user" : kind,
+                        senderUserId: kind == "human" ? LocalWhiteboardStore.localUserId : nil,
+                        senderSessionId: row["senderSessionId"].string, category: row["category"].string,
+                        text: text, createdAt: created, senderName: row["senderName"].string,
+                        inReplyTo: row["inReplyTo"].string)
+                }.sorted { $0.createdAt < $1.createdAt }
+                last[crew.id] = values.last
+                activities[crew.id] = values.last { $0.senderKind == "user" || $0.senderKind == "session" }
+            }
+            let humans = try await workspace.readValue("ask.list", .object([:]))
+            guard case .array(let rows) = humans else { throw CrewdClientError(message: "人类事项投影回复无效") }
+            var asks = Set<String>(), direct: [String: Int] = [:]
+            for row in rows where row["ask"]["state"] == .string("open") {
+                guard let id = row["ask"]["ask"].string, CrewdWorkID(id, kind: .human) != nil,
+                      let crew = row["ask"]["crewId"].string else { throw CrewdClientError(message: "人类事项正式身份无效") }
+                if asks.insert(id).inserted { direct[crew, default: 0] += 1 }
+            }
+            guard crewdWorkspace === workspace, !workspace.isRetired else { return }
+            lastWhiteboardMessages = last; lastActivityMessages = activities
+            humanTodoAttention = CrewHumanTodoAttentionCache.aggregate(directCounts: direct,
+                parentsByCrew: Dictionary(uniqueKeysWithValues: crews.map { ($0.id, $0.parentCrewIds) }))
+        } catch {
+            if crewdWorkspace === workspace { self.error = "当前后台侧栏投影未能刷新：" + error.localizedDescription }
+        }
+    }
+
     private func refreshLastWhiteboardMessages() {
+        if usesCrewdAuthority { Task { await refreshCrewdPreviews() }; return }
         let crewIds = crews.map(\.id)
         let parentsByCrew = Dictionary(
             uniqueKeysWithValues: crews.map { ($0.id, $0.parentCrewIds) })
@@ -878,6 +1029,7 @@ final class CrewStore: ObservableObject {
     /// 父白板回执一行。与 `applyPendingRenames` 同一 tick 触发
     /// （`directoryChanged` 跨进程目录监听）。
     func drainPendingCommands() async {
+        guard !usesCrewdAuthority else { return }
         guard ownsSharedControlChannel else { return }
         let cmds = LocalCrewControlStore.shared.drainCommands()
         guard !cmds.isEmpty else { return }
@@ -1373,6 +1525,7 @@ final class CrewStore: ObservableObject {
     /// 「按下」那行日志不在这里 —— 它在按钮回调的第一行，早于这个 Task 被调度。
     @MainActor
     func requestChiefResort(now: Date = Date()) async {
+        guard !usesCrewdAuthority else { error = "请在当前后台的进展视图核对计划。"; return }
         switch ChiefResortRequest.decide(chiefCrewId: chiefLayer?.id,
                                          lastRequestedAt: chiefResortRequestedAt,
                                          now: now) {

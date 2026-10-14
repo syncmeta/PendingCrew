@@ -45,8 +45,8 @@ private struct CrewdNativeMacRoot: View {
     var body: some View {
         Group {
             if let workspace = window.workspace {
-                CrewdWorkspaceView(workspace: workspace, machineLabel: window.selected.flatMap { id in window.computers.first(where: { $0.id == id })?.name } ?? "本机")
-                    .id(workspace.authorityRecordID)
+                CrewdWorkspaceView(workspace: workspace, autoConnect: false, machineLabel: window.selected.flatMap { id in window.computers.first(where: { $0.id == id })?.name } ?? "本机")
+                    .id(ObjectIdentifier(workspace))
             } else { Text("正在连接本机") }
         }.toolbar {
             Menu("电脑") {
@@ -63,7 +63,7 @@ private struct CrewdNativeMacRoot: View {
             if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
             }
-            Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true)
+            Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
         }.sheet(isPresented: $reviewing) {
             VStack(alignment:.leading,spacing:12) {
                 HStack {Text("原连接的输入").font(.title2);Spacer();Button("关闭"){reviewing=false}}
@@ -85,13 +85,20 @@ private struct CrewdNativeMacRoot: View {
                 }
             }
             .task { window.refresh(); await chooseLocal() }
+            .onChange(of: window.workspace.map {ObjectIdentifier($0)}) {_,_ in synchronizeAdministration()}
+            .onDisappear {window.close();synchronizeAdministration()}
     }
     private func chooseLocal() async {
         await window.selectLocal(directory: directory)
-        if let workspace = window.workspace, workspace.dataDirectory != nil, admin?.workspace !== workspace {
-            if let old = admin { previousAdmins.append(old) }
-            admin = CrewdRemoteAdmin(workspace: workspace)
-        }
+        synchronizeAdministration()
+    }
+    private func synchronizeAdministration() {
+        let current=window.workspace
+        if admin?.workspace === current {return}
+        if let old=admin {old.retire();previousAdmins.append(old)}
+        managing=false
+        if let current,current.dataDirectory != nil {admin=CrewdRemoteAdmin(workspace:current)}
+        else {admin=nil}
     }
 }
 #endif
