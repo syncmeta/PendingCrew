@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 窗口实际启动与受管恢复源边界
+
+原前端07完整源码组合已保存并普通推送根5050e3a4513c2a93c8ba2bd1ea94cc9351f03f7f；GUI实际编译来源5cdf、helper仍正常2bf，准备层接受不等窗口。人类已经实际回复已解锁，原锁屏等待解除。
+
+07首次私有scope /private/tmp/pcw-original-07-scope.vsyerymb 的guard/空根预检通过，exec44414实际GUI91510随后exit1，无helper/DB/业务UI。精确IPS PendingCrew-2026-10-14-193439.ips经根只读核为SIGABRT、_RegisterApplication→NSApplication.init；首次tool未显式sandbox_permissions（use_default），尚不能归因cachecut产品代码，不修改App/重编试错。
+
+根审准同不可变07新private scope /private/tmp/pcw-original-07-context.avpj7cvv 的精确guard，拟require_escalated+ttytrue一次执行上下文比较。但自动审批实际拒绝，要求人类对新的精确运行上下文单独确认；新manifest仍false、没有进程，原failedscope未改。具体一次审批问题已提交，答复前不重试/换方法/间接执行。只阻窗口，不阻后端或Linux。无安装、模型、日常数据切换或系统权限绕过。
+
+Linux受管初稿2b736a9cbeac29d5a8ffd24982fe73ba649a9398内部完整Mac安装/备份/恢复11及13/reopen、wrapperdeath跨exec排他lease和header负例GREEN；QA发现restore --from另一SQLite源未保护，整块未接受、旧freeze未推/未新CI。根裁决阶段性managed恢复限定本target/data/backups已完成独立Core快照，owned0600/canonical0700/nolinks、DELETE1/1 header/无sidecars/实际package maxschema先判，并共享同dataEXlease；future/活源/跨data/unknown拒且保source与target物理/mode，输入不得先chmod。import必须明确JSON且确认Core不打开SQLite源。作者一次补完整源边界控制后新冻结，QA影响验再考虑必要Linux；Core原任意from能力不变，最终14同版crash安全恢复与受管扩展仍待，不把保守拒绝当完整交付。
+
+14公共生产整块质量资产已准备，真实defaultnormal/接口冻结/核准kernel身份仍为运行依赖，syntax不代表通过；后端整块生产接线继续。既有稳定验收不重复，公共schema/构建唯一写者不变。
+
+
 ## 2026-10-14 原前端完整 Apple 准备单元整合
 
 实际不可变 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07 的 Mac58283、iPhoneOS42703、Simulator51928 均真实 terminal exit0。质量线已独核Mac正式checker/codesign deep strict、1314完整Gitinputs逐字同5cdf、3738SPM前后同、DebugNative/SDK27/arm64；两个移动SDK51/55实际产物及来源/settings/log/unsigned/family1,2一致。报告 /private/tmp/pcw-original-front-5cdf8af6-mac-independent-01.json 及对应iphone/simulator独验报告。新CrewStore缓存构造切断确在这个包输入中，不拿旧822包代证。
