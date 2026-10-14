@@ -16,8 +16,11 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
     @MainActor static func main() async throws {
         guard CommandLine.arguments.count == 2 else { fatalError("explicit isolated service root required") }
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
+        func stage(_ value: String) { FileHandle.standardOutput.write(Data(("NATIVE_STAGE " + value + "\n").utf8)) }
+        stage("begin")
         let owner = CrewdClient()
         try await owner.connect(path: root.appendingPathComponent("crewd.sock").path)
+        stage("local-qualified")
         let status = try await owner.call("remote.status")
         precondition(status["listening"] == .bool(true), "harness must explicitly configure loopback first")
         precondition(status["configuration"]["listenHost"] == .string("127.0.0.1"))
@@ -26,12 +29,19 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
         }
         let invite = try await owner.call("remote.invite", .object(["requestId": .string(UUID().uuidString.lowercased())]))
         let vault = QAMemoryVault(), pairing = CrewdRemotePairing(credentials: vault)
-        let id = try pairing.respond(envelope(invite), deviceLabel: "Independent native loopback QA")
+        let invitationEnvelope = try envelope(invite)
+        stage("public-invitation-decoded")
+        _ = try pairing.invitation(invitationEnvelope)
+        stage("public-invitation-verified")
+        let id = try pairing.respond(invitationEnvelope, deviceLabel: "Independent native loopback QA")
+        stage("native-response-signed")
         let recordCount = try vault.records().count
         precondition(recordCount == 1)
-        let response = try JSONDecoder().decode(CrewdValue.self, from: Data(pairing.responseText(id).utf8))
+        let responseEnvelope = try CrewdRemoteText.decode(pairing.responseText(id))
+        let response = try JSONDecoder().decode(CrewdValue.self, from: JSONEncoder().encode(responseEnvelope))
         let acceptParams = CrewdValue.object(["requestId": .string(UUID().uuidString.lowercased()), "responseEnvelope": response])
         let accepted = try await owner.call("remote.accept", acceptParams)
+        stage("public-accept-complete")
         let signedReceipt = try envelope(accepted["receipt"])
         let invalidReceipt = CrewdRemoteEnvelope(format: signedReceipt.format, payload: signedReceipt.payload, signature: Data(repeating: 0, count: 64).base64EncodedString())
         do {
@@ -41,11 +51,13 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
         let unconfirmed = try vault.read(id)
         precondition(unconfirmed.receipt == nil, "invalid signature changed pairing confirmation")
         try pairing.confirm(signedReceipt, id: id)
+        stage("native-receipt-confirmed")
         let (_, invitation, receipt) = try pairing.paired(id)
         precondition(invitation.server.dbId == receipt.dbId && invitation.server.authorityId == receipt.authorityId)
         let remote = CrewdClient()
         try await CrewdRemoteTransport.connector(id: id, pairing: pairing)(remote)
         precondition(remote.connected)
+        stage("native-tls-and-hello-qualified")
         let work = root.appendingPathComponent("native-work")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let crew = try await remote.call("crew.create", .object(["title": .string("Native TLS QA crew"), "workingDirectory": .string(work.path)]))
@@ -67,6 +79,7 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
             _ = try await remote.call("todo.get", .object(["id": requirement["requirementId"]]))
             fatalError("revoked native connection still read work")
         } catch { }
+        stage("live-revoke-denied-old-read")
         remote.disconnect()
         let next = CrewdClient()
         do {
@@ -74,6 +87,7 @@ final class QAMemoryVault: CrewdRemoteCredentialStore {
             fatalError("old native certificate regained qualified connection")
         } catch { }
         next.disconnect()
+        stage("old-cert-new-connection-denied")
         let confirmation = try await owner.call("remote.accept", acceptParams)
         precondition(confirmation["reused"] == .bool(true) && confirmation["grant"]["revokedAt"] != .null)
         owner.disconnect()
