@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 完整候选13与默认双平台接受、实际窗口锁屏停点
+
+准确compiled源码0f303a456a7133ea703a95e2d6bd428a055e5d4f的新normal07已独验：binary6f625537c46da48fe58b921104b0aa1476feee5f6718a23d4910e27a8d29743d、外部witness75094d5d3c868e7d0234ca2b893c8d6a6db0e2adaf5abf2f960916e87d272cdb；390输入/raw11ownpkg12targets全freshfalse/defaultDebug/non-test空features/Rust1.94/source前后/容量37.754s终态0齐，报告/private/tmp/pcw-M14-normal0f303a45-independent-07.json。existing A实际SecCode窄关07仅新false/false私库通过，daemonwait0、A原birth/hash同，exactpin/duplicate/四negative/revoke；不是新PID或publisher正例。
+
+唯一whole13 queue52759三platform实际BUILD SUCCEEDED/terminal0；产物/private/tmp/pcw-original-frontend-candidate14-0f303a45-13/，全1353Git/3738SPM前后与normal/GUI准确0f。Mac实际Debugcandidate、六加载postsign/deepseal/properchecker；两mobile正式NativeCandidate scheme/config/sourceRef与candidateID/51products/NOsign/noTeam/profile/entitlements，phoneunsigned/simlinkeradhoc不冒生产签名。whole独验/private/tmp/pcw-original-front14-13-whole-independent.json SHA2ca9388afbcbc5f306b8fad6248117472377a1d51e950fd50562d0f8bfc695d4。
+
+必要且仅一次默认双hostrun38627445832精确0f实际SUCCESS；两OS各nextest2654PASS/12skip、fmt/clippy/十一workspace doccrates实际PASS，两Linux安装job均skipped，非all-features。原完整日志/private/tmp/pcw-core14-default-{macos,linux}-0f303-job-01.log保留。Linux仍同旧8c一项registry reaper LEAK、相同case/blob，不能称全进程树回收；fixture派生sleep继承管道是源码推断无CI census，原startup signal-only后forget的产品限界需完整恢复模块另闭合，不能掩盖或重CI消噪。后端独立树进行真实boot/group物理确认、有限unknown拒启与closed inspect/reconcile恢复cut，未混当前0f。SDK06/新增producer取证均仍未获人类执行授权，Native15未激活/不可宣称available。
+
+新A13具体scope/privateguard经根审与自动审批允许；初8071因heredoc stdin非TTY在App启动前真实拒绝，无receipt/GUI。修正同三SHA的直接shell真实TTY后一次51440已launch：GUI44774 birth1792008698344456、helper44804 birth1792008701861991 parentGUI、exact13路径/6privateenv/fakecwd/falseClaude/namespace0700，同Unix物理fd及helper API3 hello日志已读。UI工具实际Mac locked，完整runtime/cap/可读路由与业务尚未验；已async请求人类手动解锁，未答不自动unlock/重启/UI输入。旧A/B/07/a9保留；B/S noLaunch，ownedQuit仍须完整非owner依赖裁决，不能借source-method模型控制宣称GUI已退出。
+
+所有构建/源捕获均已sealed；本检查点是docs-only新HEAD，07/13/CI实际sourceRef永远保持0f，不重标旧06/12或本次0f产物。产品源码继续冻结。远端main实核1ba3d4ba0973b6abf3f68395611063523b1be03e，仅两CI文件相对fe改变；合并预检仅这两workflow冲突，拟保global精确manual-only blobs，未合main/未push/未碰主目录人类改动。窗口/真机/生产签名与Vault、安装/日常数据切换/公开发布/真实模型及完整M4仍未交付。
+
 ## 2026-10-15 原前端候选配置与耐久关闭完整单元接受、最终组合冻结
 
 客户端5431dd3957bb1fc1e77b5e0d2cf3809a74161b3c已独立质量接受，报告 `/private/tmp/pcw-mobile-staging-source-unit-01/independent-whole-source-acceptance-06.json` SHA2ae1f44d037165e3e3f051bba9ccb52d9f8d28cda5d38642843c93c99465dc06；binding06 SHA91b1a7a850e1e484d6f8bb7f80f74affaa5af43b140c0c2dcf3a080a4eabef9e。原target新增NativeCandidate配置/scheme、unsigned/noLocal/no生产共享容器、sourceRef缺坏失败关闭、来源目录与显式同DBauthority恢复；required journal完整恢复后才发布可写adapter，失败只读与typed notSubmitted、晚代际回调拒及无反馈重试保持。12路径中10逐字复用4c全配置/FS证据；仅MacQuit与记录变化，最终Mac369输入typecheck0、四生产方法控制通过。原4c ownedQuit真实回归报告保留，未把旧移动typecheck或包12重标。
