@@ -635,6 +635,45 @@ pub(crate) fn check_revision(item: &WorkItem, id: &str, revision: u64) -> Result
     }
     Ok(())
 }
+pub(crate) fn command_refusal(error: CollabError) -> CollabError {
+    use crewd_work::{Rejected as R, invariants::Violation as V};
+    match error {
+        CollabError::Work(R::OwnerRequired) => {
+            CollabError::Conflict(Refusal::new(Code::WorkOwnerRequired))
+        }
+        CollabError::Work(R::DependenciesPending) => {
+            CollabError::Conflict(Refusal::new(Code::WorkDependenciesPending))
+        }
+        CollabError::Work(R::SameOwner) => {
+            CollabError::Conflict(Refusal::new(Code::WorkOwnerUnchanged))
+        }
+        CollabError::Work(R::NextCheckRequired) => {
+            CollabError::Invalid(Refusal::new(Code::WorkCheckRequired))
+        }
+        CollabError::Work(R::NextCheckNotAllowed) => {
+            CollabError::Invalid(Refusal::new(Code::WorkCheckNotAllowed))
+        }
+        CollabError::Work(R::NextCheckTooFar) => {
+            CollabError::Invalid(Refusal::new(Code::WorkCheckTooFar))
+        }
+        CollabError::Work(R::NextCheckNotFuture) => {
+            CollabError::Invalid(Refusal::new(Code::WorkCheckNotFuture))
+        }
+        CollabError::Work(
+            R::RelationInvalid | R::Invariant(V::Cycle(_) | V::ParentDepth { .. }),
+        ) => CollabError::Invalid(Refusal::new(Code::WorkRelationInvalid)),
+        CollabError::Work(R::Invariant(
+            V::LiveUnderTerminal { .. } | V::LiveOnDropped { .. } | V::LiveOnClosedEntry { .. },
+        )) => CollabError::Conflict(Refusal::new(Code::WorkDependentsActive)),
+        CollabError::Work(R::Terminal(_)) => {
+            CollabError::Conflict(Refusal::new(Code::WorkTerminal))
+        }
+        CollabError::Work(R::Forbidden(_)) => {
+            CollabError::Forbidden(Refusal::new(Code::WorkActorForbidden))
+        }
+        other => other,
+    }
+}
 pub fn update(
     tx: &mut crate::Tx<'_>,
     by: &crate::Sender,
@@ -736,7 +775,8 @@ pub fn update(
             return Ok((ap.events, ready));
         }
         Ok((Vec::new(), Vec::new()))
-    })?;
+    })
+    .map_err(command_refusal)?;
     wake_cleared(
         tx,
         &r.crew_id,
@@ -961,7 +1001,7 @@ mod action_tests {
                 &Sender::Session("w-a2".into()),
                 finish(&p)
             )),
-            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+            CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
         ));
         assert!(matches!(
             err(&mut s, |tx| update(
@@ -969,7 +1009,7 @@ mod action_tests {
                 &Sender::Session("cap-b".into()),
                 finish(&p)
             )),
-            CollabError::Work(crewd_work::Rejected::Forbidden(_))
+            CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
         ));
         assert_eq!(get(s.conn(), &p.id).unwrap(), p);
         let done = ok(&mut s, |tx| update(tx, &by, finish(&p)));
@@ -1482,7 +1522,8 @@ pub fn assign(
             crewd_work::SessionId::new(&p.owner),
             &p.note,
         )
-    })?;
+    })
+    .map_err(command_refusal)?;
     let plan = get(tx.conn(), &p.id)?;
     crate::wakes::enqueue(tx,crate::wakes::WakeRequest {session:p.owner,kind:crate::wakes::WakeKind::System,source:format!("work-assigned:{}:{}",p.id,plan.revision),priority:crate::wakes::WakePriority::System,not_before_ms:None,note:Some(serde_json::json!({"assignedWork":[p.id],"targets":[p.id],"total":1,"partial":false,"assignmentNote":p.note.chars().take(256).collect::<String>(),"noteTruncated":p.note.chars().nth(256).is_some(),"assignedRevision":plan.revision}).to_string()),origin:None})?;
     changed(tx, by, &r.crew_id, &p.id)?;
@@ -1586,7 +1627,7 @@ mod assignment_tests {
                     &Sender::Session(actor.into()),
                     input(&claimed, owner)
                 )),
-                CollabError::Work(crewd_work::Rejected::Forbidden(_))
+                CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
             ));
         }
         let moved = ok(&mut s, |tx| {

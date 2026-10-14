@@ -170,7 +170,7 @@ fn ordinary_captain_cannot_mutate_other_crew_but_foreign_owner_can() {
     });
     assert!(matches!(
         failure,
-        CollabError::Work(crewd_work::Rejected::Forbidden(_))
+        CollabError::Forbidden(refusal) if refusal.code == crate::refusal::Code::WorkActorForbidden
     ));
     assert_eq!(work::get(s.conn(), &b.id).unwrap(), b);
     done(&mut s, &b);

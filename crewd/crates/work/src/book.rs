@@ -27,6 +27,11 @@ pub enum Rejected {
     /// 认领入口建出的项必须有负责人。
     OwnerRequired,
     NextCheckNotFuture,
+    NextCheckRequired,
+    NextCheckNotAllowed,
+    NextCheckTooFar,
+    DependenciesPending,
+    RelationInvalid,
     SameOwner,
     TransferPending(WorkId),
     NoPendingTransfer(WorkId),
@@ -58,6 +63,13 @@ impl std::fmt::Display for Rejected {
             }
             Rejected::OwnerRequired => write!(f, "every claimed item needs an owner"),
             Rejected::NextCheckNotFuture => write!(f, "next check must be later than now"),
+            Rejected::NextCheckRequired => write!(f, "active work needs a next check"),
+            Rejected::NextCheckNotAllowed => write!(f, "this state cannot schedule a next check"),
+            Rejected::NextCheckTooFar => write!(f, "next check exceeds the configured horizon"),
+            Rejected::DependenciesPending => {
+                write!(f, "complete dependencies before starting work")
+            }
+            Rejected::RelationInvalid => write!(f, "work relationships would be invalid"),
             Rejected::SameOwner => write!(f, "that session already owns the item"),
             Rejected::TransferPending(w) => write!(f, "{w} already has a pending transfer"),
             Rejected::NoPendingTransfer(w) => write!(f, "{w} has no pending transfer"),

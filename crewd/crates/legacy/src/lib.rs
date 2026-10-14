@@ -56,6 +56,7 @@ pub fn import(
             "work_import",
             &crewd_store::now_ts(),
         )?;
+        crewd_store::native_execution::invalidate_unknown(tx)?;
         let mut cx = Ctx {
             src,
             report: &mut report,

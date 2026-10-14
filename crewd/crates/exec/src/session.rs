@@ -918,6 +918,11 @@ impl Core {
         }
     }
 
+    /// The driver has already applied this size to the actual PTY successfully.
+    pub(crate) fn resize_observed(&mut self, cols: u16, lines: u16) {
+        self.screen.resize(cols as usize, lines as usize);
+    }
+
     /// 认证探测的结果。
     pub fn on_auth(&mut self, state: AuthState, now: Instant) {
         if !self.running {

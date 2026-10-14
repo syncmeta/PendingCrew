@@ -29,6 +29,7 @@ impl WorkBook {
         id: WorkId,
         r: Report,
     ) -> Result<Applied<()>, Rejected> {
+        let cfg = self.cfg;
         self.transact(by, now, |d| {
             let now = d.now;
             d.permit_on(Action::Report, id)?;
@@ -38,6 +39,35 @@ impl WorkBook {
             }
             if r.next_check_at.is_some_and(|t| t <= now) {
                 return Err(Rejected::NextCheckNotFuture);
+            }
+            let current = d.item(id)?;
+            let to = match r.status {
+                Some(Progress::Open) => Status::Open,
+                Some(Progress::Active) => Status::Active,
+                None => current.status,
+            };
+            let check = r.next_check_at.or(current.next_check_at);
+            if (to == Status::Active || check.is_some()) && current.owner.is_none() {
+                return Err(Rejected::OwnerRequired);
+            }
+            if check.is_some() && !matches!(to, Status::Open | Status::Active) {
+                return Err(Rejected::NextCheckNotAllowed);
+            }
+            if to == Status::Active && check.is_none() {
+                return Err(Rejected::NextCheckRequired);
+            }
+            if r.next_check_at.is_some_and(|at| {
+                Some(at) != current.next_check_at && at > now.plus(cfg.max_check_horizon_ms)
+            }) {
+                return Err(Rejected::NextCheckTooFar);
+            }
+            if to == Status::Active
+                && current
+                    .depends_on
+                    .iter()
+                    .any(|id| d.s.items[id].status != Status::Done)
+            {
+                return Err(Rejected::DependenciesPending);
             }
             let it = d.item_mut(id)?;
             let from = it.status;
@@ -267,6 +297,37 @@ mod tests {
     }
 
     #[test]
+    fn unowned_active_report_is_a_domain_refusal_without_any_effect() {
+        let mut b = book();
+        let id = b
+            .create_item(&Actor::Human, T1, NewItem::titled("unowned"))
+            .unwrap()
+            .value;
+        let before = b.state().clone();
+        assert_eq!(
+            b.report(
+                &Actor::Human,
+                T1,
+                id,
+                report(
+                    Some(Progress::Active),
+                    Some(T1.plus(HOUR)),
+                    "actual progress"
+                )
+            ),
+            Err(Rejected::OwnerRequired)
+        );
+        assert_eq!(b.state(), &before);
+        b.report(
+            &Actor::Human,
+            T1,
+            id,
+            report(Some(Progress::Open), None, "still unassigned"),
+        )
+        .unwrap();
+        assert!(b.item(id).unwrap().owner.is_none());
+    }
+    #[test]
     fn reporting_starts_work_with_a_next_check() {
         let mut b = book();
         let w = claim(&mut b, "a", &["x"])[0];
@@ -311,7 +372,7 @@ mod tests {
         let a = Actor::worker("a");
         assert_eq!(
             b.report(&a, T1, w, report(Some(Progress::Active), None, "go")),
-            Err(Rejected::Invariant(Violation::ActiveWithoutCheck(w)))
+            Err(Rejected::NextCheckRequired)
         );
         assert_eq!(
             b.report(&a, T1, w, report(Some(Progress::Active), Some(T1), "go")),
@@ -324,11 +385,7 @@ mod tests {
                 w,
                 report(Some(Progress::Active), Some(T1.plus(2 * HOUR + 1)), "go")
             ),
-            Err(Rejected::Invariant(Violation::CheckTooFar {
-                item: w,
-                at: T1.plus(2 * HOUR + 1),
-                limit: T1.plus(2 * HOUR)
-            }))
+            Err(Rejected::NextCheckTooFar)
         );
         assert_eq!(
             b.report(&a, T1, w, report(None, None, " ")),
@@ -372,10 +429,7 @@ mod tests {
         let go = report(Some(Progress::Active), Some(T1.plus(HOUR)), "go");
         assert_eq!(
             b.report(&Actor::worker("a"), T1, ids[1], go.clone()),
-            Err(Rejected::Invariant(Violation::ActiveBeforeDeps {
-                item: ids[1],
-                dep: ids[0]
-            }))
+            Err(Rejected::DependenciesPending)
         );
         b.mark_done(&Actor::worker("a"), T1, ids[0], commit())
             .unwrap();
@@ -404,7 +458,7 @@ mod tests {
                 w,
                 report(None, Some(T1.plus(HOUR)), "x")
             ),
-            Err(Rejected::Invariant(Violation::CheckNotAllowed(w))),
+            Err(Rejected::NextCheckNotAllowed),
             "blocked 项不排检查"
         );
         b.report(

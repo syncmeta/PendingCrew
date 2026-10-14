@@ -11,13 +11,17 @@
 # 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
 # 按 Rust 改动触发，互不拖累，也互不遮挡。
 name: crewd
-run-name: "${{ inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
+run-name: "${{ inputs.core_permission_followup == true && 'Core permission follow-up (affected tests and doctests, not full CI)' || inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
 
 on:
   workflow_dispatch:
     inputs:
       linux_candidate_only:
         description: Build and verify the Linux development candidate only (not full CI)
+        type: boolean
+        default: false
+      core_permission_followup:
+        description: Verify the three canonical permission cases and previously blocked doctests only (not full CI)
         type: boolean
         default: false
   # **push 上不设 paths 过滤**，理由同 ci.yml 里那段长注释：push 上的 paths 按这一推
@@ -47,7 +51,7 @@ env:
 
 jobs:
   check:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true)) }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -130,7 +134,7 @@ jobs:
           if-no-files-found: ignore
 
   linux-candidate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true && inputs.core_permission_followup != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -163,3 +167,85 @@ jobs:
           path: ${{ runner.temp }}/crewd-linux-candidate
           if-no-files-found: error
           retention-days: 14
+
+  invalid-dispatch-scope:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true && inputs.core_permission_followup == true }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "::error::Choose exactly one explicit affected/candidate dispatch scope"
+          exit 2
+
+  core-permission-followup:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_permission_followup == true && inputs.linux_candidate_only != true }}
+    name: Core affected permission and doctest (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-26
+          - name: Linux
+            os: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crewd
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read repository toolchain
+        id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Full formatting and strict workspace all-target lint
+        run: |
+          set -euo pipefail
+          mkdir -p target/core-followup-evidence
+          cargo fmt --all -- --check 2>&1 | tee target/core-followup-evidence/fmt.log
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee target/core-followup-evidence/clippy.log
+      - name: Three exact canonical permission workflows only
+        run: |
+          set -euo pipefail
+          cargo nextest run --workspace --profile ci -E 'package(=crewd-collab) & (test(=work::action_tests::stale_revision_and_unauthorized_actor_leave_all_state_unchanged) | test(=work::assignment_tests::worker_claim_is_not_steal_or_foreign_captain_privilege_and_stale_cas_is_read_only) | test(=global_workflow_core::ordinary_captain_cannot_mutate_other_crew_but_foreign_owner_can))' 2>&1 | tee target/core-followup-evidence/three-permission-workflows.log
+      - name: Preserve the three-case JUnit before the separate feature workflow
+        if: always()
+        run: |
+          mkdir -p target/core-followup-evidence
+          if [ -f target/nextest/ci/junit.xml ]; then cp target/nextest/ci/junit.xml target/core-followup-evidence/three-permission-junit.xml; fi
+      - name: Complete workspace doctests previously blocked by unit failures
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --workspace --doc 2>&1 | tee target/core-followup-evidence/doctests.log
+      - name: Explicit testkit CLI enrollment workflow only (not all features)
+        if: ${{ !cancelled() }}
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          bash ../scripts/dev/test-crewd-cli-enrollment-feature.sh "$RUNNER_TEMP/core-testkit-enrollment"
+      - name: Preserve exact affected-scope evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-core-permission-followup-${{ matrix.name }}-${{ github.sha }}
+          path: |
+            crewd/target/core-followup-evidence
+            crewd/target/nextest/ci/junit.xml
+            ${{ runner.temp }}/core-testkit-enrollment
+          if-no-files-found: warn

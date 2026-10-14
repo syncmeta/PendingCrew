@@ -170,3 +170,11 @@ iOS Device SDK专用unsigned整目标构建实际exit0，完整源/config/settin
 Mac actualfresh fd195窗口已真实执行机组、原始需求/同源计划、Todo独立分类、Unicode文档创建/编辑、进展读回及草稿只读重连，发现两项真实产品阻断：UI启动成员检查session.start而正常后台只广告orchestra；未指派计划推进返回内部owner invariant错误。质量直接交两作者同批修，客户端修能力解释与当前owner/CAS门禁，后台修正式业务拒绝，不自动指派或降低owner规则；后台只在schema11交付树给必要Rustfix，不混入未冻12/M4。改变GUI或Rust后必须准确新包；Rust完整输入改变还须新normal实际witness。旧fd/335证据不改标，稳定业务不无故全量重跑。
 
 Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装日常数据/公开发布仍未交付。客户端继续可审查的isolated-prefix安装/升级/回退材料，真实系统/自启动不启用；后台继续Core12冻结与M5，质量先复验修正窗口再接后台整块独验。全工程目标保持active。
+
+## 2026-10-14 Core12 子单元整合与原前端方向
+
+本次整合固定后端 a76cae4804cb26c62f4e2a64c993dbe18822758f，只接 Core12/私有持久收件与正式迁移，以及已验 typed work contract，不带后续 M5/schema13 未提交实现。独立质量结论见 `2026-10-14-independent-resumed-delivery-acceptance.md`：e871 的 2602 稳定生产用例证据与 a76 精确三例、doctest、真实 CLI testkit 补充验证组合；run38509489542 双平台终态 success，其 standard full jobs 明确 skipped。原 d360/e871 run 保持 failure，不能称 a76 全量 CI 或历史 all-features 通过。Core12 子单元可继续原前端及 Linux 升级组合；整体 M4/实际 SDK/生产混合执行仍未完成。
+
+最终产品回到实际原 PendingCrew 前端组件，独立 Native 工作区只保留为验证材料；详见总计划原前端纠偏段和 `2026-10-14-original-frontend-quality-impact-matrix.md`。最终公共 PTY 交互与可靠命令 receipt/status 仍是后端依赖，现客户端本机 UUID/内存 unknown 不证明服务端幂等或跨重启恢复。
+
+旧 normal335/5c 等完整字节输入与真实业务证据保留，但共享 Cargo target 后发现自有依赖可能沿用其他树缓存，旧 witness 不能证明每个自有依赖实际从该树重新编译。新候选须完整 owning dependency graph、真实 owner paths、所有必需自有 targets fresh=false 与原始 Cargo JSON/sidecars独核；不得重标旧二进制或重复全部稳定业务掩盖来源缺口。
