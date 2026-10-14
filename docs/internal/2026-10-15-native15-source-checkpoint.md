@@ -1,6 +1,6 @@
 # Native15 unactivated source checkpoint
 
-This is development source for the complete M4 Native producer/history unit. It is not a Native capability freeze, schema activation, SDK compatibility result, or program delivery. The accepted Core14 source remains `8a1255ac1762c7dfe84090a399fee835c32fdc3c`; its normal05 binary and witnesses retain that exact compiled source identity.
+This is development source for the complete M4 Native producer/history unit. It is not a Native capability freeze, schema activation, SDK compatibility result, or program delivery. The previous Core14 normal05 source `8a1255ac1762c7dfe84090a399fee835c32fdc3c` and subsequent normal06 source `8c906dc50b2993e71ddeba186799e0dbeec3dfca` retain their exact compiled identities. The two-host default regression failure at8c and its separate global causal repair cut are recorded independently; Native15 is not combined with that repair or its next normal build.
 
 ## Product and authority boundaries
 
@@ -25,6 +25,14 @@ The DTO source is present but the method is not registered or advertised yet. Na
 - Effective-content framing `/private/tmp/pcw-M15-native-content-chunks-source-tests-02.log`: actual encoded-frame bound and no partial body release; foreign IDs/revision, gap, final-marker error, duplicate and expired assemblies all poison. The prior01 compile failure (private shared limit) is retained;02 uses the same existing1MiB limit through crate visibility, without changing the limit.
 
 These are component source/fake evidence inside one unfinished module. They are not substitutes for the production adapter or SDK lifecycle gate.
+
+## Continued source since the saved checkpoint
+
+The owning Store entry now exposes one FIFO transaction for these projection operations, including nested savepoint failures handled by the outer caller. The proposed15 foreign keys follow runtime/session deletion through all history rows/cuts, so private projection rows cannot block the existing session/crew deletion authority or remain orphaned. Restore/restart historicalization is distinct from deliberate authoritative deletion.
+
+The private Core receipt route now keeps a per-authenticated-call bounded content assembly. Every chunk passes the actual peer/custody generation, epoch and exact sequence admission. Intermediate chunks do not produce a durable content ACK. Only a complete bounded body enters the existing FIFO native receipt transaction, whose durable commit is the final ACK condition. Malformed/oversized envelopes, gap/foreign identities, incomplete-content interleaving, cancellation and raw revocation discard the assembly and cannot release or replay its remainder. The encoded chunk envelope remains within the existing control-frame limit. This private mechanism is not connected to an advertised Native producer.
+
+These continued source changes and their new projection tests have not been compiled or executed yet. Shared compiler ownership stayed on the isolated global Core14 regression repair and will stay there until its new normal input is sealed. Earlier component logs above do not cover the new source, and no updated module freeze is claimed.
 
 ## Next actual isolated SDK evidence
 

@@ -14,7 +14,7 @@ pub const MAX_CUT_ROWS: usize = 100_000;
 pub const V15_DDL: &str = r#"
 CREATE TABLE native_history_streams(
  history_id TEXT PRIMARY KEY,
- runtime_id TEXT NOT NULL REFERENCES native_execution_runtimes(runtime_id),
+ runtime_id TEXT NOT NULL REFERENCES native_execution_runtimes(runtime_id) ON DELETE CASCADE,
  native_session_id TEXT NOT NULL,
  sdk_sha256 TEXT NOT NULL CHECK(length(sdk_sha256)=64),
  coverage TEXT NOT NULL CHECK(coverage IN('incomplete','complete','historical')),
@@ -25,7 +25,7 @@ CREATE TABLE native_history_streams(
 );
 CREATE TRIGGER native_history_source_immutable BEFORE UPDATE OF history_id,runtime_id,native_session_id,sdk_sha256,created_at ON native_history_streams BEGIN SELECT RAISE(ABORT,'native history source immutable'); END;
 CREATE TABLE native_history_rows(
- history_id TEXT NOT NULL REFERENCES native_history_streams(history_id),
+ history_id TEXT NOT NULL REFERENCES native_history_streams(history_id) ON DELETE CASCADE,
  native_uuid TEXT NOT NULL,
  row_bytes BLOB NOT NULL CHECK(length(row_bytes) BETWEEN 1 AND 8388608),
  row_sha256 TEXT NOT NULL CHECK(length(row_sha256)=64),
@@ -35,7 +35,7 @@ CREATE TABLE native_history_rows(
 CREATE TRIGGER native_history_row_immutable BEFORE UPDATE ON native_history_rows BEGIN SELECT RAISE(ABORT,'native history row immutable'); END;
 CREATE TABLE native_history_cuts(
  cut_id TEXT PRIMARY KEY,
- history_id TEXT NOT NULL REFERENCES native_history_streams(history_id),
+ history_id TEXT NOT NULL REFERENCES native_history_streams(history_id) ON DELETE CASCADE,
  source_census BLOB NOT NULL CHECK(length(source_census) BETWEEN 1 AND 8388608),
  source_sha256 TEXT NOT NULL CHECK(length(source_sha256)=64),
  row_count INTEGER NOT NULL CHECK(row_count BETWEEN 0 AND 100000),
@@ -43,13 +43,13 @@ CREATE TABLE native_history_cuts(
  created_at TEXT NOT NULL
 );
 CREATE TABLE native_history_cut_rows(
- cut_id TEXT NOT NULL REFERENCES native_history_cuts(cut_id),
+ cut_id TEXT NOT NULL REFERENCES native_history_cuts(cut_id) ON DELETE CASCADE,
  ordinal INTEGER NOT NULL CHECK(ordinal>=0),
  history_id TEXT NOT NULL,
  native_uuid TEXT NOT NULL,
  PRIMARY KEY(cut_id,ordinal),
  UNIQUE(cut_id,native_uuid),
- FOREIGN KEY(history_id,native_uuid) REFERENCES native_history_rows(history_id,native_uuid)
+ FOREIGN KEY(history_id,native_uuid) REFERENCES native_history_rows(history_id,native_uuid) ON DELETE CASCADE
 );
 CREATE TRIGGER native_history_cut_immutable BEFORE UPDATE ON native_history_cuts BEGIN SELECT RAISE(ABORT,'native history cut immutable'); END;
 CREATE TRIGGER native_history_cut_row_immutable BEFORE UPDATE ON native_history_cut_rows BEGIN SELECT RAISE(ABORT,'native history cut row immutable'); END;
@@ -153,6 +153,21 @@ fn current(c: &Connection, binding: &Binding) -> Result<()> {
     }
     Ok(())
 }
+/// Enter the history projection through the owning Store/FIFO transaction.
+/// Mutable access is needed solely for nested savepoints: each history operation
+/// must roll back its own failed row/cut even when the outer Core task handles
+/// that error. This does not open another connection or change with_tx callers.
+/// The separate schema15 migration remains required before history use.
+pub fn with_transaction<T>(
+    store: &mut crate::Store,
+    f: impl FnOnce(&mut rusqlite::Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let mut tx = store.conn.transaction()?;
+    let value = f(&mut tx)?;
+    tx.commit()?;
+    Ok(value)
+}
+
 /// Caller supplies the Core transaction. Registering an empty stream is still
 /// incomplete; zero observed rows never prove a genuinely empty native source.
 pub fn register(tx: &mut rusqlite::Transaction<'_>, binding: &Binding, now: &str) -> Result<()> {
@@ -386,6 +401,95 @@ mod tests {
             source_census: source,
             rows,
         }
+    }
+    #[test]
+    fn owning_store_transaction_keeps_nested_failure_and_outer_commit_atomic() {
+        let (conn, binding) = fixture();
+        let mut store = crate::Store {
+            conn,
+            backups: None,
+        };
+        let first = native_row(1);
+        with_transaction(&mut store, |tx| {
+            assert!(observe(tx, &binding, &first)?);
+            // The caller intentionally handles a failed cut. Its savepoint must
+            // not retain the extra row when the owning outer transaction commits.
+            let extra = native_row(2);
+            assert!(commit_cut(tx, &binding, &synthetic_cut(vec![extra]), "cut").is_err());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT COUNT(*) FROM native_history_rows", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let second = native_row(3);
+        let rejected: Result<()> = with_transaction(&mut store, |tx| {
+            observe(tx, &binding, &second)?;
+            Err(invalid("synthetic Core task abort"))
+        });
+        assert!(rejected.is_err());
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT COUNT(*) FROM native_history_rows", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn deleting_the_owning_runtime_removes_only_its_history_projection() {
+        let (c, binding) = fixture();
+        let mut tx = c.unchecked_transaction().unwrap();
+        commit_cut(
+            &mut tx,
+            &binding,
+            &synthetic_cut(vec![native_row(1)]),
+            "cut",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        // Existing session/crew deletion owns runtime lifetime. Projection rows
+        // cannot prevent that authority's deletion or survive as private orphans.
+        c.execute(
+            "DELETE FROM native_execution_runtimes WHERE runtime_id=?1",
+            [&binding.runtime_id],
+        )
+        .unwrap();
+        for table in [
+            "native_history_streams",
+            "native_history_rows",
+            "native_history_cuts",
+            "native_history_cut_rows",
+        ] {
+            assert_eq!(
+                c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        assert!(
+            c.prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn zero_observations_and_continuous_hooks_do_not_establish_full_coverage() {

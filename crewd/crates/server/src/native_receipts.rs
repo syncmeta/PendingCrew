@@ -89,6 +89,7 @@ pub struct CoreNativeReceipts {
     socket: UnixStream,
     runtime: n::Runtime,
     closed: bool,
+    effective_content: Option<crewd_exec::acp::content_chunks::Assembly>,
 }
 impl CoreNativeReceipts {
     pub async fn authenticate(
@@ -177,6 +178,7 @@ impl CoreNativeReceipts {
             socket,
             runtime,
             closed: false,
+            effective_content: None,
         };
         route.verify()?;
         Ok(route)
@@ -254,12 +256,23 @@ impl CoreNativeReceipts {
         request: String,
         body: Vec<u8>,
     ) -> io::Result<(n::Receipt, bool)> {
+        if self.effective_content.is_some() {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native request interleaves incomplete content",
+            ));
+        }
         self.commit(move |tx, runtime| {
             n::prepare(tx, runtime, &request, &body, &crewd_store::now_ts())
         })
         .await
     }
     pub async fn cancel(&mut self, request: String, revision: i64) -> io::Result<n::Receipt> {
+        // Cancellation discards every incomplete body. Its durable phase guard
+        // still owns acceptance; a later remainder cannot become a fresh body.
+        self.effective_content = None;
         self.commit(move |tx, runtime| {
             n::request_cancel(tx, runtime, &request, revision, &crewd_store::now_ts())
         })
@@ -268,6 +281,7 @@ impl CoreNativeReceipts {
     /// The transport may release a matching manual-input ACK only after this
     /// succeeds. A cancelled waiter remains an unknown admitted FIFO outcome.
     pub async fn revoke_before_raw(&mut self, revision: i64) -> io::Result<()> {
+        self.effective_content = None;
         self.commit(move |tx, runtime| {
             n::revoke_before_raw(tx, runtime, revision, &crewd_store::now_ts())
         })
@@ -304,6 +318,103 @@ impl CoreNativeReceipts {
         self.observation(&frame.generation, frame.epoch, frame.sequence, frame.event)
             .await
     }
+    /// Separate closed chunk envelope. Native/Mod JSON cannot select a peer or
+    /// runtime; every part still passes the same physical admission and sequence.
+    /// None is transport progress only, never a durable-content acknowledgement.
+    pub async fn content_chunk_frame(&mut self, bytes: &[u8]) -> io::Result<Option<n::Receipt>> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Frame {
+            generation: String,
+            epoch: u64,
+            sequence: u64,
+            chunk: crewd_exec::acp::content_chunks::ContentChunk,
+        }
+        if bytes.len() > crewd_exec::acp::wire::MAX_CONTROL {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native content frame limit",
+            ));
+        }
+        let frame: Frame = match serde_json::from_slice(bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                self.effective_content = None;
+                self.closed = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "native content frame malformed",
+                ));
+            }
+        };
+        self.content_chunk(&frame.generation, frame.epoch, frame.sequence, frame.chunk)
+            .await
+    }
+    /// Large effective content uses a bounded sequence of authenticated native
+    /// observations. Intermediate frames carry no content/effect ACK. Only the
+    /// complete body enters the existing FIFO receipt transaction, and only its
+    /// durable result may release the final ACK. This grants no SDK capability.
+    pub async fn content_chunk(
+        &mut self,
+        generation: &str,
+        epoch: u64,
+        sequence: u64,
+        chunk: crewd_exec::acp::content_chunks::ContentChunk,
+    ) -> io::Result<Option<n::Receipt>> {
+        let result = async {
+            self.verify()?;
+            {
+                let held = self
+                    .custody
+                    .lock()
+                    .map_err(|_| io::Error::other("native custody poisoned"))?;
+                self.peer
+                    .admit(&self.socket, &held, generation, epoch, sequence)?;
+            }
+            if self.effective_content.is_none() {
+                self.effective_content = Some(crewd_exec::acp::content_chunks::Assembly::new(
+                    chunk.request.clone(),
+                    chunk.revision,
+                    chunk.prompt.clone(),
+                    chunk.total_bytes as usize,
+                    std::time::Duration::from_secs(2),
+                )?);
+            }
+            let request = chunk.request.clone();
+            let revision = chunk.revision;
+            let prompt = chunk.prompt.clone();
+            let body = self
+                .effective_content
+                .as_mut()
+                .ok_or_else(|| io::Error::other("native assembly unavailable"))?
+                .push(chunk)?;
+            let Some(body) = body else {
+                return Ok(None);
+            };
+            self.effective_content = None;
+            self.commit(move |tx, runtime| {
+                n::accept_content(
+                    tx,
+                    runtime,
+                    &request,
+                    revision,
+                    &prompt,
+                    &body,
+                    &crewd_store::now_ts(),
+                )
+            })
+            .await
+            .map(Some)
+        }
+        .await;
+        if result.is_err() {
+            self.effective_content = None;
+            self.closed = true;
+        }
+        result
+    }
     pub async fn observation(
         &mut self,
         generation: &str,
@@ -311,6 +422,14 @@ impl CoreNativeReceipts {
         sequence: u64,
         event: NativeEvent,
     ) -> io::Result<n::Receipt> {
+        if self.effective_content.is_some() {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native observation interleaves incomplete content",
+            ));
+        }
         let admitted = {
             let held = self
                 .custody
