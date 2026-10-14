@@ -386,16 +386,20 @@ impl LegacyTerminal {
         let permit = self.permit(current, actor, id)?;
         self.projection().await?;
         let cancellation = permit.clone();
-        let outcome = match tokio::time::timeout(
-            Duration::from_secs(2),
-            self.driver.raw_confirmed(bytes, permit),
-        )
-        .await
-        {
+        let write = self.driver.raw_confirmed(bytes, permit);
+        tokio::pin!(write);
+        // Reserve half of the existing two-second whole budget for the driver
+        // to observe revocation and report its exact accepted prefix. Dropping
+        // the only receiver at the first deadline would discard that evidence.
+        let outcome = match tokio::time::timeout(Duration::from_secs(1), &mut write).await {
             Ok(Ok(outcome)) => outcome,
-            _ => {
+            Ok(Err(_)) => return Err(refused()),
+            Err(_) => {
                 cancellation.revoke();
-                return Err(refused());
+                match tokio::time::timeout(Duration::from_secs(1), &mut write).await {
+                    Ok(Ok(outcome)) => outcome,
+                    _ => return Err(refused()),
+                }
             }
         };
         Ok(match outcome {

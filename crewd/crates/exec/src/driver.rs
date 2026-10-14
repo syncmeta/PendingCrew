@@ -1394,6 +1394,10 @@ async fn run(mut t: Task) {
                 }
             }
         }
+        // A saturated PTY can remain non-writable forever. Revoked/expired
+        // manual writes still need to drop and report their exact prefix on
+        // ordinary ticks, without waiting for or performing another syscall.
+        expire_manual_writes(&mut t.writes);
         if exit.is_some() {
             drain(&t.running.master, &mut t.core, Duration::from_millis(500)).await;
         }
@@ -1619,6 +1623,16 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         }
     }
     false
+}
+
+fn expire_manual_writes(writes: &mut VecDeque<PendingWrite>) {
+    writes.retain(|write| {
+        write.manual.as_ref().is_none_or(|(permit, _)| {
+            permit.allowed()
+                && permit.current_native(None)
+                && permit.shared_chunk().is_none_or(|guard| guard.is_ok())
+        })
+    });
 }
 
 /// 单个有界 syscall，与 SessionHandle::raw 入队线性化。锁绝不跨 await / 阻塞 IO。
@@ -4362,7 +4376,9 @@ mod output_drain_tests {
             Err(oneshot::error::TryRecvError::Empty)
         ));
         permit.revoke();
-        write_ready(&process.master, &mut core, &fence, 0, &mut queue).unwrap();
+        // The unread physical slave cannot make the master writable. The
+        // ordinary lifecycle sweep must acknowledge without another syscall.
+        expire_manual_writes(&mut queue);
         assert!(
             queue.is_empty(),
             "revoked remainder cannot remain replayable"
