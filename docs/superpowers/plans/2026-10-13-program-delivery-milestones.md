@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 最新实际交付检查点：原窗口已连接，Linux 主链仍未闭合（2026-10-14）
+
+原前端修复冻结822a72c84e6ce3adec5fbf1c2e811a378404297e，原Mac/iPhoneOS/Simulator专用完整增量构建均真实terminal0；Mac不可变包 /private/tmp/pcw-original-frontend-candidate13-822a72c8-05 已独立验1312Gitinputs与822一致、3738SPM前后相同及实际签名/config。GUI来源822，Mac helper仍实际编译2bf/defaultDebug/完整374Rust相同，不重标822 normal。新私有scope已具体审准一次launch，GUI54307/helper54337真实birth/parent/kernelpeer/privatecwd/env/fakeCodex/claudefalse均资格，正常13 hello/api3，原Root显示已连接；legacy-preserved仍空。初始化阻断解除，非完整窗口验收：首次UI动作遇Maclocked，人类手动解锁待答，保持同一live场景，不试密码/绕锁/重启。14 receipts/terminal/ownedQuit及实际设备/安装/日常数据仍未验。
+
+成本精简后仅派必要Linux单job38541835255/exact4e80134b9b5ff5a9b759aed1446f61da489efc4c，全量check跳过/无Apple/不重复本地前置。真实默认release构建步成功，完整普通UID安装升级恢复步失败；typedold11拒13确实发生，postDB与priornewbackup只读schema/version13/50alltable内容相同，但原beforephysicalhash未落盘，不能据此称整链通过或猜具体WAL变化。作者收口observer显式close、phasefacts、归档activation symlink去重，并核可信复用actual4e构建，不重编同Rust。完整ZIP和实际二进制/来源/DB/log保留；仅15误宽选的重复解包副本经明确清单/hash复核回收，实际空间1,208,320,000到1,789,952,000B，不扩删唯一产物。
+
+后端14生产helper/custody/lease/watch继续，尚无defaultnormal14或模块freeze；未来15完整历史方案未激活。独立质量已核manifest02全部13345旧自有MH_OBJECT硬链接路径/3481完整inode组与78actualbinary保护，根批准仅确切终态再生清单回收；执行仍须作者exclusivelease和metadata再核，actualremoved/protectedafter/statvfs留证。系统锁屏只阻窗口操作，不暂停源码、Linux因果或后端装配。所有证据范围与未定方案/授权边界保持。
+
 ## CI 成本与运行方式纠正（2026-10-14，用户最新决定）
 
 用户明确重点是避免不必要的CI麻烦及GitHub时长消耗，而非仅减邮件。根已核当前in-progress运行为空；两workflow现存push main/PR自动触发，最近失败则均为我们手动派发。main实际protected=false、required_status_checks contexts/checks为空，不存在必须保留自动触发的分支保护依赖。客户端唯一workflow writer正在将重型检查改为完整模块冻结后显式按需要手动运行，清理已完成阶段的临时scope和重复自动全量；本机必要质量、确需真实Linux/指定Apple环境的剩余交付验证仍保留。新Linux6c源码/本地前置接受不等实际链通过，目前尚未派发，等待精简后的新完整冻结。
