@@ -503,4 +503,31 @@ expectedStatus 必须是原始需求状态。
 群工作引用已经变化。请刷新当前群的工作视图再重试。
 
 ## work.owner_required
-请先指派负责人，再将工作推进为进行中或标为阻塞。
+请先指派负责人，再开工、标为阻塞或安排下次检查。
+
+## work.check_required
+进行中的工作必须有下次检查时间；请安排检查后再开工。
+
+## work.check_not_allowed
+当前状态不能安排下次检查；请先解除阻塞，或只记录进展备注。
+
+## work.check_too_far
+下次检查超出后台允许的时间范围；请选择近期的检查时间。
+
+## work.check_not_future
+下次检查必须晚于当前时间；请选择未来的时间。
+
+## work.dependencies_pending
+前置工作尚未完成；请先完成依赖，再将此项推进为进行中。
+
+## work.relation_invalid
+工作关系会形成循环或违反层级限制；请调整依赖或拆分关系。
+
+## work.owner_unchanged
+这位成员已是当前负责人；请选择其他负责人，或记录进展。
+
+## work.dependents_active
+还有未完成的子项或依赖工作；请先完成或调整这些关系，再关闭当前项。
+
+## work.terminal
+此工作已经结束；不能再次回报、阻塞或指派，请创建后续工作。

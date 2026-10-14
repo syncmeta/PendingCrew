@@ -95,6 +95,9 @@ impl WorkBook {
             it.blocked_on.sort();
             it.status = Status::Blocked;
             it.next_check_at = None;
+            if crate::graph::find_cycle(&crate::graph::adjacency(&d.s.items)).is_some() {
+                return Err(Rejected::RelationInvalid);
+            }
             d.emit(EventKind::Blocked { id, on: blockers });
             Ok(BlockResult { asks, split })
         })
@@ -408,7 +411,6 @@ mod tests {
 
     use super::*;
     use crate::ids::{EntryNo, HOUR};
-    use crate::invariants::Violation;
     use crate::model::ItemRef;
     use crate::progress::{Progress, Report};
     use crate::testkit::*;
@@ -620,7 +622,7 @@ mod tests {
                 vec![ask("q")],
                 Continuation::Nothing
             ),
-            Err(Rejected::Invariant(Violation::OwnerMissing(unowned)))
+            Err(Rejected::OwnerRequired)
         );
     }
 
@@ -646,7 +648,7 @@ mod tests {
                 vec![BlockOn::Item(parent)],
                 Continuation::Nothing
             ),
-            Err(Rejected::Invariant(Violation::Cycle(vec![parent, child])))
+            Err(Rejected::RelationInvalid)
         );
         assert!(
             b.block(
