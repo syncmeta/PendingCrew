@@ -157,3 +157,16 @@ root无冲突将冻结fd19551d串行合入global开发整合树37464e2，实核S
 实际新窗口材料 `/private/tmp/pcw-visible-gui.sagibkxv/session.json` 已prepared。root已读精确包/GUI/helper/fake哈希与独立HOME/work/data环境，授权质量在包独验后启动此限定fake候选并尝试整块窗口流程；旧a9不被冒充。真实账号模型、LAN、设备安装与日常数据仍另核授权；App权限如需人处理不暂停其他线。窗口与真机验收尚未通过。
 
 后端正式12及完整Core生命周期继续在独立树。原scope metadata逐键attempt03实际新paint选Yes后CR仍返回No，无exact trust状态、types或mock请求，owned进程已回收；真实SDK兼容仍unknown，不重复盲试。客户端接Linux候选分发/真实Linux验证，质量接新窗口与M4冻结独验；Jev与记忆仍仅待决方案。额外all-features历史ENOSPC中断仍未完成，不由标准CI或feature差异证明外推整套通过。
+
+
+## 2026-10-14 Linux候选分发与设备准备：独验通过，窗口产品阻断继续修
+
+客户端平台材料冻结531bf520，root合入global为3e43f836；源于7b1849d9的实际Linux候选run38500948870已terminal success，明确candidate-only，不算standard full CI。实际Ubuntu24 x86_64/default release normal构建、完整witness、包装后生产serve→工作→停止→backup→restore→原UUID重开及remote default-off通过。质量独验360个Git Rust完整集合/每对象SHA、Linux ELF/实际log/config/binary、规范tar安全members与hidden输入、原runtime证据中的同binary/ref/旧UUID及restoredDB schema11/integrity/#1唯一均通过。证据 `/private/tmp/pcw-M6-linux-candidate-quality-01.log` 与 `.json`；规范tar SHA `8a9cc739…742c94`，保留实际完整digest于原证明。
+
+原CI loose artifact上传遗漏hidden源码，直接checker正确拒绝；原raw上传层RED保留。规范tar自身完整且独验通过，不因后来include-hidden-files修正重复构建有效binary/tar，更不能改标原7b sourceRef。新workflow修正只保证下一次完整上传；不会倒推原raw曾完整。
+
+iOS Device SDK专用unsigned整目标构建实际exit0，完整源/config/settings/input证明保留；仅设备交付准备，不是签发/安装/运行。实际devicectl只读发现7个known paired设备的tunnelState全部disconnected，iPhone/iPad真实设备验收仍阻断，不展示ID/个人名称。
+
+Mac actualfresh fd195窗口已真实执行机组、原始需求/同源计划、Todo独立分类、Unicode文档创建/编辑、进展读回及草稿只读重连，发现两项真实产品阻断：UI启动成员检查session.start而正常后台只广告orchestra；未指派计划推进返回内部owner invariant错误。质量直接交两作者同批修，客户端修能力解释与当前owner/CAS门禁，后台修正式业务拒绝，不自动指派或降低owner规则；后台只在schema11交付树给必要Rustfix，不混入未冻12/M4。改变GUI或Rust后必须准确新包；Rust完整输入改变还须新normal实际witness。旧fd/335证据不改标，稳定业务不无故全量重跑。
+
+Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装日常数据/公开发布仍未交付。客户端继续可审查的isolated-prefix安装/升级/回退材料，真实系统/自启动不启用；后台继续Core12冻结与M5，质量先复验修正窗口再接后台整块独验。全工程目标保持active。
