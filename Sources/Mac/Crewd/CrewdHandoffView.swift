@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 /// Human can inspect and cancel an offer; only the real target agent can accept it.
@@ -103,4 +102,3 @@ struct CrewdHandoffView:View {
         }
     }
 }
-#endif

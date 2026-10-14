@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Combine
 
@@ -6,15 +5,15 @@ import Combine
 final class CrewdWorkspace: ObservableObject {
     let client = CrewdClient()
     lazy var workStore = CrewdWorkStore { [weak self] method, params in
-        guard let self else { throw CancellationError() }
+        guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.client.call(method, params)
     }
     lazy var resources=CrewdResources { [weak self] method,params in
-        guard let self else {throw CancellationError()}
+        guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}
         return try await self.client.call(method,params)
     }
     lazy var channelWork=CrewdChannelWorkStore { [weak self] method,params in
-        guard let self else{throw CancellationError()};return try await self.client.call(method,params)
+        guard let self, !self.retired else{throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)};return try await self.client.call(method,params)
     }
     @Published var channelLinkDrafts=CrewdChannelLinkDrafts()
     @Published var resourceDrafts=CrewdResourceDrafts()
@@ -29,6 +28,12 @@ final class CrewdWorkspace: ObservableObject {
     private var activityDirty = true
     private var activityAffected: Set<String> = []
     private var activityChannelCrews: [String: String] = [:]
+    struct TextSubmission:Identifiable {let id:UUID;let method:String;let params:CrewdValue;let snapshot:CrewdDrafts.Snapshot}
+    @Published private(set) var uncertainTextSubmissions:[TextSubmission]=[]
+    var uncertainTextSnapshots:[CrewdDrafts.Snapshot] {uncertainTextSubmissions.map(\.snapshot)}
+    @Published var uncertainSessionStarts: [CrewdDrafts.Snapshot] = []
+    @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
+    @Published var messageDrafts = CrewdDrafts()
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
     @Published var humanDrafts = CrewdHumanDrafts()
@@ -45,22 +50,46 @@ final class CrewdWorkspace: ObservableObject {
     @Published var status = "未连接"
     @Published var error: String?
     @Published var busy = false
-    let dataDirectory: URL
+    /// Immutable cache/draft namespace. The pairing transport must separately
+    /// authenticate the peer; a namespace UUID is never authentication evidence.
+    let authorityRecordID: UUID
+    let dataDirectory: URL?
+    typealias Connector = @MainActor (CrewdClient) async throws -> Void
+    private let connector: Connector
+    private var retired = false
     private var generation = UUID()
     private var selection = UUID()
+    private var sessionDirectoryQuery = UUID()
+    private var crewDirectoryQuery = UUID()
     private var sync: Task<Void, Never>?
     private var reconnect: Task<Void, Never>?
     private var reconnectID: UUID?
+    #if os(macOS)
     private var backend: Process?
+    #endif
     private var again = false
     private var recoverNeeded = false
     private var sleeping = false
     private var booting = false
 
-    init(dataDirectory: URL) {
+    #if os(macOS)
+    convenience init(dataDirectory: URL) {
+        self.init(authorityRecordID: UUID(), dataDirectory: dataDirectory, connector: { client in
+            try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        })
+    }
+    #endif
+    /// One instance per paired authority. Switching authorities retires this
+    /// instance and creates another; public W/#/H numbers never share caches.
+    convenience init(authorityRecordID: UUID, connect: @escaping Connector) {
+        self.init(authorityRecordID: authorityRecordID, dataDirectory: nil, connector: connect)
+    }
+    private init(authorityRecordID: UUID, dataDirectory: URL?, connector: @escaping Connector) {
+        self.authorityRecordID = authorityRecordID
         self.dataDirectory = dataDirectory
+        self.connector = connector
         client.onEvent = { [weak self] name, data in
-            guard let self else { return }
+            guard let self, !self.retired else { return }
             self.resources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
             if name == "document.changed" || name == "viewFolder.changed" || name == "channel.workChanged" { return }
@@ -81,7 +110,7 @@ final class CrewdWorkspace: ObservableObject {
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
-            guard let self, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
+            guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
@@ -101,8 +130,28 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    /// Explicit first-edition launch uses an independent root; no legacy importer runs.
+    /// Retain unknown inputs in this old scope for inspection; never replay them
+    /// into the next authority or let a late reconnect reactivate a retired one.
+    func retire() {
+        retired = true; sleeping = true; generation = UUID(); selection = UUID()
+        sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
+        again = false; recoverNeeded = false
+        resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
+        client.retire(); status = "已切换连接"
+    }
     func connect() async {
+        guard !retired, !booting else { return }
+        #if os(macOS)
+        if let dataDirectory { await connectLocal(dataDirectory); return }
+        #endif
+        booting = true; defer { booting = false }
+        reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
+        do { try await connectOnly() }
+        catch { if !retired, !Task.isCancelled { self.error = error.localizedDescription; status = "连接失败" } }
+    }
+    #if os(macOS)
+    /// Explicit local launch uses an independent root; no legacy importer runs.
+    private func connectLocal(_ dataDirectory: URL) async {
         guard !booting else { return }
         booting = true; defer { booting = false }
         reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
@@ -150,10 +199,16 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
+    #endif
     private func connectOnly() async throws {
+        guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
-        try await client.connect(path: dataDirectory.appendingPathComponent("crewd.sock").path)
+        try await connector(client)
+        guard generation == current, !retired, !Task.isCancelled, !sleeping else {
+            if retired { client.disconnect() }
+            throw CancellationError()
+        }
         workStore.configureCapabilities(client.capabilities)
         resources.configureCapabilities(client.capabilities)
         channelWork.configureCapabilities(client.capabilities)
@@ -164,6 +219,29 @@ final class CrewdWorkspace: ObservableObject {
         await sync?.value
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         guard client.connected else { throw CrewdClientError(message: client.lastError ?? "后台连接已中断。") }
+    }
+
+    func refreshSessionDirectory(_ crew: String) async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        let current = generation, selected = selection, query = UUID()
+        sessionDirectoryQuery = query
+        let response = try await client.call("session.list", .object(["crewId": .string(crew)]))
+        guard !retired, current == generation, selected == selection, sessionDirectoryQuery == query,
+              crewID == crew, !Task.isCancelled else { throw CancellationError() }
+        guard case .array(let rows) = response else { throw CrewdClientError(message: "成员列表回复格式无效。") }
+        sessions = rows
+        for row in rows { if let id = row["id"].string { knownSessions[id] = row } }
+    }
+
+    func refreshCrewDirectory() async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        let current = generation, selected = selection, query = UUID()
+        crewDirectoryQuery = query
+        let response = try await client.call("crew.list")
+        guard !retired, current == generation, selected == selection, crewDirectoryQuery == query,
+              !Task.isCancelled else { throw CancellationError() }
+        guard case .array(let rows) = response else { throw CrewdClientError(message: "机组列表回复格式无效。") }
+        crews = rows
     }
 
     func selectCrew(_ id: String) {
@@ -202,10 +280,11 @@ final class CrewdWorkspace: ObservableObject {
 
     private func refresh(recoverHistory: Bool) async throws {
         guard !sleeping, !Task.isCancelled else { return }
-        let current = generation, selected = selection
+        let current = generation, selected = selection, crewQuery = UUID()
+        crewDirectoryQuery = crewQuery
         let newCrews = try await client.call("crew.list")
         guard current == generation, !sleeping, !Task.isCancelled else { return }
-        guard selected == selection else { again = true; return }
+        guard selected == selection, crewDirectoryQuery == crewQuery else { again = true; return }
         crews = newCrews.array
         if activityDirty {
             activityDirty = false
@@ -248,10 +327,14 @@ final class CrewdWorkspace: ObservableObject {
             guard current == generation, selected == selection, !sleeping, !Task.isCancelled else { return }
         }
         guard !crew.isEmpty else { return }
+        let sessionQuery = UUID()
+        sessionDirectoryQuery = sessionQuery
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
-        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection,
+              crewID == crew, sessionDirectoryQuery == sessionQuery else { again = true; return }
         let newChannels = try await client.call("channel.list", .object(["crewId": .string(crew)]))
-        guard !sleeping, !Task.isCancelled, current == generation, selected == selection, crewID == crew else { again = true; return }
+        guard !sleeping, !Task.isCancelled, current == generation, selected == selection,
+              crewID == crew, sessionDirectoryQuery == sessionQuery else { again = true; return }
         for row in newSessions.array {if let id=row["id"].string {knownSessions[id]=row}}
         sessions = newSessions.array; channelSummaries = newChannels.array; channels = newChannels.array.map { $0["channel"] }
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
@@ -272,16 +355,44 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    func perform(_ method: String, _ params: CrewdValue) async -> Bool {
-        guard !busy else { return false }
+    /// Typed result keeps submission certainty and backend facts with the caller.
+    /// The compatibility Bool entry remains for the original Mac controls.
+    func performValue(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
+        guard !retired, !busy else { throw CrewdClientError(message: "连接已关闭或正在提交，尚未发送本次操作。", kind: .notSubmitted) }
+        let current = generation, selected = selection, requestCrew = crewID
         busy = true; defer { busy = false }; error = nil
         do {
             let result = try await client.call(method, params)
-            if method == "crew.create", let id = result["id"].string { selectCrew(id) }
-            if method == "session.start", let id = result["id"].string { selectSession(id) }
-            scheduleSync(); return true
+            guard !retired, generation == current else { throw CrewdClientError(message: "连接已切换，原操作结果需要在原团队核对。") }
+            if method == "crew.create" || method == "session.start" {
+                guard let id = result["id"].string, !id.isEmpty else { throw CrewdClientError(message: "创建回执缺少真实编号，结果需要核对。") }
+                // A valid older write still returns its receipt to the original draft
+                // owner, but must not replace the user's newer selection.
+                if selected == selection {
+                    if method == "crew.create" { selectCrew(id) }
+                    else if crewID == requestCrew, params["crewId"].string == requestCrew { selectSession(id) }
+                }
+            }
+            scheduleSync(); return result
+        } catch {
+            if !retired, generation == current, selected == selection { self.error = error.localizedDescription; scheduleSync() }
+            throw error
         }
-        catch { self.error = error.localizedDescription; scheduleSync(); return false }
+    }
+    @discardableResult func performText(_ method:String,_ params:CrewdValue,snapshot:CrewdDrafts.Snapshot) async -> Bool {
+        do {
+            _ = try await performValue(method,params)
+            messageDrafts.clearIfUnchanged(snapshot)
+            return true
+        } catch {
+            if CrewdClientError.isUncertainSubmission(error) {
+                uncertainTextSubmissions.append(TextSubmission(id:UUID(),method:method,params:params,snapshot:snapshot))
+            }
+            return false
+        }
+    }
+    func perform(_ method: String, _ params: CrewdValue) async -> Bool {
+        do { _ = try await performValue(method, params); return true }
+        catch { return false }
     }
 }
-#endif

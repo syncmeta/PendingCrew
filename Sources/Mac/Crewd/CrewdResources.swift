@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Combine
 
@@ -173,4 +172,3 @@ struct CrewdFolderSnapshot {
         let value=try await mutate(method,.object(params));let snapshot=try parseFolders(value,view);folders[view]=snapshot;failure=nil;return snapshot
     }
 }
-#endif

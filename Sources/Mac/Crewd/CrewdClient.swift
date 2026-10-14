@@ -1,11 +1,25 @@
-#if os(macOS)
 import Foundation
 import Network
+import Security
 import Combine
 
-/// The wire value stays lossless; domain state remains owned by crewd.
+/// Expected durable scope comes from an independently verified pairing receipt.
+/// These fields never replace TLS certificate verification or server grant checks.
+struct CrewdRemoteBindingExpectation: Equatable, Sendable {
+    let authorityID: String
+    let dbID: String
+    let grantID: String
+    let grantRevision: String
+    func accepts(_ binding: CrewdValue) -> Bool {
+        binding["authorityId"].string == authorityID && binding["dbId"].string == dbID
+        && binding["grantId"].string == grantID && binding["grantRevision"].string == grantRevision
+        && binding["runtimeBindingId"].string.flatMap(UUID.init(uuidString:)) != nil
+    }
+}
+
+/// Preserve signed and unsigned 64-bit wire integers; domain state stays owned by crewd.
 indirect enum CrewdValue: Codable, Equatable, Sendable {
-    case null, bool(Bool), integer(Int64), number(Double), string(String), array([CrewdValue]), object([String: CrewdValue])
+    case null, bool(Bool), integer(Int64), unsigned(UInt64), number(Double), string(String), array([CrewdValue]), object([String: CrewdValue])
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null }
@@ -14,6 +28,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
         else if let v = try? c.decode([String: CrewdValue].self) { self = .object(v) }
         else if let v = try? c.decode([CrewdValue].self) { self = .array(v) }
         else if let v = try? c.decode(Int64.self) { self = .integer(v) }
+        else if let v = try? c.decode(UInt64.self) { self = .unsigned(v) }
         else { self = .number(try c.decode(Double.self)) }
     }
     func encode(to encoder: Encoder) throws {
@@ -22,6 +37,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
         case .null: try c.encodeNil()
         case .bool(let v): try c.encode(v)
         case .integer(let v): try c.encode(v)
+        case .unsigned(let v): try c.encode(v)
         case .number(let v): try c.encode(v)
         case .string(let v): try c.encode(v)
         case .array(let v): try c.encode(v)
@@ -31,7 +47,7 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
     subscript(_ key: String) -> CrewdValue { if case .object(let v) = self { return v[key] ?? .null }; return .null }
     var string: String? { if case .string(let v) = self { return v }; return nil }
     var array: [CrewdValue] { if case .array(let v) = self { return v }; return [] }
-    var int: Int? { if case .integer(let v) = self { return Int(exactly: v) }; if case .number(let v) = self, v.isFinite, v >= Double(Int.min), v < Double(Int.max), v.rounded() == v { return Int(v) }; return nil }
+    var int: Int? { if case .integer(let v) = self { return Int(exactly: v) }; if case .unsigned(let v) = self { return Int(exactly: v) }; if case .number(let v) = self, v.isFinite, v >= Double(Int.min), v < Double(Int.max), v.rounded() == v { return Int(v) }; return nil }
     var pretty: String { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; return (try? e.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
 }
 
@@ -51,6 +67,39 @@ struct CrewdClientError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The same bounded NDJSON decoder is used on Mac and mobile. A transport may
+/// split a UTF-8 scalar or an RPC frame at any byte; only LF closes a frame.
+final class CrewdNDJSONDecoder {
+    private var buffer = Data()
+    let maximumFrameBytes: Int
+    init(maximumFrameBytes: Int = 64 * 1024 * 1024) {
+        precondition(maximumFrameBytes > 0)
+        self.maximumFrameBytes = maximumFrameBytes
+    }
+    func append(_ data: Data, onFrame: (CrewdValue) throws -> Void) throws {
+        var start = data.startIndex
+        while start < data.endIndex {
+            let end = data[start...].firstIndex(of: 10) ?? data.endIndex
+            let count = data.distance(from: start, to: end)
+            guard count <= maximumFrameBytes - buffer.count else {
+                throw CrewdClientError(message: "响应超过大小上限。")
+            }
+            buffer.append(contentsOf: data[start..<end])
+            if end == data.endIndex { break }
+            if !buffer.isEmpty {
+                let frame = try JSONDecoder().decode(CrewdValue.self, from: buffer)
+                buffer.removeAll(keepingCapacity: true)
+                try onFrame(frame)
+            }
+            buffer.removeAll(keepingCapacity: true)
+            start = data.index(after: end)
+        }
+    }
+    func finish() throws {
+        guard buffer.isEmpty else { throw CrewdClientError(message: "后台响应在消息完成前中断。") }
+    }
+}
+
 /// NDJSON is a different wire protocol from the legacy length-prefixed daemon.
 /// Each request has one generation, one response and a deadline; connection loss
 /// fails pending work instead of replaying mutations or native human replies.
@@ -64,7 +113,9 @@ final class CrewdClient: ObservableObject {
     var onDisconnect: (() -> Void)?
     private var connection: NWConnection?
     private var generation = UUID()
-    private var buffer = Data()
+    private var qualifiedForWork = true
+    private var retired = false
+    private var decoder = CrewdNDJSONDecoder()
     private var receivePending = false
     private var terminalFailure: String?
     private var nextID = 1
@@ -72,11 +123,28 @@ final class CrewdClient: ObservableObject {
     private var timeouts: [Int: Task<Void, Never>] = [:]
     private var ready: CheckedContinuation<Void, Error>?
 
+    #if os(macOS)
     func connect(path: String) async throws {
+        guard !path.utf8.contains(0), path.utf8.count <= 103 else { throw CrewdClientError(message: "后台连接路径无效或过长。", kind: .notSubmitted) }
+        try await connect(NWConnection(to: .unix(path: path), using: .tcp), clientName: "PendingCrew Mac", expectedRemote: nil)
+    }
+    #endif
+
+    /// Callers construct a mutually authenticated TLS configuration from a stored
+    /// pairing. No work RPC or event is admitted until its actual hello matches.
+    func connect(host: String, port: UInt16, parameters: NWParameters, expectedRemote: CrewdRemoteBindingExpectation) async throws {
+        guard !host.isEmpty, host.utf8.count <= 255, port != 0,
+              let networkPort = NWEndpoint.Port(rawValue: port) else {
+            throw CrewdClientError(message: "电脑连接地址无效，尚未提交。", kind: .notSubmitted)
+        }
+        try await connect(NWConnection(host: .init(host), port: networkPort, using: parameters), clientName: "PendingCrew", expectedRemote: expectedRemote)
+    }
+
+    private func connect(_ c: NWConnection, clientName: String, expectedRemote: CrewdRemoteBindingExpectation?) async throws {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
         disconnect()
-        guard !path.utf8.contains(0), path.utf8.count <= 103 else { throw CrewdClientError(message: "后台连接路径无效或过长。") }
+        qualifiedForWork = expectedRemote == nil
         let current = generation
-        let c = NWConnection(to: .unix(path: path), using: .tcp)
         connection = c
         // Keep callback delivery FIFO on the main queue: an already received final
         // reply must be ingested before a later transport failure clears pending calls.
@@ -108,10 +176,20 @@ final class CrewdClient: ObservableObject {
             guard generation == current, !Task.isCancelled else { throw CancellationError() }
             deadline.cancel()
             reachedBackend = true
-            let hello = try await call("system.hello", .object(["client": .object(["name": .string("PendingCrew Mac"), "version": .string("Codex first")]), "apiVersion": .number(3)]))
+            if expectedRemote != nil {
+                guard let tls = c.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata,
+                      sec_protocol_metadata_get_negotiated_tls_protocol_version(tls.securityProtocolMetadata) == .TLSv13 else {
+                    throw CrewdClientError(message: "连接没有使用所需的安全协议。")
+                }
+            }
+            let hello = try await call("system.hello", .object(["client": .object(["name": .string(clientName), "version": .string("Codex first")]), "apiVersion": .number(3)]))
             guard generation == current, !Task.isCancelled else { throw CancellationError() }
             guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
-            guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
+            if let expectedRemote {
+                guard expectedRemote.accepts(hello["remoteBinding"]) else { throw CrewdClientError(message: "电脑身份或设备授权已改变，请重新配对。") }
+                qualifiedForWork = true
+            }
+            guard expectedRemote != nil || hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
             version = hello["version"].string ?? "未知"
             capabilities=Set(hello["capabilities"].array.compactMap(\.string))
             let topics=["crew", "session", "message", "channel", "ask", "work", "restart", "system"] + ["documents","viewFolders"].filter {capabilities.contains($0)}
@@ -127,6 +205,9 @@ final class CrewdClient: ObservableObject {
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
+        guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
+        guard !Task.isCancelled else { throw CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted) }
+        guard qualifiedForWork || method == "system.hello" else { throw CrewdClientError(message: "尚未核实电脑身份，操作未提交。", kind: .notSubmitted) }
         guard connected, terminalFailure == nil, let c = connection else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
         let id = nextID; nextID += 1
         var data:Data
@@ -134,7 +215,12 @@ final class CrewdClient: ObservableObject {
         catch {throw CrewdClientError(message:"请求无法编码，尚未提交。",kind:.notSubmitted)}
         data.append(10)
         let current = generation
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+            guard !Task.isCancelled else {
+                continuation.resume(throwing: CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted))
+                return
+            }
             pending[id] = continuation
             timeouts[id] = Task { [weak self] in
                 try? await Task.sleep(for: timeout)
@@ -148,9 +234,16 @@ final class CrewdClient: ObservableObject {
                     self.transportEnded(error.localizedDescription)
                 }
             })
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == current else { return }
+                self.finish(id, .failure(CrewdClientError(message: "等待已取消，提交结果未知；请检查当前状态。")))
+            }
         }
     }
 
+    func retire() { retired = true; disconnect() }
     func disconnect() { fail("连接已断开。", notify: false); lastError = nil }
 
     private func transportEnded(_ message: String) {
@@ -168,26 +261,23 @@ final class CrewdClient: ObservableObject {
                 self.receivePending = false
                 do {
                     if let data { try self.ingest(data) }
+                    guard self.generation == current else { return }
                     if let error { self.fail(error.localizedDescription, notify: true) }
-                    else if complete { self.fail(self.terminalFailure ?? "后台连接已结束。", notify: true) }
+                    else if complete { try self.decoder.finish(); self.fail(self.terminalFailure ?? "后台连接已结束。", notify: true) }
                     else { self.receive(current) }
                 } catch { self.fail("后台响应无法解析：\(error.localizedDescription)", notify: true) }
             }
         }
     }
     private func ingest(_ data: Data) throws {
-        buffer.append(data)
-        while let newline = buffer.firstIndex(of: 10) {
-            let line = Data(buffer[..<newline]); buffer.removeSubrange(...newline)
-            if line.isEmpty { continue }
-            guard line.count <= 64 * 1024 * 1024 else { throw CrewdClientError(message: "响应超过大小上限。") }
-            let frame = try JSONDecoder().decode(CrewdValue.self, from: line)
+        let current = generation
+        try decoder.append(data) { frame in
+            guard generation == current else { return }
             if let id = frame["id"].int {
                 if frame["error"] != .null { finish(id, .failure(CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。", code: frame["error"]["code"].int, data: frame["error"]["data"]))) }
                 else { finish(id, .success(frame["result"])) }
-            } else if let event = frame["event"].string { onEvent?(event, frame["data"]) }
+            } else if let event = frame["event"].string, qualifiedForWork { onEvent?(event, frame["data"]) }
         }
-        guard buffer.count <= 64 * 1024 * 1024 else { throw CrewdClientError(message: "响应超过大小上限。") }
     }
     private func finish(_ id: Int, _ result: Result<CrewdValue, Error>) {
         timeouts.removeValue(forKey: id)?.cancel()
@@ -198,11 +288,11 @@ final class CrewdClient: ObservableObject {
         generation = UUID()
         let c = connection; connection = nil
         c?.stateUpdateHandler = nil; c?.cancel()
-        connected = false; capabilities=[]; receivePending = false; terminalFailure = nil; buffer.removeAll(); lastError = message
+        qualifiedForWork = false
+        connected = false; capabilities=[]; receivePending = false; terminalFailure = nil; decoder = CrewdNDJSONDecoder(); lastError = message
         ready?.resume(throwing: CrewdClientError(message: message)); ready = nil
         let ids = Array(pending.keys)
         for id in ids { finish(id, .failure(CrewdClientError(message: "连接中断，结果未知；请检查当前状态。"))) }
         if notify && hadConnection { onDisconnect?() }
     }
 }
-#endif

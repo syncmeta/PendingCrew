@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 struct CrewdDocumentTarget:Identifiable {let key:CrewdResourceDrafts.Key;var id:String{key.crew+":"+key.object+":"+key.operation}}
 struct CrewdDocumentsView:View {
@@ -7,8 +6,35 @@ struct CrewdDocumentsView:View {
     @State private var selected:String?
     @State private var target:CrewdDocumentTarget?
     @State private var failure:String?
+    @State private var selectionToken=UUID()
     private var selection:Binding<String>{Binding(get:{drafts.selection(store.crew,.documents)},set:{drafts.select(store.crew,.documents,$0)})}
-    private func readDocument(_ id:String)async {let scope=store.crew;do{_ = try await store.document(id);if store.crew == scope{failure=nil}}catch{if store.crew == scope,!(error is CancellationError){failure=error.localizedDescription}}}
+    private func readDocument(_ id:String)async {
+        let scope=store.crew, token=selectionToken
+        do {_ = try await store.document(id);if store.crew == scope,selectionToken == token,selected == id{failure=nil}}
+        catch{if store.crew == scope,selectionToken == token,selected == id,!(error is CancellationError){failure=error.localizedDescription}}
+    }
+    private var list:some View {
+        ScrollView{VStack(alignment:.leading,spacing:10){
+            ForEach(store.documentIDs.filter{CrewdFolderFilter.includes(CrewdFolderFilter.object("document",$0),selection:selection.wrappedValue,snapshot:store.folders[.documents])},id:\.self){id in
+                if let doc=store.documents[id]{
+                    Button{selected=id;selectionToken=UUID();failure=nil;Task{await readDocument(id)}}label:{
+                        VStack(alignment:.leading){Text(doc.summary["title"].string ?? "文档");Text(doc.summary["updatedAt"].string ?? "").font(.caption).foregroundStyle(.secondary)}
+                    }.buttonStyle(.plain)
+                }
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading)}
+    }
+    @ViewBuilder private var detail:some View {
+        if let selected,let doc=store.documents[selected]{
+            VStack(alignment:.leading,spacing:10){
+                Text(doc.summary["title"].string ?? "文档").font(.title2)
+                if doc.deleted{Text("已删除；原文和审计记录保留。").font(.caption).foregroundStyle(.secondary)}
+                CrewdFolderAssignmentButton(store:store,drafts:$drafts,view:.documents,object:CrewdFolderFilter.object("document",selected))
+                HStack{Button("读取当前正文"){Task{await readDocument(selected)}};Button("编辑 / 删除"){target = .init(key:.init(crew:store.crew,view:.documents,object:selected,operation:"update",domain:.document))}.disabled(doc.deleted || store.writing)}
+                if let body=doc.body {ScrollView{Text(body).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}}else{Text("正文尚未读取，或版本更新后需要重新读取。").foregroundStyle(.secondary)}
+            }.frame(maxWidth:.infinity,alignment:.leading)
+        }else{Text(!store.documentListLoaded ? "文档列表尚未成功读取":store.documentIDs.isEmpty ? "尚无文档":"选择文档读取正文").foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)}
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:10){
             HStack{Text("文档").font(.headline);Spacer();Button("新建文档"){target = .init(key:.init(crew:store.crew,view:.documents,object:"",operation:"create",domain:.document))}.disabled(!store.capabilities.contains("documents") || store.writing)}
@@ -16,24 +42,19 @@ struct CrewdDocumentsView:View {
             if let error=store.failure{Text(error.localizedDescription).foregroundStyle(.orange).textSelection(.enabled)}
             if !store.capabilities.contains("documents"){Text("配套后台尚未开放文档，当前不能读取或编辑。").foregroundStyle(.secondary)}
             else {
-                HStack(alignment:.top,spacing:16){
-                    ScrollView{VStack(alignment:.leading,spacing:10){ForEach(store.documentIDs.filter{CrewdFolderFilter.includes(CrewdFolderFilter.object("document",$0),selection:selection.wrappedValue,snapshot:store.folders[.documents])},id:\.self){id in
-                        if let doc=store.documents[id]{Button{selected=id;Task{await readDocument(id)}}label:{VStack(alignment:.leading){Text(doc.summary["title"].string ?? "文档");Text(doc.summary["updatedAt"].string ?? "").font(.caption).foregroundStyle(.secondary)}}.buttonStyle(.plain)}
-                    }}.frame(maxWidth:.infinity,alignment:.leading)}.frame(width:200)
-                    Divider()
-                    if let selected,let doc=store.documents[selected]{
-                        VStack(alignment:.leading,spacing:10){
-                            Text(doc.summary["title"].string ?? "文档").font(.title2)
-                            if doc.deleted{Text("已删除；原文和审计记录保留。").font(.caption).foregroundStyle(.secondary)}
-                            CrewdFolderAssignmentButton(store:store,drafts:$drafts,view:.documents,object:CrewdFolderFilter.object("document",selected))
-                            HStack{Button("读取当前正文"){Task{await readDocument(selected)}};Button("编辑 / 删除"){target = .init(key:.init(crew:store.crew,view:.documents,object:selected,operation:"update",domain:.document))}.disabled(doc.deleted || store.writing)}
-                            if let body=doc.body {ScrollView{Text(body).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}}else{Text("正文尚未读取，或版本更新后需要重新读取。").foregroundStyle(.secondary)}
-                        }.frame(maxWidth:.infinity,alignment:.leading)
-                    }else{Text(!store.documentListLoaded ? "文档列表尚未成功读取":store.documentIDs.isEmpty ? "尚无文档":"选择文档读取正文").foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)}
+                #if os(macOS)
+                HStack(alignment:.top,spacing:16){list.frame(width:200);Divider();detail}
+                #else
+                ViewThatFits(in:.horizontal){
+                    HStack(alignment:.top,spacing:16){list.frame(width:200);Divider();detail.frame(minWidth:280)}
+                    VStack(alignment:.leading,spacing:12){list.frame(maxHeight:180);Divider();detail}
                 }
+                #endif
             }
             if let failure {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
-        }.padding(16).onChange(of:store.crew){_,_ in selected=nil;target=nil;failure=nil}.task(id:store.crew+String(store.capabilities.contains("documents"))){await store.activate(.documents)}.sheet(item:$target){target in CrewdDocumentEditor(store:store,drafts:$drafts,target:target)}
+        }.padding(16).onChange(of:store.crew){_,_ in selected=nil;selectionToken=UUID();target=nil;failure=nil}
+        .task(id:store.crew+String(store.capabilities.contains("documents"))){await store.activate(.documents)}
+        .sheet(item:$target){target in CrewdDocumentEditor(store:store,drafts:$drafts,target:target)}
     }
 }
 struct CrewdDocumentEditor:View {
@@ -74,7 +95,7 @@ struct CrewdDocumentEditor:View {
             }
             if let failure{Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"保存"){if let snapshot=drafts.begin(key){send(snapshot,delete:false)}}.disabled(drafts.busy(key) || submitting || store.writing || reading || store.crew != key.crew || !store.capabilities.contains("documents") || (!key.object.isEmpty && fields.revision.isEmpty))}
-        }.padding(20).frame(width:600,height:620).task{if key.object.isEmpty {if !drafts.exists(key){drafts.edit(key,.init())}}else{await read()}}
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:600,height:620)).task{if key.object.isEmpty {if !drafts.exists(key){drafts.edit(key,.init())}}else{await read()}}
         .confirmationDialog("删除文档？原文和审计记录保留，普通列表将不再显示。",isPresented:$confirmDelete){Button("删除",role:.destructive){drafts.edit(deleteKey,fields);if let snapshot=drafts.begin(deleteKey){send(snapshot,delete:true)}}}
     }
     private func describe(_ error:Error)->String{guard let e=error as? CrewdClientError else{return error.localizedDescription};return [e.message,e.code.map{"错误 \($0)"},e.refusal,e.data["currentDocument"]["revision"].string.map{"当前版本："+$0}].compactMap{$0}.joined(separator:" · ")}
@@ -106,4 +127,3 @@ struct CrewdDocumentEditor:View {
         }
     }
 }
-#endif
