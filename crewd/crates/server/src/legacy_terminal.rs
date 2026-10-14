@@ -238,11 +238,24 @@ impl LegacyTerminal {
         previous: Option<&str>,
     ) -> io::Result<Value> {
         let mut lease = self.lease.lock().await;
+        let expired_previous = lease
+            .as_ref()
+            .filter(|old| !old.connection.is_live() || Instant::now() >= old.deadline)
+            .map(|old| old.id.clone());
+        if expired_previous.is_some() {
+            let old = lease.as_ref().expect("expired lease selected");
+            // A lost connection or elapsed clock does not by itself prove the
+            // old writer is fenced. Wait for its physical chunk barrier before
+            // a new explicit Human claim can adopt another lease.
+            old.fence.revoke(Instant::now() + Duration::from_secs(2))?;
+            old.connection.remove(&old.id)?;
+            *lease = None;
+        }
         if let Some(old) = lease.as_ref() {
             if previous != Some(old.id.as_str()) {
                 return Err(refused());
             }
-        } else if previous.is_some() {
+        } else if previous.is_some() && previous != expired_previous.as_deref() {
             return Err(refused());
         }
         let binding = self.binding()?;
