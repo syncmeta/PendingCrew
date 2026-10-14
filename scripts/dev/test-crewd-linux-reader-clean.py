@@ -31,15 +31,17 @@ def main():
    if after!='?? scripts/dev/__pycache__/\n' or not caches:raise ValueError('original reader cache-write RED not reproduced')
   elif after or caches:raise ValueError('fixed reader changed its own clean input')
   results.append({'label':label,'command':command,'sourceFiles':rows,'beforeStatus':before,'afterStatus':after,'exit':result.returncode,'bytecodeFiles':caches,'strictPackageVerified':True})
- dirty_guard = None
- if sys.platform == 'linux':
-  consumer=files/'write-codex-first-provenance.py';consumer.write_bytes(consumer.read_bytes()+b'\n# synthetic tracked-source dirt\n')
-  forbidden=out/'forbidden-build'
-  command=[sys.executable,str(files/'build-crewd-linux-candidate.py'),str(forbidden)]
-  result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=10)
-  (out/'strict-dirty-refusal.log').write_text(result.stdout+result.stderr)
-  if result.returncode==0 or 'clean committed input required' not in result.stderr or 'Actual owning checkout status' not in result.stderr or 'write-codex-first-provenance.py' not in result.stderr or forbidden.exists():raise ValueError('tracked-source dirty guard lost or build began')
-  dirty_guard={'actualLinux':True,'command':command,'exit':result.returncode,'compileStarted':False,'outputCreated':False,'trackedSourceRefused':True}
+ consumer=files/'write-codex-first-provenance.py';consumer.write_bytes(consumer.read_bytes()+b'\n# synthetic tracked-source dirt\n')
+ forbidden=out/'forbidden-build'
+ # Only the non-compiling rejection path needs a supported-platform branch.
+ # Mac controls override the platform query, never claim a native Linux build.
+ # A dirty fixture with no crewd tree must reject before output/Cargo.
+ prefix=[] if sys.platform=='linux' else ['-c','import platform,runpy,sys;platform.system=lambda:"Linux";platform.machine=lambda:"x86_64";sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name="__main__")']
+ command=[sys.executable,*prefix,str(files/'build-crewd-linux-candidate.py'),str(forbidden)]
+ result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=10)
+ (out/'strict-dirty-refusal.log').write_text(result.stdout+result.stderr)
+ if result.returncode==0 or 'clean committed input required' not in result.stderr or 'Actual owning checkout status' not in result.stderr or 'write-codex-first-provenance.py' not in result.stderr or forbidden.exists():raise ValueError('tracked-source dirty guard lost or build began')
+ dirty_guard={'actualLinux':sys.platform=='linux','supportedPlatformQueryControlled':sys.platform!='linux','command':command,'exit':result.returncode,'compileStarted':False,'outputCreated':False,'trackedSourceRefused':True}
  (out/'result.json').write_text(json.dumps({'passed':True,'python':sys.version,'platform':sys.platform,'originalReaderSource':ORIGINAL,'actualOriginalFailedRunnerStatusRecovered':False,'linuxDefaultCacheLayout':True,'controls':results,'strictDirtyGuardControl':dirty_guard},indent=2)+'\n')
  print('PASS original cache-write RED and fixed read-only GREEN with unchanged strict package verification; no build/install')
 if __name__=='__main__':

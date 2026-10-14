@@ -234,10 +234,10 @@ jobs:
           git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
           test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-before-verification.txt"
           test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
-      - name: Actual original-reader RED and fixed read-only GREEN without compiling
+      - name: Complete actual non-compiling delivery entry, reader, dirty and safe-extract preflight
         run: |
           git fetch --no-tags origin 5f3f759568c88b84b5949fe0a109f3f35e44c1db
-          python3 scripts/dev/test-crewd-linux-reader-clean.py "$RUNNER_TEMP/linux-install-baseline/crewd-linux-x86_64" "$RUNNER_TEMP/linux-install-original-meta/reader-controls"
+          python3 scripts/dev/test-crewd-linux-delivery-preflight.py "$RUNNER_TEMP/linux-install-baseline/crewd-linux-x86_64" "$RUNNER_TEMP/linux-install-original-meta/complete-preflight"
           git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-after-reader-controls.txt"
           test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-after-reader-controls.txt"
       - name: Resolve locked dependencies into existing runner cache

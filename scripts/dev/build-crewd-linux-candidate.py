@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build a inspectable development Linux backend candidate. Never install or publish."""
-import argparse,hashlib,json,os,pathlib,platform,shutil,subprocess,tarfile
+import argparse,hashlib,json,os,pathlib,platform,shutil,subprocess,sys,tarfile
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
