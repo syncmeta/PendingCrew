@@ -767,7 +767,7 @@ impl<P: Port> Core<P> {
                         } else {
                             CommandPhase::Unknown
                         },
-                        serde_json::json!({"physicalExitConfirmed":gone,"originalBirth":obligation.birth}),
+                        serde_json::json!({"physicalExit":if gone { "confirmed" } else { "unconfirmed" },"physicalExitConfirmed":gone,"originalBirth":obligation.birth}),
                     ))
                 }
                 (true, SessionEvent::Exited(_)) => Some((
