@@ -444,6 +444,7 @@ fn m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact() 
         f.root.path().display(),
         normal.display()
     );
+    std::fs::create_dir_all(&f.data).unwrap();
     let (captain, owner, plan) = {
         let mut store = crewd_store::Store::open_data_dir(&f.data).unwrap();
         crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
@@ -461,7 +462,7 @@ fn m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact() 
                     crew_id: c.id.clone(),
                     role: crewd_proto::Role::Captain,
                     executor: "claude".into(),
-                    title: Some("M5 physical captain".into()),
+                    title: Some("M5 captain".into()),
                     brief: Some("M5 synthetic initial context".into()),
                     ..Default::default()
                 },
@@ -601,19 +602,21 @@ fn m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact() 
             json!({"sessionId":captain,"reason":"M5 controlled physical stop"}),
         );
         let until = Instant::now() + CAP;
-        while !born.iter().all(birth_gone) {
+        loop {
+            let settled =
+                crewd_exec::registry::ProcessRegistry::load(&f.data.join("exec-registry.json"))
+                    .unwrap()
+                    .entries()
+                    .is_empty();
+            if born.iter().all(birth_gone) && settled {
+                break;
+            }
             assert!(
                 Instant::now() < until,
-                "actual fake provider birth not reaped"
+                "actual fake provider birth/registry not settled after public Stop"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            crewd_exec::registry::ProcessRegistry::load(&f.data.join("exec-registry.json"))
-                .unwrap()
-                .entries()
-                .is_empty()
-        );
         (acknowledged, input, born)
     }));
     let _ = unsafe { libc::kill(daemon.child.id() as i32, libc::SIGTERM) };
