@@ -13,7 +13,7 @@ def load(name):
  spec=importlib.util.spec_from_file_location(name,pathlib.Path(__file__).with_name(name+'.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('download');p.add_argument('output');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('download');p.add_argument('output');p.add_argument('--baseline13',action='store_true',help='verify actual historical13 as old baseline, never cover current14 production');a=p.parse_args()
  source=pathlib.Path(a.download).resolve();out=pathlib.Path(a.output).resolve();repo=pathlib.Path(__file__).resolve().parents[2]
  if out.exists():raise ValueError('fresh reused release directory required')
  if source.is_file():
@@ -31,11 +31,12 @@ def main():
  with tarfile.open(archives[0]) as t:baseline.validate_members(t.getmembers());t.extractall(out)
  package=out/'crewd-linux-x86_64';manifest=json.loads((package/'candidate.json').read_text());witness=json.loads((package/'normal-build-witness.json').read_text())
  if manifest['sourceRef']!=REF or manifest['binarySHA256']!=BIN_SHA or sha(package/'bin/crewd')!=BIN_SHA:raise ValueError('original normal source/binary mismatch')
- paths=subprocess.check_output(['git','-C',str(repo),'ls-tree','-r','--name-only','HEAD','crewd']).decode().splitlines()
+ proof_ref=REF if a.baseline13 else 'HEAD'
+ paths=subprocess.check_output(['git','-C',str(repo),'ls-tree','-r','--name-only',proof_ref,'crewd']).decode().splitlines()
  rows=[]
  for path in paths:
-  committed=subprocess.check_output(['git','-C',str(repo),'show','HEAD:'+path]);h=hashlib.sha256(committed).hexdigest()
-  if sha(repo/path)!=h:raise ValueError('current owning Rust working tree differs from committed input')
+  committed=subprocess.check_output(['git','-C',str(repo),'show',proof_ref+':'+path]);h=hashlib.sha256(committed).hexdigest()
+  if not a.baseline13 and sha(repo/path)!=h:raise ValueError('current owning Rust working tree differs from committed input')
   rows.append({'path':path,'sha256':h})
  if sorted(rows,key=lambda r:r['path'])!=witness['files']:raise ValueError('complete current Rust inputs differ; original normal cannot cover new production')
  proof=load('write-codex-first-provenance');cfg=proof.complete_configuration(witness['buildConfiguration'])
@@ -43,8 +44,8 @@ def main():
  if cfg.get('artifactProfile',{}).get('test') is not False:raise ValueError('normal must be non-test production')
  proof.verify_witness(package/'normal-build-witness.json',package/'bin/crewd',proof.digest(rows),expected,require_fresh=True)
  subprocess.run([sys.executable,str(pathlib.Path(__file__).with_name('check-crewd-linux-candidate.py')),str(package)],check=True)
- result={'runId':RUN,'artifactId':ARTIFACT,'compiledSourceRef':REF,'currentFixtureSourceRef':subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD']).decode().strip(),'normalRebuilt':False,'originalZipSHA256':ZIP_SHA,'canonicalTarSHA256':TAR_SHA,'binarySHA256':BIN_SHA,'fullRustInputDigest':proof.digest(rows),'sourceProofTier':'fresh-owning-workspace-production-graph','originalRunConclusion':'failure; install lifecycle closure remains unverified'}
- (out/'reused-normal13.json').write_text(json.dumps(result,sort_keys=True,indent=2)+'\n');print('VERIFIED original4e normal13 release, no new compile or source relabel')
+ result={'runId':RUN,'artifactId':ARTIFACT,'compiledSourceRef':REF,'currentFixtureSourceRef':subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD']).decode().strip(),'normalRebuilt':False,'role':'historical13-baseline-only' if a.baseline13 else 'same-production-normal13-reuse','currentProductionCovered':not a.baseline13,'originalZipSHA256':ZIP_SHA,'canonicalTarSHA256':TAR_SHA,'binarySHA256':BIN_SHA,'fullRustInputDigest':proof.digest(rows),'sourceProofTier':'fresh-owning-workspace-production-graph','originalRunConclusion':'failure; install lifecycle closure remains unverified'}
+ (out/'reused-normal13.json').write_text(json.dumps(result,sort_keys=True,indent=2)+'\n');print('VERIFIED original4e normal13 release, role '+result['role']+'; no new compile or source relabel')
 if __name__=='__main__':
  try:main()
  except (ValueError,OSError,KeyError,subprocess.SubprocessError,tarfile.TarError) as e:raise SystemExit('REFUSED reused normal13: '+str(e))
