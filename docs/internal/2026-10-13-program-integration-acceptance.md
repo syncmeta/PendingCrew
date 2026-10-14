@@ -126,3 +126,9 @@ M4 metadata原外部目标疑虑经同动作准确localhost环境证据复核通
 Native 客户端固定源码 `1e51045a7e5de6a9b04ec0d74ea7d87091e0c19d` 的原 Mac 目标实际构建已 terminal exit0，日志 `/private/tmp/pcw-M6-native-main-macos-build-02.log` 为 `BUILD SUCCEEDED`；结果 `/private/tmp/pcw-M6-native-main-macos-build-02-result.json` 记录 clean 输入与构建后不变。根独立逐项将输入 manifest 的356个文件 SHA 与该 commit 的 Git 对象核对，零差异，结果 `/private/tmp/pcw-M6-native-main-macos-build-02-root-input-check.json`。此证据只关闭该源码的 Mac 目标构建，不替代 iOS 构建、Native TLS 运行、设备、配对产物或安装。
 
 远程后台 `d17766af` 相对已验 main `fe68022f` 的22文件范围已在 global 树实际 `git apply --check` 无冲突；仅预检，未应用或合 main。后续只在服务完整冻结后整合 schema11，供 M4 schema12 接续。当前后台后续修复 `2d0c445e` 保持未配对 grant 列表只读；作者继续慢 writer 撤销与有界发送，质量线继续实际反例及正式 schema10→11/旧版拒写验收。已接纳业务完成与 socket 部分帧取消不得混为一项，也不以丢失回执后耐久事实仍在的通过替代慢连接撤销证明。
+
+## Native 实际 Xcode26.5 CI：保存失败，先同步已验基线
+
+实际 workflow_dispatch `38488956854` 精确源码 `778e5d5c4699a023319ae808ef9d8d960aca5bd6` 已 terminal failure，唯一 observer55258 exit1，不再轮询。工程同步 job115609340590通过；build/test job115609341157完成Mac编译，但3202测试/15跳过/3断言失败，全部来自同一 `testPagedLazyHistoryLongMessageMovesOnlyByWheelDistance` 旧NaN测量；后续iOS步骤未执行。原始失败日志 `/private/tmp/pcw-M6-native-ci-778e5d5c-failed.log`，观察日志 `/private/tmp/pcw-M6-native-ci-778e5d5c-watch.log` 全部保留。
+
+根核实 M6 没有 main 已验 `37d199f4`（实际祖先检查exit1），对应测试diff正是旧离屏lazy行测量，不能当新增Native产品缺陷或删测。根派CI前漏核该基线；作者直接同步已经通过真实CI的修正/已验main `fe68022f`，继续自身模块。新完整冻结后再派平台CI，不能盲重跑旧ref。后续组合冻结必须核对最新已验main及相关修正实际包含情况，再判断必要新门禁。
