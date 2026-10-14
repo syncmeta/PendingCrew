@@ -1,14 +1,14 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 2026-10-15 Linux census 修复整块接受，准确新输入待专项运行
+## 2026-10-15 Linux 完整恢复单元实际接受，候选包装待来源收口
 
-实际 Linux run 38647080589 / job 116136487047、来源 1f9c22666b07d2676897eb6b4376f060acffbc31 已终态 FAILURE：28 项中 26 PASS、2 FLKY-FL；两项重试通过仍按原规则失败。新 normal、fake 构建及公开恢复物理链未执行。原日志没有 offending PID/stage/errno，不能把旁组进程退出假说称为已证明根因。原失败范围独核报告 /private/tmp/pcw-Core14-recovery-linux-1f9c2266-failed-01/independent-failure-scope-01.json，SHA c03228509052e7b4bc40a98f6889c33b602b9f19dfbfc8f1a5a157f6965e0d8b。
+实际 Linux run 38650263649 / job 116147028404、准确来源 a8cb22190f13deb44f9b0807893c6a7020535032 已终态 SUCCESS，并通过整块独立验收。报告 /private/tmp/pcw-Core14-recovery-linux-a8cb-independent-01/complete-unit-independent.json，SHA 73ed135ef5a6dcdc4bca786a2cc0d7cdf5b25e9bd78cfbf71938b9fd0350d93e。artifact11934288235单次取得，ZIP SHA48bcae2e782b3d3b9b9c78a2eaca47556142cd979b5edb98f820f1c4ff01861b；normal SHA60778d1eca399f5be634b6e575010992fd418b3d9aca7bf8b5eed2002ed591d0。393完整Git/snapshot输入、强require-fresh独立consumer、raw11ownpkg12targets全部fresh=false/defaultDebug/non-test空features/Rust1.94、编译环境与sidecar一致；testkit fake另raw/hash，不混normal证明。
 
-后端 correction02 两路径整块已独验接受，报告 /private/tmp/pcw-Core14-linux-census-correction-freeze-02/independent-whole-impact-acceptance-01.json，SHA e61c3432ba63d9776627e48f19209202bcd5e5ceba41ae7ffe5d97d0b8652e4b；patch SHA 87da9be6b2a6c1b81f92caa33041e90f7fe0be8d0eb4852fbad204862ea296de。根已精确应用并核 393 完整输入逐 SHA 与作者冻结一致。真实 getpgid 仅 ESRCH 排除消失枚举项、实际其他 PGID 排除旁组；目标缺读、错误及受限当前 proc 视图保持 Unknown。双遍完整成员身份/UID、leader、Store guard、全局 2 秒与原重试/断言保持；最多 16 条内存诊断不在预算内做日志 I/O。Mac 影响矩阵 29 PASS、exec all-targets strict clippy 通过，不能外推 Linux 实际成功。
+31项首轮PASS、0flaky、未打印LEAK；fmt/default workspace all-targets strictclippy通过，仅影响范围而非all-features或稳定全套重跑。真实daemon硬杀→原birth/groupGone先于新合格socket；sameDB/newruntime保原Launched历史，lookup/duplicate不重投原body。legacy空boot活child保持Unknown/零signal/无admission，仅fixture精确ownedchild外部停止后无signalreconcile；Stop真birth/groupGone/daemon0。20项closedCLI覆盖坏WAL/btree/id/registry的inspect/reconcile/serve/codex/claude，原物理内容和mode不变、无provider/socket。103归档文件hash全核。本次终态净scope无socket/FIFO，specialRows=0，不能把本run冒真实特殊inode正例；原8f独立socket/FIFO源控制分层复用，诊断归档仍nonrestore。
 
-支持边界为普通受管同一 PID namespace 连续运行/恢复；当前 NSpid/self/mount 资格不是历史 registry namespace 证明，跨 namespace 搬迁既不受支持也没有已实现的自动拒绝保证。membership/birth→killpg 非原子 TOCTOU 限界继续明确。Native15 WIP 不合入，schema/proto/Cargo、workflow 与稳定 M5 schema13 模块保持；M5 已验实现不重新开发。
+原run38647080589、来源1f9的26PASS+2FLKY-FL与原完整日志/报告保留；原失败没有offendingPID/stage/errno，新成功不反推具体因果。correction02两路径来源/Mac影响独验e61c3432ba63d9776627e48f19209202bcd5e5ceba41ae7ffe5d97d0b8652e4b及a8cb实际393组合独核241e41e66ec3fef4326b4e3c6fcd857ddd45dee6a4a37d713f7e6ffbadf497b3保留。支持普通受管同一PIDnamespace连续运行/恢复；当前proc资格不是历史registry namespace证明，跨namespace搬迁不受支持且没有自动识别拒绝保证。birth/member/UID/mount与killpg非原子TOCTOU和foreignaccount组件证据限界明确。
 
-本次提交后按准确新 HEAD 冻结，由根唯一派发一次必要 Linux recovery_gate，保持 fail-if-flaky/LEAK 规则与完整失败归档，并实际跑新的强 normal/fake/public 恢复链。客户端 DeliveryValidation 包装器仍在独立树补最终 sealed helper 与强 normal 输入的来源绑定，未通过整块验收、未合入此 Linux 输入；不等待该独立模块。磁盘实测约 6.8 GiB，不清理保护对象。旧 normal07、候选13和默认 CI 来源仍为 0f，不重标。main、安装、日常数据、发布、真实模型及待具体动作保持未交付。
+Linux模块已闭合，不再重复必要CI或稳定验收。客户端专用DeliveryValidation包装器仍在独立树补normal签前原件→最终sealed helper及GUI/嵌套加载代码的独立来源等价，旧封存样本只读验证不冒新包。完整包装源独验后一次精确组合新fullGit输入，再唯一Mac normal/完整候选；若393Rust输入全同，可按影响复用a8cb机制，但实际Linux编译ref永远a8cb，不改标为之后文档或包装ref。M5 schema13已验整块复用，不重新实现。Native15 WIP不合入，SDK实际执行、A13本次解锁、真实签名/持久凭据动作、窗口/设备、main产品、安装/日常切换/公开发布仍待对应证据与具体授权；Jev/记忆待决。此记录保存整块Linux成果，不宣称全工程交付。
 
 ## 2026-10-15 已验恢复04、验证入口与限定工作流一次精确组合
 
