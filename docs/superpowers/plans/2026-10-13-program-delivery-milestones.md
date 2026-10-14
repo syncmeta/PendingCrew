@@ -4,7 +4,7 @@
 
 用户明确重点是避免不必要的CI麻烦及GitHub时长消耗，而非仅减邮件。根已核当前in-progress运行为空；两workflow现存push main/PR自动触发，最近失败则均为我们手动派发。main实际protected=false、required_status_checks contexts/checks为空，不存在必须保留自动触发的分支保护依赖。客户端唯一workflow writer正在将重型检查改为完整模块冻结后显式按需要手动运行，清理已完成阶段的临时scope和重复自动全量；本机必要质量、确需真实Linux/指定Apple环境的剩余交付验证仍保留。新Linux6c源码/本地前置接受不等实际链通过，目前尚未派发，等待精简后的新完整冻结。
 
-仓库实际PUBLIC，当前标准GitHub runner按官方规则免费；不以免费为重复运行理由，也不把这一仓库的运行冒称消耗私有仓库分钟额度。这里只陈述实际核对状态；开发分支里的触发精简未整合到main前，不宣称GitHub main自动触发已改变。main产品整合/安装/日常数据/公开发布边界保持原约束。稳定已验业务无需为CI配置精简全量重跑。
+仓库实际PUBLIC，当前标准GitHub runner按官方规则免费；不以免费为重复运行理由，也不把这一仓库的运行冒称消耗私有仓库分钟额度。用户最新CI精简要求已仅以配置整合到实际GitHub main：1ba3d4ba0973b6abf3f68395611063523b1be03e（parent fe68022f），恰好两份workflow、仅workflow_dispatch，全部原main jobs/steps/concurrency逐值保持；API实际blob与本地commit匹配，按该commit查询runs为空。未混入开发产品或Linux新脚本，main产品整合/安装/日常数据/公开发布边界保持原约束。主目录本地main仍fe68022f，用户README/design/旧ACP未提交资料原样，不更新其checkout。稳定已验业务无需为CI配置精简全量重跑。
 
 ## 最新整块执行检查点（2026-10-14，覆盖下文历史在途状态）
 

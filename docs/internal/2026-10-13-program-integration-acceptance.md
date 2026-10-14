@@ -178,3 +178,10 @@ Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装�
 最终产品回到实际原 PendingCrew 前端组件，独立 Native 工作区只保留为验证材料；详见总计划原前端纠偏段和 `2026-10-14-original-frontend-quality-impact-matrix.md`。最终公共 PTY 交互与可靠命令 receipt/status 仍是后端依赖，现客户端本机 UUID/内存 unknown 不证明服务端幂等或跨重启恢复。
 
 旧 normal335/5c 等完整字节输入与真实业务证据保留，但共享 Cargo target 后发现自有依赖可能沿用其他树缓存，旧 witness 不能证明每个自有依赖实际从该树重新编译。新候选须完整 owning dependency graph、真实 owner paths、所有必需自有 targets fresh=false 与原始 Cargo JSON/sidecars独核；不得重标旧二进制或重复全部稳定业务掩盖来源缺口。
+
+
+## 2026-10-14 CI-only 实际整合
+
+用户要求精简不必要CI。作者与独立质量线核对两份main兼容配置，仅取消push/PR，workflow_dispatch及原jobs/steps/concurrency不变。根使用独立索引仅整合两workflow，普通FF推送actual main 1ba3d4ba0973b6abf3f68395611063523b1be03e，parent fe68022f，未带开发产品源码。API实际ci blob dceb782161102f85409681df84f2c6611e8d345f、crewd blob d2ba723ca7ea9ea6e0748d056f49b8406515e988与commit匹配，按commit查runs=[]。整体disable曾被自动审批拒绝，未执行；保留手动入口的配置精简为授权内安全替代。
+
+主目录本地main未checkout/reset/pull，仍fe68022f，README/design/旧ACP用户资料原样。开发CI精简4e80134b9b5ff5a9b759aed1446f61da489efc4c已推送，保留full与必要Linux链，删除已完成临时scope/重复远端前置。Linux实际安装链仍未通过，没有再派发；6c本地整批前置接受仅为准备。证据 /private/tmp/pcw-ci-manual-policy-01/validation.json 与 /private/tmp/pcw-ci-main-manual-commit.json。未重跑稳定业务、不重标all-features/包/窗口/M4完成。
