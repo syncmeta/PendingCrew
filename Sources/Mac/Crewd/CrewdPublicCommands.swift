@@ -70,7 +70,7 @@ final class CrewdPublicCommands: ObservableObject {
             if envelope.operation == .hibernate, !ownsDaemon() { throw notSubmitted("后台拥有关系已经改变；尚未发送关闭。") }
             let value = try await call("command.submit", envelope.value)
             let receipt = try CrewdPublicReceipt(value, request: envelope.requestID,
-                database: envelope.databaseID, originalCommand: envelope.command)
+                database: envelope.databaseID, originalRuntimeBinding: envelope.runtimeBindingID, originalCommand: envelope.command)
             guard (try? binding()) == captured else {
                 throw CrewdClientError(message: "原命令返回时连接已改变；保留原请求并在原数据库只读确认。")
             }
@@ -105,7 +105,7 @@ final class CrewdPublicCommands: ObservableObject {
         // Not found is read-only uncertainty, never permission to submit anew.
         if value == .null { return nil }
         let receipt = try CrewdPublicReceipt(value, request: original.id,
-            database: original.envelope.databaseID, originalCommand: original.envelope.command)
+            database: original.envelope.databaseID, originalRuntimeBinding: original.envelope.runtimeBindingID, originalCommand: original.envelope.command)
         observations[original.id] = .init(prepared: original.prepared,
             envelope: original.envelope, receipt: receipt)
         return receipt

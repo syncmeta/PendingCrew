@@ -642,6 +642,7 @@ final class CrewdWorkspace: ObservableObject {
         guard record.scope == presentationScope, !receipt.historical,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
               record.params["dbId"].string == receipt.databaseID,
+              record.params["runtimeBindingId"].string == receipt.runtimeBindingID,
               record.params["command"] == receipt.value["command"],
               [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
               let journal = originalJournal else { throw CrewdPublicWire.invalid() }

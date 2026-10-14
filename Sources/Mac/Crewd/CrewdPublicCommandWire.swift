@@ -36,9 +36,10 @@ struct CrewdPublicReceipt {
     let runtimeBindingID: String
     let phase: CrewdCommandPhase
     let historical: Bool
-    init(_ value: CrewdValue, request: UUID, database: String, originalCommand: CrewdValue) throws {
+    init(_ value: CrewdValue, request: UUID, database: String, originalRuntimeBinding: String, originalCommand: CrewdValue) throws {
         guard let id = value["requestId"].string.flatMap(UUID.init(uuidString:)), id == request,
-              value["dbId"].string == database, value["command"] == originalCommand,
+              value["dbId"].string == database, value["runtimeBindingId"].string == originalRuntimeBinding,
+              value["command"] == originalCommand,
               let phase = value["phase"].string.flatMap(CrewdCommandPhase.init(rawValue:)),
               case .bool(let historical) = value["historical"],
               let hash = value["payloadSha256"].string, hash.count == 64,
@@ -182,18 +183,34 @@ struct CrewdTerminalWriteObservation {
     let inputBytes: Int
     let writtenBytes: Int?
     let unknown: Bool
-    init(_ value: CrewdValue, submittedByteCount: Int) throws {
+    init(_ value: CrewdValue, phase: CrewdCommandPhase, submittedByteCount: Int) throws {
         guard submittedByteCount > 0, submittedByteCount <= 64 * 1024,
-              value["inputBytes"].int == submittedByteCount else { throw CrewdPublicWire.invalid() }
+              value["inputBytes"].int == submittedByteCount,
+              value["applicationConsumed"] == .null || value["applicationConsumed"] == .string("unconfirmed") else { throw CrewdPublicWire.invalid() }
         inputBytes = submittedByteCount
-        unknown = try CrewdPublicWire.boolean(value["unknown"])
         if value["writtenBytes"] == .null { writtenBytes = nil }
         else {
             guard let written = value["writtenBytes"].int, written >= 0, written <= inputBytes else { throw CrewdPublicWire.invalid() }
             writtenBytes = written
         }
-        guard unknown || writtenBytes == inputBytes else { throw CrewdPublicWire.invalid() }
+        switch phase {
+        case .written:
+            guard value["unknown"] == .bool(false), writtenBytes == inputBytes else { throw CrewdPublicWire.invalid() }
+            unknown = false
+        case .unknown:
+            // Expiry/revocation has an authoritative Unknown receipt without a
+            // physical byte count. Absence stays nil, never fabricated zero.
+            if value["unknown"] == .bool(true) { unknown = true }
+            else {
+                guard value["unknown"] == .null, writtenBytes == nil,
+                      value["physicalResult"] == .string("unconfirmed"),
+                      value["replayAllowed"] == .bool(false) else { throw CrewdPublicWire.invalid() }
+                unknown = true
+            }
+        default: throw CrewdPublicWire.invalid()
+        }
     }
+
     // No remaining-bytes retry helper: partial/unknown must remain unresolved.
     // Even a complete kernel write has no applicationConsumed confirmation.
 }

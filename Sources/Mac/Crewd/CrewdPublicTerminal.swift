@@ -20,6 +20,7 @@ final class CrewdPublicTerminal: ObservableObject {
     private var epoch = UUID()
     private var ownerEpoch: UUID?
     private var target: CrewdCommandTarget?
+    private var previousLeaseID: String?
     private var watchID: String?
     private var cursor: String?
     private var awaitingWatch = false
@@ -109,17 +110,28 @@ final class CrewdPublicTerminal: ObservableObject {
     func claim() async {
         guard !busy, leaseID == nil, connected, snapshot?.manualAvailable == true,
               let target else { return }
-        let captured = epoch, began = Date()
+        let captured = epoch, began = Date(), previous = previousLeaseID
         busy = true; defer { if epoch == captured { busy = false } }
         do {
-            let receipt = try await command(.terminalClaim, .object(["target": target.value]))
+            // This is a new explicit Human claim, not a replay. Refresh only
+            // the revision of this same physical generation on this socket.
+            guard let client else { throw CrewdPublicWire.invalid() }
+            let current = try CrewdTerminalSnapshot(try await client.call("session.terminal.inspect", .object(["sessionId": .string(sessionID)])))
+            guard accepts(captured), current.kind == .pty, current.manualAvailable,
+                  current.target.sessionID == target.sessionID,
+                  current.target.generation == target.generation else {
+                throw CrewdClientError(message: "原物理代际已经改变；未将手工控制转给新进程。", kind: .notSubmitted)
+            }
+            var params: [String: CrewdValue] = ["target": current.target.value]
+            if let previous { params["previousLeaseId"] = .string(previous) }
+            let receipt = try await command(.terminalClaim, .object(params))
             guard accepts(captured), !receipt.historical, receipt.phase == .confirmed,
                   let id = receipt.value["result"]["leaseId"].string, !id.isEmpty,
                   receipt.value["result"]["manualRevocationPersisted"] == .bool(true),
                   receipt.value["result"]["automaticInputPaused"] == .bool(true),
                   receipt.value["result"]["physicalInputWritten"] == .bool(false),
                   receipt.value["result"]["durationMs"].int == 30000 else { throw CrewdClientError(message: "手工控制结果未确认；不会发送输入。") }
-            self.target = try nextTarget(receipt, original: target); leaseID = id; failure = nil
+            self.target = try nextTarget(receipt, original: current.target); leaseID = id; previousLeaseID = nil; failure = nil
             let remaining = max(0, 30 - Date().timeIntervalSince(began))
             leaseExpiry?.cancel()
             leaseExpiry = Task { [weak self] in
@@ -150,7 +162,7 @@ final class CrewdPublicTerminal: ObservableObject {
                 do {
                     let receipt = try await self.command(.terminalWrite, .object(["target": current.value, "leaseId": .string(lease), "bytesBase64": .string(bytes.base64EncodedString())]))
                     guard self.accepts(captured), self.leaseID == lease, !receipt.historical else { throw CrewdClientError(message: "输入返回时原连接已改变，结果需只读核对。") }
-                    let observed = try CrewdTerminalWriteObservation(receipt.value["result"], submittedByteCount: bytes.count)
+                    let observed = try CrewdTerminalWriteObservation(receipt.value["result"], phase: receipt.phase, submittedByteCount: bytes.count)
                     guard receipt.phase == .written, !observed.unknown, observed.writtenBytes == bytes.count else { throw CrewdClientError(message: "终端输入存在部分或未知写入；不会重写剩余字节。") }
                     self.target = try self.nextTarget(receipt, original: current)
                 } catch {
@@ -179,6 +191,8 @@ final class CrewdPublicTerminal: ObservableObject {
         do {
             let receipt = try await command(.terminalRelease, .object(["target": current.value, "leaseId": .string(lease)]))
             guard accepts(captured), !receipt.historical, receipt.phase == .confirmed else { throw CrewdClientError(message: "释放原控制权的结果尚未确认，不会恢复自动执行。") }
+            target = try nextTarget(receipt, original: current)
+            leaseID = nil; previousLeaseID = nil
         }
         catch { if epoch == captured { failure = error.localizedDescription } }
         if epoch == captured { invalidateLease(failure ?? "手工控制已结束；不会自动恢复执行。") }
@@ -199,13 +213,15 @@ final class CrewdPublicTerminal: ObservableObject {
         unresolvedInput.append(bytes)
     }
     private func invalidateLease(_ reason: String) {
-        leaseExpiry?.cancel(); leaseExpiry = nil; leaseID = nil
+        leaseExpiry?.cancel(); leaseExpiry = nil
+        if let leaseID { previousLeaseID = leaseID }
+        leaseID = nil
         preserveUnsent(queuedInput); queuedInput.removeAll(); failure = reason
     }
     private func closeObservation(_ reason: String) {
         invalidateLease(reason); connected = false; awaitingWatch = false; earlyOutput.removeAll()
         client?.onDisconnect = nil; client?.onEvent = nil; client?.disconnect(); client = nil; commands = nil
-        watchID = nil; cursor = nil
+        watchID = nil; cursor = nil; previousLeaseID = nil
     }
     func deactivate() {
         epoch = UUID(); pumpTask?.cancel(); pumpTask = nil
