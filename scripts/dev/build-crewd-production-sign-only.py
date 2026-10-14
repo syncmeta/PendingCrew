@@ -85,6 +85,8 @@ def main():
     info=app/'Contents/Info.plist';info_value=plistlib.loads(info.read_bytes());info_value.update(PendingCrewSourceRef=v['sourceRef'],BuildStampCommit=v['sourceRef']);info.write_bytes(plistlib.dumps(info_value))
     builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none','--preserve-metadata=entitlements,requirements',str(app)],snapshot,out/'app-sign.log')
     builder.run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
+    requirement='anchor apple generic and identifier "com.pendingname.pendingcrew" and certificate leaf[subject.OU] = "'+v['team']+'" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+    builder.run(['codesign','--verify','--strict','--test-requirement','='+requirement,str(app)],snapshot,out/'apple-publisher-requirement.log')
     display=subprocess.run(['codesign','--display','--verbose=4',str(app)],capture_output=True,check=True);(out/'signature-display.log').write_bytes(display.stdout+display.stderr)
     signed_ent=subprocess.run(['codesign','--display','--entitlements',':-',str(app)],capture_output=True,check=True);(out/'signed-entitlements.plist').write_bytes(signed_ent.stdout)
     actual_ent=plistlib.loads(signed_ent.stdout);text=display.stderr.decode()
@@ -93,7 +95,7 @@ def main():
     observed=builder.regular_inventory(snapshot);expected=[x for x in inputs if x['path']!='Config/Local.xcconfig'];actual=[x for x in observed if x['path']!='Config/Local.xcconfig']
     if sha(pathlib.Path(a.manifest))!=manifest_hash or sha(pathlib.Path(v['profilePath']))!=v['profileSHA256']:raise ValueError('reviewed signing input changed')
     if expected!=actual or before!=after:raise ValueError('committed inputs or dependencies changed')
-    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'signingAction':True,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
+    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'signingAction':True,'staticAppleRequirement':requirement,'staticAppleRequirementLogSHA256':sha(out/'apple-publisher-requirement.log'),'staticAppleRequirementVerified':True,'publisherRuntimeAcceptance':False,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
     print('BUILT private sign-only product; no launch/install/notarize/publication')
 if __name__=='__main__':
     try:main()

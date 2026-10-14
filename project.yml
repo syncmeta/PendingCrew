@@ -134,7 +134,7 @@ targets:
         SUPPORTS_MACCATALYST: NO
       configs:
         DeliveryValidation:
-          PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.delivery-validation
+          PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
           INFOPLIST_FILE: Config/DeliveryValidation-Info.plist
         NativeCandidate:
           PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate

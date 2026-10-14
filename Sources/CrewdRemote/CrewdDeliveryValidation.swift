@@ -20,7 +20,8 @@ enum CrewdDeliveryValidation {
         let pin: String?
     }
     static func qualified() throws -> Scope {
-        guard Bundle.main.object(forInfoDictionaryKey: "PendingCrewDeliveryValidation") as? Bool == true,
+        guard Bundle.main.bundleIdentifier == "com.pendingname.pendingcrew.native-candidate",
+              Bundle.main.object(forInfoDictionaryKey: "PendingCrewDeliveryValidation") as? Bool == true,
               let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
               let path = ProcessInfo.processInfo.environment["PENDINGCREW_VALIDATION_MANIFEST"] else { throw CrewdRemoteError.storageFailure }
         #if os(macOS)
@@ -57,7 +58,7 @@ enum CrewdDeliveryValidation {
         guard fstat(fd, &last) == 0, first.st_ino == last.st_ino, first.st_size == last.st_size,
               first.st_mtimespec.tv_sec == last.st_mtimespec.tv_sec, first.st_mtimespec.tv_nsec == last.st_mtimespec.tv_nsec else { throw CrewdRemoteError.storageFailure }
         guard let v = try JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any],
-              let format = v["format"] as? NSNumber, CFGetTypeID(format) != CFBooleanGetTypeID(), format.intValue == 1, v["sourceRef"] as? String == sourceRef,
+              let format = v["format"] as? NSNumber, CFGetTypeID(format) != CFBooleanGetTypeID(), Set(["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"]).contains(String(cString: format.objCType)), format.doubleValue == 1.0, format.intValue == 1, v["sourceRef"] as? String == sourceRef,
               v["validationDomain"] as? String == "pendingcrew.fake-only.delivery-validation.v1",
               let scopeID = v["scopeID"] as? String, let uuid = UUID(uuidString: scopeID), scopeID == uuid.uuidString.lowercased(),
               let service = v["service"] as? String, service == "com.pendingname.pendingcrew.delivery-validation." + scopeID,
@@ -85,7 +86,8 @@ enum CrewdDeliveryValidation {
                   environment["PENDINGCREW_CREWD_DATA_DIR"] == v["dataDirectory"] as? String,
                   let codex = v["codexProgram"] as? String, codex == root.appendingPathComponent("bin/fake-codex").path,
                   let claude = v["claudeProgram"] as? String, claude == "/usr/bin/false",
-                  environment["PENDINGCREW_CODEX_PROGRAM"] == codex, environment["PENDINGCREW_CLAUDE_PROGRAM"] == claude else { throw CrewdRemoteError.storageFailure }
+                  environment["PENDINGCREW_CODEX_PROGRAM"] == codex, environment["PENDINGCREW_CLAUDE_PROGRAM"] == claude,
+                  environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw CrewdRemoteError.storageFailure }
             data = root.appendingPathComponent("data")
             for directory in [data, root.appendingPathComponent("work"), root.appendingPathComponent("bin")] { try privatePath(directory, root: root, directory: true) }
             let fake = URL(fileURLWithPath: codex)
@@ -109,7 +111,7 @@ enum CrewdDeliveryValidation {
                   v["mode"] as? String == "remoteMobile", root.path == parent.appendingPathComponent(scopeID).path,
                   v["presentationDirectory"] as? String == root.appendingPathComponent("presentation").path,
                   environment["PENDINGCREW_CODEX_PROGRAM"] == nil, environment["PENDINGCREW_CLAUDE_PROGRAM"] == nil,
-                  environment["PENDINGCREW_CREWD_DATA_DIR"] == nil else { throw CrewdRemoteError.storageFailure }
+                  environment["PENDINGCREW_CREWD_DATA_DIR"] == nil, environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw CrewdRemoteError.storageFailure }
             data = root.appendingPathComponent("presentation");try privatePath(data, root: root, directory: true)
         }
         return Scope(root: root, data: data, service: service, account: account, actions: Set(actions),

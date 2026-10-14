@@ -4,7 +4,7 @@
 
 ## 一个明确编译通道，先资格后启动
 
-原PendingCrew target新增Release型DeliveryValidation配置及同名专用scheme，全actions明确使用该配置。它有独立delivery-validation bundleID/URL与Info marker，PENDINGCREW_DELIVERY_VALIDATION条件、默认不签、无Team/profile/entitlements、不读个人Local配置。正式Debug/Release与NativeCandidate的全部既有配置对象保持不变。工程只新增CrewdDeliveryValidation.swift这个实际source-phase文件，原source全部保留；第二次xcodegen无漂移。
+原PendingCrew target新增Release型DeliveryValidation配置及同名专用scheme，全actions明确使用该配置。DeliveryValidation uses the existing allowed native-candidate bundleID, with independent validation URL/Info marker，PENDINGCREW_DELIVERY_VALIDATION条件、默认不签、无Team/profile/entitlements、不读个人Local配置。正式Debug/Release与NativeCandidate的全部既有配置对象保持不变。工程只新增CrewdDeliveryValidation.swift这个实际source-phase文件，原source全部保留；第二次xcodegen无漂移。
 
 stamp在签名前要求PENDINGCREW_VALIDATION_SOURCE_REF为40个lowerhex，与产品Info的sourceRef/validation marker绑定。缺坏值失败且原Info不变。运行时入口在所有旧MCP/daemon/helper与GUI分支前核实际bundle marker/ref和私有manifest，validation只允许无附加argv的原GUI入口；坏资格直接诊断退出，Core/legacy/Keychain不启动。SourceRef是来源关联，不是用户/服务器身份授权。
 
@@ -14,7 +14,7 @@ stamp在签名前要求PENDINGCREW_VALIDATION_SOURCE_REF为40个lowerhex，与�
 
 共同清单是closed字段、format1、固定fake-only验证域、完整源码ref、scope UUID、唯一service=com.pendingname.pendingcrew.delivery-validation.<scopeUUID>、唯一account及逐操作records/read/save/remove许可。所有查询只这个service/account，不使用共享组、不枚举未列记录。records逐个精确account查询，不调用service-wide枚举；原普通store方法不变。返回store固定最初manifest SHA和root/service/account，后续每个动作重新资格核对，修改/切换清单会在SecItem前拒绝。
 
-Mac只接受/private/tmp/pcw-delivery-validation.<UUID>/scope.json，现存owned0700、文件0600、canonical且无alias；data/work/bin必须同root下owned0700。data env严格相符；fakeCodex只能该bin/fake-codex、owned0700 regular且匹配清单hash，Claude只能明确/usr/bin/false及其hash。读取scope用O_RDONLY|NOFOLLOW|CLOEXEC并复核descriptor type/UID/mode/size/mtime。所有资格检查不创建、chmod或采纳不可信目录。
+Mac只接受/private/tmp/pcw-delivery-validation.<UUID>/scope.json，现存owned0700、文件0600、canonical且无alias；data/work/bin必须同root下owned0700。data env must match; every PENDINGCREW_CREWD_PROGRAM override is refused; fakeCodex只能该bin/fake-codex、owned0700 regular且匹配清单hash，Claude只能明确/usr/bin/false及其hash。读取scope用O_RDONLY|NOFOLLOW|CLOEXEC并复核descriptor type/UID/mode/size/mtime。所有资格检查不创建、chmod或采纳不可信目录。
 
 移动是remote-only：实际container由NSHomeDirectory提供，不从env替换；scope只允许其Library/Application Support/PendingCrewDeliveryValidation/<UUID>私有节点，presentation同scope下owned0700。Mac provider/data env全部拒绝，没有local Core或服务器路径猜测。当前控制中mobile container是明确的private modeled container，不是真机OS容器运行证明。
 
@@ -40,3 +40,15 @@ Pairing先完成既有正式签名邀请/certificate/SPKI/有效期验证，再�
 - 83847默认sandbox完整Mac类型检查的首个错误是SwiftUI宏服务malformed response，后续State不可变诊断是级联；原日志保留，不先认产品ABI。最终77431在明确CLI编译授权上下文沿原warm缓存完整三平台370个源、正确SDK/arm64 target/validation宏且无DEBUG/candidate均exit0。它不是全link、签包或设备运行。
 
 下一整合由根把此单元与后端accepted恢复cut按完整字节组合，生成唯一准确normal与完整包；不拿13重标新源、不打各小项中间包。实际Keychain、publisher、新签候选/真机、安装/日常数据与发布分别准备准确action manifest再核授权。旧installed0.1.43严格签名失败与目前设备不可用事实原样保留。
+
+## Whole review closure and actual execution dependencies
+
+The original source-review cut 9bf68cad and its 370-source checks retain their actual input identities and rejection report. The same-unit closure fixes the saved/query lowercase account versus uppercase returned-attribute comparison through one production canonicalAccount helper used by both query and boundedRecords. Controlled API attributes test the actual production matcher without SecItem; it does not expand enumeration. The manifest now rejects fractional/boolean format types, rather than trusting NSNumber.intValue truncation.
+
+DeliveryValidation now uses the existing allowed native-candidate identifier. Its independent Release-type compile channel, validation marker, private fake service and scope remain; ordinary and original NativeCandidate config values remain unchanged. It does not expand the backend code allowlist or qualify as publisher. Mac and mobile scopes reject every PENDINGCREW_CREWD_PROGRAM override, including empty strings. A later launch manifest must bind the accurately sealed embedded normal helper/source/hash; the scope itself cannot authorize a process.
+
+The separate ordinary prodID publisher test uses the existing explicit PENDINGCREW_ISOLATED_CREDENTIALS=memory application() path, which returns the isolated singleton before constructing the personal production Keychain. The future private launch action must declare this exact value. This demonstrates OS publisher/newPID permissions, never persistent recovery. Actual fake-persistent validation is through the native-candidate validation App processes and formal pairing/TLS, not a prod-service access or fabricated identity.
+
+The signing tool now evaluates a real OS test requirement: anchor apple generic, production identifier, approved leaf OU Team, DeveloperID intermediate OID1.2.840.113635.100.6.2.6 and leafOID1.2.840.113635.100.6.1.13. This is separate from strict deep code sealing and hardened/no-debug checks. Authority names alone do not prove an Apple chain. The requirement log enters static product proof; actual new-PID dynamic SecCode admission remains a later gate. Source expression controls prove the tool sends the hard requirement, not actual certificate/OS positivity.
+
+Closure evidence is under closure-controls, closure-settings, closure-typechecks and the accurate new-ref sign-only plan controls. The prior full 370 App checks remain 9bf evidence; the bounded three-SDK closure checks include the changed production sources and explicit type-only Pairing bridge, not a new full App link. None of this invokes Keychain, signs, installs, runs an App/daemon/provider or connects to an endpoint. The final combined package still needs all accurate inputs/config/source and actual runtime scopes.

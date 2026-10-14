@@ -71,9 +71,14 @@ final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
             #endif
         }
     }
+    static func canonicalAccount(_ id: UUID) -> String { id.uuidString.lowercased() }
+    static func matchesReturnedAccount(_ result: Any?, id: UUID) -> Bool {
+        guard let attributes = result as? [String: Any] else { return false }
+        return attributes[kSecAttrAccount as String] as? String == canonicalAccount(id)
+    }
     private func query(_ id: UUID? = nil) -> [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrSynchronizable as String: false]
-        if let id { query[kSecAttrAccount as String] = id.uuidString.lowercased() }
+        if let id { query[kSecAttrAccount as String] = Self.canonicalAccount(id) }
         return query
     }
     /// Exact approved accounts only; never a service-wide credential enumeration.
@@ -84,8 +89,7 @@ final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
             var result: CFTypeRef?
             let status = SecItemCopyMatching(request as CFDictionary, &result)
             if status == errSecItemNotFound { continue }
-            guard status == errSecSuccess, let attributes = result as? [String: Any],
-                  attributes[kSecAttrAccount as String] as? String == id.uuidString else { throw CrewdRemoteError.unavailableCredential }
+            guard status == errSecSuccess, Self.matchesReturnedAccount(result, id: id) else { throw CrewdRemoteError.unavailableCredential }
             present.append(id)
         }
         return present

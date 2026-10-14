@@ -3758,7 +3758,7 @@
 					"@executable_path/Frameworks",
 				);
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "$(inherited) @executable_path/../Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.pendingname.pendingcrew.delivery-validation";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.pendingname.pendingcrew.native-candidate";
 				PRODUCT_NAME = PendingCrew;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
