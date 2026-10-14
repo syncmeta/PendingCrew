@@ -19,6 +19,7 @@ pub mod testing;
 pub mod todos;
 pub mod view_folders;
 pub mod work_events;
+pub mod work_followups;
 pub mod work_organization;
 pub mod work_stop_checks;
 

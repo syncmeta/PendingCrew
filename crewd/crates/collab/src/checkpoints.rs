@@ -51,7 +51,13 @@ struct Resolved {
     crew: String,
     local: WorkId,
 }
-fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Result<Vec<Resolved>> {
+fn current(
+    conn: &Connection,
+    row: &wakes::WakeRow,
+    n: &Note,
+    now: i64,
+    acknowledged: bool,
+) -> Result<Vec<Resolved>> {
     if wakes::automatic_work_paused(conn, &row.session)? {
         return Ok(Vec::new());
     }
@@ -62,6 +68,12 @@ fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Resul
         .filter(|d| d.owner.as_str() == row.session)
         .flat_map(|d| d.items)
         .collect();
+    // Only a never-dispatched durable fact can refresh its nonsemantic revision.
+    // Acknowledgement uses the revision captured in the claim transaction.
+    let refreshable = !acknowledged
+        && row.state == wakes::WakeState::Pending
+        && row.attempts == 0
+        && crewd_store::work_followups::available(conn)?;
     let mut out = Vec::new();
     for t in &n.checkpoint_targets {
         let Some(r) = object_refs::get(conn, ObjectKind::Plan, work::number(&t.id)?)? else {
@@ -74,8 +86,16 @@ fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Resul
             .ok_or_else(|| invalid("checkpoint target has no authoritative item"))?;
         if !frozen
             && due.contains(&local)
-            && i.revision.to_string() == t.revision
+            && (refreshable || i.revision.to_string() == t.revision)
             && i.next_check_at == Some(Ts(t.next_check_at))
+            && crate::work_followups::checkpoint_subject_admitted(
+                conn,
+                row,
+                &t.id,
+                t.next_check_at,
+                now,
+                acknowledged,
+            )?
         {
             out.push(Resolved {
                 id: t.id.clone(),
@@ -86,6 +106,40 @@ fn current(conn: &Connection, row: &wakes::WakeRow, n: &Note, now: i64) -> Resul
     }
     Ok(out)
 }
+/// Capture metadata for the same semantic fact and wake before its first claim.
+/// No new input is created, and the rendered reminder body remains unchanged.
+pub(crate) fn capture_for_claim(tx: &mut Tx<'_>, row: &wakes::WakeRow) -> Result<()> {
+    if row.state != wakes::WakeState::Pending
+        || row.attempts != 0
+        || !crewd_store::work_followups::available(tx.conn())?
+    {
+        return Ok(());
+    }
+    let Some(mut note) = saved(row)? else {
+        return Ok(());
+    };
+    let valid = current(tx.conn(), row, &note, tx.now_ms(), false)?;
+    let book = asks::load_org(tx.conn())?;
+    for target in &mut note.checkpoint_targets {
+        if let Some(resolved) = valid.iter().find(|r| r.id == target.id) {
+            target.revision = book
+                .item(resolved.local)
+                .ok_or_else(|| invalid("claim checkpoint item missing"))?
+                .revision
+                .to_string();
+        }
+    }
+    let encoded =
+        serde_json::to_string(&note).map_err(|_| invalid("claim checkpoint serialization"))?;
+    let changed = tx.conn().execute(
+        "UPDATE wakes SET note=?2 WHERE id=?1 AND state='pending' AND attempts=0 AND note=?3",
+        params![row.id, encoded, row.note],
+    )?;
+    if changed != 1 {
+        return Err(invalid("checkpoint changed during claim"));
+    }
+    Ok(())
+}
 pub(crate) fn render_note(
     conn: &Connection,
     row: &wakes::WakeRow,
@@ -94,7 +148,10 @@ pub(crate) fn render_note(
     let Some(n) = saved(row)? else {
         return Ok(work::FollowupNote::Ordinary);
     };
-    let targets = current(conn, row, &n, now)?;
+    if !crate::work_followups::checkpoint_admitted(conn, row, now)? {
+        return Ok(work::FollowupNote::Stale);
+    }
+    let targets = current(conn, row, &n, now, false)?;
     if targets.is_empty() {
         return Ok(work::FollowupNote::Stale);
     }
@@ -122,6 +179,7 @@ fn candidate_crews(conn: &Connection, now: i64) -> Result<Vec<String>> {
 /// One merged due reminder per owner across crews. Existing queued work never
 /// advances missedChecks; duplicate settled manifests do not restart fail loops.
 pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
+    crate::work_followups::baseline(tx)?;
     let book = asks::load_org(tx.conn())?;
     let mut owners: BTreeMap<String, Vec<Target>> = BTreeMap::new();
     for due in book.due_checkpoints(Ts(tx.now_ms())) {
@@ -156,6 +214,29 @@ pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
             continue;
         }
         targets.sort_by(|a, b| a.id.cmp(&b.id));
+        if crewd_store::work_followups::available(tx.conn())? {
+            let mut fresh = Vec::new();
+            for target in targets {
+                if fresh.len() < 50
+                    && crate::work_followups::checkpoint_new(
+                        tx,
+                        &target.id,
+                        &owner,
+                        target.next_check_at,
+                    )?
+                {
+                    fresh.push(target);
+                }
+            }
+            targets = fresh;
+        }
+        if targets.is_empty() {
+            continue;
+        }
+        let attributed: Vec<(String, i64)> = targets
+            .iter()
+            .map(|t| (t.id.clone(), t.next_check_at))
+            .collect();
         let note = serde_json::to_string(&Note {
             due_work: targets.iter().take(50).map(|t| t.id.clone()).collect(),
             total: targets.len(),
@@ -167,21 +248,24 @@ pub fn enqueue_due(tx: &mut Tx<'_>) -> Result<usize> {
         if existing.is_some() {
             continue;
         }
-        if matches!(
-            wakes::enqueue(
-                tx,
-                wakes::WakeRequest {
-                    session: owner,
-                    kind: wakes::WakeKind::Checkpoint,
-                    source: format!("work-check:{}", uuid::Uuid::new_v4()),
-                    priority: wakes::WakePriority::System,
-                    not_before_ms: None,
-                    note: Some(note),
-                    origin: None
-                }
-            )?,
-            wakes::Enqueued::New(_)
-        ) {
+        let source = if crewd_store::work_followups::available(tx.conn())? {
+            crate::work_followups::checkpoint_source(&attributed, &owner)
+        } else {
+            format!("work-check:{}", uuid::Uuid::new_v4())
+        };
+        if let wakes::Enqueued::New(id) = wakes::enqueue(
+            tx,
+            wakes::WakeRequest {
+                session: owner.clone(),
+                kind: wakes::WakeKind::Checkpoint,
+                source,
+                priority: wakes::WakePriority::System,
+                not_before_ms: None,
+                note: Some(note),
+                origin: None,
+            },
+        )? {
+            crate::work_followups::checkpoint_link(tx, &attributed, &owner, id)?;
             count += 1;
         }
     }
@@ -203,7 +287,7 @@ pub(crate) fn delivered(tx: &mut Tx<'_>, before: &[wakes::WakeRow]) -> Result<()
         if !delivered {
             continue;
         }
-        let targets = current(tx.conn(), row, &n, tx.now_ms())?;
+        let targets = current(tx.conn(), row, &n, tx.now_ms(), true)?;
         if let Some(first) = targets.first() {
             let ids: Vec<_> = targets.iter().map(|t| t.local).collect();
             asks::with_book(tx, &first.crew, |b, now| {
@@ -349,6 +433,161 @@ mod tests {
         });
         assert_eq!(ok_at(&mut s, NOW + 3 * MIN, enqueue_due).0, 0);
         assert_eq!(rows(&s).len(), 1);
+    }
+    fn note_only(s: &mut crewd_store::Store, id: &str, at: i64) {
+        let p = work::get(s.conn(), id).unwrap();
+        ok_at(s, at, |tx| {
+            work::update(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkUpdateParams {
+                    id: p.id,
+                    expected_revision: p.revision,
+                    note: Some("new progress without changing the checkpoint".into()),
+                    ..Default::default()
+                },
+            )
+        });
+    }
+    #[test]
+    fn undispatched_rider_refund_preserves_fact_for_its_only_actual_input() {
+        let mut s = store();
+        active(&mut s, "crew-a");
+        ok_at(&mut s, NOW + MIN, enqueue_due);
+        let original = rows(&s)[0].clone();
+        ok_at(&mut s, NOW + MIN, |tx| wakes::claim(tx, &[original.id]));
+        ok_at(&mut s, NOW + MIN, |tx| {
+            wakes::ack_delivered(tx, "w-a1", &[], wakes::Riders::Release, &[original.id], &[])
+        });
+        let refunded = rows(&s)[0].clone();
+        assert_eq!(refunded.state, wakes::WakeState::Pending);
+        assert_eq!(refunded.attempts, 0);
+        assert!(matches!(
+            render_note(s.conn(), &refunded, NOW + MIN).unwrap(),
+            work::FollowupNote::Current(_)
+        ));
+        assert_eq!(ok_at(&mut s, NOW + MIN, enqueue_due).0, 0);
+        let l = lease(&mut s, &refunded, NOW + MIN);
+        ok_at(&mut s, NOW + MIN, |tx| {
+            cr::ack_reserved_delivered(tx, &l, wakes::Riders::Release)
+        });
+        assert_eq!(missed(&s, "crew-a"), 1);
+        assert_eq!(rows(&s).len(), 1);
+    }
+    #[test]
+    fn semantic_deadline_stop_and_archive_never_refresh_old_fact() {
+        for mode in ["deadline", "stop", "archive"] {
+            let mut s = store();
+            active(&mut s, "crew-a");
+            ok_at(&mut s, NOW + MIN, enqueue_due);
+            let original = rows(&s)[0].clone();
+            let id = saved(&original).unwrap().unwrap().checkpoint_targets[0]
+                .id
+                .clone();
+            match mode {
+                "deadline" => {
+                    let p = work::get(s.conn(), &id).unwrap();
+                    ok_at(&mut s, NOW + MIN, |tx| {
+                        work::update(
+                            tx,
+                            &Sender::Session("w-a1".into()),
+                            WorkUpdateParams {
+                                id: p.id,
+                                expected_revision: p.revision,
+                                next_check_at: Some(crewd_store::ts_from_ms(NOW + 5 * MIN)),
+                                note: Some("explicit future checkpoint report".into()),
+                                ..Default::default()
+                            },
+                        )
+                    });
+                }
+                "stop" => {
+                    ok_at(&mut s, NOW + MIN, |tx| wakes::human_stop(tx, "w-a1"));
+                }
+                "archive" => {
+                    ok_at(&mut s, NOW + MIN, |tx| crate::crews::archive(tx, "crew-b"));
+                    ok_at(&mut s, NOW + MIN, |tx| crate::crews::archive(tx, "crew-a"));
+                }
+                _ => unreachable!(),
+            }
+            let actual = rows(&s)[0].clone();
+            assert!(
+                matches!(
+                    render_note(s.conn(), &actual, NOW + MIN).unwrap(),
+                    work::FollowupNote::Stale
+                ),
+                "{mode}"
+            );
+            ok_at(&mut s, NOW + MIN, |tx| capture_for_claim(tx, &actual));
+            assert_eq!(rows(&s)[0].note, original.note, "{mode}");
+            assert_eq!(missed(&s, "crew-a"), 0);
+        }
+    }
+    #[test]
+    fn queued_note_change_keeps_same_fact_and_captures_revision_once() {
+        let mut s = store();
+        active(&mut s, "crew-a");
+        assert_eq!(ok_at(&mut s, NOW + MIN, enqueue_due).0, 1);
+        let before = rows(&s)[0].clone();
+        let id = saved(&before).unwrap().unwrap().checkpoint_targets[0]
+            .id
+            .clone();
+        note_only(&mut s, &id, NOW + MIN);
+        assert_eq!(ok_at(&mut s, NOW + MIN, enqueue_due).0, 0);
+        assert!(matches!(
+            render_note(s.conn(), &before, NOW + MIN).unwrap(),
+            work::FollowupNote::Current(_)
+        ));
+        let l = lease(&mut s, &before, NOW + MIN);
+        let claimed = rows(&s)[0].clone();
+        assert_eq!(claimed.id, before.id);
+        assert_eq!(claimed.source, before.source);
+        assert_ne!(claimed.note, before.note);
+        assert_eq!(
+            saved(&claimed).unwrap().unwrap().checkpoint_targets[0].revision,
+            work::get(s.conn(), &id).unwrap().revision
+        );
+        ok_at(&mut s, NOW + MIN, |tx| {
+            cr::ack_reserved_delivered(tx, &l, wakes::Riders::Release)
+        });
+        assert_eq!(missed(&s, "crew-a"), 1);
+        assert_eq!(rows(&s).len(), 1);
+    }
+    #[test]
+    fn postclaim_note_change_delivers_without_old_miss_and_unknown_cannot_refresh() {
+        for unknown in [false, true] {
+            let mut s = store();
+            active(&mut s, "crew-a");
+            ok_at(&mut s, NOW + MIN, enqueue_due);
+            let row = rows(&s)[0].clone();
+            let id = saved(&row).unwrap().unwrap().checkpoint_targets[0]
+                .id
+                .clone();
+            let l = lease(&mut s, &row, NOW + MIN);
+            let claimed = rows(&s)[0].clone();
+            note_only(&mut s, &id, NOW + MIN);
+            if unknown {
+                ok_at(&mut s, NOW + MIN, |tx| {
+                    cr::ack_reserved_failed(tx, &l, "unknown physical outcome", |_| {
+                        Some(NOW + 2 * MIN)
+                    })
+                });
+                let pending = rows(&s)[0].clone();
+                assert!(matches!(
+                    render_note(s.conn(), &pending, NOW + 2 * MIN).unwrap(),
+                    work::FollowupNote::Stale
+                ));
+                ok_at(&mut s, NOW + 2 * MIN, |tx| capture_for_claim(tx, &pending));
+                assert_eq!(rows(&s)[0].note, claimed.note);
+                assert_eq!(ok_at(&mut s, NOW + 2 * MIN, enqueue_due).0, 0);
+            } else {
+                ok_at(&mut s, NOW + MIN, |tx| {
+                    cr::ack_reserved_delivered(tx, &l, wakes::Riders::Release)
+                });
+                assert_eq!(rows(&s)[0].state, wakes::WakeState::Delivered);
+            }
+            assert_eq!(missed(&s, "crew-a"), 0);
+        }
     }
     #[test]
     fn new_report_before_ack_supersedes_checkpoint_accounting() {

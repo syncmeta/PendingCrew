@@ -35,6 +35,7 @@ pub mod view_folders;
 pub mod wakes;
 pub mod work;
 pub mod work_block;
+pub mod work_followups;
 pub mod work_lost;
 pub mod work_patrol;
 pub mod work_transfer;

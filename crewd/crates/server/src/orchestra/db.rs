@@ -900,8 +900,12 @@ impl Port for DbPort {
     }
 
     async fn enqueue_work_checkpoints(&self) -> Result<()> {
-        self.write(|tx| collab::checkpoints::enqueue_due(tx).map(|_| ()))
-            .await
+        self.write(|tx| {
+            collab::checkpoints::enqueue_due(tx)?;
+            collab::work_followups::enqueue(tx)?;
+            Ok(())
+        })
+        .await
     }
 
     async fn apply_due_defaults(&self) -> Result<()> {

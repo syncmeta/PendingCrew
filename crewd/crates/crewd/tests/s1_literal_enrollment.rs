@@ -425,3 +425,220 @@ fn s1_literal_rpc_sibling_waits_real_driver_enrollment_and_pending_managed_peer_
         }
     }
 }
+
+/// The daemon is an independently frozen default-feature normal binary. Only
+/// fake_claude is synthetic; its actual stdin log and real registry births are
+/// checked alongside durable fact/wake acknowledgement. This is not ACP SDK proof.
+#[test]
+#[ignore = "explicit immutable normal13 binary and retained synthetic evidence required"]
+fn m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact() {
+    use crewd_collab::{Sender, crews, sessions, work};
+    let normal = PathBuf::from(
+        std::env::var_os("PCW_M5_NORMAL_CREWD").expect("explicit verified normal13 executable"),
+    );
+    assert!(normal.is_absolute() && normal.is_file());
+    let mut f = Fixture::new();
+    f.root.disable_cleanup(true);
+    eprintln!(
+        "M5 retained physical normal fixture {} binary {}",
+        f.root.path().display(),
+        normal.display()
+    );
+    let (captain, owner, plan) = {
+        let mut store = crewd_store::Store::open_data_dir(&f.data).unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            let c = crews::create(
+                tx,
+                crews::NewCrew {
+                    title: "M5 synthetic physical".into(),
+                    working_directory: f.work.display().to_string(),
+                    ..Default::default()
+                },
+            )?;
+            let cap = sessions::register(
+                tx,
+                sessions::NewSession {
+                    crew_id: c.id.clone(),
+                    role: crewd_proto::Role::Captain,
+                    executor: "claude".into(),
+                    title: Some("M5 physical captain".into()),
+                    brief: Some("M5 synthetic initial context".into()),
+                    ..Default::default()
+                },
+            )?;
+            let owner = sessions::register(
+                tx,
+                sessions::NewSession {
+                    crew_id: c.id.clone(),
+                    role: crewd_proto::Role::Worker,
+                    executor: "claude".into(),
+                    title: Some("M5 failed member".into()),
+                    brief: Some("M5 synthetic inactive member".into()),
+                    ..Default::default()
+                },
+            )?;
+            let p = work::create(
+                tx,
+                &Sender::Human,
+                crewd_proto::WorkCreateParams {
+                    crew_id: c.id,
+                    title: "PRIVATE_M5_BODY_MUST_NOT_ENTER_REMINDER_a612".into(),
+                    owner: Some(owner.id.clone()),
+                    ..Default::default()
+                },
+            )?;
+            sessions::set_resume_failed(tx, &owner.id, true)?;
+            Ok((cap.id, owner.id, p.id))
+        })
+        .unwrap()
+        .0
+    };
+    let local_command = || {
+        let mut c = Command::new(&normal);
+        c.env_clear()
+            .env("PATH", CHILD_PATH)
+            .env("HOME", &f.home)
+            .env("XDG_CACHE_HOME", &f.cache)
+            .env("CLAUDE_CONFIG_DIR", &f.config)
+            .env("TMPDIR", f.root.path())
+            .env("SHELL", "/usr/bin/false")
+            .env("CREWD_CLAUDE", artifact("fake_claude"))
+            .env("CREWD_DATA_DIR", &f.data)
+            .env("LANG", "C.UTF-8")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        c
+    };
+    let start_daemon = |tag: &str| {
+        let mut c = local_command();
+        c.args([
+            "serve",
+            "--claude-env",
+            "FAKE_CLAUDE_MODE=ready",
+            "--claude-env",
+        ])
+        .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()))
+        .arg("--claude-env")
+        .arg("FAKE_CLAUDE_FULL_INPUT=1");
+        spawn(c, &f, tag).unwrap()
+    };
+    let public_rpc = |tag: &str, method: &str, params: Value| {
+        let mut c = local_command();
+        c.args(["rpc", method, &params.to_string()]);
+        let mut child = spawn(c, &f, tag).unwrap();
+        let status = child.wait().unwrap();
+        assert!(
+            status.success(),
+            "normal publicRPC {method}: {}",
+            std::fs::read_to_string(&child.stderr).unwrap()
+        );
+        child.json().unwrap()
+    };
+    let observe = || {
+        let c = rusqlite::Connection::open_with_flags(
+            f.data.join(crewd_store::DB_FILE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut q=c.prepare("SELECT f.effect,f.original_wake_id,w.state,w.attempts FROM work_followup_facts f LEFT JOIN wakes w ON w.id=f.original_wake_id WHERE f.category='owner_lost' AND f.recipient_snapshot=?1 ORDER BY f.id").unwrap();
+        q.query_map([&captain], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<u32>>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+    };
+    let mut daemon = start_daemon("m5-normal-daemon");
+    let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_file(&f.data.join("crewd.sock")).unwrap();
+        let until = Instant::now() + Duration::from_secs(60);
+        let acknowledged = loop {
+            let rows = observe();
+            if rows.len() == 1
+                && rows[0].0 == "delivered"
+                && rows[0].2.as_deref() == Some("delivered")
+            {
+                break rows;
+            }
+            assert!(
+                Instant::now() < until,
+                "actual normal delivery not acknowledged: {rows:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let input = std::fs::read_to_string(&f.log).unwrap();
+        assert_eq!(
+            input
+                .lines()
+                .filter(|s| s.contains("deterministicFollowup") && s.contains(&plan))
+                .count(),
+            1
+        );
+        assert!(!input.contains("PRIVATE_M5_BODY_MUST_NOT_ENTER_REMINDER_a612"));
+        let entries =
+            crewd_exec::registry::ProcessRegistry::load(&f.data.join("exec-registry.json"))
+                .unwrap()
+                .entries();
+        assert!(entries.iter().any(|(id, _)| id == &captain));
+        assert!(
+            !entries.iter().any(|(id, _)| id == &owner),
+            "a loss notification must not start/reassign the failed owner"
+        );
+        let born = entries
+            .into_iter()
+            .filter(|(id, _)| id == &captain)
+            .map(|(_, b)| b)
+            .collect::<Vec<_>>();
+        assert!(!born.is_empty());
+        public_rpc(
+            "m5-public-stop",
+            "session.stop",
+            json!({"sessionId":captain,"reason":"M5 controlled physical stop"}),
+        );
+        let until = Instant::now() + CAP;
+        while !born.iter().all(birth_gone) {
+            assert!(
+                Instant::now() < until,
+                "actual fake provider birth not reaped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            crewd_exec::registry::ProcessRegistry::load(&f.data.join("exec-registry.json"))
+                .unwrap()
+                .entries()
+                .is_empty()
+        );
+        (acknowledged, input, born)
+    }));
+    let _ = unsafe { libc::kill(daemon.child.id() as i32, libc::SIGTERM) };
+    let closed = daemon.wait().unwrap();
+    assert!(closed.success());
+    assert!(!f.data.join("crewd.sock").exists());
+    let (acknowledged, input, born) = observed.unwrap();
+    let mut daemon = start_daemon("m5-normal-restart");
+    let reopened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_file(&f.data.join("crewd.sock")).unwrap();
+        let readback = public_rpc("m5-normal-readback", "work.get", json!({"id":plan}));
+        assert_eq!(readback["owner"], owner);
+        assert_eq!(observe(), acknowledged);
+        assert_eq!(std::fs::read_to_string(&f.log).unwrap(), input);
+        assert!(
+            crewd_exec::registry::ProcessRegistry::load(&f.data.join("exec-registry.json"))
+                .unwrap()
+                .entries()
+                .is_empty()
+        );
+        assert!(born.iter().all(birth_gone));
+    }));
+    let _ = unsafe { libc::kill(daemon.child.id() as i32, libc::SIGTERM) };
+    assert!(daemon.wait().unwrap().success());
+    assert!(!f.data.join("crewd.sock").exists());
+    reopened.unwrap();
+    std::fs::write(f.root.path().join("m5-physical-result.json"),serde_json::to_vec_pretty(&json!({"normalBinary":normal,"plan":plan,"captain":captain,"owner":owner,"factReceipt":acknowledged,"physicalBirths":born,"actualSubmissions":1,"oldFactAfterRestart":false,"sourceSeed":"synthetic official collab transaction before normaldaemon (not a real provider failure)","realModel":false,"nativeSDKCompatibility":false})).unwrap()).unwrap();
+}
