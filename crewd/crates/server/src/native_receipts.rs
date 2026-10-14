@@ -1195,13 +1195,17 @@ os.close(master)
     #[tokio::test]
     async fn actual_enrolled_pty_proxy_core_fifo_exact_content_cancel_late_start_raw_and_disconnect()
      {
-        actual_flow(false).await;
+        actual_flow(false, false).await;
     }
     #[tokio::test]
     async fn actual_enrolled_proxy_cancelled_fifo_waiter_is_unknown_and_cannot_reemit() {
-        actual_flow(true).await;
+        actual_flow(true, false).await;
     }
-    async fn actual_flow(cancel_waiter: bool) {
+    #[tokio::test]
+    async fn actual_enrolled_proxy_full_body_chunks_commit_only_after_complete_authenticated_cut() {
+        actual_flow(false, true).await;
+    }
+    async fn actual_flow(cancel_waiter: bool, chunked: bool) {
         let dir = tempfile::tempdir().unwrap();
         let registry = Arc::new(ProcessRegistry::load(&dir.path().join("processes.json")).unwrap());
         let listener = UnixListener::bind(dir.path().join("proxy.sock")).unwrap();
@@ -1264,7 +1268,13 @@ os.close(master)
         );
         let request = uuid::Uuid::new_v4().to_string();
         let prompt = uuid::Uuid::new_v4().to_string();
-        let body = b" exact body\n".to_vec();
+        let body = if chunked {
+            // JSON byte arrays would exceed the control frame bound for this
+            // legal body. Chunk framing must retain every control byte losslessly.
+            vec![b'\r'; 1_048_576]
+        } else {
+            b" exact body\n".to_vec()
+        };
         if cancel_waiter {
             let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
             let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -1341,18 +1351,76 @@ os.close(master)
         let (same, retry) = route.prepare(request.clone(), body.clone()).await.unwrap();
         assert!(retry);
         assert_eq!(same, prepared);
-        let accepted = observed(
-            &mut route,
-            &generation.to_string(),
-            1,
-            NativeEvent::Content {
-                request: request.clone(),
-                revision: prepared.revision,
-                prompt: prompt.clone(),
-                effective: body.clone(),
-            },
-        )
-        .await;
+        let mut next_sequence = 1;
+        let accepted = if chunked {
+            let chunks = crewd_exec::acp::content_chunks::encode(
+                &request,
+                prepared.revision,
+                &prompt,
+                std::str::from_utf8(&body).unwrap(),
+            )
+            .unwrap();
+            let count = chunks.len();
+            let mut final_receipt = None;
+            for (index, chunk) in chunks.into_iter().enumerate() {
+                let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":next_sequence,"chunk":chunk});
+                let encoded = serde_json::to_vec(&frame).unwrap();
+                assert!(encoded.len() <= crewd_exec::acp::wire::MAX_CONTROL);
+                let mut wire = route.socket.try_clone().unwrap();
+                wire.write_all(&encoded).unwrap();
+                wire.write_all(b"\n").unwrap();
+                let mut echoed = Vec::new();
+                BufReader::new(wire).read_until(b'\n', &mut echoed).unwrap();
+                let receipt = route.content_chunk_frame(&echoed).await.unwrap();
+                next_sequence += 1;
+                if index + 1 < count {
+                    assert!(
+                        receipt.is_none(),
+                        "partial content must not return a durable ACK"
+                    );
+                    let request = request.clone();
+                    let durable = db
+                        .call_result(move |store| n::get(store.conn(), &request))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(durable.phase, n::Phase::Prepared);
+                    assert_eq!(durable.revision, prepared.revision);
+                } else {
+                    final_receipt = receipt;
+                }
+            }
+            let receipt = final_receipt.expect("only complete content has durable ACK");
+            let request = request.clone();
+            let expected = body.clone();
+            let runtime = route.runtime_id().to_owned();
+            let effective = db
+                .call_result(move |store| {
+                    n::original_input(store.conn(), &runtime, &request)
+                        .map(|row| row.map(|v| v.bytes().to_vec()))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(effective, Some(expected));
+            receipt
+        } else {
+            let receipt = observed(
+                &mut route,
+                &generation.to_string(),
+                1,
+                NativeEvent::Content {
+                    request: request.clone(),
+                    revision: prepared.revision,
+                    prompt: prompt.clone(),
+                    effective: body.clone(),
+                },
+            )
+            .await;
+            next_sequence += 1;
+            receipt
+        };
         assert_eq!(accepted.phase, n::Phase::ContentAccepted);
         let canceled = route
             .cancel(request.clone(), accepted.revision)
@@ -1362,7 +1430,7 @@ os.close(master)
         let started = observed(
             &mut route,
             &generation.to_string(),
-            2,
+            next_sequence,
             NativeEvent::Started {
                 request: request.clone(),
                 revision: canceled.revision,
@@ -1384,7 +1452,7 @@ os.close(master)
         let completed = observed(
             &mut route,
             &generation.to_string(),
-            3,
+            next_sequence + 1,
             NativeEvent::Completed {
                 request: request.clone(),
                 revision: revoked.revision,
