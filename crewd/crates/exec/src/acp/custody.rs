@@ -16,6 +16,29 @@ pub struct SettledNative {
     pub(crate) identity: ProcessIdentity,
 }
 
+/// Actual stdio proxy, enrolled only under the exact native process and group.
+/// The Core keeps cleanup responsibility even if final admission fails.
+#[derive(Debug)]
+pub struct BridgeEnrollment {
+    pub(crate) binding: super::ownership::NativeBinding,
+    pub(crate) identity: ProcessIdentity,
+    pub(crate) registry_key: String,
+    slot: u64,
+}
+impl BridgeEnrollment {
+    pub fn binding(&self) -> &super::ownership::NativeBinding {
+        &self.binding
+    }
+    pub fn identity(&self) -> &ProcessIdentity {
+        &self.identity
+    }
+    pub fn registry_key(&self) -> &str {
+        &self.registry_key
+    }
+    pub fn slot(&self) -> u64 {
+        self.slot
+    }
+}
 pub struct NativeEnrollment {
     pub epoch: u64,
     pub identity: ProcessIdentity,
@@ -49,6 +72,8 @@ pub struct Custody {
     last_epoch: u64,
     natives: BTreeMap<u64, ProcessIdentity>,
     closed: bool,
+    bridges: BTreeMap<(u64, u64), ProcessIdentity>,
+    last_bridge: u64,
 }
 fn same_birth(a: &ProcessIdentity, b: &ProcessIdentity) -> bool {
     a.pid == b.pid && a.pgid == b.pgid && a.start_time == b.start_time && a.boot_id == b.boot_id
@@ -94,6 +119,8 @@ impl Custody {
             last_epoch: 0,
             natives: BTreeMap::new(),
             closed: false,
+            bridges: BTreeMap::new(),
+            last_bridge: 0,
         };
         custody.check_helper()?;
         Ok(custody)
@@ -172,6 +199,140 @@ impl Custody {
             acknowledgement: report.acknowledge(),
         })
     }
+    fn actual_bridge(&self, epoch: u64, pid: i32) -> io::Result<ProcessIdentity> {
+        self.check_helper()?;
+        let native = self
+            .natives
+            .get(&epoch)
+            .ok_or_else(|| denied("bridge native epoch unavailable"))?;
+        match registry::parent(native.pid) {
+            ParentProbe::Found { identity, parent }
+                if same_birth(native, &identity) && parent == self.helper.pid => {}
+            _ => return Err(denied("bridge native birth or parent changed")),
+        }
+        match registry::parent(pid) {
+            ParentProbe::Found { identity, parent }
+                if parent == native.pid && identity.pid > 1 && identity.pgid == native.pgid =>
+            {
+                Ok(identity)
+            }
+            _ => Err(denied(
+                "bridge is not a direct native child in its owned group",
+            )),
+        }
+    }
+    /// The private transport separately checks the socket PID/nonce. Calling
+    /// code must supply that actual kernel PID, never a reported PID from JSON.
+    pub fn enroll_bridge(&mut self, epoch: u64, pid: i32) -> io::Result<BridgeEnrollment> {
+        if self.closed || epoch != self.last_epoch {
+            return Err(denied("bridge admission closed or stale"));
+        }
+        let identity = self.actual_bridge(epoch, pid)?;
+        if self.bridges.values().any(|old| same_birth(old, &identity)) {
+            return Err(denied("bridge birth already enrolled"));
+        }
+        let slot = self
+            .last_bridge
+            .checked_add(1)
+            .ok_or_else(|| denied("bridge slot exhausted"))?;
+        self.last_bridge = slot;
+        self.bridges.insert((epoch, slot), identity.clone());
+        let registry_key = match self.registry.record_participant(
+            &self.session,
+            ProcessParticipant::AcpBridge {
+                generation: self.generation,
+                epoch,
+                slot,
+            },
+            identity.clone(),
+        ) {
+            Ok(key) => key,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
+        let current = match self.actual_bridge(epoch, pid) {
+            Ok(current) => current,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
+        if !same_birth(&current, &identity) {
+            self.closed = true;
+            return Err(denied("bridge birth changed before ACK"));
+        }
+        Ok(BridgeEnrollment {
+            binding: self.native_binding(epoch)?,
+            identity,
+            registry_key,
+            slot,
+        })
+    }
+    pub(crate) fn check_bridge_nonce(&self, received: &[u8; 16]) -> io::Result<()> {
+        let difference = self
+            .nonce
+            .iter()
+            .zip(received)
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        if self.closed || difference != 0 {
+            return Err(denied("bridge admission closed or nonce mismatch"));
+        }
+        Ok(())
+    }
+    /// Recheck the durable enrollment and every immediate parent. A proxy
+    /// cannot retain permission after its native/helper birth changes.
+    pub(crate) fn check_bridge(&self, enrollment: &BridgeEnrollment) -> io::Result<()> {
+        if self.closed
+            || enrollment.binding.session != self.session
+            || enrollment.binding.generation != self.generation.to_string()
+            || enrollment.binding.epoch != self.last_epoch
+        {
+            return Err(denied("bridge custody is closed or stale"));
+        }
+        let saved = self
+            .bridges
+            .get(&(enrollment.binding.epoch, enrollment.slot))
+            .ok_or_else(|| denied("bridge enrollment is no longer held"))?;
+        if !same_birth(saved, &enrollment.identity)
+            || !self
+                .natives
+                .get(&enrollment.binding.epoch)
+                .is_some_and(|native| same_birth(native, &enrollment.binding.native))
+        {
+            return Err(denied("bridge enrollment binding changed"));
+        }
+        let current = self.actual_bridge(enrollment.binding.epoch, enrollment.identity.pid)?;
+        if !same_birth(&current, &enrollment.identity) {
+            return Err(denied("bridge birth changed"));
+        }
+        Ok(())
+    }
+    pub fn bridge_identities(&self) -> impl Iterator<Item = (&(u64, u64), &ProcessIdentity)> {
+        self.bridges.iter()
+    }
+    pub fn forget_reaped_bridge(&mut self, epoch: u64, slot: u64) -> io::Result<()> {
+        let identity = self
+            .bridges
+            .get(&(epoch, slot))
+            .ok_or_else(|| denied("unknown bridge incarnation"))?;
+        match registry::probe(identity.pid) {
+            ProbeResult::Missing => {}
+            ProbeResult::Found(actual) if !same_birth(identity, &actual) => {}
+            _ => return Err(denied("bridge has not been verified reaped")),
+        }
+        self.registry.forget(
+            &ProcessParticipant::AcpBridge {
+                generation: self.generation,
+                epoch,
+                slot,
+            }
+            .key()?,
+        )?;
+        self.bridges.remove(&(epoch, slot));
+        Ok(())
+    }
     /// Reject further births immediately; actual stopping/reaping is performed
     /// by the core owner using these recorded identities and its normal guards.
     pub fn close_admission(&mut self) {
@@ -198,6 +359,13 @@ impl Custody {
         self.natives.iter()
     }
     pub fn forget_reaped_native(&mut self, epoch: u64) -> io::Result<SettledNative> {
+        if self
+            .bridges
+            .keys()
+            .any(|(native_epoch, _)| *native_epoch == epoch)
+        {
+            return Err(denied("native bridge custody is not settled"));
+        }
         let identity = self
             .natives
             .get(&epoch)
@@ -225,7 +393,7 @@ impl Custody {
         })
     }
     pub fn forget_reaped_helper(&mut self) -> io::Result<()> {
-        if !self.closed || !self.natives.is_empty() {
+        if !self.closed || !self.natives.is_empty() || !self.bridges.is_empty() {
             return Err(denied("native custody is not settled"));
         }
         match registry::probe(self.helper.pid) {
@@ -297,8 +465,18 @@ if pid == 0:
     if ack != report + b'\x01': os._exit(3)
     with open(os.environ['EXEC_MARKER'], 'w') as f:
         f.write('tty' if all(os.isatty(fd) for fd in (0,1,2)) else 'not-tty')
+    proxy_pid = None
+    if os.environ.get('PROXY_SOCKET'):
+        proxy_pid = os.fork()
+        if proxy_pid == 0:
+            control.close()
+            proxy = socket.socket(socket.AF_UNIX)
+            proxy.connect(os.environ['PROXY_SOCKET'])
+            proxy.recv(1)
+            os._exit(0)
     control.sendall(b'R')
     control.recv(1)
+    if proxy_pid is not None: os.waitpid(proxy_pid, 0)
     os._exit(0)
 os.close(slave)
 control.close()
@@ -321,6 +499,10 @@ os.close(master)
                 nonce.iter().map(|b| format!("{b:02x}")).collect::<String>(),
             )
             .env("EXEC_MARKER", dir.join("actual-native-exec"));
+        let proxy_socket = dir.join("proxy.sock");
+        if proxy_socket.exists() {
+            command.env("PROXY_SOCKET", proxy_socket);
+        }
         // SAFETY: only async-signal-safe setsid/fcntl on an owned descriptor.
         unsafe {
             command.pre_exec(move || {
@@ -439,6 +621,101 @@ os.close(master)
             2,
             "retirement cannot elevate managed descendants"
         );
+    }
+    #[test]
+    fn actual_process_api_proxy_requires_durable_direct_native_custody_and_fresh_events() {
+        use super::super::bridge::NativeProxyPeer;
+        use std::os::unix::net::UnixListener;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("processes.json");
+        let registry = Arc::new(ProcessRegistry::load(&path).unwrap());
+        let listener = UnixListener::bind(dir.path().join("proxy.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let nonce = *uuid::Uuid::new_v4().as_bytes();
+        let mut physical = peer(dir.path(), nonce);
+        let report = receive(&mut physical);
+        let mut custody = Custody::enroll_helper(
+            registry.clone(),
+            "worker-owned".into(),
+            uuid::Uuid::new_v4(),
+            nonce,
+            physical.child.id() as i32,
+        )
+        .unwrap();
+        let native = custody.enroll_native(&report).unwrap();
+        physical
+            .channel
+            .write_all(native.acknowledgement())
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(value) => break value,
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                Err(error) => panic!("proxy connection absent: {error}"),
+            }
+        };
+        let mut ready = [0];
+        physical.channel.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [b'R']);
+        let before = registry.entries();
+        assert!(NativeProxyPeer::authenticate(&stream, &mut custody, 1, &[0; 16]).is_err());
+        assert_eq!(
+            registry.entries(),
+            before,
+            "foreign nonce cannot register a proxy"
+        );
+        let mut proxy = NativeProxyPeer::authenticate(&stream, &mut custody, 1, &nonce).unwrap();
+        assert_eq!(ProcessRegistry::load(&path).unwrap().entries().len(), 3);
+        assert_eq!(proxy.enrollment().identity().pgid, native.identity.pgid);
+        assert_ne!(proxy.enrollment().identity().pid, native.identity.pid);
+        assert!(NativeProxyPeer::authenticate(&stream, &mut custody, 1, &nonce).is_err());
+        assert!(
+            proxy
+                .admit(&stream, &custody, &custody.generation.to_string(), 2, 1)
+                .is_err()
+        );
+        assert!(
+            proxy
+                .admit(&stream, &custody, &custody.generation.to_string(), 1, 2)
+                .is_err()
+        );
+        proxy
+            .admit(&stream, &custody, &custody.generation.to_string(), 1, 1)
+            .unwrap();
+        assert!(
+            proxy
+                .admit(&stream, &custody, &custody.generation.to_string(), 1, 1)
+                .is_err()
+        );
+        assert!(
+            custody
+                .forget_reaped_bridge(1, proxy.enrollment().slot())
+                .is_err()
+        );
+        assert!(custody.forget_reaped_native(1).is_err());
+        custody.close_admission();
+        assert!(
+            proxy
+                .admit(&stream, &custody, &custody.generation.to_string(), 1, 2)
+                .is_err()
+        );
+        stream.write_all(b"Q").unwrap();
+        physical.channel.write_all(b"Q").unwrap();
+        assert!(physical.child.wait().unwrap().success());
+        // The native/helper waitpid receipts have reaped both actual descendants.
+        custody
+            .forget_reaped_bridge(1, proxy.enrollment().slot())
+            .unwrap();
+        custody.forget_reaped_native(1).unwrap();
+        custody.forget_reaped_helper().unwrap();
+        assert!(registry.entries().is_empty());
+        assert_eq!(registry.authority_snapshot().unwrap().spawned.len(), 3);
     }
     #[test]
     fn real_persistence_failure_returns_no_ack_and_retains_stop_obligation() {

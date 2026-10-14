@@ -259,8 +259,18 @@ pub fn apply_with(
 /// Slots are core-generated, never a provider-supplied file path or team identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessParticipant {
-    AcpHelper { generation: uuid::Uuid },
-    AcpNative { generation: uuid::Uuid, epoch: u64 },
+    AcpHelper {
+        generation: uuid::Uuid,
+    },
+    AcpNative {
+        generation: uuid::Uuid,
+        epoch: u64,
+    },
+    AcpBridge {
+        generation: uuid::Uuid,
+        epoch: u64,
+        slot: u64,
+    },
 }
 impl ProcessParticipant {
     pub(crate) fn key(self) -> io::Result<String> {
@@ -270,6 +280,13 @@ impl ProcessParticipant {
             }
             Self::AcpNative { generation, epoch } if !generation.is_nil() && epoch != 0 => {
                 Ok(format!("@acp/{generation}/native/{epoch}"))
+            }
+            Self::AcpBridge {
+                generation,
+                epoch,
+                slot,
+            } if !generation.is_nil() && epoch != 0 && slot != 0 => {
+                Ok(format!("@acp/{generation}/bridge/{epoch}/{slot}"))
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

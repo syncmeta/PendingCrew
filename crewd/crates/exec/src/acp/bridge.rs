@@ -141,6 +141,69 @@ impl NativePeer {
     }
 }
 
+/// A process-API stdio proxy has a distinct kernel peer. It is admitted only
+/// after Core persists its direct-native-child enrollment. No JSON PID,
+/// generic ancestor, or same-UID fallback is accepted here.
+pub struct NativeProxyPeer {
+    enrollment: super::custody::BridgeEnrollment,
+    next_sequence: u64,
+}
+impl std::fmt::Debug for NativeProxyPeer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeProxyPeer")
+            .field("enrollment", &self.enrollment)
+            .field("next_sequence", &self.next_sequence)
+            .finish()
+    }
+}
+impl NativeProxyPeer {
+    pub fn authenticate(
+        stream: &UnixStream,
+        custody: &mut super::custody::Custody,
+        epoch: u64,
+        received_nonce: &[u8; 16],
+    ) -> io::Result<Self> {
+        custody.check_bridge_nonce(received_nonce)?;
+        let enrollment = custody.enroll_bridge(epoch, peer_pid(stream)?)?;
+        custody.check_bridge(&enrollment)?;
+        Ok(Self {
+            enrollment,
+            next_sequence: 1,
+        })
+    }
+    pub fn binding(&self) -> &NativeBinding {
+        self.enrollment.binding()
+    }
+    pub fn enrollment(&self) -> &super::custody::BridgeEnrollment {
+        &self.enrollment
+    }
+    pub fn admit(
+        &mut self,
+        stream: &UnixStream,
+        custody: &super::custody::Custody,
+        generation: &str,
+        epoch: u64,
+        sequence: u64,
+    ) -> io::Result<()> {
+        if generation != self.enrollment.binding().generation
+            || epoch != self.enrollment.binding().epoch
+            || sequence != self.next_sequence
+        {
+            return Err(denied("stale or out-of-order native proxy event"));
+        }
+        let next = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or_else(|| denied("native proxy sequence exhausted"))?;
+        if peer_pid(stream)? != self.enrollment.identity().pid {
+            return Err(denied("foreign native proxy socket peer"));
+        }
+        custody.check_bridge(&self.enrollment)?;
+        self.next_sequence = next;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -299,11 +299,17 @@ impl Ownership {
             if request.phase == Phase::Running && request.turn_id.as_deref() == Some(turn_id) {
                 return Ok(Applied::Duplicate);
             }
-            if request.phase != Phase::ContentAccepted {
-                return Err(denied("unaccepted or revoked turn"));
+            if request.turn_id.is_some() {
+                return Err(denied("native turn witness already bound"));
             }
+            match request.phase {
+                Phase::ContentAccepted => request.phase = Phase::Running,
+                Phase::CancelRequested | Phase::RawRevoked | Phase::Unknown => {}
+                _ => return Err(denied("unaccepted or settled turn")),
+            }
+            // A late authenticated fact may make cancellation settleable, but
+            // cannot change its phase or release manual-input ownership.
             request.turn_id = Some(turn_id.to_owned());
-            request.phase = Phase::Running;
             Ok(Applied::Changed)
         })
     }
@@ -472,6 +478,43 @@ mod tests {
     }
     fn save(_: &Checkpoint) -> io::Result<()> {
         Ok(())
+    }
+    #[test]
+    fn late_authenticated_start_keeps_cancel_and_manual_ownership_until_matching_complete() {
+        for raw in [false, true] {
+            let mut o = Ownership::default();
+            let b = binding();
+            let r = id();
+            let p = id();
+            o.prepare(&r, b.clone(), "body".into(), save).unwrap();
+            o.accept_content(&r, &b, &p, "body", save).unwrap();
+            if raw {
+                o.revoke_before_raw(&b, save).unwrap();
+            } else {
+                o.request_cancel(&r, &b, save).unwrap();
+            }
+            let phase = o.phase(&r);
+            let before = o.checkpoint().clone();
+            assert!(o.turn_started(&r, &b, &id(), "foreign-turn", save).is_err());
+            assert_eq!(o.checkpoint(), &before);
+            assert!(
+                o.turn_started(&r, &b, &p, "actual-turn", |_| Err(io::Error::other(
+                    "real commit denied"
+                )))
+                .is_err()
+            );
+            assert_eq!(o.checkpoint(), &before);
+            o.turn_started(&r, &b, &p, "actual-turn", save).unwrap();
+            assert_eq!(o.phase(&r), phase);
+            assert!(o.prepare(&id(), b.clone(), "next".into(), save).is_err());
+            o.turn_completed(&r, &b, &p, "actual-turn", TurnOutcome::Aborted, save)
+                .unwrap();
+            if raw {
+                assert!(o.prepare(&id(), b.clone(), "next".into(), save).is_err());
+            } else {
+                o.prepare(&id(), b.clone(), "next".into(), save).unwrap();
+            }
+        }
     }
     #[test]
     fn exact_content_is_bound_before_turn_and_duplicate_cannot_reexecute() {

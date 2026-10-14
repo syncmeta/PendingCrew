@@ -9,6 +9,7 @@ pub mod db_health;
 pub mod documents;
 pub mod fsutil;
 pub mod messages;
+pub mod native_execution;
 pub mod object_refs;
 pub mod runner_usage;
 pub mod schema;

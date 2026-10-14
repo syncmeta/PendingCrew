@@ -455,12 +455,14 @@ dependencies = [
  "crewd-proto",
  "crewd-work",
  "libc",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
