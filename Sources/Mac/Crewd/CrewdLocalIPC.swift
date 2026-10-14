@@ -71,6 +71,8 @@ final class CrewdLocalIPC {
     private let queue = DispatchQueue(label: "pendingcrew.crewd.local-ipc")
     private var closed = false
     private var queuedBytes = 0
+    private var readInProgress = false
+    private var currentReadBytes = 0
     static let maximumQueuedBytes = 64 * 1024 * 1024
 
     private init(descriptor: Int32, peer: CrewdKernelProcessIdentity) {
@@ -173,15 +175,28 @@ final class CrewdLocalIPC {
     }
 
     func startReading() {
-        io.read(offset: 0, length: Int.max, queue: queue) { [weak self] done, bytes, error in
+        guard !closed, !readInProgress else { return }
+        readInProgress = true; currentReadBytes = 0
+        // At most this operation's 64 KiB can await the main decoder. Re-arm
+        // only after its FIFO callbacks have been processed, like NW receive.
+        let limit = 64 * 1024
+        io.read(offset: 0, length: limit, queue: queue) { [weak self] done, bytes, error in
             let data = bytes.map { Data($0) }
-            let ended = error != 0 || (done && (bytes?.isEmpty ?? true))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, !self.closed else { return }
                     // Preserve FIFO: final received bytes precede disconnect.
-                    if let data, !data.isEmpty { self.onData?(data) }
-                    if ended { self.end(error == 0 ? "本机后台连接已结束。" : "本机后台连接中断。") }
+                    if let data, !data.isEmpty {
+                        self.currentReadBytes += data.count
+                        self.onData?(data)
+                    }
+                    guard !self.closed else { return }
+                    if error != 0 { self.end("本机后台连接中断。") }
+                    else if done {
+                        self.readInProgress = false
+                        if self.currentReadBytes < limit { self.end("本机后台连接已结束。") }
+                        else { self.startReading() }
+                    }
                 }
             }
         }
