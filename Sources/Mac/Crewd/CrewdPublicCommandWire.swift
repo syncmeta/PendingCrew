@@ -108,7 +108,7 @@ struct CrewdTerminalOutput {
         closed = try CrewdPublicWire.boolean(event["closed"])
     }
 }
-private enum CrewdPublicWire {
+enum CrewdPublicWire {
     static func invalid() -> CrewdClientError { .init(message: "公开命令或终端响应契约不完整；保留原提交并核对后台状态。") }
     static func token(_ value: CrewdValue) throws -> String {
         guard let text = value.string, !text.isEmpty, text.utf8.count <= 4096 else { throw invalid() }
