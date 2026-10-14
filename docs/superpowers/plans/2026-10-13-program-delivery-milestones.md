@@ -1,5 +1,19 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 公共执行实证与最终组合依赖
+
+精确06清单117终态自有objects经QA/root裁定实际回收，errornull/80原actualbin SHA均同，statvfs实际增加240386048B。首容量REFUSED_BEFORE_COMPILE保留且阈值不降；准确ed1f5ad14e32ebe8a339569b953ef9f1b56e189c新defaultDebug强normal37.796s终态0，采样最低1265115136B，390完整输入/raw12ownfreshfalse/3sidecars独核接受。binaryf2b2f05f882764060738e83c3da28aec2e0734984cf597cc52590be52385309e，digestb5c3126e61ec3c0d9aecf7810664bc8f90cad9f1190282cfcbe46da258dca4d5；/private/tmp/pcw-M14-normaled-independent-provenance-03.json。删除回执80保护比较在此新normal重编之前，不比较随后已更新target缓存。
+
+准确20d4正常structured Codex整链actualPASS；ed actualpartial10/expiry完整PASS且独核：64KiB真实kernelprefix1022/unknown、同UUID不续剩余、真实31s到期拒写且missingcount不冒0、原birth Stop/daemon0。原manual07产品RED保留。QA ready03准确ed TLSquiet撤销完整PASS：真实reader25B baseline后撤权、旧cert/写/远程Quit与bootstrap拒、consumer bytes/hash不增与raw无拒token、worker存活至本机Stop/daemon0。仅consumer/raw，不从unknown推kernel零字节；capture两RED及旧stdout normal20模板保留，以actual完整program/source proof为准。
+
+新publicwatch方法actual27349/ed终态PASS，/private/tmp/pcw-m14-watch.aw55vczm/result.json：512KiB真实PTY replay/fast连续opaque cursor、slow有限关闭、旧cursor typed拒与freshinspect、快owner不阻、关viewer不停止session至正式Stop/daemon0。author11实际14→14 receipt/pin备份恢复整块PASS交QA独核，不重复13迁移。live07动态SecCode机制仅existingPID exactpin，不冒新App连接/publisher正例。
+
+全14仍未冻结：新连接丢old lease不能显式reclaim的真实恢复缺口在修。必须失效lease物理fence ACK后合法Human显式claim最新same-generation target；有效lease仍prevID handoff、manualfloor不回auto、不猜ID/自动重连。需新准确normal及expired/disconnect/reclaim/旧write拒/Stop全链，不以partial10拒旧write冒reclaim已验。Native ACP producer/审批/history完整M4继续下一模块，schema15/新wire先root裁决，未激活或缩成手工PTY。
+
+原App整块14源码6715e3c47516ddee1803f86e23b095b8cba04419及recipe1d2e19e14e2f583d23f17c92e36cfb0f44785e52已普通推client，Swift/project仍逐字6715。16typed receipt/atomic首发/原Mac-iPhone-iPad terminal及审批恢复/explicit trust/ordinary默认Core稳定namespace整块源审在途；Foundation/parse/注册/reader只对应层，不冒新链接或包。3d2a69c0仅具体生产配置、fake-service持久vault/publisher/newPID及设备安装日常切换授权动作表准备，未执行。根只读preflight完整59file crewd patch无冲突，未应用产品源。
+
+Apple一次完整三平台新包估算启动前至少2.5GiB实际余量，当前约1.25GiB；已向人类请求释放至少2GiB非工程空间，实际容量仍需复核。保旧候选/源码/SDK/SPM/DB/log/proof，只阻真实build依赖；源审、具体交付准备与后端门禁继续。新App PID/publisher/ownedQuit/窗口设备、最终Mac/Linux必要门禁、产品main、安装日常切换/公开发布/真实模型仍未交付；all-features历史ENOSPC仍未验，不由标准CI冒称。
+
 ## 2026-10-14 正式14迁移与耐久单元独立接受
 
 独立质量完成准确normal86的完整13→14备份障碍保护/第二DDL原子回滚/保失败并在独立副本retry/请求及文档文件夹见证重开，真实已ACK工作→SIGKILL非空WAL→同版恢复及future15/badWAL原main/id/WAL/SHM物理保护。历史裸13在future14带空WAL/SHM仍会删旁文件的RED保留；实际已批准3ac managed入口在同data EXlease下pre-exec拒future14且全部物理不变，再由新入口Core正式restore本target pre13快照并旧版重开原需求/wait0，完整尾段接受。QA activation选择不冒第二次Linux安装ledger/CAS，旧Linux全链证据复用。详见 independent-resumed-delivery-acceptance 最新完整单元和 /private/tmp/pcw-m14-migration.arjvzka7 报告。
