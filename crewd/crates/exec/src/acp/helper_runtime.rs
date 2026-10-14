@@ -206,16 +206,14 @@ pub async fn run(
             false
         })
         .await;
-        if !matches!(reaped, Ok(true)) {
-            if let Some(birth) = birth {
-                if matches!(crate::registry::probe(birth.pid),ProbeResult::Found(ref current) if current.pid==birth.pid && current.pgid==birth.pgid && current.start_time==birth.start_time && current.boot_id==birth.boot_id)
-                {
-                    crate::registry::apply(
-                        &crate::registry::decide(&birth, &crate::registry::probe(birth.pid)),
-                        &birth,
-                    );
-                }
-            }
+        if !matches!(reaped, Ok(true))
+            && let Some(birth) = birth
+            && matches!(crate::registry::probe(birth.pid),ProbeResult::Found(ref current) if current.pid==birth.pid && current.pgid==birth.pgid && current.start_time==birth.start_time && current.boot_id==birth.boot_id)
+        {
+            crate::registry::apply(
+                &crate::registry::decide(&birth, &crate::registry::probe(birth.pid)),
+                &birth,
+            );
         }
     }
     outcome

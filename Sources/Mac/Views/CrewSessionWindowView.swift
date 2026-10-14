@@ -81,11 +81,13 @@ struct CrewSessionWindowView: View {
         .task {
             // Read-only detection. The explicit notice owns both confirmation
             // clicks; merely opening this pane must never install a CLI.
+            guard !appModel.usesCrewdAuthority || appModel.crewdBackend?.workspace.dataDirectory != nil else { return }
             if cliVersions.codexProvisioningState == nil {
                 await cliVersions.refresh(.codex)
             }
         }
         .task {
+            guard !appModel.usesCrewdAuthority else { return }
             while !Task.isCancelled {
                 let dir = LocalWhiteboardStore.defaultDirectory
                 let table = await Task.detached(priority: .utility) {
@@ -98,6 +100,10 @@ struct CrewSessionWindowView: View {
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
         .onChange(of: sessionRunner.selectedRunId) { _, newId in
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
+                if appModel.usesCrewdAuthority {
+                    appModel.crewdBackend?.workspace.selectSession(run.sessionId)
+                    appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return
+                }
                 SessionUnreadStore.shared.markViewed(run.sessionId)
             }
         }
@@ -329,8 +335,14 @@ struct CrewSessionWindowView: View {
             if let crewId = crewStore.selectedDetail?.crew.id {
                 VSplitView {
                     ScrollView {
-                        CrewTodoPanel(crewId: crewId, runner: sessionRunner,
-                                      crewName: crewStore.selectedDetail?.crew.title)
+                        if appModel.usesCrewdAuthority {
+                            if let workspace = crewStore.crewdWorkspace {
+                                CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)
+                            } else { Text("当前后台未连接，Todo 尚未确认。") }
+                        } else {
+                            CrewTodoPanel(crewId: crewId, runner: sessionRunner,
+                                          crewName: crewStore.selectedDetail?.crew.title)
+                        }
                     }
                     .background(CrewTodoPagePalette.background)
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
@@ -407,7 +419,7 @@ struct CrewSessionWindowView: View {
         let runSessionIds = Set(memberSessionRuns.map { $0.sessionId })
         let crewId = crewStore.selectedDetail?.crew.id ?? ""
         let persistedBySessionId = Dictionary(
-            uniqueKeysWithValues: LocalCrewStore.shared.sessionMembers(crewId: crewId)
+            uniqueKeysWithValues: (appModel.usesCrewdAuthority ? [] : LocalCrewStore.shared.sessionMembers(crewId: crewId))
                 .map { ($0.sessionId, $0) })
         // 有在跑的 captain run 时，server 的 captain 成员收敛成那条可点的 run 行 ——
         // 否则会重复出现「机长」(不可点) + 「Captain」(可点) 两条（用户要"点头像进
@@ -759,6 +771,7 @@ struct CrewSessionWindowView: View {
     private func badgeCount(for run: CrewSessionRun) -> Int {
         _ = badgeTick // 依赖 tick，白板变更事件到来时让 SwiftUI 重算
         if run.runID == sessionRunner.selectedRunId { return 0 }
+        if appModel.usesCrewdAuthority { return appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] ?? 0 }
         return SessionUnreadStore.shared.unreadCount(
             crewId: run.crewId, sessionId: run.sessionId,
             whiteboard: .shared)
@@ -818,7 +831,9 @@ struct CrewSessionWindowView: View {
 
     @ViewBuilder
     private var admissionRecoveryMenu: some View {
-        if let detail = crewStore.selectedDetail {
+        if appModel.usesCrewdAuthority {
+            Text("自动跟进由当前后台维护").font(.caption).foregroundStyle(.secondary)
+        } else if let detail = crewStore.selectedDetail {
             Menu {
                 if let run = sessionRunner.runs.first(where: {
                     $0.runID == sessionRunner.selectedRunId
@@ -833,7 +848,7 @@ struct CrewSessionWindowView: View {
                                           crewId: detail.crew.id)
                 }
                 Menu("恢复缺席成员的自动唤醒") {
-                    ForEach(LocalCrewStore.shared.sessionMembers(crewId: detail.crew.id)
+                    ForEach((appModel.usesCrewdAuthority ? [] : LocalCrewStore.shared.sessionMembers(crewId: detail.crew.id))
                         .filter { member in
                             !sessionRunner.runs.contains { $0.sessionId == member.sessionId }
                         }, id: \.sessionId) { member in
@@ -860,6 +875,7 @@ struct CrewSessionWindowView: View {
 
     private func recoverAutomaticWakes(_ scope: AutomaticWakeAdmission.RecoveryScope,
                                        crewId: String) {
+        if appModel.usesCrewdAuthority { sessionRunner.lastStartError = "自动调度恢复由当前后台负责；不能恢复旧本机唤醒账。"; return }
         switch sessionRunner.requestAdmissionRecovery(scope: scope, crewId: crewId) {
         case .failed:
             sessionRunner.lastStartError = "自动唤醒恢复失败：该范围未熔断、滑窗尚未冷却，或账本不可读写；请检查告警和本机数据目录。"
@@ -1026,6 +1042,9 @@ struct CrewSessionWindowView: View {
     // MARK: - actions
 
     private func send() async {
+        if appModel.usesCrewdAuthority {
+            await sendCrewdInput(); return
+        }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if isContinuing, let run = sessionRunner.current {
@@ -1046,6 +1065,43 @@ struct CrewSessionWindowView: View {
             // 无 run / 已退出 / 新建态 → 开一个新 session。
             await startSession(firstPrompt: text)
         }
+    }
+
+    private func sendCrewdInput() async {
+        guard let workspace = appModel.crewdBackend?.workspace, let detail = crewStore.selectedDetail else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        starting = true; defer { starting = false }
+        do {
+            if isContinuing, let run = sessionRunner.current {
+                let context = CrewdDrafts.Context.message(crew: detail.crew.id, channel: detail.crew.id + "/lobby", session: run.sessionId)
+                workspace.messageDrafts.set(text, for: context)
+                _ = try await workspace.submitOriginalText(.object([
+                    "channelId": .string(detail.crew.id + "/lobby"), "text": .string(text),
+                    "mentions": .array([.object(["kind": .string("session"), "targetId": .string(run.sessionId)])])]), snapshot: workspace.messageDrafts.snapshot(for: context))
+            } else {
+                guard selectedKind == .codex else { throw CrewdClientError(message: "Claude 的正式 ACP 档案和终端控制协议尚未冻结，当前不能启动。", kind: .notSubmitted) }
+                let context = CrewdDrafts.Context.initialTask(crew: detail.crew.id, session: "original-composer")
+                guard !workspace.hasOriginalUnknown(method: "session.start", crew: detail.crew.id), !workspace.uncertainSessionStarts.contains(where: { $0.context == context }) else {
+                    throw CrewdClientError(message: "原启动结果未确认；请核对同一机组会话，不会再次启动。", kind: .notSubmitted)
+                }
+                workspace.messageDrafts.set(text, for: context)
+                let snapshot = workspace.messageDrafts.snapshot(for: context)
+                let result: CrewdValue
+                do {
+                    result = try await workspace.performValue("session.start", .object([
+                        "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
+                        "executor": .string("codex"), "brief": .string(text), "isolation": .bool(true)]))
+                    workspace.messageDrafts.clearIfUnchanged(snapshot)
+                } catch {
+                    if CrewdClientError.isUncertainSubmission(error) { workspace.uncertainSessionStarts.append(snapshot) }
+                    throw error
+                }
+                guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
+                workspace.selectSession(id)
+            }
+            draft = ""; localError = nil; localErrorAction = nil
+        } catch { localError = error.localizedDescription; localErrorAction = nil }
     }
 
     /// Zero-config start: crew default dir + runner kind + permission mode, with
@@ -1364,6 +1420,10 @@ private struct SessionRunContentView: View {
                 header
             }
             Divider()
+            if let backend = run.backend as? CrewdOriginalSessionBackend {
+                CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
+                if let control = backend.publicTerminal { CrewdTerminalControlBar(control: control) }
+            }
             if let terminalView = run.terminalView {
                 // 左右留白：终端网格自绘不透明底,贴边显得挤。padding 区用
                 // Theme.canvas 补色 —— AgentTerminalView.applyTheme 的底色就是
@@ -1382,6 +1442,8 @@ private struct SessionRunContentView: View {
                     }
                     .padding(.horizontal, 12)
                     .background(Theme.Palette.canvas)
+            } else if let crewd = run.backend as? CrewdOriginalSessionBackend, let transcript = crewd.transcript {
+                CodexTranscriptView(transcript: transcript).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let codex = run.backend as? CodexAppServerBackend {
                 CodexTranscriptView(transcript: codex.transcript)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1539,6 +1601,9 @@ private struct SessionRunContentView: View {
         let (text, color): (String, Color) = {
             switch status {
             case .running: return ("running", .blue)
+            case .inactive:
+                if let backend = run.backend as? CrewdOriginalSessionBackend, !backend.hasObservedLive { return ("正在核对后台状态", .secondary) }
+                return ("未运行 · 结束结果未确认", .secondary)
             case .completed:
                 if let code = exitCode {
                     return code == 0 ? ("退出 0", .green) : ("退出 \(code)", .orange)

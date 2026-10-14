@@ -31,10 +31,13 @@ final class CaptainTemplateStore: ObservableObject {
 
     @Published private(set) var templates: [CaptainTemplate] = []
 
-    private let fileURL: URL
+    private let fileURL: URL?
 
     /// 测试时传 tmp 目录,生产传 nil 用默认 Application Support。
-    init(baseDirectory: URL? = nil) {
+    init(baseDirectory: URL? = nil, presentationOnly: Bool = false) {
+        // crewd is the authority. Original template UI remains available as
+        // ephemeral preferences; it cannot initialize a legacy local ledger.
+        if presentationOnly { fileURL = nil; return }
         let base: URL
         if let baseDirectory {
             base = baseDirectory
@@ -91,7 +94,7 @@ final class CaptainTemplateStore: ObservableObject {
     // MARK: - Persistence
 
     private func loadFromDisk() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        guard let fileURL, FileManager.default.fileExists(atPath: fileURL.path) else {
             return
         }
         do {
@@ -109,6 +112,7 @@ final class CaptainTemplateStore: ObservableObject {
     }
 
     private func persistToDisk() {
+        guard let fileURL else { return }
         let payload = CaptainTemplateFile(version: 1, templates: templates)
         do {
             let encoder = JSONEncoder()

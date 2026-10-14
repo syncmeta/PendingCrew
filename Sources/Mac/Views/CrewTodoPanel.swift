@@ -140,14 +140,14 @@ struct CrewTodoPanel: View {
         // `id` 带上 ledger —— 换药丸就换一本账重订（两本各自一个文件、一把锁）。
         // 读全量只在这条 task 里做，**不在 body 求值路径上**（那条红线）。
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
-            guard crewId != LocalCrew.chiefCrewId else { return }
+            guard !appModel.usesCrewdAuthority, crewId != LocalCrew.chiefCrewId else { return }
             let requestedLedger = ledger
             let store = LocalTodoStore.shared(requestedLedger)
             ownRead = store.read(crewId: crewId)
             loadedLedger = requestedLedger
             await refreshExecutionLines()
             for await _ in store.todoChanges(crewId: crewId) {
-                guard !Task.isCancelled, ledger == requestedLedger else { return }
+                guard !Task.isCancelled, !appModel.usesCrewdAuthority, ledger == requestedLedger else { return }
                 ownRead = store.read(crewId: crewId)
                 loadedLedger = requestedLedger
                 await refreshExecutionLines()
@@ -157,20 +157,21 @@ struct CrewTodoPanel: View {
         // 这一屏要当场多出一行。**只在看人类那本时才订**（看 agent 那本时它就是
         // `ownRead` 自己，再订一份是白烧一条目录监听）。
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
-            guard crewId != LocalCrew.chiefCrewId else { return }
+            guard !appModel.usesCrewdAuthority, crewId != LocalCrew.chiefCrewId else { return }
             guard ledger == .human else { waitingOnHuman = []; return }
             let agentStore = LocalTodoStore.shared(.agent)
             waitingOnHuman = agentStore.list(crewId: crewId)
             for await _ in agentStore.todoChanges(crewId: crewId) {
+                guard !Task.isCancelled, !appModel.usesCrewdAuthority, ledger == .human else { return }
                 waitingOnHuman = agentStore.list(crewId: crewId)
             }
         }
         .task(id: TodoFeedKey(crewId: crewId, ledger: ledger, refreshToken: refreshToken)) {
-            guard crewId == LocalCrew.chiefCrewId else { return }
+            guard !appModel.usesCrewdAuthority, crewId == LocalCrew.chiefCrewId else { return }
             let requestedLedger = ledger
             refreshChiefRows(ledger: requestedLedger)
             for await _ in LocalTodoStore.shared(requestedLedger).todoChanges(crewId: crewId) {
-                guard !Task.isCancelled, ledger == requestedLedger else { return }
+                guard !Task.isCancelled, !appModel.usesCrewdAuthority, ledger == requestedLedger else { return }
                 refreshChiefRows(ledger: requestedLedger)
             }
         }
@@ -178,6 +179,7 @@ struct CrewTodoPanel: View {
 
     /// Read execution accounting off the rendering path, alongside the feed.
     private func refreshExecutionLines() async {
+        guard !appModel.usesCrewdAuthority else { return }
         guard ledger == .agent, crewId != LocalCrew.chiefCrewId,
               case .rows(let items) = ownRead else { executionLines = [:]; return }
         let id = crewId
@@ -203,6 +205,7 @@ struct CrewTodoPanel: View {
 
     /// 总机组只读来源账本；不把任何条目复制进总机组自己的 Todo 文件。
     private func refreshChiefRows(ledger: TodoLedger) {
+        guard !appModel.usesCrewdAuthority else { return }
         var incomplete = false
         let sources = LocalCrewStore.shared.allCrewTitles()
             .filter { $0.id != LocalCrew.chiefCrewId }
@@ -234,6 +237,7 @@ struct CrewTodoPanel: View {
     /// 要落在 agent 那本的 #N 上，否则会打开人类那本里号码相同的另一件事。
     private func openDetail(ledger: TodoLedger, focus: Int?,
                             source: (id: String, title: String)? = nil) {
+        guard !appModel.usesCrewdAuthority else { return }
         CrewTodoDetailWindowPresenter.shared.open(
             crewId: source?.id ?? crewId, crewName: source?.title ?? crewName,
             ledger: ledger, focus: focus,

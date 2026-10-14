@@ -19,28 +19,33 @@ struct PendingCrewApp: App {
     #if os(macOS)
     /// 长期职责的唯一所有者（spec §6）。**必须挂在 App 上而不是任何视图上** ——
     /// 挂视图上就会随视图生灭，那正是我们要修的病。
-    @StateObject private var sessionHost = SessionHost()
+    @StateObject private var sessionHost: SessionHost
     /// 菜单栏那个数字（P5b·B）。挂在 App 上而不是任何视图上 —— 它要在主窗口
     /// 关着的时候仍然在数，那正是这个功能存在的理由。
     @StateObject private var menuBarAttention = MenuBarAttentionModel()
     #endif
     /// Captain 模板池(BYOK 模式的"本机 captain 池",spec v2 §5.2)。
     /// 登录态下也注入但 UI 不消费 —— 登录态走真 bot 库(后续 task)。
-    @StateObject private var captainTemplates = CaptainTemplateStore.shared
+    @StateObject private var captainTemplates: CaptainTemplateStore
     /// App-wide appearance override (跟随系统/浅/深)，设置里改。
     /// `.system` → nil → 跟随 OS。对齐 PendingBot #299。
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
     init() {
         let appModel = AppModel()
+        _captainTemplates = StateObject(wrappedValue: appModel.usesCrewdAuthority ? CaptainTemplateStore(presentationOnly: true) : CaptainTemplateStore.shared)
         _model = StateObject(wrappedValue: appModel)
         _crewStore = StateObject(wrappedValue: CrewStore(appModel: appModel))
+        #if os(macOS)
+        _sessionHost = StateObject(wrappedValue: SessionHost(presentationOnly: appModel.usesCrewdAuthority))
+        #endif
         #if os(macOS)
         // 启动即挂 Sparkle 定时检查，不等登录 —— 此前只在 MacRootView.onAppear
         // 才首次触达 AppUpdater.shared，未登录的装机永远不会跑后台检查
         // （PendingCrew 未登录也是常态：本地为家）。未配置更新源时自动 no-op。
         // 对齐 PendingBotApp.swift 的同款 init 接线。
         MainActor.assumeIsolated {
+            guard !appModel.usesCrewdAuthority else { return }
             _ = AppUpdater.shared
             AppUpdater.shared.onWillInstallUpdate = {
                 AppQuitLifecycle.shared.sparkleInstalling = true
@@ -73,13 +78,14 @@ struct PendingCrewApp: App {
         // 这样在设置窗口改外观时它本身也即时重绘。对齐 PendingBot #299。
         Settings {
             CrewSettingsView()
+                .environmentObject(model)
                 // 「后端」页的重启入口要走 SessionHost（换代公告 / 停旧 / 问接回同一套）。
                 // **不注入就是一读就崩**，接线测试钉着。
                 .environmentObject(sessionHost)
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         }
         .commands {
-            PendingCrewUpdateCommands()
+            if !model.usesCrewdAuthority { PendingCrewUpdateCommands() }
             CommandGroup(replacing: .appTermination) {
                 Button("退出 PendingCrew") {
                     AppQuitLifecycle.shared.userRequestedQuit = true
@@ -144,6 +150,20 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let lifecycle = AppQuitLifecycle.shared
+        if let quit = lifecycle.crewdQuit {
+            if waitingForDaemon { return .terminateLater }
+            waitingForDaemon = true
+            Task { @MainActor [weak self] in
+                do { try await quit(); self?.waitingForDaemon = false; sender.reply(toApplicationShouldTerminate: true) }
+                catch {
+                    self?.waitingForDaemon = false
+                    let alert = NSAlert(); alert.messageText = "退出尚未确认"; alert.informativeText = error.localizedDescription
+                    alert.addButton(withTitle: "留在 PendingCrew"); alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+            }
+            return .terminateLater
+        }
         if waitingForDaemon { return .terminateLater }
         let reason = AppQuitDaemonPolicy.resolveReason(
             sparkleInstalling: lifecycle.sparkleInstalling,
@@ -219,6 +239,7 @@ final class AppQuitLifecycle {
             NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
         }
     }
+    var crewdQuit: (() async throws -> Void)?
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
     var resumeViewer: (() -> Void)?
@@ -261,10 +282,10 @@ struct RootView: View {
             #endif
         }
         // 进入主界面时确保机器列表已就绪。macOS backend 恒本地（至少一台本机）。
+        #if os(macOS)
         .task {
             await crewStore.refreshMachines()
         }
-        #if os(macOS)
         // 恢复弹窗（人类 2026-09-11 定的规格）：**只有「刚更新过」或「上次意外结束」
         // 才问**，而且必须真有东西可恢复；问了他点头才恢复，**一次都不自动**。
         // 判定全在 `SessionRestoreOffer`（有测试），这里只负责显示。

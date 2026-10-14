@@ -21,20 +21,23 @@ final class SessionHost: ObservableObject {
 
     private var bag = Set<AnyCancellable>()
     private var started = false
+    private let isCrewdPresentation: Bool
 
     /// 两个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
     /// 默认实参在 **nonisolated** 上下文求值，而这两个类型都是 `@MainActor`。
     /// `ownsAppUpdater` = 本进程是不是那个「更新 app」的进程。**daemon 传 false**：
     /// 更新是窗口那一侧的事，而且碰 `AppUpdater.shared` 会把 Sparkle 拉起来 ——
     /// 一个没有 `NSApplication` 的进程里不该有它。
-    init(runner: CrewSessionRunner? = nil,
+    init(presentationOnly: Bool = false, runner: CrewSessionRunner? = nil,
          usage: LocalAgentUsageMonitor? = nil,
          ownsAppUpdater: Bool = true) {
-        self.runner = runner ?? CrewSessionRunner()
+        self.isCrewdPresentation = presentationOnly
+        self.runner = runner ?? CrewSessionRunner(presentationOnly: presentationOnly)
         self.usage = usage ?? LocalAgentUsageMonitor()
         self.ownsAppUpdater = ownsAppUpdater
     }
 
+    private var crewdProjection: CrewdOriginalSessionProjection?
     private let ownsAppUpdater: Bool
 
     /// viewer 模式下那条腿（`PENDINGCREW_BACKEND=daemon`，或 inproc 但锁被一个 daemon
@@ -62,6 +65,14 @@ final class SessionHost: ObservableObject {
     private var orchestrationContext: (model: AppModel, crewStore: CrewStore)?
 
     func begin(model: AppModel, crewStore: CrewStore) {
+        // The original frontend observes crewd; it cannot acquire the legacy
+        // orchestration lock, run mention delivery, or take over a failed helper.
+        if model.usesCrewdAuthority {
+            if let workspace = model.crewdBackend?.workspace {
+                crewdProjection = CrewdOriginalSessionProjection(workspace: workspace, runner: runner)
+            }
+            return
+        }
         orchestrationContext = (model, crewStore)
         AppQuitLifecycle.shared.runningSessionCount = { [weak self] in
             guard let self else { return 0 }
@@ -260,6 +271,7 @@ final class SessionHost: ObservableObject {
     ///   同版重启是人自己按的 → 规格是不问（确认框里已经提前说了）。
     /// - viewer 里不用我们起新的：锁空了 `ViewerSessionClient` 自己会拉。
     func restartLocalBackend() async -> String {
+        guard !isCrewdPresentation else { return "当前后台不使用旧 daemon 重启操作；没有停止或写入其它后台。" }
         let previousDaemonPID = viewer?.connectedDaemonPID
         let appBuild = SessionDaemonHost.currentBuild
         let candidates = Self.restoreCandidates()

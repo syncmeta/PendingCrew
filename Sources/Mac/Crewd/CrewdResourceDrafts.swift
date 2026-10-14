@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// Mutable window input, including immutable uncertain submission snapshots.
@@ -17,6 +16,7 @@ struct CrewdResourceDrafts {
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->[Snapshot] {unknown[key] ?? []}
+    var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields){guard entries[key]?.fields != fields else{return};entries[key]=Snapshot(key:key,fields:fields,request:UUID(),version:UUID())}
     mutating func begin(_ key:Key)->Snapshot? {guard !busy(key),let snapshot=entries[key] else{return nil};pending[key]=snapshot.version;return snapshot}
     mutating func confirm(_ snapshot:Snapshot)->Bool {guard !busy(snapshot.key),uncertain(snapshot.key).contains(snapshot) else{return false};pending[snapshot.key]=snapshot.version;return true}
@@ -27,4 +27,3 @@ struct CrewdResourceDrafts {
         if accepted && entries[snapshot.key] == snapshot {entries[snapshot.key]=nil}
     }
 }
-#endif

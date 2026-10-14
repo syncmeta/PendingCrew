@@ -14,6 +14,7 @@ import UIKit
 ///
 /// 详细 IO（stdout/stderr/工具日志）不在这——那在右栏 session 窗口（§9.3）。
 struct CrewChatView: View {
+    @Environment(\.crewdOriginalChannelID) private var crewdChannelID
     let crewId: String
     let crewTitle: String
     /// macOS:点 session(右侧成员行 / session 气泡)时打开 inspector 并选中。
@@ -134,10 +135,10 @@ struct CrewChatView: View {
     /// composer and carries `reply_to` + an auto-@ on send. nil = not replying.
     @State private var replyTarget: CrewReplyTarget?
 
-    /// Todo 模式（task #487）：composer 的 checklist 钮点亮时，发送 = 创建 Todo
-    /// （LocalTodoStore + 群里「To do +1: #N」提示），发完自动熄灭。仅 macOS
-    /// 启用（todo 数据与机长唤醒都在本机；iOS 侧不传 binding → 按钮不渲染）。
+    /// Checklist preserves the original composer. crewd creates a formal
+    /// channel requirement; the legacy macOS branch keeps its existing route.
     @State private var todoMode = false
+    @State private var requirementReceipt: String?
 
     // MARK: - ComposerView bindings
     /// Forwarded to ComposerView; ChatActionSheet flips this to open
@@ -192,6 +193,7 @@ struct CrewChatView: View {
 
     /// Todo 切换钮只在 macOS 亮出（见 `todoMode`）。
     private var todoModeBinding: Binding<Bool>? {
+        if appModel.usesCrewdAuthority { return $todoMode }
         #if os(macOS)
         return crewId == LocalCrew.chiefCrewId ? nil : $todoMode
         #else
@@ -293,6 +295,7 @@ struct CrewChatView: View {
 
     /// 收下这次拖放。返回 false = 这堆 provider 里没有文件，交还给系统。
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !appModel.usesCrewdAuthority else { loadError = "当前后台尚未支持附件提交；未读取或暂存所拖文件。"; return false }
         let fileProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
         guard !fileProviders.isEmpty else { return false }
         for provider in fileProviders {
@@ -381,6 +384,20 @@ struct CrewChatView: View {
         VStack(spacing: 0) {
             mentionPickerBar
             composerCore
+            if let requirementReceipt { Text(requirementReceipt).font(.caption).foregroundStyle(.secondary).padding(8) }
+            if let workspace = appModel.crewdBackend?.workspace {
+                ForEach(workspace.composerRequirementDrafts.uncertain(crewId, channel: crewdChannelID), id: \.requestID) { snapshot in
+                    VStack(alignment: .leading) {
+                        Text("此前群需求结果待确认；原文及请求编号保留，不会自动重发。").foregroundStyle(.orange)
+                        Text(snapshot.text).lineLimit(3)
+                        Button("确认这份原始群需求请求") {
+                            if workspace.composerRequirementDrafts.confirm(snapshot) {
+                                Task { await submitCrewdRequirement(snapshot, workspace: workspace) }
+                            }
+                        }.disabled(sending || workspace.composerRequirementDrafts.busy(crewId, channel: crewdChannelID))
+                    }.font(.caption).padding(8)
+                }
+            }
         }
     }
 
@@ -425,7 +442,7 @@ struct CrewChatView: View {
                 canSend: canSend,
                 onSend: { Task { await send() } },
                 isStreaming: false,
-                showsAttachments: true,
+                showsAttachments: !appModel.usesCrewdAuthority,
                 placeholder: "发群消息", // 发送态；todoMode 点亮时 ComposerView 自动切「新建 Todo」
                 todoMode: todoModeBinding,
                 onPasteAttachments: pasteAttachmentsHandler // Todo #3：⌘V 粘贴图片/文件
@@ -451,8 +468,18 @@ struct CrewChatView: View {
 
     /// 进屏取回本 crew 记着的草稿。文本 / 已挂上的 @ / 正在回复谁一起取 —— 只取文本的话
     /// 恢复出来的 `@某人` 就成了一串没有目标的字（看着 @ 了，发出去谁也没 @ 到）。
+    private var draftStorageKey: String {
+        if let backend = appModel.crewdBackend { return backend.workspace.presentationNamespace + "/" + crewId + "/" + crewdChannelID }
+        return crewId
+    }
+
     private func restoreDraft() {
-        let saved = CrewComposerDraftStore.shared.draft(for: crewId)
+        var saved = CrewComposerDraftStore.shared.draft(for: draftStorageKey)
+        // Earlier original-front drafts were crew/lobby scoped. Retain them
+        // only for that exact authority/lobby, never another conversation.
+        if saved.isEmpty, crewdChannelID == crewId + "/lobby", let workspace = appModel.crewdBackend?.workspace {
+            saved = CrewComposerDraftStore.shared.draft(for: workspace.presentationNamespace + "/" + crewId)
+        }
         guard !saved.isEmpty else { return }
         draft = saved.text
         replyTarget = saved.replyTarget
@@ -463,9 +490,12 @@ struct CrewChatView: View {
 
     /// 存回去（草稿一动就存；发送成功后由 `send()` 清）。
     private func saveDraft() {
+        if let workspace = appModel.crewdBackend?.workspace {
+            workspace.messageDrafts.set(draft, for: .message(crew: crewId, channel: crewdChannelID, session: ""))
+        }
         CrewComposerDraftStore.shared.save(
             .init(text: draft, stagedMentions: stagedMentions, replyTarget: replyTarget),
-            for: crewId)
+            for: draftStorageKey)
     }
 
     /// The roster member id that represents "me" (skipped from the candidate
@@ -633,6 +663,25 @@ struct CrewChatView: View {
     /// 这一刻的可达性事实。判定本身在纯函数里（`CrewMessageReferencePills`），
     /// 这里只负责从活状态里把事实取出来。
     private func pillContext(for entry: CrewWhiteboardEntry) -> CrewMessageReferencePills.Context {
+        if let workspace = appModel.crewdBackend?.workspace {
+            // Resolve only identities supplied by this authority. Legacy crew
+            // numbers/Todo IDs cannot be looked up in a second local ledger.
+            let sessions = Dictionary(workspace.sessions.compactMap { row -> (String, String)? in
+                guard let id = row["id"].string else { return nil }
+                return (id, row["title"].string ?? row["displayName"].string ?? id)
+            }, uniquingKeysWith: { first, _ in first })
+            var targets: [String: CrewMessageReferencePills.Target] = [:]
+            for reference in entry.references ?? [] where reference.resolvedKind == .crew {
+                guard let row = workspace.crews.first(where: { $0["id"].string == reference.targetId }),
+                      let id = row["id"].string else { continue }
+                targets[reference.targetId] = .init(crewId: id, title: row["title"].string ?? id, sessionId: nil)
+            }
+            return .init(selfMessageId: entry.id, loadedMessageIds: Set(entries.map(\.id)),
+                         openableSessions: sessions, crewTargets: targets, externalTodos: [:])
+        }
+        if appModel.usesCrewdAuthority {
+            return .init(selfMessageId: entry.id, loadedMessageIds: Set(entries.map(\.id)), openableSessions: [:], crewTargets: [:], externalTodos: [:])
+        }
         #if os(macOS)
         // 只认**这个群里在跑的** session：跳右栏靠 run 的 runID，没有 run 就跳不过去。
         let sessions = Dictionary(
@@ -726,6 +775,23 @@ struct CrewChatView: View {
         #if os(macOS)
         let here = CrewChatReturnTrail.Stop(
             crewId: crewId, crewTitle: crewTitle, messageId: entry.id)
+        if let workspace = appModel.crewdBackend?.workspace {
+            // Old reference numbers cannot open a legacy Todo store. Show the
+            // actual authority panel without pretending to resolve an old ID.
+            switch pill.action {
+            case .todo: workspace.originalSection = "Todo"; return
+            case .crossCrewTodo(let source, _, _, _):
+                onJumpToCrew?(source, here); workspace.originalSection = "Todo"; return
+            case .plan: workspace.originalSection = "进展"; return
+            default: break
+            }
+        }
+        if appModel.usesCrewdAuthority {
+            switch pill.action {
+            case .todo, .crossCrewTodo, .plan: return
+            default: break
+            }
+        }
         switch pill.action {
         case .todo(let ledger, let number):
             CrewTodoDetailWindowPresenter.shared.open(
@@ -1558,8 +1624,9 @@ struct CrewChatView: View {
             loadError = "未配置 backend"
             return
         }
+        let changes = backend.whiteboardChanges(crewId: crewId)
         await refresh()
-        for await _ in backend.whiteboardChanges(crewId: crewId) {
+        for await _ in changes {
             if Task.isCancelled { return }
             await refresh()
         }
@@ -1600,6 +1667,7 @@ struct CrewChatView: View {
     }
 
     private func send() async {
+        if appModel.usesCrewdAuthority && todoMode { await sendCrewdRequirement(); return }
         #if os(macOS)
         if todoMode {
             await sendTodo()
@@ -1621,12 +1689,13 @@ struct CrewChatView: View {
             //
             // 落盘规则（搬 vs 写、原名留不留）收口在 `CrewLocalAttachmentPersist`——
             // 群聊、新建 Todo、Todo 追问三条入口共用同一份，图都进同一个目录。
-            do {
-                localAttachments = try CrewLocalAttachmentPersist.persist(
-                    toUpload, crewId: crewId)
-            } catch {
-                loadError = error.localizedDescription
+            if appModel.usesCrewdAuthority && !toUpload.isEmpty {
+                loadError = "当前后台尚未开放附件提交；文件保留在输入中。"
                 return
+            }
+            if !appModel.usesCrewdAuthority {
+                do { localAttachments = try CrewLocalAttachmentPersist.persist(toUpload, crewId: crewId) }
+                catch { loadError = error.localizedDescription; return }
             }
             #else
             // iOS 侧的附件通道是 edge 上传（拿 id 再随消息发），随 #63 第二期一起
@@ -1657,7 +1726,7 @@ struct CrewChatView: View {
             stagedMentions = []
             replyTarget = nil
             activeMentionQuery = nil
-            CrewComposerDraftStore.shared.clear(crewId) // 发出去了就不是草稿了
+            CrewComposerDraftStore.shared.clear(draftStorageKey) // 发出去了就不是草稿了
             await refresh()
         } catch {
             loadError = error.localizedDescription
@@ -1672,6 +1741,7 @@ struct CrewChatView: View {
     /// 上、也挂到群里那条「To do +1」上。@ 不参与（todo 没有收件人）；发完 Todo 模式
     /// 保持 sticky（Todo #6），只有用户手动再点 Todo 钮才熄灭。
     private func sendTodo() async {
+        if appModel.usesCrewdAuthority { await sendCrewdRequirement(); return }
         guard crewId != LocalCrew.chiefCrewId else {
             loadError = ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription
             return
@@ -1701,13 +1771,56 @@ struct CrewChatView: View {
             pendingAttachments = []
             stagedMentions = []
             activeMentionQuery = nil
-            CrewComposerDraftStore.shared.clear(crewId)
+            CrewComposerDraftStore.shared.clear(draftStorageKey)
             await refresh()
         } catch {
             loadError = error.localizedDescription
         }
     }
     #endif
+
+    /// The original checklist creates the authority's requirement directly;
+    /// it never appends a second local Todo or a synthetic chat message.
+    private func sendCrewdRequirement() async {
+        guard let workspace = appModel.crewdBackend?.workspace,
+              workspace.crewID == crewId, workspace.channelID == crewdChannelID,
+              !crewdChannelID.isEmpty, workspace.client.connected, !workspace.isRetired else {
+            loadError = "当前会话身份尚未核实，需求尚未提交。"; return
+        }
+        guard pendingAttachments.isEmpty, replyTarget == nil, mentionsForSend().isEmpty else {
+            loadError = "群需求使用正文提交；请保留附件、回复和 @，改用普通消息或先明确移除这些内容。"; return
+        }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        workspace.composerRequirementDrafts.set(crewId, channel: crewdChannelID, text: text)
+        guard let snapshot = workspace.composerRequirementDrafts.begin(crewId, channel: crewdChannelID) else { return }
+        await submitCrewdRequirement(snapshot, workspace: workspace)
+    }
+    private func submitCrewdRequirement(_ snapshot: CrewdRequirementDrafts.Snapshot, workspace: CrewdWorkspace) async {
+        guard appModel.crewdBackend?.workspace === workspace, workspace.client.connected,
+              !workspace.isRetired, workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel else {
+            workspace.composerRequirementDrafts.finish(snapshot, accepted: false)
+            loadError = "原会话已切换；请回到原连接核对，不会跨会话提交。"; return
+        }
+        let epoch = workspace.observationGeneration
+        sending = true; defer { sending = false }
+        do {
+            let result = try await workspace.workStore.createRequirement(requestID: snapshot.requestID, text: snapshot.text, channel: snapshot.channel)
+            workspace.composerRequirementDrafts.finish(snapshot, accepted: true)
+            guard appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch),
+                  workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel else { return }
+            requirementReceipt = "已创建本群需求 " + (result["requirementId"].string ?? "（请核对 Todo）")
+            if result["channelAssociation"]["linked"] == .bool(false) { requirementReceipt = "需求已创建，但原会话关联已解除；不会重新关联。" }
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == snapshot.text {
+                draft = ""; CrewComposerDraftStore.shared.clear(draftStorageKey)
+            }
+            loadError = nil
+            try? await workspace.channelWork.refresh()
+        } catch {
+            workspace.composerRequirementDrafts.finish(snapshot, accepted: false, uncertain: CrewdClientError.isUncertainSubmission(error))
+            if appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch), workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel { loadError = error.localizedDescription }
+        }
+    }
 
     // MARK: - File import (cross-platform via .fileImporter)
 
@@ -1717,6 +1830,7 @@ struct CrewChatView: View {
     /// 与拖拽**共用** `CrewFileAttachmentIntake.intake` —— 大小闸门、目录/package
     /// 拒收、mime 推导、复制进暂存区全在那一份里。别在这儿写第二条并行的路。
     private func handleImport(_ result: Result<[URL], Error>) {
+        guard !appModel.usesCrewdAuthority else { loadError = "当前后台尚未支持附件提交；未读取或暂存所选文件。"; return }
         switch result {
         case .failure(let error):
             loadError = error.localizedDescription
@@ -1736,6 +1850,7 @@ struct CrewChatView: View {
     /// ComposerView 的粘贴拦截闭包：读剪贴板 → 交给纯逻辑判定 → 收进托盘。
     /// 返回 true = 已收下、吞掉本次 paste；false = 走默认文本粘贴。
     private var pasteAttachmentsHandler: (() -> Bool)? {
+        guard !appModel.usesCrewdAuthority else { return nil }
         return {
             // 读剪贴板收口在 `CrewPasteboardReader`（Todo 追问的粘贴走同一份）。
             let items = CrewPasteboardReader.attachments()
@@ -1751,6 +1866,7 @@ struct CrewChatView: View {
     /// Decode PhotosPickerItems into PendingComposerAttachments and append.
     @MainActor
     private func handlePhotoItems(_ items: [PhotosPickerItem]) async {
+        guard !appModel.usesCrewdAuthority else { loadError = "当前后台尚未支持照片提交。"; return }
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             // Best-effort MIME detection from the supported content types.
@@ -1777,6 +1893,7 @@ struct CrewChatView: View {
     /// 「拍照」拍回来的一张图 → 附件托盘。JPEG 编码（相机原图是位图，PNG 会大一个
     /// 量级）；编不出来就软报错，不静默丢。
     private func handleCameraImage(_ image: PlatformImage) {
+        guard !appModel.usesCrewdAuthority else { loadError = "当前后台尚未支持照片提交。"; return }
         defer { cameraImage = nil }
         guard let data = image.jpegData(quality: 0.85) else {
             loadError = "照片编码失败，没有加进附件。"

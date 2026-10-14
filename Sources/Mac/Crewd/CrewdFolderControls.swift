@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 enum CrewdFolderFilter {
@@ -82,7 +81,7 @@ struct CrewdFolderEditor:View {
             HStack{Button("关闭"){dismiss()};Spacer();Button(store.writing ? "提交中":"提交"){
                 if key.operation == "delete"{confirmDelete=true}else if let draft=drafts.begin(key){send(draft)}
             }.disabled(store.writing || submitting || reading || fields.revision.isEmpty || (!store.capabilities.contains("viewFolders")) || (object == nil && operation != "create" && selected.isEmpty))}
-        }.padding(20).frame(width:560,height:500).task(id:key){await read()}
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:500)).task(id:key){await read()}
         .confirmationDialog("解散这个文件夹？不会删除其中的内容。",isPresented:$confirmDelete){Button("解散文件夹",role:.destructive){if let draft=drafts.begin(key){send(draft)}}}
     }
     private func folderPicker(_ label:String,selection:Binding<String>,rootLabel:String)->some View{
@@ -125,4 +124,3 @@ struct CrewdFolderEditor:View {
         }
     }
 }
-#endif

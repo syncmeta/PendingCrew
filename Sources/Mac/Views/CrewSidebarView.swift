@@ -1,5 +1,6 @@
 #if os(macOS)
 import SwiftUI
+import Combine
 
 /// 左栏：crew 列表 + toolbar（新建 / 刷新）。
 ///
@@ -75,7 +76,7 @@ struct CrewSidebarView: View {
             hiddenCrewsFooter
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
-            quotaFooterLine
+            if !crewStore.usesCrewdAuthority { quotaFooterLine }
             // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
         }
@@ -84,7 +85,7 @@ struct CrewSidebarView: View {
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由
         // WindowChromeConfigurator 一次性藏死。
         .task { reloadArrangement() }
-        .onReceive(LocalWhiteboardStore.shared.directoryChanged) { _ in reloadArrangement() }
+        .onReceive(crewStore.usesCrewdAuthority ? Empty<Void, Never>().eraseToAnyPublisher() : LocalWhiteboardStore.shared.directoryChanged.eraseToAnyPublisher()) { _ in reloadArrangement() }
         .toolbar {
             ToolbarItemGroup {
                 Button {

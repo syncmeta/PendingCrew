@@ -9,6 +9,9 @@ options:
     macOS: "14.0"
   createIntermediateGroups: true
 packages:
+  SwiftCertificates:
+    url: https://github.com/apple/swift-certificates.git
+    exactVersion: 1.21.0
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     minVersion: 2.4.0
@@ -85,6 +88,8 @@ targets:
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
         basedOnDependencyAnalysis: false
     dependencies:
+      - package: SwiftCertificates
+        product: X509
       - package: MarkdownUI
         product: MarkdownUI
       - package: Sparkle
@@ -151,6 +156,17 @@ targets:
       # never instantiate a GUI view or launch an agent process.
       - path: Sources/Stores/CrewSessionRequests.swift
       - path: Sources/Mac/Services/CrewSessionRunner.swift
+      # The real runner's crewd presentation boundary uses the actual typed
+      # client/workspace/projection. Compile those production dependencies into
+      # this standalone bundle; never substitute a fake workspace or bypass role
+      # guards. Product scene/integration roots are not part of this test bundle.
+      - path: Sources/Mac/Crewd
+        excludes:
+          - CrewdFrontendIsolation.swift
+          - CrewdOriginalConnectionIntegration.swift
+          - CrewdOriginalWorkIntegration.swift
+          - CrewdMobileWorkspaceView.swift
+          - CrewdWorkspaceView.swift
       - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
       - path: Sources/Mac/Services/ModelCatalogCenter.swift
       - path: Sources/Mac/Services/QuotaCenter.swift
@@ -478,6 +494,7 @@ targets:
       - path: Sources/Chat/Vendored/Platform.swift
       - path: Sources/Chat/Vendored/ColorHex.swift
       - path: Sources/Chat/Vendored/ColorHash.swift
+      - path: Sources/Mac/Design/CrewColorHash.swift
       - path: Sources/Chat/Vendored/AppearanceMode.swift
       - path: Sources/Chat/Vendored/Theme.swift
       - path: Sources/Chat/Vendored/AppThemeAlias.swift

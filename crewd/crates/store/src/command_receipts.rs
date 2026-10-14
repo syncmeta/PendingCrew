@@ -76,7 +76,17 @@ pub fn lookup(
     if !crewd_proto::valid_remote_uuid(request) {
         return Err(invalid("public command request identity invalid"));
     }
-    let row:Option<(String,String,String,Option<String>,String,String,bool,String)>=c.query_row(
+    type StoredReceiptRow = (
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        bool,
+        String,
+    );
+    let row: Option<StoredReceiptRow> = c.query_row(
         "SELECT payload_json,payload_sha256,phase,result_json,created_at,updated_at,historical,runtime_binding_id FROM public_command_receipts WHERE principal=?1 AND request_id=?2 AND db_id=?3",
         params![principal,request,db_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
     row.map(
@@ -156,11 +166,11 @@ pub fn transition(
     principal: &str,
     db: &str,
     request: &str,
-    from: CommandPhase,
-    to: CommandPhase,
+    phases: (CommandPhase, CommandPhase),
     result: Option<&serde_json::Value>,
     at: &str,
 ) -> Result<PublicCommandReceipt> {
+    let (from, to) = phases;
     database(c, db)?;
     let legal = matches!(
         (from, to),
@@ -269,8 +279,7 @@ mod tests {
     use super::*;
     use crewd_proto::{CrewCreateParams, commands::PublicCommand};
     fn setup() -> crate::Store {
-        let s = crate::Store::open_in_memory().unwrap();
-        s
+        crate::Store::open_in_memory().unwrap()
     }
     fn request(s: &crate::Store) -> CommandSubmitParams {
         CommandSubmitParams {
@@ -297,8 +306,7 @@ mod tests {
             "kernel-human-owner",
             &p.db_id,
             &p.request_id,
-            CommandPhase::Reserved,
-            CommandPhase::Committed,
+            (CommandPhase::Reserved, CommandPhase::Committed),
             Some(&serde_json::json!({"crewId":"real-created-fact"})),
             "t2",
         )
@@ -338,8 +346,7 @@ mod tests {
             "paired-grant",
             &p.db_id,
             &p.request_id,
-            CommandPhase::Reserved,
-            CommandPhase::Admitted,
+            (CommandPhase::Reserved, CommandPhase::Admitted),
             None,
             "t2",
         )
@@ -349,8 +356,7 @@ mod tests {
             "paired-grant",
             &p.db_id,
             &p.request_id,
-            CommandPhase::Admitted,
-            CommandPhase::Dispatched,
+            (CommandPhase::Admitted, CommandPhase::Dispatched),
             None,
             "t3",
         )
@@ -369,8 +375,7 @@ mod tests {
                 "paired-grant",
                 &p.db_id,
                 &p.request_id,
-                CommandPhase::Unknown,
-                CommandPhase::Admitted,
+                (CommandPhase::Unknown, CommandPhase::Admitted),
                 None,
                 "t5"
             )
@@ -393,8 +398,7 @@ mod tests {
                 "paired-grant",
                 &p.db_id,
                 &p.request_id,
-                CommandPhase::Reserved,
-                CommandPhase::Admitted,
+                (CommandPhase::Reserved, CommandPhase::Admitted),
                 None,
                 "t8"
             )

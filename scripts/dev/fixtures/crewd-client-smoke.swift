@@ -5,7 +5,8 @@ import Foundation
         let forbidden = CrewdWorkspace(dataDirectory:root.deletingLastPathComponent().appendingPathComponent("legacy"))
         await forbidden.connect()
         precondition(forbidden.error != nil && !forbidden.client.connected)
-        precondition(!FileManager.default.fileExists(atPath:forbidden.dataDirectory.path))
+        guard let forbiddenDirectory = forbidden.dataDirectory else { preconditionFailure("local workspace must retain its explicit data directory") }
+        precondition(!FileManager.default.fileExists(atPath:forbiddenDirectory.path))
         let workspace=CrewdWorkspace(dataDirectory:root)
         let client=workspace.client
         var events:[String]=[]

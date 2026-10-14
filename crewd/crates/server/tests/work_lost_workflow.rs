@@ -424,6 +424,10 @@ async fn actual_lost_reassignment_sql_fault_rolls_back_and_render_claim_rechecks
     let p = lost_plan(&r, &mut human).await;
     r.fail_actual_owner().await;
     r.f.state.db.call_result(|s| {s.conn().execute_batch("CREATE TRIGGER reject_lost_wake BEFORE INSERT ON wakes WHEN NEW.source LIKE 'work-lost:%' BEGIN SELECT RAISE(ABORT,'independent lost wake failure'); END;")?;Ok::<_,crewd_collab::CollabError>(())}).await.unwrap().unwrap();
+    // Freeze the real actor at an acknowledged mailbox boundary, not the DB:
+    // the public RPC still runs its real SQL transaction. Independent automatic
+    // M5 facts/startup writes cannot race this full-table rollback comparison.
+    let actor_cut = timeout(LIMIT, r.h.pause_for_test()).await.unwrap().unwrap();
     let before = snapshot(&r.f).await;
     assert!(
         call(&mut human, "work.reassignLost", reassign(&p, &r.owner))
@@ -435,6 +439,7 @@ async fn actual_lost_reassignment_sql_fault_rolls_back_and_render_claim_rechecks
         before,
         "authority/history/event/revision/wake rollback together"
     );
+    drop(actor_cut);
     r.f.state
         .db
         .call_result(|s| {

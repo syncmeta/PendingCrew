@@ -10,9 +10,19 @@ import Foundation
         let assign=try CrewdPlanCommand.build(key,f,revision:"18446744073709551615")
         precondition(assign.0 == "work.assign" && assign.1["expectedRevision"] == .string("18446744073709551615") && assign.1["note"] == .string("handoff reason"))
         f.action = .report;f.reportStatus="active";f.checkpoint=true
+        do {try CrewdPlanCommand.validateOwnership(f,owner:nil);preconditionFailure("unassigned active report accepted")} catch let error as CrewdClientError {precondition(error.kind == .notSubmitted)}
+        try CrewdPlanCommand.validateOwnership(f,owner:"real-b-member")
+        var unassigned=f;unassigned.reportStatus="open";unassigned.checkpoint=false;try CrewdPlanCommand.validateOwnership(unassigned,owner:nil)
+        unassigned.checkpoint=true
+        do {try CrewdPlanCommand.validateOwnership(unassigned,owner:nil);preconditionFailure("unassigned open checkpoint accepted")} catch let error as CrewdClientError {precondition(error.kind == .notSubmitted)}
+        try CrewdPlanCommand.validateOwnership(unassigned,owner:"real-b-member")
+        unassigned.action = .block
+        do {try CrewdPlanCommand.validateOwnership(unassigned,owner:nil);preconditionFailure("unassigned block accepted")} catch let error as CrewdClientError {precondition(error.kind == .notSubmitted)}
         let report=try CrewdPlanCommand.build(key,f,revision:"2")
         precondition(report.0 == "work.update" && report.1["status"] == .string("active") && report.1["nextCheckAt"].string != nil)
         f.checkpoint=false
+        let retainedCheck=try CrewdPlanCommand.build(key,f,revision:"2",current:.object(["nextCheckAt":.string("existing authoritative checkpoint")]))
+        precondition(retainedCheck.1["nextCheckAt"] == .null,"note-only active report must preserve the existing checkpoint instead of rewriting it")
         do {_ = try CrewdPlanCommand.build(key,f,revision:"2");preconditionFailure("active without check")} catch {}
         f.action = .complete;f.note="";f.evidence=""
         let done=try CrewdPlanCommand.build(key,f,revision:"3")

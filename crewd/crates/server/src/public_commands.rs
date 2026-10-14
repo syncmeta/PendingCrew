@@ -404,8 +404,7 @@ pub(crate) async fn submit_sql(
                         &principal,
                         &p.db_id,
                         &p.request_id,
-                        CommandPhase::Reserved,
-                        CommandPhase::Committed,
+                        (CommandPhase::Reserved, CommandPhase::Committed),
                         Some(&result),
                         &tx.now_ts(),
                     )?)
@@ -456,6 +455,62 @@ pub(crate) async fn lookup(
     serde_json::to_value(result).map_err(dispatch::internal)
 }
 
+pub(crate) async fn list_unknown(
+    state: &Arc<AppState>,
+    actor: &Actor,
+    p: CommandListUnknownParams,
+) -> Result<Value, RpcError> {
+    let principal = actor.principal(state).await?;
+    validate_database(state, &p.db_id).await?;
+    let limit = p.limit.unwrap_or(50);
+    if !(1..=50).contains(&limit)
+        || p.after
+            .as_ref()
+            .is_some_and(|s| !crewd_proto::valid_remote_uuid(s))
+    {
+        return Err(malformed("未知请求页参数无效。"));
+    }
+    let own_state = state.clone();
+    let own_actor = actor.clone();
+    let mut records = state
+        .db
+        .call(move |s| -> collab::Result<_> {
+            let rows =
+                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
+            for r in &rows {
+                for method in r.command.authorized_methods() {
+                    own_actor.authorize_tx(&own_state, s.conn(), method)?;
+                }
+            }
+            Ok(rows)
+        })
+        .await
+        .map_err(dispatch::internal)?
+        .map_err(dispatch::collab_err)?;
+    let more = records.len() > usize::from(limit);
+    records.truncate(usize::from(limit));
+    let next_after = if more {
+        records.last().map(|r| r.request_id.clone())
+    } else {
+        None
+    };
+    let items = records
+        .into_iter()
+        .map(|r| CommandSummary {
+            historical: r.historical || r.runtime_binding_id != state.runtime_binding_id,
+            runtime_binding_id: r.runtime_binding_id,
+            request_id: r.request_id,
+            db_id: r.db_id,
+            operation: r.command.method().into(),
+            payload_sha256: r.payload_sha256,
+            phase: r.phase,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect();
+    serde_json::to_value(CommandUnknownPage { items, next_after }).map_err(dispatch::internal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +525,98 @@ mod tests {
         let peer = policy.accept(&server).unwrap();
         assert!(matches!(peer.authority(), crate::peer::Authority::Human));
         (state, Actor::Local(peer), db)
+    }
+    #[tokio::test]
+    async fn eof_fenced_actor_cannot_dispatch_while_accepted_output_drains() {
+        let (state, actor, db) = state_actor().await;
+        let queued_actor = actor.clone();
+        let scope = actor.connection_scope().clone();
+        let guard = scope.guard();
+        scope
+            .fence_input_until(std::time::Instant::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(!scope.is_live());
+        assert!(scope.output_is_live(), "already accepted output may drain");
+        assert_eq!(
+            queued_actor.principal(&state).await.unwrap_err().code,
+            RpcError::FORBIDDEN
+        );
+        for operation in [
+            "session.terminal.write",
+            "session.terminal.resize",
+            "session.terminal.claim",
+            "session.answer",
+            "session.respondRunnerRequest",
+            "session.start",
+        ] {
+            assert_eq!(
+                queued_actor
+                    .authorize(&state, operation)
+                    .await
+                    .unwrap_err()
+                    .code,
+                RpcError::FORBIDDEN
+            );
+            let actor = queued_actor.clone();
+            let state_for_tx = state.clone();
+            assert!(
+                state
+                    .db
+                    .call(move |store| actor.authorize_tx(&state_for_tx, store.conn(), operation))
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+        let pending = CommandSubmitParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            runtime_binding_id: state.runtime_binding_id.clone(),
+            db_id: db,
+            command: PublicCommand::CrewCreateFirstMessage(FirstMessageParams {
+                crew: crewd_proto::CrewCreateParams {
+                    title: "queued after read EOF".into(),
+                    working_directory: "/private/tmp".into(),
+                    parent_id: None,
+                },
+                text: "must never dispatch".into(),
+            }),
+        };
+        assert_eq!(
+            submit_sql(&state, &queued_actor, pending)
+                .await
+                .unwrap_err()
+                .code,
+            RpcError::FORBIDDEN
+        );
+        let counts = state
+            .db
+            .call(|store| -> rusqlite::Result<Vec<i64>> {
+                ["crews", "channels", "messages", "public_command_receipts"]
+                    .into_iter()
+                    .map(|table| {
+                        store.conn().query_row(
+                            &format!("SELECT COUNT(*) FROM {table}"),
+                            [],
+                            |row| row.get(0),
+                        )
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(counts, vec![0, 0, 0, 0]);
+        scope.close();
+        assert!(
+            !scope.output_is_live(),
+            "revoke/hard closure also cancels output"
+        );
+        assert!(
+            !*scope.liveness().lock().unwrap(),
+            "closing output never revives input"
+        );
+        drop(guard);
+        state.db.clone().shutdown();
     }
     #[tokio::test]
     async fn first_message_and_receipt_commit_once_under_real_kernel_human_actor() {
@@ -567,60 +714,4 @@ mod tests {
         assert_eq!(counts, vec![0, 0, 0, 0]);
         s.db.clone().shutdown();
     }
-}
-
-pub(crate) async fn list_unknown(
-    state: &Arc<AppState>,
-    actor: &Actor,
-    p: CommandListUnknownParams,
-) -> Result<Value, RpcError> {
-    let principal = actor.principal(state).await?;
-    validate_database(state, &p.db_id).await?;
-    let limit = p.limit.unwrap_or(50);
-    if !(1..=50).contains(&limit)
-        || p.after
-            .as_ref()
-            .is_some_and(|s| !crewd_proto::valid_remote_uuid(s))
-    {
-        return Err(malformed("未知请求页参数无效。"));
-    }
-    let own_state = state.clone();
-    let own_actor = actor.clone();
-    let mut records = state
-        .db
-        .call(move |s| -> collab::Result<_> {
-            let rows =
-                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
-            for r in &rows {
-                for method in r.command.authorized_methods() {
-                    own_actor.authorize_tx(&own_state, s.conn(), method)?;
-                }
-            }
-            Ok(rows)
-        })
-        .await
-        .map_err(dispatch::internal)?
-        .map_err(dispatch::collab_err)?;
-    let more = records.len() > usize::from(limit);
-    records.truncate(usize::from(limit));
-    let next_after = if more {
-        records.last().map(|r| r.request_id.clone())
-    } else {
-        None
-    };
-    let items = records
-        .into_iter()
-        .map(|r| CommandSummary {
-            historical: r.historical || r.runtime_binding_id != state.runtime_binding_id,
-            runtime_binding_id: r.runtime_binding_id,
-            request_id: r.request_id,
-            db_id: r.db_id,
-            operation: r.command.method().into(),
-            payload_sha256: r.payload_sha256,
-            phase: r.phase,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect();
-    serde_json::to_value(CommandUnknownPage { items, next_after }).map_err(dispatch::internal)
 }

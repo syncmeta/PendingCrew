@@ -6,7 +6,7 @@ struct CrewdWorkspaceView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var workspace: CrewdWorkspace
     var autoConnect = true
-    @State private var drafts = CrewdDrafts()
+    var machineLabel = "本机"
     @State private var creatingCrew = false
     @State private var sidebarMode = CrewdNavigation.Sidebar.contacts
     @State private var tab = CrewdNavigation.Tab.messages
@@ -14,18 +14,12 @@ struct CrewdWorkspaceView: View {
     @State private var todoExpanded = true
     @State private var membersExpanded = true
     @State private var runnerExpanded = false
-    @State private var crewTitle = ""
-    @State private var workingDirectory = ""
     private var messageContext: CrewdDrafts.Context {
         .message(crew: workspace.crewID, channel: workspace.channelID, session: workspace.sessionID)
     }
-    private var taskContext: CrewdDrafts.Context {
-        .initialTask(crew: workspace.crewID, session: workspace.sessionID)
-    }
-    private var compose: String { drafts.text(for: messageContext) }
-    private var task: String { drafts.text(for: taskContext) }
+    private var compose: String { workspace.messageDrafts.text(for: messageContext) }
     private func draftBinding(_ context: CrewdDrafts.Context) -> Binding<String> {
-        Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context) })
+        Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.messageDrafts.set($0, for: context) })
     }
     var body: some View {
         NavigationSplitView {
@@ -34,7 +28,7 @@ struct CrewdWorkspaceView: View {
                 ScrollView {
                     VStack(alignment:.leading,spacing:6) {
                         if sidebarMode == .contacts {
-                            Label("本机",systemImage:"desktopcomputer").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(.vertical,8)
+                            Label(machineLabel,systemImage:"desktopcomputer").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)).padding(.vertical,8)
                             ForEach(CrewdNavigation.directory(workspace.crews,collapsed:collapsedCrews)) {row in
                                 if let crew=workspace.crews.first(where:{$0["id"].string == row.object}) {
                                     HStack(spacing:5) {
@@ -78,7 +72,7 @@ struct CrewdWorkspaceView: View {
                 }
             }.background(CrewdChatStyle.canvas(colorScheme))
         }.foregroundStyle(CrewdChatStyle.ink(colorScheme)).frame(minWidth:1150,minHeight:700)
-        .sheet(isPresented:$creatingCrew){crewForm}
+        .sheet(isPresented:$creatingCrew){CrewdCrewCreationView(workspace:workspace)}
         .task {if autoConnect {await workspace.connect()}}
         .onChange(of:workspace.inspection["runnerRequest"]) {_,value in if value != .null {runnerExpanded=true}}
     }
@@ -213,11 +207,11 @@ struct CrewdWorkspaceView: View {
                 Text("发送会通知选中的会话").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                 Spacer()
                 Button("发送") {
-                    let sent = drafts.snapshot(for: messageContext)
+                    let sent = workspace.messageDrafts.snapshot(for: messageContext)
                     let text = sent.text, channel = sent.context.channel, target = sent.context.session
                     Task {
                         let mentions: [CrewdValue] = target.isEmpty ? [] : [.object(["kind": .string("session"), "targetId": .string(target)])]
-                        if await workspace.perform("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)])) { drafts.clearIfUnchanged(sent) }
+                        _ = await workspace.performText("message.post", .object(["channelId": .string(channel), "text": .string(text), "mentions": .array(mentions)]),snapshot:sent)
                     }
                 }.disabled(compose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy || workspace.channelID.isEmpty || workspace.sessionID.isEmpty)
             }
@@ -262,19 +256,7 @@ struct CrewdWorkspaceView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
-            TextField("给新的 Codex 会话交代任务", text: draftBinding(taskContext), axis: .vertical).lineLimit(2...6)
-            HStack {
-                Text("沿用 Codex 的默认模型和设置").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                Spacer()
-                Button("启动 Codex") {
-                    let sent = drafts.snapshot(for: taskContext)
-                    let brief = sent.text, crew = sent.context.crew
-                    let role = workspace.sessions.contains(where: {$0["role"].string == "captain"}) ? "worker" : "captain"
-                    Task {
-                        if await workspace.perform("session.start", .object(["crewId": .string(crew), "role": .string(role), "executor": .string("codex"), "brief": .string(brief), "isolation": .bool(true)])) { drafts.clearIfUnchanged(sent) }
-                    }
-                }.disabled(task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
-            }
+            CrewdSessionStartView(workspace:workspace,drafts:$workspace.messageDrafts)
         }.padding()
     }
     private func action(_ method: String, extra: [String: CrewdValue] = [:]) {
@@ -284,20 +266,7 @@ struct CrewdWorkspaceView: View {
     private func channelName(_ row: CrewdValue) -> String {
         switch row["kind"].string { case "human": return "与我沟通"; case "lobby": return "大厅"; default: return row["name"].string ?? "群" }
     }
-    private var crewForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("新建机组").font(.title2)
-            TextField("机组名称", text: $crewTitle)
-            HStack { Text(workingDirectory.isEmpty ? "选择工作目录" : workingDirectory).lineLimit(2).textSelection(.enabled); Spacer(); Button("选择…") {
-                let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true
-                if panel.runModal() == .OK { workingDirectory = panel.url?.path ?? "" }
-            } }
-            HStack { Button("取消") { creatingCrew = false }; Spacer(); Button("创建") {
-                let title = crewTitle, path = workingDirectory
-                Task { if await workspace.perform("crew.create", .object(["title": .string(title), "workingDirectory": .string(path)])) { creatingCrew = false; crewTitle = ""; workingDirectory = "" } }
-            }.disabled(crewTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workingDirectory.isEmpty || workspace.busy) }
-        }.padding(24).frame(width: 500)
-    }
+
 }
 
 private struct CrewdCrewQuestionView: View {
@@ -318,71 +287,6 @@ private struct CrewdCrewQuestionView: View {
                 }.disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
             }
         }.padding(.vertical, 6)
-    }
-}
-
-private struct CrewdHumanRequestView: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject var workspace: CrewdWorkspace
-    let request: CrewdValue
-    let decision: CrewdValue
-    @State private var answers: [String: String] = [:]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Codex 等待你的答复", systemImage: "person.crop.circle.badge.questionmark").font(.headline)
-            if request["method"].string == "item/tool/requestUserInput" {
-                ForEach(request["params"]["questions"].array.indices, id: \.self) { index in
-                    let q = request["params"]["questions"].array[index]
-                    let id = q["id"].string ?? ""
-                    Text(q["question"].string ?? "")
-                    if !q["options"].array.isEmpty {
-                        ForEach(q["options"].array.indices, id: \.self) { option in
-                            let row = q["options"].array[option]
-                            Button(row["label"].string ?? "") { answers[id] = row["label"].string }
-                            if let detail = row["description"].string { Text(detail).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)) }
-                        }
-                    }
-                    if q["options"].array.isEmpty || q["isOther"] == .bool(true) {
-                        if q["isSecret"] == .bool(true) { SecureField("你的答复", text: binding(id)) }
-                        else { TextField("你的答复", text: binding(id)) }
-                    }
-                    if q["isSecret"] != .bool(true), let value = answers[id], !value.isEmpty { Text("已选：\(value)").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme)) }
-                }
-                Button("提交答复") {
-                    let response = CrewdValue.object(["answers": .object(answers.mapValues { .object(["answers": .array([.string($0)])]) })])
-                    send(method: "session.respondRunnerRequest", extra: ["response": response])
-                }.disabled(workspace.busy || request["params"]["questions"].array.contains(where: { (answers[$0["id"].string ?? ""] ?? "").isEmpty }))
-            } else {
-                Text(decision["summary"].string ?? "请确认当前请求").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                ForEach(decision["options"].array.indices, id: \.self) { i in
-                    Button(decision["options"].array[i].string ?? "选项") { send(method: "session.answer", extra: ["choice": .number(Double(i))]) }.disabled(workspace.busy)
-                }
-            }
-        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-    }
-    private func binding(_ id: String) -> Binding<String> { Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0 }) }
-    private func send(method: String, extra: [String: CrewdValue]) {
-        var params = extra; params["sessionId"] = .string(workspace.sessionID); params["fingerprint"] = request["fingerprint"]
-        Task { _ = await workspace.perform(method, .object(params)) }
-    }
-}
-
-private struct CrewdRunnerItemView: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let item: CrewdValue
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            switch item["type"].string {
-            case "agentMessage": Text(item["text"].string ?? "").textSelection(.enabled)
-            case "userMessage": Text(item["content"].array.compactMap {$0["text"].string}.joined(separator: "\n")).foregroundStyle(CrewdChatStyle.muted(colorScheme)).textSelection(.enabled)
-            case "commandExecution":
-                Text(item["command"].string ?? "命令").font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                DisclosureGroup("命令输出 · \(item["status"].string ?? "")") { Text(item["aggregatedOutput"].string ?? "").font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            case "mcpToolCall": Text("工具：\(item["server"].string ?? "") / \(item["tool"].string ?? "") · \(item["status"].string ?? "")")
-            case "fileChange": DisclosureGroup("文件改动") { Text(item["changes"].pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            default: DisclosureGroup(item["type"].string ?? "会话事件") { Text(item.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            }
-        }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

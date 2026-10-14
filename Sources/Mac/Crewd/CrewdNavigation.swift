@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// Read-only navigation projections. Parent links are hierarchy; folders are a different
@@ -56,5 +55,3 @@ enum CrewdAvatarIdentity {
         Array(Set(members.compactMap(seed)).sorted().prefix(3))
     }
 }
-
-#endif

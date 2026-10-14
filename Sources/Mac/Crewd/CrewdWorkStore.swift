@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import Combine
 
@@ -334,4 +333,3 @@ final class CrewdWorkStore: ObservableObject {
         }
     }
 }
-#endif

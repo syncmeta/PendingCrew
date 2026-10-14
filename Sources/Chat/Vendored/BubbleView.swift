@@ -255,8 +255,10 @@ struct AttachmentGrid: View {
 
     @State private var zoomed: ZoomTarget?
 
-    private var images: [Attachment] { attachments.filter(\.isImage) }
-    private var files: [Attachment] { attachments.filter { !$0.isImage } }
+    // PENDINGCREW SHIM: crewd historical references carry metadata only;
+    // never load a remote computer path as an image on this device.
+    private var images: [Attachment] { attachments.filter { $0.isImage && !$0.url.hasPrefix("crewd-reference:") } }
+    private var files: [Attachment] { attachments.filter { !$0.isImage || $0.url.hasPrefix("crewd-reference:") } }
     /// Fixed thumbnail edge. Fixed-size cells keep the grid intrinsically
     /// sized so the parent VStack's alignment can position it — a
     /// `.flexible()` grid would stretch full-width and float the image.

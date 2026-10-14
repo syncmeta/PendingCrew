@@ -1,4 +1,3 @@
-#if os(macOS)
 import SwiftUI
 
 /// id → 稳定的柔色底 + emoji + 首字。算法搬自 PendingBot iOS ColorHash
@@ -49,4 +48,3 @@ enum CrewColorHash {
         return avatarEmoji[idx]
     }
 }
-#endif

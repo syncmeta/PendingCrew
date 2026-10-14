@@ -1,21 +1,4 @@
-#if os(macOS)
 import SwiftUI
-
-/// Shared colors follow the original chat-pane's muted warm sidebar and mint selection.
-enum CrewdChatStyle {
-    // Same anchor values as original Theme.Palette; explicit SwiftUI colorScheme
-    // keeps standalone NSHosting snapshots and the full application consistent.
-    private static func color(_ light:UInt32,_ dark:UInt32,_ scheme:ColorScheme)->Color {
-        let value=scheme == .dark ? dark:light
-        return Color(red:Double((value>>16)&255)/255,green:Double((value>>8)&255)/255,blue:Double(value&255)/255)
-    }
-    static func sidebar(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x2A2823,scheme)}
-    static func selection(_ scheme:ColorScheme)->Color {color(0xE3EEEA,0x1C3A2F,scheme)}
-    static func bubble(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x2A2823,scheme)}
-    static func canvas(_ scheme:ColorScheme)->Color {color(0xFFFFFF,0x161512,scheme)}
-    static func ink(_ scheme:ColorScheme)->Color {color(0x1B1A14,0xECE9E0,scheme)}
-    static func muted(_ scheme:ColorScheme)->Color {color(0x6E6A5C,0xA8A294,scheme)}
-}
 
 struct CrewdWorkPanels: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -222,5 +205,3 @@ struct CrewdGroupAvatar:View {
         }.frame(width:36,height:36).overlay(Circle().stroke(.secondary.opacity(0.15),lineWidth:0.5))
     }
 }
-
-#endif

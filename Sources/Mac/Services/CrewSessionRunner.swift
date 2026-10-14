@@ -69,14 +69,17 @@ final class CrewSessionRunner: ObservableObject {
     /// session 往哪儿发布（前后端分离 §10 的那一个接缝）。
     /// inproc = 同进程桥（app 自己就是 viewer）；`--daemon` = socket 服务端。
     /// **这个类在两种模式下是同一份**，差别全收在这个协议后面。
-    private let sessionPublisher: any SessionProtocolPublishing
+    private let sessionPublisherFactory: () -> (any SessionProtocolPublishing)
+    private lazy var sessionPublisher: any SessionProtocolPublishing = sessionPublisherFactory()
     /// 只在 daemon 编排器注入。viewer / inproc 不会拿 resume ledger 冒充 live 账本。
     private let expectedLiveStore: ExpectedLiveSessionStore?
     private let expectedLiveEpoch: ExpectedLiveSessionStore.DaemonEpoch?
     /// P2 的一次性自动救援资格。它必须在任何候选探测或启动之前写入持久账本，不能
     /// 用进程内集合代替，以免 daemon 重启后重复消耗启动预算。
-    private let captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore
-    private let workerAssignmentStore: WorkerAssignmentStore
+    private let captainAutomaticRecoveryClaimStoreFactory: () -> CaptainAutomaticRecoveryClaimStore
+    private lazy var captainAutomaticRecoveryClaimStore: CaptainAutomaticRecoveryClaimStore = captainAutomaticRecoveryClaimStoreFactory()
+    private let workerAssignmentStoreFactory: () -> WorkerAssignmentStore
+    private lazy var workerAssignmentStore: WorkerAssignmentStore = workerAssignmentStoreFactory()
     /// expected-live 账本失败必须回 daemon 日志，不能静默当作已记账；它不触发任何
     /// retry、wake 或 handoff，真实 run 仍由终端生命周期本身管理。
     private let expectedLiveFailureReporter: ((String, Error) -> Void)?
@@ -188,14 +191,19 @@ final class CrewSessionRunner: ObservableObject {
     private var deferredWakes = CrewDeferredWakeQueue()
     private var deferredWakeCallbacks: [String: (CrewMailboxWakeLogic.ReceiptEvidence) -> Void] = [:]
     private var deferredWakePriorities: [String: AutomaticWakeAdmission.Priority] = [:]
-    private let continuationStore: SessionContinuationStore
-    private let todoSweepStore: CaptainTodoSweepStore
-    private let agentTodoStore: LocalTodoStore
-    private let humanTodoStore: LocalTodoStore
+    private let continuationStoreFactory: () -> SessionContinuationStore
+    private lazy var continuationStore: SessionContinuationStore = continuationStoreFactory()
+    private let todoSweepStoreFactory: () -> CaptainTodoSweepStore
+    private lazy var todoSweepStore: CaptainTodoSweepStore = todoSweepStoreFactory()
+    private let agentTodoStoreFactory: () -> LocalTodoStore
+    private lazy var agentTodoStore: LocalTodoStore = agentTodoStoreFactory()
+    private let humanTodoStoreFactory: () -> LocalTodoStore
+    private lazy var humanTodoStore: LocalTodoStore = humanTodoStoreFactory()
     private let todoCheckpointInterval: TimeInterval
     private let checkpointNow: () -> Date
     private var todoCheckpointTasks: [String: Task<Void, Never>] = [:]
-    private let wakeAdmission: AutomaticWakeAdmission
+    private let wakeAdmissionFactory: () -> AutomaticWakeAdmission
+    private lazy var wakeAdmission: AutomaticWakeAdmission = wakeAdmissionFactory()
     /// Headless tests can run the real start entry without opening a CLI or terminal.
     private let launchOperationOverride: (() async throws -> Void)?
     private let launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)?
@@ -222,9 +230,34 @@ final class CrewSessionRunner: ObservableObject {
     /// 恰恰相反，它保证这个进程里一套都没有（§6 唯一所有权）。
     private(set) var isViewer = false
     private var viewerClient: SessionProtocolClient?
+    private let isCrewdPresentation: Bool
+    private var crewdProjectionWorkspace: CrewdWorkspace?
+    func installCrewdProjection(_ projected: [CrewSessionRun], workspace: CrewdWorkspace) {
+        let authorityChanged = crewdProjectionWorkspace !== workspace
+        isViewer = true; viewerClient = nil
+        if authorityChanged {
+            // Session UUID equality across computers or backup forks is not
+            // display ownership. Retire the old objects before rebinding actions.
+            for old in runs { old.retireCrewdDisplayObservation() }
+            runs = []; selectedRunId = nil; paneStates.removeAll()
+            activeCrewId = nil; viewingTerminal = false; isComposingNew = false
+        }
+        crewdProjectionWorkspace = workspace
+        if runs.map(\.runID) != projected.map(\.runID) {
+            let kept = Set(projected.map(\.runID))
+            for old in runs where !kept.contains(old.runID) { old.retireCrewdDisplayObservation() }
+            runs = projected
+            if let selectedRunId, !kept.contains(selectedRunId) { self.selectedRunId = nil }
+        }
+        if selectedRunId == nil, !workspace.sessionID.isEmpty {
+            selectedRunId = runs.first(where: { $0.sessionId == workspace.sessionID })?.runID
+        }
+    }
+
 
     /// 接上 viewer 链路。之后 `runs` 由 `applyRemoteRoster` 驱动。
     func attachViewer(client: SessionProtocolClient) {
+        guard !isCrewdPresentation else { return }
         isViewer = true
         viewerClient = client
     }
@@ -251,6 +284,7 @@ final class CrewSessionRunner: ObservableObject {
     /// **只增删改，不重建**：`runs` 每次整份换新的话，右栏正开着的那个 session 会
     /// 因为 `runID` 变了而被切走 —— 每 2 秒一次的点名快照就会让人根本没法用。
     func applyRemoteRoster(_ list: SessionList) {
+        guard !isCrewdPresentation else { return }
         guard isViewer, let client = viewerClient else { return }
         let plan = SessionRosterReconciliation.plan(
             incoming: list.sessions, localSessionIds: runs.map(\.sessionId))
@@ -328,7 +362,7 @@ final class CrewSessionRunner: ObservableObject {
     /// `sessionPublisher` 收 `nil` 默认值而不是默认实参：默认实参在 **nonisolated**
     /// 上下文求值，而 `InProcessSessionProtocolBridge` 是 `@MainActor`（同
     /// `SessionHost` 那两个依赖）。
-    init(sessionPublisher: (any SessionProtocolPublishing)? = nil,
+    init(presentationOnly: Bool = false, sessionPublisher: (any SessionProtocolPublishing)? = nil,
          wakeAdmission: AutomaticWakeAdmission? = nil,
          launchOperationOverride: (() async throws -> Void)? = nil,
          launchDenialNoticeOverride: ((AutomaticWakeAdmission.Decision) -> Void)? = nil,
@@ -347,25 +381,34 @@ final class CrewSessionRunner: ObservableObject {
          humanTodoStore: LocalTodoStore? = nil,
          todoCheckpointInterval: TimeInterval = 60,
          checkpointNow: @escaping () -> Date = Date.init) {
-        self.continuationStore = continuationStore ?? SessionContinuationStore()
-        self.todoSweepStore = todoSweepStore ?? .shared
-        self.agentTodoStore = agentTodoStore ?? .shared(.agent)
-        self.humanTodoStore = humanTodoStore ?? .shared(.human)
+        self.isCrewdPresentation = presentationOnly
+        self.continuationStoreFactory = { continuationStore ?? SessionContinuationStore() }
+        self.todoSweepStoreFactory = { todoSweepStore ?? .shared }
+        self.agentTodoStoreFactory = { agentTodoStore ?? .shared(.agent) }
+        self.humanTodoStoreFactory = { humanTodoStore ?? .shared(.human) }
         self.todoCheckpointInterval = max(0.01, todoCheckpointInterval)
         self.checkpointNow = checkpointNow
-        self.sessionPublisher = sessionPublisher ?? InProcessSessionProtocolBridge()
-        self.wakeAdmission = wakeAdmission ?? AutomaticWakeAdmission()
+        self.sessionPublisherFactory = { sessionPublisher ?? InProcessSessionProtocolBridge() }
+        self.wakeAdmissionFactory = { wakeAdmission ?? AutomaticWakeAdmission() }
         self.launchOperationOverride = launchOperationOverride
         self.launchDenialNoticeOverride = launchDenialNoticeOverride
         self.admissionRecoveryReofferOverride = admissionRecoveryReofferOverride
         self.expectedLiveStore = expectedLiveStore
         self.expectedLiveEpoch = expectedLiveEpoch
         self.expectedLiveFailureReporter = expectedLiveFailureReporter
-        self.captainAutomaticRecoveryClaimStore = captainAutomaticRecoveryClaimStore
-            ?? CaptainAutomaticRecoveryClaimStore()
-        self.workerAssignmentStore = workerAssignmentStore ?? .shared
-        self.wakeupStore = wakeupStore ?? LocalWakeupStore()
+        self.captainAutomaticRecoveryClaimStoreFactory = { captainAutomaticRecoveryClaimStore             ?? CaptainAutomaticRecoveryClaimStore() }
+        self.workerAssignmentStoreFactory = { workerAssignmentStore ?? .shared }
+        self.wakeupStoreFactory = { wakeupStore ?? LocalWakeupStore() }
         self.wakeAdmissionReadFailureReporter = wakeAdmissionReadFailureReporter
+        // No old ledger, protocol bridge, power observer or constructor side
+        // effect is created for a crewd presentation runner.
+        if presentationOnly { isViewer = true; return }
+        // Preserve ordinary legacy constructor behavior; presentation never
+        // reaches these factories or the in-process protocol bridge.
+        _ = self.continuationStore; _ = self.todoSweepStore
+        _ = self.agentTodoStore; _ = self.humanTodoStore
+        _ = self.wakeAdmission; _ = self.captainAutomaticRecoveryClaimStore
+        _ = self.workerAssignmentStore; _ = self.wakeupStore
         (self.sessionPublisher as? InProcessSessionProtocolBridge)?.setRunSummaryProvider {
             [weak self] sessionId in
             self?.runs.first { $0.sessionId == sessionId }?.protocolSummary
@@ -383,6 +426,7 @@ final class CrewSessionRunner: ObservableObject {
         isComposingNew = false
         // 看过了 —— 响铃提示消掉（次数与时刻留着，见 `TerminalBellTrace`）。
         runs.first(where: { $0.runID == runId })?.acknowledgeBells()
+        if let session = runs.first(where: { $0.runID == runId })?.sessionId { crewdProjectionWorkspace?.selectSession(session) }
     }
 
     /// 进入「新建 session」态（composer 显零配置启动面）。
@@ -393,6 +437,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 停掉指定 run（保留在列表里，状态落 cancelled）。
     func stop(_ runId: UUID) {
         guard let run = runs.first(where: { $0.runID == runId }) else { return }
+        if isCrewdPresentation { run.backend.stop(); return }
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
         continuationStore.cancel(sessionId: run.sessionId)
@@ -401,6 +446,7 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 移除指定 run（仍在跑则先停）。被移除的是选中项时，回退选最后一个。
     func remove(_ runId: UUID) {
+        if isCrewdPresentation { lastStartError = "成员记录由当前后台维护；请使用明确的停止操作。"; return }
         guard let idx = runs.firstIndex(where: { $0.runID == runId }) else { return }
         let run = runs[idx]
         let crewId = run.crewId
@@ -435,6 +481,7 @@ final class CrewSessionRunner: ObservableObject {
         priority: AutomaticWakeAdmission.Priority = .automatic,
         onDelivered: ((CrewMailboxWakeLogic.ReceiptEvidence) -> Void)? = nil
     ) {
+        guard !isCrewdPresentation else { return }
         deliverOrDeferWake(sourceKey: sourceKey, to: run, payload: .literal(text),
                            renderNow: nil, priority: priority, onDelivered: onDelivered)
     }
@@ -450,6 +497,7 @@ final class CrewSessionRunner: ObservableObject {
         priority: AutomaticWakeAdmission.Priority = .automatic,
         onDelivered: ((CrewMailboxWakeLogic.ReceiptEvidence) -> Void)? = nil
     ) {
+        guard !isCrewdPresentation else { return }
         guard run.status == .running, run.kind.isAgent else { return }
         let delivery = CrewDeferredWakeQueue.Delivery(
             key: sourceKey + "|target:" + run.sessionId,
@@ -488,6 +536,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 后端发布 busy -> idle 时补一条。再读一次 `backend.isBusy`，挡住 idle 事件排队
     /// 到主线程期间目标已经开始另一 turn 的窄竞态。
     func runBecameIdle(_ run: CrewSessionRun) {
+        guard !isCrewdPresentation else { return }
         guard run.status == .running, !run.backend.isBusy, !run.activityIsWorking else { return }
         if run.role == .captain { scheduleTodoCheckpoint(run) }
         if reofferPendingExplicitText(scope: .session(run.sessionId), crewId: run.crewId) {
@@ -793,6 +842,7 @@ final class CrewSessionRunner: ObservableObject {
     /// the operation began; the contextCompaction item and turn completion are
     /// tracked by the backend before normal wake delivery resumes.
     func requestCodexCompaction(for run: CrewSessionRun) async {
+        guard !isCrewdPresentation else { return }
         guard run.kind == .codex, run.status == .running else { return }
         if let remote = run.backend as? RemoteSessionBackend {
             do { try await remote.requestCodexCompaction() }
@@ -817,6 +867,7 @@ final class CrewSessionRunner: ObservableObject {
     /// - codex：走 app-server `thread/settings/update`，从下一轮起生效。
     /// - 目标 run 不在跑：白板落说明（fail-loud，不静默吞）。
     func applyProfileChange(_ req: SessionProfileChangeRequest) async {
+        if isCrewdPresentation { lastStartError = "当前后台尚未提供正式的运行配置切换能力。"; return }
         if isViewer {
             sendOrchestration(SessionOrchestrationOp.profileChange, [
                 "sessionId": .string(req.sessionId), "crewId": .string(req.crewId),
@@ -983,7 +1034,8 @@ final class CrewSessionRunner: ObservableObject {
     /// fail-loud，不再静默清空全部在途约定）。
     typealias PendingWakeup = LocalWakeupStore.PendingWakeup
 
-    private let wakeupStore: LocalWakeupStore
+    private let wakeupStoreFactory: () -> LocalWakeupStore
+    private lazy var wakeupStore: LocalWakeupStore = wakeupStoreFactory()
     private let wakeAdmissionReadFailureReporter: ((String) -> Void)?
     private var wakeupTimers: [String: Timer] = [:]
     private var wakeupLedgerRetries: [String: PendingWakeup] = [:]
@@ -1012,6 +1064,7 @@ final class CrewSessionRunner: ObservableObject {
 
     func receiveSystemSleepTransition(_ transition: WakeupSleepWindow.Transition, at now: Date,
                                      uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !isCrewdPresentation else { return }
         if case .willSleep = transition {
             wakeupSleepWindow.willSleep(uptime: uptime)
             return
@@ -1054,6 +1107,7 @@ final class CrewSessionRunner: ObservableObject {
     /// id 换成**按计划算出来的确定性 id** —— 「同一笔委托同一时刻最多一个在途唤醒」
     /// 这条硬约束就是靠它 + 账本的同 id no-op 落地的，不靠调用方先删再加。
     func scheduleWakeup(_ req: SessionWakeupRequest) {
+        guard !isCrewdPresentation else { return }
         guard runs.contains(where: {
             $0.sessionId == req.sessionId && $0.status == .running && $0.kind.isAgent
         }) else { return }
@@ -1076,6 +1130,7 @@ final class CrewSessionRunner: ObservableObject {
 
     /// app 启动时重挂所有持久化的唤醒（已过期的立即触发 —— 迟到好过失约）。
     func rearmWakeups() {
+        guard !isCrewdPresentation else { return }
         // **必须走 `read`，不能走 `list`**：后者把读失败压成空表，于是「一条待唤醒都
         // 没有」和「这本账读不出来」在这里长得一模一样。而这两件事的后果相反 ——
         // 前者什么都不用做，后者意味着**所有在途唤醒（含督办租约）刚刚静默消失了**，
@@ -1121,6 +1176,7 @@ final class CrewSessionRunner: ObservableObject {
 
     func fire(_ w: PendingWakeup, at now: Date = Date(),
               uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !isCrewdPresentation else { return }
         wakeupTimers[w.id]?.invalidate()
         wakeupTimers[w.id] = nil
         wakeupLedgerRetries[w.id] = nil
@@ -1299,6 +1355,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 末尾（历史消息不回放 —— 白板每轮整块注入本就覆盖）；关 = 撤销登记。
     /// 到期自动失效（`CrewListenLogic.decide` 按 `until` 判定 + 惰性清理）。
     func applyListen(_ req: SessionListenRequest) {
+        guard !isCrewdPresentation else { return }
         guard runs.contains(where: {
             $0.sessionId == req.sessionId && $0.status == .running && $0.kind.isAgent
         }) else { return }
@@ -1430,6 +1487,7 @@ final class CrewSessionRunner: ObservableObject {
     private var snapshotTickQueued = false
 
     func startSessionsSnapshotTimer() {
+        guard !isCrewdPresentation else { return }
         guard snapshotTimer == nil else { return }
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.persistSessionsSnapshot() }
@@ -1443,6 +1501,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 不会变差：定时器周期仍是 2 秒，多出来的只是一次后台 hop（微秒级），而省掉的是
     /// 主线程上几十次加锁读盘。
     func persistSessionsSnapshot() {
+        guard !isCrewdPresentation else { return }
         guard !snapshotTickInFlight else {
             snapshotTickQueued = true
             return
@@ -1546,6 +1605,7 @@ final class CrewSessionRunner: ObservableObject {
     /// **重置+1分钟**;解析不出/缺失/已过期 → 45 分钟退避重试并在白板 fail-loud
     /// 说清没拿到重置时刻（唤醒词让它先 get_quota 核实,醒来仍受限会自己顺延）。
     func autoScheduleQuotaWakeup(for run: CrewSessionRun) {
+        guard !isCrewdPresentation else { return }
         guard run.kind.isAgent else { return }
         guard !wakeupStore.list(onIncident: { self.reportWakeupIncident($0) }).contains(where: {
             $0.sessionId == run.sessionId && $0.note.hasPrefix("[auto]")
@@ -1645,6 +1705,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 所有分支都必须应答 —— helper
     /// 在等，静默吞会让机长白等到超时。
     func applySessionOp(_ req: SessionOpsRequest) {
+        guard !isCrewdPresentation else { return }
         let respond = { (text: String) in
             LocalCrewControlStore.shared.writeCommandResponse(
                 crewId: req.crewId, commandId: req.commandId, text: text)
@@ -1866,6 +1927,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 两家快照都从 `QuotaCenter` 现取（判「两家都将尽」必须同时看两边），
     /// 调用方只需在任一家刷新后招呼一声。
     func broadcastQuotaWarningIfNeeded() {
+        guard !isCrewdPresentation else { return }
         let sessions = runs.filter { $0.status == .running && $0.kind.isAgent }.map {
             QuotaWarningPlan.RunningSession(
                 sessionId: $0.sessionId, crewId: $0.crewId,
@@ -1900,6 +1962,7 @@ final class CrewSessionRunner: ObservableObject {
     ) {
         let reason = error.localizedDescription
         lastStartError = reason
+        if isCrewdPresentation { return }
         lastStartErrorAction = StartErrorAction.forFailure(error)
         let briefPart = (brief?.isEmpty == false) ? "\n无人接手的活：\(brief!)" : ""
         LocalWhiteboardStore.shared.appendSessionMessage(
@@ -1945,6 +2008,7 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool = false,
         admissionPriority: AutomaticWakeAdmission.Priority = .automatic
     ) async throws {
+        if isCrewdPresentation { throw CrewdClientError(message: "新后台会话只能经正式 session.start 提交。", kind: .notSubmitted) }
         let launchRecorded = try await CrewSessionLaunchAdmission.perform(
             admission: wakeAdmission, sessionId: sessionId, crewId: crewId,
             isCaptain: role == .captain, isAgent: config.kind.isAgent,
@@ -2343,6 +2407,7 @@ final class CrewSessionRunner: ObservableObject {
 
     func submitExplicitText(_ text: String, id: String, to run: CrewSessionRun)
         async -> SessionWakeSubmission {
+        guard !isCrewdPresentation else { return .blocked }
         let pending = AutomaticWakeAdmission.PendingExplicitText(
             id: id, sessionId: run.sessionId, crewId: run.crewId, text: text)
         if !isViewer {
@@ -2407,6 +2472,7 @@ final class CrewSessionRunner: ObservableObject {
     /// latch/audit and reoffers debt, so a forwarded request is not a receipt.
     func requestAdmissionRecovery(scope: AutomaticWakeAdmission.RecoveryScope,
                                   crewId: String) -> AdmissionRecoveryResult {
+        guard !isCrewdPresentation else { return .failed }
         if isViewer {
             guard viewerClient != nil else { return .failed }
             let kind: String
@@ -2500,6 +2566,7 @@ final class CrewSessionRunner: ObservableObject {
     /// Called only after the owner successfully writes a scoped recovery
     /// record. The original whiteboard debt remains authoritative.
     func reofferRecordedWakes(scope: AutomaticWakeAdmission.RecoveryScope, crewId: String) {
+        guard !isCrewdPresentation else { return }
         switch scope {
         case .session(let sessionId):
             let target = sessionId.hasPrefix(CrewConversationKey.captainPrefix)
@@ -2684,6 +2751,12 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?
     ) async throws {
+        if isCrewdPresentation && crewdProjectionWorkspace == nil { throw CrewdClientError(message: "当前后台尚未绑定；请求未提交，不使用旧编排账。", kind: .notSubmitted) }
+        if let workspace = crewdProjectionWorkspace {
+            guard candidate.crewId == detail.crew.id else { throw CrewdClientError(message: "机长候选不属于当前机组", kind: .notSubmitted) }
+            _ = try await workspace.performValue("crew.setCaptain", .object(["crewId": .string(detail.crew.id), "sessionId": .string(candidate.sessionId)]))
+            return
+        }
         guard candidate.crewId == detail.crew.id,
               candidate.role == .worker,
               candidate.kind.isAgent else {
@@ -2741,6 +2814,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 单独落盘，故新版第一次启动即可自动续起被指定的 conversation，不要求旧机长
     /// 还活着替它点按钮。
     func resumePendingCaptainReassignments(backend: PendingCrewBackend?) async {
+        guard !isCrewdPresentation else { return }
         for request in LocalCaptainReassignmentStore.shared.pending() {
             guard let detail = LocalCrewStore.shared.getCrew(request.crewId) else {
                 LocalWhiteboardStore.shared.appendSessionMessage(
@@ -2805,6 +2879,7 @@ final class CrewSessionRunner: ObservableObject {
         kind: LocalCodingAgentKind,
         userInitiated: Bool = false
     ) async throws {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         if forwardCaptainHandoffToOwner(
             crewId: detail.crew.id, sessionId: nil,
             runner: kind, brief: openingBrief) { return }
@@ -2821,6 +2896,7 @@ final class CrewSessionRunner: ObservableObject {
         crewId: String, sessionId: String?, runnerRaw: String?, brief: String,
         detail: CrewDetail, backend: PendingCrewBackend?
     ) async {
+        guard !isCrewdPresentation else { return }
         do {
             guard detail.crew.id == crewId else { throw RunnerError.captainCandidateInvalid }
             if let sessionId, !sessionId.isEmpty {
@@ -2897,6 +2973,7 @@ final class CrewSessionRunner: ObservableObject {
     /// daemon 已以 old epoch + typed probe 证明进程不存在时才调用。缺 role/kind 的旧
     /// expected-live 行不具 P2 身份，继续停在 P1 的人工核对边界。
     func recoverConfirmedMissingCaptain(_ record: ExpectedLiveSessionStore.Record) {
+        guard !isCrewdPresentation else { return }
         guard record.role == "captain",
               let rawKind = record.runnerKind,
               let kind = LocalCodingAgentKind(rawValue: rawKind)
@@ -2994,6 +3071,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?
     ) async {
+        guard !isCrewdPresentation else { return }
         do {
             guard detail.crew.id == request.targetCrewId else {
                 throw CaptainHandoffAuthorizationError.notDirectChild
@@ -3338,6 +3416,16 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool = false,
         admissionPriority: AutomaticWakeAdmission.Priority = .automatic
     ) async throws -> Bool {
+        if isCrewdPresentation && crewdProjectionWorkspace == nil { throw CrewdClientError(message: "当前后台尚未绑定；请求未提交，不使用旧编排账。", kind: .notSubmitted) }
+        if let workspace = crewdProjectionWorkspace {
+            guard userInitiated else { throw CrewdClientError(message: "前端不能自动编排当前后台", kind: .notSubmitted) }
+            if let captain = detail.crew.captainBotId {
+                _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(captain)]))
+            } else {
+                _ = try await workspace.performValue("session.start", .object(["crewId": .string(detail.crew.id), "role": .string("captain"), "executor": .string("codex"), "brief": .string(openingBrief ?? wakeText ?? "维护本机组的工作闭环"), "title": .string(title), "isolation": .bool(true)]))
+            }
+            return true // Typed RPC acknowledgement; not a claim that a model ran.
+        }
         if isViewer {
             // viewer 里没有编排：把请求送回 daemon，那边用它自己的 CrewStore
             // 重新拉 detail 再起。**crewId 就够了** —— detail 是 daemon 那边的事实。
@@ -3499,6 +3587,7 @@ final class CrewSessionRunner: ObservableObject {
         sessionIdOverride: String? = nil,
         manualTakeoverDirectory: URL? = nil
     ) async throws {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         if isViewer {
             sendOrchestration(SessionOrchestrationOp.startSession, [
                 "role": .string("worker"),
@@ -3544,6 +3633,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
         newRunner: LocalCodingAgentKind
     ) async throws -> String? {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         let request = try WorkerManualTakeoverRequest(
             crewId: detail.crew.id, sourceSessionId: sourceSessionId,
             runner: newRunner, confirmed: true)
@@ -3567,6 +3657,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
         newRunner: LocalCodingAgentKind
     ) async throws -> String {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
         guard let source = try workerAssignmentStore.latest(
             crewId: detail.crew.id, sessionId: sourceSessionId),
@@ -3584,6 +3675,7 @@ final class CrewSessionRunner: ObservableObject {
         sourceAgentSessionId: String, newRunner: LocalCodingAgentKind,
         model: String? = nil, effort: String? = nil
     ) async throws -> String {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
         guard newRunner.isAgent else { throw WorkerManualTakeoverError.invalidRunner }
         guard !runs.contains(where: {
@@ -3641,6 +3733,13 @@ final class CrewSessionRunner: ObservableObject {
     func restoreSessions(_ candidates: [SessionRestoreOffer.Candidate],
                          backend: PendingCrewBackend?) async -> SessionRestoreOutcome {
         var outcome = SessionRestoreOutcome()
+        if isCrewdPresentation {
+            outcome.failures = candidates.map {
+                .init(sessionId: $0.sessionId, crewId: $0.crewId,
+                      reason: "旧会话恢复不适用于当前后台；未提交且未写入旧账。")
+            }
+            return outcome
+        }
         // **先问在哪个进程里接。** 接回 = 拉 agent；viewer 里自己拉就和后台双头。
         // 判定在 `SessionRestoreRoute`（有测试）。
         switch SessionRestoreRoute.decide(
@@ -3735,6 +3834,13 @@ final class CrewSessionRunner: ObservableObject {
                        wakeEntryId: String? = nil,
                        userInitiated: Bool = false,
                        admissionPriority: AutomaticWakeAdmission.Priority = .automatic) async throws {
+        if isCrewdPresentation && crewdProjectionWorkspace == nil { throw CrewdClientError(message: "当前后台尚未绑定；请求未提交，不使用旧编排账。", kind: .notSubmitted) }
+        if let workspace = crewdProjectionWorkspace {
+            guard userInitiated else { throw CrewdClientError(message: "前端不能自动恢复成员", kind: .notSubmitted) }
+            _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(member.sessionId)]))
+            workspace.selectSession(member.sessionId)
+            return
+        }
         guard !runs.contains(where: {
             $0.sessionId == member.sessionId && $0.status == .running
         }) else { return }
@@ -3992,6 +4098,7 @@ final class CrewSessionRunner: ObservableObject {
 final class CrewSessionRun: ObservableObject, Identifiable {
     enum Status: Equatable {
         case running
+        case inactive // Actual live.running=false; no fabricated completion outcome.
         case completed
         case cancelled
         case failed
@@ -4077,6 +4184,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         if let agent = backend as? AgentTerminalSession { return agent.terminalView }
         if let plain = backend as? PlainTerminalSession { return plain.terminalView }
         if let remote = backend as? RemoteSessionBackend { return remote.terminalView }
+        if let crewd = backend as? CrewdOriginalSessionBackend { return crewd.terminalView }
         return nil
     }
 
@@ -4203,7 +4311,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         self.permissionModeOverride = permissionModeOverride
         self.backend = backend
         self.role = role
-        self.status = Self.map(backend.status, cancelled: false)
+        self.status = backend is CrewdOriginalSessionBackend ? .inactive : Self.map(backend.status, cancelled: false)
         self.isWorking = backend.isWorking
         self.displayIsTyping = backend.displayIsTyping
         observeBackendStatus()
@@ -4435,6 +4543,16 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         }
     }
 
+    /// Retiring a presentation cancels observations only. It cannot stop any
+    /// model, publish a legacy end row, or infer remote execution completion.
+    func retireCrewdDisplayObservation() {
+        (backend as? CrewdOriginalSessionBackend)?.retireDisplay()
+        guard backend is CrewdOriginalSessionBackend else { return }
+        statusObservation?.cancel(); workingObservation?.cancel(); typingObservation?.cancel()
+        healthObservation?.cancel(); decisionObservation?.cancel(); launchParameterObservation?.cancel()
+        decisionEscalation?.cancel(); contextObservations.removeAll()
+    }
+
     /// 跟踪后端的 running/exited，映射到 run 的生命周期 status，并在退出时
     /// finalize（关 server row）。用 `backend.statusPublisher` 的 Combine stream 驱动。
     private func observeBackendStatus() {
@@ -4442,6 +4560,14 @@ final class CrewSessionRun: ObservableObject, Identifiable {
             guard let self else { return }
             for await backendStatus in self.backend.statusPublisher.values {
                 if Task.isCancelled { return }
+                if let crewd = self.backend as? CrewdOriginalSessionBackend {
+                    guard crewd.hasObservedLive else { continue }
+                    self.status = backendStatus == .running ? .running : .inactive
+                    if backendStatus != .running { self.isWorking = false; self.displayIsTyping = false }
+                    // Same session may Resume in a new generation. Keep the
+                    // projection observers; never finalize a local run/ledger.
+                    continue
+                }
                 switch backendStatus {
                 case .running:
                     self.status = .running
@@ -4660,6 +4786,7 @@ extension CrewSessionRun.Status {
     var wireName: String {
         switch self {
         case .running: return "running"
+        case .inactive: return "inactive"
         case .completed: return "completed"
         case .cancelled: return "cancelled"
         case .failed: return "failed"

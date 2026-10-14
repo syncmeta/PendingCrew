@@ -259,8 +259,20 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
         return Ok(guard);
     }
     let mut h = [0u8; 100];
-    main.read_exact(&mut h).map_err(|_| unknown())?;
-    let fields = header(&h)?;
+    let corrupt_header = || {
+        if wal_nonempty || journal_nonempty {
+            // A recovery sidecar can change classification; without a verified
+            // complete format/cut, retain the prior unknown fail-closed result.
+            unknown()
+        } else {
+            StoreError::Integrity {
+                check: "SQLite file header",
+                problems: vec!["nonempty main file does not contain a valid SQLite header".into()],
+            }
+        }
+    };
+    main.read_exact(&mut h).map_err(|_| corrupt_header())?;
+    let fields = header(&h).map_err(|_| corrupt_header())?;
     version(fields.0)?;
     // A hot rollback journal needs a separate verified recovery contract. Never
     // let an unclassified journal change the source during a version probe.
@@ -308,10 +320,10 @@ pub(crate) fn with_quiescent_copy<T>(
     let copy = PrivateCopy::new()?;
     let mut main = read_file(path)?.ok_or_else(unknown)?.0;
     let db = copy.copy("probe.db", &mut main)?;
-    if let Some((mut wal, stamp)) = read_file(&suffix(path, "-wal"))? {
-        if stamp.size > 0 {
-            copy.copy("probe.db-wal", &mut wal)?;
-        }
+    if let Some((mut wal, stamp)) = read_file(&suffix(path, "-wal"))?
+        && stamp.size > 0
+    {
+        copy.copy("probe.db-wal", &mut wal)?;
     }
     guard.recheck()?;
     let conn = Connection::open_with_flags(
@@ -327,7 +339,8 @@ pub(crate) fn with_quiescent_copy<T>(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    fn census(path: &Path) -> Vec<(PathBuf, Option<(Stamp, Vec<u8>)>)> {
+    type FileCensus = Vec<(PathBuf, Option<(Stamp, Vec<u8>)>)>;
+    fn census(path: &Path) -> FileCensus {
         [
             path.to_path_buf(),
             suffix(path, "-wal"),

@@ -7,6 +7,7 @@ import SwiftUI
 /// (顶栏 ⓘ 打开)。session 终端不再常驻,收进按需 inspector（`CrewSessionWindowView`,
 /// 由 MacThreePaneView 挂在 .inspector），从 toolbar 终端开关弹出。
 struct CrewCenterView: View {
+    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
     /// 驾驶舱开关位的**写句柄**（人类 Todo #96）。`@Environment` 取一个 class 值
@@ -59,7 +60,8 @@ struct CrewCenterView: View {
                 // 滚底正好打在上一个 crew 的内容上（Todo #45 的 macOS 错位）。重建也顺带
                 // 掐掉草稿/回复目标跨群残留（在 A 群打一半的字出现在 B 群、可能误发）——
                 // 未发出的草稿由 `CrewComposerDraftStore` 按 crew 记着，切回来原样在。
-                .id(detail.crew.id)
+                .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id)
+                .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace))
             } else if let id = crewStore.selectedCrewId, crewStore.loadingDetailIds.contains(id) {
                 ProgressView("加载 crew 详情…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,7 +157,10 @@ struct CrewCenterView: View {
                     //
                     // 原来旁边还有个「Todo」按钮直达 Todo 段（Todo #12）——Todo 已并进
                     // 任务段、右栏又常驻 Todo 面板，两个按钮开同一扇门，删掉一个。
-                    Button { cockpitPresentation.open() } label: {
+                    Button {
+                        if model.usesCrewdAuthority { model.crewdBackend?.workspace.originalSection = "进展" }
+                        else { cockpitPresentation.open() }
+                    } label: {
                         Label("驾驶舱", systemImage: "speedometer")
                     }
                     .disabled(crewStore.selectedDetail == nil)
@@ -280,17 +285,27 @@ private struct PendingCrewChatView: View {
             Spacer()
             HStack(spacing: 8) {
                 Image(systemName: "folder")
-                Text(draft.workingDirectory ?? "~/CrewGround/\(draft.title)")
-                    .lineLimit(1).truncationMode(.middle)
+                Group {
+                if crewStore.usesCrewdAuthority, crewStore.crewdWorkspace?.dataDirectory == nil {
+                    TextField("所连接电脑上的完整工作目录", text: Binding(
+                        get: { draft.workingDirectory ?? "" },
+                        set: { crewStore.setPendingWorkingDirectory($0) }))
+                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil)
+                } else {
+                    Text(draft.workingDirectory ?? (crewStore.usesCrewdAuthority ? "请明确选择工作目录" : "~/CrewGround/\(draft.title)"))
+                }
+                }.lineLimit(1).truncationMode(.middle)
                 Spacer()
                 if draft.workingDirectory != nil {
-                    Button("恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
+                    Button(crewStore.usesCrewdAuthority ? "清除选择" : "恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
                         .disabled(crewStore.pendingCrewDelivery != nil
                                   || crewStore.pendingCrewRollbackError != nil)
                 }
-                Button("选择目录…") { chooseDirectory() }
-                    .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
-                              || crewStore.pendingCrewRollbackError != nil)
+                if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
+                    Button("选择目录…") { chooseDirectory() }
+                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
+                                  || crewStore.pendingCrewRollbackError != nil)
+                }
             }
             .font(.callout)
             .padding(.horizontal, 18)
@@ -365,11 +380,21 @@ private struct PendingCrewChatView: View {
     }
 
     private func chooseDirectory() {
+        let selected = crewStore.crewdWorkspace
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        if crewStore.usesCrewdAuthority {
+            guard let selected else { error = "请先连接当前后台。"; return }
+            do { panel.directoryURL = try selected.localDirectoryPickerRoot() }
+            catch { self.error = error.localizedDescription; return }
+        }
         if panel.runModal() == .OK, let url = panel.url {
+            if crewStore.usesCrewdAuthority {
+                guard crewStore.crewdWorkspace === selected, selected?.isRetired == false,
+                      crewStore.pendingCrew?.id == draft.id else { return }
+            }
             crewStore.setPendingWorkingDirectory(url.path)
         }
     }

@@ -440,7 +440,6 @@ impl Custody {
 
 #[cfg(test)]
 mod tests {
-    use super::super::birth::REPORT_LEN;
     use super::*;
     use std::{
         io::{Read, Write},
@@ -560,9 +559,10 @@ os.close(master)
         }
     }
     fn receive(peer: &mut Peer) -> BirthReport {
-        let mut bytes = [0; REPORT_LEN];
-        peer.channel.read_exact(&mut bytes).unwrap();
-        let report = BirthReport::decode(&bytes).unwrap();
+        peer.channel.set_nonblocking(true).unwrap();
+        let received = super::super::birth::receive_for_test(peer.channel.as_raw_fd());
+        peer.channel.set_nonblocking(false).unwrap();
+        let report = received.unwrap();
         let ProbeResult::Found(identity) = registry::probe(report.pid) else {
             panic!("actual native birth absent")
         };

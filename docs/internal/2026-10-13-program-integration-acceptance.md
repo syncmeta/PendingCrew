@@ -1,5 +1,64 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-14 原窗口整块发现与14可信重连裁决
+
+根完整受管Linux维护整合已普通推送5951c4c4；该模块实际平台及独证接受，无额外CI/编译。07已批准隔离上下文真实Human-only/privatework流程显示actualcrew/lobby首消息与preparedjournal replyObserved、本群需求1→无owner/noexecute计划W2且Todo/进展同W2、Doc原文create/read与独立Docfolder（其他view不混）。这只支持对应真实原UI接线，不等窗口整体验收。
+
+窗口整体仍FAIL：原新建默认根/chooser读真实FoundationHome旧目录；选crew后新出现private ui-cache/whiteboards及.human-todos.lock/.todos.lock/.todo-sweep.lock，证明sidebar/sweep仍实例化旧业务；chatchecklist仍有旧发送建Todo承诺却正式拒绝；messages/channel-folder没有原UI入口。作者将默认路径、selector来源、sidebar/sweep、composer语义和正式channelfolder接线一次完整收口，公共Backend接口缺口交唯一Rust作者，不本地第二账本或偷换其他view。QA暂不加/startAgent或旧wake，只保已审Human私有分支；unknown/restart/跨authority/ownedQuit不能借13缺能力与旧实例FAIL冒通过，已验domain流程修复后按影响复用。
+
+14另一个完整必要门槛已裁决：App死亡后旧Core被launchd收养，新App不在旧kernel/birth anchor祖先链；不能承诺重连receipt恢复，也不能放宽all-sameUID。Mac由原可信anchor明确授予经过实际kernelPID/birth/UID和OS动态代码验证的前端身份，再允许新同代码PID一般Human；adhoc候选仅exactcode pin，正式publisher须OS评估Apple签名链+批准sealedidentifier/Team及hardened/非debug，不凭SigningInformation字段或路径/JSON自证。code-admitted身份不能自升trust，restore/import清投影并旋转实例。非Mac仍用既有可信anchor或正式TLS配对grant，不假装同UID文件token隔离。directowned-process只属真正ownedQuit，不能与一般Human混。作者先一次冻结完整公共14客户端合同让客户端并行接线；normal14/生产生命周期/App跨实例实际验证仍须完成。参考Apple官方Code Signing Requirement Language与Code Signing Tasks，未把方案当实现通过。
+
+资源事实纠正：/private/tmp/pcw-apple-module-terminal-reclaim-5cdf-manifest.json 实际3237paths/476071432B（约454MiB）是终态Xcode生成.pcm/.swiftmodule缓存，包含Darwin等系统/SDK模块，不是仅自有Swift目标。原SDK安装文件/.o/实际二进制/SPM不在删除清单，protected-after回执保存；下次必要前端构建需沿原DD按需重建模块，不另建cold目录/不为回填缓存额外全量构建，停止扩大ModuleCache回收。normal14前空间约1.3GiB，唯一Rust作者准备精确终态自有旧object/inode清单，经质量核和根审后才删；不盲ENOSPC或删SDK/第三方/rlib/rmeta/79actualbins/源/DB/log/proofs。
+
+
+## 2026-10-14 Linux 完整受管维护单元验收与原窗口当前边界
+
+唯一必要 Linux run38559752496/attempt1/exact3ac3074706830d3d384160b18f7d248ca8addb1a 已 terminal success，普通UID1001，仅linux-install-upgrade，全量crewd跳过，无新编译。独立报告 /private/tmp/pcw-Linux-install-3ac30747-success-small-06/complete-unit-independent.json 已实读接受：安装11→升级13→未知prepared/dropped回执readback/冲突payload/并发单CASwinner→仅pointer回退→managed在oldexec前拒future并保全部main/id/WAL/SHM物理与逻辑→正式Core restore11/reopen#1→restore13/reopen#1/#2走完整尾段；最终13/integrityok/50table。正常daemon实际wait0；wrapperdeath控制子进程仅证gone或zombie、退出码不可得，不泛称全部reaped0。
+
+新artifact11890753801 / ZIP56,492,828B / SHA841c747cc5d2c43786a8f3fa1135ff2cf2cf50eb29a2297e046828c51bafc658；827file/link完整manifest流式核对通过，actualmanagedmodule9ab7e0e6ddc585397e2a2552eb27f0a720bb7029e80afc0d9347889b2e889190同Git3ac。后台诚实复用original4e normal13默认release/binaryd891b4d84b5e8b35c9f502504ae5da5569ee330c7f23ba489c746cc8f6a5b8e5与original7b old11，不把3ac或根组合SHA称新编译。接受仅sameprefix受管/独立快照停态维护；其他prefix/raw、非空WAL同版crash14、安全生产配置、真实日常安装/分发仍未完成。原失败与rawold侧文件限制记录保留。
+
+根精准整合该完整12个workflow/scripts差异与作者Linux单元记录；正式原前端交付方案43b4cbb96cdd1b82deb535812d06ba1b6ec86244仅方案，要求ordinary默认Core/稳定正式namespace/真实持久安全vault/原各平台scene与14receipt-terminal-ownedQuit/设备/安装日常授权，未冒实施。整个Sources和crewd仍同已编5cdf字节，后台未14，不重复稳定审核、编译或CI。
+
+人类已明确授权一次新07 require_escalated+ttycontext，自动审批通过后actual98616 GUI97324/helper97339在 /private/tmp/pcw-original-07-context.avpj7cvv 真实kernelbirth/parent/private6env/cwd/fakeCodex/claudefalse/Unixpeer资格通过，原Root已连接，无旧whiteboards/legacy业务实例。保91510原default-sandbox SIGABRT对照，不为执行上下文重编产品。外部Python非Human lineage探针正确拒绝，不拿它替GUI资格。
+
+窗口仍未整体验收：新建入口与chooser暴露FoundationHome真实旧默认工作目录读取，输入HOME不能伪隔离。作者整块修默认根/selectedauthority/local-remote目录来源，不循环字段重包。当前明确privatework已有draft的compiled07提交路径已bounded证只取explicit目录、actualcrew/lobby且无legacy回填/自动start；QA须核实际draft和authority才继续该正式业务，不再触发knownbadbegin/chooser。隐私入口门禁仍FAIL，后续业务绿不能覆盖。13split首发不等14原子/receipt；M4producer/历史/审批、14normal及整体生产执行继续后端线，Jev/记忆只保留方案。
+
+
+## 2026-10-14 窗口实际启动与受管恢复源边界
+
+原前端07完整源码组合已保存并普通推送根5050e3a4513c2a93c8ba2bd1ea94cc9351f03f7f；GUI实际编译来源5cdf、helper仍正常2bf，准备层接受不等窗口。人类已经实际回复已解锁，原锁屏等待解除。
+
+07首次私有scope /private/tmp/pcw-original-07-scope.vsyerymb 的guard/空根预检通过，exec44414实际GUI91510随后exit1，无helper/DB/业务UI。精确IPS PendingCrew-2026-10-14-193439.ips经根只读核为SIGABRT、_RegisterApplication→NSApplication.init；首次tool未显式sandbox_permissions（use_default），尚不能归因cachecut产品代码，不修改App/重编试错。
+
+根审准同不可变07新private scope /private/tmp/pcw-original-07-context.avpj7cvv 的精确guard，拟require_escalated+ttytrue一次执行上下文比较。但自动审批实际拒绝，要求人类对新的精确运行上下文单独确认；新manifest仍false、没有进程，原failedscope未改。具体一次审批问题已提交，答复前不重试/换方法/间接执行。只阻窗口，不阻后端或Linux。无安装、模型、日常数据切换或系统权限绕过。
+
+Linux受管初稿2b736a9cbeac29d5a8ffd24982fe73ba649a9398内部完整Mac安装/备份/恢复11及13/reopen、wrapperdeath跨exec排他lease和header负例GREEN；QA发现restore --from另一SQLite源未保护，整块未接受、旧freeze未推/未新CI。根裁决阶段性managed恢复限定本target/data/backups已完成独立Core快照，owned0600/canonical0700/nolinks、DELETE1/1 header/无sidecars/实际package maxschema先判，并共享同dataEXlease；future/活源/跨data/unknown拒且保source与target物理/mode，输入不得先chmod。import必须明确JSON且确认Core不打开SQLite源。作者一次补完整源边界控制后新冻结，QA影响验再考虑必要Linux；Core原任意from能力不变，最终14同版crash安全恢复与受管扩展仍待，不把保守拒绝当完整交付。
+
+14公共生产整块质量资产已准备，真实defaultnormal/接口冻结/核准kernel身份仍为运行依赖，syntax不代表通过；后端整块生产接线继续。既有稳定验收不重复，公共schema/构建唯一写者不变。
+
+
+## 2026-10-14 原前端完整 Apple 准备单元整合
+
+实际不可变 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07 的 Mac58283、iPhoneOS42703、Simulator51928 均真实 terminal exit0。质量线已独核Mac正式checker/codesign deep strict、1314完整Gitinputs逐字同5cdf、3738SPM前后同、DebugNative/SDK27/arm64；两个移动SDK51/55实际产物及来源/settings/log/unsigned/family1,2一致。报告 /private/tmp/pcw-original-front-5cdf8af6-mac-independent-01.json 及对应iphone/simulator独验报告。新CrewStore缓存构造切断确在这个包输入中，不拿旧822包代证。
+
+根已将整棵 Sources 同步至实际编译GUI来源5cdf8af6233408760142e9f0416ce52602f7dd29（七个实际文件差异，其余原前端相同）；全crewd输入与该冻结同，仍正常schema13。此为源码组合，不重复构建、不重标组合Git ref已被编译。签名helper仍原compiled2bf正常Debug/rawfresh/374Rust证明，未14。未带入客户端在途managed/Linux脚本，不改变main产品源码。
+
+完整Apple准备层已接受，不冒实际窗口、设备、安装、日常数据或完整M4交付。822现场保留且人类解锁尚未答；07未启动。质量线先准备新private fake-only初次launch精确清单交根审，不能复用旧包/旧guard、不试解锁或触日常数据。Linux受管保护与后端14整体冻结继续并行，之后按影响验证；公共schema及构建唯一写者不变。
+
+
+## 2026-10-14 实际 Linux 新因果与交付继续点
+
+唯一必要 run38555435325 / HEAD5cdf8af6233408760142e9f0416ce52602f7dd29 已 terminal failure；只有 linux-install-upgrade，完整 crewd skipped，无 Cargo 编译。原4e实际 normal13 默认 release 的整棵 Rust 输入与强来源复用通过，不能重标为5cdf新编译。归档与证据上传成功，artifact11890101163 / 56,456,212B / SHA4a5016146f87bec83d6092cd173bd055524cea9b021228ed490138c040a25d7f。
+
+实际阶段证明207的四次 immutable observers 前后全部物理SHA一致、无WAL/SHM；正常13 daemon真实wait0后只有mainDB/.id。随后正式 backup-new CLI（backup::backup_db → SQLITE_OPEN_READ_ONLY → VACUUM INTO）重新留下0B WAL/32768B SHM；旧11 typed拒13后删除侧文件。mainDB/.id及全部50表逻辑不变，但严格物理保护仍RED，恢复尾段未执行。不能把本轮归因于已修复observer，不能以本地控制代替Linux真实结果。
+
+根裁决：客户端作者先用现有正常二进制完整复现正式backup路径及managed安装尾段，并完成managed launcher进入旧binary前的只读未来版保护；未知/活WAL不能被immutable忽略，全部原data/mode保留，旧canonical binary与严格physical断言不修改。与后端14 header/WAL failclosed契约协调，作者和QA本地整块收口后才决定必要Linux复验；不继续observer-only试错或自动重派CI。
+
+原前端5cdf缓存初始化切断已源码接受但不在822包内。新完整候选构建句柄58283，目录 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07，复用既有Xcode/SPM与真实2bf helper证明，无Rust重编；运行中不等于新包验收。旧703/822现场保留，锁屏只阻相关窗口业务，人类解锁尚无回复。后端14继续已支持Codex生产driver一次正文/生命周期/未知恢复及Core-owned现存Claude手工PTY机制；后者不能冒称Native ACP producer。完整M4 producer/历史/审批仍本线后续完整单元，Jev/记忆仅方案。
+
+CI-only远端main仍1ba3d4ba0973b6abf3f68395611063523b1be03e：普通push/PR不触发，必要手动验收保留。主目录main仍fe68022f，README/design/旧ACP人类未提交资料未触；没有产品main push、安装、日常数据切换或发布。
+
+
 工程候选 codex/work-identity-20261013，冻结门禁代码 03108f9c；Rust 1.94.0，锁定依赖、离线、all features。格式/lint/全量测试通过：2436 passed、0 failed、8 ignored；79个测试结果块只是验证统计，不是工作量。日志 /private/tmp/pcw-program-integration-gate-20261013-02.log。首次组合门禁因新 work.patrol 未进入 CLI every-method 实际调用覆盖而失败，原 -01.log 保留；b11b7abc 补实际双工作项分页、事实与详情读回，未降低覆盖清单。
 
 本轮用户场景：人显式读取有限巡检页，获取稳定全局 W、无人负责、真实恢复失败/既有失联规则、当前升级与等待事实，并读回详情。首实现2ed9f9c1的输出有界但计算重复全账本扫描，独审捕获后1382e258使用共享纯规则按页内项/关联依赖/问题投影。权威账本恢复/校验固有成本保留；未扫描范围和未评估类别明确返回。数据库无副作用、socket/CLI、核心规则等价均已验。不调 Jev、不启动行政、不自动通知/重派/关闭；这不是行政处完整交付。
@@ -140,3 +199,56 @@ Native 客户端固定源码 `1e51045a7e5de6a9b04ec0d74ea7d87091e0c19d` 的原 M
 根仅在隔离global树整合 `fe68022f..28ccf9c7` 的crewd范围，未带入未验Native客户端、未合main或切换真实数据。此候选可供M4接正式11→12；不宣布全部M6或正式交付通过。新实际CI为Rust `38492408715`（observer93795）和Swift `38492408688`（observer54017），均固定28cc；Linux job115620470451已完整2555pass/2fail/10skip/1leaky，缺口是新6项remote方法未入CLI全覆盖表、旧v8升级备份prefix仍硬编码v10。原日志 `/private/tmp/pcw-M6-linux-ci-28ccf9c7.log`；作者/质量线补齐真实覆盖与版本断言，禁止跳过。Mac与Swift剩余job保持观察，main须在完整平台门禁收束后再合。
 
 本机errno28的全workspace未运行测试，保留原失败。资源回收仅明确终态可再生缓存，包含root SDK2174文件221329501bytes manifest `/private/tmp/pcw-M6-terminal-sdk-module-cache-cleanup-20261014.json`、QA03及M4 incremental/rlib/rmeta清单；原始源、数据库、日志、实际SDK对象/二进制、normal与候选/witness均保留。全量检查移到实际CI，本机不盲重跑全workspace。
+
+
+## 2026-10-14 新会话：完整 Native/schema11 组合与专用 v2 候选
+
+用户明确恢复完整工程，并在本会话另行明确授权三条现有 codex 开发分支普通推送。接手实核及固定三线责任见总计划最新恢复段；旧停手与原失败证据保留。
+
+客户端将 global35179724 与 client e1ea6fc8 完整无冲突组合为335c64cb，保留后来 QA 脚本和全局记录。root 实际 Git 对比确认整个 crewd 与已通过真实 Linux/Mac CI 的 c42828e3 完全相同；Sources/Tests/project/Xcode/Package/Info 与已通过普通 Xcode26.5 CI 的28ccf9c7相同。root 只读实际 API 再核 CI38494334844/38492408688 的精确 SHA 与 terminal success，不重复派普通门禁。
+
+质量发现 SPM 实际编译目录需要完整集合与路径绑定。作者在feadabc7/fd19551d强化完整 before/after inventory、真实命令外部 SPM 路径及复制证明，新增负对照由质量独验；实际3738项顺序差异曾在构建前正确拒绝，canonical修正后再构建，原尝试保留。此范围是来源证明修正，不冒充稳定业务重新验收。
+
+完整专用 iOS 目标真实 build exit0（Swift/project固定335c64cb，与fd19551d逐字相同）。Mac完整 recipe、构建、打包、签名和checker真实exit0，新产物为 `/private/tmp/pcw-M6-native-v2-candidate-fd19551d-02/PendingCrew Native Candidate.app`。质量独验完整1261个 Git 输入的集合与每对象SHA、实际360个Rust输入与335normal默认配置非test helper来源、3738个SPM完整前后集合与复制证明、真实编译条件/SDK/settings/log、打包/双签均通过。证据 `/private/tmp/pcw-M6-native-v2-artifact-quality-01.log` 与 `.json`；normal独核 `/private/tmp/pcw-M6-normal-335c64cb-quality-proof.json`。旧normal28不被重标为新完整输入。
+
+root无冲突将冻结fd19551d串行合入global开发整合树37464e2，实核Swift/Rust/Xcode及v2 recipe/checker字节与实际产物冻结相同，保留新增统筹/质量记录，未动用户README/design/旧ACP路径。实际包的完整sourceRef仍为fd19551d，不冒称其归档包含后来global统筹文档。main仍fe68022f，未将schema11/Native或未完M4合main、安装、切换日常数据或发布。
+
+实际新窗口材料 `/private/tmp/pcw-visible-gui.sagibkxv/session.json` 已prepared。root已读精确包/GUI/helper/fake哈希与独立HOME/work/data环境，授权质量在包独验后启动此限定fake候选并尝试整块窗口流程；旧a9不被冒充。真实账号模型、LAN、设备安装与日常数据仍另核授权；App权限如需人处理不暂停其他线。窗口与真机验收尚未通过。
+
+后端正式12及完整Core生命周期继续在独立树。原scope metadata逐键attempt03实际新paint选Yes后CR仍返回No，无exact trust状态、types或mock请求，owned进程已回收；真实SDK兼容仍unknown，不重复盲试。客户端接Linux候选分发/真实Linux验证，质量接新窗口与M4冻结独验；Jev与记忆仍仅待决方案。额外all-features历史ENOSPC中断仍未完成，不由标准CI或feature差异证明外推整套通过。
+
+
+## 2026-10-14 Linux候选分发与设备准备：独验通过，窗口产品阻断继续修
+
+客户端平台材料冻结531bf520，root合入global为3e43f836；源于7b1849d9的实际Linux候选run38500948870已terminal success，明确candidate-only，不算standard full CI。实际Ubuntu24 x86_64/default release normal构建、完整witness、包装后生产serve→工作→停止→backup→restore→原UUID重开及remote default-off通过。质量独验360个Git Rust完整集合/每对象SHA、Linux ELF/实际log/config/binary、规范tar安全members与hidden输入、原runtime证据中的同binary/ref/旧UUID及restoredDB schema11/integrity/#1唯一均通过。证据 `/private/tmp/pcw-M6-linux-candidate-quality-01.log` 与 `.json`；规范tar SHA `8a9cc739…742c94`，保留实际完整digest于原证明。
+
+原CI loose artifact上传遗漏hidden源码，直接checker正确拒绝；原raw上传层RED保留。规范tar自身完整且独验通过，不因后来include-hidden-files修正重复构建有效binary/tar，更不能改标原7b sourceRef。新workflow修正只保证下一次完整上传；不会倒推原raw曾完整。
+
+iOS Device SDK专用unsigned整目标构建实际exit0，完整源/config/settings/input证明保留；仅设备交付准备，不是签发/安装/运行。实际devicectl只读发现7个known paired设备的tunnelState全部disconnected，iPhone/iPad真实设备验收仍阻断，不展示ID/个人名称。
+
+Mac actualfresh fd195窗口已真实执行机组、原始需求/同源计划、Todo独立分类、Unicode文档创建/编辑、进展读回及草稿只读重连，发现两项真实产品阻断：UI启动成员检查session.start而正常后台只广告orchestra；未指派计划推进返回内部owner invariant错误。质量直接交两作者同批修，客户端修能力解释与当前owner/CAS门禁，后台修正式业务拒绝，不自动指派或降低owner规则；后台只在schema11交付树给必要Rustfix，不混入未冻12/M4。改变GUI或Rust后必须准确新包；Rust完整输入改变还须新normal实际witness。旧fd/335证据不改标，稳定业务不无故全量重跑。
+
+Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装日常数据/公开发布仍未交付。客户端继续可审查的isolated-prefix安装/升级/回退材料，真实系统/自启动不启用；后台继续Core12冻结与M5，质量先复验修正窗口再接后台整块独验。全工程目标保持active。
+
+## 2026-10-14 Core12 子单元整合与原前端方向
+
+本次整合固定后端 a76cae4804cb26c62f4e2a64c993dbe18822758f，只接 Core12/私有持久收件与正式迁移，以及已验 typed work contract，不带后续 M5/schema13 未提交实现。独立质量结论见 `2026-10-14-independent-resumed-delivery-acceptance.md`：e871 的 2602 稳定生产用例证据与 a76 精确三例、doctest、真实 CLI testkit 补充验证组合；run38509489542 双平台终态 success，其 standard full jobs 明确 skipped。原 d360/e871 run 保持 failure，不能称 a76 全量 CI 或历史 all-features 通过。Core12 子单元可继续原前端及 Linux 升级组合；整体 M4/实际 SDK/生产混合执行仍未完成。
+
+最终产品回到实际原 PendingCrew 前端组件，独立 Native 工作区只保留为验证材料；详见总计划原前端纠偏段和 `2026-10-14-original-frontend-quality-impact-matrix.md`。最终公共 PTY 交互与可靠命令 receipt/status 仍是后端依赖，现客户端本机 UUID/内存 unknown 不证明服务端幂等或跨重启恢复。
+
+旧 normal335/5c 等完整字节输入与真实业务证据保留，但共享 Cargo target 后发现自有依赖可能沿用其他树缓存，旧 witness 不能证明每个自有依赖实际从该树重新编译。新候选须完整 owning dependency graph、真实 owner paths、所有必需自有 targets fresh=false 与原始 Cargo JSON/sidecars独核；不得重标旧二进制或重复全部稳定业务掩盖来源缺口。
+
+
+## 2026-10-14 CI-only 实际整合
+
+用户要求精简不必要CI。作者与独立质量线核对两份main兼容配置，仅取消push/PR，workflow_dispatch及原jobs/steps/concurrency不变。根使用独立索引仅整合两workflow，普通FF推送actual main 1ba3d4ba0973b6abf3f68395611063523b1be03e，parent fe68022f，未带开发产品源码。API实际ci blob dceb782161102f85409681df84f2c6611e8d345f、crewd blob d2ba723ca7ea9ea6e0748d056f49b8406515e988与commit匹配，按commit查runs=[]。整体disable曾被自动审批拒绝，未执行；保留手动入口的配置精简为授权内安全替代。
+
+主目录本地main未checkout/reset/pull，仍fe68022f，README/design/旧ACP用户资料原样。开发CI精简4e80134b9b5ff5a9b759aed1446f61da489efc4c已推送，保留full与必要Linux链，删除已完成临时scope/重复远端前置。Linux实际安装链仍未通过，没有再派发；6c本地整批前置接受仅为准备。证据 /private/tmp/pcw-ci-manual-policy-01/validation.json 与 /private/tmp/pcw-ci-main-manual-commit.json。未重跑稳定业务、不重标all-features/包/窗口/M4完成。
+
+## 2026-10-15 Core14默认失败整块因果修复冻结
+
+双平台默认CI原11个不同失败已完成整块源码与本机影响验收，独立报告 `/private/tmp/pcw-M14-default-ci-whole-fix-20/independent-whole-acceptance.json` SHA `ef0c6bbc9584e23371d162f7bbf3b714e365dac2763796beddc7ced2ee394b16`。390完整输入、12变更路径、20份实际证据核齐；whole.patch SHA `9c7d299980d318745378ec64144a5a6406f10e1070cfd4feb300d7f013ffd125`。根核整个diff一致后保存并普通推送 `0a6a0521330ace1647b2678c09d0738777aede1b`，开发树干净。DDL、proto/API与8c逐字相同，Native15不混入。
+
+读EOF先立即关闭输入权限并撤物理fence，输出仅按原有限预算排空原已接受响应/事件；排队旧actor的write/resize/claim/approval/respond/start与原子首消息均拒、零SQL副作用，hard revoke不能复活输入。真实半关连接合法reclaim/旧Unknown不冒零字节、新reader写入/原birth退出及daemon0；slow TLS部分帧撤权和排队零effects闭合。默认32×400模拟保原RNG/覆盖，无增栈或减断言；出生耐久ACK/全表回滚/损坏与未知WAL保护/历史迁移断言保持。此接受是源码与本机affected机制层，不是完整双host默认CI或新normal来源。
+
+客户端候选配置与实际iOS日志就绪/晚authority回调同批尚在冻结；required journal未就绪不发布可写adapter、所有write typed notSubmitted，无fallback/replay，保原自身socket只读诊断，await赋值前核captured epoch/scope/authority，不停止daemon或丢ownedIPC。待客户端整块QA接受后整合准确fullref，唯一后台作者新normal、完整原前端候选和一次必要双host默认验证含doctest；旧8c normal06/package12与CI失败保原来源，不重标。已验Linux隔离迁移与稳定业务不重复，额外all-features仍未验。磁盘实核10GiB，无容量阻断、未清理。B人工前台确认、SDK06具体授权仍未答；安装、日常切换、main产品、公开发布、真机及完整Native ACP仍未交付。
