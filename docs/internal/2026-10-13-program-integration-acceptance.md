@@ -252,3 +252,9 @@ Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装�
 读EOF先立即关闭输入权限并撤物理fence，输出仅按原有限预算排空原已接受响应/事件；排队旧actor的write/resize/claim/approval/respond/start与原子首消息均拒、零SQL副作用，hard revoke不能复活输入。真实半关连接合法reclaim/旧Unknown不冒零字节、新reader写入/原birth退出及daemon0；slow TLS部分帧撤权和排队零effects闭合。默认32×400模拟保原RNG/覆盖，无增栈或减断言；出生耐久ACK/全表回滚/损坏与未知WAL保护/历史迁移断言保持。此接受是源码与本机affected机制层，不是完整双host默认CI或新normal来源。
 
 客户端候选配置与实际iOS日志就绪/晚authority回调同批尚在冻结；required journal未就绪不发布可写adapter、所有write typed notSubmitted，无fallback/replay，保原自身socket只读诊断，await赋值前核captured epoch/scope/authority，不停止daemon或丢ownedIPC。待客户端整块QA接受后整合准确fullref，唯一后台作者新normal、完整原前端候选和一次必要双host默认验证含doctest；旧8c normal06/package12与CI失败保原来源，不重标。已验Linux隔离迁移与稳定业务不重复，额外all-features仍未验。磁盘实核10GiB，无容量阻断、未清理。B人工前台确认、SDK06具体授权仍未答；安装、日常切换、main产品、公开发布、真机及完整Native ACP仍未交付。
+
+## 2026-10-15 客户端整块配置验收阻断与Native15强制入口待决
+
+客户端原target候选配置与journal发布整块4c5f06726be1e0969706f4a895d32d14f183c21b静止；12源绑定、9settings/ordinary六配置与sourcephase逐值同、stamp6/namespace7/实际私有目录/A原历史副本0RPC保全、最终369输入三平台typecheck0已核。独立04报告 `/private/tmp/pcw-mobile-staging-source-unit-01/independent-whole-source-review-04.json` SHA92f50fda22271cd17162a92d1ae5306e902c5a4bc84a6af17246ec22d1c84c14，但整块不接受、不整合、不打包：真实ownedQuit先sleeping=true，使新增requiredjournalReady拒绝随后正式hibernate。作者同批修，须进入sleeping前捕获并再核ownbirth/scope/epoch/runtime与journal就绪；保持正式receipt/Unknown/有限关闭、不开放其它sleeping写、不raw绕日志、不授nonowner休眠权限。修后只做实际影响复验，未变配置证据复用。原socket日志失败只读/typed notSubmitted规则继续，不Kill/Stop后台。
+
+Native15独立后端树安全吸收准确1eda/0a6a Core14源码并保八路径Native增量，owningStore与真实enrolled proxy 1MiB分片/最终唯一ACK、cancel/gap/foreign半正文拒/无phase推进/断连Unknown矩阵实际通过，target已释放。此仅未激活private/fake组件层，不是原生SDK producer。现有SDK声明插件失败不阻native submit且PromptSubmitResult无genuine promptId/idle提交无turnId，故mandatory耐久入口与真实关联尚未证明，Native能力仍不可宣称available。后端按完整模块提交真实PTY外层门控/插件语义、来源完整cut、取消审批恢复的可裁决方案，仅现有证据与方案，不擅自降级或新SDK探测。SDK06人类授权仍未收到，且该历史/权限取证不能单独闭合producer。目标保持完整，后续新normal/原前端包与必要双host默认验收仍待客户端整块接受后的准确组合ref；旧normal06/包12及CI失败不重标。

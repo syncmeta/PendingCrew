@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 客户端整块配置验收阻断与Native15强制入口待决
+
+客户端原target候选配置与journal发布整块4c5f06726be1e0969706f4a895d32d14f183c21b静止；12源绑定、9settings/ordinary六配置与sourcephase逐值同、stamp6/namespace7/实际私有目录/A原历史副本0RPC保全、最终369输入三平台typecheck0已核。独立04报告 `/private/tmp/pcw-mobile-staging-source-unit-01/independent-whole-source-review-04.json` SHA92f50fda22271cd17162a92d1ae5306e902c5a4bc84a6af17246ec22d1c84c14，但整块不接受、不整合、不打包：真实ownedQuit先sleeping=true，使新增requiredjournalReady拒绝随后正式hibernate。作者同批修，须进入sleeping前捕获并再核ownbirth/scope/epoch/runtime与journal就绪；保持正式receipt/Unknown/有限关闭、不开放其它sleeping写、不raw绕日志、不授nonowner休眠权限。修后只做实际影响复验，未变配置证据复用。原socket日志失败只读/typed notSubmitted规则继续，不Kill/Stop后台。
+
+Native15独立后端树安全吸收准确1eda/0a6a Core14源码并保八路径Native增量，owningStore与真实enrolled proxy 1MiB分片/最终唯一ACK、cancel/gap/foreign半正文拒/无phase推进/断连Unknown矩阵实际通过，target已释放。此仅未激活private/fake组件层，不是原生SDK producer。现有SDK声明插件失败不阻native submit且PromptSubmitResult无genuine promptId/idle提交无turnId，故mandatory耐久入口与真实关联尚未证明，Native能力仍不可宣称available。后端按完整模块提交真实PTY外层门控/插件语义、来源完整cut、取消审批恢复的可裁决方案，仅现有证据与方案，不擅自降级或新SDK探测。SDK06人类授权仍未收到，且该历史/权限取证不能单独闭合producer。目标保持完整，后续新normal/原前端包与必要双host默认验收仍待客户端整块接受后的准确组合ref；旧normal06/包12及CI失败不重标。
+
 ## 2026-10-15 Core14默认失败整块因果修复冻结
 
 双平台默认CI原11个不同失败已完成整块源码与本机影响验收，独立报告 `/private/tmp/pcw-M14-default-ci-whole-fix-20/independent-whole-acceptance.json` SHA `ef0c6bbc9584e23371d162f7bbf3b714e365dac2763796beddc7ced2ee394b16`。390完整输入、12变更路径、20份实际证据核齐；whole.patch SHA `9c7d299980d318745378ec64144a5a6406f10e1070cfd4feb300d7f013ffd125`。根核整个diff一致后保存并普通推送 `0a6a0521330ace1647b2678c09d0738777aede1b`，开发树干净。DDL、proto/API与8c逐字相同，Native15不混入。
