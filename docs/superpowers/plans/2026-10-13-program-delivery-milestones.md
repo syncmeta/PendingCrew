@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 原前端14完整Apple产物准备单元接受
+
+最终不可变11目录 /private/tmp/pcw-original-frontend-candidate14-440ffc67-11，GUI实际完整输入440ffc67c2288aff9b5947991711fb22cf3f56df、inputdigest4ac7ed2728efabf81366df2bc52c10003072510b67124c44dd679a6cc369bebd；Mac8529/iPhoneOS87105/Simulator31475三完整target均实际terminal0。独立报告 /private/tmp/pcw-original-front14-11-wholeApple-independent.json 接受准备层：1343 Gitfiles与3738 SPM前后、完整settings/commands/logs/actualSDK27 arm64，Mac deepstrict签名及实际debug/preview dylib/CodeResources核齐。后台如实复用normal05 compiled8a、390输入与原强证明，不把GUI全ref或本文后续doc提交称后台新编译。11实际产物已静止，后续构建文件改变不改旧来源。
+
+编译真实09 Mac65与10 phone65均保原失败；18d/9408与d083为作者整批ABI适配、质量bounded接受，未扩权限/协议，最终根源码精确crewd==8a、原Sources/Tests/project/Info/recipes==d083。旧10Mac成功仍仅8ef来源，未重标11。移动51/55 unsigned完整SDK产品仍普通com.pendingname.pendingcrew标识，不能称隔离安装可用或设备/模拟器runtime通过。
+
+质量线A/B/S准备继续：A真实App ownedCore/fakeCodex；B同实际非空DB真实新AppPID/OS代码pin/general权限及nonownedQuit不停止Ahelper；S独立正式localhostSignedTLS假Claude真实PTY视图/lease/撤销。最终guard必须绑定整个已签sealed包/全部实际代码dylib，并核真实kernel birth/peer与B真实状态，尚未launch。当前adhoc exactpin不证明正式publisherpositive；后者独立真实正式标识/DeveloperID链/Team/hardened/no-debug仍待。
+
+Linux14下一完整单元由客户端唯一build/workflow作者负责：准确原Linux13来源作baseline，新14defaultrelease强正常构建一次、managed13→14与真实SIGKILL非空WAL恢复/重开、完整归档；不重已验11→13。managed委托恢复仅准确已验Core14包与源证明/hash/正式入口绑定，旧13/未知/未来/活外写者仍no-touch failclosed。根唯一必要CI dispatch，当前尚未派14CI，自动push/PR关闭保持。check.sh真实范围fmtall/clippyworkspacealltargets/默认workspace nextest和doc，不含allfeatures；历史额外all-features测试ENOSPC仍未验。
+
+Native15架构仅新增typed只读executor.list、沿现有executor=acp:<id>，能力须真实factory/producer证据门控，未验不标available；15仅原生history source/rows/cut及正式14→15迁移。后端继续整个source/fake模块，共享Rust唯一编译权已归还；未激活15/未新增SDK或真实模型调用。真实producer/permission/history输入目前不在旧metadata05授权证据中，作者先交精确隔离mock零forward/noModel/API清单核授权。Jev/个人记忆/团队知识仍待讨论。产品main、安装、日常切换/发布及真机/窗口/正式签名未交付。
+
 ## 2026-10-14 完整Core14与原App14源码组合冻结
 
 Core14准确冻结8a1255ac1762c7dfe84090a399fee835c32fdc3c与最终normal05独立验收接受；全390输入digest8dfa60de8ed9097b3478b659085fe059f1fef96fd69a1ae72812161a7c183910，binary651e96bd2ab196339514d6172e00e04cbcefc27c7dbf09b3c32a1d08b804a38d，witness5db422f10e82a8d487c1a7f8aeab1527972d6a433bf457c11e2a2e4dd2a9f243，12own fresh=false/defaultDebug/non-test/emptyfeatures真实构建47.09s终态0。新增静态schema/CLI消费者91methods/410refs齐，六实际typed null拒(-32602)/daemon0成功；系统SQLite modeRO收尾CANTOPEN原FAIL保留，同已停且无WAL/SHM的保留DBimmutable实核receipt0 completion通过，不重复六CLI。报告/private/tmp/pcw-M14-normal8a-independent-provenance-05.json及QA完整记录。
