@@ -33,7 +33,10 @@ def regular_inventory(root):
  rows=[]
  for p in sorted(root.rglob('*')):
   if p.is_symlink(): raise ValueError('evidence snapshot cannot contain symlinks')
-  if p.is_file(): rows.append({'path':p.relative_to(root).as_posix(),'sha256':sha(p)})
+  if p.is_file():
+   relative=p.relative_to(root).as_posix()
+   if any(c in relative for c in '\n\r\t'): raise ValueError('control characters in evidence paths')
+   rows.append({'path':relative,'sha256':sha(p)})
  return rows
 
 def main():

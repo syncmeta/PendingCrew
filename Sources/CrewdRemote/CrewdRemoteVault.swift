@@ -19,7 +19,18 @@ protocol CrewdRemoteCredentialStore {
 /// A new, non-synchronizing Keychain namespace. Legacy PSK entries are never read.
 final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
     private let service: String
-    init(service: String = "com.pendingname.pendingcrew.crewd.remote.v1") { self.service = service }
+    init(service: String? = nil) {
+        if let service { self.service = service }
+        else {
+            #if PENDINGCREW_NATIVE_CANDIDATE
+            let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String
+            let qualified = ref.flatMap { $0.count == 40 && $0.allSatisfy({ "0123456789abcdef".contains($0) }) ? $0 : nil }
+            self.service = "com.pendingname.pendingcrew.native-candidate." + (qualified ?? "unqualified") + ".crewd.remote.v1"
+            #else
+            self.service = "com.pendingname.pendingcrew.crewd.remote.v1"
+            #endif
+        }
+    }
     private func query(_ id: UUID? = nil) -> [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrSynchronizable as String: false]
         if let id { query[kSecAttrAccount as String] = id.uuidString.lowercased() }

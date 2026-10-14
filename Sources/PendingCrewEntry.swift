@@ -45,6 +45,10 @@ struct PendingCrewEntry {
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
         // Opt-in Codex first edition uses crewd and an independent data root.
         // It must be selected before legacy stores or the Swift orchestration gate start.
+        #if PENDINGCREW_NATIVE_CANDIDATE
+        PendingCrewNativeNextApp.main()
+        return
+        #else
         if CommandLine.arguments.contains("--crewd-ui") { PendingCrewNativeNextApp.main(); return }
         // 身份四（默认）：GUI。**编排闸门在这里取，不在任何视图里。**
         // 「谁是编排者」是进程身份的属性，不是某个视图的属性 —— 挂在视图上就会有
@@ -53,7 +57,10 @@ struct PendingCrewEntry {
         // 详见 `OrchestrationGate`。
         OrchestrationGate.installForGUIProcess()
         #endif
+        #endif
+        #if !PENDINGCREW_NATIVE_CANDIDATE
         PendingCrewApp.main()
+        #endif
         #endif
     }
 

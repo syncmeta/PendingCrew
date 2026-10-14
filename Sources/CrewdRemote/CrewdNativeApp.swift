@@ -10,13 +10,27 @@ struct CrewdRemoteMobileApp: App {
 #if os(macOS)
 /// Explicit --crewd-ui entry keeps the established isolated data-directory rule.
 struct PendingCrewNativeNextApp: App {
-    private let directory: URL
+    private let directory: URL?
     init() {
-        directory = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNext")
+        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty {
+            directory = URL(fileURLWithPath: explicit)
+        } else {
+            #if PENDINGCREW_NATIVE_CANDIDATE
+            if let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
+               ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) {
+                directory = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Application Support/PendingCrewNativeCandidates").appendingPathComponent(ref)
+            } else { directory = nil }
+            #else
+            directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNext")
+            #endif
+        }
     }
     var body: some Scene {
-        WindowGroup("PendingCrew · 开发候选") { CrewdNativeMacRoot(directory: directory).frame(minWidth: 1040, minHeight: 680) }
+        WindowGroup("PendingCrew · 开发候选") {
+            if let directory { CrewdNativeMacRoot(directory: directory).frame(minWidth: 1040, minHeight: 680) }
+            else { Text("这个候选版本缺少版本信息，暂时无法打开。") }
+        }
     }
 }
 private struct CrewdNativeMacRoot: View {
