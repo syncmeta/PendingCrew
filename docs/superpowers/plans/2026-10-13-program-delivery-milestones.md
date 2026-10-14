@@ -1,5 +1,16 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 原窗口整块发现与14可信重连裁决
+
+根完整受管Linux维护整合已普通推送5951c4c4；该模块实际平台及独证接受，无额外CI/编译。07已批准隔离上下文真实Human-only/privatework流程显示actualcrew/lobby首消息与preparedjournal replyObserved、本群需求1→无owner/noexecute计划W2且Todo/进展同W2、Doc原文create/read与独立Docfolder（其他view不混）。这只支持对应真实原UI接线，不等窗口整体验收。
+
+窗口整体仍FAIL：原新建默认根/chooser读真实FoundationHome旧目录；选crew后新出现private ui-cache/whiteboards及.human-todos.lock/.todos.lock/.todo-sweep.lock，证明sidebar/sweep仍实例化旧业务；chatchecklist仍有旧发送建Todo承诺却正式拒绝；messages/channel-folder没有原UI入口。作者将默认路径、selector来源、sidebar/sweep、composer语义和正式channelfolder接线一次完整收口，公共Backend接口缺口交唯一Rust作者，不本地第二账本或偷换其他view。QA暂不加/startAgent或旧wake，只保已审Human私有分支；unknown/restart/跨authority/ownedQuit不能借13缺能力与旧实例FAIL冒通过，已验domain流程修复后按影响复用。
+
+14另一个完整必要门槛已裁决：App死亡后旧Core被launchd收养，新App不在旧kernel/birth anchor祖先链；不能承诺重连receipt恢复，也不能放宽all-sameUID。Mac由原可信anchor明确授予经过实际kernelPID/birth/UID和OS动态代码验证的前端身份，再允许新同代码PID一般Human；adhoc候选仅exactcode pin，正式publisher须OS评估Apple签名链+批准sealedidentifier/Team及hardened/非debug，不凭SigningInformation字段或路径/JSON自证。code-admitted身份不能自升trust，restore/import清投影并旋转实例。非Mac仍用既有可信anchor或正式TLS配对grant，不假装同UID文件token隔离。directowned-process只属真正ownedQuit，不能与一般Human混。作者先一次冻结完整公共14客户端合同让客户端并行接线；normal14/生产生命周期/App跨实例实际验证仍须完成。参考Apple官方Code Signing Requirement Language与Code Signing Tasks，未把方案当实现通过。
+
+资源事实纠正：/private/tmp/pcw-apple-module-terminal-reclaim-5cdf-manifest.json 实际3237paths/476071432B（约454MiB）是终态Xcode生成.pcm/.swiftmodule缓存，包含Darwin等系统/SDK模块，不是仅自有Swift目标。原SDK安装文件/.o/实际二进制/SPM不在删除清单，protected-after回执保存；下次必要前端构建需沿原DD按需重建模块，不另建cold目录/不为回填缓存额外全量构建，停止扩大ModuleCache回收。normal14前空间约1.3GiB，唯一Rust作者准备精确终态自有旧object/inode清单，经质量核和根审后才删；不盲ENOSPC或删SDK/第三方/rlib/rmeta/79actualbins/源/DB/log/proofs。
+
+
 ## 2026-10-14 Linux 完整受管维护单元验收与原窗口当前边界
 
 唯一必要 Linux run38559752496/attempt1/exact3ac3074706830d3d384160b18f7d248ca8addb1a 已 terminal success，普通UID1001，仅linux-install-upgrade，全量crewd跳过，无新编译。独立报告 /private/tmp/pcw-Linux-install-3ac30747-success-small-06/complete-unit-independent.json 已实读接受：安装11→升级13→未知prepared/dropped回执readback/冲突payload/并发单CASwinner→仅pointer回退→managed在oldexec前拒future并保全部main/id/WAL/SHM物理与逻辑→正式Core restore11/reopen#1→restore13/reopen#1/#2走完整尾段；最终13/integrityok/50table。正常daemon实际wait0；wrapperdeath控制子进程仅证gone或zombie、退出码不可得，不泛称全部reaped0。
