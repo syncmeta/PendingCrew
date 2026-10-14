@@ -67,3 +67,18 @@ Root approved a separate schema14 implementation, preserving frozen12/13. Approv
 - No advertised capability until actual public methods/source/package/runtime freeze. Real Claude SDK/account/trust/model validation still requires its own authorization and actual evidence; fake protocol does not prove compatibility.
 
 QA reuses stable schema12 evidence and verifies only this new affected whole module at freeze; it does not write public product/schema implementation.
+
+
+## Whole original frontend initialization, mobile foundation and Quit scope
+
+Final acceptance starts before configure-crewd, not only after the first connected operation. AppModel, CrewStore, SessionHost, AppDelegate and MenuBar initialization must not instantiate a legacy LocalBackend, default daily root, ledger/outbox writer, old orchestrator lock, takeover/wake timer or model process before authority binding. Use the exact new original-scene candidate with explicit private HOME/data/work and monitor its own legacy ledger/outbox/lock/timer/process boundary. Daily directory roots are forbidden; do not read personal content to assess them. Disconnect and failed authentication cannot trigger legacy/local fallback. Old isolated Native launch evidence is reusable business evidence, never proof of these new original-scene initialization effects.
+
+Mobile whole delivery preserves original IPadShell/CrewListView/CrewChatView/IOSRemoteSessionView and pairing form under the same trustworthy remote authority. The old two-step form may add the necessary signed-invitation/response/formal-confirmation stage, reusing validated TLS/signature semantics instead of reverting to old credentials or restart protocols. Mac original-window success plus compilation of a replacement mobile root is not original iPhone/iPad delivery. At the full frontend freeze, verify the original components' live authority, selections, unknown writes and revoked/slow connection effects; do not repeat already accepted TLS cryptography simply because the view changes. Physical device installation/run retains its separate authorization and evidence gate.
+
+Lifecycle outcomes are distinct:
+
+- Closing a window preserves its team. Explicit App Quit may drain/hibernate/stop only the local helper and children actually owned by that App, with genuine PID/birth/ledger evidence. It cannot stop unrelated old helpers or transfer ownership by changing selection.
+- Remote viewer Quit cancels only its connection/watch/lease. It never automatically stops the remote server or team. A mobile app entering background or disappearing cannot establish remote termination.
+- Switching machine/crew closes only the owned viewer scope; it does not move, terminate or silently acquire the previous authority. Late callbacks retain their original scope and cannot clear the new selection's draft.
+
+Apply these together in the immutable full-platform original frontend candidate gate after freeze. Source ownership stays with the client author; QA reports concrete whole-flow defects directly, without repeatedly reviewing moving fields or rerunning stable Stop/TLS suites.
