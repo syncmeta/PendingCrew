@@ -14,6 +14,11 @@ struct CrewdRemoteRetainedInputs: View {
     @State private var showing: CrewdRetainedInput?
     private var inputs: [CrewdRetainedInput] {
         var rows: [CrewdRetainedInput] = []
+        for unknown in workspace.durableUnknown {
+            rows.append(.init(id: "durable-" + unknown.id.uuidString,
+                title: unknown.method + " · 原提交结果待确认",
+                text: "这是本机保留的提交观察记录，不是后台成功回执。不会自动重放。\n原作用域：" + unknown.scope.namespace.uuidString + "\n原机组：" + unknown.crew + "\n原参数：\n" + unknown.params.pretty))
+        }
         for submission in workspace.uncertainTextSubmissions {
             rows.append(.init(id: submission.id.uuidString, title: submission.method == "session.start" ? "启动成员 · 结果待确认" : "消息 · 结果待确认", text: submission.snapshot.text))
         }

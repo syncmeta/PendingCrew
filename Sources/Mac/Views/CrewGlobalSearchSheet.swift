@@ -9,6 +9,7 @@ struct CrewGlobalSearchSheet: View {
     @State private var query = ""
     @State private var documents: [CrewMessageSearchDocument] = []
     @State private var loading = true
+    @State private var loadError: String?
 
     private struct Scope: Sendable {
         let id: String
@@ -41,6 +42,8 @@ struct CrewGlobalSearchSheet: View {
             if loading {
                 ProgressView("正在读取群聊索引…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let loadError {
+                placeholder(icon: "wifi.exclamationmark", text: loadError)
             } else if trimmedQuery.isEmpty {
                 placeholder(icon: "magnifyingglass", text: "搜索所有群的消息")
             } else if results.isEmpty {
@@ -54,7 +57,7 @@ struct CrewGlobalSearchSheet: View {
 
             Divider()
             HStack {
-                Text("范围：全部 \(crewStore.crews.count) 个群；最多显示最新 200 条")
+                Text(crewStore.usesCrewdAuthority ? "范围：当前电脑的机组消息回复；每群读取至多 1000 条，最多显示最新 200 条匹配" : "范围：全部 \(crewStore.crews.count) 个群；最多显示最新 200 条")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -65,7 +68,7 @@ struct CrewGlobalSearchSheet: View {
         }
         .frame(minWidth: 620, minHeight: 500)
         .navigationTitle("搜索所有群")
-        .task { await loadDocuments() }
+        .task(id: crewStore.crewdWorkspace?.presentationNamespace) { await loadDocuments() }
     }
 
     private func resultRow(_ result: CrewMessageSearchResult) -> some View {
@@ -120,6 +123,21 @@ struct CrewGlobalSearchSheet: View {
     }
 
     private func loadDocuments() async {
+        if crewStore.usesCrewdAuthority {
+            guard let workspace = crewStore.crewdWorkspace else { loadError = "当前后台未连接"; loading = false; return }
+            loading = true; documents = []; loadError = nil
+            do {
+                let backend = CrewdPendingCrewBackend(workspace: workspace)
+                var next: [CrewMessageSearchDocument] = []
+                for crew in crewStore.crews {
+                    let rows = try await backend.listCrewWhiteboard(crewId: crew.id)
+                    next += rows.map { CrewMessageSearchAdapters.entry($0, crewId: crew.id, crewTitle: crew.title) }
+                }
+                guard !Task.isCancelled, crewStore.crewdWorkspace === workspace else { return }
+                documents = next; loading = false
+            } catch { if crewStore.crewdWorkspace === workspace { loadError = error.localizedDescription; loading = false } }
+            return
+        }
         let scopes = crewStore.crews.map { Scope(id: $0.id, title: $0.title) }
         documents = await Task.detached(priority: .userInitiated) {
             scopes.flatMap { scope in

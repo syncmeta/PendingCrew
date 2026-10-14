@@ -451,8 +451,15 @@ struct CrewChatView: View {
 
     /// 进屏取回本 crew 记着的草稿。文本 / 已挂上的 @ / 正在回复谁一起取 —— 只取文本的话
     /// 恢复出来的 `@某人` 就成了一串没有目标的字（看着 @ 了，发出去谁也没 @ 到）。
+    private var draftStorageKey: String {
+        #if os(macOS)
+        if let backend = appModel.crewdBackend { return backend.workspace.presentationNamespace + "/" + crewId }
+        #endif
+        return crewId
+    }
+
     private func restoreDraft() {
-        let saved = CrewComposerDraftStore.shared.draft(for: crewId)
+        let saved = CrewComposerDraftStore.shared.draft(for: draftStorageKey)
         guard !saved.isEmpty else { return }
         draft = saved.text
         replyTarget = saved.replyTarget
@@ -463,9 +470,14 @@ struct CrewChatView: View {
 
     /// 存回去（草稿一动就存；发送成功后由 `send()` 清）。
     private func saveDraft() {
+        #if os(macOS)
+        if let workspace = appModel.crewdBackend?.workspace {
+            workspace.messageDrafts.set(draft, for: .message(crew: crewId, channel: crewId + "/lobby", session: ""))
+        }
+        #endif
         CrewComposerDraftStore.shared.save(
             .init(text: draft, stagedMentions: stagedMentions, replyTarget: replyTarget),
-            for: crewId)
+            for: draftStorageKey)
     }
 
     /// The roster member id that represents "me" (skipped from the candidate
@@ -1558,8 +1570,9 @@ struct CrewChatView: View {
             loadError = "未配置 backend"
             return
         }
+        let changes = backend.whiteboardChanges(crewId: crewId)
         await refresh()
-        for await _ in backend.whiteboardChanges(crewId: crewId) {
+        for await _ in changes {
             if Task.isCancelled { return }
             await refresh()
         }
@@ -1621,6 +1634,10 @@ struct CrewChatView: View {
             //
             // 落盘规则（搬 vs 写、原名留不留）收口在 `CrewLocalAttachmentPersist`——
             // 群聊、新建 Todo、Todo 追问三条入口共用同一份，图都进同一个目录。
+            if appModel.usesCrewdAuthority && !toUpload.isEmpty {
+                loadError = "当前后台尚未开放附件提交；文件保留在输入中。"
+                return
+            }
             do {
                 localAttachments = try CrewLocalAttachmentPersist.persist(
                     toUpload, crewId: crewId)
@@ -1657,7 +1674,7 @@ struct CrewChatView: View {
             stagedMentions = []
             replyTarget = nil
             activeMentionQuery = nil
-            CrewComposerDraftStore.shared.clear(crewId) // 发出去了就不是草稿了
+            CrewComposerDraftStore.shared.clear(draftStorageKey) // 发出去了就不是草稿了
             await refresh()
         } catch {
             loadError = error.localizedDescription
@@ -1672,6 +1689,7 @@ struct CrewChatView: View {
     /// 上、也挂到群里那条「To do +1」上。@ 不参与（todo 没有收件人）；发完 Todo 模式
     /// 保持 sticky（Todo #6），只有用户手动再点 Todo 钮才熄灭。
     private func sendTodo() async {
+        if appModel.usesCrewdAuthority { loadError = "请使用本群 Todo 的正式创建入口。"; return }
         guard crewId != LocalCrew.chiefCrewId else {
             loadError = ChiefTodoCreationRefusal.useExecutionCrew.localizedDescription
             return
@@ -1701,7 +1719,7 @@ struct CrewChatView: View {
             pendingAttachments = []
             stagedMentions = []
             activeMentionQuery = nil
-            CrewComposerDraftStore.shared.clear(crewId)
+            CrewComposerDraftStore.shared.clear(draftStorageKey)
             await refresh()
         } catch {
             loadError = error.localizedDescription

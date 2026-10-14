@@ -25,10 +25,13 @@ import Combine
     @Published var revokeNotes: [String: String] = [:]
     private var drafts: [String: RequestDraft] = [:]
     private var readEpoch = UUID()
+    private var retired=false
     let workspace: CrewdWorkspace
     init(workspace: CrewdWorkspace) { self.workspace = workspace }
+    func retire() {retired=true;readEpoch=UUID()}
     private func decode<T: Decodable>(_ value: CrewdValue, as: T.Type) throws -> T { try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value)) }
     func refresh() async {
+        guard !retired else{return}
         let epoch = UUID(); readEpoch = epoch
         do {
             let state = try decode(await workspace.client.call("remote.status"), as: CrewdRemoteStatus.self)
@@ -79,7 +82,7 @@ import Combine
     }
     func confirm(_ draft: RequestDraft) async { await execute(draft) }
     private func submit(_ method: String, _ base: CrewdValue, label: String, idempotent: Bool = true) async {
-        guard !busy else { return }
+        guard !retired,!busy else { return }
         let current: RequestDraft
         if let old = drafts[method] {
             var oldBase = old.params
@@ -96,7 +99,7 @@ import Combine
         return RequestDraft(id: id, method: method, params: params, label: label)
     }
     private func execute(_ draft: RequestDraft) async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !retired,!busy else { return }; busy = true; defer { busy = false }
         readEpoch = UUID()
         do {
             let result = try await workspace.client.call(draft.method, draft.params)
@@ -112,7 +115,7 @@ import Combine
             }
             unknown.removeAll { $0.id == draft.id }
             error = nil
-            await refresh()
+            if !retired {await refresh()}
         } catch {
             self.error = error.localizedDescription
             if CrewdClientError.isUncertainSubmission(error), !unknown.contains(where: { $0.id == draft.id }) { unknown.append(draft) }

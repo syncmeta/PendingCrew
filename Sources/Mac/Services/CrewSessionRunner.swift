@@ -222,6 +222,12 @@ final class CrewSessionRunner: ObservableObject {
     /// 恰恰相反，它保证这个进程里一套都没有（§6 唯一所有权）。
     private(set) var isViewer = false
     private var viewerClient: SessionProtocolClient?
+    private var crewdProjectionWorkspace: CrewdWorkspace?
+    func installCrewdProjection(_ projected: [CrewSessionRun], workspace: CrewdWorkspace) {
+        isViewer = true; viewerClient = nil; crewdProjectionWorkspace = workspace
+        if runs.map(\.sessionId) != projected.map(\.sessionId) { runs = projected }
+    }
+
 
     /// 接上 viewer 链路。之后 `runs` 由 `applyRemoteRoster` 驱动。
     func attachViewer(client: SessionProtocolClient) {
@@ -383,6 +389,7 @@ final class CrewSessionRunner: ObservableObject {
         isComposingNew = false
         // 看过了 —— 响铃提示消掉（次数与时刻留着，见 `TerminalBellTrace`）。
         runs.first(where: { $0.runID == runId })?.acknowledgeBells()
+        if let session = runs.first(where: { $0.runID == runId })?.sessionId { crewdProjectionWorkspace?.selectSession(session) }
     }
 
     /// 进入「新建 session」态（composer 显零配置启动面）。
@@ -393,6 +400,7 @@ final class CrewSessionRunner: ObservableObject {
     /// 停掉指定 run（保留在列表里，状态落 cancelled）。
     func stop(_ runId: UUID) {
         guard let run = runs.first(where: { $0.runID == runId }) else { return }
+        if crewdProjectionWorkspace != nil { run.backend.stop(); return }
         let crewId = run.crewId
         discardDeferredWakes(sessionId: run.sessionId)
         continuationStore.cancel(sessionId: run.sessionId)
@@ -401,6 +409,7 @@ final class CrewSessionRunner: ObservableObject {
 
     /// 移除指定 run（仍在跑则先停）。被移除的是选中项时，回退选最后一个。
     func remove(_ runId: UUID) {
+        if crewdProjectionWorkspace != nil { lastStartError = "成员记录由当前后台维护；请使用明确的停止操作。"; return }
         guard let idx = runs.firstIndex(where: { $0.runID == runId }) else { return }
         let run = runs[idx]
         let crewId = run.crewId
@@ -817,6 +826,7 @@ final class CrewSessionRunner: ObservableObject {
     /// - codex：走 app-server `thread/settings/update`，从下一轮起生效。
     /// - 目标 run 不在跑：白板落说明（fail-loud，不静默吞）。
     func applyProfileChange(_ req: SessionProfileChangeRequest) async {
+        if crewdProjectionWorkspace != nil { lastStartError = "当前后台尚未提供正式的运行配置切换能力。"; return }
         if isViewer {
             sendOrchestration(SessionOrchestrationOp.profileChange, [
                 "sessionId": .string(req.sessionId), "crewId": .string(req.crewId),
@@ -1900,6 +1910,7 @@ final class CrewSessionRunner: ObservableObject {
     ) {
         let reason = error.localizedDescription
         lastStartError = reason
+        if crewdProjectionWorkspace != nil { return }
         lastStartErrorAction = StartErrorAction.forFailure(error)
         let briefPart = (brief?.isEmpty == false) ? "\n无人接手的活：\(brief!)" : ""
         LocalWhiteboardStore.shared.appendSessionMessage(
@@ -1945,6 +1956,7 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool = false,
         admissionPriority: AutomaticWakeAdmission.Priority = .automatic
     ) async throws {
+        if crewdProjectionWorkspace != nil { throw CrewdClientError(message: "新后台会话只能经正式 session.start 提交。", kind: .notSubmitted) }
         let launchRecorded = try await CrewSessionLaunchAdmission.perform(
             admission: wakeAdmission, sessionId: sessionId, crewId: crewId,
             isCaptain: role == .captain, isAgent: config.kind.isAgent,
@@ -2684,6 +2696,11 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?
     ) async throws {
+        if let workspace = crewdProjectionWorkspace {
+            guard candidate.crewId == detail.crew.id else { throw CrewdClientError(message: "机长候选不属于当前机组", kind: .notSubmitted) }
+            _ = try await workspace.performValue("crew.setCaptain", .object(["crewId": .string(detail.crew.id), "sessionId": .string(candidate.sessionId)]))
+            return
+        }
         guard candidate.crewId == detail.crew.id,
               candidate.role == .worker,
               candidate.kind.isAgent else {
@@ -3338,6 +3355,15 @@ final class CrewSessionRunner: ObservableObject {
         userInitiated: Bool = false,
         admissionPriority: AutomaticWakeAdmission.Priority = .automatic
     ) async throws -> Bool {
+        if let workspace = crewdProjectionWorkspace {
+            guard userInitiated else { throw CrewdClientError(message: "前端不能自动编排当前后台", kind: .notSubmitted) }
+            if let captain = detail.crew.captainBotId {
+                _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(captain)]))
+            } else {
+                _ = try await workspace.performValue("session.start", .object(["crewId": .string(detail.crew.id), "role": .string("captain"), "executor": .string("codex"), "brief": .string(openingBrief ?? wakeText ?? "维护本机组的工作闭环"), "title": .string(title), "isolation": .bool(true)]))
+            }
+            return true // Typed RPC acknowledgement; not a claim that a model ran.
+        }
         if isViewer {
             // viewer 里没有编排：把请求送回 daemon，那边用它自己的 CrewStore
             // 重新拉 detail 再起。**crewId 就够了** —— detail 是 daemon 那边的事实。
@@ -3735,6 +3761,12 @@ final class CrewSessionRunner: ObservableObject {
                        wakeEntryId: String? = nil,
                        userInitiated: Bool = false,
                        admissionPriority: AutomaticWakeAdmission.Priority = .automatic) async throws {
+        if let workspace = crewdProjectionWorkspace {
+            guard userInitiated else { throw CrewdClientError(message: "前端不能自动恢复成员", kind: .notSubmitted) }
+            _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(member.sessionId)]))
+            workspace.selectSession(member.sessionId)
+            return
+        }
         guard !runs.contains(where: {
             $0.sessionId == member.sessionId && $0.status == .running
         }) else { return }
@@ -4077,6 +4109,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
         if let agent = backend as? AgentTerminalSession { return agent.terminalView }
         if let plain = backend as? PlainTerminalSession { return plain.terminalView }
         if let remote = backend as? RemoteSessionBackend { return remote.terminalView }
+        if let crewd = backend as? CrewdOriginalSessionBackend { return crewd.terminalView }
         return nil
     }
 

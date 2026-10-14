@@ -44,7 +44,11 @@ struct MacThreePaneView: View {
             // 「这个窗口现在管不管事」—— 正常编排时渲染成空，不占一个像素。
             // 挂在三栏**之上**而不是某一栏里：它讲的是整个进程的状态，
             // 塞进任何一栏都会变成「那一栏的事」。见 `OrchestrationNoticeBar`。
-            OrchestrationNoticeBar()
+            if model.usesCrewdAuthority {
+                if let workspace = model.crewdBackend?.workspace {
+                    CrewdOriginalConnectionStatus(workspace: workspace)
+                } else { Text(model.crewdDirectory == nil ? "这个候选版本缺少来源信息，连接未建立。" : "正在连接当前后台").font(.caption).padding(8) }
+            } else { OrchestrationNoticeBar() }
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
@@ -64,10 +68,10 @@ struct MacThreePaneView: View {
             .environment(\.cockpitPresentation, cockpit)
             }
 
-            CockpitLayer(presentation: cockpit)
-                .environmentObject(crewStore)
-                .environmentObject(model)
-                .zIndex(1)
+            if !model.usesCrewdAuthority {
+                CockpitLayer(presentation: cockpit)
+                    .environmentObject(crewStore).environmentObject(model).zIndex(1)
+            }
         }
         // ⚠️ **这里不许再挂 `.animation(_:value:)`**（人类 Todo #96）。
         // 它的作用域是整个子树，包括整棵 NavigationSplitView；开关驾驶舱那一下的
@@ -78,13 +82,24 @@ struct MacThreePaneView: View {
         // crew、恢复新 crew 记住的那份 —— 切回来还是原来打开的 session，不串。
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
+            if model.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace, let new, new != crewStore.pendingCrew?.id {
+                workspace.selectCrew(new); workspace.selectChannel(new + "/lobby")
+            }
         }
         // 去掉 toolbar 底部那条灰色分隔线（详见 WindowSeparatorRemover）。tick 传
         // selectedCrewId —— 切 crew 时借 updateNSView 重设，抢在 SwiftUI 把它重置回去之后。
+        .onChange(of: model.crewdBackend?.workspace.presentationNamespace) { _, _ in
+            guard model.usesCrewdAuthority else { return }
+            crewStore.retireOriginalAuthorityPresentation()
+            sessionHost.begin(model: model, crewStore: crewStore)
+            Task { await crewStore.refreshList() }
+        }
         .background(WindowSeparatorRemover(tick: crewStore.selectedCrewId ?? ""))
+        .modifier(CrewdOriginalConnectionIntegration())
         .task {
             // 长期职责（编排器/中继/唤醒器/两个轮询中心/用量监视 + 那一串编排
             // 订阅）全在 SessionHost 里起，这里只招呼一声。幂等。
+            if model.usesCrewdAuthority { await model.connectCrewdAuthority() }
             sessionHost.begin(model: model, crewStore: crewStore)
             // 首次进入时把列表 + subjects 都拉一遍 —— subjects 用于创建
             // crew sheet 的 picker，提前 prefetch 避免 sheet 打开时空。

@@ -41,6 +41,7 @@ struct PendingCrewApp: App {
         // （PendingCrew 未登录也是常态：本地为家）。未配置更新源时自动 no-op。
         // 对齐 PendingBotApp.swift 的同款 init 接线。
         MainActor.assumeIsolated {
+            guard !appModel.usesCrewdAuthority else { return }
             _ = AppUpdater.shared
             AppUpdater.shared.onWillInstallUpdate = {
                 AppQuitLifecycle.shared.sparkleInstalling = true
@@ -73,13 +74,14 @@ struct PendingCrewApp: App {
         // 这样在设置窗口改外观时它本身也即时重绘。对齐 PendingBot #299。
         Settings {
             CrewSettingsView()
+                .environmentObject(model)
                 // 「后端」页的重启入口要走 SessionHost（换代公告 / 停旧 / 问接回同一套）。
                 // **不注入就是一读就崩**，接线测试钉着。
                 .environmentObject(sessionHost)
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         }
         .commands {
-            PendingCrewUpdateCommands()
+            if !model.usesCrewdAuthority { PendingCrewUpdateCommands() }
             CommandGroup(replacing: .appTermination) {
                 Button("退出 PendingCrew") {
                     AppQuitLifecycle.shared.userRequestedQuit = true
@@ -144,6 +146,20 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let lifecycle = AppQuitLifecycle.shared
+        if let quit = lifecycle.crewdQuit {
+            if waitingForDaemon { return .terminateLater }
+            waitingForDaemon = true
+            Task { @MainActor [weak self] in
+                do { try await quit(); self?.waitingForDaemon = false; sender.reply(toApplicationShouldTerminate: true) }
+                catch {
+                    self?.waitingForDaemon = false
+                    let alert = NSAlert(); alert.messageText = "退出尚未确认"; alert.informativeText = error.localizedDescription
+                    alert.addButton(withTitle: "留在 PendingCrew"); alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: false)
+                }
+            }
+            return .terminateLater
+        }
         if waitingForDaemon { return .terminateLater }
         let reason = AppQuitDaemonPolicy.resolveReason(
             sparkleInstalling: lifecycle.sparkleInstalling,
@@ -219,6 +235,7 @@ final class AppQuitLifecycle {
             NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
         }
     }
+    var crewdQuit: (() async throws -> Void)?
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
     var resumeViewer: (() -> Void)?
@@ -255,7 +272,7 @@ struct RootView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            CrewdRemoteMobileRoot()
+            IPadShell()
             #else
             MacThreePaneView()
             #endif

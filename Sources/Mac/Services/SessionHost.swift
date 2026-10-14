@@ -35,6 +35,7 @@ final class SessionHost: ObservableObject {
         self.ownsAppUpdater = ownsAppUpdater
     }
 
+    private var crewdProjection: CrewdOriginalSessionProjection?
     private let ownsAppUpdater: Bool
 
     /// viewer 模式下那条腿（`PENDINGCREW_BACKEND=daemon`，或 inproc 但锁被一个 daemon
@@ -62,6 +63,14 @@ final class SessionHost: ObservableObject {
     private var orchestrationContext: (model: AppModel, crewStore: CrewStore)?
 
     func begin(model: AppModel, crewStore: CrewStore) {
+        // The original frontend observes crewd; it cannot acquire the legacy
+        // orchestration lock, run mention delivery, or take over a failed helper.
+        if model.usesCrewdAuthority {
+            if let workspace = model.crewdBackend?.workspace {
+                crewdProjection = CrewdOriginalSessionProjection(workspace: workspace, runner: runner)
+            }
+            return
+        }
         orchestrationContext = (model, crewStore)
         AppQuitLifecycle.shared.runningSessionCount = { [weak self] in
             guard let self else { return 0 }

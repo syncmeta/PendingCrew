@@ -38,7 +38,7 @@ struct IPadShell: View {
                 .navigationTitle("机组")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("连接 Mac", systemImage: "link") { showingPairing = true }
+                        Button("连接电脑", systemImage: "link") { showingPairing = true }
                     }
                 }
         } detail: {
@@ -47,6 +47,18 @@ struct IPadShell: View {
         .onChange(of: selectedCrewId) { _, id in
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
             communicationView = .human
+            if let id, id != crewStore.pendingCrew?.id, let workspace = appModel.crewdBackend?.workspace {
+                workspace.selectCrew(id); workspace.selectChannel(id + "/lobby")
+            }
+        }
+        .onChange(of: crewStore.selectedCrewId) { _, id in
+            if selectedCrewId != id { selectedCrewId = id; selectedRemoteSessionID = nil }
+        }
+        .task { await appModel.connectCrewdAuthority(); await crewStore.refreshList() }
+        .onChange(of: appModel.crewdBackend?.workspace.presentationNamespace) { _, _ in
+            crewStore.retireOriginalAuthorityPresentation()
+            selectedCrewId = nil; selectedRemoteSessionID = nil
+            Task { await crewStore.refreshList() }
         }
         .sheet(isPresented: $showingPairing) {
             IOSRemotePairingView()
@@ -62,7 +74,8 @@ struct IPadShell: View {
                 crewId: id, crewTitle: title,
                 onOpenRemoteSession: { selectedRemoteSessionID = $0 },
                 communicationView: $communicationView)
-                .id(id) // 切换 crew 时强制重建 chat view（清空旧 state）
+                .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace))
+                .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id)
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。

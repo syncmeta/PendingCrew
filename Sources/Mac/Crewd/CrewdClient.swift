@@ -107,6 +107,7 @@ final class CrewdNDJSONDecoder {
 final class CrewdClient: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var version = ""
+    @Published private(set) var authorityBinding: CrewdValue = .null
     @Published private(set) var capabilities:Set<String>=[]
     /// The authoritative hello advertises the orchestra capability group,
     /// not an individual capability named after every session RPC.
@@ -196,6 +197,7 @@ final class CrewdClient: ObservableObject {
                 qualifiedForWork = true
             }
             guard expectedRemote != nil || hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
+            authorityBinding = hello["remoteBinding"]
             version = hello["version"].string ?? "未知"
             capabilities=Set(hello["capabilities"].array.compactMap(\.string))
             let topics=["crew", "session", "message", "channel", "ask", "work", "restart", "system"] + ["documents","viewFolders"].filter {capabilities.contains($0)}
