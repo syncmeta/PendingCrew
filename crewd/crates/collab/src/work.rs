@@ -229,6 +229,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.source.starts_with("work-followup:") {
+        return crate::work_followups::render(conn, row, now);
+    }
     if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("work-lost:") {
         return crate::work_lost::followup_note(conn, row);
     }

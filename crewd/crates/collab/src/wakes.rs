@@ -353,6 +353,14 @@ pub fn by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<WakeRow>> {
 /// （调用方的 `Tx` 再兜一层回滚）。次数按 [`lifecycle::attempts_after`] 改；`Fail { retry_at: Some(t) }` 改 `not_before`；
 /// 进终局的记 `settled_at`。返回每一行事件之后的次数（与 `ids` 同序）。
 pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>> {
+    apply_inner(tx, ids, event, false)
+}
+fn apply_inner(
+    tx: &mut Tx<'_>,
+    ids: &[i64],
+    event: WakeEvent,
+    unsent_riders: bool,
+) -> Result<Vec<u32>> {
     let mut planned = Vec::with_capacity(ids.len());
     for id in ids {
         let row: Option<(String, u32, String)> = tx
@@ -385,9 +393,10 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
             lifecycle::attempts_after(event, attempts),
             retry_at,
             cancelled && to == WakeState::Dropped,
+            state,
         ));
     }
-    for (id, to, attempts, retry_at, cancelled) in &planned {
+    for (id, to, attempts, retry_at, cancelled, before) in &planned {
         let settled = matches!(to, WakeState::Delivered | WakeState::Dropped);
         tx.conn().execute(
             "UPDATE wakes SET state=?2, attempts=?3, not_before=COALESCE(?4, not_before),
@@ -395,11 +404,17 @@ pub fn apply(tx: &mut Tx<'_>, ids: &[i64], event: WakeEvent) -> Result<Vec<u32>>
               WHERE id=?1",
             params![id, to.as_str(), attempts, retry_at, settled, tx.now_ts()],
         )?;
+        // Released riders were explicitly excluded from the dispatched body.
+        // Their claim refund is not an unknown physical write; preserve the same
+        // pending fact. Stop still drops them and cannot revive admission.
+        if !(unsent_riders && *to == WakeState::Pending) {
+            crewd_store::work_followups::wake_transition(tx.conn(), *id, before, to.as_str())?;
+        }
         if *cancelled {
             note_error(tx, &[*id], HUMAN_STOP_ERROR)?;
         }
     }
-    Ok(planned.into_iter().map(|(_, _, a, _, _)| a).collect())
+    Ok(planned.into_iter().map(|(_, _, a, _, _, _)| a).collect())
 }
 
 fn not_found(id: i64) -> CollabError {
@@ -472,7 +487,7 @@ pub fn ack_delivered(
     apply(tx, wakes, WakeEvent::Deliver)?;
     match riders {
         Riders::Release => {
-            apply(tx, rider_ids, WakeEvent::Requeue)?;
+            apply_inner(tx, rider_ids, WakeEvent::Requeue, true)?;
         }
         Riders::Drop(why) => {
             apply(tx, rider_ids, WakeEvent::Drop)?;

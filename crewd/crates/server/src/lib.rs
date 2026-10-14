@@ -376,7 +376,7 @@ async fn serve_with_hooks_inner(
     if let Some(o) = &opts.orchestra {
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
     }
-    let store = Store::open_data_dir(&data_dir)?;
+    let mut store = Store::open_data_dir(&data_dir)?;
     // Registry recovery and the data-directory lock precede this transaction.
     // Stored birth/session receipts are observations, never fresh authority.
     {
@@ -384,6 +384,13 @@ async fn serve_with_hooks_inner(
         crewd_store::native_execution::invalidate_unknown(&tx)?;
         tx.commit()?;
     }
+    // Establish the historical recovery baseline before exposing public writes.
+    // A genuinely new fact created after readiness must not be mistaken for history.
+    crewd_collab::run(
+        &mut store,
+        crewd_store::now_ms(),
+        crewd_collab::work_followups::baseline,
+    )?;
     let db = Db::spawn(store)?;
     let hooks = hooks.unwrap_or_else(|| orchestra::hooks::Hooks {
         extras: Arc::new(orchestra::work_context::WorkContext(db.clone())),

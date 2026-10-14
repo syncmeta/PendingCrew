@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -859,6 +859,23 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 12 {
         migrate_v12(conn)?;
     }
+    if v < 13 {
+        migrate_v13(conn, v != 0)?;
+    }
+    Ok(())
+}
+
+/// Deterministic followup bookkeeping is separate from the work authority.
+pub(crate) fn migrate_v13(conn: &Connection, historical: bool) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(crate::work_followups::V13_DDL)?;
+    if historical {
+        crate::work_followups::restored(&tx)?;
+    } else {
+        crate::work_followups::finish_baseline(&tx)?;
+    }
+    tx.execute_batch("PRAGMA user_version=13;")?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2652,7 +2669,7 @@ mod organization_version_tests {
     fn exact_v11_fixture() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch("DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+        conn.execute_batch("DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
         conn
     }
     #[test]
@@ -2664,7 +2681,7 @@ mod organization_version_tests {
         )
         .unwrap();
         migrate(&conn).unwrap();
-        assert_eq!(version(&conn), 12);
+        assert_eq!(version(&conn), SCHEMA_VERSION);
         assert_eq!(
             conn.query_row(
                 "SELECT revision,enabled,port FROM remote_configuration",
@@ -2681,7 +2698,7 @@ mod organization_version_tests {
         let tables:i64=conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'native_execution_%'", [], |r|r.get(0)).unwrap();
         assert_eq!(tables, 3);
         migrate(&conn).unwrap();
-        assert_eq!(version(&conn), 12);
+        assert_eq!(version(&conn), SCHEMA_VERSION);
     }
     #[test]
     fn formal_v12_conflict_rolls_back_whole_ddl_and_keeps_v11() {
@@ -2701,7 +2718,7 @@ mod organization_version_tests {
         conn.execute_batch("DROP TABLE native_execution_receipts;")
             .unwrap();
         migrate(&conn).unwrap();
-        assert_eq!(version(&conn), 12);
+        assert_eq!(version(&conn), SCHEMA_VERSION);
     }
     #[test]
     fn formal_v11_guarded_open_keeps_exact_backup_before_v12() {
@@ -2709,10 +2726,10 @@ mod organization_version_tests {
         let path = tmp.path().join("crewd.db");
         {
             let store = crate::Store::open(&path).unwrap();
-            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
         }
         let store = crate::Store::open(&path).unwrap();
-        assert_eq!(version(store.conn()), 12);
+        assert_eq!(version(store.conn()), SCHEMA_VERSION);
         assert_eq!(
             store
                 .conn()
@@ -2729,7 +2746,7 @@ mod organization_version_tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("crewd-v11-pre-v12-")
+                    .starts_with(&format!("crewd-v11-pre-v{SCHEMA_VERSION}-"))
             })
             .collect();
         assert_eq!(snapshots.len(), 1);

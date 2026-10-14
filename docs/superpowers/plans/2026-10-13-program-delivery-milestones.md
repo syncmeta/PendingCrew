@@ -4,11 +4,23 @@
 
 用户再次明确要求在原 PendingCrew 前端基础上推进。保留实际 PendingCrewApp → RootView → MacThreePaneView 与原通讯录/消息/群聊/会话视图，客户端底层迁移至唯一 crewd authority，再将 Todo、文档、进展融入原布局。独立 Native 工作区只保留为迁移与验证材料，不作为最终产品入口。已验后台和稳定业务证据复用，不因前端纠偏重做后台；独立新窗口通过不能代替原前端完整流程验收。
 
+此方向同样覆盖已约定 iPhone/iPad：实际原 IPadShell、IOSRemotePairingView、IOSRemoteSessionView 应保留视图/导航基础并接同一可信 crewd remote authority，新增工作视图融入原平台布局。client 已冻结的原前端源码 a9859d405ccf03bb5ba0246ab3692ac85488c159 中，实际 Sources/PendingCrewApp.swift 的 RootView iOS 分支已恢复 IPadShell；独立 CrewdNativeApp 仍仅为验证入口。原前端权限与旧账切断独审发现缺口，作者正在整块修复，因此尚不计原移动前端迁移验收完成；不能保留旧 RemoteBackend 协议/本地账本作为 fallback。已有 TLS/配对/撤销证据复用，新增移动 UI/authority 流程与真机交付分别验收。
+
 客户端线拥有原视图、Swift 接线与候选构建；后端线唯一拥有公共协议、schema 与真实执行/恢复能力；质量线按原前端真实用户流程独验。当前公共 crew.create/message.post/session.start 没有 requestId/status，客户端 UUID 不等于服务端幂等：暂用 single-submit、保留原 authority 与 unknown snapshot、只读核对及人工确认，禁止旧本地 outbox/rollback/跨群重放。最终耐久交付依赖正式公共可靠请求与恢复接口。真实 PTY 输入/resize/观察仍是 M4 既定交付缺口，不将只读屏幕冒完整交互终端。附件上传仍遵守既有非空 attachments 拒绝政策，完整上传协议未定，不以静默丢附件或客户端文件路径绕过。
 
 Core12 原子迁移、正常后台和私有持久收件子单元已有独立证据，整块 M4 尚未完成。M5 schema13 与原前端、Linux 安装升级分别继续，只有真实依赖等待。当前 Core follow-up run38509489542 精确 a76cae4804cb26c62f4e2a64c993dbe18822758f，只验证受影响三例、严格 lint、doctest 和 CLI testkit 差异，不能称全量 CI 或历史 all-features 成功。候选来源还须区分旧完整字节输入证明与新的自有依赖实际重新编译证明；不重标旧 normal 包。
 
 用户已明确授权普通推送到现有三条 codex 开发分支；不扩为 main 推送、安装、日常数据切换、公开发布或真实模型验收。
+
+当前整合结果：global `842283b17ab912489aeb78d327e74dd2c9971728` 已保存远端，完整 crewd tree 与已验 a76 相同，workflow 与 client 冻结8bb合成相同；无 M5/原前端 dirty 混入。client 已接此精确组合，继续原前端整块实现。独立质量源码比对通过；未重复稳定业务。main 保持原状态。
+
+公共可靠命令与真实 terminal control 作为既定交付缺口授权后端整块实现，独立新增 schema14，必须13→14顺序，不改冻12/13。采用 typed crew.createFirstMessage，同Tx创建crew/首消息/receipt；optional Start另按外部真实生命周期记录。terminal typed方法与 command.submit/lookup 共用唯一durable机制，真实 actor/principal、原 scope/generation与不可变payload绑定。普通 PTY write只证明内核接受精确字节，不能称原生reader已消费或命令已成功；partial/unknown绝不自动重写剩余bytes。lookup先权限，notfound不允许自动retry；restore不能把旧执行结果提升为当前完成。所有能力仅在实际生产接线/正常配置/完整权限恢复流程冻结后广告。Jev、个人记忆、团队知识依旧仅待决方案。
+
+原前端完整退出交付依赖 schema14 的真实本地 IPC/ownProcess 关联：Mac 客户端以受支持 AF_UNIX fd 的 kernel peer PID/uid、实际进程 birth/boot session，匹配自身 spawn 捕获的 child PID/birth/direct parent；握手前后与 Quit 前重核，再关联 Core 产生的同 server instance/runtime binding。路径、launch UUID 和 JSON hello PID 不授权。断联或 kernel 关联未证保持 pending，不杀旧 helper；remote Quit 只撤自身连接/watch/lease。物理退出和账面 hibernation 分别留证。此为两作者已对齐的工程契约，尚未实际验收；不把必要安全退出缩小为永远不退出后台。Swift transport 归 client，server/runtime 归 backend。
+
+M5 剩余双平台物理流程与 Linux 正式12→13采用 client source-review freeze `884a1c9bacd32b5903ce82f6738b2b1357835530`；质量线一次完整来源门禁审接受。原 run38516501175 实时仍为 completed/failure/attempt1/exact2bf，两固定来源 artifact 未过期。补验绑定原来源，拒绝 current crewd tree 变动，保留原 raw fresh/正常配置/完整输入证明，不重标为新源码编译；只补缺失真实流程，不重复已验100项影响测试/doctest。source-review 通过不等于 actual closure 通过。backend 精确组合 b822bdfb13b954e2a606025f7a051585ee33a709 由 client 唯一 writer 合成并获质量线差异审接受；整个 crewd tree 与原2bf一致。根已派发 run38520913233（m5_remaining_only=true），起初 queued/exactb822，后续实际两平台 completed/failure：完整来源复用 consumer 核验通过，官方 download-artifact 单ID默认具名子目录与后续 OWNER/HASH/MIGSHA 固定 flat 路径不一致，OWNER FileNotFound，物理与正式迁移尚未执行。质量线已保存双平台原始失败并直接交 client 唯一构建作者修整块布局；不放宽来源证明，不重已通过范围。client 修复9b37a1735616edfdd2390998983dbabb81f6e408获影响独审接受，两平台具名目录实际控制通过；backend 精确保存4c356b7843d4efaff6085081fd3f3048b251944c，完整crewd仍同2bf。根派发新run38521653705，实际完整run38521653705已双host terminal success，质量线收束接受exact4c M5 normal13模块：真实PTY唯一stdin/耐久fact+wake回执/publicStop实际birth消失与registry清空/同normal重启无第二输入，Linux真old12→13保护备份/失败字节不变/真实DDL回滚/副本重试/old12拒13/业务与文档UUID重开均通过。证据 /private/tmp/pcw-M5-whole-remaining-independent-4c356b78.json。编译来源仍为原a76/2bf，4c只为组合/夹具/物理资格，不重标。根下一步整合该完整模块，M4/14/原前端/包窗口设备和真实切换仍未完成。
+
+原前端旧 authority 整块切断 source-review freeze `bf1c0537535f6482d88bb7e705f6974592c0f988`已交质量线按 a985 缺口影响独审；原 Mac/iPhone/iPad 组件保留，完整358源 Mac/iPhoneOS 类型检查实际 exit0。仍待独审、schema14 receipt/交互终端/kernel peer绑定、完整组合候选包及窗口/设备验收；类型检查不代表整块产品交付。
 
 ## 2026-10-14 新会话明确恢复与三线固定责任
 
@@ -90,9 +102,9 @@ M6后台服务/schema11先与质量线收束完整生产路由、迁移/restore�
 | M1 工作与恢复 | 需求、计划、指派、阻塞、人工答复、交接、失联重派与停止形成闭环 | 后端及 typed 正常运行组合已验收 | 随 M3 验证最终可交付组合；后台作者维护，质量线独验 |
 | M2 本机完整工作台 | 保留微信式布局；消息、Todo、文档、进展可操作，独立文件夹与真实本群 Todo | 产品接线、正常后台组合、正式 schema 升级/备份恢复与候选构建已验收 | 最终组合的可见窗口操作未完成；客户端作者维护，质量线验收 |
 | M3 整合交付与自我开发 | 一致版本、真实使用、恢复回退及交付，然后在新版中开发后续模块 | main 已整合并保存远端 fe68022f；Swift 修复已通过实际 Mac/iOS CI；后台最终修复已通过真实 Linux/macOS CI，新正常后台/GUI完整候选已实际构建并独验，main自动组合CI已全通过，实际正常后台/typed组合已验，窗口/真实使用交付仍待验 | 修复冻结 → 独立完整门禁 → 实际 Linux/Mac CI → 组合整合及新产物 → 可见操作、已授权真实任务与对应交付；根负责整合，不以旧候选冒充新版本 |
-| M4 跨厂商执行 | Codex 原生 app-server；Claude 经 ACP 保真实交互 PTY；共享通信、工作、权限、恢复 | 独立实现与基础进程/协议验证在途 | 启动/载入/审批/取消/尺寸/停止/恢复及混合路由整块验收；后台作者负责，质量线独验 |
-| M5 确定性行政与调度 | 失联、过期、阻塞事实 → 耐久合并 → 权限/停止/预算过滤 → 有效提醒 | 有部分基础，完整闭环尚未交付 | 后台线完成 M4 后接整块调度；无新事实不重复唤醒；Jev 仍等待讨论定案 |
-| M6 远程与平台 | 安全配对/撤销、移动端完整工作流程及约定 Linux/平台分发与恢复 | 共享客户端与手机/iPad 操作源码、实际目标构建已验证；远程安全后台正在实现 | 真实 TLS/配对/撤销与恢复信任边界 → 客户端联通 → 对应设备/平台验收与分发；客户端线同时负责远程后台，不等待整个 M4 |
+| M4 跨厂商执行 | Codex 原生 app-server；Claude 经 ACP 保真实交互 PTY；共享通信、工作、权限、恢复 | Core12 正式迁移、私有持久收件与正常后台已有独立实际证据；真实 CLI 信任、完整生命周期仍未完成 | schema14 公共收件/终端/恢复整块接线与验收；真实 ACP 内容、审批、取消、载入和混合路由不得以组件证据代替。后台作者负责，质量线独验 |
+| M5 确定性行政与调度 | 失联、过期、阻塞事实 → 耐久合并 → 权限/停止/预算过滤 → 有效提醒 | schema13 正常构建、Mac 正式12→13与物理链已独验；两平台100影响测试/doctest及剩余run38521653705已实际成功 | 质量线已收束接受完整normal13模块；根整合exact4c完整M5源码，复用稳定证据。最终原前端交付与整体候选仍待。Jev仅待决方案 |
+| M6 远程与平台 | 安全配对/撤销、移动端完整工作流程及约定 Linux/平台分发与恢复 | 真实 TLS/签名配对/权限/在线撤销和恢复信任失效已有纵向证据；普通 Mac/iOS构建已验 | 原Mac/iPhone/iPad前端整块authority迁移独审、专用候选完整构建/不可变新版包/窗口设备/Linux完整安装升级与剩余平台交付仍待；不因14阻塞独立平台路径 |
 
 主路径：M1/M2 → M3 整合交付；并行路径：后台推进 M4 → M5，客户端推进 M6。M3 的 GUI 权限或单个平台检查不能暂停独立路径。质量线按各模块冻结顺序验收，缺陷直接与作者闭环。
 
