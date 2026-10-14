@@ -13,6 +13,13 @@ def run(argv,cwd,log):
   result=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT)
   f.write('Exit: '+str(result.returncode)+'\n')
  if result.returncode: raise ValueError('Build failed; preserve '+str(log))
+def query(argv,cwd,log,output=None):
+ result=subprocess.run(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+ with log.open('a') as f:
+  f.write('Command: '+shlex.join([str(v) for v in argv])+'\n'+result.stdout+result.stderr+'\nExit: '+str(result.returncode)+'\n')
+ if result.returncode: raise ValueError('query failed; preserve '+str(log))
+ if output: output.write_text(result.stdout)
+ return result.stdout.strip()
 def copied_inputs(source,dest):
  # Flatten only in-tree links, including framework version aliases. Detect
  # cycles instead of letting a copied alias escape or recurse forever.
@@ -77,13 +84,16 @@ def main():
   if len(candidates)!=1: raise ValueError('unique Native entry source required')
   entry=candidates[0]
  if 'PENDINGCREW_NATIVE_CANDIDATE' not in entry.read_text(): raise ValueError('candidate compile entry is not frozen in selected source')
- manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':subprocess.check_output(['xcodebuild','-version'],text=True).strip(),'sdkVersion':subprocess.check_output(['xcrun','--sdk','macosx','--show-sdk-version'],text=True).strip()}}
- save(out/'build-inputs.json',manifest);(out/'source-head.txt').write_text(ref+'\n')
+ toolchain={'xcodeVersion':query(['xcodebuild','-version'],snapshot,out/'gui-toolchain.log'),'sdkVersion':query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'gui-toolchain.log')}
+ save(out/'gui-toolchain.json',toolchain)
+ manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
+ save(out/'build-inputs.json',manifest);(out/'source-head.txt').write_text(ref+'\n');(out/'source-changes.patch').write_text('')
  if not args.execute:
   print('PREPARED only (no compilation or application launch):',out);return
  dd=pathlib.Path(args.derived_data).resolve()
  if dd.is_relative_to(out): raise ValueError('use the existing external DerivedData; no cold build cache in evidence')
- argv=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Debug','-destination','platform=macOS,arch=arm64','-derivedDataPath',str(dd),'-clonedSourcePackagesDirPath',str(spm),'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','CODE_SIGNING_ALLOWED=NO','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE','build']
+ argv=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Debug','-destination','platform=macOS,arch=arm64','-derivedDataPath',str(dd),'-clonedSourcePackagesDirPath',str(spm),'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','CODE_SIGNING_ALLOWED=NO','ARCHS=arm64','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE','build']
+ query(argv[:-1]+['-showBuildSettings','-json'],snapshot,out/'gui-build-settings.log',out/'gui-build-settings.json')
  run(argv,snapshot,out/'gui-build.log')
  if regular_inventory(snapshot)!=source_rows: raise ValueError('target build changed its source snapshot')
  # Check every actual external package/artifact byte against the copied proof.
@@ -101,7 +111,8 @@ def main():
  info.write_bytes(plistlib.dumps(plist))
  run(['codesign','--force','--deep','--sign','-',str(app)],snapshot,out/'signing.log')
  run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
- save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log')},'backend':{'mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
+ save(out/'build-provenance.json',{'format':2,'sourceRef':ref,'inputManifestSHA256':sha(out/'build-inputs.json'),'gui':{'preSignFile':'gui.pre-sign','preSignSHA256':sha(out/'gui.pre-sign'),'buildLog':'gui-build.log','buildLogSHA256':sha(out/'gui-build.log'),'buildSettingsFile':'gui-build-settings.json','buildSettingsSHA256':sha(out/'gui-build-settings.json'),'buildSettingsLog':'gui-build-settings.log','buildSettingsLogSHA256':sha(out/'gui-build-settings.log'),'toolchainFile':'gui-toolchain.json','toolchainSHA256':sha(out/'gui-toolchain.json'),'toolchainLog':'gui-toolchain.log','toolchainLogSHA256':sha(out/'gui-toolchain.log')},'backend':{'mode':'verified-prebuilt','witnessFile':'backend-witness.json','witnessSHA256':sha(out/'backend-witness.json'),'preSignFile':'crewd.pre-sign','preSignSHA256':sha(out/'crewd.pre-sign'),'buildConfiguration':value['buildConfiguration']},'packaged':{'nativeSHA256':sha(original),'helperSHA256':sha(helper)},'candidateVersion':version,'appDirectory':app.name})
+ (out/'artifact-sha256.txt').write_text(sha(original)+'  '+str(original)+'\n'+sha(helper)+'  '+str(helper)+'\n')
  print('BUILT isolated candidate; not launched/installed/released:',app)
 if __name__=='__main__':
  try: main()
