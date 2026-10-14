@@ -7,27 +7,14 @@
 # 无证书环境能编能测。
 name: CI
 
+# 完整冻结后由统筹按必要影响范围手动派发，不在 push / PR 重复全量检查。
+run-name: Apple frozen full checks (explicit)
 on:
   workflow_dispatch:
-  # **push 上故意不设 paths-ignore。** 它在 push 事件上按「这一推的 head 提交
-  # 动了哪些文件」来判，不是按整推的合计 —— 而发版流程的最后一笔惯例是
-  # 只改 CHANGELOG.md。2026-08-26 发 0.1.17 时一次推了 28 笔，head 正好是那笔
-  # 纯 .md，**整条流水线一次都没被触发**（`?head_sha=` 查回 total_count 0），
-  # 28 笔代码就这么进了公开 main 且从没被 CI 看过一眼。
-  # 省下的是几分钟机器时间（public 仓库的 macOS runner 免费），赔进去的是
-  # 「main 被验过」这个前提本身。不划算，所以不设。
-  push:
-    branches: [main]
-  # PR 上保留：这里的过滤按整个 PR 的 diff 判，不会被最后一笔提交带偏。
-  pull_request:
-    branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**', '.github/ISSUE_TEMPLATE/**']
 
-# 同一个分支上新的推送把旧的跑掉 —— macOS runner 很贵，别让排队的旧 commit
-# 白烧分钟数。
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -64,18 +51,7 @@ jobs:
             exit 1
           fi
 
-  # **push / PR / 手动触发都跑。** 实测冷机一次 13 分 26 秒（macOS 编译+单测
-  # 9'45"、iOS 端编译 3'12"）。
-  #
-  # 这里原本挂着 `if: github.event_name != 'push'`，理由是 private 仓库的 macOS
-  # runner 按 10 倍计费、Free 档一个月只够跑十几次，而那句注释自己写了「仓库转
-  # public 之后 macOS runner 免费，那时可以把这条 if 去掉」。**仓库已经是 public
-  # 了，所以去掉。**
-  #
-  # 拖到现在才去掉的代价是真实的，记在这儿别再犯：2026-08-26 发 0.1.17 时一次
-  # 推了 28 笔到 main，这个 job 被这条 if 全部跳过，而流水线整体判定是
-  # **success** —— 页面上一片绿，底下压着 28 笔从没被编译过的改动。**一个会
-  # 跳过主检查、却仍然报绿的流水线，比一个红的更糟：红的会叫，绿的不会。**
+  # 手动完整检查保留实际 macOS 编译、单测和 iOS SDK 编译。
   build-test:
     name: 三端编译 + 单测
     runs-on: macos-26

@@ -1,65 +1,31 @@
-# crewd（crewd/ 下的 Rust 后端）的 CI。
-#
-# **它存在的理由：** 之前 ci.yml 里一个 cargo 都没有，crewd 的「绿」只存在于
-# 跑过 crewd/scripts/check.sh 的那台机器上。这里把同一个脚本搬到 CI ——
-# 本机和 CI 都调 `crewd/scripts/check.sh`，所以两边不会各写一份然后漂移；
-# CI 只多设一个环境变量 CREWD_TEST_RUNNER=nextest（见 crewd/.config/nextest.toml 的 ci 档：
-# 失败重试 2 次、抖动照样判红、出 JUnit）。
-#
-# 默认 full-check 不跑 `--ignored`。显式 M5 scope 只调用白名单 synthetic-provider ignored entry；不调用真实模型/付费API。
-#
-# 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
-# 按 Rust 改动触发，互不拖累，也互不遮挡。
+# 完整冻结后按影响范围显式运行；日常源码、文档和 PR 不自动重复重型检查。
+# 本机与完整检查共用 crewd/scripts/check.sh；默认不跑真实模型或 ignored 测试。
+# 已完成的临时 Core/M5/candidate 补验保留历史来源和本地脚本，不再暴露重复入口。
 name: crewd
-run-name: "${{ inputs.m5_remaining_only == true && 'M5 remaining physical/migration closure (original 2bf artifacts; not new normal build or full CI)' || inputs.m5_followup_only == true && 'M5 whole affected follow-up and physical workflow (not full CI)' || inputs.core_permission_followup == true && 'Core permission follow-up (affected tests and doctests, not full CI)' || inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
+run-name: "${{ inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
 
 on:
   workflow_dispatch:
     inputs:
-      m5_remaining_only:
-        description: Close missing M5 physical and migration flows using original run 38516501175 artifacts (not a new normal build)
+      linux_install_upgrade:
+        description: Run the required isolated Linux11 to13 install, lease, unknown, rollback and restore flow instead of full checks
         type: boolean
         default: false
-      m5_followup_only:
-        description: Verify the complete M5 affected unit, fresh normal build and physical workflow (not full CI)
-        type: boolean
-        default: false
-      linux_candidate_only:
-        description: Build and verify the Linux development candidate only (not full CI)
-        type: boolean
-        default: false
-      core_permission_followup:
-        description: Verify the three canonical permission cases and previously blocked doctests only (not full CI)
-        type: boolean
-        default: false
-  # **push 上不设 paths 过滤**，理由同 ci.yml 里那段长注释：push 上的 paths 按这一推
-  # 的 head 提交判，纯 .md 的收尾提交会让一次推 28 笔代码的流水线整条不触发。
-  # 省下的只是几分钟免费机器时间，赔进去的是「main 被验过」这个前提。
-  push:
-    branches: [main]
-  # PR 上的过滤按整个 PR 的 diff 判，不会被最后一笔带偏，所以这里可以收窄。
-  pull_request:
-    branches: [main]
-    paths:
-      - 'crewd/**'
-      - '.github/workflows/crewd.yml'
 
 concurrency:
   group: crewd-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  # 钉死 nextest 版本。flaky-result 需要 >= 0.9.131；不钉的话上游一升级，
-  # 所有人的 PR 同时变红（同 ci.yml 钉 Xcode / xcodegen 的理由）。
   NEXTEST_VERSION: 0.9.146
 
 jobs:
   check:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true || inputs.m5_remaining_only == true)) }}
+    if: ${{ inputs.linux_install_upgrade != true }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -141,409 +107,91 @@ jobs:
           path: crewd/target/nextest/ci/junit.xml
           if-no-files-found: ignore
 
-  linux-candidate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true && inputs.core_permission_followup != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
+  linux-install-upgrade:
+    if: ${{ inputs.linux_install_upgrade == true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v5
-      - name: Read repository toolchain
-        id: toolchain
-        run: |
-          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' crewd/rust-toolchain.toml)
-          test -n "$channel"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crewd
-      - name: Resolve locked dependencies into existing runner cache
-        working-directory: crewd
-        run: cargo fetch --locked
-      - name: Build actual normal release and packaged synthetic recovery
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
-        run: python3 scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/crewd-linux-candidate"
-      - name: Preserve candidate and complete build/runtime evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: crewd-linux-candidate-${{ github.sha }}
-          include-hidden-files: true
-          path: ${{ runner.temp }}/crewd-linux-candidate
-          if-no-files-found: error
-          retention-days: 14
-
-  invalid-dispatch-scope:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.linux_candidate_only == true && inputs.core_permission_followup == true) || (inputs.m5_followup_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true)) || (inputs.m5_remaining_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true))) }}
-    runs-on: ubuntu-24.04
-    steps:
-      - run: |
-          echo "::error::Choose exactly one explicit affected/candidate dispatch scope"
-          exit 2
-
-  core-permission-followup:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_permission_followup == true && inputs.linux_candidate_only != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
-    name: Core affected permission and doctest (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            os: macos-26
-          - name: Linux
-            os: ubuntu-latest
-    defaults:
-      run:
-        working-directory: crewd
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-      - name: Read repository toolchain
-        id: toolchain
-        run: |
-          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          test -n "$channel"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crewd
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
-      - name: Full formatting and strict workspace all-target lint
-        run: |
-          set -euo pipefail
-          mkdir -p target/core-followup-evidence
-          cargo fmt --all -- --check 2>&1 | tee target/core-followup-evidence/fmt.log
-          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee target/core-followup-evidence/clippy.log
-      - name: Three exact canonical permission workflows only
-        run: |
-          set -euo pipefail
-          cargo nextest run --workspace --profile ci -E 'package(=crewd-collab) & (test(=work::action_tests::stale_revision_and_unauthorized_actor_leave_all_state_unchanged) | test(=work::assignment_tests::worker_claim_is_not_steal_or_foreign_captain_privilege_and_stale_cas_is_read_only) | test(=global_workflow_core::ordinary_captain_cannot_mutate_other_crew_but_foreign_owner_can))' 2>&1 | tee target/core-followup-evidence/three-permission-workflows.log
-      - name: Preserve the three-case JUnit before the separate feature workflow
-        if: always()
-        run: |
-          mkdir -p target/core-followup-evidence
-          if [ -f target/nextest/ci/junit.xml ]; then cp target/nextest/ci/junit.xml target/core-followup-evidence/three-permission-junit.xml; fi
-      - name: Complete workspace doctests previously blocked by unit failures
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          cargo test --workspace --doc 2>&1 | tee target/core-followup-evidence/doctests.log
-      - name: Explicit testkit CLI enrollment workflow only (not all features)
-        if: ${{ !cancelled() }}
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
-        run: |
-          set -euo pipefail
-          cargo fetch --locked
-          bash ../scripts/dev/test-crewd-cli-enrollment-feature.sh "$RUNNER_TEMP/core-testkit-enrollment"
-      - name: Preserve exact affected-scope evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: crewd-core-permission-followup-${{ matrix.name }}-${{ github.sha }}
-          path: |
-            crewd/target/core-followup-evidence
-            crewd/target/nextest/ci/junit.xml
-            ${{ runner.temp }}/core-testkit-enrollment
-          if-no-files-found: warn
-
-  m5-followup:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_followup_only == true && inputs.linux_candidate_only != true && inputs.core_permission_followup != true && inputs.m5_remaining_only != true }}
-    name: M5 whole affected and physical workflow (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            os: macos-26
-          - name: Linux
-            os: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
-    defaults:
-      run:
-        working-directory: crewd
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-      - name: Read repository toolchain
-        id: toolchain
-        run: |
-          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          test -n "$channel"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crewd
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
-      - name: Full formatting and strict workspace all-target lint
-        run: |
-          set -euo pipefail
-          mkdir -p target/m5-followup-evidence
-          cargo fmt --all -- --check 2>&1 | tee target/m5-followup-evidence/fmt.log
-          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee target/m5-followup-evidence/clippy.log
-      - name: Complete affected M5 claim, wake, restore and follow-up modules
-        run: |
-          set -euo pipefail
-          cargo nextest run --workspace --profile ci -E '(package(=crewd-collab) & (test(work_followups::tests::) | test(checkpoints::tests::) | test(cursor_reservations::tests::) | test(wakes::tests::))) | (package(=crewd-store) & (test(work_followups::tests::) | test(fresh_database_is_current_and_has_no_management_crew_until_a_crew_exists))) | (package(=crewd-legacy) & (test(crews_and_sessions_import_from_fixture) | test(messages_todos_and_archive_import_from_fixture) | test(importing_same_board_twice_is_idempotent_for_messages))) | (package(=crewd-server) & test(actual_daemon_restart_revokes_native_receipts_before_socket_ready)) | (package(=crewd) & test(deterministic_followup_))' 2>&1 | tee target/m5-followup-evidence/affected-modules.log
-      - name: Preserve whole affected JUnit
-        if: always()
-        run: |
-          mkdir -p target/m5-followup-evidence
-          if [ -f target/nextest/ci/junit.xml ]; then cp target/nextest/ci/junit.xml target/m5-followup-evidence/affected-junit.xml; fi
-      - name: Complete workspace doctests independently
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          cargo test --workspace --doc 2>&1 | tee target/m5-followup-evidence/doctests.log
-      - name: Fresh owning-source normal schema12 baseline on Linux only
-        if: ${{ !cancelled() && matrix.name == 'Linux' }}
-        id: baseline12
-        run: |
-          set -euo pipefail
-          baseline_ref=a76cae4804cb26c62f4e2a64c993dbe18822758f
-          git fetch --no-tags origin "$baseline_ref"
-          baseline_source=$(mktemp -d "$RUNNER_TEMP/m5-baseline12.XXXXXX")
-          git worktree add --detach "$baseline_source" "$baseline_ref"
-          test "$(git -C "$baseline_source" rev-parse HEAD)" = "$baseline_ref"
-          (cd "$baseline_source/crewd" && cargo fetch --locked)
-          python3 ../scripts/dev/record-crewd-build.py prepare "$baseline_source" "$RUNNER_TEMP/m5-normal12" "$baseline_ref"
-          python3 ../scripts/dev/record-crewd-build.py build "$baseline_source" "$RUNNER_TEMP/m5-normal12" "$CARGO_TARGET_DIR/debug/crewd" cargo build --locked --offline -p crewd --bin crewd --message-format=json
-          python3 - "$RUNNER_TEMP/m5-normal12-witness.json" "$RUNNER_TEMP/m5-normal12/crewd-presign" "$baseline_ref" <<'BASELINE'
-          import importlib.util,json,pathlib,sys
-          spec=importlib.util.spec_from_file_location('pcw_proof','../scripts/dev/write-codex-first-provenance.py');proof=importlib.util.module_from_spec(spec);spec.loader.exec_module(proof)
-          witness=pathlib.Path(sys.argv[1]);value=json.loads(witness.read_text());assert value['sourceRef']==sys.argv[3]
-          proof.verify_witness(witness,pathlib.Path(sys.argv[2]),value['rustInputDigest'],{'profile':'debug','defaultFeatures':True,'features':[],'allFeatures':False},require_fresh=True)
-          BASELINE
-      - name: Fresh owning-source default normal schema13 and complete evidence
-        if: ${{ !cancelled() }}
-        id: normal13
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          cargo fetch --locked
-          python3 ../scripts/dev/record-crewd-build.py prepare "$GITHUB_WORKSPACE" "$RUNNER_TEMP/m5-normal13" "$GITHUB_SHA"
-          python3 ../scripts/dev/record-crewd-build.py build "$GITHUB_WORKSPACE" "$RUNNER_TEMP/m5-normal13" "$CARGO_TARGET_DIR/debug/crewd" cargo build --locked --offline -p crewd --bin crewd --message-format=json
-          python3 - "$RUNNER_TEMP/m5-normal13-witness.json" "$RUNNER_TEMP/m5-normal13/crewd-presign" <<'VERIFY'
-          import importlib.util,json,pathlib,sys
-          spec=importlib.util.spec_from_file_location('pcw_proof','../scripts/dev/write-codex-first-provenance.py');proof=importlib.util.module_from_spec(spec);spec.loader.exec_module(proof)
-          witness=pathlib.Path(sys.argv[1]);value=json.loads(witness.read_text())
-          proof.verify_witness(witness,pathlib.Path(sys.argv[2]),value['rustInputDigest'],{'profile':'debug','defaultFeatures':True,'features':[],'allFeatures':False},require_fresh=True)
-          print('Fresh owning-source normal13 full graph independently parsed from raw Cargo JSON')
-          VERIFY
-      - name: Physical normal-daemon follow-up delivery, Stop and restart workflow
-        if: ${{ !cancelled() && steps.normal13.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/m5-physical"
-          cargo build --locked --offline -p crewd-exec --bin fake_claude --features testkit --message-format=json 2>&1 | tee target/m5-followup-evidence/fake-claude-testkit-build.jsonl
-          python3 - "$CARGO_TARGET_DIR/debug/fake_claude" target/m5-followup-evidence/fake-claude-testkit-build.jsonl target/m5-followup-evidence/fake-claude-proof.json <<'FAKE'
-          import hashlib,json,pathlib,sys
-          binary=pathlib.Path(sys.argv[1]).resolve();messages=[]
-          for line in pathlib.Path(sys.argv[2]).read_text().splitlines():
-              try: row=json.loads(line)
-              except json.JSONDecodeError: continue
-              if isinstance(row,dict): messages.append(row)
-          artifacts=[r for r in messages if r.get('reason')=='compiler-artifact' and r.get('executable') and pathlib.Path(r['executable']).resolve()==binary and r['target']['name']=='fake_claude']
-          assert len(artifacts)==1 and 'testkit' in artifacts[0]['features'] and artifacts[0]['profile']['test'] is False
-          pathlib.Path(sys.argv[3]).write_text(json.dumps({'binary':str(binary),'sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'artifact':artifacts[0]},indent=2)+'\n')
-          FAKE
-          TMPDIR="$RUNNER_TEMP/m5-physical" PCW_M5_NORMAL_CREWD="$RUNNER_TEMP/m5-normal13/crewd-presign" cargo test --locked -p crewd --features testkit --test s1_literal_enrollment m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact -- --ignored --exact --nocapture 2>&1 | tee target/m5-followup-evidence/normal-physical.log
-          python3 - "$RUNNER_TEMP/m5-normal13-witness.json" "$RUNNER_TEMP/m5-normal13/crewd-presign" <<'HASH'
-          import hashlib,json,pathlib,sys
-          proof=json.loads(pathlib.Path(sys.argv[1]).read_text());assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==proof['binarySHA256']
-          HASH
-          python3 - target/m5-followup-evidence/fake-claude-proof.json <<'FAKEHASH'
-          import hashlib,json,pathlib,sys
-          proof=json.loads(pathlib.Path(sys.argv[1]).read_text());assert hashlib.sha256(pathlib.Path(proof['binary']).read_bytes()).hexdigest()==proof['sha256']
-          FAKEHASH
-      - name: Prepare private short-path Linux migration evidence parent
-        if: ${{ !cancelled() && matrix.name == 'Linux' && steps.baseline12.outcome == 'success' && steps.normal13.outcome == 'success' }}
-        id: migration_root
-        run: |
-          set -euo pipefail
-          evidence_parent=$(mktemp -d /tmp/pm5.XXXXXX)
-          chmod 700 "$evidence_parent"
-          printf 'PENDINGCREW_TEST_MIGRATION_EVIDENCE_ROOT=%s\n' "$evidence_parent" >> "$GITHUB_ENV"
-          printf 'evidence-root=%s\n' "$evidence_parent" >> "$GITHUB_OUTPUT"
-      - name: Formal Linux actual normal12 to normal13 whole migration and recovery
-        if: ${{ !cancelled() && matrix.name == 'Linux' && steps.baseline12.outcome == 'success' && steps.normal13.outcome == 'success' && steps.migration_root.outcome == 'success' }}
-        env:
-          PENDINGCREW_TEST_OLD_CREWD_PROGRAM: ${{ runner.temp }}/m5-normal12/crewd-presign
-          PENDINGCREW_TEST_CREWD_PROGRAM: ${{ runner.temp }}/m5-normal13/crewd-presign
-        run: |
-          set -euo pipefail
-          export PENDINGCREW_TEST_OLD_CREWD_SHA256=$(python3 -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/m5-normal12-witness.json"))["binarySHA256"])')
-          export PENDINGCREW_TEST_CREWD_SHA256=$(python3 -c 'import json,os;print(json.load(open(os.environ["RUNNER_TEMP"]+"/m5-normal13-witness.json"))["binarySHA256"])')
-          bash ../scripts/dev/test-crewd-followup-migration.sh 2>&1 | tee target/m5-followup-evidence/linux-formal-migration.log
-      - name: Preserve complete scoped source, build, physical and migration evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: crewd-m5-whole-followup-${{ matrix.name }}-${{ github.sha }}
-          include-hidden-files: true
-          path: |
-            crewd/target/m5-followup-evidence
-            ${{ runner.temp }}/m5-normal12
-            ${{ runner.temp }}/m5-normal12-witness.json
-            ${{ runner.temp }}/m5-normal13
-            ${{ runner.temp }}/m5-normal13-witness.json
-            ${{ runner.temp }}/m5-physical
-            ${{ steps.migration_root.outputs.evidence-root }}
-          if-no-files-found: warn
-          retention-days: 14
-
-  m5-remaining:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_remaining_only == true && inputs.m5_followup_only != true && inputs.core_permission_followup != true && inputs.linux_candidate_only != true }}
-    name: M5 remaining physical and migration (original compiled 2bf) (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+      PYTHONDONTWRITEBYTECODE: '1'
     permissions:
       contents: read
       actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS
-            os: macos-26
-            original_artifact: 11872685419
-          - name: Linux
-            os: ubuntu-latest
-            original_artifact: 11871714902
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
-    defaults:
-      run:
-        working-directory: crewd
-        shell: bash
     steps:
       - uses: actions/checkout@v5
-      - name: Bind original completed failed run and unchanged complete Rust tree
+      - name: Verify original accepted Linux11 run and canonical artifact metadata
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          mkdir -p target/m5-followup-evidence
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/38516501175" --jq '{id,head_sha,status,conclusion,run_attempt}' > target/m5-followup-evidence/original-run.json
-          python3 - target/m5-followup-evidence/original-run.json <<'RUN'
-          import json,pathlib,sys
-          value=json.loads(pathlib.Path(sys.argv[1]).read_text());assert value['id']==38516501175 and value['head_sha']=='2bf1ce50129eb54c412496600c1f17945ed3f61d' and value['status']=='completed' and value['conclusion']=='failure' and value['run_attempt']==1
-          RUN
-          git fetch --no-tags origin 2bf1ce50129eb54c412496600c1f17945ed3f61d a76cae4804cb26c62f4e2a64c993dbe18822758f
-          git diff --exit-code 2bf1ce50129eb54c412496600c1f17945ed3f61d HEAD -- .
-          git diff --quiet HEAD -- .
+          mkdir -m 700 "$RUNNER_TEMP/linux-install-original-meta"
+          gh api repos/${{ github.repository }}/actions/runs/38500948870 > "$RUNNER_TEMP/linux-install-original-meta/run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/11866465185 > "$RUNNER_TEMP/linux-install-original-meta/artifact.json"
+          python3 - <<'PYCONTROL'
+          import json,os,pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-install-original-meta'
+          run=json.loads((root/'run.json').read_text());artifact=json.loads((root/'artifact.json').read_text())
+          assert run['id']==38500948870 and run['run_attempt']==1 and run['conclusion']=='success'
+          assert run['head_sha']=='7b1849d97a813a1655ebafb66068a04a614e8787'
+          assert artifact['id']==11866465185 and not artifact['expired']
+          assert artifact['workflow_run']['id']==run['id'] and artifact['workflow_run']['head_sha']==run['head_sha']
+          assert artifact['name']=='crewd-linux-candidate-'+run['head_sha']
+          PYCONTROL
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: ${{ matrix.original_artifact }}
-          path: ${{ runner.temp }}/m5-original-scope
+          artifact-ids: '11866465185'
+          run-id: '38500948870'
           github-token: ${{ github.token }}
-          run-id: 38516501175
-      - name: Read matching repository toolchain
-        id: toolchain
+          merge-multiple: true
+          path: ${{ runner.temp }}/linux-install-original-download
+      - name: Verify and safely extract immutable original canonical tar
         run: |
-          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          test -n "$channel"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crewd
-      - name: Actual import control and original full-input raw proof verification
-        id: reused_normal
-        run: |
-          set -euo pipefail
-          python3 ../scripts/dev/test-crewd-provenance-import.py
-          python3 ../scripts/dev/verify-crewd-m5-reused-normal.py "$RUNNER_TEMP/m5-original-scope" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/m5-remaining-evidence" --platform "${{ matrix.name }}"
-          python3 - "$RUNNER_TEMP/m5-remaining-evidence/composition.json" <<'HOST'
-          import json,pathlib,subprocess,sys
-          proof=json.loads(pathlib.Path(sys.argv[1]).read_text());host=next(line[6:] for line in subprocess.check_output(['rustc','-Vv'],text=True).splitlines() if line.startswith('host: '));assert host==proof['expectedRuntimeTarget']
-          HOST
-          cargo fetch --locked
-          python3 - "$RUNNER_TEMP/m5-remaining-evidence/composition.json" "$RUNNER_TEMP/m5-remaining-evidence/testkit-source-preflight.json" <<'OWNER'
-          import importlib.util,json,os,pathlib,subprocess,sys
-          spec=importlib.util.spec_from_file_location('pcw_record','../scripts/dev/record-crewd-build.py');record=importlib.util.module_from_spec(spec);spec.loader.exec_module(record)
-          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);composition=json.loads(pathlib.Path(sys.argv[1]).read_text());original=next(row for row in composition['normalArtifacts'] if row['schema']=='13');value=json.loads(pathlib.Path(original['originalWitness']).read_text());ref=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-          before=record.source_preflight(repo,value['files'],pathlib.Path(os.environ['CARGO_TARGET_DIR']),ref);before['scope']='testkit compilation only; reused normals remain original compiled source'
-          pathlib.Path(sys.argv[2]).write_text(json.dumps(before,indent=2)+'\n')
-          OWNER
-      - name: Physical normal-daemon follow-up delivery, Stop and restart workflow
-        if: ${{ !cancelled() && steps.reused_normal.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/m5-physical"
-          cargo build --locked --offline -p crewd-exec --bin fake_claude --features testkit --message-format=json 2>&1 | tee target/m5-followup-evidence/fake-claude-testkit-build.jsonl
-          python3 - "$CARGO_TARGET_DIR/debug/fake_claude" target/m5-followup-evidence/fake-claude-testkit-build.jsonl target/m5-followup-evidence/fake-claude-proof.json <<'FAKE'
-          import hashlib,json,pathlib,sys
-          binary=pathlib.Path(sys.argv[1]).resolve();messages=[]
-          for line in pathlib.Path(sys.argv[2]).read_text().splitlines():
-              try: row=json.loads(line)
-              except json.JSONDecodeError: continue
-              if isinstance(row,dict): messages.append(row)
-          artifacts=[r for r in messages if r.get('reason')=='compiler-artifact' and r.get('executable') and pathlib.Path(r['executable']).resolve()==binary and r['target']['name']=='fake_claude']
-          assert len(artifacts)==1 and 'testkit' in artifacts[0]['features'] and artifacts[0]['profile']['test'] is False
-          pathlib.Path(sys.argv[3]).write_text(json.dumps({'binary':str(binary),'sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'artifact':artifacts[0]},indent=2)+'\n')
-          FAKE
-          TMPDIR="$RUNNER_TEMP/m5-physical" PCW_M5_NORMAL_CREWD="$RUNNER_TEMP/m5-remaining-evidence/normal13-used/crewd" cargo test --locked -p crewd --features testkit --test s1_literal_enrollment m5_literal_normal_daemon_physical_driver_delivery_stop_restart_no_old_fact -- --ignored --exact --nocapture 2>&1 | tee target/m5-followup-evidence/normal-physical.log
-          python3 - "$RUNNER_TEMP/m5-remaining-evidence/composition.json" "$RUNNER_TEMP/m5-remaining-evidence/normal13-used/crewd" <<'HASH'
-          import hashlib,json,pathlib,sys
-          composition=json.loads(pathlib.Path(sys.argv[1]).read_text());proof=next(row for row in composition['normalArtifacts'] if row['schema']=='13');assert hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()==proof['binarySHA256']
-          HASH
-          python3 - target/m5-followup-evidence/fake-claude-proof.json <<'FAKEHASH'
-          import hashlib,json,pathlib,sys
-          proof=json.loads(pathlib.Path(sys.argv[1]).read_text());assert hashlib.sha256(pathlib.Path(proof['binary']).read_bytes()).hexdigest()==proof['sha256']
-          FAKEHASH
-      - name: Prepare private short-path Linux migration evidence parent
-        if: ${{ !cancelled() && matrix.name == 'Linux' && steps.reused_normal.outcome == 'success' }}
-        id: migration_root
-        run: |
-          set -euo pipefail
-          evidence_parent=$(mktemp -d /tmp/pm5.XXXXXX)
-          chmod 700 "$evidence_parent"
-          printf 'PENDINGCREW_TEST_MIGRATION_EVIDENCE_ROOT=%s\n' "$evidence_parent" >> "$GITHUB_ENV"
-          printf 'evidence-root=%s\n' "$evidence_parent" >> "$GITHUB_OUTPUT"
-      - name: Formal Linux actual normal12 to normal13 whole migration and recovery
-        if: ${{ !cancelled() && matrix.name == 'Linux' && steps.reused_normal.outcome == 'success' && steps.migration_root.outcome == 'success' }}
+          git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-before-verification.txt"
+          python3 scripts/dev/prepare-crewd-linux-install-baseline.py "$RUNNER_TEMP/linux-install-original-download" "$RUNNER_TEMP/linux-install-baseline"
+          git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
+          test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-before-verification.txt"
+          test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
+      - name: Verify original failed run with successful actual normal13 release
         env:
-          PENDINGCREW_TEST_OLD_CREWD_PROGRAM: ${{ runner.temp }}/m5-remaining-evidence/normal12-used/crewd
-          PENDINGCREW_TEST_CREWD_PROGRAM: ${{ runner.temp }}/m5-remaining-evidence/normal13-used/crewd
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          export PENDINGCREW_TEST_OLD_CREWD_SHA256=$(python3 -c 'import json,os;print(next(row for row in json.load(open(os.environ["RUNNER_TEMP"]+"/m5-remaining-evidence/composition.json"))["normalArtifacts"] if row["schema"]=="12")["binarySHA256"])')
-          export PENDINGCREW_TEST_CREWD_SHA256=$(python3 -c 'import json,os;print(next(row for row in json.load(open(os.environ["RUNNER_TEMP"]+"/m5-remaining-evidence/composition.json"))["normalArtifacts"] if row["schema"]=="13")["binarySHA256"])')
-          bash ../scripts/dev/test-crewd-followup-migration.sh 2>&1 | tee target/m5-followup-evidence/linux-formal-migration.log
-      - name: Preserve original provenance plus new remaining-flow composition evidence
+          gh api repos/${{ github.repository }}/actions/runs/38541835255 > "$RUNNER_TEMP/linux-install-original-meta/normal13-run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/11882857926 > "$RUNNER_TEMP/linux-install-original-meta/normal13-artifact.json"
+          gh api repos/${{ github.repository }}/actions/runs/38541835255/jobs > "$RUNNER_TEMP/linux-install-original-meta/normal13-jobs.json"
+          python3 - <<'PYVERIFY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-install-original-meta'
+          r=json.loads((p/'normal13-run.json').read_text());a=json.loads((p/'normal13-artifact.json').read_text());jobs=json.loads((p/'normal13-jobs.json').read_text())['jobs']
+          assert r['id']==38541835255 and r['run_attempt']==1 and r['head_sha']=='4e80134b9b5ff5a9b759aed1446f61da489efc4c' and r['conclusion']=='failure'
+          assert a['id']==11882857926 and not a['expired'] and a['workflow_run']['id']==r['id'] and a['workflow_run']['head_sha']==r['head_sha']
+          assert a['name']=='crewd-linux-install-upgrade-'+r['head_sha']
+          job=next(j for j in jobs if j['name']=='linux-install-upgrade')
+          assert next(x for x in job['steps'] if x['name']=='Build actual new default release with fresh owning-workspace proof and packaged recovery')['conclusion']=='success'
+          PYVERIFY
+      - name: Retrieve original artifact ZIP without expanding duplicated activation payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/actions/artifacts/11882857926/zip > "$RUNNER_TEMP/linux-install-normal13-original.zip"
+      - name: Verify full current Rust equivalence and original strong-fresh normal13 package
+        run: python3 scripts/dev/prepare-crewd-linux-install-reuse.py "$RUNNER_TEMP/linux-install-normal13-original.zip" "$RUNNER_TEMP/linux-install-new13"
+      - name: Actual ordinary-user two-version managed install, upgrade, unknown, rollback and Core recovery
+        id: lifecycle
+        run: |
+          parent=$(mktemp -d /tmp/pli.XXXXXX)
+          chmod 700 "$parent"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          python3 scripts/dev/smoke-crewd-linux-install-upgrade.py "$RUNNER_TEMP/linux-install-baseline/crewd-linux-x86_64" "$RUNNER_TEMP/linux-install-new13/crewd-linux-x86_64" "$parent/flow" --new-schema 13
+      - name: Archive private lifecycle without dereferencing activation references
+        if: ${{ always() && steps.lifecycle.outputs.parent != '' }}
+        run: python3 scripts/dev/archive-crewd-linux-lifecycle.py '${{ steps.lifecycle.outputs.parent }}/flow' "$RUNNER_TEMP/linux-install-lifecycle.tar.gz"
+      - name: Preserve original and new complete provenance plus actual lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: crewd-m5-remaining-closure-${{ matrix.name }}-${{ github.sha }}
+          name: crewd-linux-install-upgrade-${{ github.sha }}
           include-hidden-files: true
           path: |
-            crewd/target/m5-followup-evidence
-            ${{ runner.temp }}/m5-original-scope
-            ${{ runner.temp }}/m5-remaining-evidence
-            ${{ runner.temp }}/m5-physical
-            ${{ steps.migration_root.outputs.evidence-root }}
-          if-no-files-found: warn
+            ${{ runner.temp }}/linux-install-original-meta
+            ${{ runner.temp }}/linux-install-new13/reused-normal13.json
+            ${{ runner.temp }}/linux-install-lifecycle.tar.gz
+            ${{ runner.temp }}/linux-install-lifecycle.tar.gz.json
+          if-no-files-found: error
           retention-days: 14

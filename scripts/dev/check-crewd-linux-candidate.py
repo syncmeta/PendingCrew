@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Verify a Linux candidate against its full recorded Rust build; no execution."""
 import hashlib,importlib.util,json,pathlib,struct,sys
+# Verification is read-only even when imported proof modules have no cached bytecode.
+sys.dont_write_bytecode = True
 
 def main():
  root=pathlib.Path(sys.argv[1]).resolve();manifest=json.loads((root/'candidate.json').read_text())

@@ -1,5 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-14 Linux 完整受管维护单元验收与原窗口当前边界
+
+唯一必要 Linux run38559752496/attempt1/exact3ac3074706830d3d384160b18f7d248ca8addb1a 已 terminal success，普通UID1001，仅linux-install-upgrade，全量crewd跳过，无新编译。独立报告 /private/tmp/pcw-Linux-install-3ac30747-success-small-06/complete-unit-independent.json 已实读接受：安装11→升级13→未知prepared/dropped回执readback/冲突payload/并发单CASwinner→仅pointer回退→managed在oldexec前拒future并保全部main/id/WAL/SHM物理与逻辑→正式Core restore11/reopen#1→restore13/reopen#1/#2走完整尾段；最终13/integrityok/50table。正常daemon实际wait0；wrapperdeath控制子进程仅证gone或zombie、退出码不可得，不泛称全部reaped0。
+
+新artifact11890753801 / ZIP56,492,828B / SHA841c747cc5d2c43786a8f3fa1135ff2cf2cf50eb29a2297e046828c51bafc658；827file/link完整manifest流式核对通过，actualmanagedmodule9ab7e0e6ddc585397e2a2552eb27f0a720bb7029e80afc0d9347889b2e889190同Git3ac。后台诚实复用original4e normal13默认release/binaryd891b4d84b5e8b35c9f502504ae5da5569ee330c7f23ba489c746cc8f6a5b8e5与original7b old11，不把3ac或根组合SHA称新编译。接受仅sameprefix受管/独立快照停态维护；其他prefix/raw、非空WAL同版crash14、安全生产配置、真实日常安装/分发仍未完成。原失败与rawold侧文件限制记录保留。
+
+根精准整合该完整12个workflow/scripts差异与作者Linux单元记录；正式原前端交付方案43b4cbb96cdd1b82deb535812d06ba1b6ec86244仅方案，要求ordinary默认Core/稳定正式namespace/真实持久安全vault/原各平台scene与14receipt-terminal-ownedQuit/设备/安装日常授权，未冒实施。整个Sources和crewd仍同已编5cdf字节，后台未14，不重复稳定审核、编译或CI。
+
+人类已明确授权一次新07 require_escalated+ttycontext，自动审批通过后actual98616 GUI97324/helper97339在 /private/tmp/pcw-original-07-context.avpj7cvv 真实kernelbirth/parent/private6env/cwd/fakeCodex/claudefalse/Unixpeer资格通过，原Root已连接，无旧whiteboards/legacy业务实例。保91510原default-sandbox SIGABRT对照，不为执行上下文重编产品。外部Python非Human lineage探针正确拒绝，不拿它替GUI资格。
+
+窗口仍未整体验收：新建入口与chooser暴露FoundationHome真实旧默认工作目录读取，输入HOME不能伪隔离。作者整块修默认根/selectedauthority/local-remote目录来源，不循环字段重包。当前明确privatework已有draft的compiled07提交路径已bounded证只取explicit目录、actualcrew/lobby且无legacy回填/自动start；QA须核实际draft和authority才继续该正式业务，不再触发knownbadbegin/chooser。隐私入口门禁仍FAIL，后续业务绿不能覆盖。13split首发不等14原子/receipt；M4producer/历史/审批、14normal及整体生产执行继续后端线，Jev/记忆只保留方案。
+
+
 ## 2026-10-14 窗口实际启动与受管恢复源边界
 
 原前端07完整源码组合已保存并普通推送根5050e3a4513c2a93c8ba2bd1ea94cc9351f03f7f；GUI实际编译来源5cdf、helper仍正常2bf，准备层接受不等窗口。人类已经实际回复已解锁，原锁屏等待解除。
