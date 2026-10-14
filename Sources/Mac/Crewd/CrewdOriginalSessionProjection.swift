@@ -21,6 +21,7 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     var isBusy: Bool { isWorking }
     private(set) var hasObservedLaunchSignal = false
     private var lastScreen: String?
+    private var retired = false
     private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind
@@ -31,7 +32,7 @@ final class CrewdOriginalSessionBackend: SessionBackend {
         terminalView?.onSendBytes = nil; terminalView?.onResize = nil
     }
     func update(live: CrewdValue, inspection: CrewdValue, items: [CrewdValue]) {
-        guard live["sessionId"].string == sessionID else { return }
+        guard !retired, workspace.acceptsObservation(workspace.observationGeneration), live["sessionId"].string == sessionID else { return }
         hasObservedLive = true
         status = live["running"] == .bool(true) ? .running : .exited(nil)
         isWorking = live["working"] == .bool(true)
@@ -56,18 +57,39 @@ final class CrewdOriginalSessionBackend: SessionBackend {
     func submitWake(_ text: String) async -> SessionWakeSubmission { .blocked }
     func interrupt() { command("session.interrupt", ["sessionId": .string(sessionID)]) }
     func stop() { command("session.stop", ["sessionId": .string(sessionID), "reason": .string("人类在原窗口明确停止")]) }
+    func retireDisplay() {
+        retired = true
+        terminalView?.onSendBytes = nil; terminalView?.onResize = nil
+    }
     private func command(_ method: String, _ fields: [String: CrewdValue]) {
+        let epoch = workspace.observationGeneration
+        guard !retired, workspace.acceptsObservation(epoch) else { return }
         Task {
-            do { _ = try await workspace.performValue(method, .object(fields)); await refresh() }
-            catch { failure = error.localizedDescription }
+            // Authority may have switched while this main-actor task was queued.
+            guard !retired, workspace.acceptsObservation(epoch) else { return }
+            do {
+                _ = try await workspace.performValue(method, .object(fields))
+                guard !retired, workspace.acceptsObservation(epoch) else { return }
+                await refresh()
+            } catch {
+                guard !retired, workspace.acceptsObservation(epoch) else { return }
+                failure = error.localizedDescription
+            }
         }
     }
     func refresh() async {
+        let epoch = workspace.observationGeneration
+        guard !retired, workspace.acceptsObservation(epoch) else { return }
         do {
             let live = try await workspace.readValue("session.live", .object(["sessionId": .string(sessionID)]))
+            guard !retired, workspace.acceptsObservation(epoch) else { return }
             let inspection = try await workspace.readValue("session.inspect", .object(["sessionId": .string(sessionID)]))
+            guard !retired, workspace.acceptsObservation(epoch) else { return }
             update(live: live, inspection: inspection, items: inspection["items"].array)
-        } catch { failure = error.localizedDescription }
+        } catch {
+            guard !retired, workspace.acceptsObservation(epoch) else { return }
+            failure = error.localizedDescription
+        }
     }
 }
 
@@ -77,8 +99,10 @@ final class CrewdOriginalSessionProjection {
     weak var runner: CrewSessionRunner?
     private var observation: AnyCancellable?
     private var projections: [String: CrewSessionRun] = [:]
+    private var observedGeneration: UUID?
     init(workspace: CrewdWorkspace, runner: CrewSessionRunner) {
         self.workspace = workspace; self.runner = runner
+        runner.installCrewdProjection([], workspace: workspace)
         observation = workspace.objectWillChange.sink { [weak self] _ in Task { @MainActor [weak self] in self?.publish() } }
         publish()
     }
@@ -90,6 +114,13 @@ final class CrewdOriginalSessionProjection {
     }
     func publish() {
         guard let runner else { return }
+        let epoch = workspace.observationGeneration
+        if observedGeneration != epoch {
+            for old in projections.values { old.retireCrewdDisplayObservation() }
+            projections.removeAll(); observedGeneration = epoch
+            runner.installCrewdProjection([], workspace: workspace)
+        }
+        guard workspace.acceptsObservation(epoch) else { return }
         for row in workspace.sessions {
             guard let id = row["id"].string, let crew = row["crewId"].string, let executor = row["executor"].string else { continue }
             guard executor == "codex" || executor == "claude" || executor.hasPrefix("acp:") else { continue }

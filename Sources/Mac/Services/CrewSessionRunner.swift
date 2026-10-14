@@ -233,17 +233,31 @@ final class CrewSessionRunner: ObservableObject {
     private let isCrewdPresentation: Bool
     private var crewdProjectionWorkspace: CrewdWorkspace?
     func installCrewdProjection(_ projected: [CrewSessionRun], workspace: CrewdWorkspace) {
-        isViewer = true; viewerClient = nil; crewdProjectionWorkspace = workspace
-        if runs.map(\.sessionId) != projected.map(\.sessionId) {
+        let authorityChanged = crewdProjectionWorkspace !== workspace
+        isViewer = true; viewerClient = nil
+        if authorityChanged {
+            // Session UUID equality across computers or backup forks is not
+            // display ownership. Retire the old objects before rebinding actions.
+            for old in runs { old.retireCrewdDisplayObservation() }
+            runs = []; selectedRunId = nil; paneStates.removeAll()
+            activeCrewId = nil; viewingTerminal = false; isComposingNew = false
+        }
+        crewdProjectionWorkspace = workspace
+        if runs.map(\.runID) != projected.map(\.runID) {
             let kept = Set(projected.map(\.runID))
             for old in runs where !kept.contains(old.runID) { old.retireCrewdDisplayObservation() }
             runs = projected
+            if let selectedRunId, !kept.contains(selectedRunId) { self.selectedRunId = nil }
+        }
+        if selectedRunId == nil, !workspace.sessionID.isEmpty {
+            selectedRunId = runs.first(where: { $0.sessionId == workspace.sessionID })?.runID
         }
     }
 
 
     /// 接上 viewer 链路。之后 `runs` 由 `applyRemoteRoster` 驱动。
     func attachViewer(client: SessionProtocolClient) {
+        guard !isCrewdPresentation else { return }
         isViewer = true
         viewerClient = client
     }
@@ -270,6 +284,7 @@ final class CrewSessionRunner: ObservableObject {
     /// **只增删改，不重建**：`runs` 每次整份换新的话，右栏正开着的那个 session 会
     /// 因为 `runID` 变了而被切走 —— 每 2 秒一次的点名快照就会让人根本没法用。
     func applyRemoteRoster(_ list: SessionList) {
+        guard !isCrewdPresentation else { return }
         guard isViewer, let client = viewerClient else { return }
         let plan = SessionRosterReconciliation.plan(
             incoming: list.sessions, localSessionIds: runs.map(\.sessionId))
@@ -2864,6 +2879,7 @@ final class CrewSessionRunner: ObservableObject {
         kind: LocalCodingAgentKind,
         userInitiated: Bool = false
     ) async throws {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         if forwardCaptainHandoffToOwner(
             crewId: detail.crew.id, sessionId: nil,
             runner: kind, brief: openingBrief) { return }
@@ -2880,6 +2896,7 @@ final class CrewSessionRunner: ObservableObject {
         crewId: String, sessionId: String?, runnerRaw: String?, brief: String,
         detail: CrewDetail, backend: PendingCrewBackend?
     ) async {
+        guard !isCrewdPresentation else { return }
         do {
             guard detail.crew.id == crewId else { throw RunnerError.captainCandidateInvalid }
             if let sessionId, !sessionId.isEmpty {
@@ -3054,6 +3071,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail,
         backend: PendingCrewBackend?
     ) async {
+        guard !isCrewdPresentation else { return }
         do {
             guard detail.crew.id == request.targetCrewId else {
                 throw CaptainHandoffAuthorizationError.notDirectChild
@@ -3569,6 +3587,7 @@ final class CrewSessionRunner: ObservableObject {
         sessionIdOverride: String? = nil,
         manualTakeoverDirectory: URL? = nil
     ) async throws {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         if isViewer {
             sendOrchestration(SessionOrchestrationOp.startSession, [
                 "role": .string("worker"),
@@ -3614,6 +3633,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
         newRunner: LocalCodingAgentKind
     ) async throws -> String? {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         let request = try WorkerManualTakeoverRequest(
             crewId: detail.crew.id, sourceSessionId: sourceSessionId,
             runner: newRunner, confirmed: true)
@@ -3637,6 +3657,7 @@ final class CrewSessionRunner: ObservableObject {
         detail: CrewDetail, backend: PendingCrewBackend?, sourceSessionId: String,
         newRunner: LocalCodingAgentKind
     ) async throws -> String {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
         guard let source = try workerAssignmentStore.latest(
             crewId: detail.crew.id, sessionId: sourceSessionId),
@@ -3654,6 +3675,7 @@ final class CrewSessionRunner: ObservableObject {
         sourceAgentSessionId: String, newRunner: LocalCodingAgentKind,
         model: String? = nil, effort: String? = nil
     ) async throws -> String {
+        guard !isCrewdPresentation else { throw CrewdClientError(message: "旧编排操作不适用于当前后台；请求未提交。", kind: .notSubmitted) }
         guard !isViewer else { throw WorkerManualTakeoverError.viewerUnavailable }
         guard newRunner.isAgent else { throw WorkerManualTakeoverError.invalidRunner }
         guard !runs.contains(where: {
@@ -3711,6 +3733,13 @@ final class CrewSessionRunner: ObservableObject {
     func restoreSessions(_ candidates: [SessionRestoreOffer.Candidate],
                          backend: PendingCrewBackend?) async -> SessionRestoreOutcome {
         var outcome = SessionRestoreOutcome()
+        if isCrewdPresentation {
+            outcome.failures = candidates.map {
+                .init(sessionId: $0.sessionId, crewId: $0.crewId,
+                      reason: "旧会话恢复不适用于当前后台；未提交且未写入旧账。")
+            }
+            return outcome
+        }
         // **先问在哪个进程里接。** 接回 = 拉 agent；viewer 里自己拉就和后台双头。
         // 判定在 `SessionRestoreRoute`（有测试）。
         switch SessionRestoreRoute.decide(
@@ -4517,6 +4546,7 @@ final class CrewSessionRun: ObservableObject, Identifiable {
     /// Retiring a presentation cancels observations only. It cannot stop any
     /// model, publish a legacy end row, or infer remote execution completion.
     func retireCrewdDisplayObservation() {
+        (backend as? CrewdOriginalSessionBackend)?.retireDisplay()
         guard backend is CrewdOriginalSessionBackend else { return }
         statusObservation?.cancel(); workingObservation?.cancel(); typingObservation?.cancel()
         healthObservation?.cancel(); decisionObservation?.cancel(); launchParameterObservation?.cancel()

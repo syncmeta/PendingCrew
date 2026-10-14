@@ -21,6 +21,7 @@ final class SessionHost: ObservableObject {
 
     private var bag = Set<AnyCancellable>()
     private var started = false
+    private let isCrewdPresentation: Bool
 
     /// 两个依赖都收 `nil` 默认值而不是 `= CrewSessionRunner()` 这类默认实参：
     /// 默认实参在 **nonisolated** 上下文求值，而这两个类型都是 `@MainActor`。
@@ -30,6 +31,7 @@ final class SessionHost: ObservableObject {
     init(presentationOnly: Bool = false, runner: CrewSessionRunner? = nil,
          usage: LocalAgentUsageMonitor? = nil,
          ownsAppUpdater: Bool = true) {
+        self.isCrewdPresentation = presentationOnly
         self.runner = runner ?? CrewSessionRunner(presentationOnly: presentationOnly)
         self.usage = usage ?? LocalAgentUsageMonitor()
         self.ownsAppUpdater = ownsAppUpdater
@@ -269,6 +271,7 @@ final class SessionHost: ObservableObject {
     ///   同版重启是人自己按的 → 规格是不问（确认框里已经提前说了）。
     /// - viewer 里不用我们起新的：锁空了 `ViewerSessionClient` 自己会拉。
     func restartLocalBackend() async -> String {
+        guard !isCrewdPresentation else { return "当前后台不使用旧 daemon 重启操作；没有停止或写入其它后台。" }
         let previousDaemonPID = viewer?.connectedDaemonPID
         let appBuild = SessionDaemonHost.currentBuild
         let candidates = Self.restoreCandidates()

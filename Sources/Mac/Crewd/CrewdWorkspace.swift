@@ -85,6 +85,10 @@ final class CrewdWorkspace: ObservableObject {
     private var retired = false
     var isRetired: Bool { retired }
     private var generation = UUID()
+    var observationGeneration: UUID { generation }
+    func acceptsObservation(_ epoch: UUID) -> Bool {
+        !retired && !sleeping && client.connected && generation == epoch
+    }
     private var selection = UUID()
     private var sessionDirectoryQuery = UUID()
     private var crewDirectoryQuery = UUID()
@@ -93,6 +97,14 @@ final class CrewdWorkspace: ObservableObject {
     private var reconnectID: UUID?
     #if os(macOS)
     private var backend: Process?
+    private var ownedChildIdentity: CrewdKernelProcessIdentity?
+    private struct OwnedIPCBinding {
+        let generation: UUID
+        let peer: CrewdKernelProcessIdentity
+        let dbID: String
+        let runtimeBindingID: String
+    }
+    private var ownedIPCBinding: OwnedIPCBinding?
     #endif
     private var again = false
     private var recoverNeeded = false
@@ -218,7 +230,11 @@ final class CrewdWorkspace: ObservableObject {
             if !FileManager.default.fileExists(atPath: logs.path) { FileManager.default.createFile(atPath: logs.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
             let log = try FileHandle(forWritingTo: logs); try log.seekToEnd()
             p.standardOutput = log; p.standardError = log
-            try p.run(); backend = p; try log.close()
+            try p.run(); backend = p
+            // A failed birth observation leaves the helper unconfirmed; never
+            // infer ownership from the launch path or an advertised PID.
+            ownedChildIdentity = try? CrewdKernelProcessIdentity.ownChild(p.processIdentifier)
+            try log.close()
             for _ in 0..<30 {
                 try await Task.sleep(for: .milliseconds(100))
                 do { try await connectOnly(); return } catch { if sleeping || Task.isCancelled { return } }
@@ -231,19 +247,48 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    /// The current NWConnection transport exposes no kernel peer identity.
-    /// A running child plus a matching IPC path does not prove that this
-    /// connection reaches that child. Until an authenticated kernel association
-    /// exists, preserve pending Quit rather than send hibernate to a rival daemon.
+    /// Hibernate only the child authenticated on this very IPC descriptor.
+    /// An RPC acknowledgement does not prove the process physically exited.
     func quitOwnedLocalHelper() async throws {
         guard let owned = backend, owned.isRunning else { return }
-        throw CrewdClientError(message: "本 App 启动的本机后台仍在运行，但当前连接尚无内核进程身份核对，无法确认安全退出。退出请求保留待核对，不会停止其它后台。", kind: .notSubmitted)
+        guard !retired, client.connected, let birth = ownedChildIdentity,
+              let binding = ownedIPCBinding, binding.generation == generation,
+              owned.processIdentifier == birth.pid,
+              (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth,
+              (try? client.verifiedLocalPeerIdentity()) == binding.peer, binding.peer == birth,
+              client.runtimeIdentity["dbId"].string == binding.dbID,
+              client.runtimeIdentity["runtimeBindingId"].string == binding.runtimeBindingID else {
+            throw CrewdClientError(message: "本 App 的后台尚无当前内核连接与进程实例的完整核对，退出保留待确认，不会停止其它后台。", kind: .notSubmitted)
+        }
+        sleeping = true; reconnect?.cancel(); sync?.cancel()
+        do { _ = try await submitRPC("crewd.hibernate", .object([:])) }
+        catch {
+            if !CrewdClientError.isUncertainSubmission(error) { sleeping = false; throw error }
+        }
+        for _ in 0..<300 {
+            if !owned.isRunning { backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil; return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw CrewdClientError(message: "尚未确认本 App 的后台已退出；休眠结果待核对，不强制终止进程。")
+    }
+    private func associateOwnedIPC(_ epoch: UUID) {
+        ownedIPCBinding = nil
+        guard let process = backend, process.isRunning, let birth = ownedChildIdentity,
+              process.processIdentifier == birth.pid,
+              (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth,
+              let peer = try? client.verifiedLocalPeerIdentity(), peer == birth,
+              let db = client.runtimeIdentity["dbId"].string, !db.isEmpty, db.utf8.count <= 256,
+              let instance = client.runtimeIdentity["runtimeBindingId"].string, UUID(uuidString: instance) != nil else { return }
+        ownedIPCBinding = OwnedIPCBinding(generation: epoch, peer: peer, dbID: db, runtimeBindingID: instance)
     }
     #endif
     private func connectOnly() async throws {
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
+        #if os(macOS)
+        ownedIPCBinding = nil
+        #endif
         try await connector(client)
         guard generation == current, !retired, !Task.isCancelled, !sleeping else {
             if retired { client.disconnect() }
@@ -259,6 +304,9 @@ final class CrewdWorkspace: ObservableObject {
         await sync?.value
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         guard client.connected else { throw CrewdClientError(message: client.lastError ?? "后台连接已中断。") }
+        #if os(macOS)
+        associateOwnedIPC(current)
+        #endif
     }
 
     func refreshSessionDirectory(_ crew: String) async throws {
