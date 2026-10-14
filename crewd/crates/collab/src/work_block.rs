@@ -86,7 +86,7 @@ pub fn block(tx: &mut Tx<'_>, by: &Sender, p: WorkBlockParams) -> Result<WorkBlo
     let result = asks::with_book(tx, &reference.crew_id, |b, now| {
         b.block(&actor, now, local, on, rest).map(|ap| ap.value)
     })
-    .map_err(work::owner_refusal)?;
+    .map_err(work::command_refusal)?;
     let human_tasks = asks::announce_block_questions(tx, &result.asks)?;
     let mut split = Vec::with_capacity(result.split.len());
     for id in result.split {

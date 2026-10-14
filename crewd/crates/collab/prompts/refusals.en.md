@@ -503,4 +503,31 @@ Channel work references changed. Refresh the current channel work view before re
 Channel work references changed. Refresh the current channel work view before retrying.
 
 ## work.owner_required
-Assign an owner before starting or blocking this work.
+Assign an owner before starting, blocking, or scheduling a check for this work.
+
+## work.check_required
+Active work needs a next check; schedule one before starting.
+
+## work.check_not_allowed
+This state cannot schedule a next check; unblock the work first or report only a note.
+
+## work.check_too_far
+The next check exceeds the configured horizon; choose an earlier check.
+
+## work.check_not_future
+The next check must be in the future; choose a later time.
+
+## work.dependencies_pending
+Complete the prerequisite work before starting this item.
+
+## work.relation_invalid
+These relationships would create a cycle or violate work hierarchy limits; revise the dependencies or split.
+
+## work.owner_unchanged
+That member already owns this work; choose another owner or report progress.
+
+## work.dependents_active
+Live child or dependent work remains; finish it or revise the relationships before closing this item.
+
+## work.terminal
+This work is already closed; create followup work instead of reporting, blocking, or reassigning it.
