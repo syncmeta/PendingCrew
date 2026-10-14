@@ -85,3 +85,10 @@ smoke统一dbversion、拒绝snapshot和最后integrity为显式close的immutabl
 保证仅本受管prefix；别prefix、rawbinary、外部写者及hostroot不由该lease封住。保守非空WAL拒只证明旧版零触碰安全，不代表正常同版本crash自动恢复。最终可靠日常Linux恢复仍依赖14正式官方WAL副本验证/同版恢复或明确受管恢复入口，不能让人raw绕过/手删WAL后声称完整平台交付。当前只冻结安装/版本拒绝/停态backup/restore单元。实际普通Linux全链仍待质量影响接受后的唯一必要剩余运行，4e原compiled/ref/规范tar完整证明复用，不重编/全CI/已足证前置。
 
 作者新增module控制首次import生成的唯一终态pyc已按exacthash/mtime清单回收，manifest `/private/tmp/pcw-managed-author-pycache-reclaim.json`；生产launcher在import之前设置dont_write_bytecode，后续本地控制也在import前设置，未以module内设置冒称可阻加载器先写仓库。源码/DB/log/binary/SDK证明均保留。
+
+
+### 受管恢复来源完整边界收口
+
+2b源码独审发现restore --from会打开第二个SQLite来源，旧Core先open_read_only再判版本；仅target header/lease不足。现按主明确裁决，受管restore只接本target/data/backups下完成的Core快照：canonical0700parent、owned0600regular/nolinks、正式Core命名、DELETE1/1 header、无任何WAL/SHM/journal（包括空文件），same验包maxschema在任何SQLite exec之前判。与target共享同data排他lease；external/live/跨data/unknown/future来源均保source+target拒绝。Core原任意from接口不变，本受管入口不宣称该兼容能力。import实际只读legacyJSON，必须显式canonical0700且与target不重叠的源，拒绝隐含daily/default/alias；源不当SQLite打开。
+
+最终新source控制完整重走实际生成launcher+Mac11/13正规backup/restore/restart尾段，全流程GREEN `/private/tmp/pcw-managed-whole-1b87u1h3/result.json`，新moduleSHA与输入绑定。其source-input-controls.json保存15项actuallauncher负例：实际future13源给old11、WAL-mode源、外部跨data、source与backups-parent alias、WAL/SHM/journal各empty/pending、unknown snapshot名、implicit/alias/overlap import。每次真实refusal且source/target全SHA/mode/link保持，合法显式JSON import正例源零变更。临时控制程序 `/private/tmp/pcw-managed-source-input-controls.py`、所有logs保留；没有借remote发现这些输入分支，也不把Mac控制改标Linux全链。旧2b source-review未被标成接受，待这完整来源收口once独审。14官方WAL验证/同版crash恢复/受管恢复扩展仍属最终平台未交付依赖。

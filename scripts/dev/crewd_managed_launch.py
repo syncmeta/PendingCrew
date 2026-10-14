@@ -45,7 +45,7 @@ def classify(argv):
         if option in seen and option not in {'--codex-env', '--claude-env'}:
             raise ValueError('duplicate managed database argument')
         seen.add(option); i += 2
-    if command == 'restore' and '--from' not in seen: raise ValueError('restore requires explicit source')
+    if command in {'restore', 'import'} and '--from' not in seen: raise ValueError('managed restore/import requires explicit source; no daily fallback')
     return data
 
 def supported_schema(package):
@@ -79,6 +79,9 @@ def readonly_header(data, maximum):
             if info.st_size: raise ValueError('managed database has pending WAL/journal; preserve files and use authoritative newer recovery')
     db = data / 'crewd.db'
     if not db.exists() and not db.is_symlink(): return
+    return inspect_header(db, maximum)
+
+def inspect_header(db, maximum):
     private(db)
     fd = os.open(db, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
@@ -96,6 +99,27 @@ def readonly_header(data, maximum):
         raise ValueError('managed.future_schema: database version %d exceeds supported %d; old program not launched' % (version, maximum))
     if int.from_bytes(header[68:72], 'big') != 1129469764 or version < 1:
         raise ValueError('unknown database identity/version; preserve original files')
+    return header
+
+def source_guard(data, command, arguments, maximum):
+    if command not in {'restore', 'import'}: return
+    source = pathlib.Path(arguments[arguments.index('--from') + 1])
+    if not source.is_absolute(): raise ValueError('explicit canonical source path required')
+    if command == 'import':
+        private(source, True)
+        if source == data or source.is_relative_to(data) or data.is_relative_to(source):
+            raise ValueError('legacy JSON import source must be disjoint from target')
+        return # Core imports legacy JSON; it never opens source SQLite.
+    backups = data / 'backups'; private(backups, True)
+    if source.parent != backups or not re.fullmatch(r'crewd-(?:manual|auto|v[0-9]+-pre-v[0-9]+)-[0-9]{8}T[0-9]{9}Z\.db', source.name):
+        raise ValueError('managed restore requires a completed Core snapshot in this target backups directory')
+    private(source)
+    for suffix in ['-wal', '-shm', '-journal']:
+        side = pathlib.Path(str(source) + suffix)
+        if side.exists() or side.is_symlink(): raise ValueError('restore snapshot has side files; preserve source and use newer authoritative recovery')
+    header = inspect_header(source, maximum)
+    if header[18:20] != bytes([1, 1]):
+        raise ValueError('managed restore requires independent DELETE-mode Core snapshot; never open live WAL source')
 
 def main(prefix, argv):
     if os.getuid() != os.geteuid(): raise ValueError('elevated mixed-UID launch unsupported')
@@ -114,5 +138,7 @@ def main(prefix, argv):
         fd = os.open(locks / name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         private(locks / name)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); os.set_inheritable(fd, True)
-        readonly_header(data, supported_schema(package))
+        maximum = supported_schema(package)
+        readonly_header(data, maximum)
+        source_guard(data, argv[2], argv[3:], maximum)
     os.execv(str(package / 'bin/crewd'), [str(package / 'bin/crewd'), *argv])
