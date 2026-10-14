@@ -1,5 +1,24 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 停手与接手检查点（2026-10-14，优先于下文在途状态）
+
+用户明确要求本会话收尾、总结后停手，剩余由另一个session继续。不得据下文“持续推进”条款、旧heartbeat或已恢复磁盘空间自行恢复。本工程未完成；Jev/记忆仍只保留方案，Codex内部通信仍延期，Claude仍须真实交互PTY。
+
+已完成本次收尾：
+
+- main仍为已推送并完整CI通过的 `fe68022f`；本轮新的schema11与Native客户端尚未合main、安装或切换日常数据。用户README/设计/旧ACP未提交资料保留。
+- 根隔离树 `/Users/hey/.codex/worktrees/global-work-flow-20261013/PendingCrew` 的后台11候选 `cf22e789` 已保存远端，当前已再接覆盖修正 `2001ac91`（原 `c42828e3`）。只整合crewd，未带未验Native客户端。
+- 正常后台28cc源/360完整Rust输入/实际默认features构建与二进制来源独核通过。正式normal10→11升级、保护备份失败、第二DDL回滚、副本重试、旧版拒写、业务与UUID重开全部实际通过。旧normal28 witness只证明其原输入，不能倒推后来test-only源码。
+- 最终后台CI `38494334844` 精确 `c42828e3` 已success：Linux/Mac均2557pass/10skip，Linux1leaky分类，Mac无leaky；fmt/严格lint/doctest同run通过。原完整日志 `/private/tmp/pcw-M6-backend-ci-c42828e3-green.log`。observer63184终态0，不再轮询或重跑。
+- 普通配置Xcode26.5 CI `38492408688` 精确 `28ccf9c7` 已success：Mac3202总/3187pass/15skip/0fail、iOS Simulator BUILD SUCCEEDED、工程同步通过。原日志 `/private/tmp/pcw-M6-native-ci-28ccf9c7-green.log`；observer54017终态0。不是专用候选条件或实际窗口证明。
+- 实际临时TLS生产配对/撤销/同身份恢复信任失效、kernel阻塞writer/排队旧写拒绝/有限全局drain，以及Apple内存vault→真实Network TLS13→Core工作/事件→撤销完整链已通过。原normal迁移与Apple链交接在M6文档，原RED保留。
+- M6源码工作树 `/Users/hey/.codex/worktrees/m6-client-20261014/PendingCrew` clean最终 `e1ea6fc8`。交接 `docs/internal/2026-10-14-m6-stopped-handoff.md`；完整v2 recipe/checker已实现并有结构负对照，实际候选配置仅settings查询通过，完整条件构建/包/窗口/真机仍未验。额外all-features测试因errno28未跑完，不用标准CI冒称该范围已验。
+- M4工作树 `/Users/hey/.codex/worktrees/claude-pty-acp-20261014/PendingCrew` clean最终 `c2fbd2bd`：已保存helper/receipt组件、Core FIFO证据并接11；25 ACP/PTY+6 SQL receipt+1 Core FIFO是组件证据，不是完整M4。schema12仍未激活，M5仍未完成。交接见 `docs/internal/2026-10-14-claude-acp-native-foundation.md`末段。
+- 人类已批准原 `/private/tmp/pcw-M4-metadata-human-scope-5xexpvh8` 的假凭据/本机mock/无模型metadata信任测试。两次已启动受控尝试均完成回收、mock0/types0；实际trust未确认，原生接口类型仍unknown。许可不扩为真实账号或模型任务，下次先按交接核当前菜单与exact scope，不在本会话重启。
+- 所有自有编译、metadata与CI观察句柄已终态；三个子代理已收尾。原源、日志、数据库、图、SDK实际对象、二进制、候选与witness保留。可再生缓存回收都有清单；恢复空间不是恢复开发授权。
+
+下一session从现有检查点接续，优先整合完整源码/正常helper来源一致的候选，完成专用条件全目标构建、实际v2包及窗口/设备验收；M4完成正式12接线、完整生命周期与全帧deadline边界，再接M5。保留泛厂商通信、原微信式布局与既有授权边界，不重新开发已验模块。当前目标与pendingcrew自动跟进在收尾后暂停，不能标全工程完成。
+
 本节为当前工程推进依据。后面的历史记录保留证据和决定，不能覆盖当前依赖顺序。原始设计规范、用户原布局、通用跨厂商、原始数据与权限边界仍然有效；不得把整个工程改成只完成已经写好的模块。
 
 ## 最终工程目标与近期交付关口
@@ -19,20 +38,42 @@
 
 主代理持续维护依赖、关口和整合版本，作者直接处理质量缺陷；空闲执行线主动接已有授权的下一完整批次。运行结果/权限/平台差异必须如实保留，但不向人类逐项转述编译等待和局部修补。M3通过后继续M4–M6，全工程未完成不得关闭目标。尚待讨论的功能不能用自行假定的方案宣布完成。
 
-## 六个工程关口
+## 并行模块所有权更新：M6远程配对不等待整个M4（2026-10-14）
 
-| 关口 | 可验收的完整结果 | 当前事实与主要剩余 | 依赖/责任 |
+M6共享通信/取消/authority隔离独立验收2347928d已完成并保存远端，手机/iPad原四视图及共享操作源码已冻结0dd409ed，尚不代表移动端可用。客户端线接续完整M6远程配对纵向模块：先完成实际目标项目Mac/iOS构建，再依Q11冻结并实现TLS1.3双向SPKI、持久grant/在线撤销、认证后的Core身份绑定及同NDJSON，与现有手机/iPad操作链接通。旧PSK需重配，namespace不是认证证据，不建立临时无认证Human网络入口。
+
+文件所有权以完整模块划分：global_work_resume继续拥有M3/M4 exec/term/native-helper/peer生产，usage_independent_review拥有M6客户端与新增remote/TLS/pairing/grant及相应独立store/proto模块。公共server路由/导出/schema修改由两作者先确认唯一所有者并串行整合；所有Rust编译共用同一target与单一窗口，不增加冷target。只有真正依赖M4的接口等待该接口，不把所有远程后台工作机械排到M4全部完成后。M5仍由后端接M4后的完整跟进调度；Jev和记忆继续仅方案。
+
+质量线当前优先M3完整提交/回显边界独验，随后接M6完整共享操作、可信TLS/配对/撤销与移动运行验收，原可见a9窗口暂停保留0点击证据。所有开发验证使用独立临时数据、本机TLS/模拟端；不默认开启真实LAN服务、不安装或改日常配置、不请求离线用户的App控制、不跑多余付费模型。源冻结、实际目标构建、合成TLS、真机/安装各为独立证据。
+
+根负责关口依赖、可信身份/提交确认等架构裁决、真实CI、组合源码/产物一致性与交付；内部小修直接作者与质量线协作，不逐测试回传根。未验证opaque TUI不能用总行数或旧画面确认全文，M3暂时能力边界与M4最终真实内容witness必须区分，不能以暂时拒绝缩小最终工程范围。
+
+## 当前关键路径的执行与验收分开（2026-10-14）
+
+M6后台服务/schema11先与质量线收束完整生产路由、迁移/restore、ACL、撤销和已接纳执行边界，再由根整合，供M4正式schema12接续；不等待整个Native/设备/Linux阶段。客户端继续完整可信移动链。
+
+后台先完成M4 helper/Core/receipt/fake纵向源码。如果届时仅余真实CLI信任许可、正式版本整合或真实模型验收，保留M4未完成与待许可证据，接续已有M5确定性事实跟进→耐久合并→权限/停止/预算→有效提醒的完整单元；不把外部验收关口变成整条开发线停工理由，也不现在打断未完成helper或提前激活乱序schema。Jev依然仅方案。
+
+## 六个工程关口：整块结果、当前状态与完成条件（2026-10-14 核对）
+
+此表替代此前表格中的陈旧在途状态。按用户可用能力计进度；单个测试、修补和提交不形成新的里程碑。
+
+| 关口 | 整块交付结果 | 当前已确认层级 | 剩余完成条件 / 负责人 |
 |---|---|---|---|
-| M1 完整工作与恢复闭环 | 提需求→关联计划→指派/回报→阻塞/拆分/人工答复→完成或裁定；双向交接保留说明与历史；核实失联才能重派；重启/断线不误发重放 | 组织账与需求已验收；双向交接056d46b8已完整workspace2517/0/8忽略及strict门禁通过并保存远端；核实失联重派716712fe已完成整套workspace2525/0/8忽略及strict门禁；Human停止后自动跟进不复活；typed客户端c7651580与真实daemon716712fe组合82188069已验；最终可见窗口及交付仍待验 | 当前后端主线；客户端并行接线；独立质量线跨层验收 |
-| M2 完整本机工作台 | 原层级通讯录、真实消息时间流、群/单聊合一列表，可折Todo/成员；四视图可操作；文档和每视图独立文件夹由后台权威数据支持 | 原布局、需求/Plan、交接及全组织H操作已接线；草稿/CAS/未知结果与明暗原生View有独立证据；最新双agent操作贯通在验；文档/独立文件夹权威已进入正式schema10，并通过34d06fa5的实际socket/MCP四项流程；客户端077e81d6已接线，草稿domain修复e2e26085独验通过；真实本群Todo、normal迁移/客户端贯通和可见窗口全流程仍待验 | 与M1并行；后端提供权威接口，客户端实现用户流程，质量线独验 |
-| M3 整合交付并持续自用 | 冻结一致源码/产物、main整合、迁移及回退、安装与真实任务；新版完成后续实际开发单元 | 开发分支已保存已验收检查点；固定源码builder dc78ac6c已实现；配置checker949716f8与记录器实际小编译193bb7ac已独验，接口修正d1940f6a；完整PendingCrew GUI/helper来源配对未验；正式窗口、当前整合版真实任务、真实迁移/安装分别未完成 | M1+M2通过；根负责整合/交付，质量线证据；沿既有真实运行/数据/发布授权，不提前越界 |
-| M4 通用跨厂商协作 | Codex与Claude共享crewd工作/通信/权限/恢复；Claude经ACP仍有真实交互PTY；执行器差异可见且不误投递 | Codex有基础，公共机制已有；Claude ACP真实PTY和混合运行须成套验收 | 可稳定契约先研究准备，实施接M1公共机制；后端线与质量线 |
-| M5 行政与调度 | 确定性事实驱动失联/过期/阻塞跟进，耐久合并提醒与预算防无益唤醒；完整管辖和停止规则 | 部分采集/过期claim/批处理已有；自动行政/调度闭环尚未完成；Jev多后端实施等待用户定案 | M1的事实/权限/恢复基础；后端线与质量线，根裁决关键政策 |
-| M6 平台与长期能力 | 原约定远程/配对与安全边界、iOS/iPad、Linux分发等；个人/团队记忆形成专业且了解用户的私人团队 | 本机存储/升级证据不代表这些完成；平台仍有大块工作，记忆先保留方案 | 公共接口/迁移与对应平台依赖；按前面关口释放的执行线承接，讨论项等待定案 |
+| M1 工作与恢复 | 需求、计划、指派、阻塞、人工答复、交接、失联重派与停止形成闭环 | 后端及 typed 正常运行组合已验收 | 随 M3 验证最终可交付组合；后台作者维护，质量线独验 |
+| M2 本机完整工作台 | 保留微信式布局；消息、Todo、文档、进展可操作，独立文件夹与真实本群 Todo | 产品接线、正常后台组合、正式 schema 升级/备份恢复与候选构建已验收 | 最终组合的可见窗口操作未完成；客户端作者维护，质量线验收 |
+| M3 整合交付与自我开发 | 一致版本、真实使用、恢复回退及交付，然后在新版中开发后续模块 | main 已整合并保存远端 fe68022f；Swift 修复已通过实际 Mac/iOS CI；后台最终修复已通过真实 Linux/macOS CI，新正常后台/GUI完整候选已实际构建并独验，main自动组合CI已全通过，实际正常后台/typed组合已验，窗口/真实使用交付仍待验 | 修复冻结 → 独立完整门禁 → 实际 Linux/Mac CI → 组合整合及新产物 → 可见操作、已授权真实任务与对应交付；根负责整合，不以旧候选冒充新版本 |
+| M4 跨厂商执行 | Codex 原生 app-server；Claude 经 ACP 保真实交互 PTY；共享通信、工作、权限、恢复 | 独立实现与基础进程/协议验证在途 | 启动/载入/审批/取消/尺寸/停止/恢复及混合路由整块验收；后台作者负责，质量线独验 |
+| M5 确定性行政与调度 | 失联、过期、阻塞事实 → 耐久合并 → 权限/停止/预算过滤 → 有效提醒 | 有部分基础，完整闭环尚未交付 | 后台线完成 M4 后接整块调度；无新事实不重复唤醒；Jev 仍等待讨论定案 |
+| M6 远程与平台 | 安全配对/撤销、移动端完整工作流程及约定 Linux/平台分发与恢复 | 共享客户端与手机/iPad 操作源码、实际目标构建已验证；远程安全后台正在实现 | 真实 TLS/配对/撤销与恢复信任边界 → 客户端联通 → 对应设备/平台验收与分发；客户端线同时负责远程后台，不等待整个 M4 |
 
-整合当前核对：main本地及真实远端均为cd14d07c，是开发分支祖先；远端开发检查点754d7b05（开发源码备份）；已验收恢复后端基线716712fe。本地主线无分叉，用户README/design/ACP资料未动。正式合入前再次核对新远端、源码与验收冻结，不能以此次核对替代未来合入检查。
+主路径：M1/M2 → M3 整合交付；并行路径：后台推进 M4 → M5，客户端推进 M6。M3 的 GUI 权限或单个平台检查不能暂停独立路径。质量线按各模块冻结顺序验收，缺陷直接与作者闭环。
 
-当前关键路径：M1/M2成套闭环→M3可持续使用交付；M4/M5/M6是保留的后续完整工程范围。不能用“可用首版”替换M4–M6，也不能把讨论项未经定案提前实现。
+根的工作单元是完整模块和组合交付：维护范围、依赖、接口裁决、唯一文件所有者、源码冻结、真实 CI、集成及最终产物；不接管常规测试/局部代码修补。作者完成一个内部小项后继续本模块，只有整块冻结、实际阻断或必要架构决策交根。
+
+交付闭环固定为：作者完成整块能力 → 质量线独立验收并直接处理缺陷 → 根完成受影响的真实平台 CI 与组合整合 → 对应用户流程/产物验收。相同源码不无故重复全量检查；必要的安全、恢复和未知结果检查不删除。
+
+Jev 与个人/团队记忆保留为待讨论设计，不擅自实施，也不拿它们等待定案作为已授权工程停止的理由。Codex 内部通信继续延期。具体安装、真实数据切换、真实账号与公开发布仍分别沿既有授权边界执行。
 
 ## M2 已定整体政策（2026-10-14）
 
@@ -48,6 +89,39 @@
 
 后台与客户端直接冻结最小完整契约：关联/取消关联/按群读取，群内创建需求或计划建立实际来源关联，读取和写入均校验actual channel ACL及source work可见性。共享# / W / H权威与生命周期，不复制Plan、推断channel、修改parent/status/owner或默认唤醒模型；解除关联不删除工作。质量线验证双群隔离、跨投影状态一致、成员权限变化、持久重开与未知结果不重复创建/关联。纯说明诚实标出在途边界，但不替代最终操作链。
 
+## M4 自动原生提交内容闸：根架构裁决（2026-10-14）
+
+同意在 Core 已拥有的自动 prompt 中采用原生 UserPromptSubmit 内容闸，替代只有提交后观察 sidecar 的不足；不改变真实交互 PTY 要求，也不提前宣称真实厂商已验收。
+
+- 私有已登记 native session/epoch、当前自动 ownership 和原生 prompt_id 必须绑定；完整内容仅按已验证版本的无损编码精确核对，不 trim、substring 或凭终端行数放行。既有用户 hook 的拒绝和权限结果保持，不能修改全局用户配置。
+- 人工 raw 输入先耐久撤销自动 ownership；旧/重复/迟到回调不能重新获得自动许可。Core 仍是耐久账本与进程登记的唯一写者。
+- 完整自动能力需要真实 CLI 支持阻断失败的 command hook。官方新增 onFailure:block 要求至少 v2.1.295；必须验证 timeout/crash/缺 executable/解析失败的实际行为，不用版本号或模拟事件代替真实能力验收。旧版/缺字段保持明确 unknown 和真实 PTY，不能假成功或用 transcript 猜测。
+- 官方 common hook fields 已列当前 prompt_id，Stop 可继承；这不是已安装版本的实测。内容展开可能有 pasted_content 包装，编码处理仍须版本实证。已有用户 Stop hook 可以继续同一 turn，单个 Stop 回调不能独自宣布空闲；须保留实际聚合阻断/继续结果。取消未确认不能投递下一条。
+
+当前 primary 依据：[common fields](https://code.claude.com/docs/en/hooks#common-input-fields)、[hook failure](https://code.claude.com/docs/en/hooks#block-the-action-when-a-hook-fails)、[UserPromptSubmit](https://code.claude.com/docs/en/hooks#userpromptsubmit)、[Stop](https://code.claude.com/docs/en/hooks#stop)。作者与独立质量线负责整块启动/载入/审批/取消/停止/恢复与混合路由验收，不为该裁决停其他独立实现。
+
+## M4/M6 共同耐久版本链（2026-10-14 根裁决）
+
+自动原生执行采用 Core 既有 DB FIFO 的内部 execution receipt，不使用会被 prepare_claude 删除的临时 admission 目录，不另建团队工作账或默认模型上下文。helper 只提供事实，Core 是唯一写者；immutable body/witness、request身份、可信native session/runtime epoch、turn/phase与raw撤权在同一权威事务。自动输入/API/按键发出前等待耐久commit ACK。元数据与正文分离，列表/常规上下文不读取全文，诊断按权限按需读取。
+
+正式schema12串行接M6 schema11，禁止旁路DDL/倒序启用。M4作者拥有新增独立receipt模块与12迁移；公共schema/lib/DB route与M6作者明确唯一写者、串行接线。12只依赖11后台正式迁移/恢复及服务冻结，不等待全部手机/iPad/设备/Linux交付；不因此缩减M6平台范围。独立helper/fake纵向及staged receipt可并行实现。
+
+重启/restore/import对旧在途状态恢复unknown，不能把旧phase视为重投许可；旧自动accept/raw权限不得随旧备份复活，使用新不可回滚runtime绑定。正式版本验收要覆盖真实升级/失败回退、原始请求不重放、撤权和未知投递；缺真实CLI能力或恢复证据不宣称M4完成。
+
+## M4 原生结构化控制优先路径（2026-10-14 根裁决）
+
+采用真正交互 Claude CLI 主进程内的 native Mod prompt/abort/turn receipt 作为自动控制优先方向，主进程始终保留真实 PTY、人工输入、审批和尺寸/ANSI。用户要求真实 PTY，不要求自动任务模拟键盘逐字输入；不转 SDK/headless/-p。ACP helper 通过私有登记桥接 native Mod，继续复用 Core 唯一耐久工作/进程账，不形成第二份团队账。
+
+实际 build types、加载能力、ownership/content/session epoch/turnId、真实取消及已有 hook 继续结果仍需整块验收。原始 submit 参数不独自证明后续 hook/mod 未改变内容；原生内容闸和聚合终态的边界继续有效。自动投递只能走一种已验证路径，不能同时写 PTY 与 native API 重复发同一任务。未知能力明确保留，fake host 不冒充真实 CLI/模型。Primary：[native mod events](https://code.claude.com/docs/en/plugins/mods/events#follow-a-turn)。
+
+允许自有隔离 profile/cwd/config、dummy 凭据、localhost mock 的只观察 metadata PTY 层取得真实 types；不发 prompt、不访问真实 provider、不读个人 auth/transcript、不改全局/日常实例，固定寿命并实际清理。该许可不扩大付费/真实模型运行范围。原动作若审查拒绝，保留事实，不换工具/代理绕过。
+
+## 原生运行桥与下一配套构建输入（2026-10-14）
+
+官方Mods静态导入只允许插件内relative import和claude-code bare import，不能以node:net直接连接Unix来假定实际适配。采用官方process API的受控自有stdio proxy：Core验证实际peer PID、native直接parent与已登记helper/Core稳定链、nonce/runtime generation，并在业务帧前耐久登记proxy。未知SDK broker链/PGID/API shape明确unknown，不放宽任意ancestor或同UID；proxy必须纳入实际native进程族监督。既有same-native-PID控制保留其窄证明。实际SDK类型仍等待精确目录的非阻塞人类许可。Primary：[Mods create](https://code.claude.com/docs/en/plugins/mods/create)。
+
+Native远程客户端引入Sources/CrewdRemote及X509/SPM后，旧仅Mac/Crewd直接swiftc的候选配方不能复用于新GUI声明。客户端拥有下一完整固定输入/实际目标构建配方：纳入新源码与固定dependency配置、实际编译日志和normal helper完整来源配对。根仍以实际目标/产物验证交付，不拿旧fe680候选标签冒充新Native版本。
+
 ## M4 当前兼容策略（质量线官方/项目primary研判，未实测完成）
 
 - Codex保留原生app-server主线，不为统一协议再重做已经可用的执行器；其command/exec tty是工具shell终端，不能冒称主Codex TUI。官方依据：[app-server](https://developers.openai.com/codex/app-server)。
@@ -57,7 +131,7 @@
 
 ## 持续分工
 
-- 后端线 global_work_resume：拥有Rust生产源码及生成契约。完成一个完整流程后自主接续本关口剩余流程，与客户端直接协调依赖，修复质量线发现的问题。交接与真实核实失联重派后端已验收，当前接文档/文件夹权威接口。
+- 后端线 global_work_resume：拥有M3/M4 Rust生产源码及对应生成契约；M6新增后台模块按上述所有权更新分配。完成一个完整流程后自主接续本关口剩余流程，与客户端直接协调依赖，修复质量线发现的问题。交接与真实核实失联重派后端已验收，当前接文档/文件夹权威接口。
 - 客户端线 usage_independent_review：拥有Crewd客户端产品与源注册，包括原根代理的数据层改动。以完整可操作流程为交付单位；文档和独立分组不使用本地第二账，未知写结果/版本冲突/草稿作用域必须明确。
 - 质量线 usage_resume：拥有专用测试/夹具/验收脚本，实际RPC/MCP/actor、Swift+daemon、原生渲染与交付验收成套推进。向作者直接报缺口并复验，保留原始失败证据，不替作者改产品。
 - 根代理：统筹六个关口、关键路径/接口决策、跨线整合、版本冻结、交付与授权边界。停止日常代写局部产品/夹具，也不反复独审相同源码。
