@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 实际 Linux 新因果与交付继续点
+
+唯一必要 run38555435325 / HEAD5cdf8af6233408760142e9f0416ce52602f7dd29 已 terminal failure；只有 linux-install-upgrade，完整 crewd skipped，无 Cargo 编译。原4e实际 normal13 默认 release 的整棵 Rust 输入与强来源复用通过，不能重标为5cdf新编译。归档与证据上传成功，artifact11890101163 / 56,456,212B / SHA4a5016146f87bec83d6092cd173bd055524cea9b021228ed490138c040a25d7f。
+
+实际阶段证明207的四次 immutable observers 前后全部物理SHA一致、无WAL/SHM；正常13 daemon真实wait0后只有mainDB/.id。随后正式 backup-new CLI（backup::backup_db → SQLITE_OPEN_READ_ONLY → VACUUM INTO）重新留下0B WAL/32768B SHM；旧11 typed拒13后删除侧文件。mainDB/.id及全部50表逻辑不变，但严格物理保护仍RED，恢复尾段未执行。不能把本轮归因于已修复observer，不能以本地控制代替Linux真实结果。
+
+根裁决：客户端作者先用现有正常二进制完整复现正式backup路径及managed安装尾段，并完成managed launcher进入旧binary前的只读未来版保护；未知/活WAL不能被immutable忽略，全部原data/mode保留，旧canonical binary与严格physical断言不修改。与后端14 header/WAL failclosed契约协调，作者和QA本地整块收口后才决定必要Linux复验；不继续observer-only试错或自动重派CI。
+
+原前端5cdf缓存初始化切断已源码接受但不在822包内。新完整候选构建句柄58283，目录 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07，复用既有Xcode/SPM与真实2bf helper证明，无Rust重编；运行中不等于新包验收。旧703/822现场保留，锁屏只阻相关窗口业务，人类解锁尚无回复。后端14继续已支持Codex生产driver一次正文/生命周期/未知恢复及Core-owned现存Claude手工PTY机制；后者不能冒称Native ACP producer。完整M4 producer/历史/审批仍本线后续完整单元，Jev/记忆仅方案。
+
+CI-only远端main仍1ba3d4ba0973b6abf3f68395611063523b1be03e：普通push/PR不触发，必要手动验收保留。主目录main仍fe68022f，README/design/旧ACP人类未提交资料未触；没有产品main push、安装、日常数据切换或发布。
+
+
 ## Linux 实际拒写边界与 14 恢复保护裁决（2026-10-14）
 
 必要剩余 run38547586374/exact8d37be29fd9cd04792fc174bea2343ab6495df9e 实际仍 terminal failure；原4e normal严格复用成功、归档804文件/链接核对通过，只下载新56MB档及110KB阶段证据。安装11→运行13/backup→安装未知回执readback→并发writer一commit一EAGAIN/CAS conflict→仅pointer rollback11已实际走到；恢复11/再升13/reopen尾段尚未执行。旧11 typed拒13是真的，mainDB/.id SHA和size、schema/50table/integrity前后相同，但before0B WAL/32768B SHM在after消失，严格物理门禁未通过，不改标成功。canonical旧11确在futureguard前open RW/pinWAL；旧产物不改、不重标物理零触碰。
