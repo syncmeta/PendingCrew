@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-14 正式14迁移与耐久单元独立接受
+
+独立质量完成准确normal86的完整13→14备份障碍保护/第二DDL原子回滚/保失败并在独立副本retry/请求及文档文件夹见证重开，真实已ACK工作→SIGKILL非空WAL→同版恢复及future15/badWAL原main/id/WAL/SHM物理保护。历史裸13在future14带空WAL/SHM仍会删旁文件的RED保留；实际已批准3ac managed入口在同data EXlease下pre-exec拒future14且全部物理不变，再由新入口Core正式restore本target pre13快照并旧版重开原需求/wait0，完整尾段接受。QA activation选择不冒第二次Linux安装ledger/CAS，旧Linux全链证据复用。详见 independent-resumed-delivery-acceptance 最新完整单元和 /private/tmp/pcw-m14-migration.arjvzka7 报告。
+
+actual38790 ownedHibernate/restart/historicalunknown/query不重放完整受影响单元已terminal0PASS并独核；03原失败不改标，正常86证明准确保留。客户端真实RunnerRequestView缺request_id由唯一Rust作者additive补齐并冻结合同03，最新干净WIP20d4fb3f4cfe1297185e6ca1eeda66a1157b8ca3已普通推送，actual39975强normal在途。这不等全14冻结：最终新normal必须对应新inputs，迁移与已验生命周期按影响复用而非全量重复；新签名前端PID/远端quietwatch与lease完整撤销、原App全部流程、Native ACP producer/历史/审批及最终平台交付仍继续。根未合WIP产品main/安装/日常数据/发布。
+
 ## 2026-10-14 原前端14组合与实际正常构建检查点
 
 客户端修复冻结7d5350396440cc8ab08790f173253f31aff23b4e已普通推送；07窗口发现的默认目录/旧sidebar与sweep/正式Todo composer/channel-folder四项源码切线独审接受，但尚无对应新包或窗口复验。根决定不再生成短寿命13中间候选，客户端按公共合同02组合完整14适配器及正式原前端配置，复用原Xcode/SPM目录。生产配置仍待实现与实际交付，不把旧candidate memory vault/临时namespace当正式产品。
