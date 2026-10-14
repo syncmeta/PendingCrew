@@ -120,3 +120,9 @@ M6生产路由检查点d177已普通快进保存远端开发分支；M4 Core/nat
 M4 metadata原外部目标疑虑经同动作准确localhost环境证据复核通过，实际probe零mock请求并已回收，随后主题/dummy初始化到workspace-trust新边界。该信任动作CreateProcess前被自动审查明确拒绝，未执行，不能换路径/工具/代理绕过。拒绝原文 `/private/tmp/pcw-M4-metadata-trust-auto-review-rejection-01.json`：信任授予read/edit/execute，超出此前不含工具/权限批准的metadata许可。
 
 为用户可审阅的最终批准，作者只prepare固定目录 `/private/tmp/pcw-M4-metadata-human-scope-5xexpvh8`；根已读4个只观察文件、完整固定88a9 supervisor与prepared-scope.json。实际preparedOnly=true/CLI未启动/mock未绑定/awaitingHuman=true。根已提交非阻塞人类问题，只批准这次自有目录、dummy凭据、localhost mock、无模型/真实auth/日常配置的workspace-trust；尚无回复，不能按推荐选项或时间流逝当批准。真实build types仍unknown，bridge其他源码工作不停，全工程目标不暂停。
+
+## 2026-10-14：Native Mac 原目标构建与后台整合准备
+
+Native 客户端固定源码 `1e51045a7e5de6a9b04ec0d74ea7d87091e0c19d` 的原 Mac 目标实际构建已 terminal exit0，日志 `/private/tmp/pcw-M6-native-main-macos-build-02.log` 为 `BUILD SUCCEEDED`；结果 `/private/tmp/pcw-M6-native-main-macos-build-02-result.json` 记录 clean 输入与构建后不变。根独立逐项将输入 manifest 的356个文件 SHA 与该 commit 的 Git 对象核对，零差异，结果 `/private/tmp/pcw-M6-native-main-macos-build-02-root-input-check.json`。此证据只关闭该源码的 Mac 目标构建，不替代 iOS 构建、Native TLS 运行、设备、配对产物或安装。
+
+远程后台 `d17766af` 相对已验 main `fe68022f` 的22文件范围已在 global 树实际 `git apply --check` 无冲突；仅预检，未应用或合 main。后续只在服务完整冻结后整合 schema11，供 M4 schema12 接续。当前后台后续修复 `2d0c445e` 保持未配对 grant 列表只读；作者继续慢 writer 撤销与有界发送，质量线继续实际反例及正式 schema10→11/旧版拒写验收。已接纳业务完成与 socket 部分帧取消不得混为一项，也不以丢失回执后耐久事实仍在的通过替代慢连接撤销证明。
