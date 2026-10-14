@@ -22,6 +22,9 @@ final class CrewdRemotePairing {
               !invite.computerLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, invite.computerLabel.utf8.count <= 256,
               let expires = CrewdRemoteText.date(invite.expiresAt) else { throw CrewdRemoteError.invalidExchange }
         if requireFresh && (expires <= Date() || expires.timeIntervalSinceNow > 10 * 60) { throw CrewdRemoteError.expiredInvitation }
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        try CrewdDeliveryValidation.validateInvitation(invite)
+        #endif
         return invite
     }
     /// Call only after the human confirms the computer identity shown in the UI.
@@ -32,7 +35,11 @@ final class CrewdRemotePairing {
         let generated = try CrewdRemoteCertificate.generate()
         let (_, pin) = try CrewdRemoteCertificate.validate(generated.certificate, role: .client)
         let response = try CrewdRemoteCertificate.sign(CrewdRemoteResponse(invitationId: invite.invitationId, authorityId: invite.server.authorityId, dbId: invite.server.dbId, challenge: invite.challenge, clientCertificateDerBase64: generated.certificate.base64EncodedString(), clientSpkiSha256: pin, deviceLabel: label), privateKey: generated.privateKey)
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        let id = try CrewdDeliveryValidation.qualified().account
+        #else
         let id = UUID()
+        #endif
         try credentials.save(CrewdRemoteStoredPair(id: id, invitation: envelope, response: response, privateKey: generated.privateKey, clientCertificate: generated.certificate))
         NotificationCenter.default.post(name:Self.changed,object:nil)
         return id

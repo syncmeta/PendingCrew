@@ -19,6 +19,12 @@ import AppKit
 @main
 struct PendingCrewEntry {
     static func main() {
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        guard CommandLine.arguments.dropFirst().isEmpty, (try? CrewdDeliveryValidation.qualified()) != nil else {
+            fputs("Delivery validation scope refused before credential/helper startup.\n", stderr)
+            return
+        }
+        #endif
         #if os(iOS)
         CrewdFrontendIsolation.prepare()
         PendingCrewApp.main()

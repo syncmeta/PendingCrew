@@ -42,8 +42,10 @@ configs:
   Debug: debug
   Release: release
   NativeCandidate: debug
+  DeliveryValidation: release
 configFiles:
   NativeCandidate: Config/NativeCandidate.xcconfig
+  DeliveryValidation: Config/DeliveryValidation.xcconfig
   Debug: Config/Signing.xcconfig
   Release: Config/Signing.xcconfig
 settings:
@@ -131,6 +133,9 @@ targets:
         ENABLE_PREVIEWS: YES
         SUPPORTS_MACCATALYST: NO
       configs:
+        DeliveryValidation:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.delivery-validation
+          INFOPLIST_FILE: Config/DeliveryValidation-Info.plist
         NativeCandidate:
           PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
           INFOPLIST_FILE: Config/NativeCandidate-Info.plist
@@ -571,3 +576,17 @@ schemes:
       config: NativeCandidate
     archive:
       config: NativeCandidate
+  PendingCrewDeliveryValidation:
+    build:
+      targets:
+        PendingCrew: all
+    run:
+      config: DeliveryValidation
+    test:
+      config: DeliveryValidation
+    profile:
+      config: DeliveryValidation
+    analyze:
+      config: DeliveryValidation
+    archive:
+      config: DeliveryValidation
