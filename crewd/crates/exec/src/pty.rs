@@ -195,6 +195,16 @@ impl PtyMaster {
     }
 
     /// 改窗口尺寸（内核随后给前台进程组发 SIGWINCH）。
+    /// Public manual control confirms the exact kernel window size at this
+    /// observation, not whether the native application rendered a new layout.
+    pub fn resize_confirmed(&self, cols: u16, lines: u16) -> io::Result<()> {
+        self.resize(cols, lines)?;
+        let actual = rustix::termios::tcgetwinsize(self.fd.get_ref().as_fd())?;
+        if actual.ws_col != cols || actual.ws_row != lines {
+            return Err(io::Error::other("PTY resize readback differs"));
+        }
+        Ok(())
+    }
     pub fn resize(&self, cols: u16, lines: u16) -> io::Result<()> {
         rustix::termios::tcsetwinsize(self.fd.get_ref().as_fd(), winsize(cols, lines))?;
         Ok(())

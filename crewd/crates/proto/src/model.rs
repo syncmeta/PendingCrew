@@ -23,6 +23,10 @@ pub struct Hello {
     /// Present only on a mutually authenticated, durably granted remote connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_binding: Option<crate::RemoteHelloBinding>,
+    /// Actual work DB and Core-generated current daemon correlation. Absence on
+    /// old daemons is unconfirmed; this JSON is not a kernel peer credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_identity: Option<crate::commands::RuntimeIdentity>,
 }
 
 /// Historical latest DB failure; absence does not assert that the daemon is healthy.

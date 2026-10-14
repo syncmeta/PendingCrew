@@ -50,6 +50,7 @@ pub(crate) struct Manager {
 }
 #[derive(Clone)]
 pub(crate) struct Principal {
+    pub(crate) connection_scope: crate::connection_scope::ConnectionScope,
     manager: Weak<Manager>,
     pub(crate) binding: RemoteHelloBinding,
     server_pin: String,
@@ -702,6 +703,7 @@ impl Manager {
         let identity = self.ensure_identity().await?;
         let authority = identity.public.authority_id.clone();
         let id = p.grant_id.clone();
+        let revoke_id = id.clone();
         let grant = self
             .db
             .call(move |s| {
@@ -738,6 +740,17 @@ impl Manager {
         self.refresh_pins(&identity.public.authority_id).await?;
         self.changed
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        if let Some(state) = self.state.upgrade() {
+            if let Some(factory) = state.native_helpers.get() {
+                factory.revoke_grant(&revoke_id).await.map_err(|_| {
+                    RpcError::new(
+                        RpcError::CONFLICT,
+                        "grant is durably revoked; physical manual barrier remains unknown",
+                    )
+                    .with_refusal("remote.physical_revocation_unknown")
+                })?;
+            }
+        }
         serde_json::to_value(grant).map_err(dispatch::internal)
     }
     pub(super) async fn qualify(
@@ -765,6 +778,7 @@ impl Manager {
             .ok_or_else(denied)?;
         let state = self.state()?;
         let principal = Principal {
+            connection_scope: crate::connection_scope::ConnectionScope::new(),
             manager: Arc::downgrade(self),
             binding: RemoteHelloBinding {
                 authority_id: identity.public.authority_id.clone(),
@@ -783,6 +797,40 @@ impl Manager {
     }
 }
 impl Principal {
+    /// Recheck the authentic grant inside the mutation transaction. Wrapper
+    /// permission never substitutes for the original operation permission.
+    pub(crate) fn authorize_command_tx(
+        &self,
+        state: &Arc<AppState>,
+        conn: &rusqlite::Connection,
+        method: &str,
+    ) -> std::result::Result<(), RpcError> {
+        if !allowed_method(method) {
+            return Err(denied());
+        }
+        let manager = self.manager.upgrade().ok_or_else(denied)?;
+        let owner = manager.state()?;
+        if !Arc::ptr_eq(state, &owner)
+            || state.runtime_binding_id != self.binding.runtime_binding_id
+            || manager.listener_epoch.load(Ordering::SeqCst) != self.listener_epoch
+        {
+            return Err(denied());
+        }
+        let grant = facts::live_grant(
+            conn,
+            &self.binding.authority_id,
+            &self.binding.db_id,
+            &self.server_pin,
+            &self.client_pin,
+            &self.binding.grant_id,
+            &self.configuration_revision,
+        )
+        .map_err(store_error)?;
+        if !grant.is_some_and(|g| g.revision == self.binding.grant_revision) {
+            return Err(denied());
+        }
+        Ok(())
+    }
     pub(crate) fn changes(&self) -> std::result::Result<watch::Receiver<u64>, RpcError> {
         Ok(self
             .manager
@@ -840,6 +888,10 @@ fn allowed_method(method: &str) -> bool {
     matches!(
         method,
         "system.hello"
+            | "command.submit"
+            | "command.lookup"
+            | "command.listUnknown"
+            | "session.controlTarget"
             | "events.subscribe"
             | "crew.list"
             | "crew.get"
@@ -869,6 +921,12 @@ fn allowed_method(method: &str) -> bool {
             | "session.get"
             | "session.usage"
             | "session.inspect"
+            | "session.terminal.inspect"
+            | "session.terminal.watch"
+            | "session.terminal.claim"
+            | "session.terminal.release"
+            | "session.terminal.write"
+            | "session.terminal.resize"
             | "session.start"
             | "session.stop"
             | "session.interrupt"

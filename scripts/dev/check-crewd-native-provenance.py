@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Read-only Native Xcode candidate evidence checks; never launch bundle code."""
-import importlib.util,json,pathlib,plistlib,shlex
+import importlib.util,json,pathlib,plistlib,shlex,sys
+sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location('base_proof',pathlib.Path(__file__).with_name('check-codex-first-provenance.py'))
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 def load(path):
@@ -16,7 +17,10 @@ def check(app):
  required={'Sources/CrewdRemote/CrewdNativeApp.swift','Sources/Mac/Crewd/CrewdClient.swift','Sources/Mac/Crewd/CrewdWorkspace.swift','PendingCrew.xcodeproj/project.pbxproj','PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved','scripts/dev/build-crewd-native-macos.py'}
  if not required.issubset(paths):p.fail('Native complete project inputs missing')
  entry=[x for x in paths if x.endswith('/PendingCrewEntry.swift')]
- if len(entry)!=1 or 'PENDINGCREW_NATIVE_CANDIDATE' not in (snapshot/entry[0]).read_text():p.fail('Native candidate entry missing')
+ if len(entry)!=1:p.fail('unique original candidate entry missing')
+ entry_spec=importlib.util.spec_from_file_location('native_entry_contract',pathlib.Path(__file__).with_name('build-crewd-native-macos.py'))
+ entry_module=importlib.util.module_from_spec(entry_spec);entry_spec.loader.exec_module(entry_module)
+ entry_module.verify_candidate_entry(snapshot)
  rust=[x for x in entries if x[0].startswith('crewd/')];rd=p.digest(rust)
  if manifest.get('sourceInputDigest')!=p.digest(entries) or manifest.get('rustInputDigest')!=rd:p.fail('Native complete source digest mismatch')
  dep=base/p.basename(manifest.get('dependencyDirectory'));deps=p.files(dep,manifest.get('dependencyFiles'))

@@ -11,6 +11,7 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
+pub mod commands;
 mod model;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
@@ -124,6 +125,12 @@ pub mod methods {
 
     /// 客户端可调的全部方法（契约测试与 `crewd rpc` 端到端都按它逐个核）。
     pub const ALL: &[&str] = &[
+        crate::commands::COMMAND_SUBMIT,
+        crate::commands::COMMAND_LOOKUP,
+        crate::commands::COMMAND_LIST_UNKNOWN,
+        crate::commands::SESSION_CONTROL_TARGET,
+        crate::commands::SESSION_TERMINAL_INSPECT,
+        crate::commands::SESSION_TERMINAL_WATCH,
         HELLO,
         REMOTE_STATUS,
         REMOTE_CONFIGURE,
@@ -425,6 +432,10 @@ pub enum ShutdownReason {
 /// 每个事件名 → 它的 `data` 类型。契约的 `events` 表与 `Event` 的 schema 都从这一张表来。
 fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value)> {
     vec![
+        (
+            commands::TERMINAL_OUTPUT_EVENT,
+            sub::<commands::TerminalWatchEvent>(g),
+        ),
         (events::SYSTEM_SHUTDOWN, sub::<SystemShutdown>(g)),
         (events::MESSAGE_APPENDED, sub::<Message>(g)),
         (events::CHANNEL_CHANGED, sub::<ChannelSummary>(g)),
@@ -550,6 +561,48 @@ pub fn api_schema() -> Value {
     let g = &mut generator;
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
+        (
+            commands::COMMAND_SUBMIT,
+            m(
+                sub::<commands::CommandSubmitParams>(g),
+                sub::<commands::PublicCommandReceipt>(g),
+            ),
+        ),
+        (
+            commands::COMMAND_LOOKUP,
+            m(
+                sub::<commands::CommandLookupParams>(g),
+                sub::<Option<commands::PublicCommandReceipt>>(g),
+            ),
+        ),
+        (
+            commands::COMMAND_LIST_UNKNOWN,
+            m(
+                sub::<commands::CommandListUnknownParams>(g),
+                sub::<commands::CommandUnknownPage>(g),
+            ),
+        ),
+        (
+            commands::SESSION_CONTROL_TARGET,
+            m(
+                sub::<commands::TerminalInspectParams>(g),
+                sub::<commands::CommandRuntimeTarget>(g),
+            ),
+        ),
+        (
+            commands::SESSION_TERMINAL_INSPECT,
+            m(
+                sub::<commands::TerminalInspectParams>(g),
+                sub::<commands::TerminalInspection>(g),
+            ),
+        ),
+        (
+            commands::SESSION_TERMINAL_WATCH,
+            m(
+                sub::<commands::TerminalWatchParams>(g),
+                sub::<commands::TerminalWatchStarted>(g),
+            ),
+        ),
         (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),
         (
             methods::REMOTE_STATUS,
@@ -912,6 +965,7 @@ mod tests {
             capabilities: vec!["orchestra".into()],
             daemon_health: None,
             remote_binding: None,
+            runtime_identity: None,
         };
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["minApiVersion"], MIN_API_VERSION);

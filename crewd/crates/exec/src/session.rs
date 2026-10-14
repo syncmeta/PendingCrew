@@ -495,6 +495,7 @@ pub struct Core {
     started_at: Instant,
     running: bool,
     stopped_by_user: bool,
+    manual_hold: bool,
     last_output_at: Option<Instant>,
     working: bool,
     working_since: Option<Instant>,
@@ -551,6 +552,7 @@ impl Core {
             started_at: now,
             running: true,
             stopped_by_user: false,
+            manual_hold: false,
             last_output_at: None,
             working: false,
             working_since: None,
@@ -831,6 +833,14 @@ impl Core {
             );
             return;
         }
+        if self.manual_hold {
+            self.finish(
+                pending,
+                DeliveryOutcome::Abandoned("手工接管暂停自动投递".into()),
+                now,
+            );
+            return;
+        }
         self.queue.push_back(pending);
         self.start_next(now);
     }
@@ -839,6 +849,14 @@ impl Core {
     /// 已排正文之后收到 raw，终结该投递为 Unsubmitted（可能写了一部分，是否提交未知），
     /// 撤掉剩余正文 / 提交拍，不清理可能混有人字的输入框。原始字节本身照常按 FIFO 写入。
     pub fn raw(&mut self, bytes: &[u8]) {
+        self.apply_raw_authority(bytes, true);
+    }
+    /// The physical writer owns the once-only manual payload and its receipt;
+    /// Core still applies exactly the same automatic-content revocation.
+    pub(crate) fn admit_manual_raw(&mut self, bytes: &[u8]) {
+        self.apply_raw_authority(bytes, false);
+    }
+    fn apply_raw_authority(&mut self, bytes: &[u8], enqueue: bool) {
         if self.running && !bytes.is_empty() {
             self.cancel_guarded_key(AnswerOutcome::NeedsTerminal, self.last_now);
             let collision = self.in_flight.as_ref().is_some_and(|f| f.wrote_body)
@@ -866,14 +884,39 @@ impl Core {
                     "外来输入与已排正文相撞：已停止剩余写入和提交，不清理输入框；正文可能只写入一部分，是否已提交不能确认。重发前请回读屏幕和对话，避免重复。".into()
                 ), self.last_now);
             }
-            self.actions.push(Action::Write(bytes.to_vec()));
+            if enqueue {
+                self.actions.push(Action::Write(bytes.to_vec()));
+            }
             self.step_delivery(self.last_now);
         }
     }
 
+    /// Explicit manual ownership cancels automatic work without manufacturing
+    /// a keystroke, empty-input echo, native success or completion event.
+    pub(crate) fn hold_automatic(&mut self) {
+        self.manual_hold = true;
+        self.cancel_guarded_key(AnswerOutcome::NeedsTerminal, self.last_now);
+        self.keys.clear();
+        if self.in_flight.is_some() {
+            self.report(
+                DeliveryOutcome::Unsubmitted(
+                    "手工接管已暂停自动正文；旧写入和提交结果需回读确认，不自动重发。".into(),
+                ),
+                self.last_now,
+            );
+        }
+        while let Some(pending) = self.queue.pop_front() {
+            self.finish(
+                pending,
+                DeliveryOutcome::Abandoned("手工接管暂停自动投递".into()),
+                self.last_now,
+            );
+        }
+    }
     /// 驱动实际写入的最后一道闸；所有重试清空、正文块、空格 / 退格 / 回车都走它。
     pub(crate) fn delivery_write_allowed(&self, id: u64) -> bool {
         self.running
+            && !self.manual_hold
             && !self.stopped_by_user
             && self.draft_held(None).is_none()
             && self.in_flight.as_ref().is_some_and(|f| f.pending.id == id)
@@ -1060,6 +1103,9 @@ impl Core {
     ///   再发一轮（记一次重试）。
     /// - 限流应答的回车：菜单不在了就不发（「1」可能已经直接选中关掉了它）。
     fn flush_due_keys(&mut self, now: Instant) {
+        if self.manual_hold {
+            return;
+        }
         if self.guarded_key.is_some() {
             return;
         }
@@ -1291,7 +1337,7 @@ impl Core {
     }
 
     fn start_next(&mut self, now: Instant) {
-        if self.in_flight.is_some() || !self.running {
+        if self.manual_hold || self.in_flight.is_some() || !self.running {
             return;
         }
         if let Some(pending) = self.queue.pop_front() {
@@ -1317,6 +1363,9 @@ impl Core {
     }
 
     fn step_delivery(&mut self, now: Instant) {
+        if self.manual_hold {
+            return;
+        }
         if self.expire_pending_write(now) {
             return;
         }
@@ -4205,6 +4254,65 @@ mod tests {
         assert_eq!(t.core.foreign_input, Foreign::Typed);
     }
 
+    #[test]
+    fn manual_custody_hold_cancels_body_and_submit_beats_without_keys_or_replay() {
+        for beat in 0..=3 {
+            let mut t = T::new(vec![]);
+            t.core.send(1, "BOT", t.at(0.0));
+            t.output(&styled_box(""), 0.0);
+            assert_eq!(writes(&t.tick(0.3)), vec![b"BOT".to_vec()]);
+            if beat > 0 {
+                t.output(&styled_box("BOT"), 0.9);
+            }
+            if beat > 1 {
+                t.output(&styled_box("BOT "), 0.95);
+                t.tick(1.0);
+            }
+            if beat > 2 {
+                t.output(&styled_box("BOT"), 1.05);
+                t.tick(1.1);
+            }
+            t.core.send(2, "OLD_QUEUE", t.at(1.2));
+            t.core.take_actions();
+            t.core.hold_automatic();
+            let mut held = t.core.take_actions();
+            t.core.send(3, "NEW_QUEUE", t.at(1.3));
+            held.extend(t.core.take_actions());
+            held.extend(t.output(&styled_box("BOT"), 2.0));
+            held.extend(t.output(&styled_box(""), 3.0));
+            held.extend(t.tick(100.0));
+            assert!(writes(&held).is_empty(), "beat {beat}: {held:?}");
+            assert!(!delivered(&held, 1));
+            assert!(!delivered(&held, 2));
+            assert!(!delivered(&held, 3));
+            assert!(events(&held).iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    id: 1,
+                    outcome: DeliveryOutcome::Unsubmitted(_),
+                    ..
+                }
+            )));
+            assert!(events(&held).iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    id: 2,
+                    outcome: DeliveryOutcome::Abandoned(_),
+                    ..
+                }
+            )));
+            assert!(events(&held).iter().any(|e| matches!(
+                e,
+                SessionEvent::Delivery {
+                    id: 3,
+                    outcome: DeliveryOutcome::Abandoned(_),
+                    ..
+                }
+            )));
+            assert!(!t.core.delivery_write_allowed(1));
+            assert!(!t.core.delivery_write_allowed(3));
+        }
+    }
     #[test]
     fn raw_after_a_body_or_each_submit_beat_stops_without_own_residue_cleanup() {
         for beat in 0..=3 {

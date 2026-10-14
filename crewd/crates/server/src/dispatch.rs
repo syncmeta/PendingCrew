@@ -205,6 +205,17 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
+            if state.runtime_identity.get().is_some() {
+                capabilities.push("command.receipts".into());
+            }
+            if state.orchestra.get().is_some()
+                && state.native_helpers.get().is_some()
+                && state
+                    .terminal_supported
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                capabilities.push("session.terminal".into());
+            }
             capabilities.extend(
                 [
                     "work.reassignLost",
@@ -224,6 +235,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities,
                 daemon_health: current_db_health(state),
                 remote_binding: None,
+                runtime_identity: state.runtime_identity.get().cloned(),
             })
         }
         methods::CREW_LIST => {

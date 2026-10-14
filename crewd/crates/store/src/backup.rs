@@ -222,6 +222,8 @@ fn snapshot_steps(
             crate::remote::invalidate_for_work_replacement(&tx, "work_restore", &crate::now_ts())?;
             crate::native_execution::invalidate_unknown(&tx)?;
             crate::work_followups::restored(&tx)?;
+            crate::command_receipts::restored(&tx, &crate::now_ts())?;
+            crate::local_clients::restored(&tx)?;
             tx.commit()?;
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
@@ -250,7 +252,8 @@ fn require_file(db: &Path) -> Result<()> {
     }
 }
 
-/// 只读的第二连接（`SQLITE_OPEN_READ_ONLY`：不建库、不写；WAL 下不挡库线程的写）。拍快照用。
+/// SQLite READ_ONLY second connection for online snapshots. It does not write
+/// SQL rows, but SQLite may create/checkpoint/remove WAL/SHM sidecars.
 /// 库不在就报错。**做检查别用它**，见 `open_for_check`。
 pub fn open_read_only(db: &Path) -> Result<Connection> {
     require_file(db)?;
@@ -301,6 +304,14 @@ fn durable(c: &Connection) -> Result<()> {
 pub fn backup_db(db: &Path, dest: &Path) -> Result<()> {
     let c = open_read_only(db)?;
     vacuum_into(&c, dest)
+}
+
+/// Offline backup under the caller-held data-directory lock. Original DB,
+/// identity and SQLite sidecars remain untouched; only a verified private copy
+/// is opened by SQLite. Online backup retains its concurrent-writer contract.
+pub fn backup_db_quiescent(db: &Path, dest: &Path) -> Result<()> {
+    require_file(db)?;
+    crate::version_guard::with_quiescent_copy(db, |c| vacuum_into(c, dest))
 }
 
 /// 定时备份的保留策略。

@@ -20,6 +20,7 @@ import AppKit
 struct PendingCrewEntry {
     static func main() {
         #if os(iOS)
+        CrewdFrontendIsolation.prepare()
         PendingCrewApp.main()
         #else
         // 未捕获 NSException 留痕（2026-07-26 布局自激闪退：.ips 里连异常名都没有）。
@@ -43,24 +44,12 @@ struct PendingCrewEntry {
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
-        // Opt-in Codex first edition uses crewd and an independent data root.
-        // It must be selected before legacy stores or the Swift orchestration gate start.
-        #if PENDINGCREW_NATIVE_CANDIDATE
+        // Ordinary and candidate builds share the original visual root and
+        // one crewd authority. Private presentation preparation precedes UI
+        // singleton construction; no legacy orchestration gate is installed.
         CrewdFrontendIsolation.prepare()
         PendingCrewApp.main()
         return
-        #else
-        if CommandLine.arguments.contains("--crewd-ui") { CrewdFrontendIsolation.prepare(); PendingCrewApp.main(); return }
-        // 身份四（默认）：GUI。**编排闸门在这里取，不在任何视图里。**
-        // 「谁是编排者」是进程身份的属性，不是某个视图的属性 —— 挂在视图上就会有
-        // 第 N 个入口哪天忘了问（在这行出现之前，GUI 那条路上一次都没问过）。
-        // 这一行同时负责六条约束里的第 6 条在 app 侧的那一半：把数据根打进日志。
-        // 详见 `OrchestrationGate`。
-        OrchestrationGate.installForGUIProcess()
-        #endif
-        #endif
-        #if !PENDINGCREW_NATIVE_CANDIDATE
-        PendingCrewApp.main()
         #endif
         #endif
     }

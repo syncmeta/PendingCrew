@@ -131,6 +131,9 @@ pub trait ExecHandle: Send + Sync {
             crewd_exec::driver::SendError::BindingRejected,
         ))
     }
+    fn terminal_driver(&self) -> Option<SessionHandle> {
+        None
+    }
     fn accepts_context(&self) -> bool {
         false
     }
@@ -175,6 +178,9 @@ pub trait ExecHandle: Send + Sync {
 
 /// claude（M2b）。上下文由 hook 注入（M3b），不收 additionalContext。
 impl ExecHandle for SessionHandle {
+    fn terminal_driver(&self) -> Option<SessionHandle> {
+        self.manual_pty().then(|| self.clone())
+    }
     fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError> {
         check_context(self.accepts_context(), context)?;
         Ok(SessionHandle::send(self, text)?)

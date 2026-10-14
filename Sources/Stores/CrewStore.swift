@@ -289,8 +289,14 @@ final class CrewStore: ObservableObject {
             selectedCrewId = pendingCrew.id
             return
         }
-        let root = Self.defaultCrewGroundRoot
-        let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+        // crewd titles are a projection of the selected authority, not names
+        // discovered by enumerating the real user's legacy CrewGround.
+        let existing: Set<String>
+        if usesCrewdAuthority { existing = Set(crews.map(\.title)) }
+        else {
+            let root = Self.defaultCrewGroundRoot
+            existing = Set((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [])
+        }
         let name = PlaceNames.all.shuffled().first { !existing.contains($0) }
             ?? "Crew-\(UUID().uuidString.prefix(8))"
         let draft = PendingCrewDraft(id: "pending-\(UUID().uuidString)", title: name,
@@ -318,8 +324,9 @@ final class CrewStore: ObservableObject {
         if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
     }
 
-    /// The first message is the commit point. Failure rolls back this attempt;
-    /// a second click cannot overlap it or start another captain.
+    /// Public14 uses its atomic SQL crew/first-message receipt; protocol13
+    /// compatibility truthfully keeps split create/post with unknown snapshots.
+    /// Neither route replays, rolls back or implicitly starts a member.
     private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
         guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
               let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
@@ -344,6 +351,22 @@ final class CrewStore: ObservableObject {
         }
         do {
             let crewID: String
+            if workspace.client.capabilities.contains("command.receipts") {
+                var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]
+                if let parent = draft.parentCrewId { fields["parentId"] = .string(parent) }
+                let receipt = try await workspace.submitPublicCommand(.firstMessage,
+                    params: .object(["crew": .object(fields), "text": .string(text)]), crew: "")
+                guard !receipt.historical, receipt.phase == .committed,
+                      let actual = receipt.value["result"]["crew"]["id"].string,
+                      receipt.value["result"]["message"]["text"].string == text else {
+                    throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
+                }
+                update(.accepted, crew: actual)
+                guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
+                pendingCrew = nil; selectedCrewId = actual
+                await refreshList(); await refreshDetail(actual)
+                return
+            }
             if let known = existing?.crewID { crewID = known }
             else {
                 var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]

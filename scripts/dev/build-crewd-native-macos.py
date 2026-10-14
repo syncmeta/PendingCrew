@@ -2,7 +2,8 @@
 """Build an isolated Native candidate from committed sources. Never launch/install.
 Requires a recorded normal backend witness and a pre-resolved SPM cache.
 """
-import argparse, hashlib, importlib.util, json, os, pathlib, plistlib, shlex, shutil, subprocess, tarfile
+import argparse, hashlib, importlib.util, json, os, pathlib, plistlib, shlex, shutil, subprocess, tarfile, sys
+sys.dont_write_bytecode = True
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def save(p,v): p.write_text(json.dumps(v,sort_keys=True,indent=2)+'\n')
@@ -64,6 +65,25 @@ def external_dependency_inventory(spm,pins):
  if (spm/'artifacts').exists(): inspect(spm/'artifacts','artifacts')
  return sorted(rows,key=lambda row:row['path'])
 
+def verify_candidate_entry(snapshot):
+ # The ordinary and candidate product now share the original App root. The
+ # dedicated compile condition controls credentials/storage, not a second GUI.
+ entry=snapshot/'Sources/PendingCrewEntry.swift'
+ if not entry.is_file(): raise ValueError('unique original App entry required')
+ body=entry.read_text()
+ if 'PENDINGCREW_NATIVE_CANDIDATE' in body: return 'legacy-candidate-entry'
+ configuration=snapshot/'Sources/Mac/Crewd/CrewdFrontendConfiguration.swift'
+ credentials=snapshot/'Sources/CrewdRemote/CrewdRemoteVault.swift'
+ if not configuration.is_file() or not credentials.is_file(): raise ValueError('candidate authority/credential factories missing')
+ storage=configuration.read_text();vault=credentials.read_text()
+ if ('CrewdFrontendIsolation.prepare()' not in body or 'PendingCrewApp.main()' not in body
+     or '#if PENDINGCREW_NATIVE_CANDIDATE && os(macOS)' not in storage
+     or 'PendingCrewNativeCandidates' not in storage or 'PendingCrewCore' not in storage
+     or '#if PENDINGCREW_NATIVE_CANDIDATE' not in vault or 'return isolated' not in vault
+     or 'return CrewdRemoteKeychain()' not in vault):
+  raise ValueError('original candidate authority/credential entry contract missing')
+ return 'original-app-candidate-factories'
+
 def main():
  a=argparse.ArgumentParser();a.add_argument('output');a.add_argument('--ref',default='HEAD');a.add_argument('--backend',required=True);a.add_argument('--witness',required=True);a.add_argument('--spm',required=True);a.add_argument('--derived-data',required=True);a.add_argument('--execute',action='store_true');args=a.parse_args()
  repo=pathlib.Path(__file__).resolve().parents[2];out=pathlib.Path(args.output).resolve()
@@ -97,12 +117,7 @@ def main():
  if (spm/'artifacts').exists(): copied_inputs(spm/'artifacts',deps/'artifacts')
  dependency_rows=regular_inventory(deps)
  if external_dependency_inventory(spm,pins)!=dependency_rows: raise ValueError('external package inventory differs before build')
- entry=(snapshot/'Sources/PendingCrewEntry.swift')
- if not entry.exists():
-  candidates=list(snapshot.rglob('PendingCrewEntry.swift'))
-  if len(candidates)!=1: raise ValueError('unique Native entry source required')
-  entry=candidates[0]
- if 'PENDINGCREW_NATIVE_CANDIDATE' not in entry.read_text(): raise ValueError('candidate compile entry is not frozen in selected source')
+ verify_candidate_entry(snapshot)
  toolchain={'xcodeVersion':query(['xcodebuild','-version'],snapshot,out/'gui-toolchain.log'),'sdkVersion':query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'gui-toolchain.log')}
  save(out/'gui-toolchain.json',toolchain)
  manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'externalDependencyPath':str(spm),'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}

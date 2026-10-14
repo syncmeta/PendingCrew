@@ -2,36 +2,17 @@ import Foundation
 import SwiftUI
 import Combine
 
-/// Original frontend state with one selected crewd authority. The legacy local
-/// backend remains available only to the ordinary, unconverted Mac configuration.
+/// Original frontend state with one selected crewd authority. Ordinary startup
+/// uses the same Core seam; failure cannot fall back to a legacy writer.
 @MainActor
 final class AppModel: ObservableObject {
-    let usesCrewdAuthority: Bool = {
-        #if os(iOS)
-        true
-        #elseif PENDINGCREW_NATIVE_CANDIDATE
-        true
-        #else
-        ProcessInfo.processInfo.arguments.contains("--crewd-ui")
-        #endif
-    }()
+    let usesCrewdAuthority = true
     @Published private(set) var crewdBackend: CrewdPendingCrewBackend?
     lazy var crewdWindow = CrewdRemoteWindow()
     private var authorityObservation: AnyCancellable?
     @Published private(set) var connectingAuthority = false
-    private lazy var localBackend = LocalBackend(store: .shared, whiteboard: .shared)
 
-    var crewdDirectory: URL? {
-        #if os(macOS)
-        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty { return URL(fileURLWithPath: explicit).standardizedFileURL }
-        guard let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
-              ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrewNativeCandidates").appendingPathComponent(ref)
-        #else
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("PendingCrewFrontend").standardizedFileURL.resolvingSymlinksInPath()
-        #endif
-    }
+    var crewdDirectory: URL? { CrewdFrontendConfiguration.directory }
     var backendConfigurationError: String? { crewdWindow.error ?? crewdBackend?.workspace.error ?? "尚未连接已配对的电脑。" }
     init() {
         guard usesCrewdAuthority else { return }
@@ -56,7 +37,7 @@ final class AppModel: ObservableObject {
         connectingAuthority = true; defer { connectingAuthority = false }
         #if os(macOS)
         guard let directory = crewdDirectory else {
-            crewdWindow.error = "这个候选版本缺少来源信息，连接未建立。"
+            crewdWindow.error = "当前后台数据目录配置不可用，连接未建立。"
             return
         }
         do { try CrewdFrontendIsolation.prepareAuthority(directory: directory) }
@@ -73,12 +54,5 @@ final class AppModel: ObservableObject {
             if crewdBackend?.workspace !== workspace { crewdBackend = CrewdPendingCrewBackend(workspace: workspace) }
         }
     }
-    var backend: PendingCrewBackend? {
-        if usesCrewdAuthority { return crewdBackend }
-        #if os(macOS)
-        return localBackend
-        #else
-        return nil
-        #endif
-    }
+    var backend: PendingCrewBackend? { crewdBackend }
 }

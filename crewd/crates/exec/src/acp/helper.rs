@@ -30,6 +30,7 @@ pub struct CoreLedger {
     core: ProcessIdentity,
     timeout: Duration,
     channel: Mutex<LedgerChannel>,
+    raw_scope: Arc<()>,
 }
 impl std::fmt::Debug for CoreLedger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -126,6 +127,51 @@ impl CoreLedger {
         stream.set_nonblocking(false)?;
         Self::new(stream, session, generation, nonce, core, timeout)
     }
+    pub fn verified_core_birth(&self) -> io::Result<ProcessIdentity> {
+        let channel = self
+            .channel
+            .lock()
+            .map_err(|_| denied("Core channel poisoned"))?;
+        if channel.closed {
+            return Err(denied("Core channel closed"));
+        }
+        self.verify(channel.stream.get_ref())?;
+        Ok(self.core.clone())
+    }
+    /// A separately child-connected channel can carry typed Core control after
+    /// the same genuine kernel-parent checks. It is never an inherited pair.
+    pub fn into_verified_parent_socket(self) -> io::Result<UnixStream> {
+        self.verified_core_birth()?;
+        let channel = self
+            .channel
+            .into_inner()
+            .map_err(|_| denied("Core channel poisoned"))?;
+        if channel.closed {
+            return Err(denied("Core channel closed"));
+        }
+        // Constructing this ledger already checked the current direct parent.
+        // Recheck it here without accepting JSON process ownership.
+        if !matches!(registry::probe(self.core.pid),ProbeResult::Found(ref actual) if same_birth(actual,&self.core))
+        {
+            return Err(denied("Core birth changed"));
+        }
+        Ok(channel.stream.into_inner())
+    }
+    pub fn open_manual_fence(
+        &self,
+        path: &std::path::Path,
+        nonce: [u8; 16],
+    ) -> io::Result<super::manual_fence::ManualFence> {
+        let channel = self
+            .channel
+            .lock()
+            .map_err(|_| denied("Core channel poisoned"))?;
+        if channel.closed {
+            return Err(denied("Core channel closed"));
+        }
+        self.verify(channel.stream.get_ref())?;
+        super::manual_fence::ManualFence::adopt(path, nonce)
+    }
     pub fn new(
         stream: UnixStream,
         session: String,
@@ -158,6 +204,7 @@ impl CoreLedger {
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
         let value = Self {
+            raw_scope: Arc::new(()),
             session,
             generation,
             nonce,
@@ -328,7 +375,7 @@ impl CoreLedger {
         let request = uuid::Uuid::new_v4().to_string();
         self.typed("native/raw.revoke",json!({"runtimeId":runtime,"expectedRevision":revision,"requestId":request,"rawBytes":bytes}),|result| {
             if result.get("committed")!=Some(&Value::Bool(true))||result.get("manual")!=Some(&Value::Bool(true))||result.get("requestId").and_then(Value::as_str)!=Some(request.as_str())||result.get("runtimeId").and_then(Value::as_str)!=Some(runtime){return Err(denied("native raw has no matching commit ACK"));}
-            Ok(CommittedRaw {bytes})
+            Ok(CommittedRaw { bytes, raw_scope: self.raw_scope.clone() })
         })
     }
 }
@@ -382,10 +429,11 @@ pub async fn launch_native(
             "helper requires Core custody, separate terminal observer, no transcript probe and no keyboard prompt",
         )));
     }
+    let raw_scope = ledger.raw_scope.clone();
     start.ledger = ledger;
     let (handle, events) = driver::start_claude(start, config).await?;
     Ok((
-        NativePtySession { handle },
+        NativePtySession { handle, raw_scope },
         NativePtyEvents { source: events },
     ))
 }
@@ -472,9 +520,11 @@ impl NativePtyEvents {
 /// submissions use the authenticated Mod path after Core content admission.
 pub struct NativePtySession {
     handle: SessionHandle,
+    raw_scope: Arc<()>,
 }
 pub struct CommittedRaw {
     bytes: Vec<u8>,
+    raw_scope: Arc<()>,
 }
 impl std::fmt::Debug for CommittedRaw {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -484,16 +534,54 @@ impl std::fmt::Debug for CommittedRaw {
     }
 }
 impl NativePtySession {
-    /// Success means queued after durable revocation, not physically consumed.
-    pub fn raw_queued(&self, permit: CommittedRaw) -> Result<(), driver::Closed> {
-        self.handle.raw(permit.bytes)
+    /// Only a sealed, durably acknowledged manual-revocation input can reach
+    /// the physical writer. The lease gate remains independent of queue ACK.
+    /// Written bytes mean kernel acceptance, never native application consumption.
+    pub fn raw_confirmed(
+        &self,
+        committed: CommittedRaw,
+        lease: driver::ManualWritePermit,
+    ) -> impl std::future::Future<Output = Result<driver::RawWriteOutcome, driver::Closed>>
+    + Send
+    + 'static {
+        let bound = lease.is_native_bound()
+            && lease.is_connection_bound()
+            && Arc::ptr_eq(&self.raw_scope, &committed.raw_scope);
+        let input = if bound { committed.bytes } else { Vec::new() };
+        // Unbound native input cannot enter the writer. This invalid result is
+        // independent of whether its earlier revocation transaction committed.
+        self.handle.raw_confirmed(input, lease)
     }
     pub async fn resize(
         &self,
         columns: u16,
         rows: u16,
+        lease: driver::ManualWritePermit,
     ) -> Result<driver::ResizeOutcome, driver::Closed> {
-        self.handle.resize_confirmed(columns, rows).await
+        if !lease.is_native_bound() || !lease.is_connection_bound() {
+            return Ok(driver::ResizeOutcome::Unknown);
+        }
+        self.handle.resize_controlled(columns, rows, lease).await
+    }
+    pub async fn owned_native_birth(&self) -> io::Result<ProcessIdentity> {
+        let status = self
+            .handle
+            .status()
+            .await
+            .map_err(|_| denied("native driver closed"))?;
+        match registry::parent(status.pid as i32) {
+            registry::ParentProbe::Found { identity, parent }
+                if parent == std::process::id() as i32 =>
+            {
+                Ok(identity)
+            }
+            _ => Err(denied("native is not this helper's current child")),
+        }
+    }
+    pub async fn terminal_cut(
+        &self,
+    ) -> Result<Option<super::terminal::TerminalCut>, driver::Closed> {
+        self.handle.terminal_cut().await
     }
     pub async fn snapshot(&self) -> Result<Option<crewd_term::Snapshot>, driver::Closed> {
         self.handle.snapshot().await
@@ -752,5 +840,67 @@ mod tests {
             parent.write_all(b"\n").unwrap();
         }
         assert!(child.0.wait().unwrap().success());
+    }
+}
+
+#[cfg(test)]
+mod public_manual_scope_tests {
+    use super::*;
+    #[tokio::test]
+    async fn foreign_native_raw_commit_scope_cannot_queue_any_physical_input() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = SessionHandle::new(tx);
+        let session = NativePtySession {
+            handle,
+            raw_scope: Arc::new(()),
+        };
+        let committed = CommittedRaw {
+            bytes: b"foreign raw".to_vec(),
+            raw_scope: Arc::new(()),
+        };
+        let native = match registry::probe(std::process::id() as i32) {
+            ProbeResult::Found(native) => native,
+            other => panic!("kernel self: {other:?}"),
+        };
+        let permit = driver::ManualWritePermit::for_native_connection(
+            Instant::now() + Duration::from_secs(1),
+            native,
+            Arc::new(Mutex::new(true)),
+        );
+        assert_eq!(
+            session.raw_confirmed(committed, permit).await.unwrap(),
+            driver::RawWriteOutcome::InvalidInput
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+    #[tokio::test]
+    async fn missing_actual_connection_scope_cannot_queue_native_manual_bytes() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let scope = Arc::new(());
+        let session = NativePtySession {
+            handle: SessionHandle::new(tx),
+            raw_scope: scope.clone(),
+        };
+        let committed = CommittedRaw {
+            bytes: b"unbound raw".to_vec(),
+            raw_scope: scope,
+        };
+        let native = match registry::probe(std::process::id() as i32) {
+            ProbeResult::Found(native) => native,
+            other => panic!("kernel self: {other:?}"),
+        };
+        let permit =
+            driver::ManualWritePermit::for_native(Instant::now() + Duration::from_secs(1), native);
+        assert_eq!(
+            session.raw_confirmed(committed, permit).await.unwrap(),
+            driver::RawWriteOutcome::InvalidInput
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 }

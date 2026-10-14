@@ -100,7 +100,10 @@ struct CrewSessionWindowView: View {
         // 切前台 = 看过了：清掉新选中 run 的未读（T6）。
         .onChange(of: sessionRunner.selectedRunId) { _, newId in
             if let run = sessionRunner.runs.first(where: { $0.runID == newId }) {
-                if appModel.usesCrewdAuthority { appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return }
+                if appModel.usesCrewdAuthority {
+                    appModel.crewdBackend?.workspace.selectSession(run.sessionId)
+                    appModel.crewdBackend?.workspace.originalObservedUnread[run.sessionId] = 0; return
+                }
                 SessionUnreadStore.shared.markViewed(run.sessionId)
             }
         }
@@ -332,8 +335,14 @@ struct CrewSessionWindowView: View {
             if let crewId = crewStore.selectedDetail?.crew.id {
                 VSplitView {
                     ScrollView {
-                        CrewTodoPanel(crewId: crewId, runner: sessionRunner,
-                                      crewName: crewStore.selectedDetail?.crew.title)
+                        if appModel.usesCrewdAuthority {
+                            if let workspace = crewStore.crewdWorkspace {
+                                CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)
+                            } else { Text("当前后台未连接，Todo 尚未确认。") }
+                        } else {
+                            CrewTodoPanel(crewId: crewId, runner: sessionRunner,
+                                          crewName: crewStore.selectedDetail?.crew.title)
+                        }
                     }
                     .background(CrewTodoPagePalette.background)
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
@@ -822,7 +831,9 @@ struct CrewSessionWindowView: View {
 
     @ViewBuilder
     private var admissionRecoveryMenu: some View {
-        if let detail = crewStore.selectedDetail {
+        if appModel.usesCrewdAuthority {
+            Text("自动跟进由当前后台维护").font(.caption).foregroundStyle(.secondary)
+        } else if let detail = crewStore.selectedDetail {
             Menu {
                 if let run = sessionRunner.runs.first(where: {
                     $0.runID == sessionRunner.selectedRunId
@@ -1409,6 +1420,10 @@ private struct SessionRunContentView: View {
                 header
             }
             Divider()
+            if let backend = run.backend as? CrewdOriginalSessionBackend {
+                CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
+                if let control = backend.publicTerminal { CrewdTerminalControlBar(control: control) }
+            }
             if let terminalView = run.terminalView {
                 // 左右留白：终端网格自绘不透明底,贴边显得挤。padding 区用
                 // Theme.canvas 补色 —— AgentTerminalView.applyTheme 的底色就是
