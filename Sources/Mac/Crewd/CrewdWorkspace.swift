@@ -9,6 +9,7 @@ final class CrewdWorkspace: ObservableObject {
     private var originalJournal: CrewdPresentationJournal?
     private var preparingJournal = false
     @Published private(set) var durableUnknown: [CrewdPresentationJournal.Prepared] = []
+    @Published private(set) var originalFirstMessageHistory: [CrewdPresentationJournal.Prepared] = []
     @Published private(set) var presentationScope: CrewdPresentationJournal.Scope?
     var presentationNamespace: String {
         let scope = presentationScope
@@ -32,6 +33,7 @@ final class CrewdWorkspace: ObservableObject {
         finish: { [weak self] record, state, detail in
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪。") }
             try journal.finish(record, state: state, detail: detail)
+            self?.originalFirstMessageHistory = try journal.firstMessageRecords()
             if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
         })
     func makeTerminalCommands(for connection: CrewdClient) -> CrewdPublicCommands {
@@ -533,7 +535,7 @@ final class CrewdWorkspace: ObservableObject {
         sessions = newSessions.array; channelSummaries = newChannels.array; channels = newChannels.array.map { $0["channel"] }
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
         if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
-        if !channels.contains(where: {$0["id"].string == channelID}) { channelID = channels.first(where: {$0["kind"].string == "human"})?["id"].string ?? channels.first?["id"].string ?? "" }
+        if !channels.contains(where: {$0["id"].string == channelID}) { channelID = CrewdConversationProjection.selected(channels, requested: channelID) }
         channelWork.selectChannel(crew:crew,channel:channelID)
         let session = sessionID, channel = channelID
         if !session.isEmpty {
@@ -564,6 +566,7 @@ final class CrewdWorkspace: ObservableObject {
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
             let unknown = try journal.unknownRecords()
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
+            originalFirstMessageHistory = try journal.firstMessageRecords()
             if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
         } catch { self.error = "原前端提交历史未就绪：" + error.localizedDescription }
     }
@@ -636,6 +639,30 @@ final class CrewdWorkspace: ObservableObject {
         try publicCommands.restore([record])
         guard let observation = publicCommands.observations[id] else { throw CrewdPublicWire.invalid() }
         return try await publicCommands.lookup(observation)
+    }
+    /// Explicit read-only receipt recovery. Historical SQL acceptance alone
+    /// cannot prove current presence; verify both current crew/channel before
+    /// changing only presentation selection. Never submit the command again.
+    func openOriginalFirstMessage(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) async throws -> String {
+        let epoch = observationGeneration, selected = selection
+        guard record.scope == presentationScope, receipt.phase == .committed,
+              record.params["command"]["operation"].string == "crew.createFirstMessage",
+              record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
+              record.params["dbId"].string == receipt.databaseID,
+              record.params["runtimeBindingId"].string == receipt.runtimeBindingID,
+              record.params["command"] == receipt.value["command"],
+              let crew = receipt.value["result"]["crew"]["id"].string,
+              let channel = receipt.value["result"]["message"]["channelId"].string else { throw CrewdPublicWire.invalid() }
+        let currentCrews = try await readValue("crew.list")
+        guard acceptsObservation(epoch), selection == selected, currentCrews.array.contains(where: { $0["id"].string == crew }) else {
+            throw CrewdClientError(message: "原回执仍保留，当前后台没有该机组；不会重建或重发。", kind: .notSubmitted)
+        }
+        let currentChannels = try await readValue("channel.list", .object(["crewId": .string(crew)]))
+        guard acceptsObservation(epoch), selection == selected, currentChannels.array.contains(where: { $0["channel"]["id"].string == channel }) else {
+            throw CrewdClientError(message: "原回执仍保留，当前后台没有该可读会话；不会重发。", kind: .notSubmitted)
+        }
+        selectCrew(crew); selectChannel(channel)
+        return crew
     }
     func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) throws {
         _ = try publicCommandBinding(for: client)

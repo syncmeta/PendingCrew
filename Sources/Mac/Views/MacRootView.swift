@@ -90,7 +90,7 @@ struct MacThreePaneView: View {
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
             if model.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace, let new, new != crewStore.pendingCrew?.id {
-                workspace.selectCrew(new); workspace.selectChannel(new + "/lobby")
+                workspace.selectCrew(new)
             }
         }
         // 去掉 toolbar 底部那条灰色分隔线（详见 WindowSeparatorRemover）。tick 传

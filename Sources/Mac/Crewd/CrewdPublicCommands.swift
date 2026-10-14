@@ -124,6 +124,14 @@ final class CrewdPublicCommands: ObservableObject {
                 operation: operation, params: record.params["command"]["params"])
             guard envelope.value == record.params else { throw notSubmitted("原公开命令记录发生变化；未重放。") }
             if let old = observations[request], old.envelope != envelope { throw notSubmitted("原请求编号对应不同payload；保留冲突记录。") }
+            if observations[request] == nil, observations.count >= maximumObservations {
+                let settled = observations.values.filter { row in
+                    guard !pending.contains(row.id), let receipt = row.receipt else { return false }
+                    return !receipt.historical && [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase)
+                }.min { $0.prepared.preparedAt < $1.prepared.preparedAt }
+                guard let settled else { throw notSubmitted("原观察窗口已满；磁盘原记录仍保留，不能移除未确认请求来核对新项。") }
+                observations.removeValue(forKey: settled.id)
+            }
             sent.insert(request)
             observations[request] = .init(prepared: record, envelope: envelope)
         }

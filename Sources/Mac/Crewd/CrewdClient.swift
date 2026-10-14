@@ -389,3 +389,21 @@ final class CrewdClient: ObservableObject {
         if notify && hadConnection { onDisconnect?() }
     }
 }
+
+/// Names and selection come from authoritative readable Channel rows. Empty
+/// system names are intentional protocol values, never invisible controls.
+enum CrewdConversationProjection {
+    static func title(_ channel: CrewdValue) -> String {
+        switch channel["kind"].string {
+        case "human": return "与我沟通"
+        case "lobby": return "大厅"
+        default:
+            if let name = channel["name"].string, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return name }
+            return channel["kind"].string == "dm" ? "私聊" : "话题"
+        }
+    }
+    static func selected(_ channels: [CrewdValue], requested: String) -> String {
+        if channels.contains(where: { $0["id"].string == requested }) { return requested }
+        return channels.first(where: { $0["kind"].string == "human" })?["id"].string ?? channels.first?["id"].string ?? ""
+    }
+}

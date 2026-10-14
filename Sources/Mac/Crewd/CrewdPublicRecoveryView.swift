@@ -4,17 +4,23 @@ import SwiftUI
 /// historical results nor an external Unknown authorizes replay.
 struct CrewdPublicRecoveryView: View {
     @ObservedObject var workspace: CrewdWorkspace
+    var openCrew: ((String) -> Void)? = nil
     @State private var found: [UUID: CrewdPublicReceipt] = [:]
     @State private var missing = Set<UUID>()
     @State private var checking = Set<UUID>()
     @State private var failure: String?
+    private var records: [CrewdPresentationJournal.Prepared] {
+        var seen = Set<UUID>()
+        return (workspace.durableUnknown.filter { $0.method == "command.submit" } + workspace.originalFirstMessageHistory)
+            .filter { seen.insert($0.id).inserted }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("原请求核对").font(.headline)
             Text("保留原数据库、请求身份与内容。此处仅查找；不会重新发送、补写终端字节或启动成员。")
                 .font(.caption).foregroundStyle(.secondary)
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
-            ForEach(workspace.durableUnknown.filter { $0.method == "command.submit" }, id: \.id) { record in
+            ForEach(records, id: \.id) { record in
                 let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(record.params["command"]["operation"].string ?? "原命令").font(.subheadline.bold())
@@ -25,7 +31,11 @@ struct CrewdPublicRecoveryView: View {
                     if let id, let receipt = found[id] {
                         Text("后台阶段：\(receipt.phase.rawValue)\(receipt.historical ? " · 历史实例" : "")")
                         DisclosureGroup("后台原回执") { Text(receipt.value.pretty).font(.caption).textSelection(.enabled) }
-                        if !receipt.historical && [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase) {
+                        if record.params["command"]["operation"].string == "crew.createFirstMessage", receipt.phase == .committed, openCrew != nil {
+                            Button("查看原首条消息（不重新发送）") { open(record, receipt) }
+                                .disabled(checking.contains(receipt.requestID) || !workspace.client.connected || workspace.isRetired)
+                        }
+                        if workspace.durableUnknown.contains(where: { $0.id == record.id }), !receipt.historical && [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase) {
                             Button("已核对原回执，结束此项待确认") { acknowledge(record, receipt) }
                         }
                     } else if let id, missing.contains(id) {
@@ -51,6 +61,18 @@ struct CrewdPublicRecoveryView: View {
                 if let receipt { found[id] = receipt; missing.remove(id) }
                 else { missing.insert(id) }
                 failure = nil
+            } catch { if workspace.acceptsObservation(epoch) { failure = error.localizedDescription } }
+        }
+    }
+    private func open(_ record: CrewdPresentationJournal.Prepared, _ receipt: CrewdPublicReceipt) {
+        let epoch = workspace.observationGeneration
+        checking.insert(receipt.requestID)
+        Task {
+            defer { checking.remove(receipt.requestID) }
+            do {
+                let crew = try await workspace.openOriginalFirstMessage(record, receipt: receipt)
+                guard workspace.acceptsObservation(epoch) else { return }
+                openCrew?(crew); failure = nil
             } catch { if workspace.acceptsObservation(epoch) { failure = error.localizedDescription } }
         }
     }

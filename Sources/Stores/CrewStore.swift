@@ -358,12 +358,13 @@ final class CrewStore: ObservableObject {
                     params: .object(["crew": .object(fields), "text": .string(text)]), crew: "")
                 guard !receipt.historical, receipt.phase == .committed,
                       let actual = receipt.value["result"]["crew"]["id"].string,
-                      receipt.value["result"]["message"]["text"].string == text else {
+                      receipt.value["result"]["message"]["text"].string == text,
+                      let actualChannel = receipt.value["result"]["message"]["channelId"].string, !actualChannel.isEmpty else {
                     throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
                 }
                 update(.accepted, crew: actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-                pendingCrew = nil; selectedCrewId = actual
+                pendingCrew = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
                 await refreshList(); await refreshDetail(actual)
                 return
             }
@@ -379,7 +380,7 @@ final class CrewStore: ObservableObject {
             _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
             update(.accepted)
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-            pendingCrew = nil; selectedCrewId = crewID
+            pendingCrew = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
             await refreshList(); await refreshDetail(crewID)
         } catch {
             update(CrewdClientError.isUncertainSubmission(error) ? .unknown : .refused, failure: error.localizedDescription)
@@ -927,11 +928,19 @@ final class CrewStore: ObservableObject {
     private func refreshCrewdPreviews() async {
         guard !readingCrewdPreviews, let workspace = crewdWorkspace else { return }
         readingCrewdPreviews = true; defer { readingCrewdPreviews = false }
+        let epoch = workspace.observationGeneration
         do {
             var last: [String: LocalWhiteboardMessage] = [:], activities: [String: LocalWhiteboardMessage] = [:]
             for crew in crews {
-                let raw = try await workspace.readValue("message.list", .object(["channelId": .string(crew.id + "/lobby"), "limit": .integer(200)]))
-                guard case .array(let rows) = raw else { throw CrewdClientError(message: "群消息投影回复无效") }
+                let summaries = try await workspace.readValue("channel.list", .object(["crewId": .string(crew.id)]))
+                guard crewdWorkspace === workspace, workspace.acceptsObservation(epoch) else { throw CancellationError() }
+                var rows: [CrewdValue] = []
+                for summary in summaries.array {
+                    guard let channel = summary["channel"]["id"].string else { throw CrewdClientError(message: "频道回复缺少正式编号") }
+                    let raw = try await workspace.readValue("message.list", .object(["channelId": .string(channel), "limit": .integer(200)]))
+                    guard crewdWorkspace === workspace, workspace.acceptsObservation(epoch), case .array(let values) = raw else { throw CancellationError() }
+                    rows.append(contentsOf: values)
+                }
                 let values = try rows.map { row -> LocalWhiteboardMessage in
                     guard let id = row["id"].string, let created = row["createdAt"].string, let text = row["text"].string, let kind = row["senderKind"].string else { throw CrewdClientError(message: "群消息缺少正式身份或时间") }
                     return LocalWhiteboardMessage(id: id, senderKind: kind == "human" ? "user" : kind,
@@ -951,7 +960,7 @@ final class CrewStore: ObservableObject {
                       let crew = row["ask"]["crewId"].string else { throw CrewdClientError(message: "人类事项正式身份无效") }
                 if asks.insert(id).inserted { direct[crew, default: 0] += 1 }
             }
-            guard crewdWorkspace === workspace, !workspace.isRetired else { return }
+            guard crewdWorkspace === workspace, workspace.acceptsObservation(epoch) else { return }
             lastWhiteboardMessages = last; lastActivityMessages = activities
             humanTodoAttention = CrewHumanTodoAttentionCache.aggregate(directCounts: direct,
                 parentsByCrew: Dictionary(uniqueKeysWithValues: crews.map { ($0.id, $0.parentCrewIds) }))

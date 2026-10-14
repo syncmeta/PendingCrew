@@ -52,7 +52,7 @@ struct IPadShell: View {
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
             communicationView = .human
             if let id, id != crewStore.pendingCrew?.id, let workspace = appModel.crewdBackend?.workspace {
-                workspace.selectCrew(id); workspace.selectChannel(id + "/lobby")
+                workspace.selectCrew(id)
             }
         }
         .onChange(of: crewStore.selectedCrewId) { _, id in
@@ -66,7 +66,7 @@ struct IPadShell: View {
         }
         .sheet(isPresented: $showingRecovery) {
             if let workspace = appModel.crewdBackend?.workspace {
-                ScrollView { CrewdPublicRecoveryView(workspace: workspace).padding() }
+                ScrollView { CrewdPublicRecoveryView(workspace: workspace, openCrew: { crewStore.selectCrew($0) }).padding() }
             }
         }
         .sheet(isPresented: $showingPairing) {
