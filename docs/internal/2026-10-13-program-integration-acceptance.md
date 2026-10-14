@@ -1,5 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 后续完整恢复与三平台验证入口并行推进
+
+根只读实核：global仍d97e63018ed6d2159f59c0ccebbc9e1210fffcbd干净，既有normal07/候选13/默认双平台CI的实际compiled来源永远0f303a45；主目录仍fe68022f及README/design/旧ACP人类改动，未修改。当前磁盘约7.76M KiB，不清理。A13 GUI44774/helper44804实际仍存活，未收到本次解锁答复，未操作UI；旧候选现场保留。
+
+后端唯一Rust/schema写者在独立9e7faed8基线上完成恢复源码接线，31777与35909实际源码check终态0；whole模块尚未冻结，原registry17项16PASS/1旧提示断言FAIL保留，不以这些窄证据宣称恢复完成。完整合同为Lock→原文件只读版本/完整性/WAL归属guard及隔离副本→真实boot/birth/PGID/UID与组census→仅确认消失持久retire→新admission；Unknown有限拒普通serve与独立codex/claude执行。inspect不SQL、不signal；reconcile guard前置且只ConfirmedGone，无force/forget/任意PID。需要Mac及Linux实际kernel矩阵，不能将Native15 WIP混入global或借旧normal来源。
+
+客户端唯一原UI/项目/构建写者在5431dd39独立树推进完整DeliveryValidation入口与sign-only工具源码。同批必须包括Mac私有假provider资格和移动app-container remote-only资格，正式配对/签名/授权不变；具体受审测试endpoint不能以hostname自称可信，也不能把手机loopback当Mac服务。缺坏scope在Keychain/Core/legacy前失败关闭，普通Release与candidate13不变。生产factory控制05真实终态0/noSecItem；原95764 driver -5及83847宏服务类型检查失败保留，最终三平台完整类型证据仍待源码收口。真实Keychain、签名身份使用、设备及网络动作另核具体授权。
+
+独立质量whole恢复矩阵已准备/private/tmp/pcw-Core14-recovery-next-whole-gate-20261015.json；只在作者整块冻结后影响范围独验，不抢target/不写产品fixture。窗口完整顺序守卫准备记录/private/tmp/pcw-app14-final13-jlhibsxa/guard-skeletons-review.json SHA7e6e6626f5b47b5bc9d5d4f41c268d6ffa4a92d2231abf9923a835af85da9b54，三个guard的FINAL_DYNAMIC_SHA为空、无action实现且均不可launch。保持A真实业务→B同实际非空正式backup/pin/requestcut非ownerQuit→A ownedQuit→S-local新GUI非ownerQuit且parent留存→S-remote另审新GUI正式TLS/PTY/撤销/退出→creator所属清理，不能借退出PID/自动restart/跳B反例。计划ab808ddacd4b86cf6484f2ee3e6fed22fff0adf8dad1c1cee85dab08838fe5ad已核，准备方案不是运行验收。
+
+Native15强制producer仍未闭合，SDK06及新增probe未获执行授权；main产品整合、生产签名/持久Vault、实际窗口和设备、安装/日常数据切换/公开发布/真实模型与历史all-features仍未完成。此仅统筹检查点，不称工程阶段交付，不修改封存产物或重复已验稳定流程。
+
+
 ## 2026-10-14 原窗口整块发现与14可信重连裁决
 
 根完整受管Linux维护整合已普通推送5951c4c4；该模块实际平台及独证接受，无额外CI/编译。07已批准隔离上下文真实Human-only/privatework流程显示actualcrew/lobby首消息与preparedjournal replyObserved、本群需求1→无owner/noexecute计划W2且Todo/进展同W2、Doc原文create/read与独立Docfolder（其他view不混）。这只支持对应真实原UI接线，不等窗口整体验收。
