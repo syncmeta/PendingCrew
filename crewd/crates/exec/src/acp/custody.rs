@@ -125,7 +125,7 @@ impl Custody {
         custody.check_helper()?;
         Ok(custody)
     }
-    fn check_helper(&self) -> io::Result<()> {
+    pub(super) fn check_helper(&self) -> io::Result<()> {
         match registry::parent(self.helper.pid) {
             ParentProbe::Found { identity, parent }
                 if same_birth(&self.helper, &identity) && parent == std::process::id() as i32 =>
@@ -351,6 +351,20 @@ impl Custody {
             epoch,
             native: native.clone(),
         })
+    }
+    /// Core/helper channel binding is checked against custody's canonical
+    /// launch scope, never against an expected value supplied by peer JSON.
+    pub fn verify_helper_channel(
+        &self,
+        session: &str,
+        generation: &str,
+        nonce: &[u8; 16],
+    ) -> io::Result<()> {
+        self.check_helper()?;
+        if session != self.session || generation != self.generation.to_string() {
+            return Err(denied("foreign helper launch binding"));
+        }
+        self.check_bridge_nonce(nonce)
     }
     pub fn helper_identity(&self) -> &ProcessIdentity {
         &self.helper

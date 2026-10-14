@@ -1,6 +1,6 @@
 //! Internal Core execution receipts, not a provider/team work ledger. Only the
 //! owning DB FIFO transaction writes these tables. Helpers never receive a writer.
-//! V12 DDL is staged; the official version chain must first include M6 V11.
+//! Formal version12 follows the remote version11 migration; provider capability remains independently gated.
 use crate::{Result, StoreError};
 use ring::digest::{SHA256, digest};
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -461,6 +461,18 @@ pub fn retire_verified_native(tx: &Transaction<'_>, runtime: &str, now: &str) ->
     affected(tx.execute("UPDATE native_execution_receipts SET phase='failed',revision=revision+1,updated_at=?2 WHERE runtime_id=?1 AND phase NOT IN('completed','aborted','failed')",params![runtime,now])?,count)?;
     Ok(())
 }
+/// A disconnected private bridge only invalidates its owning runtime. No
+/// other provider/crew is affected and no observed process is forgotten.
+pub fn invalidate_runtime_unknown(tx: &Transaction<'_>, runtime: &str) -> Result<()> {
+    let count = pending(tx, runtime)?;
+    let (_, revision) = active(tx, runtime)?;
+    if revision == i64::MAX {
+        return Err(invalid("native runtime revision exhausted"));
+    }
+    affected(tx.execute("UPDATE native_execution_runtimes SET revoked=1,manual=1,revision=revision+1 WHERE runtime_id=?1 AND revoked=0",[runtime])?,1)?;
+    affected(tx.execute("UPDATE native_execution_receipts SET phase='unknown',revision=revision+1 WHERE runtime_id=?1 AND phase NOT IN('completed','aborted','failed')",[runtime])?,count)?;
+    Ok(())
+}
 /// Run on Core restart and on the staged restore/import copy before installing
 /// it. Old schemas are a no-op; stored native bindings are never fresh authority.
 pub fn invalidate_unknown(tx: &rusqlite::Connection) -> Result<usize> {
@@ -471,7 +483,7 @@ pub fn invalidate_unknown(tx: &rusqlite::Connection) -> Result<usize> {
     if !exists {
         return Ok(0);
     }
-    let overflow:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_runtimes WHERE revoked=0 AND revision>=9223372036854775807) OR EXISTS(SELECT 1 FROM native_execution_receipts WHERE phase NOT IN('completed','aborted','failed') AND revision>=9223372036854775807)",[],|r|r.get(0))?;
+    let overflow:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_runtimes WHERE revoked=0 AND revision>=9223372036854775807) OR EXISTS(SELECT 1 FROM native_execution_receipts WHERE phase NOT IN('completed','aborted','failed','unknown') AND revision>=9223372036854775807)",[],|r|r.get(0))?;
     if overflow {
         return Err(invalid("native invalidation revision exhausted"));
     }
@@ -481,9 +493,9 @@ pub fn invalidate_unknown(tx: &rusqlite::Connection) -> Result<usize> {
         |r| r.get::<_, i64>(0),
     )?)
     .map_err(|_| invalid("native runtime count overflow"))?;
-    let receipts=usize::try_from(tx.query_row("SELECT COUNT(*) FROM native_execution_receipts WHERE phase NOT IN('completed','aborted','failed')",[],|r|r.get::<_,i64>(0))?).map_err(|_|invalid("native receipt count overflow"))?;
+    let receipts=usize::try_from(tx.query_row("SELECT COUNT(*) FROM native_execution_receipts WHERE phase NOT IN('completed','aborted','failed','unknown')",[],|r|r.get::<_,i64>(0))?).map_err(|_|invalid("native receipt count overflow"))?;
     affected(tx.execute("UPDATE native_execution_runtimes SET revoked=1,manual=1,revision=revision+1 WHERE revoked=0",[])?,runtimes)?;
-    affected(tx.execute("UPDATE native_execution_receipts SET phase='unknown',revision=revision+1 WHERE phase NOT IN('completed','aborted','failed')",[])?,receipts)?;
+    affected(tx.execute("UPDATE native_execution_receipts SET phase='unknown',revision=revision+1 WHERE phase NOT IN('completed','aborted','failed','unknown')",[])?,receipts)?;
     Ok(receipts)
 }
 
@@ -634,8 +646,7 @@ mod tests {
         };
         let store = crate::Store::open_in_memory().unwrap();
         store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('receipt-crew','fixture','now','now'); INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('receipt-session','receipt-crew','worker','claude','now');").unwrap();
-        // Explicit staged fixture installation, not the production version chain.
-        store.conn().execute_batch(V12_DDL).unwrap();
+        // The actual Store installs formal12 before exposing its FIFO actor.
         let runtime = Runtime {
             id: id(),
             session: "receipt-session".into(),
@@ -862,5 +873,68 @@ mod tests {
         let old = rusqlite::Connection::open_in_memory().unwrap();
         let tx = old.unchecked_transaction().unwrap();
         assert_eq!(invalidate_unknown(&tx).unwrap(), 0);
+    }
+    #[test]
+    fn actual_restore_staging_revokes_native_before_install_and_retains_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.db");
+        let dest = tmp.path().join("restored");
+        std::fs::create_dir(&dest).unwrap();
+        let store = crate::Store::open(&source).unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('c','fixture','now','now'); INSERT INTO sessions(id,crew_id,role,executor,updated_at) VALUES('s','c','worker','claude','now');").unwrap();
+        let runtime = Runtime {
+            id: id(),
+            session: "s".into(),
+            generation: id(),
+            epoch: 1,
+            native_pid: 42,
+            native_start: 123,
+            native_boot: "synthetic-kernel-fixture".into(),
+        };
+        let request = id();
+        let tx = store.conn().unchecked_transaction().unwrap();
+        register(&tx, &runtime).unwrap();
+        prepare(&tx, &runtime.id, &request, b"exact original\n", "now").unwrap();
+        revoke_before_raw(&tx, &runtime.id, 0, "now").unwrap();
+        tx.commit().unwrap();
+        crate::backup::restore(&dest, &source).unwrap();
+        // Inspect installed file BEFORE any daemon startup could invalidate it.
+        let installed = rusqlite::Connection::open(dest.join(crate::DB_FILE)).unwrap();
+        let receipt = get(&installed, &request).unwrap().unwrap();
+        assert_eq!(receipt.phase, Phase::Unknown);
+        assert_eq!(
+            get(store.conn(), &request).unwrap().unwrap().phase,
+            Phase::RawRevoked
+        );
+        assert_eq!(
+            installed
+                .query_row(
+                    "SELECT revoked,manual FROM native_execution_runtimes WHERE runtime_id=?1",
+                    [&runtime.id],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                )
+                .unwrap(),
+            (1, 1)
+        );
+        let tx = installed.unchecked_transaction().unwrap();
+        assert!(
+            accept_content(
+                &tx,
+                &runtime.id,
+                &request,
+                receipt.revision,
+                &id(),
+                b"exact original\n",
+                "later"
+            )
+            .is_err()
+        );
+        assert!(revoke_before_raw(&tx, &runtime.id, 1, "later").is_err());
+        let (confirmed, already) =
+            prepare(&tx, &runtime.id, &request, b"exact original\n", "later").unwrap();
+        assert!(already);
+        assert_eq!(confirmed.phase, Phase::Unknown);
+        assert_eq!(invalidate_unknown(&tx).unwrap(), 0);
+        tx.commit().unwrap();
     }
 }

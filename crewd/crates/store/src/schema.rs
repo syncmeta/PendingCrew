@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -856,6 +856,19 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 11 {
         migrate_v11(conn)?;
     }
+    if v < 12 {
+        migrate_v12(conn)?;
+    }
+    Ok(())
+}
+
+/// Core receipt authority is installed atomically after remote schema11.
+/// Version12 alone does not advertise a provider/native capability.
+pub(crate) fn migrate_v12(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(crate::native_execution::V12_DDL)?;
+    tx.execute_batch("PRAGMA user_version=12;")?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2635,5 +2648,92 @@ mod organization_version_tests {
         let retried = crate::Store::open(&path).unwrap();
         assert_eq!(version(retried.conn()), SCHEMA_VERSION);
         assert_eq!(issued(retried.conn()), before);
+    }
+    fn exact_v11_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+        conn
+    }
+    #[test]
+    fn formal_v11_to_v12_is_atomic_and_preserves_remote_configuration() {
+        let conn = exact_v11_fixture();
+        conn.execute(
+            "UPDATE remote_configuration SET revision=8,enabled=1,port=8443",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(version(&conn), 12);
+        assert_eq!(
+            conn.query_row(
+                "SELECT revision,enabled,port FROM remote_configuration",
+                [],
+                |r| Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?
+                ))
+            )
+            .unwrap(),
+            (8, 1, 8443)
+        );
+        let tables:i64=conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'native_execution_%'", [], |r|r.get(0)).unwrap();
+        assert_eq!(tables, 3);
+        migrate(&conn).unwrap();
+        assert_eq!(version(&conn), 12);
+    }
+    #[test]
+    fn formal_v12_conflict_rolls_back_whole_ddl_and_keeps_v11() {
+        let conn = exact_v11_fixture();
+        conn.execute_batch("CREATE TABLE native_execution_receipts(marker TEXT);")
+            .unwrap();
+        assert!(migrate(&conn).is_err());
+        assert_eq!(version(&conn), 11);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='native_execution_runtimes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        conn.execute_batch("DROP TABLE native_execution_receipts;")
+            .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(version(&conn), 12);
+    }
+    #[test]
+    fn formal_v11_guarded_open_keeps_exact_backup_before_v12() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("crewd.db");
+        {
+            let store = crate::Store::open(&path).unwrap();
+            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+        }
+        let store = crate::Store::open(&path).unwrap();
+        assert_eq!(version(store.conn()), 12);
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT title FROM crews WHERE id='v11-work'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap(),
+            "retained"
+        );
+        let snapshots: Vec<_> = std::fs::read_dir(tmp.path().join("backups"))
+            .unwrap()
+            .map(|x| x.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("crewd-v11-pre-v12-")
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        let backup = Connection::open(&snapshots[0]).unwrap();
+        assert_eq!(version(&backup), 11);
     }
 }

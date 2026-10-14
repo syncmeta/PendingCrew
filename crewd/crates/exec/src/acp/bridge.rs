@@ -141,6 +141,33 @@ impl NativePeer {
     }
 }
 
+/// Kernel-bound Core/helper peer. It cannot confer public Human permissions.
+pub struct HelperPeer {
+    identity: ProcessIdentity,
+}
+impl HelperPeer {
+    pub fn authenticate(
+        stream: &UnixStream,
+        custody: &super::custody::Custody,
+    ) -> io::Result<Self> {
+        custody.check_helper()?;
+        let identity = custody.helper_identity().clone();
+        if peer_pid(stream)? != identity.pid {
+            return Err(denied("foreign helper socket peer"));
+        }
+        Ok(Self { identity })
+    }
+    pub fn verify(&self, stream: &UnixStream, custody: &super::custody::Custody) -> io::Result<()> {
+        custody.check_helper()?;
+        if peer_pid(stream)? != self.identity.pid
+            || !same_birth(custody.helper_identity(), &self.identity)
+        {
+            return Err(denied("helper socket birth changed"));
+        }
+        Ok(())
+    }
+}
+
 /// A process-API stdio proxy has a distinct kernel peer. It is admitted only
 /// after Core persists its direct-native-child enrollment. No JSON PID,
 /// generic ancestor, or same-UID fallback is accepted here.
@@ -177,6 +204,15 @@ impl NativeProxyPeer {
     pub fn enrollment(&self) -> &super::custody::BridgeEnrollment {
         &self.enrollment
     }
+    /// Recheck the exact socket and enrolled parent chain without advancing
+    /// wire sequence. Core uses this around durable local actions and commit ACKs.
+    pub fn verify(&self, stream: &UnixStream, custody: &super::custody::Custody) -> io::Result<()> {
+        if peer_pid(stream)? != self.enrollment.identity().pid {
+            return Err(denied("foreign native proxy socket peer"));
+        }
+        custody.check_bridge(&self.enrollment)?;
+        Ok(())
+    }
     pub fn admit(
         &mut self,
         stream: &UnixStream,
@@ -195,10 +231,7 @@ impl NativeProxyPeer {
             .next_sequence
             .checked_add(1)
             .ok_or_else(|| denied("native proxy sequence exhausted"))?;
-        if peer_pid(stream)? != self.enrollment.identity().pid {
-            return Err(denied("foreign native proxy socket peer"));
-        }
-        custody.check_bridge(&self.enrollment)?;
+        self.verify(stream, custody)?;
         self.next_sequence = next;
         Ok(())
     }

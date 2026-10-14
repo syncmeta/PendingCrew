@@ -12,7 +12,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 
@@ -28,6 +28,7 @@ pub struct CoreLedger {
     generation: String,
     nonce: [u8; 16],
     core: ProcessIdentity,
+    timeout: Duration,
     channel: Mutex<LedgerChannel>,
 }
 impl std::fmt::Debug for CoreLedger {
@@ -138,6 +139,7 @@ impl CoreLedger {
             generation,
             nonce,
             core,
+            timeout,
             channel: Mutex::new(LedgerChannel {
                 stream: BufReader::new(stream),
                 next: 1,
@@ -181,6 +183,13 @@ impl CoreLedger {
                 "Core channel closed",
             ));
         }
+        let deadline = Instant::now() + self.timeout;
+        let remaining = || {
+            deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Core whole-frame deadline"))
+        };
         let result = (|| {
             self.verify(channel.stream.get_ref())?;
             let id = channel.next.to_string();
@@ -206,9 +215,30 @@ impl CoreLedger {
                 return Err(io::Error::other("Core ledger frame limit"));
             }
             bytes.push(b'\n');
-            channel.stream.get_mut().write_all(&bytes)?;
+            let mut written = 0;
+            while written < bytes.len() {
+                channel
+                    .stream
+                    .get_ref()
+                    .set_write_timeout(Some(remaining()?))?;
+                match channel.stream.get_mut().write(&bytes[written..]) {
+                    Ok(0) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "Core ledger write stalled",
+                        ));
+                    }
+                    Ok(count) => written += count,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
+            }
             let mut response = Vec::new();
             loop {
+                channel
+                    .stream
+                    .get_ref()
+                    .set_read_timeout(Some(remaining()?))?;
                 let available = channel.stream.fill_buf()?;
                 if available.is_empty() {
                     return Err(io::Error::new(
@@ -227,7 +257,9 @@ impl CoreLedger {
                     break;
                 }
             }
+            remaining()?;
             self.verify(channel.stream.get_ref())?;
+            remaining()?;
             match wire::control(&response) {
                 Ok(Control::Response {
                     id: reply,
@@ -506,7 +538,11 @@ mod tests {
             std::env::var("PCW_TEST_GENERATION").unwrap(),
             nonce,
             core,
-            Duration::from_secs(5),
+            if std::env::var_os("PCW_TEST_DRIBBLE").is_some() {
+                Duration::from_millis(150)
+            } else {
+                Duration::from_secs(5)
+            },
         )
         .unwrap();
         // SAFETY: the constructor still owns the live FD.
@@ -514,6 +550,23 @@ mod tests {
             unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
             0
         );
+        if std::env::var_os("PCW_TEST_DRIBBLE").is_some() {
+            let began = std::time::Instant::now();
+            assert!(
+                ledger.recorded().is_err(),
+                "dribbling full frame must time out"
+            );
+            assert!(
+                began.elapsed() < Duration::from_millis(600),
+                "whole frame budget exceeded: {:?}",
+                began.elapsed()
+            );
+            assert_eq!(
+                ledger.recorded().unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
+            return;
+        }
         assert_eq!(ledger.recorded().unwrap(), None);
         ledger.record("native-session-1").unwrap();
         let permit = ledger
@@ -531,6 +584,70 @@ mod tests {
             ledger.recorded().unwrap_err().kind(),
             io::ErrorKind::BrokenPipe
         );
+    }
+    #[test]
+    fn actual_owned_helper_rejects_dribbling_response_within_whole_frame_budget() {
+        let (mut parent, inherited) = UnixStream::pair().unwrap();
+        parent
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        parent
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let ProbeResult::Found(core) = registry::probe(std::process::id() as i32) else {
+            panic!("Core birth unavailable")
+        };
+        let nonce = *uuid::Uuid::new_v4().as_bytes();
+        let generation = uuid::Uuid::new_v4().to_string();
+        let runtime = uuid::Uuid::new_v4().to_string();
+        let fd = inherited.as_raw_fd();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--ignored",
+                "--exact",
+                "acp::helper::tests::private_ledger_child",
+            ])
+            .env_clear()
+            .env("PCW_OWNED_CORE_FD", fd.to_string())
+            .env(
+                "PCW_TEST_CORE_IDENTITY",
+                serde_json::to_string(&core).unwrap(),
+            )
+            .env("PCW_TEST_NONCE", serde_json::to_string(&nonce).unwrap())
+            .env("PCW_TEST_GENERATION", &generation)
+            .env("PCW_TEST_RUNTIME", &runtime)
+            .env("PCW_TEST_DRIBBLE", "1");
+        // SAFETY: only async-signal-safe setsid/fcntl in the owned child's pre-exec context.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = OwnedChild(command.spawn().unwrap());
+        drop(inherited);
+        let mut reader = BufReader::new(parent.try_clone().unwrap());
+        let mut frame = String::new();
+        reader.read_line(&mut frame).unwrap();
+        let request: Value = serde_json::from_str(&frame).unwrap();
+        let response = serde_json::to_vec(
+            &json!({"jsonrpc":"2.0","id":request["id"],"result":{"agentSessionId":null}}),
+        )
+        .unwrap();
+        for byte in response.iter().chain([b'\n'].iter()) {
+            if parent.write_all(&[*byte]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        assert!(child.0.wait().unwrap().success());
     }
     #[test]
     fn actual_owned_helper_requires_matching_commit_ack_and_keeps_core_fd_private() {
