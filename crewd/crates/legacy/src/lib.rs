@@ -51,6 +51,11 @@ pub fn import(
         to: att_to,
     };
     store.with_tx(|tx| {
+        crewd_store::remote::invalidate_for_work_replacement(
+            tx,
+            "work_import",
+            &crewd_store::now_ts(),
+        )?;
         let mut cx = Ctx {
             src,
             report: &mut report,
