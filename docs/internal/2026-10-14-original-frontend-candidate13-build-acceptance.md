@@ -36,3 +36,9 @@ Current schema13 cannot establish schema14 public request receipts/atomic first-
 新包真实包含humanTodoCache lazy及reset旧缓存门禁，822不含。GUI packaged SHA 624d9154e702ee7baa681da1db9b92ba4833a06946adb6b083e0aeadf4cb05a7，helper packaged SHA 3f09f12969c87d7b7a9a1c54b2640cf718de998ce96d1e62c7da1fc06712def7。后台仍实际compiled2bf/full374 Rust/default debug/non-test/rawfresh11package12target；未重编，未重标5cdf或14。06作者调用缺explicitdebug意图，严格门禁在编译前拒绝，其log/snapshot保留；07显式debug正确组合完成，无守卫弱化。
 
 07未launch/安装/发布，首次启动需主重新核具体bundle/source/private-env/fake-only清单及新实例。822 GUI54307/helper54337初始化资格已通过，但业务因Mac锁屏等待；703旧RED现场也保留，不移其窗口证据给07。原窗口全流程、真机、14 receipt/terminal/ownedQuit、日常数据切换与main产品交付仍未完成。global整合相同字节的新SHA不称重新编译。
+
+## 07终态后的资源维护分类更正
+
+精确回收清单 `/private/tmp/pcw-apple-module-terminal-reclaim-5cdf-manifest.json` 与保护复核 `/private/tmp/pcw-apple-module-terminal-reclaim-5cdf-protected-after.json` 记录3237个SHA/size/mtime逐项匹配后的删除，实际释放476071432 bytes（约454 MiB）。其路径是现有DerivedData的`ModuleCache.noindex`，包含Darwin、`_AvailabilityInternal`、`_Builtin_float`等由Xcode编译的系统/SDK `.pcm` 和Swift模块缓存，**不能称为仅自有standalone模块或称SDK缓存全部保留**。原SDK安装对象、`.o`、DerivedData实际产品、SPM、源文件、DB/log和实际GUI/helper/provenance不在删除清单；保护复核记录实际产品/来源SHA与完整SPM字节一致。
+
+回收时Swift/Clang/Xcode编译已终态。它有后续按需重建系统模块的成本，不等于零成本资源措施；后续沿原DerivedData/SPM重建受影响模块，不新建冷目录，也不为恢复缓存额外跑全量构建。按主裁决停止扩大ModuleCache回收；未来资源维护优先既定自有Rust终态对象精确清单与所有者协调。
