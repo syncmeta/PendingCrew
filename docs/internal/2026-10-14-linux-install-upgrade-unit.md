@@ -54,3 +54,6 @@ The exact batch input file hashes and owning HEAD are recorded separately from c
 剩余工作只复用原4e实际规范normal13 tar，compiledRef仍4e，run38541835255/artifact11882857926/tarSHA cc73c54b606181f7f2c2ea500cbe0665f2aeb07138ee3c74db5553dec1ad129a；完整当前crewd Git/working inputs必须逐字等于原374输入且raw own fresh12targets/defaultrelease证明通过。无新normal编译或重标新fixture源码；不重复旧完整CI/本地16门禁。实际原ZIP→唯一canonicaltar→完整消费来源已本机正向验证，错误ZIP与既有output拒绝。
 
 归档此前upload跟随activation/current引用而重复复制同release。新producer将private lifecycle root封为dereference=false tar，保相对指针/激活请求、真实双方release完整来源、DB/backup/log，不递归上传这些链接。每实际regular文件校验byteSHA，每链接核内部相对指向并验证tar仍是链接，附archiveSHA/member manifest。本机actual模块控制证保留3引用但只有1 retained fixturebinary，外部escape拒绝无output。证据 `/private/tmp/pcw-linux-observer-archive-controls-01` 和 `/private/tmp/pcw-linux-normal13-reuse-control-01.log`；不代表实际Linux恢复链完成。
+
+
+归档影响审找到真实smoke source-controls `/proc/123/exe` 保留同flow内部绝对dangling引用。原“任何绝对链接都拒”的规则会使已完成业务链的归档必失败。修复不改原证据链接：manifest保originalTarget，tar只将同ownedroot内绝对引用序列化为等效内部相对target；内相对引用原样保留，任何外逃仍拒。实际直接执行production smoke的整个source-controls block再交production archive与private extract consumer，覆盖原绝对dangling、内部绝对existing、relative dangling/alias、outside absolute拒绝无output；源target未改变。证据 `/private/tmp/pcw-linux-actual-smoke-archive-shapes-02/result.json`。这是归档真实形状准备层，不改原4e failure为安装PASS，不复跑旧业务。

@@ -14,11 +14,21 @@ def archive(root,output):
    path=pathlib.Path(parent)/name;relative=path.relative_to(root).as_posix();s=path.lstat()
    if path.is_symlink():
     target=os.readlink(path)
-    if pathlib.Path(target).is_absolute() or not path.resolve().is_relative_to(root):raise ValueError('evidence link escapes fixture')
-    rows.append({'path':relative,'kind':'symlink','target':target})
+    resolved=path.resolve()
+    if not resolved.is_relative_to(root):raise ValueError('evidence link escapes fixture')
+    # Controlled synthetic /proc entries retain absolute targets in the live
+    # fixture. Preserve that fact, but serialize an equivalent portable in-root
+    # reference; never dereference it or change the original evidence tree.
+    serialized=os.path.relpath(resolved,path.parent) if pathlib.Path(target).is_absolute() else target
+    rows.append({'path':relative,'kind':'symlink','target':serialized,'originalTarget':target})
    elif stat.S_ISREG(s.st_mode):rows.append({'path':relative,'kind':'file','size':s.st_size,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()})
    elif not stat.S_ISDIR(s.st_mode):raise ValueError('special file cannot enter lifecycle archive')
- with tarfile.open(output,'w:gz',dereference=False) as t:t.add(root,arcname='flow',recursive=True)
+ links={row['path']:row for row in rows if row['kind']=='symlink'}
+ def preserve_reference(info):
+  row=links.get(info.name.removeprefix('flow/'))
+  if row is not None:info.linkname=row['target']
+  return info
+ with tarfile.open(output,'w:gz',dereference=False) as t:t.add(root,arcname='flow',recursive=True,filter=preserve_reference)
  with tarfile.open(output,'r:gz') as t:
   members={m.name.removeprefix('flow/'):m for m in t.getmembers() if m.name!='flow'}
   for row in rows:
@@ -35,4 +45,4 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('root');p.add_argument('output');a=p.parse_args();r=archive(a.root,a.output);print('ARCHIVED private lifecycle without dereferencing references:',r['archiveSHA256'])
 if __name__=='__main__':
  try:main()
- except (ValueError,OSError,tarfile.TarError) as e:raise SystemExit('REFUSED lifecycle evidence archive: '+str(e))
+ except (ValueError,OSError,RuntimeError,tarfile.TarError) as e:raise SystemExit('REFUSED lifecycle evidence archive: '+str(e))
