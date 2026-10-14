@@ -20,6 +20,7 @@ struct CrewdPlanDrafts {
     private var pending:[Key:UUID]=[:]
     private var unknown:[Key:[UUID:Snapshot]]=[:]
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
+    func hasDraft(_ key:Key)->Bool {entries[key] != nil}
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->Bool {!(unknown[key] ?? [:]).isEmpty}
     func isCurrent(_ snapshot:Snapshot)->Bool {entries[snapshot.key]?.version == snapshot.version}
@@ -48,6 +49,12 @@ struct CrewdPlanTarget:Identifiable {
 }
 /// Typed forms become ordinary human RPC commands. No raw JSON editor or inferred IDs.
 enum CrewdPlanCommand {
+    static func validateOwnership(_ fields:CrewdPlanDrafts.Fields,owner:String?) throws {
+        guard fields.action == .block || (fields.action == .report && fields.reportStatus == "active") else {return}
+        guard let owner,!owner.isEmpty else {
+            throw CrewdClientError(message:"请先指派负责人，再把计划设为推进中或阻塞。",kind:.notSubmitted)
+        }
+    }
     static func build(_ key:CrewdPlanDrafts.Key,_ f:CrewdPlanDrafts.Fields,revision:String?,requestID:UUID?=nil) throws -> (String,CrewdValue) {
         func need(_ text:String,_ name:String)throws {if text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {throw CrewdClientError(message:"请填写"+name)}}
         if key.object.isEmpty {
@@ -105,6 +112,11 @@ struct CrewdPlanActions:View {
     @State private var reviewedUnknown=false
     private var key:CrewdPlanDrafts.Key {target.key}
     private var fields:CrewdPlanDrafts.Fields {drafts.fields(key)}
+    private var currentHasOwner:Bool {
+        guard let id=CrewdWorkID(key.object,kind:.plan),let owner=store.plans[id]?.value["owner"].string else{return false}
+        return !owner.isEmpty
+    }
+    private var ownerRequired:Bool { !key.object.isEmpty && !currentHasOwner && (fields.action == .block || (fields.action == .report && fields.reportStatus == "active")) }
     private func binding<T>(_ path:WritableKeyPath<CrewdPlanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
@@ -167,7 +179,8 @@ struct CrewdPlanActions:View {
                             }
                             ownerPicker;TextField("交接说明",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                         case .report:
-                            Picker("状态",selection:binding(\.reportStatus)){Text("待推进").tag("open");Text("推进中").tag("active")}
+                            Picker("状态",selection:binding(\.reportStatus)){Text("待推进").tag("open");Text("推进中").tag("active").disabled(!currentHasOwner)}
+                            if !currentHasOwner {Text("尚未指派负责人，可以先记录待推进的说明。指派后才能设为推进中。").font(.caption).foregroundStyle(.secondary)}
                             TextField("当前进展与下一步",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                             Toggle("设置下一检查点",isOn:binding(\.checkpoint))
                             if fields.checkpoint {DatePicker("下次检查",selection:binding(\.nextCheck),displayedComponents:[.date,.hourAndMinute])}
@@ -177,6 +190,7 @@ struct CrewdPlanActions:View {
                             TextField("凭据（可选）",text:binding(\.evidence),axis:.vertical).lineLimit(2...5)
                         case .drop:TextField("为什么放弃这项计划",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                         case .block:
+                            if !currentHasOwner {Text("请先指派负责人，再将计划设为阻塞。").font(.caption).foregroundStyle(.orange)}
                             TextField("需要人类处理什么？",text:binding(\.question),axis:.vertical).lineLimit(2...5)
                             Picker("其余工作能否继续",selection:binding(\.split)){Text("其余不能继续").tag(false);Text("拆出仍可推进的部分").tag(true)}
                             if fields.split {TextField("可独立推进的部分",text:binding(\.splitTitle),axis:.vertical).lineLimit(2...5)}
@@ -184,7 +198,7 @@ struct CrewdPlanActions:View {
                     }
                 }.disabled(drafts.busy(key))
             }
-            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
+            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || ownerRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:560)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {
@@ -208,7 +222,13 @@ struct CrewdPlanActions:View {
     private func load() async {
         guard let id=CrewdWorkID(key.object,kind:.plan) else {return}
         reading=true;defer{reading=false}
-        do {let detail=try await store.detail(id);revision=detail.revision;failure=nil}
+        do {
+            let detail=try await store.detail(id)
+            if !drafts.hasDraft(key),detail.value["owner"].string == nil {
+                var initial=fields;initial.reportStatus="open";drafts.edit(key,initial)
+            }
+            revision=detail.revision;failure=nil
+        }
         catch {failure=describe(error)}
     }
     private func describe(_ error:Error)->String {
@@ -227,6 +247,7 @@ struct CrewdPlanActions:View {
                     let latest=try await store.detail(id)
                     guard latest.revision == expected else {throw CrewdClientError(message:"计划已变化，请核对当前详情后再次决定。",code:-32009,data:.object(["refusal":.string("work.revision_conflict")]))}
                     guard !latest.frozen else {throw CrewdClientError(message:"归档计划只读。",code:-32009)}
+                    try CrewdPlanCommand.validateOwnership(snapshot.fields,owner:latest.value["owner"].string)
                 }
                 let (method,params)=try CrewdPlanCommand.build(key,snapshot.fields,revision:expected,requestID:snapshot.version)
                 guard store.selectedCrew == key.crew else {throw CancellationError()}

@@ -108,6 +108,12 @@ final class CrewdClient: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var version = ""
     @Published private(set) var capabilities:Set<String>=[]
+    /// The authoritative hello advertises the orchestra capability group,
+    /// not an individual capability named after every session RPC.
+    var supportsSessionStart: Bool { Self.sessionStartSupported(connected: connected, capabilities: capabilities) }
+    static func sessionStartSupported(connected: Bool, capabilities: Set<String>) -> Bool {
+        connected && capabilities.contains("orchestra")
+    }
     @Published private(set) var lastError: String?
     var onEvent: ((String, CrewdValue) -> Void)?
     var onDisconnect: (() -> Void)?
