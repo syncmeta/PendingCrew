@@ -601,11 +601,11 @@ impl Runtime {
                 }
             }
             .await;
-            if result.is_err() {
-                if let Some(runtime) = weak.upgrade() {
-                    runtime.healthy.store(false, Ordering::Release);
-                    cleanup_custody(&runtime.custody);
-                }
+            if result.is_err()
+                && let Some(runtime) = weak.upgrade()
+            {
+                runtime.healthy.store(false, Ordering::Release);
+                cleanup_custody(&runtime.custody);
             }
             result
         });
@@ -625,13 +625,14 @@ impl Runtime {
                         return Err(error());
                     }
                     let mut ring = runtime.frames.lock().map_err(|_| error())?;
-                    if let Some(last) = ring.back() {
-                        if frame.epoch == last.epoch && frame.sequence <= last.sequence {
-                            if last.kind == crewd_exec::acp::wire::TerminalKind::Resync {
-                                continue;
-                            }
-                            return Err(error());
+                    if let Some(last) = ring.back()
+                        && frame.epoch == last.epoch
+                        && frame.sequence <= last.sequence
+                    {
+                        if last.kind == crewd_exec::acp::wire::TerminalKind::Resync {
+                            continue;
                         }
+                        return Err(error());
                     }
                     ring.push_back(frame.clone());
                     while ring.len() > 64
@@ -992,17 +993,15 @@ impl Runtime {
                 })
             })
             .await;
-        if observed {
-            if let Ok(mut held) = self.custody.lock() {
-                let epochs = held
-                    .native_identities()
-                    .map(|(epoch, _)| *epoch)
-                    .collect::<Vec<_>>();
-                for epoch in epochs {
-                    let _ = held.forget_reaped_native(epoch);
-                }
-                let _ = held.forget_reaped_helper();
+        if observed && let Ok(mut held) = self.custody.lock() {
+            let epochs = held
+                .native_identities()
+                .map(|(epoch, _)| *epoch)
+                .collect::<Vec<_>>();
+            for epoch in epochs {
+                let _ = held.forget_reaped_native(epoch);
             }
+            let _ = held.forget_reaped_helper();
         }
     }
 }

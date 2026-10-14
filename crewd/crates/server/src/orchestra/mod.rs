@@ -239,7 +239,10 @@ impl Handle {
     ) -> Result<serde_json::Value, crewd_proto::RpcError> {
         let (reply, response) = oneshot::channel();
         self.tx
-            .send(Input::Cmd(Cmd::PublicExecution { call, reply }))
+            .send(Input::Cmd(Cmd::PublicExecution {
+                call: Box::new(call),
+                reply,
+            }))
             .map_err(|_| rpc::rpc_err(stopped()))?;
         response.await.map_err(|_| rpc::rpc_err(stopped()))?
     }

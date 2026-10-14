@@ -124,10 +124,10 @@ impl crate::native_helpers::NativeFactory {
         session: &str,
         driver: Option<SessionHandle>,
     ) -> io::Result<TerminalRuntime> {
-        if let Some(native) = self.get(session) {
-            if native.is_live() {
-                return Ok(TerminalRuntime::Native(native));
-            }
+        if let Some(native) = self.get(session)
+            && native.is_live()
+        {
+            return Ok(TerminalRuntime::Native(native));
         }
         let existing = self
             .legacy
@@ -135,10 +135,10 @@ impl crate::native_helpers::NativeFactory {
             .map_err(|_| io::Error::other("terminal factory poisoned"))?
             .get(session)
             .cloned();
-        if let Some(legacy) = existing {
-            if legacy.is_live() {
-                return Ok(TerminalRuntime::Legacy(legacy));
-            }
+        if let Some(legacy) = existing
+            && legacy.is_live()
+        {
+            return Ok(TerminalRuntime::Legacy(legacy));
         }
         let driver = driver.ok_or_else(|| {
             io::Error::new(
@@ -164,10 +164,10 @@ impl crate::native_helpers::NativeFactory {
             .map_err(|_| io::Error::other("terminal factory poisoned"))?
             .get(session)
             .cloned();
-        if let Some(current) = current {
-            if current.is_live() {
-                return Ok(TerminalRuntime::Legacy(current));
-            }
+        if let Some(current) = current
+            && current.is_live()
+        {
+            return Ok(TerminalRuntime::Legacy(current));
         }
         let legacy =
             LegacyTerminal::adopt(session.to_owned(), driver, self.db.clone(), &self.registry)

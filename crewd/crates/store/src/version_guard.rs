@@ -308,10 +308,10 @@ pub(crate) fn with_quiescent_copy<T>(
     let copy = PrivateCopy::new()?;
     let mut main = read_file(path)?.ok_or_else(unknown)?.0;
     let db = copy.copy("probe.db", &mut main)?;
-    if let Some((mut wal, stamp)) = read_file(&suffix(path, "-wal"))? {
-        if stamp.size > 0 {
-            copy.copy("probe.db-wal", &mut wal)?;
-        }
+    if let Some((mut wal, stamp)) = read_file(&suffix(path, "-wal"))?
+        && stamp.size > 0
+    {
+        copy.copy("probe.db-wal", &mut wal)?;
     }
     guard.recheck()?;
     let conn = Connection::open_with_flags(
@@ -327,7 +327,8 @@ pub(crate) fn with_quiescent_copy<T>(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    fn census(path: &Path) -> Vec<(PathBuf, Option<(Stamp, Vec<u8>)>)> {
+    type FileCensus = Vec<(PathBuf, Option<(Stamp, Vec<u8>)>)>;
+    fn census(path: &Path) -> FileCensus {
         [
             path.to_path_buf(),
             suffix(path, "-wal"),

@@ -404,8 +404,7 @@ pub(crate) async fn submit_sql(
                         &principal,
                         &p.db_id,
                         &p.request_id,
-                        CommandPhase::Reserved,
-                        CommandPhase::Committed,
+                        (CommandPhase::Reserved, CommandPhase::Committed),
                         Some(&result),
                         &tx.now_ts(),
                     )?)
@@ -454,6 +453,62 @@ pub(crate) async fn lookup(
         r.historical |= r.runtime_binding_id != state.runtime_binding_id;
     }
     serde_json::to_value(result).map_err(dispatch::internal)
+}
+
+pub(crate) async fn list_unknown(
+    state: &Arc<AppState>,
+    actor: &Actor,
+    p: CommandListUnknownParams,
+) -> Result<Value, RpcError> {
+    let principal = actor.principal(state).await?;
+    validate_database(state, &p.db_id).await?;
+    let limit = p.limit.unwrap_or(50);
+    if !(1..=50).contains(&limit)
+        || p.after
+            .as_ref()
+            .is_some_and(|s| !crewd_proto::valid_remote_uuid(s))
+    {
+        return Err(malformed("未知请求页参数无效。"));
+    }
+    let own_state = state.clone();
+    let own_actor = actor.clone();
+    let mut records = state
+        .db
+        .call(move |s| -> collab::Result<_> {
+            let rows =
+                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
+            for r in &rows {
+                for method in r.command.authorized_methods() {
+                    own_actor.authorize_tx(&own_state, s.conn(), method)?;
+                }
+            }
+            Ok(rows)
+        })
+        .await
+        .map_err(dispatch::internal)?
+        .map_err(dispatch::collab_err)?;
+    let more = records.len() > usize::from(limit);
+    records.truncate(usize::from(limit));
+    let next_after = if more {
+        records.last().map(|r| r.request_id.clone())
+    } else {
+        None
+    };
+    let items = records
+        .into_iter()
+        .map(|r| CommandSummary {
+            historical: r.historical || r.runtime_binding_id != state.runtime_binding_id,
+            runtime_binding_id: r.runtime_binding_id,
+            request_id: r.request_id,
+            db_id: r.db_id,
+            operation: r.command.method().into(),
+            payload_sha256: r.payload_sha256,
+            phase: r.phase,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect();
+    serde_json::to_value(CommandUnknownPage { items, next_after }).map_err(dispatch::internal)
 }
 
 #[cfg(test)]
@@ -567,60 +622,4 @@ mod tests {
         assert_eq!(counts, vec![0, 0, 0, 0]);
         s.db.clone().shutdown();
     }
-}
-
-pub(crate) async fn list_unknown(
-    state: &Arc<AppState>,
-    actor: &Actor,
-    p: CommandListUnknownParams,
-) -> Result<Value, RpcError> {
-    let principal = actor.principal(state).await?;
-    validate_database(state, &p.db_id).await?;
-    let limit = p.limit.unwrap_or(50);
-    if !(1..=50).contains(&limit)
-        || p.after
-            .as_ref()
-            .is_some_and(|s| !crewd_proto::valid_remote_uuid(s))
-    {
-        return Err(malformed("未知请求页参数无效。"));
-    }
-    let own_state = state.clone();
-    let own_actor = actor.clone();
-    let mut records = state
-        .db
-        .call(move |s| -> collab::Result<_> {
-            let rows =
-                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
-            for r in &rows {
-                for method in r.command.authorized_methods() {
-                    own_actor.authorize_tx(&own_state, s.conn(), method)?;
-                }
-            }
-            Ok(rows)
-        })
-        .await
-        .map_err(dispatch::internal)?
-        .map_err(dispatch::collab_err)?;
-    let more = records.len() > usize::from(limit);
-    records.truncate(usize::from(limit));
-    let next_after = if more {
-        records.last().map(|r| r.request_id.clone())
-    } else {
-        None
-    };
-    let items = records
-        .into_iter()
-        .map(|r| CommandSummary {
-            historical: r.historical || r.runtime_binding_id != state.runtime_binding_id,
-            runtime_binding_id: r.runtime_binding_id,
-            request_id: r.request_id,
-            db_id: r.db_id,
-            operation: r.command.method().into(),
-            payload_sha256: r.payload_sha256,
-            phase: r.phase,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect();
-    serde_json::to_value(CommandUnknownPage { items, next_after }).map_err(dispatch::internal)
 }

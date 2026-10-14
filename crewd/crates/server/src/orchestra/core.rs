@@ -508,7 +508,7 @@ pub struct AnswerReport {
 
 pub enum Cmd {
     PublicExecution {
-        call: crate::public_execution::PublicExecution,
+        call: Box<crate::public_execution::PublicExecution>,
         reply: oneshot::Sender<Result<serde_json::Value, crewd_proto::RpcError>>,
     },
     PublicTarget {
@@ -682,7 +682,7 @@ pub struct Live {
 pub enum AnswerReply {
     Legacy(Reply<AnswerReport>),
     Public {
-        call: crate::public_execution::PublicExecution,
+        call: Box<crate::public_execution::PublicExecution>,
         inbox: mpsc::UnboundedSender<Input>,
     },
 }
@@ -702,7 +702,10 @@ impl AnswerReply {
                 let _ = reply.send(outcome);
             }
             Self::Public { call, inbox } => {
-                let _ = inbox.send(Input::PublicAnswerDone { call, outcome });
+                let _ = inbox.send(Input::PublicAnswerDone {
+                    call: *call,
+                    outcome,
+                });
             }
         }
     }
@@ -1025,6 +1028,7 @@ impl<P: Port> Core<P> {
     async fn on_cmd(&mut self, c: Cmd) {
         match c {
             Cmd::PublicExecution { call, reply } => {
+                let call = *call;
                 if matches!(
                     &call.request.command,
                     crewd_proto::commands::PublicCommand::Hibernate(_)
