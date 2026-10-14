@@ -140,3 +140,20 @@ Native 客户端固定源码 `1e51045a7e5de6a9b04ec0d74ea7d87091e0c19d` 的原 M
 根仅在隔离global树整合 `fe68022f..28ccf9c7` 的crewd范围，未带入未验Native客户端、未合main或切换真实数据。此候选可供M4接正式11→12；不宣布全部M6或正式交付通过。新实际CI为Rust `38492408715`（observer93795）和Swift `38492408688`（observer54017），均固定28cc；Linux job115620470451已完整2555pass/2fail/10skip/1leaky，缺口是新6项remote方法未入CLI全覆盖表、旧v8升级备份prefix仍硬编码v10。原日志 `/private/tmp/pcw-M6-linux-ci-28ccf9c7.log`；作者/质量线补齐真实覆盖与版本断言，禁止跳过。Mac与Swift剩余job保持观察，main须在完整平台门禁收束后再合。
 
 本机errno28的全workspace未运行测试，保留原失败。资源回收仅明确终态可再生缓存，包含root SDK2174文件221329501bytes manifest `/private/tmp/pcw-M6-terminal-sdk-module-cache-cleanup-20261014.json`、QA03及M4 incremental/rlib/rmeta清单；原始源、数据库、日志、实际SDK对象/二进制、normal与候选/witness均保留。全量检查移到实际CI，本机不盲重跑全workspace。
+
+
+## 2026-10-14 新会话：完整 Native/schema11 组合与专用 v2 候选
+
+用户明确恢复完整工程，并在本会话另行明确授权三条现有 codex 开发分支普通推送。接手实核及固定三线责任见总计划最新恢复段；旧停手与原失败证据保留。
+
+客户端将 global35179724 与 client e1ea6fc8 完整无冲突组合为335c64cb，保留后来 QA 脚本和全局记录。root 实际 Git 对比确认整个 crewd 与已通过真实 Linux/Mac CI 的 c42828e3 完全相同；Sources/Tests/project/Xcode/Package/Info 与已通过普通 Xcode26.5 CI 的28ccf9c7相同。root 只读实际 API 再核 CI38494334844/38492408688 的精确 SHA 与 terminal success，不重复派普通门禁。
+
+质量发现 SPM 实际编译目录需要完整集合与路径绑定。作者在feadabc7/fd19551d强化完整 before/after inventory、真实命令外部 SPM 路径及复制证明，新增负对照由质量独验；实际3738项顺序差异曾在构建前正确拒绝，canonical修正后再构建，原尝试保留。此范围是来源证明修正，不冒充稳定业务重新验收。
+
+完整专用 iOS 目标真实 build exit0（Swift/project固定335c64cb，与fd19551d逐字相同）。Mac完整 recipe、构建、打包、签名和checker真实exit0，新产物为 `/private/tmp/pcw-M6-native-v2-candidate-fd19551d-02/PendingCrew Native Candidate.app`。质量独验完整1261个 Git 输入的集合与每对象SHA、实际360个Rust输入与335normal默认配置非test helper来源、3738个SPM完整前后集合与复制证明、真实编译条件/SDK/settings/log、打包/双签均通过。证据 `/private/tmp/pcw-M6-native-v2-artifact-quality-01.log` 与 `.json`；normal独核 `/private/tmp/pcw-M6-normal-335c64cb-quality-proof.json`。旧normal28不被重标为新完整输入。
+
+root无冲突将冻结fd19551d串行合入global开发整合树37464e2，实核Swift/Rust/Xcode及v2 recipe/checker字节与实际产物冻结相同，保留新增统筹/质量记录，未动用户README/design/旧ACP路径。实际包的完整sourceRef仍为fd19551d，不冒称其归档包含后来global统筹文档。main仍fe68022f，未将schema11/Native或未完M4合main、安装、切换日常数据或发布。
+
+实际新窗口材料 `/private/tmp/pcw-visible-gui.sagibkxv/session.json` 已prepared。root已读精确包/GUI/helper/fake哈希与独立HOME/work/data环境，授权质量在包独验后启动此限定fake候选并尝试整块窗口流程；旧a9不被冒充。真实账号模型、LAN、设备安装与日常数据仍另核授权；App权限如需人处理不暂停其他线。窗口与真机验收尚未通过。
+
+后端正式12及完整Core生命周期继续在独立树。原scope metadata逐键attempt03实际新paint选Yes后CR仍返回No，无exact trust状态、types或mock请求，owned进程已回收；真实SDK兼容仍unknown，不重复盲试。客户端接Linux候选分发/真实Linux验证，质量接新窗口与M4冻结独验；Jev与记忆仍仅待决方案。额外all-features历史ENOSPC中断仍未完成，不由标准CI或feature差异证明外推整套通过。
