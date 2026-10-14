@@ -8,7 +8,10 @@ def main():
  if platform.system()!='Linux' or platform.machine()!='x86_64':raise ValueError('build on actual Linux x86_64; cross compile is not runtime acceptance')
  repo=pathlib.Path(__file__).resolve().parents[2];out=pathlib.Path(args.output).resolve()
  if out.exists():raise ValueError('fresh output required; retain previous evidence')
- if subprocess.check_output(['git','-C',str(repo),'status','--porcelain']).strip():raise ValueError('clean committed input required')
+ status=subprocess.check_output(['git','-C',str(repo),'status','--porcelain'])
+ if status.strip():
+  print('Actual owning checkout status before build:\n'+status.decode(),file=sys.stderr)
+  raise ValueError('clean committed input required')
  ref=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip();out.mkdir()
  target=pathlib.Path(os.environ.get('CARGO_TARGET_DIR',str(repo/'crewd/target'))).resolve()
  record=repo/'scripts/dev/record-crewd-build.py';evidence=out/'normal-build'

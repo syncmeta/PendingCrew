@@ -184,6 +184,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_install_upgrade == true && inputs.linux_candidate_only != true && inputs.core_permission_followup != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     permissions:
       contents: read
       actions: read
@@ -226,7 +228,18 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/linux-install-original-download
       - name: Verify and safely extract immutable original canonical tar
-        run: python3 scripts/dev/prepare-crewd-linux-install-baseline.py "$RUNNER_TEMP/linux-install-original-download" "$RUNNER_TEMP/linux-install-baseline"
+        run: |
+          git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-before-verification.txt"
+          python3 scripts/dev/prepare-crewd-linux-install-baseline.py "$RUNNER_TEMP/linux-install-original-download" "$RUNNER_TEMP/linux-install-baseline"
+          git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
+          test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-before-verification.txt"
+          test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-after-verification.txt"
+      - name: Actual original-reader RED and fixed read-only GREEN without compiling
+        run: |
+          git fetch --no-tags origin 5f3f759568c88b84b5949fe0a109f3f35e44c1db
+          python3 scripts/dev/test-crewd-linux-reader-clean.py "$RUNNER_TEMP/linux-install-baseline/crewd-linux-x86_64" "$RUNNER_TEMP/linux-install-original-meta/reader-controls"
+          git status --porcelain > "$RUNNER_TEMP/linux-install-original-meta/checkout-after-reader-controls.txt"
+          test ! -s "$RUNNER_TEMP/linux-install-original-meta/checkout-after-reader-controls.txt"
       - name: Resolve locked dependencies into existing runner cache
         working-directory: crewd
         run: cargo fetch --locked

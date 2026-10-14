@@ -177,7 +177,7 @@ def main():
   assert call('todo.create',params)['requirementId']==requirement
   post=call('todo.create',postparams)['requirementId']
   remote=call('remote.status',{});assert not remote['listening'] and not remote['configuration']['enabled']
- assert dbversion()==args.new_schema,'formal Core migrations required; never set PRAGMA or count two same-schema packages as upgrade' 
+ assert dbversion()==args.new_schema,'formal Core migrations required; never set PRAGMA or count two same-schema packages as upgrade'
  cli('backup-new','backup');backup_new=max((data/'backups').glob('crewd-manual-*.db'),key=lambda p:p.stat().st_mtime_ns);assert dbversion(backup_new)==args.new_schema
  # Concurrent writers receive the same activation CAS. Exactly one may commit;
  # the other must refuse without changing DB bytes or overwriting the winner.
