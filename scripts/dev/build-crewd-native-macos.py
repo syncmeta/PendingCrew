@@ -44,7 +44,7 @@ def regular_inventory(root):
    relative=p.relative_to(root).as_posix()
    if any(c in relative for c in '\n\r\t'): raise ValueError('control characters in evidence paths')
    rows.append({'path':relative,'sha256':sha(p)})
- return rows
+ return sorted(rows,key=lambda row:row['path'])
 
 def external_dependency_inventory(spm,pins):
  rows=[]
