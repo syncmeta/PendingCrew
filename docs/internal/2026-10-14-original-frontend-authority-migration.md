@@ -87,3 +87,12 @@ The independent Mac test target was fully linked as well. Its first build retain
 初始化现在先调用现有严格命名空间准备，再单独准备0700 ui-cache；namespace/unknown记录与 UI cache 隔离。没有 chmod、接纳旧宽权限目录或借路径自造 authority。原模板 UI 在 crewd 配置使用内存 presentation store，Mac和iPhone/iPad都不初始化旧模板文件。普通配置的原模板持久政策保留。本机显式连接也重复严格验证，失败显示真实错误和显式重试；不无限假装正在连接，不自动回放未知操作。原窗口和三栏/移动组件继续保留。
 
 实际生产 Foundation 文件编译和控制证据：`/private/tmp/pcw-original-startup-private-first-02`。新私有准备→实际模板操作→稳定 namespace、旧数据和cache无模板/账文件通过；既有0755目录和符号链接拒绝且不改变，显式回到原有效根保持同namespace。该层不证明 SwiftUI App 全目标构建、真实后台连接或原窗口业务；修复后的专用全目标构建、新不可变 GUI 来源与实际窗口仍待本单元后续完成。Rust输入未变，后台仅可诚实复用原2bf编译来源，不能重标新版GUI或14。
+
+
+### 822实际原窗口启动后的旧缓存构造边界
+
+QA实际822原Root已正常启动并连接真实packaged normal13（原compiled2bf），新GUI/helper/kernelpeer/fake-only资格通过。首次创建crew因Mac锁屏未执行，原现场未重启，完整窗口业务仍未验。ui-cache下空whiteboards0755不能被解释成无旧store初始化。明确源链为CrewStore eager humanTodoCache→CrewHumanTodoAttentionCache默认human/agent `.shared`参数→LocalTodoStore.init创建defaultDirectory；当前crewd预览分支走正式message.list/ask.list及纯static aggregate，没有调用该旧缓存读取，但构造副作用本身是漏口。
+
+将humanTodoCache与既有lastMessageCache均限于legacy路径首次需要时创建；reset也显式仅legacy路径触clear，避免lazy缓存被重置反而实例化。两缓存的唯一其余访问位于refreshLastWhiteboardMessages的usesCrewdAuthority早返回之后。CrewStore其它eager默认依赖为内存队列、draft/rollback状态与仅计算fileURL的PendingCrewRecoveryStore；presentation SessionHost/Runner已有factory及constructor早返回，不执行旧store、bridge、watcher。原Root驾驶舱也只在legacy模式出现。该修复保留旧模式缓存行为，crewd数据权威不变。
+
+822不可变包没有包含此新源码，不重标其输入或现场结果。完整新GUI源码组合需按影响编译/来源证明与原窗口复验，Rust输入不变可诚实复用已验对应normal原compiled来源。未因这个sourcecut宣称最终窗口、14请求恢复/终端/Quit、真机或main产品交付通过。

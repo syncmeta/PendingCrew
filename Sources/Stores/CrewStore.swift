@@ -180,7 +180,10 @@ final class CrewStore: ObservableObject {
     /// 上面那份快照的算法（指纹门控，只有指纹变了的 crew 才重新解码）。
     private lazy var lastMessageCache = CrewLastMessageCache(store: .shared)
     /// 人类 Todo 未回应数的同款指纹门控缓存（同一套 `FileFingerprintCache`）。
-    private let humanTodoCache = CrewHumanTodoAttentionCache()
+    // Legacy IO caches must not instantiate LocalTodoStore while the original
+    // sidebar is presenting crewd. The default cache constructor opens both
+    // legacy stores and creates their directory even before a cache read.
+    private lazy var humanTodoCache = CrewHumanTodoAttentionCache()
     /// 刷新在这条队列上做 —— stat + 解码都是磁盘 IO，不许上主线程；串行也顺带
     /// 保证目录 tick 密集时不会并发重入同一个 cache。
     private let lastMessageQueue = DispatchQueue(
@@ -830,9 +833,9 @@ final class CrewStore: ObservableObject {
         lastWhiteboardMessages = [:]
         crewStatusCarriers = [:]
         lastActivityMessages = [:]
-        lastMessageCache.clear()
+        if !usesCrewdAuthority { lastMessageCache.clear() }
         humanTodoAttention = [:]
-        humanTodoCache.clear()
+        if !usesCrewdAuthority { humanTodoCache.clear() }
         details = [:]
         subjects = []
         machines = []
