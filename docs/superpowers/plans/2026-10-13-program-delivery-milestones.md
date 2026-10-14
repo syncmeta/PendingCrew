@@ -1,6 +1,6 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 2026-10-15 Linux 完整恢复单元实际接受，候选包装待来源收口
+## 2026-10-15 Linux恢复与Mac包装源码整块接受，完整产物输入待构建
 
 实际 Linux run 38650263649 / job 116147028404、准确来源 a8cb22190f13deb44f9b0807893c6a7020535032 已终态 SUCCESS，并通过整块独立验收。报告 /private/tmp/pcw-Core14-recovery-linux-a8cb-independent-01/complete-unit-independent.json，SHA 73ed135ef5a6dcdc4bca786a2cc0d7cdf5b25e9bd78cfbf71938b9fd0350d93e。artifact11934288235单次取得，ZIP SHA48bcae2e782b3d3b9b9c78a2eaca47556142cd979b5edb98f820f1c4ff01861b；normal SHA60778d1eca399f5be634b6e575010992fd418b3d9aca7bf8b5eed2002ed591d0。393完整Git/snapshot输入、强require-fresh独立consumer、raw11ownpkg12targets全部fresh=false/defaultDebug/non-test空features/Rust1.94、编译环境与sidecar一致；testkit fake另raw/hash，不混normal证明。
 
@@ -8,7 +8,11 @@
 
 原run38647080589、来源1f9的26PASS+2FLKY-FL与原完整日志/报告保留；原失败没有offendingPID/stage/errno，新成功不反推具体因果。correction02两路径来源/Mac影响独验e61c3432ba63d9776627e48f19209202bcd5e5ceba41ae7ffe5d97d0b8652e4b及a8cb实际393组合独核241e41e66ec3fef4326b4e3c6fcd857ddd45dee6a4a37d713f7e6ffbadf497b3保留。支持普通受管同一PIDnamespace连续运行/恢复；当前proc资格不是历史registry namespace证明，跨namespace搬迁不受支持且没有自动识别拒绝保证。birth/member/UID/mount与killpg非原子TOCTOU和foreignaccount组件证据限界明确。
 
-Linux模块已闭合，不再重复必要CI或稳定验收。客户端专用DeliveryValidation包装器仍在独立树补normal签前原件→最终sealed helper及GUI/嵌套加载代码的独立来源等价，旧封存样本只读验证不冒新包。完整包装源独验后一次精确组合新fullGit输入，再唯一Mac normal/完整候选；若393Rust输入全同，可按影响复用a8cb机制，但实际Linux编译ref永远a8cb，不改标为之后文档或包装ref。M5 schema13已验整块复用，不重新实现。Native15 WIP不合入，SDK实际执行、A13本次解锁、真实签名/持久凭据动作、窗口/设备、main产品、安装/日常切换/公开发布仍待对应证据与具体授权；Jev/记忆待决。此记录保存整块Linux成果，不宣称全工程交付。
+Linux模块已闭合，不再重复必要CI或稳定验收。客户端专用DeliveryValidation包装源码039cf7a5c611c7be4002bb63d3ed8024837f3c03已整块独验接受，报告 /private/tmp/pcw-delivery-validation-package-source-unit-01/independent-whole-source-closure-02.json，SHA2bd0d300663068b681292004dce38d600e447609a3a451f6c05179776780f6c2；whole binding SHA3b5b8d64a35f1380f2c0f64ec8f030504bfb94d8c8abcdea71e5b8ec011ce35b，4输入/22证据hash一致。strongnormal原件→stagedhelper精确bytes、actualtarget→staged全MachO→consumer独立重算签封后等价闭合；producer表不作权威。7组旧0f实际保留代码样本、20代码/边界控制和5CLI guard分层准确，原488拒收保留，不冒新签包。只允许受数学约束签名尾区与LINKEDIT变化，其余header/load/order/section/payload变化拒绝，未知layout拒绝。
+
+根已精确应用8f→039的4路径，无Swift/project/Rust变动，393完整Rust输入仍逐SHA同实际Linuxa8cb；Native15排除。本次提交后以准确新fullGit ref冻结，由backend唯一共享Rustowner生成arm64Darwin default/non-test正常后台及全raw-own fresh来源；source/profile/ref证据独验后client使用原warmDD/SPM生成原Mac target的DeliveryValidation Release私有ad-hoc不可变包，消费者核全Git/SPM/SDK/settings/normal/GUI/allloadedcode来源。默认PLAN与显式execute+adhoc、无Team/profile/entitlements、不得读Apple私钥、不得App启动/Keychain/安装/发布保持。GUI Release不冒helper release；实际helper profile独立披露。当前没有新Macnormal或新包，不能用源码控制或旧样本证明该层。
+
+按字节影响复用Linux机制，实际Linux编译ref永远a8cb，不改标为之后文档或包装ref。M5 schema13已验整块复用，不重新实现。Mac-only构建器不缩小iPhone/iPad专用产物及真机范围；真实持久fake-service/正式签名配对、publisher新PID、窗口与设备仍各待准确动作与证据。Native15实际SDK调用与完整生命周期、main产品、安装/日常切换/公开发布、A13本次解锁及待具体动作授权仍未交付；Jev/记忆待决。此记录接受完整源码组合并安排真实产物，不宣称全工程完成。
 
 ## 2026-10-15 已验恢复04、验证入口与限定工作流一次精确组合
 
