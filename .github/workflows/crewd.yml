@@ -11,7 +11,7 @@
 # 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
 # 按 Rust 改动触发，互不拖累，也互不遮挡。
 name: crewd
-run-name: "${{ inputs.m5_remaining_only == true && 'M5 remaining physical/migration closure (original 2bf artifacts; not new normal build or full CI)' || inputs.m5_followup_only == true && 'M5 whole affected follow-up and physical workflow (not full CI)' || inputs.core_permission_followup == true && 'Core permission follow-up (affected tests and doctests, not full CI)' || inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
+run-name: "${{ inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback workflow (not full CI)' || inputs.m5_remaining_only == true && 'M5 remaining physical/migration closure (original 2bf artifacts; not new normal build or full CI)' || inputs.m5_followup_only == true && 'M5 whole affected follow-up and physical workflow (not full CI)' || inputs.core_permission_followup == true && 'Core permission follow-up (affected tests and doctests, not full CI)' || inputs.linux_candidate_only == true && 'Linux development candidate (not full CI)' || 'crewd full checks' }}"
 
 on:
   workflow_dispatch:
@@ -22,6 +22,10 @@ on:
         default: false
       m5_followup_only:
         description: Verify the complete M5 affected unit, fresh normal build and physical workflow (not full CI)
+        type: boolean
+        default: false
+      linux_install_upgrade:
+        description: Verify ordinary-user isolated Linux11 to13 install, live lease, unknown, rollback and Core restore (not system installation or full CI)
         type: boolean
         default: false
       linux_candidate_only:
@@ -59,7 +63,7 @@ env:
 
 jobs:
   check:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true || inputs.m5_remaining_only == true)) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.linux_install_upgrade == true || inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true || inputs.m5_remaining_only == true)) }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -142,7 +146,7 @@ jobs:
           if-no-files-found: ignore
 
   linux-candidate:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true && inputs.core_permission_followup != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_candidate_only == true && inputs.core_permission_followup != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true && inputs.linux_install_upgrade != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -176,8 +180,84 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux-install-upgrade:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_install_upgrade == true && inputs.linux_candidate_only != true && inputs.core_permission_followup != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read repository toolchain
+        id: toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' crewd/rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd
+      - name: Verify original accepted Linux11 run and canonical artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/linux-install-original-meta"
+          gh api repos/${{ github.repository }}/actions/runs/38500948870 > "$RUNNER_TEMP/linux-install-original-meta/run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/11866465185 > "$RUNNER_TEMP/linux-install-original-meta/artifact.json"
+          python3 - <<'PYCONTROL'
+          import json,os,pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-install-original-meta'
+          run=json.loads((root/'run.json').read_text());artifact=json.loads((root/'artifact.json').read_text())
+          assert run['id']==38500948870 and run['run_attempt']==1 and run['conclusion']=='success'
+          assert run['head_sha']=='7b1849d97a813a1655ebafb66068a04a614e8787'
+          assert artifact['id']==11866465185 and not artifact['expired']
+          assert artifact['workflow_run']['id']==run['id'] and artifact['workflow_run']['head_sha']==run['head_sha']
+          assert artifact['name']=='crewd-linux-candidate-'+run['head_sha']
+          PYCONTROL
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11866465185'
+          run-id: '38500948870'
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/linux-install-original-download
+      - name: Verify and safely extract immutable original canonical tar
+        run: python3 scripts/dev/prepare-crewd-linux-install-baseline.py "$RUNNER_TEMP/linux-install-original-download" "$RUNNER_TEMP/linux-install-baseline"
+      - name: Resolve locked dependencies into existing runner cache
+        working-directory: crewd
+        run: cargo fetch --locked
+      - name: Build actual new default release with fresh owning-workspace proof and packaged recovery
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+        run: python3 scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux-install-new13"
+      - name: Actual ordinary-user two-version managed install, upgrade, unknown, rollback and Core recovery
+        id: lifecycle
+        run: |
+          parent=$(mktemp -d /tmp/pli.XXXXXX)
+          chmod 700 "$parent"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          python3 scripts/dev/smoke-crewd-linux-install-upgrade.py "$RUNNER_TEMP/linux-install-baseline/crewd-linux-x86_64" "$RUNNER_TEMP/linux-install-new13/crewd-linux-x86_64" "$parent/flow" --new-schema 13
+      - name: Preserve original and new complete provenance plus actual lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-linux-install-upgrade-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/linux-install-original-meta
+            ${{ runner.temp }}/linux-install-original-download
+            ${{ runner.temp }}/linux-install-baseline
+            ${{ runner.temp }}/linux-install-new13
+            ${{ steps.lifecycle.outputs.parent }}
+          if-no-files-found: error
+          retention-days: 14
+
   invalid-dispatch-scope:
-    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.linux_candidate_only == true && inputs.core_permission_followup == true) || (inputs.m5_followup_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true)) || (inputs.m5_remaining_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true))) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.linux_candidate_only == true && inputs.core_permission_followup == true) || (inputs.m5_followup_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true)) || (inputs.m5_remaining_only == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true)) || (inputs.linux_install_upgrade == true && (inputs.linux_candidate_only == true || inputs.core_permission_followup == true || inputs.m5_followup_only == true || inputs.m5_remaining_only == true))) }}
     runs-on: ubuntu-24.04
     steps:
       - run: |
@@ -185,7 +265,7 @@ jobs:
           exit 2
 
   core-permission-followup:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_permission_followup == true && inputs.linux_candidate_only != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.core_permission_followup == true && inputs.linux_candidate_only != true && inputs.m5_followup_only != true && inputs.m5_remaining_only != true && inputs.linux_install_upgrade != true }}
     name: Core affected permission and doctest (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -259,7 +339,7 @@ jobs:
           if-no-files-found: warn
 
   m5-followup:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_followup_only == true && inputs.linux_candidate_only != true && inputs.core_permission_followup != true && inputs.m5_remaining_only != true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_followup_only == true && inputs.linux_candidate_only != true && inputs.core_permission_followup != true && inputs.m5_remaining_only != true && inputs.linux_install_upgrade != true }}
     name: M5 whole affected and physical workflow (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -413,7 +493,7 @@ jobs:
           retention-days: 14
 
   m5-remaining:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_remaining_only == true && inputs.m5_followup_only != true && inputs.core_permission_followup != true && inputs.linux_candidate_only != true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.m5_remaining_only == true && inputs.m5_followup_only != true && inputs.core_permission_followup != true && inputs.linux_candidate_only != true && inputs.linux_install_upgrade != true }}
     name: M5 remaining physical and migration (original compiled 2bf) (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
