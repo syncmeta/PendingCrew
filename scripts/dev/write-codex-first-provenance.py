@@ -114,5 +114,6 @@ def main():
   save(out/'build-inputs.json',manifest)
   save(out/'build-provenance.json',{'format':1,'sourceRef':manifest['sourceRef'],'inputManifestSHA256':sha(out/'build-inputs.json'),'gui':gui,'backend':backend,'packaged':{'guiSHA256':sha(app/'Contents/MacOS/PendingCrewCodexFirst'),'helperSHA256':sha(app/'Contents/Helpers/crewd')}})
  else:raise ValueError('Unsupported action')
-try:main()
-except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError,IndexError) as e:print('FAIL: '+str(e),file=sys.stderr);sys.exit(1)
+if __name__ == '__main__':
+ try:main()
+ except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError,IndexError) as e:print('FAIL: '+str(e),file=sys.stderr);sys.exit(1)
