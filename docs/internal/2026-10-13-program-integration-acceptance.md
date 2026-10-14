@@ -1,5 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 原App验证源码整块接受、恢复权限合同补齐中
+
+客户端最终bc89bc3a548f0ec0719baa657c83f06dd5035915完整13路径源码/资格控制单元已独验接受并普通push（5431→bc89）。报告/private/tmp/pcw-delivery-validation-source-unit-01/independent-whole-source-closure-02.json SHAb2e947debdc695004f414fa34f069946dbe9dbc4e90c8ead68ff81c8332139cd；closure binding SHA9d0a73f7afaf1ec2cc3c3ceb72e704ff7384eba6427c7ba30cf053ae0944aee7。7原路径逐字复用、6路径修复，37新证据核齐：actual account属性形状/大小写、strict整数format、helper override拒、既有候选ID/marker准入、真实Appleanchor完整requirement和ordinary memory optin源码闭合。21资格控制/三SDK仅变源类型检查/三settings/七默认plan与拒绝均准确分层，旧9bf的370全源证据不重标。没有真实SecItem/sign/App或设备网络；新完整包、双App假service持久、真实publisher PID与移动TLS设备仍需具体动作与验收。
+
+后端02完整source/Mac影响证据已核390base+9delta复合393全hash及134原证据，并核Mac kernel8/finalregistry22/Store4/public11+14/closedguard/defaultlint终态。报告/private/tmp/pcw-Core14-recovery-whole-freeze-02/independent-recovery-source-mac-reviewed-01.json SHA4ff6ee7f840def5d275a7722ac75de36fb5cf5c9274334652df33453d7e52557，但完整恢复合同仍不接受：发送前仅leaderUID检查，不满足完整target-group member真实UID/可读性；作者同一cut补完整census与成员birth/boot/PGID/effectiveUID，未知或不符零signal留登记，2s预算与TOCTOU限界不掩盖。late目录fsync发生rename后时disk可能已retire，memory回补且本次拒admission，不可广称所有持久失败原disk不变；仅ConfirmedGone可forget不丢live义务，作者补实际晚失败影响证据。原02与07/09/10等失败保留，修改后的生产输入必须新freeze/来源，不能借02 runtime改标。
+
+根只读整合预检/private/tmp/pcw-two-whole-integration-preflight-5bea7o0q/preflight.json：accepted client patch20310fd7d4ba02dd25b89e597df5abe5d4bff157465a30959b02a51ccedba3f3与原02 recovery patchc074870ee64c5c81e139d711ed1c287c929ccf0582890dbb052cacd3093f0f6e均apply-check0，global干净，未应用；后端新修复必须更新patch再核。Native15全部排除，旧normal07/候选13/默认CI实际来源仍0f，不修改或重标。
+
+Linux真实恢复gate准备由client唯一workflow/build writer与backend唯一portable运行fixture writer合作，root唯一dispatch。新增scope仅手动/defaultfalse，与既有两安装scope互斥；任意多选仅minimal invalid-scope，heavy jobs不跑。reviewed_ref显式40lowerhex由env验证等于github.sha及checkout HEAD，必须先于toolchain/cache/fetch/build；不拼shell，不用默认sha自称人工review。一次准确新组合normal393/raw-own鲜活来源/fake targets独立证据与真实Linux/proc全group、Unknown/保护/publicrestart尚未执行，不从Mac或旧0f+LEAK外推。portable四资产已准备，仍待新恢复freeze/独验及完整workflow归档门禁。
+
+磁盘最新约7.12M KiB，未清理。A13本次锁屏解锁/SDK06与新增producer实际执行授权仍未答；只阻对应依赖。main产品、真实窗口与设备、生产签名/Vault、安装/日常切换/发布/实际模型、Native15 mandatory producer完整生命周期及all-features仍未交付。既有稳定业务证据复用，不以源码接受冒整体交付。
+
+
 ## 2026-10-15 持久验证入口整块独验拒收与真实恢复矩阵推进
 
 客户端完成13路径clean源码冻结9bf68cad3ce8e9df430282c60588adc232aeeee2；whole binding /private/tmp/pcw-delivery-validation-source-unit-01/whole-source-review-binding.json SHA0f15fd3ef66bd7a810caa4a04ddcb54aa707b7ad1ab5d013f2bebd58a342b41c。三平台各370完整输入typecheck终态0、17实际factory资格控制、普通/candidate工厂选择、3settings、stamp及默认sign-only plan/输入拒绝已封存；没有真实SecItem/sign/App/设备/network。独立整块报告independent-whole-source-review-01.json SHAf3ac4dfd3549372f5ace5181b2c8f0c3eeaae0ad5d5febf92880e40f43b8e781核齐13源/71证据，但暂拒收：真实record account大小写不一致、format1.5误收、签包仅Authority文本不足Appleanchor资格、独立validationID不能沿现有本机信任准入、helper override未闭合fake-only资格。不能因factory/typecheck绿把9bf称可运行交付；未push/整合或新包，作者同模块一次收口修复。
