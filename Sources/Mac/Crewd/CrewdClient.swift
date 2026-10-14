@@ -239,21 +239,39 @@ final class CrewdClient: ObservableObject {
     }
 
     private func acceptHello(clientName: String, expectedRemote: CrewdRemoteBindingExpectation?, current: UUID) async throws {
-    let hello = try await call("system.hello", .object(["client": .object(["name": .string(clientName), "version": .string("Codex first")]), "apiVersion": .number(3)]))
-    guard generation == current, !Task.isCancelled else { throw CancellationError() }
-    guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3, (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
-    if let expectedRemote {
-        guard expectedRemote.accepts(hello["remoteBinding"]) else { throw CrewdClientError(message: "电脑身份或设备授权已改变，请重新配对。") }
+        let hello = try await call("system.hello", .object(["client": .object(["name": .string(clientName), "version": .string("Codex first")]), "apiVersion": .number(3)]))
+        guard generation == current, !Task.isCancelled else { throw CancellationError() }
+        guard hello["server"].string == "crewd", let api = hello["apiVersion"].int, api >= 3,
+              (hello["minApiVersion"].int ?? 1) <= 3 else { throw CrewdClientError(message: "后台协议版本与客户端不兼容。") }
+        if let expectedRemote {
+            guard expectedRemote.accepts(hello["remoteBinding"]) else { throw CrewdClientError(message: "电脑身份或设备授权已改变，请重新配对。") }
+        } else {
+            #if os(macOS)
+            // The same live descriptor must still have the kernel peer observed
+            // before hello. This qualifies local work, not child ownership/Quit.
+            _ = try verifiedLocalPeerIdentity()
+            #endif
+            guard hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else {
+                throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。")
+            }
+        }
+        let instance = hello["runtimeIdentity"]
+        if instance != .null {
+            guard let db = instance["dbId"].string, !db.isEmpty, db.utf8.count <= 256,
+                  let binding = instance["runtimeBindingId"].string, UUID(uuidString: binding) != nil else {
+                throw CrewdClientError(message: "后台实例信息不完整；连接尚未取得工作资格。")
+            }
+        }
+        runtimeIdentity = instance // Correlation only; no kernel ownership grant.
+        authorityBinding = hello["remoteBinding"]
+        version = hello["version"].string ?? "未知"
+        capabilities = Set(hello["capabilities"].array.compactMap(\.string))
         qualifiedForWork = true
-    }
-    guard expectedRemote != nil || hello["capabilities"].array.contains(.string("session.respondRunnerRequest")) else { throw CrewdClientError(message: "后台尚不支持 Codex 人工答复，请使用配套新版后台。") }
-    authorityBinding = hello["remoteBinding"]
-    version = hello["version"].string ?? "未知"
-    capabilities=Set(hello["capabilities"].array.compactMap(\.string))
-    let topics=["crew", "session", "message", "channel", "ask", "work", "restart", "system"] + ["documents","viewFolders"].filter {capabilities.contains($0)}
-    _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
-    guard generation == current, !Task.isCancelled else { throw CancellationError() }
-    lastError = nil
+        let topics = ["crew", "session", "message", "channel", "ask", "work", "restart", "system"]
+            + ["documents", "viewFolders"].filter { capabilities.contains($0) }
+        _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
+        guard generation == current, !Task.isCancelled else { throw CancellationError() }
+        lastError = nil
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
