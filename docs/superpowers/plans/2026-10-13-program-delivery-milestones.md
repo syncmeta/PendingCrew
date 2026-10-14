@@ -2,7 +2,7 @@
 
 ## 最新整块执行检查点（2026-10-14，覆盖下文历史在途状态）
 
-实际原703候选可见启动一次已资格确认：PID24151/birth1791966433.590184、精确不可变bundle、六项私有env和真实fakework cwd均匹配，未改个人vault或真实数据。但原MacThreePane数分钟停在“正在连接当前后台”，私有data尚无namespace、children0/log0，因此初始化为实际RED，helper fake argv/peer尚未资格；质量线未做UI写入或绕App手启helper。缺陷直接交客户端作者定位完整启动链，原进程与证据保留；第二次启动须有具体修复冻结和私有范围复核。此窗口阻断不暂停后端或Linux线。
+实际原703候选可见启动一次已资格确认：PID24151/birth1791966433.590184、精确不可变bundle、六项私有env和真实fakework cwd均匹配，未改个人vault或真实数据。但原MacThreePane数分钟停在“正在连接当前后台”，私有data已有frontend-presentation和whiteboards两个0755展示目录（birth16:27:15，App16:27:13），但0regularfile、尚无namespace/db、children0/log0；此前质量线file-only枚举不能解释为整个data空，因此初始化仍为实际RED，helper fake argv/peer尚未资格；质量线未做UI写入或绕App手启helper。缺陷直接交客户端作者定位完整启动链，原进程与证据保留；第二次启动须有具体修复冻结和私有范围复核。此窗口阻断不暂停后端或Linux线。
 
 Linux首次5f运行38533350050失败保留，实际install主链未执行。cd7b0e24137c9485dafedfd4f83ba5918ca80b00的reader不落pycache修复及严格dirty拒绝影响独审接受；旧runner未记录当时Git状态，私有强制Linux缓存布局的真实RED/GREEN不能冒称原runner状态。根已核远端精确cd7并派发新完整普通用户安装/升级/租约/恢复验证38535878565，实际head cd7/in_progress；等待真实整链与实际新release来源，不以源码接受宣称Linux交付完成。
 
