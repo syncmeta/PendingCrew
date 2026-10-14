@@ -399,6 +399,15 @@ pub trait Port: Send + Sync + 'static {
     fn sessions_desired_running(&self) -> impl Future<Output = Result<Vec<SessionRow>>> + Send;
     fn all_session_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn insert_session(&self, s: NewSession) -> impl Future<Output = Result<SessionRow>> + Send;
+    /// Production-only authenticated allocation. A fake Port cannot silently
+    /// skip the original public actor/receipt transaction.
+    fn insert_public_session(
+        &self,
+        _s: NewSession,
+        _call: crate::public_execution::PublicExecution,
+    ) -> impl Future<Output = Result<SessionRow>> + Send {
+        async { anyhow::bail!("public start authority transaction is unavailable") }
+    }
     /// 机组的工作目录（`isolation: true` 建 worktree 的起点，C8）；没有 = None。
     fn crew_workdir(&self, crew: &str) -> impl Future<Output = Result<Option<PathBuf>>> + Send;
     fn patch_session(&self, id: &str, p: SessionPatch) -> impl Future<Output = Result<()>> + Send;

@@ -210,6 +210,11 @@ async fn human_answers_native_request_through_real_serve_without_a_key_fallback(
     let inspection =
         inspect_request(&mut client, id, "item/commandExecution/requestApproval").await;
     let fingerprint = inspection["runnerRequest"]["fingerprint"].clone();
+    let request_id = inspection["runnerRequest"]["runnerRequestId"]
+        .as_str()
+        .expect("actual structured request identity is exposed by inspect");
+    uuid::Uuid::parse_str(request_id).unwrap();
+    assert_ne!(request_id, fingerprint.as_str().unwrap());
     assert_eq!(
         inspection["runnerRequest"]["params"]["command"],
         "git status"
@@ -223,6 +228,12 @@ async fn human_answers_native_request_through_real_serve_without_a_key_fallback(
         .unwrap();
     assert_eq!(response["cleared"], true);
     let question = inspect_request(&mut client, id, "item/tool/requestUserInput").await;
+    let question_id = question["runnerRequest"]["runnerRequestId"]
+        .as_str()
+        .expect("the next structured request has its own identity");
+    uuid::Uuid::parse_str(question_id).unwrap();
+    assert_ne!(request_id, question_id);
+
     assert_eq!(
         question["runnerRequest"]["params"]["questions"][0]["id"],
         "task"

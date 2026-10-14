@@ -23,16 +23,21 @@ pub(crate) struct PeerPolicy {
     roots: Option<Arc<ProcessRegistry>>,
     // Captured from our own kernel lineage, not from a client-provided name.
     human_anchors: Vec<ProcessIdentity>,
+    trusted_clients: std::sync::RwLock<Vec<crewd_store::local_clients::TrustedClient>>,
+    trusted_connections:
+        Mutex<BTreeMap<String, (String, crate::connection_scope::ConnectionScope)>>,
     // Exact daemon process captured before any driver spawn, never a parent/common ancestor.
     daemon_birth: ProcessIdentity,
     owner_uid: u32,
     // Runtime-only restrictive evidence; never a source of Human authority.
     managed_peers: Mutex<BTreeMap<(i32, u64, String), String>>,
 }
+#[derive(Clone)]
 pub(crate) struct ConnectionPeer {
     pub(crate) policy: Arc<PeerPolicy>,
     identity: Option<ProcessIdentity>,
     kernel_uid: u32,
+    pub(crate) connection_scope: crate::connection_scope::ConnectionScope,
 }
 impl PeerPolicy {
     pub(crate) fn new(roots: Option<Arc<ProcessRegistry>>) -> io::Result<Self> {
@@ -54,11 +59,81 @@ impl PeerPolicy {
         Ok(Self {
             roots,
             human_anchors,
+            trusted_clients: Default::default(),
+            trusted_connections: Default::default(),
             daemon_birth,
             owner_uid,
             managed_peers: Mutex::new(BTreeMap::new()),
         })
     }
+    /// A driver observation becomes public physical evidence only when the
+    /// exact current kernel child matches this session's spawn enrollment.
+    pub(crate) fn owned_runtime_birth(&self, session: &str, pid: u32) -> Option<ProcessIdentity> {
+        let pid = i32::try_from(pid).ok()?;
+        let ParentProbe::Found { identity, parent } = registry::parent(pid) else {
+            return None;
+        };
+        let roots = self.roots.as_ref()?;
+        let snapshot = roots.authority_snapshot().ok()?;
+        let owns = |birth: &ProcessIdentity| {
+            snapshot
+                .spawned
+                .iter()
+                .any(|(owner, recorded)| owner == session && same_birth(recorded, birth))
+        };
+        if !owns(&identity) {
+            return None;
+        }
+        let daemon_pid = if parent == self.daemon_birth.pid {
+            parent
+        } else {
+            // The native process may be the exact enrolled helper's child,
+            // never an arbitrary same-UID descendant or JSON-claimed PID.
+            let ParentProbe::Found {
+                identity: helper,
+                parent: core,
+            } = registry::parent(parent)
+            else {
+                return None;
+            };
+            if core != self.daemon_birth.pid
+                || helper.pgid != helper.pid
+                || identity.pgid != identity.pid
+                || !owns(&helper)
+            {
+                return None;
+            }
+            let entries = roots.try_entries().ok()?;
+            let native_key = entries.iter().find_map(|(key, birth)| {
+                if !same_birth(birth, &identity) {
+                    return None;
+                }
+                let parts = key.split('/').collect::<Vec<_>>();
+                if parts.len() != 4 || parts[0] != "@acp" || parts[2] != "native" {
+                    return None;
+                }
+                let generation = uuid::Uuid::parse_str(parts[1]).ok()?;
+                let epoch = parts[3].parse::<u64>().ok()?;
+                (!generation.is_nil() && generation.to_string() == parts[1] && epoch > 0)
+                    .then(|| format!("@acp/{generation}/helper"))
+            })?;
+            if !entries
+                .iter()
+                .any(|(key, birth)| key == &native_key && same_birth(birth, &helper))
+            {
+                return None;
+            }
+            core
+        };
+        let ParentProbe::Found {
+            identity: daemon, ..
+        } = registry::parent(daemon_pid)
+        else {
+            return None;
+        };
+        same_birth(&daemon, &self.daemon_birth).then_some(identity)
+    }
+
     pub(crate) fn accept(self: &Arc<Self>, stream: &UnixStream) -> io::Result<ConnectionPeer> {
         let cred = stream.peer_cred()?;
         let kernel_uid = cred.uid();
@@ -77,6 +152,7 @@ impl PeerPolicy {
             policy: self.clone(),
             identity,
             kernel_uid,
+            connection_scope: crate::connection_scope::ConnectionScope::new(),
         })
     }
 }
@@ -132,9 +208,223 @@ impl PeerPolicy {
         }
     }
 }
+impl PeerPolicy {
+    pub(crate) fn replace_trusted_clients(
+        &self,
+        pins: Vec<crewd_store::local_clients::TrustedClient>,
+    ) -> io::Result<()> {
+        let live_ids = pins.iter().map(|p| p.id.clone()).collect::<BTreeSet<_>>();
+        *self
+            .trusted_clients
+            .write()
+            .map_err(|_| io::Error::other("local trust policy unavailable"))? = pins;
+        let mut connections = self
+            .trusted_connections
+            .lock()
+            .map_err(|_| io::Error::other("local trusted connection registry unavailable"))?;
+        connections.retain(|_, (_, scope)| scope.is_live());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut first_error = None;
+        for (_, (trust, scope)) in connections.iter() {
+            if !live_ids.contains(trust) {
+                if let Err(error) = scope.close_until(deadline) {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        connections.retain(|_, (_, scope)| scope.is_live());
+        first_error.map_or(Ok(()), Err)
+    }
+}
 impl ConnectionPeer {
+    pub(crate) fn is_human_anchor(&self) -> bool {
+        matches!(self.lineage_authority(), Authority::Human)
+    }
+    pub(crate) fn grant_frontend(
+        &self,
+        p: &crewd_proto::commands::LocalClientTrustParams,
+        db: &str,
+        at: &str,
+    ) -> io::Result<crewd_store::local_clients::TrustedClient> {
+        if !self.is_human_anchor() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "old trusted Human anchor required",
+            ));
+        }
+        let pid = p
+            .client_pid
+            .map(i32::try_from)
+            .transpose()
+            .map_err(io::Error::other)?
+            .or(self.identity.as_ref().map(|p| p.pid))
+            .ok_or_else(|| io::Error::other("kernel caller unavailable"))?;
+        let ParentProbe::Found { identity, .. } = registry::parent(pid) else {
+            return Err(io::Error::other("frontend birth unavailable"));
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+            let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+            let n = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDTBSDINFO,
+                    0,
+                    info.as_mut_ptr().cast(),
+                    size,
+                )
+            };
+            if n != size || unsafe { info.assume_init() }.pbi_uid != self.kernel_uid {
+                return Err(io::Error::other(
+                    "frontend kernel UID unavailable or foreign",
+                ));
+            }
+        }
+        let mode = match p.mode {
+            crewd_proto::commands::LocalClientTrustMode::ExactCode => "exactCode",
+            crewd_proto::commands::LocalClientTrustMode::Publisher => "publisher",
+        };
+        let trust = crate::signed_client::grant(
+            &identity,
+            mode,
+            &p.expected_cd_hash,
+            p.expected_team.as_deref(),
+            db,
+            at,
+        )?;
+        if !self.is_human_anchor() {
+            return Err(io::Error::other("bootstrap Human anchor changed"));
+        }
+        Ok(trust)
+    }
+    /// Owned-process shutdown requires the actual IPC caller to be the daemon's
+    /// current direct parent with both kernel births unchanged. A same-UID peer,
+    /// JSON PID, path or old connection does not establish this association.
+    pub(crate) fn owns_daemon_child(&self) -> bool {
+        let Some(peer) = &self.identity else {
+            return false;
+        };
+        if !matches!(self.authority(), Authority::Human) {
+            return false;
+        }
+        let ParentProbe::Found {
+            identity: daemon,
+            parent,
+        } = registry::parent(self.policy.daemon_birth.pid)
+        else {
+            return false;
+        };
+        if !same_birth(&daemon, &self.policy.daemon_birth) || parent != peer.pid {
+            return false;
+        }
+        matches!(registry::parent(parent), ParentProbe::Found { identity, .. } if same_birth(peer, &identity))
+    }
+    pub(crate) fn command_principal(&self) -> Result<String, RpcError> {
+        if !matches!(self.authority(), Authority::Human) {
+            return Err(RpcError::new(
+                RpcError::FORBIDDEN,
+                "public commands require trusted Human IPC",
+            ));
+        }
+        Ok(format!("local-human:{}", self.policy.owner_uid))
+    }
     // Revalidate before every parsed request. No await or database access while any registry lock is held.
     pub(crate) fn authority(&self) -> Authority {
+        if !self.connection_scope.is_live() {
+            return Authority::Unknown {
+                reason: "original_connection_closed",
+            };
+        }
+        let lineage = self.lineage_authority();
+        // Registry/enrollment/read failures and every known managed ancestor
+        // dominate code signing. Only a stable unrelated lineage may re-admit.
+        if !matches!(
+            lineage,
+            Authority::Unknown {
+                reason: "unqualified_or_changed_lineage"
+            }
+        ) {
+            return lineage;
+        }
+        let Some(peer) = self.identity.as_ref() else {
+            return lineage;
+        };
+        let Ok(pins) = self.policy.trusted_clients.read() else {
+            return lineage;
+        };
+        for pin in pins.iter() {
+            if self.signed_lineage_current(peer)
+                && crate::signed_client::verify(peer, pin).is_ok()
+                && self.signed_lineage_current(peer)
+            {
+                let Ok(mut connections) = self.policy.trusted_connections.lock() else {
+                    return Authority::Unknown {
+                        reason: "trusted_client_registry_unavailable",
+                    };
+                };
+                connections.retain(|_, (_, scope)| scope.is_live());
+                if connections.len() >= 256 && !connections.contains_key(&self.connection_scope.id)
+                {
+                    return Authority::Unknown {
+                        reason: "trusted_client_capacity",
+                    };
+                }
+                connections.insert(
+                    self.connection_scope.id.clone(),
+                    (pin.id.clone(), self.connection_scope.clone()),
+                );
+                return Authority::Human;
+            }
+        }
+        lineage
+    }
+    fn signed_lineage_current(&self, peer: &ProcessIdentity) -> bool {
+        let roots = match &self.policy.roots {
+            Some(r) => match r.authority_snapshot() {
+                Ok(s) => s,
+                Err(_) => return false,
+            },
+            None => Default::default(),
+        };
+        if roots.enrolling != 0
+            || self
+                .policy
+                .retained_managed(peer, registry::parent)
+                .is_some()
+        {
+            return false;
+        }
+        let mut captured = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut pid = peer.pid;
+        for _ in 0..64 {
+            if !seen.insert(pid) {
+                return false;
+            }
+            let ParentProbe::Found { identity, parent } = registry::parent(pid) else {
+                return false;
+            };
+            if pid == peer.pid && !same_birth(peer, &identity) {
+                return false;
+            }
+            if roots
+                .spawned
+                .iter()
+                .any(|(_, birth)| same_birth(birth, &identity))
+            {
+                return false;
+            }
+            captured.push((identity, parent));
+            if parent <= 1 {
+                return captured.iter().all(|(old,p)|matches!(registry::parent(old.pid),ParentProbe::Found{identity,parent} if same_birth(old,&identity)&&parent==*p))
+                    && match &self.policy.roots{Some(r)=>r.authority_snapshot().is_ok_and(|s|s.revision==roots.revision&&s.enrolling==0),None=>true};
+            }
+            pid = parent;
+        }
+        false
+    }
+    fn lineage_authority(&self) -> Authority {
         if self.kernel_uid != self.policy.owner_uid {
             return Authority::Unknown {
                 reason: "peer_uid_mismatch",
@@ -629,6 +919,8 @@ mod tests {
         PeerPolicy {
             roots: None,
             human_anchors: vec![identity(10, 10)],
+            trusted_clients: Default::default(),
+            trusted_connections: Default::default(),
             daemon_birth: identity(10, 10),
             owner_uid: 0,
             managed_peers: Mutex::new(BTreeMap::new()),
@@ -734,6 +1026,8 @@ mod tests {
         let restarted = PeerPolicy {
             roots: None,
             human_anchors: vec![identity(10, 10)],
+            trusted_clients: Default::default(),
+            trusted_connections: Default::default(),
             daemon_birth: identity(10, 10),
             owner_uid: 0,
             managed_peers: Mutex::new(BTreeMap::new()),
@@ -1168,5 +1462,115 @@ mod enrollment_wait_controls {
         .await;
         assert_eq!(got.unwrap_err().code, RpcError::FORBIDDEN);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[cfg(test)]
+mod public_physical_controls {
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::process::CommandExt,
+        process::{Command, Stdio},
+    };
+    #[test]
+    fn public_native_runtime_requires_actual_enrolled_same_generation_helper_chain() {
+        let directory = tempfile::tempdir().unwrap();
+        let roots =
+            Arc::new(ProcessRegistry::load(&directory.path().join("registry.json")).unwrap());
+        let policy = PeerPolicy::new(Some(roots.clone())).unwrap();
+        let mut command = Command::new("/usr/bin/python3");
+        command
+            .args([
+                "-c",
+                r#"import os,time
+pid=os.fork()
+if pid==0:
+ os.setsid()
+ time.sleep(30)
+else:
+ print(pid,flush=True)
+ time.sleep(30)
+"#,
+            ])
+            .stdout(Stdio::piped());
+        // SAFETY: setsid is async-signal-safe and only establishes this owned
+        // helper's fresh group before exec, never another process's group.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let mut helper = command.spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(helper.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let native_pid = line.trim().parse::<i32>().unwrap();
+        struct Cleanup {
+            helper: std::process::Child,
+            native: i32,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                for pid in [self.native, self.helper.id() as i32] {
+                    if let ProbeResult::Found(birth) = registry::probe(pid) {
+                        registry::apply(&registry::decide(&birth, &registry::probe(pid)), &birth);
+                    }
+                }
+                let _ = self.helper.wait();
+            }
+        }
+        let owned = Cleanup {
+            helper,
+            native: native_pid,
+        };
+        assert!(
+            policy
+                .owned_runtime_birth("native-session", native_pid as u32)
+                .is_none(),
+            "unregistered same-UID child is never physical authority"
+        );
+        let generation = uuid::Uuid::new_v4();
+        let nonce = [9; 16];
+        let mut custody = crewd_exec::acp::custody::Custody::enroll_helper(
+            roots.clone(),
+            "native-session".into(),
+            generation,
+            nonce,
+            owned.helper.id() as i32,
+        )
+        .unwrap();
+        custody
+            .enroll_native(&crewd_exec::acp::birth::BirthReport {
+                pid: native_pid,
+                epoch: 1,
+                nonce,
+            })
+            .unwrap();
+        let birth = policy
+            .owned_runtime_birth("native-session", native_pid as u32)
+            .unwrap();
+        assert_eq!(birth.pid, native_pid);
+        assert!(
+            policy
+                .owned_runtime_birth("foreign-session", native_pid as u32)
+                .is_none()
+        );
+        let key = crewd_exec::registry::ProcessParticipant::AcpHelper { generation }
+            .key()
+            .unwrap();
+        roots.forget(&key).unwrap();
+        assert!(
+            policy
+                .owned_runtime_birth("native-session", native_pid as u32)
+                .is_none(),
+            "restrictive retained history cannot replace current same-generation helper registration"
+        );
+        drop(owned);
     }
 }

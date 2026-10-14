@@ -422,6 +422,7 @@ dependencies = [
 name = "crewd-exec"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "crewd-term",
  "libc",
@@ -494,6 +495,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "core-foundation 0.10.1",
  "crewd-collab",
  "crewd-exec",
  "crewd-proto",
@@ -505,6 +507,7 @@ dependencies = [
  "libc",
  "rusqlite",
  "rustls",
+ "security-framework",
  "serde",
  "serde_json",
  "tempfile",

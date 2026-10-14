@@ -115,6 +115,10 @@ impl Executor for ClaudeExecutor {
             self.check_launch()?;
             let mut config = DriverConfig::new(self.runtime_dir.clone());
             config.registry = self.registry.clone();
+            config.terminal_observer = Some(Arc::new(
+                crewd_exec::acp::terminal::TerminalTap::new(1, 64)
+                    .map_err(|_| LaunchError::Failed("terminal observer unavailable".into()))?,
+            ));
             config.delivery_observer = req.delivery_observer.clone();
             config.claude_projects_dir = self.projects_dir.clone();
             let comms = comms_for(

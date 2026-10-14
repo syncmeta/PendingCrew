@@ -1,6 +1,9 @@
 //! Private Core native receipt route. No public RPC, provider capability, or
 //! helper DB writer is created here. The actual SDK adapter is separately gated.
-use crewd_exec::acp::{bridge::NativeProxyPeer, custody::Custody};
+use crewd_exec::acp::{
+    bridge::{NativePeer, NativeProxyPeer},
+    custody::Custody,
+};
 use crewd_store::{Db, StoreError, native_execution as n};
 use std::{
     io,
@@ -45,10 +48,44 @@ impl std::fmt::Debug for NativeEvent {
 /// The Core-owned transport holds custody; JSON never chooses a runtime/birth.
 /// A failed/unknown call poisons this connection. Recovery creates a fresh
 /// kernel-bound runtime, preserving old receipts as unknown observations.
+enum NativeReceiptPeer {
+    Proxy(NativeProxyPeer),
+    Direct(NativePeer),
+}
+impl NativeReceiptPeer {
+    fn binding(&self) -> &crewd_exec::acp::ownership::NativeBinding {
+        match self {
+            Self::Proxy(peer) => peer.binding(),
+            Self::Direct(peer) => peer.binding(),
+        }
+    }
+    fn verify(&self, socket: &UnixStream, custody: &Custody) -> io::Result<()> {
+        match self {
+            Self::Proxy(peer) => peer.verify(socket, custody),
+            Self::Direct(peer) => peer.verify(socket, custody),
+        }
+    }
+    fn admit(
+        &mut self,
+        socket: &UnixStream,
+        custody: &Custody,
+        generation: &str,
+        epoch: u64,
+        sequence: u64,
+    ) -> io::Result<()> {
+        match self {
+            Self::Proxy(peer) => peer.admit(socket, custody, generation, epoch, sequence),
+            Self::Direct(peer) => {
+                peer.verify(socket, custody)?;
+                peer.admit(socket, generation, epoch, sequence)
+            }
+        }
+    }
+}
 pub struct CoreNativeReceipts {
     db: Db,
     custody: Arc<Mutex<Custody>>,
-    peer: NativeProxyPeer,
+    peer: NativeReceiptPeer,
     socket: UnixStream,
     runtime: n::Runtime,
     closed: bool,
@@ -67,6 +104,37 @@ impl CoreNativeReceipts {
                 .map_err(|_| io::Error::other("native custody poisoned"))?;
             NativeProxyPeer::authenticate(&socket, &mut held, epoch, &nonce)?
         };
+        Self::authenticate_peer(db, custody, socket, NativeReceiptPeer::Proxy(peer)).await
+    }
+    /// Genuine SDK Unix HTTP requests originate from the enrolled native
+    /// process itself, as the isolated identity/ACK gate demonstrated. This
+    /// enables no producer capability; subsequent observations still need their
+    /// exact request, generation, native birth and sequence admission.
+    pub async fn authenticate_direct(
+        db: Db,
+        custody: Arc<Mutex<Custody>>,
+        socket: UnixStream,
+        epoch: u64,
+        expected_nonce: [u8; 16],
+        received_nonce: [u8; 16],
+    ) -> io::Result<Self> {
+        let binding = {
+            let held = custody
+                .lock()
+                .map_err(|_| io::Error::other("native custody poisoned"))?;
+            let binding = held.current_native_binding(epoch)?;
+            held.verify_helper_channel(&binding.session, &binding.generation, &expected_nonce)?;
+            binding
+        };
+        let peer = NativePeer::authenticate(&socket, binding, &expected_nonce, &received_nonce)?;
+        Self::authenticate_peer(db, custody, socket, NativeReceiptPeer::Direct(peer)).await
+    }
+    async fn authenticate_peer(
+        db: Db,
+        custody: Arc<Mutex<Custody>>,
+        socket: UnixStream,
+        peer: NativeReceiptPeer,
+    ) -> io::Result<Self> {
         let b = peer.binding();
         let runtime = n::Runtime {
             id: uuid::Uuid::new_v4().to_string(),
@@ -78,7 +146,27 @@ impl CoreNativeReceipts {
             native_boot: b.native.boot_id.clone(),
         };
         let registration = runtime.clone();
-        db.call_result(move |s| s.with_tx(|tx| n::register(tx, &registration)))
+        let runtime = db
+            .call_result(move |s| {
+                s.with_tx(|tx| {
+                    if let Some(current) = n::current_runtime(tx, &registration.session)? {
+                        if current.generation != registration.generation
+                            || current.epoch != registration.epoch
+                            || current.native_pid != registration.native_pid
+                            || current.native_start != registration.native_start
+                            || current.native_boot != registration.native_boot
+                        {
+                            return Err(StoreError::Invalid(
+                                "foreign current native runtime".into(),
+                            ));
+                        }
+                        Ok(current)
+                    } else {
+                        n::register(tx, &registration)?;
+                        Ok(registration)
+                    }
+                })
+            })
             .await
             .map_err(storage)?
             .map_err(storage)?;
@@ -92,6 +180,23 @@ impl CoreNativeReceipts {
         };
         route.verify()?;
         Ok(route)
+    }
+    /// HTTP connection replacement preserves the ONE logical peer sequence.
+    /// An unknown/closed route cannot be reset by reconnecting a same-UID peer.
+    pub fn rebind_direct_socket(&mut self, socket: UnixStream) -> io::Result<()> {
+        if self.closed || !matches!(self.peer, NativeReceiptPeer::Direct(_)) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "native route rebind refused",
+            ));
+        }
+        let held = self
+            .custody
+            .lock()
+            .map_err(|_| io::Error::other("native custody poisoned"))?;
+        self.peer.verify(&socket, &held)?;
+        self.socket = socket;
+        Ok(())
     }
     pub fn runtime_id(&self) -> &str {
         &self.runtime.id
@@ -285,6 +390,7 @@ pub struct CoreHelperLedger {
     next: u64,
     closed: bool,
     native: Option<Arc<tokio::sync::Mutex<CoreNativeReceipts>>>,
+    manual_runtime: Option<n::Runtime>,
 }
 impl CoreHelperLedger {
     pub fn authenticate(
@@ -319,7 +425,64 @@ impl CoreHelperLedger {
             next: 1,
             closed: false,
             native: None,
+            manual_runtime: None,
         })
+    }
+    /// Called by Core after actual native birth enrollment, before its pre-exec
+    /// ACK. This sole runtime row serves both public manual custody and the
+    /// later genuine SDK observation route; it grants no producer capability.
+    pub async fn register_native_birth(&mut self, epoch: u64) -> io::Result<n::Runtime> {
+        self.verify()?;
+        let binding = self
+            .custody
+            .lock()
+            .map_err(|_| io::Error::other("native custody poisoned"))?
+            .current_native_binding(epoch)?;
+        let runtime = n::Runtime {
+            id: uuid::Uuid::new_v4().to_string(),
+            session: binding.session,
+            generation: binding.generation,
+            epoch: binding.epoch,
+            native_pid: binding.native.pid,
+            native_start: binding.native.start_time,
+            native_boot: binding.native.boot_id,
+        };
+        let registration = runtime.clone();
+        self.db
+            .call_result(move |store| {
+                store.with_tx(|tx| {
+                    if let Some(prior) = n::current_runtime(tx, &registration.session)? {
+                        // A resumed/refused native can get a new epoch only after
+                        // the actual old birth is gone. A PID or JSON epoch cannot
+                        // supersede a still-live/unknown runtime or raw authority.
+                        let gone = match crewd_exec::registry::probe(prior.native_pid) {
+                            crewd_exec::registry::ProbeResult::Missing => true,
+                            crewd_exec::registry::ProbeResult::Found(actual) => {
+                                actual.start_time != prior.native_start
+                                    || actual.boot_id != prior.native_boot
+                            }
+                            crewd_exec::registry::ProbeResult::Unreadable(_) => false,
+                        };
+                        if !gone {
+                            return Err(StoreError::Invalid(
+                                "previous native birth still live or unknown".into(),
+                            ));
+                        }
+                        n::retire_verified_native(tx, &prior.id, &crewd_store::now_ts())?;
+                    }
+                    n::register(tx, &registration)
+                })
+            })
+            .await
+            .map_err(storage)?
+            .map_err(storage)?;
+        self.verify()?;
+        self.custody
+            .lock()
+            .map_err(|_| io::Error::other("native custody poisoned"))?
+            .current_native_binding(epoch)?;
+        self.manual_runtime = Some(runtime.clone());
+        Ok(runtime)
     }
     pub async fn attach_native(
         &mut self,
@@ -469,17 +632,56 @@ impl CoreHelperLedger {
                         "raw bytes limit",
                     ));
                 }
-                let native = self.native.as_ref().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::PermissionDenied, "native route unavailable")
-                })?;
-                let mut route = native.lock().await;
-                if runtime != route.runtime_id() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "raw runtime mismatch",
-                    ));
+                if let Some(native) = &self.native {
+                    let mut route = native.lock().await;
+                    if runtime != route.runtime_id() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "raw runtime mismatch",
+                        ));
+                    }
+                    route.revoke_before_raw(revision).await?;
+                } else {
+                    let bound = self
+                        .manual_runtime
+                        .as_ref()
+                        .filter(|bound| bound.id == runtime)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "native route unavailable",
+                            )
+                        })?
+                        .clone();
+                    let birth = self
+                        .custody
+                        .lock()
+                        .map_err(|_| io::Error::other("native custody poisoned"))?
+                        .current_native_binding(bound.epoch)?;
+                    if birth.native.pid != bound.native_pid
+                        || birth.native.start_time != bound.native_start
+                        || birth.native.boot_id != bound.native_boot
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "native manual birth changed",
+                        ));
+                    }
+                    self.db
+                        .call_result(move |store| {
+                            store.with_tx(|tx| {
+                                n::revoke_before_raw(
+                                    tx,
+                                    &bound.id,
+                                    revision,
+                                    &crewd_store::now_ts(),
+                                )
+                            })
+                        })
+                        .await
+                        .map_err(storage)?
+                        .map_err(storage)?;
                 }
-                route.revoke_before_raw(revision).await?;
                 json!({"committed":true,"manual":true,"runtimeId":runtime,"requestId":request})
             }
             _ => {

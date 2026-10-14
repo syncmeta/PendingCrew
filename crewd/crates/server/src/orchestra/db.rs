@@ -279,6 +279,38 @@ impl Port for DbPort {
         self.read(move |c| row_of(c, session)).await
     }
 
+    async fn insert_public_session(
+        &self,
+        s: NewSession,
+        call: crate::public_execution::PublicExecution,
+    ) -> Result<SessionRow> {
+        let owner = self.state.clone();
+        self.write(move |tx| {
+            call.authorize_registration(&owner, tx, &s)?;
+            let session = collab::sessions::register(
+                tx,
+                collab::sessions::NewSession {
+                    crew_id: s.crew_id,
+                    role: if s.captain {
+                        crewd_proto::Role::Captain
+                    } else {
+                        crewd_proto::Role::Worker
+                    },
+                    executor: s.executor,
+                    brief: Some(s.brief),
+                    title: s.title,
+                    model: s.model,
+                    effort: s.effort,
+                    worktree: s.worktree.map(|path| path.display().to_string()),
+                    ..Default::default()
+                },
+            )?;
+            call.record_registration(tx, &session.id)?;
+            row_of(tx.conn(), session)
+        })
+        .await
+    }
+
     async fn crew_workdir(&self, crew: &str) -> Result<Option<PathBuf>> {
         let crew = crew.to_string();
         self.read(move |c| {

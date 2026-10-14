@@ -1,5 +1,64 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-14 原窗口整块发现与14可信重连裁决
+
+根完整受管Linux维护整合已普通推送5951c4c4；该模块实际平台及独证接受，无额外CI/编译。07已批准隔离上下文真实Human-only/privatework流程显示actualcrew/lobby首消息与preparedjournal replyObserved、本群需求1→无owner/noexecute计划W2且Todo/进展同W2、Doc原文create/read与独立Docfolder（其他view不混）。这只支持对应真实原UI接线，不等窗口整体验收。
+
+窗口整体仍FAIL：原新建默认根/chooser读真实FoundationHome旧目录；选crew后新出现private ui-cache/whiteboards及.human-todos.lock/.todos.lock/.todo-sweep.lock，证明sidebar/sweep仍实例化旧业务；chatchecklist仍有旧发送建Todo承诺却正式拒绝；messages/channel-folder没有原UI入口。作者将默认路径、selector来源、sidebar/sweep、composer语义和正式channelfolder接线一次完整收口，公共Backend接口缺口交唯一Rust作者，不本地第二账本或偷换其他view。QA暂不加/startAgent或旧wake，只保已审Human私有分支；unknown/restart/跨authority/ownedQuit不能借13缺能力与旧实例FAIL冒通过，已验domain流程修复后按影响复用。
+
+14另一个完整必要门槛已裁决：App死亡后旧Core被launchd收养，新App不在旧kernel/birth anchor祖先链；不能承诺重连receipt恢复，也不能放宽all-sameUID。Mac由原可信anchor明确授予经过实际kernelPID/birth/UID和OS动态代码验证的前端身份，再允许新同代码PID一般Human；adhoc候选仅exactcode pin，正式publisher须OS评估Apple签名链+批准sealedidentifier/Team及hardened/非debug，不凭SigningInformation字段或路径/JSON自证。code-admitted身份不能自升trust，restore/import清投影并旋转实例。非Mac仍用既有可信anchor或正式TLS配对grant，不假装同UID文件token隔离。directowned-process只属真正ownedQuit，不能与一般Human混。作者先一次冻结完整公共14客户端合同让客户端并行接线；normal14/生产生命周期/App跨实例实际验证仍须完成。参考Apple官方Code Signing Requirement Language与Code Signing Tasks，未把方案当实现通过。
+
+资源事实纠正：/private/tmp/pcw-apple-module-terminal-reclaim-5cdf-manifest.json 实际3237paths/476071432B（约454MiB）是终态Xcode生成.pcm/.swiftmodule缓存，包含Darwin等系统/SDK模块，不是仅自有Swift目标。原SDK安装文件/.o/实际二进制/SPM不在删除清单，protected-after回执保存；下次必要前端构建需沿原DD按需重建模块，不另建cold目录/不为回填缓存额外全量构建，停止扩大ModuleCache回收。normal14前空间约1.3GiB，唯一Rust作者准备精确终态自有旧object/inode清单，经质量核和根审后才删；不盲ENOSPC或删SDK/第三方/rlib/rmeta/79actualbins/源/DB/log/proofs。
+
+
+## 2026-10-14 Linux 完整受管维护单元验收与原窗口当前边界
+
+唯一必要 Linux run38559752496/attempt1/exact3ac3074706830d3d384160b18f7d248ca8addb1a 已 terminal success，普通UID1001，仅linux-install-upgrade，全量crewd跳过，无新编译。独立报告 /private/tmp/pcw-Linux-install-3ac30747-success-small-06/complete-unit-independent.json 已实读接受：安装11→升级13→未知prepared/dropped回执readback/冲突payload/并发单CASwinner→仅pointer回退→managed在oldexec前拒future并保全部main/id/WAL/SHM物理与逻辑→正式Core restore11/reopen#1→restore13/reopen#1/#2走完整尾段；最终13/integrityok/50table。正常daemon实际wait0；wrapperdeath控制子进程仅证gone或zombie、退出码不可得，不泛称全部reaped0。
+
+新artifact11890753801 / ZIP56,492,828B / SHA841c747cc5d2c43786a8f3fa1135ff2cf2cf50eb29a2297e046828c51bafc658；827file/link完整manifest流式核对通过，actualmanagedmodule9ab7e0e6ddc585397e2a2552eb27f0a720bb7029e80afc0d9347889b2e889190同Git3ac。后台诚实复用original4e normal13默认release/binaryd891b4d84b5e8b35c9f502504ae5da5569ee330c7f23ba489c746cc8f6a5b8e5与original7b old11，不把3ac或根组合SHA称新编译。接受仅sameprefix受管/独立快照停态维护；其他prefix/raw、非空WAL同版crash14、安全生产配置、真实日常安装/分发仍未完成。原失败与rawold侧文件限制记录保留。
+
+根精准整合该完整12个workflow/scripts差异与作者Linux单元记录；正式原前端交付方案43b4cbb96cdd1b82deb535812d06ba1b6ec86244仅方案，要求ordinary默认Core/稳定正式namespace/真实持久安全vault/原各平台scene与14receipt-terminal-ownedQuit/设备/安装日常授权，未冒实施。整个Sources和crewd仍同已编5cdf字节，后台未14，不重复稳定审核、编译或CI。
+
+人类已明确授权一次新07 require_escalated+ttycontext，自动审批通过后actual98616 GUI97324/helper97339在 /private/tmp/pcw-original-07-context.avpj7cvv 真实kernelbirth/parent/private6env/cwd/fakeCodex/claudefalse/Unixpeer资格通过，原Root已连接，无旧whiteboards/legacy业务实例。保91510原default-sandbox SIGABRT对照，不为执行上下文重编产品。外部Python非Human lineage探针正确拒绝，不拿它替GUI资格。
+
+窗口仍未整体验收：新建入口与chooser暴露FoundationHome真实旧默认工作目录读取，输入HOME不能伪隔离。作者整块修默认根/selectedauthority/local-remote目录来源，不循环字段重包。当前明确privatework已有draft的compiled07提交路径已bounded证只取explicit目录、actualcrew/lobby且无legacy回填/自动start；QA须核实际draft和authority才继续该正式业务，不再触发knownbadbegin/chooser。隐私入口门禁仍FAIL，后续业务绿不能覆盖。13split首发不等14原子/receipt；M4producer/历史/审批、14normal及整体生产执行继续后端线，Jev/记忆只保留方案。
+
+
+## 2026-10-14 窗口实际启动与受管恢复源边界
+
+原前端07完整源码组合已保存并普通推送根5050e3a4513c2a93c8ba2bd1ea94cc9351f03f7f；GUI实际编译来源5cdf、helper仍正常2bf，准备层接受不等窗口。人类已经实际回复已解锁，原锁屏等待解除。
+
+07首次私有scope /private/tmp/pcw-original-07-scope.vsyerymb 的guard/空根预检通过，exec44414实际GUI91510随后exit1，无helper/DB/业务UI。精确IPS PendingCrew-2026-10-14-193439.ips经根只读核为SIGABRT、_RegisterApplication→NSApplication.init；首次tool未显式sandbox_permissions（use_default），尚不能归因cachecut产品代码，不修改App/重编试错。
+
+根审准同不可变07新private scope /private/tmp/pcw-original-07-context.avpj7cvv 的精确guard，拟require_escalated+ttytrue一次执行上下文比较。但自动审批实际拒绝，要求人类对新的精确运行上下文单独确认；新manifest仍false、没有进程，原failedscope未改。具体一次审批问题已提交，答复前不重试/换方法/间接执行。只阻窗口，不阻后端或Linux。无安装、模型、日常数据切换或系统权限绕过。
+
+Linux受管初稿2b736a9cbeac29d5a8ffd24982fe73ba649a9398内部完整Mac安装/备份/恢复11及13/reopen、wrapperdeath跨exec排他lease和header负例GREEN；QA发现restore --from另一SQLite源未保护，整块未接受、旧freeze未推/未新CI。根裁决阶段性managed恢复限定本target/data/backups已完成独立Core快照，owned0600/canonical0700/nolinks、DELETE1/1 header/无sidecars/实际package maxschema先判，并共享同dataEXlease；future/活源/跨data/unknown拒且保source与target物理/mode，输入不得先chmod。import必须明确JSON且确认Core不打开SQLite源。作者一次补完整源边界控制后新冻结，QA影响验再考虑必要Linux；Core原任意from能力不变，最终14同版crash安全恢复与受管扩展仍待，不把保守拒绝当完整交付。
+
+14公共生产整块质量资产已准备，真实defaultnormal/接口冻结/核准kernel身份仍为运行依赖，syntax不代表通过；后端整块生产接线继续。既有稳定验收不重复，公共schema/构建唯一写者不变。
+
+
+## 2026-10-14 原前端完整 Apple 准备单元整合
+
+实际不可变 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07 的 Mac58283、iPhoneOS42703、Simulator51928 均真实 terminal exit0。质量线已独核Mac正式checker/codesign deep strict、1314完整Gitinputs逐字同5cdf、3738SPM前后同、DebugNative/SDK27/arm64；两个移动SDK51/55实际产物及来源/settings/log/unsigned/family1,2一致。报告 /private/tmp/pcw-original-front-5cdf8af6-mac-independent-01.json 及对应iphone/simulator独验报告。新CrewStore缓存构造切断确在这个包输入中，不拿旧822包代证。
+
+根已将整棵 Sources 同步至实际编译GUI来源5cdf8af6233408760142e9f0416ce52602f7dd29（七个实际文件差异，其余原前端相同）；全crewd输入与该冻结同，仍正常schema13。此为源码组合，不重复构建、不重标组合Git ref已被编译。签名helper仍原compiled2bf正常Debug/rawfresh/374Rust证明，未14。未带入客户端在途managed/Linux脚本，不改变main产品源码。
+
+完整Apple准备层已接受，不冒实际窗口、设备、安装、日常数据或完整M4交付。822现场保留且人类解锁尚未答；07未启动。质量线先准备新private fake-only初次launch精确清单交根审，不能复用旧包/旧guard、不试解锁或触日常数据。Linux受管保护与后端14整体冻结继续并行，之后按影响验证；公共schema及构建唯一写者不变。
+
+
+## 2026-10-14 实际 Linux 新因果与交付继续点
+
+唯一必要 run38555435325 / HEAD5cdf8af6233408760142e9f0416ce52602f7dd29 已 terminal failure；只有 linux-install-upgrade，完整 crewd skipped，无 Cargo 编译。原4e实际 normal13 默认 release 的整棵 Rust 输入与强来源复用通过，不能重标为5cdf新编译。归档与证据上传成功，artifact11890101163 / 56,456,212B / SHA4a5016146f87bec83d6092cd173bd055524cea9b021228ed490138c040a25d7f。
+
+实际阶段证明207的四次 immutable observers 前后全部物理SHA一致、无WAL/SHM；正常13 daemon真实wait0后只有mainDB/.id。随后正式 backup-new CLI（backup::backup_db → SQLITE_OPEN_READ_ONLY → VACUUM INTO）重新留下0B WAL/32768B SHM；旧11 typed拒13后删除侧文件。mainDB/.id及全部50表逻辑不变，但严格物理保护仍RED，恢复尾段未执行。不能把本轮归因于已修复observer，不能以本地控制代替Linux真实结果。
+
+根裁决：客户端作者先用现有正常二进制完整复现正式backup路径及managed安装尾段，并完成managed launcher进入旧binary前的只读未来版保护；未知/活WAL不能被immutable忽略，全部原data/mode保留，旧canonical binary与严格physical断言不修改。与后端14 header/WAL failclosed契约协调，作者和QA本地整块收口后才决定必要Linux复验；不继续observer-only试错或自动重派CI。
+
+原前端5cdf缓存初始化切断已源码接受但不在822包内。新完整候选构建句柄58283，目录 /private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07，复用既有Xcode/SPM与真实2bf helper证明，无Rust重编；运行中不等于新包验收。旧703/822现场保留，锁屏只阻相关窗口业务，人类解锁尚无回复。后端14继续已支持Codex生产driver一次正文/生命周期/未知恢复及Core-owned现存Claude手工PTY机制；后者不能冒称Native ACP producer。完整M4 producer/历史/审批仍本线后续完整单元，Jev/记忆仅方案。
+
+CI-only远端main仍1ba3d4ba0973b6abf3f68395611063523b1be03e：普通push/PR不触发，必要手动验收保留。主目录main仍fe68022f，README/design/旧ACP人类未提交资料未触；没有产品main push、安装、日常数据切换或发布。
+
+
 工程候选 codex/work-identity-20261013，冻结门禁代码 03108f9c；Rust 1.94.0，锁定依赖、离线、all features。格式/lint/全量测试通过：2436 passed、0 failed、8 ignored；79个测试结果块只是验证统计，不是工作量。日志 /private/tmp/pcw-program-integration-gate-20261013-02.log。首次组合门禁因新 work.patrol 未进入 CLI every-method 实际调用覆盖而失败，原 -01.log 保留；b11b7abc 补实际双工作项分页、事实与详情读回，未降低覆盖清单。
 
 本轮用户场景：人显式读取有限巡检页，获取稳定全局 W、无人负责、真实恢复失败/既有失联规则、当前升级与等待事实，并读回详情。首实现2ed9f9c1的输出有界但计算重复全账本扫描，独审捕获后1382e258使用共享纯规则按页内项/关联依赖/问题投影。权威账本恢复/校验固有成本保留；未扫描范围和未评估类别明确返回。数据库无副作用、socket/CLI、核心规则等价均已验。不调 Jev、不启动行政、不自动通知/重派/关闭；这不是行政处完整交付。
@@ -178,3 +237,10 @@ Linux系统安装/更新/回退与iPhone/iPad真机、main最终合入、安装�
 最终产品回到实际原 PendingCrew 前端组件，独立 Native 工作区只保留为验证材料；详见总计划原前端纠偏段和 `2026-10-14-original-frontend-quality-impact-matrix.md`。最终公共 PTY 交互与可靠命令 receipt/status 仍是后端依赖，现客户端本机 UUID/内存 unknown 不证明服务端幂等或跨重启恢复。
 
 旧 normal335/5c 等完整字节输入与真实业务证据保留，但共享 Cargo target 后发现自有依赖可能沿用其他树缓存，旧 witness 不能证明每个自有依赖实际从该树重新编译。新候选须完整 owning dependency graph、真实 owner paths、所有必需自有 targets fresh=false 与原始 Cargo JSON/sidecars独核；不得重标旧二进制或重复全部稳定业务掩盖来源缺口。
+
+
+## 2026-10-14 CI-only 实际整合
+
+用户要求精简不必要CI。作者与独立质量线核对两份main兼容配置，仅取消push/PR，workflow_dispatch及原jobs/steps/concurrency不变。根使用独立索引仅整合两workflow，普通FF推送actual main 1ba3d4ba0973b6abf3f68395611063523b1be03e，parent fe68022f，未带开发产品源码。API实际ci blob dceb782161102f85409681df84f2c6611e8d345f、crewd blob d2ba723ca7ea9ea6e0748d056f49b8406515e988与commit匹配，按commit查runs=[]。整体disable曾被自动审批拒绝，未执行；保留手动入口的配置精简为授权内安全替代。
+
+主目录本地main未checkout/reset/pull，仍fe68022f，README/design/旧ACP用户资料原样。开发CI精简4e80134b9b5ff5a9b759aed1446f61da489efc4c已推送，保留full与必要Linux链，删除已完成临时scope/重复远端前置。Linux实际安装链仍未通过，没有再派发；6c本地整批前置接受仅为准备。证据 /private/tmp/pcw-ci-manual-policy-01/validation.json 与 /private/tmp/pcw-ci-main-manual-commit.json。未重跑稳定业务、不重标all-features/包/窗口/M4完成。

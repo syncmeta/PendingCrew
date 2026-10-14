@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -862,6 +862,20 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 13 {
         migrate_v13(conn, v != 0)?;
     }
+    if v < 14 {
+        migrate_v14(conn)?;
+    }
+    Ok(())
+}
+
+/// The sole public receipt implementation is installed after schema13 in one
+/// transaction. Neither this version nor the DDL advertises a native adapter.
+pub(crate) fn migrate_v14(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(crate::command_receipts::V14_DDL)?;
+    tx.execute_batch(crate::local_clients::V14_DDL)?;
+    tx.execute_batch("PRAGMA user_version=14;")?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2669,7 +2683,7 @@ mod organization_version_tests {
     fn exact_v11_fixture() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch("DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+        conn.execute_batch("DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
         conn
     }
     #[test]
@@ -2726,7 +2740,7 @@ mod organization_version_tests {
         let path = tmp.path().join("crewd.db");
         {
             let store = crate::Store::open(&path).unwrap();
-            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
         }
         let store = crate::Store::open(&path).unwrap();
         assert_eq!(version(store.conn()), SCHEMA_VERSION);

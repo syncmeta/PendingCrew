@@ -3,11 +3,13 @@ pub mod archive;
 pub mod backup;
 pub mod channel_work;
 pub mod channels;
+pub mod command_receipts;
 pub mod crews;
 pub mod db;
 pub mod db_health;
 pub mod documents;
 pub mod fsutil;
+pub mod local_clients;
 pub mod messages;
 pub mod native_execution;
 pub mod object_refs;
@@ -17,6 +19,7 @@ pub mod schema;
 pub mod sessions;
 pub mod testing;
 pub mod todos;
+mod version_guard;
 pub mod view_folders;
 pub mod work_events;
 pub mod work_followups;
@@ -231,6 +234,12 @@ impl Store {
     /// 打开（必要时新建）库文件。旧版本的非空库迁移前先在 `backups/` 拍快照（S20）。
     /// 库文件和它的 -wal / -shm 一律只给本用户读写（0600；PM 2026-10-07）。
     pub fn open(path: &Path) -> Result<Self> {
+        let guard = version_guard::preflight(path)?;
+        Self::open_preflight(path, guard)
+    }
+
+    fn open_preflight(path: &Path, guard: version_guard::Guard) -> Result<Self> {
+        guard.recheck()?;
         fsutil::restrict_db_files(path)?;
         Self::init(Connection::open(path)?, Some(backup::backups_dir_for(path)))
     }
@@ -256,6 +265,9 @@ impl Store {
     /// 读不到（EPERM / EACCES 等）一律报错，绝不当成「不存在」。
     pub fn open_data_dir(dir: &Path) -> Result<Self> {
         let db = dir.join(DB_FILE);
+        // Runs under the caller’s data-directory lock, before even an identity
+        // peek (SQLite read-only connections can still create/remove sidecars).
+        let guard = version_guard::preflight(&db)?;
         let id_path = dir.join(ID_FILE);
         let record = read_id_file(&id_path)?;
         let recorded = record.as_ref().map(|r| r.id.clone());
@@ -308,7 +320,7 @@ impl Store {
                 });
             }
         }
-        let store = Store::open(&db)?;
+        let store = Store::open_preflight(&db, guard)?;
         let id = meta_get(store.conn(), "dbId")?
             .ok_or_else(|| StoreError::Invalid("库里没有 dbId".into()))?;
         if let Some(expected) = recorded
@@ -419,7 +431,7 @@ impl Store {
     /// 没有任何机组、也没有任何消息。导入只往空库里写。
     pub fn is_empty(&self) -> Result<bool> {
         let n: i64 = self.conn.query_row(
-            "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages)",
+            "SELECT (SELECT COUNT(*) FROM crews) + (SELECT COUNT(*) FROM messages) + (SELECT COUNT(*) FROM public_command_receipts) + (SELECT COUNT(*) FROM local_client_trust)",
             [],
             |r| r.get(0),
         )?;

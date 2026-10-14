@@ -58,6 +58,8 @@ pub fn import(
         )?;
         crewd_store::native_execution::invalidate_unknown(tx)?;
         crewd_store::work_followups::restored(tx)?;
+        crewd_store::command_receipts::restored(tx, &crewd_store::now_ts())?;
+        crewd_store::local_clients::restored(tx)?;
         let mut cx = Ctx {
             src,
             report: &mut report,

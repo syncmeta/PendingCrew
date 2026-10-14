@@ -531,3 +531,6 @@ Live child or dependent work remains; finish it or revise the relationships befo
 
 ## work.terminal
 This work is already closed; create followup work instead of reporting, blocking, or reassigning it.
+
+## command.receipt_capacity
+Command receipt capacity is full. Read existing receipts and resolve unknown outcomes with a human; do not submit a replacement identifier.

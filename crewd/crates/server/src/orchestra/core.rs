@@ -74,7 +74,7 @@ pub(crate) fn delivery_settles_inflight(outcome: &DeliveryOutcome) -> bool {
 
 /// 停掉一个会话时，写队列里还没轮到的 nudge / 回答当场回「没在跑」（复审 C）；排着的投递留在队列里，
 /// 那批随 `inflight` 由 `on_exited` 结算。
-fn refuse_queued_nudges(l: &mut Live, session: &str) {
+pub(crate) fn refuse_queued_nudges(l: &mut Live, session: &str) {
     if let Some((_, reply)) = l.nudge_pending.take() {
         let _ = reply.send(Err(ControlError::NotRunning(session.into())));
     }
@@ -258,6 +258,15 @@ pub enum Input {
     WorktreeReady {
         req: StartSession,
         reply: Reply<SessionRow>,
+        result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
+    },
+    PublicAnswerDone {
+        call: crate::public_execution::PublicExecution,
+        outcome: Result<AnswerReport, ControlError>,
+    },
+    PublicWorktreeReady {
+        req: StartSession,
+        call: crate::public_execution::PublicExecution,
         result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     },
     /// 事件流结束了、却没有 `Exited`（驱动任务崩了 / 被丢了）：当作一次没有退出状态的退出（预检 P3）。
@@ -498,6 +507,14 @@ pub struct AnswerReport {
 }
 
 pub enum Cmd {
+    PublicExecution {
+        call: crate::public_execution::PublicExecution,
+        reply: oneshot::Sender<Result<serde_json::Value, crewd_proto::RpcError>>,
+    },
+    PublicTarget {
+        session: String,
+        reply: Reply<crewd_proto::commands::CommandRuntimeTarget>,
+    },
     Start {
         req: StartSession,
         origin: Origin,
@@ -662,10 +679,32 @@ pub struct Live {
     pub writing: bool,
 }
 
-pub struct AnswerReply(pub Reply<AnswerReport>);
+pub enum AnswerReply {
+    Legacy(Reply<AnswerReport>),
+    Public {
+        call: crate::public_execution::PublicExecution,
+        inbox: mpsc::UnboundedSender<Input>,
+    },
+}
 impl AnswerReply {
-    pub(crate) fn send(self, r: Result<AnswerReport, ControlError>) {
-        let _ = self.0.send(r);
+    pub(crate) fn is_public(&self) -> bool {
+        matches!(self, Self::Public { .. })
+    }
+    pub(crate) fn public_call(&self) -> Option<&crate::public_execution::PublicExecution> {
+        match self {
+            Self::Public { call, .. } => Some(call),
+            _ => None,
+        }
+    }
+    pub(crate) fn send(self, outcome: Result<AnswerReport, ControlError>) {
+        match self {
+            Self::Legacy(reply) => {
+                let _ = reply.send(outcome);
+            }
+            Self::Public { call, inbox } => {
+                let _ = inbox.send(Input::PublicAnswerDone { call, outcome });
+            }
+        }
     }
 }
 
@@ -684,6 +723,7 @@ pub enum Write {
         expect: String,
         action: AnswerAction,
         reply: AnswerReply,
+        public_target: Option<crewd_proto::commands::CommandRuntimeTarget>,
     },
     /// 一批唤醒的正文：轮到它时 `send`，编号记进 `Live::inflight`（收下时已占好位）。
     Deliver { text: String, extras: Context },
@@ -741,6 +781,9 @@ pub struct Core<P: Port> {
     /// 正在建 worktree 的「起机长」请求所在的机组：同一机组的第二个机长此时就该被拒。
     pub(crate) captain_pending: BTreeSet<String>,
     pub(crate) next_generator: u64,
+    pub(crate) public_fences: HashMap<String, super::public_control::RuntimeFence>,
+    pub(crate) public_physical_controls:
+        HashMap<String, Vec<super::public_control::PendingPhysicalControl>>,
     // Exact terminal evidence survives a failed atomic settlement. This is not wake
     // retry/backoff truth; it only retains the original lease/fate until commit or boot.
     terminal_obligations: HashMap<String, TerminalObligation>,
@@ -775,6 +818,7 @@ pub struct Core<P: Port> {
     pub(crate) due: DueCache,
     /// 休眠进行中（C26，`hibernate.rs`）。
     pub(crate) hibernation: Option<Hibernation>,
+    pub(crate) public_owned_hibernate: Vec<super::public_control::PendingOwnedHibernate>,
     /// 上次休眠的记录（`boot` 读进来）：恢复时据它给休眠附言（[`Core::resume_note`]），给过就记「已恢复」。
     pub(crate) hibernated: Option<HibernateRecord>,
     /// 休眠回执交给了等它的 oneshot（不论全退没有）= true：serve（T11）据此先排空在途回复、再走停机次序退出
@@ -837,6 +881,8 @@ impl<P: Port> Core<P> {
             preparing: 0,
             captain_pending: BTreeSet::new(),
             next_generator: 0,
+            public_fences: HashMap::new(),
+            public_physical_controls: HashMap::new(),
             terminal_obligations: HashMap::new(),
             gate,
             decisions: HashMap::new(),
@@ -856,6 +902,7 @@ impl<P: Port> Core<P> {
             prune_more: false,
             due: DueCache::default(),
             hibernation: None,
+            public_owned_hibernate: Vec::new(),
             hibernated: None,
             exit: watch::channel(false).0,
         })
@@ -888,6 +935,31 @@ impl<P: Port> Core<P> {
             } => self.on_launched(&session, generator, result).await,
             Input::WorktreeReady { req, reply, result } => {
                 self.on_worktree_ready(req, reply, result).await;
+                Ok(())
+            }
+            Input::PublicAnswerDone { call, outcome } => {
+                self.settle_public_answer(call, outcome).await;
+                Ok(())
+            }
+            Input::PublicWorktreeReady { req, call, result } => {
+                self.preparing = self.preparing.saturating_sub(1);
+                if req.captain {
+                    self.captain_pending.remove(&req.crew_id);
+                }
+                let outcome = match result {
+                    Ok(path) if self.shutting_down => {
+                        kept_worktree(&path);
+                        Err(ControlError::ShuttingDown)
+                    }
+                    Ok(path) => {
+                        self.finish_public_start(req, Some(path), call.clone())
+                            .await
+                    }
+                    Err(error) => Err(ControlError::Worktree(error)),
+                };
+                if let Err(error) = outcome {
+                    self.public_start_failed(&call, error).await;
+                }
                 Ok(())
             }
             Input::StreamEnded { session, generator } => match self.live.get(&session) {
@@ -952,6 +1024,21 @@ impl<P: Port> Core<P> {
 
     async fn on_cmd(&mut self, c: Cmd) {
         match c {
+            Cmd::PublicExecution { call, reply } => {
+                if matches!(
+                    &call.request.command,
+                    crewd_proto::commands::PublicCommand::Hibernate(_)
+                ) {
+                    self.execute_public_hibernate(call, reply).await;
+                } else {
+                    let result = self.execute_public_control(call).await;
+                    let _ = reply.send(result);
+                }
+            }
+            Cmd::PublicTarget { session, reply } => {
+                let result = self.public_target(&session).await;
+                let _ = reply.send(result);
+            }
             Cmd::Start { req, origin, reply } => self.start_new(req, origin, reply).await,
             Cmd::Resume {
                 session,
@@ -962,6 +1049,7 @@ impl<P: Port> Core<P> {
                 let _ = reply.send(r);
             }
             Cmd::Stop { session, reply } => {
+                self.advance_public_control(&session);
                 let r = self.stop(&session).await;
                 let _ = reply.send(r);
             }
@@ -974,6 +1062,7 @@ impl<P: Port> Core<P> {
                 input,
                 reply,
             } => {
+                self.advance_public_control(&session);
                 if let Err(e) = self.nudge(&session, &input, reply).await {
                     eprintln!("crewd: 编排：{e:#}");
                 }
@@ -984,11 +1073,13 @@ impl<P: Port> Core<P> {
                 choice,
                 reply,
             } => {
+                self.advance_public_control(&session);
                 if let Err(e) = self.answer(&session, &fingerprint, choice, reply).await {
                     eprintln!("crewd: 编排：{e:#}");
                 }
             }
             Cmd::Interrupt { session, reply } => {
+                self.advance_public_control(&session);
                 let result = match self.writable(&session) {
                     Some(l) if l.working || l.decision.is_some() => l
                         .handle
@@ -1005,6 +1096,7 @@ impl<P: Port> Core<P> {
                 response,
                 reply,
             } => {
+                self.advance_public_control(&session);
                 if let Err(e) = self
                     .respond_request(&session, &fingerprint, response, reply)
                     .await
@@ -1168,7 +1260,7 @@ impl<P: Port> Core<P> {
     }
 
     /// 起之前的检查；`isolation: true` 时返回建 worktree 的起点（机组工作目录）。
-    async fn check_start(
+    pub(crate) async fn check_start(
         &self,
         req: &StartSession,
         origin: Origin,
@@ -1334,7 +1426,7 @@ impl<P: Port> Core<P> {
 
     /// 人停掉（裁定 10）：一个事务写停止状态 + 单调 wake-ID 取消水位 + pending 作废，提交后才叫停进程。
     /// inflight 留到真实终局（迟到 Delivered 仍承认）；结算失败再 crash 也按持久取消意图作废，不重放旧工作。
-    async fn stop(&mut self, session: &str) -> Result<(), ControlError> {
+    pub(crate) async fn stop(&mut self, session: &str) -> Result<(), ControlError> {
         if self
             .port
             .session(session)
@@ -1471,7 +1563,8 @@ impl<P: Port> Core<P> {
         l.writes.push_back(Write::Answer {
             expect: fingerprint.to_string(),
             action,
-            reply: AnswerReply(reply),
+            reply: AnswerReply::Legacy(reply),
+            public_target: None,
         });
         self.pump_writes(session).await
     }
@@ -1505,7 +1598,8 @@ impl<P: Port> Core<P> {
         l.writes.push_back(Write::Answer {
             expect: fingerprint.into(),
             action: AnswerAction::Response(response),
-            reply: AnswerReply(reply),
+            reply: AnswerReply::Legacy(reply),
+            public_target: None,
         });
         self.pump_writes(session).await
     }
@@ -1515,6 +1609,14 @@ impl<P: Port> Core<P> {
     /// 所以它的回执不可能先于编号到达。
     pub(crate) async fn pump_writes(&mut self, session: &str) -> anyhow::Result<()> {
         loop {
+            let current_public_target = self.current_public_target(session);
+            if self
+                .public_fences
+                .get(session)
+                .is_some_and(|fence| fence.manual)
+            {
+                return Ok(());
+            }
             let Some(l) = self.live.get_mut(session) else {
                 return Ok(());
             };
@@ -1563,7 +1665,15 @@ impl<P: Port> Core<P> {
                     expect,
                     action,
                     reply,
+                    public_target,
                 } => {
+                    if let Some(call) = reply.public_call()
+                        && (public_target.as_ref() != Some(&current_public_target)
+                            || call.recheck_dispatched().await.is_err())
+                    {
+                        reply.send(Err(ControlError::NotRunning(session.into())));
+                        continue;
+                    }
                     l.writing = true;
                     let (handle, tx, generator) =
                         (l.handle.clone(), self.inbox.clone(), l.generator);
@@ -1603,8 +1713,15 @@ impl<P: Port> Core<P> {
                             }
                             Err(_) => Err(ControlError::NotRunning(session.clone())),
                         };
-                        let _ = tx.send(Input::WriteDone { session, generator });
-                        reply.send(r);
+                        if reply.is_public() {
+                            // Receipt settlement enters Core before releasing the
+                            // writer/hibernation exit; no detached DB job races close.
+                            reply.send(r);
+                            let _ = tx.send(Input::WriteDone { session, generator });
+                        } else {
+                            let _ = tx.send(Input::WriteDone { session, generator });
+                            reply.send(r);
+                        }
                     });
                     return Ok(());
                 }
@@ -1659,7 +1776,7 @@ impl<P: Port> Core<P> {
 
     // —— 拉起
 
-    fn check_launch(
+    pub(crate) fn check_launch(
         &self,
         exec: &Arc<dyn Executor>,
         crew: &str,
@@ -1906,8 +2023,13 @@ impl<P: Port> Core<P> {
             return Ok(());
         }
         let st = self.starting.remove(session).expect("上面查过");
+        if result.is_err() {
+            self.public_physical_lost(session, generator, "launch_failed_without_confirmed_birth")
+                .await;
+        }
         match result {
             Ok(handle) => {
+                self.observe_public_runtime(session, generator);
                 if st.stop_requested || st.halt_requested {
                     let _ = handle.stop();
                 }
@@ -2268,12 +2390,20 @@ impl<P: Port> Core<P> {
         event: SessionEvent,
     ) -> anyhow::Result<()> {
         let now = self.clock.now();
-        let Some(l) = self.live.get_mut(session) else {
-            return Ok(());
-        };
-        if l.generator != generator {
+        if self
+            .live
+            .get(session)
+            .is_none_or(|l| l.generator != generator)
+        {
             return Ok(());
         }
+        self.observe_public_event(session, &event);
+        self.settle_public_physical_event(session, generator, &event)
+            .await;
+        let l = self
+            .live
+            .get_mut(session)
+            .expect("validated current generation");
         match event {
             SessionEvent::Spawned {
                 agent_session_id, ..
@@ -2464,6 +2594,14 @@ impl<P: Port> Core<P> {
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
+        if info.is_none() {
+            self.public_physical_lost(
+                session,
+                l.generator,
+                "driver_stream_lost_without_exit_confirmation",
+            )
+            .await;
+        }
         // 还排在写队列里的 nudge / 回答：进程没了，回执「没在跑」（投递的那批随 `inflight` 在下面结算）。
         if l.input_draft.is_some() {
             let msg = text::render(

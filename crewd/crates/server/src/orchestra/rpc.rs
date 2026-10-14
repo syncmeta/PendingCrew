@@ -379,10 +379,18 @@ pub async fn call(
                         .as_ref()
                         .is_some_and(|d| d.fingerprint() == request.fingerprint)
                 })
-                .map(|request| crewd_proto::orchestra::RunnerRequestView {
-                    fingerprint: request.fingerprint,
-                    method: request.method,
-                    params: request.params,
+                .and_then(|request| {
+                    let crewd_term::DecisionKind::RunnerRequest { request_id } =
+                        &live.pending_decision.as_ref()?.kind
+                    else {
+                        return None;
+                    };
+                    Some(crewd_proto::orchestra::RunnerRequestView {
+                        runner_request_id: request_id.clone(),
+                        fingerprint: request.fingerprint,
+                        method: request.method,
+                        params: request.params,
+                    })
                 });
             to_value(crewd_proto::orchestra::SessionInspection {
                 live: live_to_proto(&live),

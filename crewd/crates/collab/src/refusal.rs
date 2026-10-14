@@ -27,6 +27,7 @@ refusal_codes! {
     ResourceNotFound = "resource.not_found" ["id"],
     ResourceForbidden = "resource.forbidden" [],
     ResourceRequestConflict = "resource.request_conflict" ["request"],
+    CommandReceiptCapacity = "command.receipt_capacity" [],
     DocumentRevisionConflict = "document.revision_conflict" ["id"],
     DocumentDeleted = "document.deleted" ["id"],
     ChannelWorkRevisionConflict = "channel.work_revision_conflict" [],

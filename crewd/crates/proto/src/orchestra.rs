@@ -109,6 +109,8 @@ pub struct SessionAnswerParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunnerRequestView {
+    /// The actual structured runner request ID; never inferred from the screen or fingerprint.
+    pub runner_request_id: String,
     pub fingerprint: String,
     pub method: String,
     pub params: serde_json::Value,

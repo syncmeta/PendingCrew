@@ -15,6 +15,7 @@ mod notify;
 pub mod port;
 #[cfg(test)]
 mod port_contract;
+mod public_control;
 pub mod rpc;
 #[cfg(test)]
 mod sim;
@@ -232,6 +233,26 @@ impl Handle {
         rx.await.map_err(|_| stopped())?
     }
 
+    pub(crate) async fn submit_public(
+        &self,
+        call: crate::public_execution::PublicExecution,
+    ) -> Result<serde_json::Value, crewd_proto::RpcError> {
+        let (reply, response) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::PublicExecution { call, reply }))
+            .map_err(|_| rpc::rpc_err(stopped()))?;
+        response.await.map_err(|_| rpc::rpc_err(stopped()))?
+    }
+
+    pub(crate) async fn public_target(
+        &self,
+        session: &str,
+    ) -> Result<crewd_proto::commands::CommandRuntimeTarget, ControlError> {
+        let session = session.to_owned();
+        self.call(|reply| Cmd::PublicTarget { session, reply })
+            .await
+    }
+
     pub async fn start(
         &self,
         req: StartSession,
@@ -312,6 +333,22 @@ impl Handle {
         .await
     }
 
+    pub(crate) async fn terminal_driver(
+        &self,
+        session: &str,
+    ) -> Result<Option<crewd_exec::driver::SessionHandle>, ControlError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::Handle {
+                session: session.into(),
+                reply,
+            }))
+            .map_err(|_| stopped())?;
+        Ok(rx
+            .await
+            .map_err(|_| stopped())?
+            .and_then(|handle| handle.terminal_driver()))
+    }
     pub async fn runner_request(
         &self,
         session: &str,

@@ -3,14 +3,22 @@ pub mod agent;
 pub mod build_info;
 pub mod causal_fence;
 pub(crate) mod conn;
+mod connection_scope;
 pub mod control;
 pub mod dispatch;
 pub mod hub;
 pub mod ledger;
+mod legacy_terminal;
+pub mod native_helpers;
 pub mod native_receipts;
 pub mod orchestra;
 pub(crate) mod peer;
+mod public_commands;
+mod public_execution;
+mod public_terminal;
 pub(crate) mod remote;
+mod signed_client;
+mod terminal_runtime;
 pub mod token;
 pub(crate) mod wake_adapter;
 
@@ -40,7 +48,10 @@ pub struct AppState {
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
     pub(crate) peer_policy: std::sync::OnceLock<Arc<peer::PeerPolicy>>,
     pub(crate) remote: std::sync::OnceLock<Arc<remote::Manager>>,
+    pub(crate) native_helpers: std::sync::OnceLock<Arc<native_helpers::NativeFactory>>,
     pub(crate) runtime_binding_id: String,
+    pub(crate) terminal_supported: std::sync::atomic::AtomicBool,
+    pub(crate) runtime_identity: std::sync::OnceLock<crewd_proto::commands::RuntimeIdentity>,
     #[cfg(any(test, feature = "testkit"))]
     s5_request_fault: Arc<std::sync::Mutex<Option<u64>>>,
     #[cfg(test)]
@@ -63,7 +74,10 @@ impl AppState {
             orchestra: std::sync::OnceLock::new(),
             peer_policy: std::sync::OnceLock::new(),
             remote: std::sync::OnceLock::new(),
+            native_helpers: std::sync::OnceLock::new(),
             runtime_binding_id: uuid::Uuid::new_v4().to_string(),
+            terminal_supported: std::sync::atomic::AtomicBool::new(false),
+            runtime_identity: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "testkit"))]
             s5_request_fault: Default::default(),
             #[cfg(test)]
@@ -87,6 +101,7 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
+        let local_policy = self.peer_policy.get().cloned();
         let context = crewd_collab::TxContext::new(self.causal_fence.clone());
         #[cfg(test)]
         let barrier = self.test_db_write_barrier.clone();
@@ -100,6 +115,11 @@ impl AppState {
                 // 在库线程上取时间：库线程串行执行，时间戳顺序 = 提交顺序（排队期间不会被后来者超过）。
                 let now = crewd_store::now_ms();
                 let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;
+                if let Some(policy) = &local_policy {
+                    policy
+                        .replace_trusted_clients(crewd_store::local_clients::list(s.conn())?)
+                        .map_err(crewd_store::StoreError::Io)?;
+                }
                 hub.emit(s.conn(), &changes);
                 Ok(v)
             })
@@ -163,16 +183,21 @@ pub fn ensure_data_dir(dir: &Path) -> anyhow::Result<()> {
 /// 独占数据目录：拿 `crewd.lock` 的排他锁。返回的文件句柄活着锁就在。
 /// serve 与 import 共用，二者不能同时碰同一个库。
 pub fn lock_data_dir(data_dir: &Path) -> anyhow::Result<std::fs::File> {
+    try_lock_data_dir(data_dir)?
+        .ok_or_else(|| anyhow::anyhow!("另一个 crewd 已在使用数据目录 {}", data_dir.display()))
+}
+
+/// None means genuine kernel lock contention; all open/lock errors remain errors.
+/// The lock-file creation is separate from the no-touch DB/identity/sidecar promise.
+pub fn try_lock_data_dir(data_dir: &Path) -> anyhow::Result<Option<std::fs::File>> {
     let lock = std::fs::File::options()
         .create(true)
         .truncate(false)
         .write(true)
         .open(data_dir.join("crewd.lock"))?;
     match lock.try_lock() {
-        Ok(()) => Ok(lock),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("另一个 crewd 已在使用数据目录 {}", data_dir.display())
-        }
+        Ok(()) => Ok(Some(lock)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
     }
 }
@@ -382,6 +407,7 @@ async fn serve_with_hooks_inner(
     {
         let tx = store.conn().unchecked_transaction()?;
         crewd_store::native_execution::invalidate_unknown(&tx)?;
+        crewd_store::command_receipts::interrupted(&tx, &crewd_store::now_ts())?;
         tx.commit()?;
     }
     // Establish the historical recovery baseline before exposing public writes.
@@ -391,6 +417,11 @@ async fn serve_with_hooks_inner(
         crewd_store::now_ms(),
         crewd_collab::work_followups::baseline,
     )?;
+    // Cache only an identity actually read from the opened store before public
+    // readiness. Hello must remain available when the FIFO later closes/fails.
+    let current_db_id = crewd_store::meta_get(store.conn(), "dbId")?
+        .ok_or_else(|| anyhow::anyhow!("work database identity missing"))?;
+    peer_policy.replace_trusted_clients(crewd_store::local_clients::list(store.conn())?)?;
     let db = Db::spawn(store)?;
     let hooks = hooks.unwrap_or_else(|| orchestra::hooks::Hooks {
         extras: Arc::new(orchestra::work_context::WorkContext(db.clone())),
@@ -420,7 +451,28 @@ async fn serve_with_hooks_inner(
     } else {
         Arc::new(AppState::new(db.clone()))
     };
+    let _ = state
+        .runtime_identity
+        .set(crewd_proto::commands::RuntimeIdentity {
+            db_id: current_db_id,
+            runtime_binding_id: state.runtime_binding_id.clone(),
+        });
     let _ = state.peer_policy.set(peer_policy);
+    state.terminal_supported.store(
+        opts.orchestra
+            .as_ref()
+            .is_some_and(|o| o.claude != orchestra::exec_claude::ClaudeProgram::Disabled),
+        std::sync::atomic::Ordering::Release,
+    );
+    if let Some(helper) = opts.orchestra.as_ref().and_then(|o| o.helper.clone()) {
+        let _ = state
+            .native_helpers
+            .set(Arc::new(native_helpers::NativeFactory::new(
+                db.clone(),
+                registry.clone(),
+                helper,
+            )));
+    }
     let mut handle = None;
     let mut actor = None;
     let mut forwarder = None;

@@ -115,6 +115,16 @@ impl NativePeer {
     pub fn binding(&self) -> &NativeBinding {
         &self.binding
     }
+    pub fn verify(&self, stream: &UnixStream, custody: &super::custody::Custody) -> io::Result<()> {
+        let current = custody.current_native_binding(self.binding.epoch)?;
+        if current.session != self.binding.session
+            || current.generation != self.binding.generation
+            || !same_birth(&current.native, &self.binding.native)
+        {
+            return Err(denied("native custody changed"));
+        }
+        verify_birth(stream, &self.binding)
+    }
     /// Every event rechecks actual kernel identity. A gap/duplicate/foreign
     /// epoch has no sequence or authority effect, and callers must not dispatch
     /// it into ownership state. Sequence exhaustion requires a fresh bridge.
