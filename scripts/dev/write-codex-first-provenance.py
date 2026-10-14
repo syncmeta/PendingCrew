@@ -152,5 +152,12 @@ def main():
   save(out/'build-inputs.json',manifest)
   save(out/'build-provenance.json',{'format':1,'sourceRef':manifest['sourceRef'],'inputManifestSHA256':sha(out/'build-inputs.json'),'gui':gui,'backend':backend,'packaged':{'guiSHA256':sha(app/'Contents/MacOS/PendingCrewCodexFirst'),'helperSHA256':sha(app/'Contents/Helpers/crewd')}})
  else:raise ValueError('Unsupported action')
-try:main()
-except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError,IndexError) as e:print('FAIL: '+str(e),file=sys.stderr);sys.exit(1)
+def cli_main():
+ # Imported verification is the same implementation as the CLI. Import must
+ # never dispatch sys.argv or weaken fresh owning-source validation.
+ try:
+  main();return 0
+ except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError,IndexError) as e:
+  print('FAIL: '+str(e),file=sys.stderr);return 1
+if __name__ == '__main__':
+ raise SystemExit(cli_main())
