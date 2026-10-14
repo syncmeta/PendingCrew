@@ -27,3 +27,12 @@ Current schema13 cannot establish schema14 public request receipts/atomic first-
 选择完整输入 `822a72c84e6ce3adec5fbf1c2e811a378404297e`，新输出 `/private/tmp/pcw-original-frontend-candidate13-822a72c8-05`。实际原 Mac App 全目标专用条件构建、打包/签名与来源 checker 通过（session66688 exit0）；同一不可变 snapshot 的 iPhoneOS（18751）和 iOSSimulator（73554）完整专用条件 build 均 exit0。继续复用既有 DD/SPM，两移动目标串行，不安装/启动/签名真机。三份实际 settings/命令/buildlog/SPM完整前后集合/产品hash均保留；移动 proof 位于 `apple-iPhoneOS/full-build-proof.json` 与 `apple-iOSSimulator/full-build-proof.json`。
 
 后台仍是实际2bf完整输入编译的 default/debug/non-test Mac normal：374 Rust输入与822逐字相同，完整 raw Cargo required-own fresh graph、原toolchain/log/binary/source witness保留。没有重新编译后台，不把其原compiledSourceRef重标822。此前703包与其初始化RED现场保持原样；新822的私有目录准备修复只有实际 Foundation控制+本次完整编译来源层已证。实际原窗口启动→helper资格→群聊/四视图/SessionRunner/unknown journal 由质量接下一完整门禁；14真实公共receipt/terminal/ownedQuit和真机层仍未交付。
+
+
+## 5cdf完整原前端候选准备层
+
+实际完整GUI/source为5cdf8af6233408760142e9f0416ce52602f7dd29，不可变根 `/private/tmp/pcw-original-frontend-candidate13-5cdf8af6-07`。Mac58283、iPhoneOS42703、iOSSimulator51928均终态exit0，既有DD/SPM、专用候选条件、jobs2串行。正式checker/codesign通过；1314 Git输入、3738 SPM输入完整前后校验，质量接受三平台actual settings/log/product/config/source/SPM。移动仍unsigned准备层，无安装/设备/模拟器启动。QA `/private/tmp/pcw-original-front-5cdf8af6-{mac,iphone-sdk,sim-sdk}-independent-01.json`。
+
+新包真实包含humanTodoCache lazy及reset旧缓存门禁，822不含。GUI packaged SHA 624d9154e702ee7baa681da1db9b92ba4833a06946adb6b083e0aeadf4cb05a7，helper packaged SHA 3f09f12969c87d7b7a9a1c54b2640cf718de998ce96d1e62c7da1fc06712def7。后台仍实际compiled2bf/full374 Rust/default debug/non-test/rawfresh11package12target；未重编，未重标5cdf或14。06作者调用缺explicitdebug意图，严格门禁在编译前拒绝，其log/snapshot保留；07显式debug正确组合完成，无守卫弱化。
+
+07未launch/安装/发布，首次启动需主重新核具体bundle/source/private-env/fake-only清单及新实例。822 GUI54307/helper54337初始化资格已通过，但业务因Mac锁屏等待；703旧RED现场也保留，不移其窗口证据给07。原窗口全流程、真机、14 receipt/terminal/ownedQuit、日常数据切换与main产品交付仍未完成。global整合相同字节的新SHA不称重新编译。
