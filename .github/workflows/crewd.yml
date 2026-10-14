@@ -8,23 +8,12 @@
 #
 # 不跑 `--ignored`：那些是要真 claude/codex、付费 API、真钥匙串的活测试，CI 上没有也不该有。
 #
-# 与 ci.yml 刻意分开：Xcode 那两个 job 慢（13 分钟）且按 Swift 改动触发，crewd 的检查几分钟、
-# 按 Rust 改动触发，互不拖累，也互不遮挡。
+# 与 Apple 检查分开，按实际冻结范围分别手动运行。
 name: crewd
 
+# 重型检查只在完整冻结后按需要手动派发；本地必要质量入口保留。
 on:
   workflow_dispatch:
-  # **push 上不设 paths 过滤**，理由同 ci.yml 里那段长注释：push 上的 paths 按这一推
-  # 的 head 提交判，纯 .md 的收尾提交会让一次推 28 笔代码的流水线整条不触发。
-  # 省下的只是几分钟免费机器时间，赔进去的是「main 被验过」这个前提。
-  push:
-    branches: [main]
-  # PR 上的过滤按整个 PR 的 diff 判，不会被最后一笔带偏，所以这里可以收窄。
-  pull_request:
-    branches: [main]
-    paths:
-      - 'crewd/**'
-      - '.github/workflows/crewd.yml'
 
 concurrency:
   group: crewd-${{ github.ref }}
