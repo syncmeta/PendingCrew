@@ -11,6 +11,14 @@ CORE14_RECOVERY_INPUTS = {
     '530de912ebc0fb615f36ed444e7ed1867bcf72510b639f6467e5633195e09a06': 393,
 }
 
+# Reviewed-source eligibility ONLY. This does not certify an actual Linux15
+# build: delegation still requires the exact actual package/witness/binary,
+# full snapshot/configuration/fresh-source sidecars below and the package's
+# independent strong-source admission. Historical14 families remain separate.
+CORE15_RECOVERY_INPUTS = {
+    '4c2f2c7b1b56d01eb85f2c5306caa9cb3c93f0f4e66afc7b61b117207aa1c4c9': 402,
+}
+
 def sha(path):
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -76,7 +84,8 @@ def supported_schema(package):
     return int(matches[0])
 
 def certified_core14_recovery(package, maximum):
-    if maximum != 14: return False
+    if maximum not in (14, 15): return False
+    families = CORE14_RECOVERY_INPUTS if maximum == 14 else CORE15_RECOVERY_INPUTS
     candidate = json.loads((package / 'candidate.json').read_text())
     witness_path = package / 'normal-build-witness.json'
     if sha(witness_path) != candidate['witnessSHA256'] or sha(package / 'bin/crewd') != candidate['binarySHA256']:
@@ -84,7 +93,7 @@ def certified_core14_recovery(package, maximum):
     witness = json.loads(witness_path.read_text())
     if candidate.get('sourceProofTier') != 'fresh-owning-workspace-production-graph' or witness.get('binarySHA256') != candidate['binarySHA256'] or witness.get('sourceRef') != candidate['sourceRef']:
         raise ValueError('recovery requires original source/binary/fresh proof pairing')
-    certified_count = CORE14_RECOVERY_INPUTS.get(witness.get('rustInputDigest'))
+    certified_count = families.get(witness.get('rustInputDigest'))
     if certified_count is None or witness.get('freshWorkspaceArtifacts') is not True:
         return False
     configuration = witness['buildConfiguration']
@@ -99,7 +108,7 @@ def certified_core14_recovery(package, maximum):
     evidence = package / witness['evidenceDirectory']
     rows = witness['files']
     if len(rows) != certified_count or len({row['path'] for row in rows}) != len(rows):
-        raise ValueError('complete certified Core14 production inputs required')
+        raise ValueError('complete certified production inputs for exact schema family required')
     for row in rows:
         relative = pathlib.PurePosixPath(row['path'])
         if relative.is_absolute() or '..' in relative.parts or not row['path'].startswith('crewd/'):

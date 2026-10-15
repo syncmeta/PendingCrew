@@ -2,11 +2,15 @@
 # 本机与完整检查共用 crewd/scripts/check.sh；默认不跑真实模型或 ignored 测试。
 # 已完成的临时 Core/M5/candidate 补验保留历史来源和本地脚本，不再暴露重复入口。
 name: crewd
-run-name: "${{ inputs.linux393_release == true && 'Linux current393 default Release package and affected recovery (explicit; not full CI)' || inputs.recovery_gate == true && 'Linux Core14 orphan recovery (explicit affected scope; not full CI)' || inputs.linux14_install_recovery == true && 'Linux14 fresh package and managed13-to14 crash recovery (explicit; not full CI)' || inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
+run-name: "${{ inputs.linux15_release == true && 'Linux Core15 default Release package and affected recovery (explicit; not full CI)' || inputs.linux393_release == true && 'Linux current393 default Release package and affected recovery (explicit; not full CI)' || inputs.recovery_gate == true && 'Linux Core14 orphan recovery (explicit affected scope; not full CI)' || inputs.linux14_install_recovery == true && 'Linux14 fresh package and managed13-to14 crash recovery (explicit; not full CI)' || inputs.linux_install_upgrade == true && 'Linux ordinary-user isolated install/upgrade/rollback (explicit; not full CI)' || 'crewd frozen full checks (explicit)' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      linux15_release:
+        description: Exact reviewed402 Core15 default Release package, Jev fake suite and only affected14-to15 recovery; no stable migration rerun
+        type: boolean
+        default: false
       linux393_release:
         description: Exact reviewed current393 default Release package and only affected startup/crash recovery; no stable migration rerun
         type: boolean
@@ -16,7 +20,7 @@ on:
         type: boolean
         default: false
       reviewed_ref:
-        description: Required complete reviewed commit SHA for recovery_gate or linux393_release; must match the immutable run and checkout
+        description: Required complete reviewed commit SHA for recovery_gate, linux393_release or linux15_release; must match the immutable run and checkout
         type: string
         default: ''
       linux_install_upgrade:
@@ -42,7 +46,7 @@ env:
 
 jobs:
   check:
-    if: ${{ inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true && inputs.linux393_release != true }}
+    if: ${{ inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true && inputs.linux393_release != true && inputs.linux15_release != true }}
     name: crewd (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -125,7 +129,7 @@ jobs:
           if-no-files-found: ignore
 
   linux-install-upgrade:
-    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true && inputs.linux393_release != true }}
+    if: ${{ inputs.linux_install_upgrade == true && inputs.linux14_install_recovery != true && inputs.recovery_gate != true && inputs.linux393_release != true && inputs.linux15_release != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -214,13 +218,13 @@ jobs:
           retention-days: 14
 
   invalid-linux-scope:
-    if: ${{ (inputs.linux_install_upgrade == true && inputs.linux14_install_recovery == true) || (inputs.recovery_gate == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true)) || (inputs.linux393_release == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true || inputs.recovery_gate == true)) }}
+    if: ${{ (inputs.linux_install_upgrade == true && inputs.linux14_install_recovery == true) || (inputs.recovery_gate == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true)) || (inputs.linux393_release == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true || inputs.recovery_gate == true)) || (inputs.linux15_release == true && (inputs.linux_install_upgrade == true || inputs.linux14_install_recovery == true || inputs.recovery_gate == true || inputs.linux393_release == true)) }}
     runs-on: ubuntu-24.04
     steps:
       - run: echo 'Choose exactly one explicit Linux scope; no build started.' >&2; exit 1
 
   linux14-install-recovery:
-    if: ${{ inputs.linux14_install_recovery == true && inputs.linux_install_upgrade != true && inputs.recovery_gate != true && inputs.linux393_release != true }}
+    if: ${{ inputs.linux14_install_recovery == true && inputs.linux_install_upgrade != true && inputs.recovery_gate != true && inputs.linux393_release != true && inputs.linux15_release != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -317,7 +321,7 @@ jobs:
           retention-days: 14
 
   linux-core14-recovery:
-    if: ${{ inputs.recovery_gate == true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux393_release != true }}
+    if: ${{ inputs.recovery_gate == true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux393_release != true && inputs.linux15_release != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -488,7 +492,7 @@ jobs:
           retention-days: 14
 
   linux393-release:
-    if: ${{ inputs.linux393_release == true && inputs.recovery_gate != true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true }}
+    if: ${{ inputs.linux393_release == true && inputs.recovery_gate != true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux15_release != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -663,5 +667,203 @@ jobs:
             ${{ runner.temp }}/linux393-baseline13/baseline-composition.json
             ${{ runner.temp }}/linux393-baseline13/canonical/*.tar.gz
             ${{ runner.temp }}/linux393-baseline13/verified/reused-normal13.json
+          if-no-files-found: error
+          retention-days: 14
+
+  linux15-release:
+    if: ${{ inputs.linux15_release == true && inputs.recovery_gate != true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux393_release != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+      PENDINGCREW_BUILD_BACKEND_PROFILE: release
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Qualify exact reviewed402 Core15 release source before tooling, cache or fetch
+        id: source
+        env:
+          REVIEWED_REF: ${{ inputs.reviewed_ref }}
+        run: |
+          python3 - <<'PYREF'
+          import hashlib,json,os,pathlib,re,subprocess
+          ref=os.environ['REVIEWED_REF'];actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert re.fullmatch('[0-9a-f]{40}',ref) and ref==os.environ['GITHUB_SHA']==actual
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          e=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15';e.mkdir(mode=0o700)
+          paths=subprocess.check_output(['git','ls-tree','-r','--name-only',ref,'crewd'],text=True).splitlines();rows=[]
+          for path in sorted(paths):
+              content=subprocess.check_output(['git','show',ref+':'+path]);assert pathlib.Path(path).read_bytes()==content
+              rows.append({'path':path,'sha256':hashlib.sha256(content).hexdigest()})
+          assert len(rows)==402 and hashlib.sha256(''.join(x['path']+'\t'+x['sha256']+'\n' for x in rows).encode()).hexdigest()=='4c2f2c7b1b56d01eb85f2c5306caa9cb3c93f0f4e66afc7b61b117207aa1c4c9'
+          inputs=['.github/workflows/crewd.yml','scripts/dev/build-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/prepare-crewd-linux15-release-baseline.py','scripts/dev/prepare-crewd-linux-install-baseline.py','scripts/dev/crewd_managed_launch.py','scripts/dev/install-crewd-linux-candidate.py','scripts/dev/archive-crewd-linux-lifecycle.py','scripts/dev/record-crewd-build.py','scripts/dev/write-codex-first-provenance.py','scripts/dev/fixtures/crewd_linux15_release_tail.py']
+          rows=[]
+          for path in inputs:
+              content=subprocess.check_output(['git','show',ref+':'+path]);assert pathlib.Path(path).read_bytes()==content
+              rows.append({'path':path,'sha256':hashlib.sha256(content).hexdigest()})
+          (e/'source-action.json').write_text(json.dumps({'reviewedRef':ref,'runRef':os.environ['GITHUB_SHA'],'checkoutRef':actual,'qualifiedBeforeTooling':True,'additionalRecipeAndRuntimeInputs':rows},indent=2))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:out.write('managed_sha='+next(x['sha256'] for x in rows if x['path']=='scripts/dev/crewd_managed_launch.py')+'\n')
+          PYREF
+      - name: Retrieve exact acceptede630 artifact holding original14 canonical baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/38670397185 > "$RUNNER_TEMP/linux15/baseline-run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/11943682299 > "$RUNNER_TEMP/linux15/baseline-artifact.json"
+          python3 - <<'PYMETA'
+          import json,os,pathlib
+          e=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15';r=json.loads((e/'baseline-run.json').read_text());a=json.loads((e/'baseline-artifact.json').read_text())
+          assert r['id']==38670397185 and r['run_attempt']==1 and r['conclusion']=='success' and r['head_sha']=='e630d3e25dab2c67a39057b3c61ab54f258894b6'
+          assert a['id']==11943682299 and not a['expired'] and a['workflow_run']['id']==r['id'] and a['workflow_run']['head_sha']==r['head_sha']
+          assert a['name']=='crewd-linux393-release-'+r['head_sha']
+          PYMETA
+          gh api repos/${{ github.repository }}/actions/artifacts/11943682299/zip > "$RUNNER_TEMP/linux15/baselinee630.zip"
+          python3 -B scripts/dev/prepare-crewd-linux15-release-baseline.py "$RUNNER_TEMP/linux15/baselinee630.zip" "$RUNNER_TEMP/linux15-baseline14"
+      - name: Read pinned source toolchain
+        id: toolchain
+        run: |
+          python3 - <<'PYTOOLCHAIN'
+          import os,pathlib,tomllib
+          channel=tomllib.loads(pathlib.Path('crewd/rust-toolchain.toml').read_text())['toolchain']['channel']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('channel='+channel+'\n')
+          PYTOOLCHAIN
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd -> target
+          cache-on-failure: true
+      - name: Prepare exact locked dependency closure before offline metadata and normal
+        run: |
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/linux15/locked-before.sha256"
+          cargo fetch --locked --manifest-path crewd/Cargo.toml > "$RUNNER_TEMP/linux15/fetch.log" 2>&1
+          sha256sum crewd/Cargo.toml crewd/Cargo.lock > "$RUNNER_TEMP/linux15/locked-after.sha256"
+          cmp "$RUNNER_TEMP/linux15/locked-before.sha256" "$RUNNER_TEMP/linux15/locked-after.sha256"
+          git status --porcelain > "$RUNNER_TEMP/linux15/checkout-after-fetch.txt"
+          test ! -s "$RUNNER_TEMP/linux15/checkout-after-fetch.txt"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: First Linux15 affected Jev fake and persistence suite only
+        run: |
+          rm -f crewd/target/nextest/ci/junit.xml
+          cargo nextest run --manifest-path crewd/Cargo.toml --locked --offline --profile ci -p crewd-server -p crewd-collab -p crewd-store -p crewd-jev -p crewd-proto -E 'test(judgments::tests::) | test(judgment_state::tests::) | test(schema::judgment_format_tests::) | binary(provider) | binary(judgment_layout)' > "$RUNNER_TEMP/linux15/affected-nextest.log" 2>&1
+          python3 - <<'PYJUNIT'
+          import pathlib,xml.etree.ElementTree as E
+          root=E.parse('crewd/target/nextest/ci/junit.xml').getroot()
+          cases=root.findall('.//testcase')
+          assert len(cases)==26 and not root.findall('.//failure') and not root.findall('.//error') and not root.findall('.//skipped')
+          PYJUNIT
+      - name: Preserve all affected JUnit attempts and failures
+        if: always()
+        run: |
+          if [ -f crewd/target/nextest/ci/junit.xml ] && [ -d "$RUNNER_TEMP/linux15" ]; then
+            cp crewd/target/nextest/ci/junit.xml "$RUNNER_TEMP/linux15/affected-junit.xml"
+          fi
+      - name: Build one fresh402 default Release canonical package without stable historical smoke
+        run: python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux15-release" --package-only
+      - name: Independent full402 Git, configuration, fresh raw graph and canonical package qualification
+        run: |
+          python3 -B scripts/dev/check-crewd-linux-candidate.py "$RUNNER_TEMP/linux15-release/crewd-linux-x86_64"
+          python3 - <<'PYPROOF'
+          import hashlib,importlib.util,json,os,pathlib,subprocess
+          repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);out=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15-release';package=out/'crewd-linux-x86_64'
+          spec=importlib.util.spec_from_file_location('strong',repo/'scripts/dev/write-codex-first-provenance.py');p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+          witness=package/'normal-build-witness.json';w=json.loads(witness.read_text());ref=os.environ['GITHUB_SHA']
+          paths=subprocess.check_output(['git','ls-tree','-r','--name-only',ref,'crewd'],text=True).splitlines();rows=[]
+          for path in paths:
+              content=subprocess.check_output(['git','show',ref+':'+path]);assert (repo/path).read_bytes()==content
+              rows.append({'path':path,'sha256':hashlib.sha256(content).hexdigest()})
+          assert len(rows)==402 and sorted(rows,key=lambda r:r['path'])==w['files'] and w['sourceRef']==ref
+          assert p.digest(rows)=='4c2f2c7b1b56d01eb85f2c5306caa9cb3c93f0f4e66afc7b61b117207aa1c4c9'
+          cfg=p.complete_configuration(w['buildConfiguration'])
+          expected={'target':'x86_64-unknown-linux-gnu','profile':'release','defaultFeatures':True,'allFeatures':False,'features':[]}
+          assert cfg['artifactFeatures']==[] and not any(cfg['workspaceFeatures'].values()) and cfg['artifactProfile']['test'] is False
+          p.verify_witness(witness,package/'bin/crewd',p.digest(rows),expected,require_fresh=True)
+          graph=json.loads((package/w['evidenceDirectory']/w['productionGraphFile']).read_text())
+          assert len(graph['requiredWorkspacePackages'])==12 and sum(len(x['targets']) for x in graph['requiredWorkspacePackages'])==13
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          archive=next(out.glob('crewd-linux-x86_64-*.tar.gz'))
+          value={'compiledRef':ref,'rustInputs':402,'digest':p.digest(rows),'configuration':cfg,'freshRaw12Packages13Targets':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archive.read_bytes()).hexdigest(),'runtimeTailPending':True}
+          (pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15/release-independent-source.json').write_text(json.dumps(value,indent=2))
+          PYPROOF
+      - name: Actual stopped14 to15Release startup, reopen and only affected WAL Unknown guard tail
+        id: physical
+        env:
+          MANAGED_SHA: ${{ steps.source.outputs.managed_sha }}
+        run: |
+          parent=$(mktemp -d /tmp/pr15.XXXXXX)
+          chmod 700 "$parent"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+          python3 -B scripts/dev/fixtures/crewd_linux15_release_tail.py --old-package "$RUNNER_TEMP/linux15-baseline14/verified/crewd-linux-x86_64" --new-package "$RUNNER_TEMP/linux15-release/crewd-linux-x86_64" --expected-source-ref "$GITHUB_SHA" --managed-module "$GITHUB_WORKSPACE/scripts/dev/crewd_managed_launch.py" --managed-module-sha256 "$MANAGED_SHA" --out "$parent/tail" > "$RUNNER_TEMP/linux15/physical-driver.log" 2>&1
+      - name: Preserve and independently consume diagnostic tail without following special inodes
+        if: ${{ always() && steps.physical.outputs.parent != '' }}
+        env:
+          PHYSICAL_ROOT: ${{ steps.physical.outputs.parent }}/tail/flow
+        run: |
+          python3 -B scripts/dev/archive-crewd-linux-lifecycle.py "$PHYSICAL_ROOT" "$RUNNER_TEMP/linux15/physical.tar.gz" --diagnostic-special-inodes
+          python3 - <<'PYARCHIVE'
+          import hashlib,json,os,pathlib,tarfile
+          evidence=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15'
+          path=evidence/'physical.tar.gz';manifest=json.loads(path.with_suffix('.gz.json').read_text())
+          assert manifest['diagnosticSpecialInodes'] is True and manifest['restorableCompleteFilesystem'] is False and manifest['specialContentsCaptured'] is False
+          assert manifest['dereference'] is False and manifest['sourceDirectory']==os.environ['PHYSICAL_ROOT']
+          assert hashlib.sha256(path.read_bytes()).hexdigest()==manifest['archiveSHA256']
+          with tarfile.open(path) as archive:
+              members={m.name.removeprefix('flow/'):m for m in archive.getmembers() if m.name!='flow'}
+              for member in archive.getmembers():
+                  p=pathlib.PurePosixPath(member.name)
+                  assert not p.is_absolute() and '..' not in p.parts and (member.isdir() or member.isfile() or member.issym())
+              for row in manifest['members']:
+                  if row['kind']=='special-metadata':
+                      assert row['inodeType'] in ['socket','fifo'] and row['contentsCaptured'] is False and row['restored'] is False and row['path'] not in members
+                      assert all(k in row for k in ['mode','uid','gid','device','inode','size','mtimeNS','ctimeNS'])
+                  elif row['kind']=='file':
+                      member=members[row['path']];assert member.isfile() and member.size==row['size']
+                      assert hashlib.sha256(archive.extractfile(member).read()).hexdigest()==row['sha256']
+                  else:
+                      member=members[row['path']];assert member.issym() and member.linkname==row['target']
+              assert {name for name,m in members.items() if not m.isdir()}=={row['path'] for row in manifest['members'] if row['kind']!='special-metadata'}
+          (evidence/'diagnostic-archive-consumer.json').write_text(json.dumps({'archiveSHA256':manifest['archiveSHA256'],'allRegularAndLinkMembersVerified':True,'specialInodesMetadataOnly':True,'restorableCompleteFilesystem':False},indent=2))
+          PYARCHIVE
+      - name: Verify unchanged source and exact canonical execution inputs after actual tail
+        if: ${{ success() }}
+        run: |
+          git status --porcelain > "$RUNNER_TEMP/linux15/checkout-after-tail.txt"
+          test ! -s "$RUNNER_TEMP/linux15/checkout-after-tail.txt"
+          python3 -B scripts/dev/check-crewd-linux-candidate.py "$RUNNER_TEMP/linux15-release/crewd-linux-x86_64"
+          python3 - <<'PYSTABLE'
+          import hashlib,json,os,pathlib
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux15-release';before=json.loads((out.parent/'linux15/release-independent-source.json').read_text())
+          archive=next(out.glob('crewd-linux-x86_64-*.tar.gz'))
+          assert hashlib.sha256(archive.read_bytes()).hexdigest()==before['canonicalTarSHA256']
+          assert hashlib.sha256((out/'crewd-linux-x86_64/bin/crewd').read_bytes()).hexdigest()==before['binarySHA256']
+          PYSTABLE
+      - name: Retain one canonical Release and historical14 proof plus whole diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewd-linux15-release-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/linux15/*.json
+            ${{ runner.temp }}/linux15/*.xml
+            ${{ runner.temp }}/linux15/*.txt
+            ${{ runner.temp }}/linux15/*.sha256
+            ${{ runner.temp }}/linux15/*.log
+            ${{ runner.temp }}/linux15/physical.tar.gz
+            ${{ runner.temp }}/linux15/physical.tar.gz.json
+            ${{ runner.temp }}/linux15-release/crewd-linux-x86_64-*.tar.gz
+            ${{ runner.temp }}/linux15-release/archive-sha256.txt
+            ${{ runner.temp }}/linux15-baseline14/baseline-composition.json
+            ${{ runner.temp }}/linux15-baseline14/canonical/*.tar.gz
           if-no-files-found: error
           retention-days: 14
