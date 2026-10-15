@@ -1,5 +1,16 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 首次真实窗口启动失败已独验；验证通道加载闭包修复整块源码接受
+
+更正后的明确人类回复 call_0e45c29d038047d6bb69b971b8bdd074 授权 native AX 与指定 source04/86包/单假service-account完整P1/N/P2动作。根真实回复记录和胶囊已核；唯一实际P1 prepare终态0，唯一launch会话75509终态1。原GUI36183/birth1792040031696630/parent34782由原Popen回收-6，daemon=null，terminal为UNKNOWN startup unconfirmed。gui.log显示dyld拒载Sparkle，main与Sparkle实查均adhoc/runtime/无Team，并非两个具名Team不同；完整12个sealed对象字节仍原。独验 /private/tmp/pcw-delivery-validation.f401171b-fa4d-461c-acc0-db848d9977e9/app-qualification-evidence/P1/independent-first-P1-qualification-failure.json，SHAfb66b524299d1e5afde96259816660ddd3dbb3ec8576421247487ba4d0a6c670。QA ps被sandbox拒，未外推当前全组census。尚无qualified helper/native UI/pairing证据；不从日志缺失推全局凭据调用不存在。原scope/包/源/Unknown与回执保留，无第二启动或原包重签。旧normal10与包86的静态来源/签封证明保持成立，不能因此称可启动。
+
+根裁决B：专用DeliveryValidation保留hardened/runtime和空entitlements、原业务前端及正式trust/凭据/owner机制，排除本次不验的自更新功能与真实动态依赖。普通产品与其他平台不变，不加disable-library-validation、不降hardened、不选择Team/访问Apple私钥。正式publisher与自更新仍是未交付项。客户端9条owned路径8aa998c1e36055c9afe8c2df5b974fa92e510397已整块独验接受并普通push；报告 /private/tmp/pcw-validation-library-seal-runtime-unit-01/independent-whole-source-closure-review-8aa998.json，SHA96427209251311db0efae1a88a256fe801bd188324bc752558a065f165634925。原259拒收及旧86运行FAIL全部保留，不改标。
+
+完整修复涵盖Validation编译分支无SPU、专用unused-dylib链接消除、Stamp后构建期实际target资格与payload排除，以及target/staged/final每架构MachO加载闭包独验。删除前真实Info双ref、根bundle封态、精确unsigned或linker-only代码态、未知拒和立即字节复核已闭合；vendor签封不冒主App封口。20新控制为生产链串联真实privateFS，但codesign状态和warm root模型化，不冒实际新构建。已验370Git+1generated Swift输入逐字未变、类型检查终态0复用；Rust全树仍1014fcee56ee4b3aced18c4ef937f3389f0d7518。消费者不沿旧7/12计数，不把adhoc/nil Team深封验证当运行加载资格。
+
+根精确组合b353→8aa的9条路径及两份统筹记录，下一准确完整组合ref必须重新生成strong normal11和Mac不可变包，保留完整输入/配置/代码载荷与实际消费者证据；不重标86/normal10，iOS旧0601及Linuxe630仍保持原编译来源，无新CI或稳定业务重复。唯一共享Rust目录由backend持有编译租约，沿warm Rust/Xcode/SPM，不清理源码/数据库/日志/旧二进制/SDK/证明。此时尚未新构建或新运行；新包实际加载与完整P1/N/P2要按新ref/pin/scope/动作核对授权，不能重放旧Unknown。当前本地main为d146c121，263用户文件保留、远端main未推送。Native15、设备、正式publisher、安装/日常切换/公开发布及真实模型仍未交付；Jev/记忆仅待讨论。
+
+
 ## 2026-10-15 原前端新 Mac 实际产物接受；TypeScript 静态门槛闭合，窗口整块仍待
 
 准确完整源码 86fb166b0c7f5c1ea04ce5a9e2ced3987cfb5845 的 normal10 与原 PendingCrew target 新 DeliveryValidation Mac 包已实际构建并获独立接受。normal10 报告 /private/tmp/pcw-Core14-normal86fb166b-independent-10.json，SHA58e83a9a6e3c02bb1779bf9f79b253f1fb513d7ff7fedb44b382c202914db9f6；默认 Debug/non-test/空 features，393 Rust 输入、raw11包12targets全部fresh=false，完整1376 Git清单为postbuild采集，不冒事前清单或连续峰值监测。新包 /private/tmp/pcw-delivery-validation-artifact-queue-03/artifact/PendingCrew Delivery Validation.app，独验报告 complete-mac-artifact-independent-03.json（同目录上级），SHA58124a193df00affc5d81ac19e005a2185024ef5e84fcda1ad40218ce347e193。GUI Release -O/专用Validation条件与helper Debug分层；实际1376Git/3738SPM/112products/12loaded/7MachO链、normal到staged及签封后等价、adhoc deep seal均核齐，实际CDHash1791f4c56898b2b773455986ef029e96009fe5b3；无Team/空entitlements，不具publisher资格，未启动App或访问SecItem。

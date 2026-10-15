@@ -18,11 +18,15 @@ struct UpdateSettingsSection: View {
         } header: {
             Text("更新")
         } footer: {
+            #if PENDINGCREW_DELIVERY_VALIDATION
+            Text("此隔离验证通道不包含自更新；此处不验收更新功能。")
+            #else
             if updater.isConfigured {
                 Text("自动检查新版本；发现新版会弹窗展示更新内容，安装时机由你决定。")
             } else {
                 Text("此构建未配置更新源（开发构建或缺公钥），检查更新不可用。")
             }
+            #endif
         }
     }
 }

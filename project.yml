@@ -94,6 +94,10 @@ targets:
         script: |
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
         basedOnDependencyAnalysis: false
+      - name: Validate isolated runtime dependency closure
+        script: |
+          /usr/bin/python3 "$SRCROOT/scripts/dev/crewd-validation-load-closure.py" prune-target
+        basedOnDependencyAnalysis: false
     dependencies:
       - package: SwiftCertificates
         product: X509

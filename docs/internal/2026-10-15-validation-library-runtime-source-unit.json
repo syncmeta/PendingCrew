@@ -1,0 +1,89 @@
+{
+  "kind": "VALIDATION_LIBRARY_RUNTIME_SOURCE_UNIT_NOT_RUNTIME_ACCEPTANCE",
+  "originalFailure": {
+    "sourceRef": "86fb166b0c7f5c1ea04ce5a9e2ced3987cfb5845",
+    "PopenExit": -6,
+    "failure": "dyld rejected mapped Sparkle under library validation",
+    "QAReportSHA256": "fb66b524299d1e5afde96259816660ddd3dbb3ec8576421247487ba4d0a6c670",
+    "actualSignatureAuditSHA256": "a9d180f3d5c08f7d3f29421d4974e026a81d1077f8672675eff3d53c69936bef",
+    "actualFinding": "All seven old Mach-O objects were adhoc/runtime/noTeam/empty entitlements; deep strict verification succeeded. This does not establish load compatibility. It was not a mismatch between two named teams."
+  },
+  "officialRules": [
+    {
+      "url": "https://developer.apple.com/videos/play/wwdc2019/703/",
+      "locator": "Transcript: library validation paragraphs immediately following Runtime Code Signing Enforcement; inside-out signing example before hardened runtime",
+      "rule": "Library validation permits Apple or team-signed images and blocks adhoc libraries. Nested code signing should proceed from inner objects to the enclosing application. These general rules support the observed cause, but do not assert every possible adhoc program layout fails."
+    },
+    {
+      "url": "https://developer.apple.com/library/archive/technotes/tn2206/",
+      "locator": "Signing nested code / Using the codesign Tool",
+      "rule": "Keep verification of the seal distinct from runtime loading; preserve complete nested-code signing."
+    },
+    {
+      "url": "https://github.com/apple-oss-distributions/ld64/blob/main/doc/man/man1/ld-classic.1",
+      "locator": "-dead_strip_dylibs",
+      "rule": "The linker can omit unused dylib load commands; this is safe here only with the guarded no-updater-symbol compile branch and independent actual-load checks."
+    }
+  ],
+  "chosenScope": {
+    "channel": "DeliveryValidation on macOS only",
+    "originalTargetAndBusinessViews": true,
+    "updaterExcludedFromValidation": true,
+    "ordinaryProductionAndNativeCandidateUpdaterUnchanged": true,
+    "iPhoneIPadExistingBehaviorUnchanged": true,
+    "hardenedRuntimeRequired": true,
+    "entitlementsRequired": {},
+    "AppleIdentityChosenOrQueried": false,
+    "disableLibraryValidationAdded": false
+  },
+  "mechanism": [
+    "Compile the same AppUpdater API without importing or referencing Sparkle/SPU in the private Validation branch; explicitly disclose unavailable self-update in settings.",
+    "Only Mac DeliveryValidation adds -Wl,-dead_strip_dylibs. SPM version and package source remain fully inventoried; the original target package dependency is retained for ordinary configurations. Validation link input can still mention the package, but no runtime dylib edge is permitted.",
+    "The source-controlled target phase and dedicated builder finalization reject every remaining non-platform load command before excluding only the fresh unsigned target Sparkle payload. The builder repeats guarded finalization after XCBuild completion to cover deferred framework embedding. This changes the new target before inventory/copy, never an old sealed artifact.",
+    "Actual-target/pre-seal/final inventories and all architectures are independently parsed. LC_LOAD_DYLIB, weak, re-export, upward and lazy imports, rpaths, dynamic-linker paths, fat bounds and unknown commands fail closed. Existing normal-to-helper and target-to-GUI code equivalence remain required.",
+    "Explicit inside-out adhoc sealing replaces signing with --deep. Deep strict remains verification. Every actual Mach-O gets bounded independent OS signature/empty-entitlement reads; no null-Team equivalence is treated as permission to load adhoc libraries."
+  ],
+  "validationEvidence": {
+    "actualMacTypecheck": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/typecheck-Mac/result.json",
+    "MacGitSourceCount": 370,
+    "MacGeneratedSourceCount": 1,
+    "sourceControls": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/source-controls-result.json",
+    "sourceControlsCount": 48,
+    "privateFSPruneBodyRootModeled": true,
+    "actualOld86MainRejected": true,
+    "actualOldHelperAcceptedAsSystemOnly": true,
+    "ordinaryUpdaterCompilerASTStillContainsSPU": true,
+    "ValidationUpdaterCompilerASTContainsNoSPU": true,
+    "signatureQueriesInNewControls": "Dependency injection only; no real new codesign query/sign action",
+    "priorSourceControlErrorsRetained": [
+      "py_compile default cache location EPERM; syntax subsequently checked using compile(bytes)",
+      "DI nonempty entitlement boundary exposed str/bytes plist error; source fixed and failing record preserved"
+    ]
+  },
+  "remainingRealActions": [
+    "QA source closure and exact root integration",
+    "Backend sole owner creates a new strong normal at the new full source ref; normal10 remains source86",
+    "One new Mac Validation artifact build and independent consumer under its exact input ref",
+    "New action/pin/consent and an actual approved launch are required to prove runtime compatibility and the full P1/N/P2 factory flow",
+    "Production publisher/distribution still needs a human-reviewed Team/identity and private-key action scope; this private adhoc channel cannot establish it"
+  ],
+  "prohibitedInThisSourceUnit": [
+    "new App/Core/native AX/SecItem execution",
+    "signing or altering old packages",
+    "choosing or enumerating Apple signing identities",
+    "new Linux CI / stable migration replay",
+    "device boot/install or new iOS artifact claims"
+  ],
+  "deletionQualificationClosure": {
+    "prior259Review": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/independent-whole-source-review-259.json",
+    "prior259ReviewSHA256": "c4febb0b782b286a5ddd2dfdb507f15259ceacd29e7b51d6425ab50755d3755b",
+    "finding": "env NOsign/fullref alone did not bind an existing target to this build or prove the root bundle unsealed",
+    "actualQualification": "Original stamp phase now precedes closure; actual Info PendingCrewSourceRef and BuildStampCommit must both match the full reviewed ref. Root App _CodeSignature must be absent. Main must be owned/canonical and actually unsigned or exactly linker-only adhoc (0x20002, noTeam), never runtime, named-team, generic prior adhoc, unreadable or unknown. A nonempty embedded signature cannot be relabeled unsigned. Vendor framework seals do not count as root App sealing.",
+    "chain": "Every removal uses finalize_unsigned_target(app,ref), which runs qualification before closure and every rmtree; main and Info hashes are rechecked immediately before exclusion. Builder post-XCBuild finalization uses this same guarded path.",
+    "consumer": "The captured finalization record is bound to actual Xcode-target command, Info and main SHA. Consumer independently reads archived target main build signature, verifies no pre-seal root bundle seal, actual source stamps, all original code and final load policy.",
+    "controls": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/deletion-qualification-result.json",
+    "count": 20,
+    "controlLayer": "Actual production qualification/finalization functions and real private FS; codesign returns and outer warm target location modeled. No old artifact was modified, no actual new signing/runtime performed.",
+    "reuse": "Initial 259 source freeze, 75 evidence entries, 48 controls and 371-input Mac typecheck retain their original exact source attribution. All 370 Git Swift inputs are byte-identical; no repeated whole typecheck. Final actual artifact will use the next root-integrated full ref and newly proven normal."
+  }
+}
