@@ -85,5 +85,38 @@
     "count": 20,
     "controlLayer": "Actual production qualification/finalization functions and real private FS; codesign returns and outer warm target location modeled. No old artifact was modified, no actual new signing/runtime performed.",
     "reuse": "Initial 259 source freeze, 75 evidence entries, 48 controls and 371-input Mac typecheck retain their original exact source attribution. All 370 Git Swift inputs are byte-identical; no repeated whole typecheck. Final actual artifact will use the next root-integrated full ref and newly proven normal."
+  },
+  "actual50BuildAndSystemAliasClosure": {
+    "actualCompiledInputRef": "50b6e425967fb04d6b6e06e15b2486b43be8565a",
+    "normal11RemainsAt50": true,
+    "actualActionSession": 7010,
+    "actualDriverExit": 1,
+    "actualXcodeExit": 65,
+    "actualFailureReport": "/private/tmp/pcw-delivery-validation-artifact-queue-04/failed-target-evidence/actual-terminal-cause.json",
+    "actualFailureReportSHA256": "5641ca1871b770b3ef9650b04e48bf87111dfeb9fb85d53966194403080a931e",
+    "independentFailureReviewSHA256": "f09eaa0ce12341ceec7a18dc2f171ab75387cdcd955d44e02a9a5eddf1a655fa",
+    "actualFinding": "Caller already passed /private/tmp warm DD; Xcode emitted /tmp TARGET_BUILD_DIR. Strict input spelling guard rejected the standard system alias before payload exclusion/adhoc artifact sealing. New target main did link without Sparkle and had linker-only adhoc state, but no immutable artifact or App runtime qualification resulted.",
+    "sourceCorrection": "Only /tmp top-level spelling, with actual OS realpath(/tmp)==/private/tmp, maps to the fixed reviewed warm-products namespace. Existing target resolution must equal that canonical path; all other aliases/traversal/cache or alternate volume spellings are rejected. Phase, builder and consumer share this exact mapping; consumer checks captured raw/canonical relation.",
+    "controls": "/private/tmp/pcw-validation-system-alias-source-closure-01/result.json",
+    "controlCount": 18,
+    "actualSettingsUsed": true,
+    "actualDeleteOrBuildOrRuntime": false
+  },
+  "readOnlyQueryOutputClosure": {
+    "findingReport": "/private/tmp/pcw-local-main-source-integration-50b6-02/limited-query-cwd-review.json",
+    "findingReportSHA256": "fd57730d470b2ec4a916b3c42d8d3c94fddfff00e4b0cd86c4aba04a294bf726",
+    "oldMainFileAttribution": "Unknown. No contents of the user main-tree colon-hyphen file were read, changed or attributed to a particular caller. No old entitlements query was rerun.",
+    "officialInstalledManual": "/usr/share/man/man1/codesign.1",
+    "officialManualSnapshot": "/private/tmp/pcw-validation-system-alias-source-closure-01/official-installed-codesign.1",
+    "officialManualSHA256": "fec462ff82f5e09e4f59422774a1099192430598368196bcd1a3d51ad0b872ed",
+    "officialLocator": "--entitlements option paragraph and examples at installed manual lines 271-289 / 747-755",
+    "outputContract": "Documented --display --entitlements - --xml writes XML to stdout; a signature with no entitlement data writes nothing and succeeds. Deprecated colon-dash is never used or accepted as evidence.",
+    "privateCwd": "Each codesign read gets a fresh explicitly passed canonical owned0700 directory under fixed /private/tmp/pcw-validation-code-query- namespace; no inherited caller cwd. Only an O_EXCL/NOFOLLOW0600 reserved evidence file is expected. Unexpected outputs, deprecated warnings or unknown OS results reject and retain original evidence.",
+    "proof": "Every actual command/cwd/stdout/stderr/exit is recorded and logged with record path/SHA. Builder root logs and entitlements file bind exactly to documented stdout. Consumer independently reissues bounded private-cwd reads and verifies outputs/seals; only the qualified scratch cwd differs in semantic comparison, never command or output. No signing identities or credential query occurs.",
+    "queryControls": "/private/tmp/pcw-validation-system-alias-source-closure-01/query-boundary-result.json",
+    "queryControlCount": 19,
+    "qualificationThroughQueryRegression": "/private/tmp/pcw-validation-system-alias-source-closure-01/deletion-qualified-query-result.json",
+    "qualificationRegressionCount": 20,
+    "layers": "All OS query returns are DI in these controls; real private FS/cwd/symlink behavior. No real codesign query/sign/App/Core/SecItem execution. Swift/PBX/xcconfig/Rust inputs are unchanged and reuse their exact existing proof; next actual normal and Mac artifact must carry their new full source ref."
   }
 }

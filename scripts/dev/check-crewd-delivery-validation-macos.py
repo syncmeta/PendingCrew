@@ -18,7 +18,7 @@ def check(base,ref):
  manifest=json.loads((base/'build-inputs.json').read_text());receipt=json.loads((base/'build-provenance.json').read_text())
  if type(manifest.get('format')) is not int or manifest['format']!=1 or type(receipt.get('format')) is not int or receipt['format']!=1:raise ValueError('closed proof version required')
  if manifest.get('sourceRef')!=ref or receipt.get('sourceRef')!=ref or manifest.get('sourceSelection')!='committed-archive':raise ValueError('explicit source attribution mismatch')
- required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json','unsigned-target-finalization.json'}
+ required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json','unsigned-target-finalization.json','root-signature-queries.json'}
  if set(receipt.get('files',{}))!=required:raise ValueError('complete evidence file set required')
  for name,digest in receipt['files'].items():
   p=base/name
@@ -96,7 +96,10 @@ def check(base,ref):
  if any(row['path'].startswith('Contents/_CodeSignature') for row in presign):raise ValueError('actual target was already bundle sealed')
  actual_main_signature=closure.main_build_signature(preseal/main_name);captured=q.get('mainBuildSignature',{})
  if actual_main_signature['state']!=captured.get('state') or actual_main_signature['sha256']!=captured.get('sha256'):raise ValueError('independent target linker/unsigned main qualification differs')
- expected_target=pathlib.Path(settings['TARGET_BUILD_DIR'])/settings['FULL_PRODUCT_NAME']
+ expected_root=closure.reviewed_target_root(settings['TARGET_BUILD_DIR'])
+ if finalization.get('targetDirectoryInput')!=settings['TARGET_BUILD_DIR'] or finalization.get('targetDirectoryCanonical')!=str(expected_root):raise ValueError('actual target system-alias mapping differs from settings')
+ expected_target=expected_root/settings['FULL_PRODUCT_NAME']
+ closure.validate_query_record(captured.get('query',{}))
  if captured.get('query',{}).get('command')!=['/usr/bin/codesign','--display','--verbose=4',str(expected_target/main_name)]:raise ValueError('pre-exclusion main query not bound to actual Xcode target')
 
  if any(row['path'].startswith('Contents/Frameworks/Sparkle.framework') for row in presign):raise ValueError('updater payload remained in original target')
@@ -110,15 +113,23 @@ def check(base,ref):
  if comparisons!=json.loads((base/'seal-code-equivalence.json').read_text()):raise ValueError('producer equivalence differs from independent recomputation')
  sign_commands=[['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app/row['path'])] for row in sorted(code_inputs,key=lambda row:(-len(pathlib.PurePosixPath(row['path']).parts),row['path']))]+[['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app)]]
  logged(base/'adhoc-sign.log',sign_commands)
- if closure.signature_audit(app,actual_closure)!=json.loads((base/'loaded-code-signatures.json').read_text()):raise ValueError('independent current OS code-image seals differ')
+ if closure.signature_facts(closure.signature_audit(app,actual_closure))!=closure.signature_facts(json.loads((base/'loaded-code-signatures.json').read_text())):raise ValueError('independent current OS code-image seals differ')
  logged(base/'signature-check.log',[['/usr/bin/codesign','--verify','--deep','--strict',str(app)]])
  signature=logged(base/'signature-display.log',[['/usr/bin/codesign','--display','--verbose=4',str(app)]])
  if 'Identifier='+b.IDENTIFIER not in signature or 'Signature=adhoc' not in signature or 'TeamIdentifier=not set' not in signature or 'runtime)' not in signature or not re.search(r'^CDHash=[0-9a-f]{40}$',signature,re.M):raise ValueError('actual ad-hoc identity/runtime/code hash missing')
- logged(base/'entitlements.log',[['/usr/bin/codesign','--display','--entitlements',':-',str(app)]])
+ logged(base/'entitlements.log',[['/usr/bin/codesign','--display','--entitlements','-','--xml',str(app)]])
+ root_queries=json.loads((base/'root-signature-queries.json').read_text())
+ expected_queries=[['/usr/bin/codesign',*options,str(app)] for options in [['--verify','--deep','--strict'],['--display','--verbose=4'],['--display','--entitlements','-','--xml']]]
+ if len(root_queries)!=3:raise ValueError('complete root signature queries required')
+ for query,argv,logname in zip(root_queries,expected_queries,['signature-check.log','signature-display.log','entitlements.log']):
+  closure.validate_query_record(query)
+  if query['command']!=argv or query['exitCode']!=0 or (base/logname).read_text()!=closure.query_log(query):raise ValueError('actual root command/cwd/stdout/stderr log mismatch')
+ if (base/'entitlements.plist').read_text()!=root_queries[-1]['stdout']:raise ValueError('entitlements file is not exact documented stdout')
  content=(base/'entitlements.plist').read_bytes()
  if content.strip() and plistlib.loads(content):raise ValueError('production/debug/shared entitlements entered validation product')
  if receipt.get('actualArtifactBuilt') is not True or receipt.get('signatureMode')!='explicit-adhoc' or any(receipt.get(key) is not False for key in ['publisherEligible','actualKeychainUsed','AppLaunched','installed','published']):raise ValueError('evidence layer or execution boundary mismatch')
- subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)],check=True)
+ actual_root_verify=closure.readonly_query(['/usr/bin/codesign','--verify','--deep','--strict',str(app)])
+ if actual_root_verify['exitCode']:raise ValueError('independent root seal verification failed')
  print('PASS complete DeliveryValidation source/config/SPM/strong normal/products/loaded code/ad-hoc seal; no persistent runtime or publisher claim')
  return {'sourceRef':ref,'sourceCount':len(sources),'signatureMode':'explicit-adhoc','persistentRuntimeProven':False,'publisherEligible':False}
 
