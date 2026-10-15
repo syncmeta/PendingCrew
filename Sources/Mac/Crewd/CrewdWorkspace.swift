@@ -401,6 +401,7 @@ final class CrewdWorkspace: ObservableObject {
                                                            origin: origin, journal: journal, directory: directory)
     }
     private func associateOwnedIPC(_ epoch: UUID) {
+        guard acceptsObservation(epoch) else { return }
         ownedIPCBinding = nil
         guard let process = backend, process.isRunning, let birth = ownedChildIdentity,
               process.processIdentifier == birth.pid,
@@ -409,6 +410,8 @@ final class CrewdWorkspace: ObservableObject {
               let db = client.runtimeIdentity["dbId"].string, !db.isEmpty, db.utf8.count <= 256,
               let instance = client.runtimeIdentity["runtimeBindingId"].string, UUID(uuidString: instance) != nil else { return }
         ownedIPCBinding = OwnedIPCBinding(generation: epoch, peer: peer, dbID: db, runtimeBindingID: instance)
+        // Either journal readiness or verified peer association may arrive first.
+        captureOwnedLifecycle()
     }
     #endif
     private func connectOnly() async throws {
@@ -589,8 +592,15 @@ final class CrewdWorkspace: ObservableObject {
             if dataDirectory != nil { identity = try await readValue("remote.status")["identity"] }
             else { identity = client.authorityBinding }
             guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            let localDirectory: String?
+            if let directory = dataDirectory {
+                guard let resolved = realpath(directory.path, nil) else { throw CrewdPublicWire.invalid() }
+                defer { free(resolved) }
+                guard String(cString: resolved) == directory.path else { throw CrewdPublicWire.invalid() }
+                localDirectory = directory.path
+            } else { localDirectory = nil }
             let scope = CrewdPresentationJournal.Scope(namespace: authorityRecordID,
-                localDirectory: dataDirectory?.standardizedFileURL.resolvingSymlinksInPath().path,
+                localDirectory: localDirectory,
                 authorityID: identity["authorityId"].string, databaseID: client.runtimeIdentity["dbId"].string ?? identity["dbId"].string,
                 grantID: identity["grantId"].string, grantRevision: identity["grantRevision"].string)
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
