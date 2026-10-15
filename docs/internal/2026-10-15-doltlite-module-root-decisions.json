@@ -1,0 +1,134 @@
+{
+  "kind": "SOURCE_DESIGN_DECISIONS_NOT_RUNTIME_ACCEPTANCE",
+  "records": [
+    {
+      "path": "/private/tmp/pcw-doltlite-core16-authority-root-decision-01/decision.json",
+      "sha256": "78a84361e7c248bbee3d2251c6a2269e152459a6a3075eec4ffe8f0f009a4c3d",
+      "record": {
+        "kind": "ROOT_APPROVED_DOLTLITE_DOCUMENT_AUTHORITY_AND_FORMAT_ALLOCATION",
+        "formalCoreFormat": 16,
+        "NativeFutureReservedFormat": 17,
+        "NativeActive": false,
+        "owner": "/root/backend sole Rust/schema/version author",
+        "scope": "Authorized developer implementation/private fake-data validation only; no installation/daily-data migration/public release",
+        "reason": "Replacing document authority while retaining format15 would allow old15 daemon writes to legacy SQLite documents and create a second authority. Copy import alone does not satisfy all document content in DoltLite.",
+        "activationProtocol": [
+          "Hold original DataDirLock and serialize publications",
+          "Read exact old documents/revisions/events/classification and linked IDs",
+          "Prepare actual DoltLite workspace/import preserving document IDs/provenance/folder/ObjectRefs; real commit and complete import manifest",
+          "Verify content hashes/counts/reconstructed document text and mapping before activating",
+          "Protect old Core15 backup then one Core transaction writes authority manifest and format16",
+          "Unactivated orphan imports remain non-authoritative; any later recovery rechecks original revisions/digests",
+          "Core16 document API uses DoltLite authority; legacy SQLite documents are historical read-only",
+          "Missing/mismatched/unreadable Dolt store fails closed; no silent fallback",
+          "Restore verifies coordinated Core and Dolt snapshot/namespace/authority mappings and retains existing restore-epoch and remote-trust invalidation"
+        ],
+        "versionRules": [
+          "No rewriting old10-15 DDL or frozen migration history",
+          "Native17 change is reservation/comment only, not production activation",
+          "Old15 must physically refuse16 before write pragmas/mutations",
+          "Runtime SQL transaction and Dolt version commit guarantees must be proved using pinned actual engine",
+          "Existing5f Core15 immutable Mac/Linux artifacts retain actual source/config and do not become16 proof"
+        ],
+        "wholeAcceptance": [
+          "Actual pinned engine and isolated worker protocol/ACL",
+          "Free SQL versus protected metadata/control functions and escape restrictions",
+          "Shared semantic blocks/placements/live and pinned views/typed links",
+          "Import/commit/crash/unknown/reopen/publish barrier",
+          "Protected formal15-to16 upgrade, failure/rollback and old15 zero-write refusal",
+          "Coordinated backup/restore with namespace/authority mismatch rejection",
+          "Original document API and client views cutover with preserved IDs and permissions"
+        ],
+        "sourceDevelopmentAuthorized": true,
+        "actualDailyDataSwitchAuthorized": false
+      }
+    },
+    {
+      "path": "/private/tmp/pcw-doltlite-free-view-root-decision-01/decision.json",
+      "sha256": "20f68f490e901472e25625461ab43db360f6840960bbc4f82e98a1ad19393c8a",
+      "record": {
+        "kind": "ROOT_APPROVED_FREE_DATA_VIEW_RENDERER_ARCHITECTURE",
+        "sourceContract": "/private/tmp/pcw-doltlite-client-interaction-contract-01/interaction-contract.json",
+        "sourceContractSHA256": "2c20daaf24fcc37e28298a1a5b6afa710fabb74c83e5142f1dcfa5126bf4653f",
+        "clientOwner": "/root/client_delivery",
+        "backendWireSchemaOwner": "/root/backend",
+        "approved": [
+          "Native ordered document composition view",
+          "Native free SQL/schema/data workspace",
+          "Versioned arbitrary HTML/CSS/JS code bundle/bindings/provenance as independent view payload",
+          "Mac and remote-iOS WKWebView renderer with host-controlled capability bridge",
+          "Default read-only, explicit protected host scope knowledge-write grant, Core ACL/CAS/UUID rechecked"
+        ],
+        "limitsAndBoundaries": [
+          "Native captured authority/db/epoch/crew/view/revision/generation, not JS-supplied caller/scope",
+          "Validate actual WK instance and frame source; host CSP cannot be replaced by bundle",
+          "Exact current bundle/authorized attachment resources only; no fileURL/newserver/genericCore/shell/credentials/ambient network",
+          "Grant controls cannot be changed by arbitrary user SQL or JS declaration",
+          "Namespace/permission/retire change revokes bridge and clears content; late results cannot cross namespaces",
+          "Unknown keeps original request UUID and permits pure lookup, never blind replay",
+          "Do not claim nonPersistent store/navigation delegates as OS resource or security isolation",
+          "Whole actual renderer/data/version/permission/failure flow acceptance required",
+          "Wait root full public DTO freeze for final transport binding; independent UI/renderer may proceed"
+        ],
+        "current5fArtifactsAndUnknownSceneUntouched": true,
+        "newSystemEntitlementOrPermissionAuthorized": false,
+        "dailyDataMigrationAuthorized": false,
+        "implementationArchitectureApproved": true
+      }
+    },
+    {
+      "path": "/private/tmp/pcw-doltlite-root-public-interface-lock-02/lock.json",
+      "sha256": "cd3547a0b7b3eaa78f5fa1c1363383dafd08cd41398f3cfe1a8fb20ec7e31683",
+      "record": {
+        "kind": "ROOT_FROZEN_DOLTLITE_COMPLETE_PUBLIC_DESIGN_CONTRACT_NOT_RUNTIME_ACCEPTANCE",
+        "snapshotDirectory": "/private/tmp/pcw-doltlite-public-contract-02",
+        "snapshotHashes": {
+          "manifest.json": "06c584a4b75f3c27e9ef787b64c86ad620e66bdcf7623faf82455f2291b18bfe",
+          "team_data.rs": "db6fa5624b8b75f531dbca0be3ff911f20073607a6e15c6023547b6498a09ace",
+          "contract.md": "6c6b5e3591c96d12cb6b01ed1dbc3cb1e70ce86547f471e9608ffc244b106ac5"
+        },
+        "solePublicRustSchemaWriter": "/root/backend",
+        "soleSwiftDecoderAndRendererWriter": "/root/client_delivery",
+        "format": 16,
+        "NativeReservedFormat": 17,
+        "frozenForClientBinding": true,
+        "requiresExplicitRootNewRevisionForWireChange": true,
+        "runtimeAdvertiseOrActivationAccepted": false,
+        "wholeModuleIndependentQAStillRequired": true,
+        "closedArchitectureDecisions": [
+          "Typed Existing/Created input references and server UUID allocation; explicit placement Keep/Set and created Object/Placement map",
+          "Pure original request lookup separated from current CAS; current ACL required, historical epoch preserves recorded result without replay",
+          "Protected qualified foreign capture vector; current live versus historical exact version explicit, no cross-file atomic promise or latest fallback",
+          "Actual output reference Visible/Unavailable redaction, inaccessible Keep preserves hidden pointer server-side",
+          "Existing FILE backup plus digest-bound sibling Dolt bundle; paired restore validates entire set before mutation; no pre16 orphan reuse",
+          "Pinned DoltLite worker isolation versus Core SQLite; actual publication, authorizer and recovery evidence still needed",
+          "Independent native composition/free SQL/code view under root renderer decision"
+        ],
+        "next": "Client binding may proceed against02. Backend implementation and whole real-engine/migration/restore acceptance continue. Independent design audit does not replace actual acceptance."
+      }
+    },
+    {
+      "path": "/private/tmp/pcw-doltlite-renderer-control-boundary-01/decision.json",
+      "sha256": "b265615d04bb0bcdc468c6f71a85ab1561a8744cc9b29e134ea900b00fe53bde",
+      "record": {
+        "kind": "ROOT_RENDERER_CONTROL_PLANE_INTERPRETATION_OF_FROZEN02",
+        "publicInterfaceLockSHA256": "cd3547a0b7b3eaa78f5fa1c1363383dafd08cd41398f3cfe1a8fb20ec7e31683",
+        "rendererRootDecisionSHA256": "20f68f490e901472e25625461ab43db360f6840960bbc4f82e98a1ad19393c8a",
+        "DTOChange": false,
+        "reason": "Standing scoped knowledge-write grant cannot turn arbitrary view JS into explicit Human recovery acknowledgement or bypass no-blind-replay/controlled administration semantics",
+        "standingBridgeGrant": [
+          "Read authorized bindings/objects/query",
+          "Ordinary authorized content/schema Apply through scoped native host and Core ACL/CAS/UUID checks"
+        ],
+        "nativeControlPlane": [
+          "ResolveUnknown acknowledgement",
+          "Initialize workspace",
+          "Branch create/switch/merge and version restore",
+          "Change bridge grants or other protected control metadata"
+        ],
+        "policy": "For these view-originated control requests, require real native-host explicit user action/single operation confirmation and host-constructed current target/request UUID. JS acknowledge=true or synthetic click is not proof. Code views may request navigation to native control UI. Formal authenticated Agent/MCP permissions remain separately enforced; do not reinterpret a JS grant as an Agent principal.",
+        "wholeAcceptance": "Prove untrusted JS cannot auto-ack its Unknown then generate blind retry or change branch/restore under standing content-write capability; native legitimate control path still works and retains history/epoch/context isolation."
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "status": "public-design-clarification-only",
+  "binding": "DataBindingEdit::Set.id and DataBinding.id are author-selected view-local logical binding names referenced by code, not globally stable entity or placement UUIDs. They are not creation aliases or created-result entries.",
+  "constraints": [
+    "Each view definition has unique nonempty binding names, UTF-8 length at most128 bytes; names are case-sensitive.",
+    "Keep may retain only an existing binding of the same parent view after expectedRevision CAS, including its protected foreign reference/capture; it cannot copy an invisible reference across views.",
+    "Set remains subject to normal scope/ACL/reference validation. A binding name confers no permission and is never a principal.",
+    "The server-assigned/non-reused UUID rule applies to namespace entities and placements, not view-local logical binding names.",
+    "CreateView defines bindings only through Set. Duplicate names in any resulting definition reject the whole mutation before publication; no first/last-write winner.",
+    "Within UpdateView, Set at an existing name is an explicit replacement under parent expectedRevision CAS. Rename is represented by omitting the previous name and adding Set with the new name; an unavailable protected target cannot be renamed by Keep or guessed replacement.",
+    "Any binding or code change advances the parent view revision and invalidates the old host view generation/bridge. A retained logical name does not carry an old bridge grant into new code."
+  ],
+  "files": {
+    "manifest": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/manifest.json",
+      "sha256": "06c584a4b75f3c27e9ef787b64c86ad620e66bdcf7623faf82455f2291b18bfe"
+    },
+    "DTO": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/team_data.rs",
+      "sha256": "db6fa5624b8b75f531dbca0be3ff911f20073607a6e15c6023547b6498a09ace"
+    },
+    "contract": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/contract.md",
+      "sha256": "6c6b5e3591c96d12cb6b01ed1dbc3cb1e70ce86547f471e9608ffc244b106ac5"
+    },
+    "rootLock": {
+      "path": "/private/tmp/pcw-doltlite-root-public-interface-lock-02/lock.json",
+      "sha256": "cd3547a0b7b3eaa78f5fa1c1363383dafd08cd41398f3cfe1a8fb20ec7e31683"
+    }
+  },
+  "previousAddendum": {
+    "path": "/private/tmp/pcw-doltlite-public-contract-02-binding-addendum-01/addendum.json",
+    "sha256": "da2552bd225d9ac6e65d5678b19f4ad169f519a4691200a8e9854e07d55606b6"
+  }
+}

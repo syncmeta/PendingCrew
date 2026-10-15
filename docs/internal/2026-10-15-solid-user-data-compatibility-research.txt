@@ -1,0 +1,185 @@
+PendingCrew 用户数据兼容 Solid：独立架构研究 01
+研究日期：2026-10-15。状态：研究建议；没有实现 Solid、连接真实 Pod、获取身份凭据、安装组件或改动仓库源码。
+
+一、结论与需 root 现在裁决的事项
+
+推荐把真正的 DoltLite 保持为本地知识/业务数据/内容块/视图主库，在 Core 准入之后增加可选 Solid 数据适配层。先做可逆、可审计的开放数据导出导入；以后单独交付明确范围的 Pod 双向同步。不要把 DoltLite 文件上传到 Pod 就称 Solid 语义兼容，也不要改成 Pod 唯一主存。
+
+当前工程只需预留三类不可丢的信息，不需要现在制造 OAuth、Pod 服务或庞大 RDF 数据库：
+1. 内容块、文档/视图、组合中的每次出现、关系、数据表/列/记录拥有稳定且不复用的 ID；稳定 ID 不使用标题、数组下标或可修改文本哈希。
+2. 显式类型、值的语义、顺序、关系和版本；引用目标与当前版本/固定历史版本必须可区分；删除后保留 tombstone 或明确缺失语义。
+3. scope 与来源/作者溯源。原文档 ID 应保留，旧整篇正文首次迁入可以成为一个块，之后人工/Agent 语义切分另记来源；不要迁入时凭猜测自动拆分。
+
+现在不必给每个实体增加必填 WebID 或 Pod URL：用项目/数据库稳定 namespace + entity UUID 可以派生导出 IRI（如 urn:uuid:…），未来在独立外部绑定表记录逻辑 IRI 与 Pod 可解引用 HTTP URL 的映射。URN 是可用 RDF 标识，但不是 WebID，也不是可直接请求的 Pod URL。若支持多库合并，namespace 不可取本机绝对路径；恢复应保持 namespace，明确 fork 才创建新 namespace 并保留来源映射。
+
+需要 root 冻结的两个模型边界：
+A. 文档中的内容块复用不扩大读取权限。组合视图必须逐目标检查 Core scope/ACL，隐藏目标不能通过标题、缩略图、反向引用或导出 manifest 泄露。跨 scope 显式共享副本或独立授权应是明确动作。
+B. 原始可自由编辑 SQL 只适用于本知识工作区；不能让修改业务表的人同时改 Core 准入、外部身份绑定、OAuth 秘密或同步确认状态。后者是控制面，需由 Core 维护并在所有 RPC/worker 入口重新准入。数据库文件主机所有者仍有最终物理控制，软件不能承诺抵御同一主机所有者直接改文件。
+
+二、实际源码基线与已观察能力
+
+此研究开始读取 main HEAD 5f6300525ee6b1f8a656a3eef8ceb2f41e1eed21。研究结束前只读快照：global 2bd6a45bf6d006dacb5d3e477890be7736acb921、client 50871579885c018bb4cc804cfd2abe44826030da、backend 7635010a41384d18b8c1f293723d0e5b35f181d9，三开发树 status 干净。main 有 README、design、旧 ACP 研究及根部未知未跟踪文件等既存改动，全部未触碰。精确时间、完整路径、文件 SHA 与行摘录在 source-evidence.json。没有运行测试或编译，没有重新审查全部已验业务。
+
+现有源码复用点（以下是源码事实，不代表新的运行验收）：
+- crewd/crates/store/src/documents.rs:38–50、63–116、118–148：文档 UUID、正文、revision CAS、create-request digest witness、软删除与事件正文。这是旧整篇文档持久模型，尚不是碎片知识库。
+- crewd/crates/collab/src/documents.rs:10–38、48–105、128–150：文档权限、expectedRevision 冲突和 request UUID 语义。适合作为新模块防覆盖/未知结果设计的现有模式，但不能声称与远端 Pod 原子事务等价。
+- crewd/crates/collab/src/resource_acl.rs:14–45：Human/Session 与 crew/captain/management 的本地 scope 准入。Solid 导入文本不可自报 Sender::Human。
+- crewd/crates/server/src/peer.rs:1–40、137–156：内核本地调用者与进程出生身份，JSON identity 不授予 Human。
+- crewd/crates/proto/src/remote.rs:98–129：authority/db/SPKI/grant revision 与 OwnerWorkspace 远程授权；它是本产品设备信任，不是 WebID-OIDC。
+- crewd/crates/server/src/remote/identity.rs:13–25、70–90：服务私有证书绑定与缺失凭据拒绝再造信任；可复用保护思路，不能直接复用为 Pod OAuth 令牌格式。
+- crewd/crates/server/src/remote/mod.rs:697–752：durable revoke 与物理取消未知的区分。撤销产品 grant 不自动撤销 Pod 既有令牌，必须两个控制面都管理。
+- Sources/Mac/Crewd/CrewdDocumentsView.swift:11–55、74–85：原客户端文档读取、crew 绑定、编辑/删除与未知提交不自动重发。新组合视图和外部同步状态沿用这些交互语义。
+- Sources/Services/RemotePendingCrewBackend.swift：iOS/远程后台接线入口。首轮通过现有 crewd RPC 读取本地知识库或同步结果，不让 iOS 链接 DoltLite 或持有第二套同步器。
+
+三、规范状态与兼容性用语
+
+2026-10-15 实际读取的 published Solid Protocol 是 0.11.0、2024-05-12 Draft Community Group Report；不是 W3C Recommendation。其 Editor's Draft 与 published 版分开看待。WAC published 为 2024-05-12 草案；ACP /TR 页面为 0.9.0、2022-05-18，明确 Editor's Draft。Solid-OIDC /TR 为 2022-03-28 v0.1.0；当前编辑稿还有变化，不能取几段不同版本拼成未经验证的“最新兼容”。LDP 1.0、RDF 1.1 Concepts、JSON-LD 1.1、PROV-O 则是各自 W3C Recommendation。具体 Pod 仍须声明并验证实际认证/授权/格式能力。[S1][S2][S3][S4][S5][S6][S7][S8][S9]
+
+应分别宣称：
+- “开放语义导出/导入”：本地数据可映射成 RDF/JSON-LD，并经本产品 round-trip。仅此不证明是 Solid 客户端。
+- “与指定 Pod 的指定资源读写互操作”：真正走发现、身份、HTTP、授权、条件写与故障恢复，列出 provider/version 与测试范围。
+- “通用 Solid 客户端”或“Solid Server”：需要进一步覆盖相应 conformance 类别与授权差异，不因一个 provider 测试通过而成立。
+- DoltLite Git-like 分支/提交是本地数据库版本；不是 Git 仓库协议，也不是 Solid 的 HTTP 资源版本。[S1][S10]
+
+四、内容块、业务表、文档和附件如何映射
+
+建议自有稳定命名空间词汇只覆盖 PendingCrew 特有部分，通用类型与来源可复用现成词汇；不存在一个 Solid 规定的通用“任务/块/文档”数据库 schema。Solid 提供资源协议，跨应用理解仍取决于共享 vocabulary 与应用约定。
+
+本地对象 -> 建议导出表示：
+- 知识块：稳定 IRI，type/content/mediaType/language/provenance；文本是数据而非执行指令。每块独立可寻址，正文修改不变 ID。
+- 文档组合视图：稳定 view ID；每次 placement 独立 ID，并指向 block ID，含有序 position、局部显示选项及 live 或 pinned revision。相同块在一篇文档出现两次必须保留两次出现；不能把它压成集合去重。
+- 多对多关系：每个带备注/来源/权限的关系作为独立 relation 实体，含 subject/predicate/object 与关系 provenance。简单无额外属性关系可投影为普通 RDF triple，仍保留本地 relationship ID 以 round-trip。
+- 业务表：table/column/row 都需稳定 ID；列重命名不改变 identity。以行资源+列 predicate 映射值，另导出 schema、约束、表/列显示名及原始精确值。自定义 SQL schema 不可能无需规则自动变成所有 Solid 应用理解的模型。
+- 视图代码/SQL/配置：独立 view 资源，可作为应用私有表示和配置附件；通用 RDF 描述其输入/引用/类型。导入视图代码、HTML、SQL 时默认不执行，先按 Core 准入与视图沙箱/能力检查；来自 Pod 的“文档”不能取得本机执行权。
+- 附件：保留 MIME、长度、摘要和 stable attachment ID；原始字节作为非 RDF 资源，元数据单独链接；导出后可按摘要验证。路径/文件名不能当身份，不能在导出里包含私有本机绝对路径或随带凭据 URL。
+
+RDF 图本质不是有序关系表；JSON-LD 普通数组也不能作为文档顺序承诺。推荐 placement 显式位置 + ID，导出可再使用 @list；明确 SQL NULL、缺字段、空串、空列表、重复值、decimal 精度、时区、二进制和未知 datatype 的表示，避免 round-trip 静默丢失。[S6][S7] 来源可以映射 PROV-O（如 wasDerivedFrom/wasAttributedTo），但不要求内部把所有审计数据都改成 PROV 存储。[S8]
+
+不建议同一 HTTP RDF 文档混入权限不同的多个块后期待片段 #id 有独立服务器 ACL。HTTP 请求资源是整文档，fragment 不提供独立 HTTP 授权隔离。初期按同一授权域分组或一块一资源；关系也可能泄露敏感存在性。为性能合包只能在相同权限、可接受冲突粒度的前提下做，不以文档容器位置推断块所有权。
+
+五、WebID、OIDC、ACL/ACP 与 Core 权限边界
+
+WebID 是标识 agent 的 HTTP(S) URI；用户手填 WebID 不构成已验证身份。可选 Pod 连接应由真实用户通过 provider 支持的 Solid-OIDC 流程证明身份，记录 WebID/issuer/client identity/credential slot 与授权范围；不能把当前 authority UUID、同 UID、本地 Human anchor、mTLS SPKI 或 agent session 直接编码为可获 Pod 权限的 WebID。[S2][S9]
+
+推荐连接器位于 crewd 受控服务侧：浏览器完成登录同意，Core 控制可导出 scope；秘密令牌与 DPoP 私钥在受保护凭据槽，而非可供 Agent SQL 编辑的业务表、DoltLite commit 历史或导出包。以 PKCE/state/nonce/issuer/redirect 精确检查防混淆；以 provider 实际支持的 DPoP/token 流程验证，不能把普通 bearer token 或 ID Token 当通用 Pod access token。
+
+最终权限是三个条件的交集：当前 Core 调用者允许此本地动作 AND 用户为该连接选择了此数据 scope/方向 AND Pod 对当前 WebID/client/resource 允许该 HTTP 动作。远端 owner/admin 不自动获得本地任意 crew 访问，Pod 传入的作者属性只记外部来源，不授予当前调用者管理权限。
+
+WAC 的 Read/Write/Append/Control 与现有 crew 角色不是一一对应；Control 是修改访问控制的能力，不是普通正文编辑。WAC 与 ACP 也不是互相替换的同一种序列化；需要能力发现与独立适配。首个最小单元只读/写业务资源，默认不编辑远端 ACL/ACP，不发布 public 权限；如远端权限不足就明确拒绝，不通过放宽 ACL 自愈。[S3][S4]
+
+撤销连接立即停止新请求、取消排队同步，隔离缓存/待确认操作，清除或撤销凭据（按 provider 支持），终止该连接授权。已经导出并被其他方下载的数据无法靠撤销追回；历史备份、DoltLite 分支与 Pod provider 备份也可能保留旧内容。产品必须区分停止共享、当前逻辑删除、彻底擦除历史三件事。
+
+六、DoltLite 版本与 Solid 同步语义
+
+ETag 是 HTTP 选定表示的 opaque validator，不是 DoltLite commit hash，也不是本地行 revision。应逐 resource 保存 server URL、representation 类型、ETag（原样含强/弱标记）、last fetched base、local commit/revision、payload digest、remote known/unknown 状态。强 If-Match 可用于乐观并发，创建用 If-None-Match:*；没有足够条件写能力时应明确标为只读/手动导出或拒绝安全双向写，不能声称 compare-and-swap 已保证。[S1][S11]
+
+建议真正同步时使用独立 durable outbox/journal（不由任意用户 SQL 直接控制），记录 operation UUID、输入 digest、连接授权 generation、base ETag/内容、目的 URI、动作与结果。Core receipt 与 worker 提交跨库不能假装一个 SQLite Tx；沿用新 DoltLite 模块将要冻结的 durable request/receipt/barrier，对“本地已提交但对外发布未确认”保持明确可查。
+
+状态机建议：queued -> sending -> confirmed / conflict / unknown / revoked。超时或掉线后只做 authorized GET/HEAD 与内容核对，不盲重发 POST、DELETE 或 PATCH。内容相等可以证明期望当前状态，不能证明唯一操作作者或远端无附带效果。不可判断则维持 unknown，由用户选择恢复；没有服务器 receipt 的通用 Solid HTTP 不能承诺跨系统 exactly-once。
+
+本地分支与外部编辑：以 last-synced base 为三方合并基线，在独立导入/同步工作分支准备修改，Core 检验结构、引用、scope 和权限后再发布。相同块正文冲突、视图 placement 重排/删除冲突与 schema 变化都要显式展示。两边内容恰巧相同不自动覆盖 provenance；不把整库 DoltLite merge 成功当跨多 Pod 资源原子成功。
+
+多资源文档发布没有通用 Solid 跨资源事务保证。建议先上传新/不可变依赖，再条件更新 manifest/组合头作为本应用发布指针；读端基于 manifest 固定版本，发现缺失/无权依赖则呈现 incomplete，不拼接半新半旧版本。对其他不遵循 manifest 的应用仍只是普通独立资源，不能宣称全 Pod 原子。删除共享块先检查引用并保留墓碑；远端 DELETE 超时后也需 reconcile。
+
+离线时继续本地 DoltLite 提交，显示未同步；恢复网络先验证连接授权 generation、重新抓取并做冲突判断，不以旧缓存授权继续外发。通知仅作刷新提示，断线/重复/乱序/遗漏后仍以 HTTP 条件读取和周期核对恢复，不能依赖通知作为 durable change log。[S12]
+
+七、三个方案比较与推荐交付顺序
+
+方案 A：一次性语义导出/导入（推荐最小单元）
+本地选定 scope、指定 DoltLite commit 生成带 manifest 的包：版本化词汇/context、schema、JSON-LD/Turtle、内容块、组合/关系、原始附件、摘要、未知字段与可选原生数据库备份引用；不携带 secrets、设备信任、执行账或模型凭据。导入先验证/预览、在新分支或全新工作区恢复，保留来源 IRI，不覆盖活跃数据；确认后发布。可先只生成本地包，不需要真实 WebID 或外网。若上传到 Pod，也须额外交付真实身份/HTTP/ACL流程。
+优点：最少依赖、便携、可验 round-trip，不改变本地主存。限制：没有自动同步，通用应用只理解标准与约定词汇，任意 SQL/视图代码的可执行行为不跨应用保证。
+
+方案 B：可选 Pod 双向同步（推荐完整路线）
+Core 内连接器、用户明确授权的 scope、适配一个声明版本的真实 Pod，提供登录/断开/撤销、能力检查、ETag/冲突/outbox/unknown/多资源 manifest 与恢复。先完整交付一种能力组合，再扩 WAC 与 ACP/provider 差异。用户可始终选择不连接。DoltLite 为本地主存和离线历史。
+优点：保留本地可靠工作与用户选 provider；能与其他 Solid 应用交换可理解的数据。代价：认证/权限、外部 schema 演化及长期恢复是独立工程模块。
+
+方案 C：直接 Pod 主存（本轮不推荐）
+需要将读写延迟、不可用、部分权限、跨资源事务、查询计划与离线编辑都变成核心依赖；SQL/RDF语义差异更大，Core 原有 durable work loop 不能无代价迁入。即使做，也应保留本地数据库作为授权受控缓存/工作分支，并重新界定权威来源。此为新的产品/架构决定，不属于“兼容 Solid”自然附带工作。
+
+DoltLite 官方提供自身版本/分支/远程能力并不等于 Solid Pod 支持其 chunk/remote 协议；不要暴露 doltlite-remotesrv 来代替 Solid 连接器，也不改变 root 已定的私有 stdio worker/统一 Core ACL。[S10]
+
+八、平台路线
+
+Mac/Linux：真实 DoltLite worker 继续仅继承私有 stdio，由 Core 维护授权、外部连接控制面与同步请求。连接器可作为 Core 内适配模块或受控 worker，但不能给知识 worker 新开公开端口或独立用户权限。先完成已授权本地知识模块和私有假 Pod 流程；真实外网 provider/身份需具体连接动作与权限。
+
+iOS：本轮通过既有远程 crewd RPC 展示知识块、文档视图、导出预览、同步/冲突状态；不本地嵌入引擎、不后台常驻 Pod 同步、不与服务侧同时争夺同一 outbox。未来若支持设备独立 Pod，可使用系统浏览器认证会话与安全凭据存储，另评 DPoP key/redirect/后台限制与设备撤销；这是后续模块。
+
+九、完整单元的质量判据（不重复已验旧流程）
+
+A 单元（开放数据便携）必须整体证明：
+- 真 DoltLite 内建表/改列名/多对多关系/稳定块/同块重复放置/混合 live与pinned 文档 -> commit -> 导出 -> 新库导入 -> 再导出，类型、NULL/缺字段、精确数值、Unicode、顺序、重复引用、附件字节、原 ID/来源/历史解释全部一致。
+- 老整篇文档迁入保 ID 与所有旧链接；失败/Unknown 不半迁入，重开可恢复；导入未知词汇保存，恶意 context 不联网取凭据，恶意 SQL/视图默认不执行。
+- 跨 scope 组合/反向引用/导出/错误信息均不泄露未授权块，软删除仍能解释历史引用；整个流程 Core 准入，没有 worker 绕过通道。
+
+B 单元（指定 Pod 真互操作）必须整体证明：
+- 正式登录身份验证、错误 issuer/nonce/DPoP拒绝、过期/撤销/换账户/换 provider 的隔离；不在日志、提交与导出包存秘密。
+- 指定 WAC/ACP 能力组合下，只读、无权、改权限、失权中途和撤销取消；现有 pairing 不变成 WebID。
+- 并发编辑产生可见 412/冲突，创建抢占、删除/重建、不支持强条件、无 ETag、弱 ETag、多表示差异、安全重定向与跨 origin 凭据保护。
+- PUT 已落盘响应丢失、POST 回执未知、进程崩溃、离线/重启、多资源部分发布和恢复；no blind replay，不能仅测正常 HTTP 200。
+- 本地历史恢复不恢复旧 OAuth 资格或已撤销连接；旧 outbox 不因 restore 被重新发送。缓存 purge 与本地历史保留有明确用户语义。
+- provider 导出后迁移至第二个独立 Pod 保 identity mapping 与引用，原 URL 不能被误作永久主键。验证来源记录具体 provider/version/source/config，不复用别的候选证明。
+
+十、工作量/依赖与待决项
+
+下面是模块相对大小，非日历承诺，不把研究算实现：
+- S：现在冻结稳定 ID/placement/type/scope/provenance 不丢原则。依赖 backend 现有知识模型设计；无 Solid 网络或新公共 RPC 必要。若模型已满足则只记设计约束，不额外改字段。
+- M：完整 A 单元，本地版本化导出/导入与全链路质量；依赖真实 DoltLite 提交/恢复、内容块/文档组合 API 冻结。可不阻塞当前 5f 候选验收。
+- L：完整 B 单元，服务侧 Solid 连接器+真实登录+一种 Pod/authz capability+冲突/未知恢复+原客户端状态呈现；依赖 A、控制面/凭据槽架构与具体用户 provider 选择/连接授权。
+- L/XL：额外 provider、两套授权管理、跨应用词汇扩展与双向 schema 演化；按真实兼容需求再做。
+- XL：C 直接 Pod 主存，需要新的产品决定与可靠性目标，不当前实施。
+
+真正待人类/主架构决定：是否将 A 纳入本轮知识模块交付还是独立后续；首个 provider 与读写范围；是否仅业务内容同步或还要分享成员身份；如何处理共享块越权时的显式共享；彻底删除历史与本地版本恢复之间的产品策略。选 DoltLite、块复用、数据与视图分离已是已定方向，不再作为待决。
+
+十一、Primary 来源（2026-10-15 通过 web 工具实际读取；不引用搜索结果页）
+
+[S1] Solid Protocol published 0.11.0, 2024-05-12 CG Draft：
+https://solidproject.org/TR/protocol
+固定版本 https://solidproject.org/TR/2024/protocol-20240512
+核对 sections Conformance / Resource Containment / Reading and Writing Resources / Conditional Update / Identity / Authentication / Authorization。本文针对其内容的规范概述刻意简述；具体适配仍以固定版本逐条验收。
+
+[S2] Solid-OIDC published 0.1.0, 2022-03-28：
+https://solidproject.org/TR/oidc
+固定版本 https://solidproject.org/TR/2022/oidc-20220328
+核对 WebID claim、issuer discovery、DPoP、TLS 与 scope。该页使用旧 DPoP draft 引用，实施时不能盲照旧稿参数。
+
+[S3] WAC, 2024-05-12 CG Draft：
+https://solidproject.org/TR/wac
+核对模式、ACL discovery/inheritance 与 Control 边界；本文没有声称支持该规范。
+
+[S4] ACP 0.9.0, 2022-05-18 Editor's Draft：
+https://solidproject.org/TR/acp
+核对 Context/Authorization/Access Grant Graph 与状态声明。不是 Agent Client Protocol；与工程 Claude ACP 完全不同。
+
+[S5] LDP 1.0, W3C Recommendation, 2015-02-26：
+https://www.w3.org/TR/ldp/
+核对 RDF/Non-RDF Source、Basic Container 与资源边界。
+
+[S6] RDF 1.1 Concepts, W3C Recommendation, 2014-02-25：
+https://www.w3.org/TR/rdf11-concepts/
+核对 IRI/literal/blank node、graph 为 triple 集合。本文 ID/空值/类型/关系映射是 PendingCrew 建议，非规范指定本产品字段。
+
+[S7] JSON-LD 1.1, W3C Recommendation, 2020-07-16：
+https://www.w3.org/TR/json-ld11/
+核对 @id/@type/@list/@set、typed values；本文 placement 模型与离线固定 context 是设计建议。
+
+[S8] PROV-O, W3C Recommendation, 2013-04-30：
+https://www.w3.org/TR/prov-o/
+核对来源、归属与派生词汇；不要求披露内部审计历史。
+
+[S9] Solid-OIDC current Editor's Draft（与 /TR published 分开核对）：
+https://solid.github.io/solid-oidc/
+核对授权码+PKCE、WebID、issuer trust、client credentials section 和 access-token out-of-scope 声明。未验证任何 SDK/provider 实现。
+
+[S10] DoltLite official repository / README（实现项目，不是 Solid 规范）：
+https://github.com/dolthub/doltlite
+核对 Beta、独立存储格式、SQLite 派生引擎、Git-like 版本/并发与原生 remote 工具。此研究不决定 backend 的最终版本 pin 或对 Beta 质量作保证。
+
+[S11] RFC 9110 HTTP Semantics, Internet Standard, June 2022：
+https://www.rfc-editor.org/rfc/rfc9110.html
+sections 8.8 Validators、13 Conditional Requests、15.5.13 412。本文 outbox/manifest/未知结果算法为设计建议，不是 RFC 提供跨资源事务。
+
+[S12] Solid Notifications Protocol 0.3.0, 2024-05-12 CG Draft：
+https://solidproject.org/TR/notifications-protocol
+通知能力与传输需 discovery；本研究建议将其仅作刷新提示，未声称其为可靠 durable 队列。
+
+两个探索 URL https://www.w3.org/TR/notification-protocol/（单数）与 https://www.w3.org/2023/09/solid-wg-charter.html 本次返回工具 Internal Error，未用于任何事实。没有因它们失败推断规范或工作组不存在。
