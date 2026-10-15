@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 原前端新 Mac 实际产物接受；TypeScript 静态门槛闭合，窗口整块仍待
+
+准确完整源码 86fb166b0c7f5c1ea04ce5a9e2ced3987cfb5845 的 normal10 与原 PendingCrew target 新 DeliveryValidation Mac 包已实际构建并获独立接受。normal10 报告 /private/tmp/pcw-Core14-normal86fb166b-independent-10.json，SHA58e83a9a6e3c02bb1779bf9f79b253f1fb513d7ff7fedb44b382c202914db9f6；默认 Debug/non-test/空 features，393 Rust 输入、raw11包12targets全部fresh=false，完整1376 Git清单为postbuild采集，不冒事前清单或连续峰值监测。新包 /private/tmp/pcw-delivery-validation-artifact-queue-03/artifact/PendingCrew Delivery Validation.app，独验报告 complete-mac-artifact-independent-03.json（同目录上级），SHA58124a193df00affc5d81ac19e005a2185024ef5e84fcda1ad40218ce347e193。GUI Release -O/专用Validation条件与helper Debug分层；实际1376Git/3738SPM/112products/12loaded/7MachO链、normal到staged及签封后等价、adhoc deep seal均核齐，实际CDHash1791f4c56898b2b773455986ef029e96009fe5b3；无Team/空entitlements，不具publisher资格，未启动App或访问SecItem。
+
+本次只重建受影响的原Mac包，iOS设备与模拟器编译证据永久保持0601来源，Linux393实际Release永久保持e630来源，稳定迁移/M5/业务按影响复用，没有追加CI。三个开发分支保存已获明确普通推送授权；远端main无推送。当前本地main621仍未含86的新Mac入口修复，README与262个untracked文件合计263项保留；本地源码进一步整合需局部预检与保护postflight，不能从已有产物外推安装、设备或日常数据切换。
+
+人类明确授权本次TypeScript5.9.3官方两个URL获取及noEmit检查，实际两请求、SHA512与132个归档regular文件一致，3真实生成声明和2JS的strict/checkJs/skipLibCheck=false/noEmit终态0，真实prompt text:number负例TS2322/exit2。完整独验 /private/tmp/pcw-M15-producer-admission-scope-preparation-01/independent-typescript-whole-static-01.json，SHA5e1033b8ca4a15e8c3ce2ce554fae9de1e6bb4b516e35d2b27f09bbd7ae6a2ad。下载进程继承HOME/PATH是相对manifest的真实偏差，未冒称完整隔离获取；不重下载抹平。检查进程使用隔离环境。candidate04保留原RED与旧源，unknown错误收窄含undefined省略/null及function throw实际行为差异，未来SDK动作必须重新绑定准确新hash；静态接受不证明SDK或Native兼容。
+
+source04完整窗口动作仍在源码收口。外部observer仅system.hello，无Human权限，不调用remote.status；首次exactCode pin仅授已核本机DB/data/App-parent/helper-code范围，不宣称远程身份已核。远程authority/cert/SPKI/endpoint必须经原App正式signed invitation及实际UI可达字段在任何远程pair/批准/保存凭据前完整复核，缺字段/不匹配/Unknown即终止，不补权限或改用裸RPC。完整P1配对保存、真正并发nonowner N只读及退出、P1有限owner退出、新PID P2恢复与原入口移除仍未实际验收；nativeAX替代技术及具体新包/假凭据动作尚无明确人类授权，TypeScript授权不覆盖此项。默认禁止native/App/SecItem执行，须先整块独审和具体动作核对。
+
+Native15模块边界见 /private/tmp/pcw-native15-after-typescript-module-boundary-02.md。静态工具依赖已解；真实SDK06格式/拒绝证据、OS隔离资格、完整历史decoder与ancestry、mandatory producer/factory、native turn/callback关联及审批/cancel/load/restart仍未闭合。版本15保持未激活；旧all-features磁盘中断范围仍未验。窗口/设备、publisher、安装/日常切换/公开发布和新真实模型各保留实际授权与证据边界。Jev/多后端/个人记忆/团队知识仍待讨论，持续目标未完成。
+
+
 ## 2026-10-15 本地main源码已整合；正式验证授权入口修复已验，下一准确Mac产物待构建
 
 本地主目录main已从fe68022f源码快进到621168557349446f41994e01af539a26c2156da9，完整程序树等于已验52d7d3ac；历史合入远端main的手动CI政策，两份工作流采用已验原blob，未新增逻辑或自动CI。README及262个untracked文件共263项内容/模式/mtime/inode和原status逐字保留，独立实际postflight /private/tmp/pcw-local-main-source-integration-621-01/independent-actual-local-main-postflight.json，SHAd4528406404c76e50652318b63fbf8ad748b5c0f8d60f621cd64b69b85cbc7dc。远端main仍未推送，安装/运行/日常数据/发布未执行；此本地main随后尚未带入本节新Mac入口修复。
