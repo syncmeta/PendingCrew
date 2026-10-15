@@ -1,7 +1,9 @@
 #if os(macOS)
 import Combine
 import Foundation
+#if !PENDINGCREW_DELIVERY_VALIDATION
 import Sparkle
+#endif
 
 /// 三 app 统一的 Sparkle 封装（spec 2026-08-06-unified-sparkle-updates）。
 /// 自动**检查**开、自动**安装**关 —— 发现新版弹标准窗口，装不装由人点。
@@ -22,10 +24,18 @@ final class AppUpdater: NSObject, ObservableObject {
 
     @Published private(set) var canCheckForUpdates = false
     let isConfigured: Bool
+    #if !PENDINGCREW_DELIVERY_VALIDATION
     private var controller: SPUStandardUpdaterController?
     private var cancellable: AnyCancellable?
 
+    #endif
+
     private override init() {
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        // This private channel verifies pairing/vault/lifecycle, never self-update.
+        isConfigured = false
+        super.init()
+        #else
         let bundle = Bundle.main
         let feed = bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
         let publicKey = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
@@ -39,13 +49,17 @@ final class AppUpdater: NSObject, ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in self?.canCheckForUpdates = value }
         controller.startUpdater()
+        #endif
     }
 
     func checkForUpdates() {
+        #if !PENDINGCREW_DELIVERY_VALIDATION
         controller?.checkForUpdates(nil)
+        #endif
     }
 }
 
+#if !PENDINGCREW_DELIVERY_VALIDATION
 extension AppUpdater: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         onWillInstallUpdate?()
@@ -66,4 +80,5 @@ extension AppUpdater: SPUUpdaterDelegate {
         }
     }
 }
+#endif
 #endif

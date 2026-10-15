@@ -11,7 +11,7 @@ IDENTIFIER='com.pendingname.pendingcrew.native-candidate'
 CONDITION='PENDINGCREW_DELIVERY_VALIDATION'
 DD='/private/tmp/pcw-codex-first-xcode'
 SPM='/private/tmp/pcw-codex-first-spm'
-TOOLS=['build-crewd-delivery-validation-macos.py','check-crewd-delivery-validation-macos.py','build-crewd-native-macos.py','write-codex-first-provenance.py','crewd-macho-seal-equivalence.py']
+TOOLS=['build-crewd-delivery-validation-macos.py','check-crewd-delivery-validation-macos.py','build-crewd-native-macos.py','write-codex-first-provenance.py','crewd-macho-seal-equivalence.py','crewd-validation-load-closure.py']
 
 def sha(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 def save(p,v):p.write_text(json.dumps(v,sort_keys=True,indent=2)+'\n')
@@ -48,6 +48,7 @@ def settings_check(rows,ref):
  v=targets[0];conditions=v.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split()
  required={'CONFIGURATION':CONFIG,'PRODUCT_BUNDLE_IDENTIFIER':IDENTIFIER,'ARCHS':'arm64','CODE_SIGNING_ALLOWED':'NO','CODE_SIGN_STYLE':'Manual','ENABLE_HARDENED_RUNTIME':'YES','ENABLE_DEBUG_DYLIB':'NO','ENABLE_PREVIEWS':'NO','PENDINGCREW_VALIDATION_SOURCE_REF':ref}
  if any(v.get(key)!=value for key,value in required.items()):raise ValueError('actual validation settings differ from reviewed request')
+ if '-Wl,-dead_strip_dylibs' not in v.get('OTHER_LDFLAGS','').split():raise ValueError('private Mac unused updater linkage exclusion missing')
  if CONDITION not in conditions or any(x in conditions for x in ['DEBUG','PENDINGCREW_NATIVE_CANDIDATE']):raise ValueError('validation credential factory compile channel mismatch')
  if any(v.get(key,'') for key in ['DEVELOPMENT_TEAM','PROVISIONING_PROFILE_SPECIFIER','PROVISIONING_PROFILE','CODE_SIGN_ENTITLEMENTS']):raise ValueError('personal signing/entitlement inputs forbidden')
  if not v.get('INFOPLIST_FILE','').endswith('Config/DeliveryValidation-Info.plist') or v.get('CODE_SIGN_IDENTITY')!='-':raise ValueError('validation Info/signing identity mismatch')
@@ -132,6 +133,14 @@ def main():
  save(out/'dependency-build-inventory.json',{'before':dependencies,'after':after,'externalPath':args.spm})
  built=pathlib.Path(settings['TARGET_BUILD_DIR'])/settings['FULL_PRODUCT_NAME']
  if not built.is_dir() or not built.resolve().is_relative_to(pathlib.Path(args.derived_data)):raise ValueError('actual original target product outside warm DD')
+ closure=load(repo/'scripts/dev/crewd-validation-load-closure.py','validation_load_policy')
+ # Explicit unsigned-target finalization also handles XCBuild's deferred package
+ # embedding order; it precedes every actual-target inventory/copy, never repairs
+ # a sealed/staged artifact. The same full guard is used by the project phase.
+ env=dict(settings,PLATFORM_NAME='macosx')
+ closure.prune_target(env)
+ if (built/'Contents/Helpers/crewd').exists():raise ValueError('unexpected helper in raw Xcode target; normal is injected only after capture')
+ target_closure=closure.audit(built);save(out/'target-load-closure.json',target_closure)
  builtrows=products(built);save(out/'xcode-products.json',builtrows);app=out/'PendingCrew Delivery Validation.app';shutil.copytree(built,app,symlinks=True)
  info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
  if info.get('CFBundleIdentifier')!=IDENTIFIER or info.get('PendingCrewDeliveryValidation') is not True or info.get('PendingCrewSourceRef')!=args.ref or info.get('BuildStampCommit')!=args.ref:raise ValueError('actual compiled Info marker/ID/source differs; do not repair it after build')
@@ -143,7 +152,10 @@ def main():
   if sha(target)!=row['sha256']:raise ValueError('pre-seal code capture changed')
   code_sources.append(row)
  save(out/'seal-code-inputs.json',code_sources)
- native.run(['/usr/bin/codesign','--force','--deep','--sign','-','--options','runtime',str(app)],snapshot,out/'adhoc-sign.log');native.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
+ # Explicit inside-out code sealing. --deep is verification only, not signing.
+ for row in sorted(code_sources,key=lambda row:(-len(pathlib.PurePosixPath(row['path']).parts),row['path'])):
+  native.run(['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app/row['path'])],snapshot,out/'adhoc-sign.log')
+ native.run(['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app)],snapshot,out/'adhoc-sign.log');native.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
  native.query(['/usr/bin/codesign','--display','--verbose=4',str(app)],snapshot,out/'signature-display.log');native.query(['/usr/bin/codesign','--display','--entitlements',':-',str(app)],snapshot,out/'entitlements.log',out/'entitlements.plist')
  ent=plistlib.loads((out/'entitlements.plist').read_bytes()) if (out/'entitlements.plist').read_bytes().strip() else {}
  if ent:raise ValueError('validation bundle must not carry production/debug/shared entitlements')
@@ -151,7 +163,9 @@ def main():
  for row in code_sources:equivalence.append({'path':row['path'],'comparison':seal.equivalent_files(preseal/row['path'],app/row['path'])})
  save(out/'seal-code-equivalence.json',equivalence)
  final=products(app);save(out/'packaged-products.json',final)
- files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json']
+ sealed_closure=closure.audit(app);save(out/'sealed-load-closure.json',sealed_closure)
+ save(out/'loaded-code-signatures.json',closure.signature_audit(app,sealed_closure))
+ files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json']
  save(out/'build-provenance.json',{'format':1,'sourceRef':args.ref,'appDirectory':app.name,'files':{name:sha(out/name) for name in files},'allLoadedCode':loaded_code(app,final),'actualArtifactBuilt':True,'signatureMode':'explicit-adhoc','publisherEligible':False,'actualKeychainUsed':False,'AppLaunched':False,'installed':False,'published':False})
  checker=load(repo/'scripts/dev/check-crewd-delivery-validation-macos.py','validation_consumer');checker.check(out,args.ref)
  print('BUILT private DeliveryValidation artifact; no Keychain/App launch/install/publisher action:',app)

@@ -18,7 +18,7 @@ def check(base,ref):
  manifest=json.loads((base/'build-inputs.json').read_text());receipt=json.loads((base/'build-provenance.json').read_text())
  if type(manifest.get('format')) is not int or manifest['format']!=1 or type(receipt.get('format')) is not int or receipt['format']!=1:raise ValueError('closed proof version required')
  if manifest.get('sourceRef')!=ref or receipt.get('sourceRef')!=ref or manifest.get('sourceSelection')!='committed-archive':raise ValueError('explicit source attribution mismatch')
- required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json'}
+ required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json'}
  if set(receipt.get('files',{}))!=required:raise ValueError('complete evidence file set required')
  for name,digest in receipt['files'].items():
   p=base/name
@@ -70,6 +70,9 @@ def check(base,ref):
  if presign!=json.loads((base/'xcode-products.json').read_text()):raise ValueError('target product copied with changes before packaging')
  mainrow=next(row for row in presign if row['path']=='Contents/MacOS/'+executable)
  if mainrow.get('kind')!='file' or mainrow.get('sha256')!=b.sha(base/'gui.pre-sign'):raise ValueError('actual GUI pre-sign pairing mismatch')
+ closure=b.load(repo/'scripts/dev/crewd-validation-load-closure.py','validation_load_consumer')
+ actual_closure=closure.audit(app)
+ if actual_closure!=json.loads((base/'sealed-load-closure.json').read_text()):raise ValueError('independent sealed dynamic dependency policy mismatch')
  final=b.products(app)
  if final!=json.loads((base/'packaged-products.json').read_text()) or b.loaded_code(app,final)!=receipt.get('allLoadedCode'):raise ValueError('complete sealed product/loaded code inventory mismatch')
  loaded={row['path'] for row in receipt['allLoadedCode']}
@@ -80,6 +83,15 @@ def check(base,ref):
  staged=native.regular_inventory(preseal)
  if staged!=sorted(code_inputs,key=lambda row:row['path']):raise ValueError('complete pre-seal code bytes differ from declared inputs')
  if {row['path'] for row in code_inputs}!={row['path'] for row in receipt['allLoadedCode'] if pathlib.PurePosixPath(row['path']).name!='CodeResources'}:raise ValueError('not every final loaded MachO has a pre-seal input')
+ # Recompute actual Xcode target closure from immutable pre-seal byte copies,
+ # independently bound below to every target product and actual strong normal.
+ target_closure={'policy':closure.POLICY,'images':[], 'libraryValidationRelaxed':False,'runtimeLaunchProven':False,'updaterCovered':False}
+ for row in presign:
+  if row['kind']=='file' and row['path'] in {x['path'] for x in code_inputs}:
+   data=(preseal/row['path']).read_bytes()
+   target_closure['images'].append({'path':row['path'],'sha256':b.sha(preseal/row['path']),'architectures':closure.image(data)})
+ if target_closure!=json.loads((base/'target-load-closure.json').read_text()):raise ValueError('independent actual-target dynamic closure mismatch')
+ if any(row['path'].startswith('Contents/Frameworks/Sparkle.framework') for row in presign):raise ValueError('updater payload remained in original target')
  baseline={row['path']:row for row in presign};comparisons=[]
  for row in code_inputs:
   name=row['path'];before=preseal/name;after=app/name
@@ -88,7 +100,9 @@ def check(base,ref):
   elif baseline.get(name,{}).get('sha256')!=row['sha256']:raise ValueError('staged GUI code is not the actual Xcode target code')
   comparisons.append({'path':name,'comparison':seal.equivalent_files(before,after)})
  if comparisons!=json.loads((base/'seal-code-equivalence.json').read_text()):raise ValueError('producer equivalence differs from independent recomputation')
- logged(base/'adhoc-sign.log',[['/usr/bin/codesign','--force','--deep','--sign','-','--options','runtime',str(app)]])
+ sign_commands=[['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app/row['path'])] for row in sorted(code_inputs,key=lambda row:(-len(pathlib.PurePosixPath(row['path']).parts),row['path']))]+[['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app)]]
+ logged(base/'adhoc-sign.log',sign_commands)
+ if closure.signature_audit(app,actual_closure)!=json.loads((base/'loaded-code-signatures.json').read_text()):raise ValueError('independent current OS code-image seals differ')
  logged(base/'signature-check.log',[['/usr/bin/codesign','--verify','--deep','--strict',str(app)]])
  signature=logged(base/'signature-display.log',[['/usr/bin/codesign','--display','--verbose=4',str(app)]])
  if 'Identifier='+b.IDENTIFIER not in signature or 'Signature=adhoc' not in signature or 'TeamIdentifier=not set' not in signature or 'runtime)' not in signature or not re.search(r'^CDHash=[0-9a-f]{40}$',signature,re.M):raise ValueError('actual ad-hoc identity/runtime/code hash missing')

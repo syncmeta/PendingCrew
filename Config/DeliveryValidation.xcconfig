@@ -7,3 +7,7 @@ CODE_SIGNING_ALLOWED = NO
 ENABLE_HARDENED_RUNTIME = YES
 SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) PENDINGCREW_DELIVERY_VALIDATION
 PENDINGCREW_VALIDATION_SOURCE_REF =
+
+// Only this private Mac channel has no updater symbol references. The target
+// phase rejects any remaining non-platform load before excluding its payload.
+OTHER_LDFLAGS[sdk=macosx*] = $(inherited) -Wl,-dead_strip_dylibs
