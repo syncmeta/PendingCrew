@@ -305,7 +305,14 @@ final class CrewdValidationWorkflowLease {
         }
         // No creation, replacement, chmod or truncation by the App. Publisher
         // initializes this exact inode in a separately reviewed transaction.
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        // Reject special files before open; NONBLOCK also closes a regular ->
+        // FIFO race without ever waiting for an unrelated writer.
+        var candidate = stat()
+        guard lstat(path, &candidate) == 0, candidate.st_uid == geteuid(),
+              (candidate.st_mode & S_IFMT) == S_IFREG,
+              (candidate.st_mode & 0o7777) == 0o600,
+              candidate.st_nlink == 1, candidate.st_size == 0 else { throw reject() }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else { throw reject() }
         var retained = false
         defer { if !retained { close(fd) } }
