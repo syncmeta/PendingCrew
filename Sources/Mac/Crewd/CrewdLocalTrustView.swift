@@ -5,12 +5,13 @@ import SwiftUI
 /// Code-admitted reconnects cannot use this form to grant themselves new trust.
 struct CrewdLocalTrustView: View {
     @ObservedObject var workspace: CrewdWorkspace
+    @Environment(\.dismiss) private var dismiss
     @State private var identity: CrewdLocalCodeIdentity?
     @State private var trustID = ""
     @State private var busy = false
     @State private var result: String?
     private var candidate: Bool {
-        #if PENDINGCREW_NATIVE_CANDIDATE
+        #if PENDINGCREW_NATIVE_CANDIDATE || PENDINGCREW_DELIVERY_VALIDATION
         return true
         #else
         return false
@@ -18,7 +19,11 @@ struct CrewdLocalTrustView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("本机 App 重连授权").font(.headline)
+            HStack {
+                Text("本机 App 重连授权").font(.headline)
+                Spacer()
+                Button("关闭") { dismiss() }
+            }
             Text("需当前真实人类启动链授权。授权只用于新App连接恢复普通命令；不能让新App关闭非其拥有的后台。")
                 .font(.caption).foregroundStyle(.secondary)
             if let identity {
