@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 准确 Apple0601 与 Linux393 Release 已验，完整模块组合继续
+
+Apple normal09及原target三平台DeliveryValidation实际产物已独验接受，实际完整编译来源永久为0601a424966bea5e3cec825ba3281ff254312295。normal09报告 /private/tmp/pcw-Core14-normal0601a424-independent-09.json（SHA9a9f9a5a43317652e274612bca3f2c5d35025de2fbcaa707ff02ebec797b2310）；三平台报告 /private/tmp/pcw-delivery-validation-artifact-queue-02/complete-whole-apple-independent-02.json（SHAb3879349b71ce607ca54979a670515df8879130ef121cf8e64f19b084bef228c）。实际1372Git/3738SPM；GUI Release -O与正常后台default Debug分别披露，iPhone/iPad原统一target设备及模拟器编译不代表窗口、SecItem、真机或publisher验收。
+
+当前393输入Linux default Release分发与受影响恢复完整单元已独验接受，run38670397185/job116211931916实际SUCCESS，用时4m53s，普通矩阵及其它scope均skip。实际完整编译来源永久e630d3e25dab2c67a39057b3c61ab54f258894b6；后续57be56c2仅补验收文档。实际报告 /private/tmp/pcw-linux393-release-e630-actual-01/complete-unit-independent.json（SHAfb8fec6ddc2083bf84ce29e0edee5aeabd6eecb3cc96df12b59c4297d31692d4）。393全Git/snapshot、raw11own包12targets全部fresh=false/defaultRelease/non-test/空features/Rust1.94；真实旧374项4e版本13停止后startup14/重开保原身份，SIGKILL后45352B非空WAL恢复保原提交，badWAL/future15/emptyBootUnknown各exit1、无socket且物理SHA/size/mode保全，原sleep birth保持、provider未新增调用，8ownPopen均回收。
+
+根只精确整合efc9639→文档记录57be56c2的6个Linux owned路径及两份统筹记录；crewd393树与0601全同、Mac产品源码未改、Native15未带入。本次提交单列为源码组合来源，各平台证明保持实际完整输入与配置，不给旧产物改标。01错误旧包计数与0fd错误归档路径、实际修复证据均保留；稳定迁移、M5与业务按字节影响复用，无重复全CI。
+
+Linux结论限隔离普通UID受管分发/恢复。实际activation pointer为QA选择，非installer CAS重跑、系统安装或公开发布；flow实际53regular/剩余special0，非完整恢复FS，runtime-prefix未归档。旧真实socket/FIFO源控另列；raw旧13 sidefile RED及历史noReplay范围不扩写。
+
+App source03将固定0601 Git对象、原snapshot/normal09/sealed payload及冻结工具副本，不依赖live HEAD停在旧ref。完整P1 local owner pin→正式配对保存→真并发nonowner N→P1有限ownedQuit→新P2恢复/原入口移除/ownedQuit尚待实际验收。nativeAX实际adapter/action正在准备且默认硬禁；实际使用须人类明确指定技术并核具体新动作，当前无App/AX/SecItem执行。main产品整合、窗口/设备、安装/日常切换/公开发布与新真实模型仍各待证。Native15未激活，真实格式/mandatory producer/turn关联/审批cancel载入恢复仍缺输入；SDK06、TypeScript5.9.3工具授权及OS隔离资格未解决。旧all-features磁盘中断范围未验；Jev/记忆仅待讨论。
+
 ## 2026-10-15 原 Mac 移除与退役后原后台生命周期整块源码接受，下一准确产物组合冻结
 
 客户端完整 efc9639ffff3a7e0735ac4da5c44a078ebfefe29 源码闭合获独立验收：/private/tmp/pcw-mac-pairing-owned-close-unit-01/independent-whole-source-closure-efc9639.json，SHA ad4e22a4a1dfa21b52eb07de16f474b787ee3a6a2ee8b681ce4127fc67dddbdc；closure manifest SHA e342b2ced7819aeca26b265fed890bd3653f9dcc706d6021ca72fbcfc9a76fe8。三条 Swift 与一份 owned 模块记录为唯一差异。真实 Mac 已保存电脑移除确认接正式 window/credential factory；原 owner 控制独立保留于业务退役/断连之外，经 fresh 同连接 kernel peer、原 Process birth/DB/runtime/journal 资格，只发送一个正式 hibernate 或查询原 Unknown ID，有限等待且最后重核原 Process，不移交 owner、不恢复退役普通写、不授非 owner Stop。

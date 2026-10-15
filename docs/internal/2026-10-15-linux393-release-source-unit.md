@@ -1,0 +1,37 @@
+# Linux current393 Release package and affected recovery unit
+
+This unit prepares one explicit manual Linux job. It does not run CI, install a system service, publish a release, run a model, or change the frozen original App source/artifacts at `0601a424966bea5e3cec825ba3281ff254312295`.
+
+The existing accepted Linux Release at `1533e69a901dd6c6c2be27cac11293cfd78117a0` has 390 Rust inputs and digest `8dfa60de8ed9097b3478b659085fe059f1fef96fd69a1ae72812161a7c183910`. Current393 digest `530de912ebc0fb615f36ed444e7ed1867bcf72510b639f6467e5633195e09a06` has actual Linux Debug recovery evidence from a8cb, and actual Mac Debug source evidence from normal09. Neither is a current393 Linux Release artifact. The new job must produce its own accurate compiled full ref and default Release evidence.
+
+## Source and configuration custody
+
+`linux393_release` defaults to false, under `workflow_dispatch` only. Four explicit Linux scopes are mutually exclusive: any two or more select only the minimal invalid-scope job; no selected scope runs the ordinary full matrix. Existing job bodies remain unchanged. The new job requires a complete lowercase forty-hex `reviewed_ref` equal to immutable `github.sha` and checkout HEAD, verifies the entire393 input digest and recipe/fixture Git bytes before tools/cache/fetch, and retains a clean source record.
+
+Dependency preparation preserves exact Cargo manifest/lock hashes, fetches the workspace locked closure once, and checks checkout cleanliness. The actual strong normal stays `--locked --offline --release`, empty/default features, non-test, Linux x86_64. Its independent consumer compares all393 witness entries with current full Git blobs, rechecks raw fresh owning-workspace evidence for eleven packages/twelve targets and all sidecars, configuration and actual ELF/binary. The canonical package has one exact compiled full ref. No schema label, producer digest table, old390 proof, Debug proof or cache hit can substitute.
+
+The existing builder gains an explicit `--package-only` option for this scope. It still builds and independently verifies the canonical package, then leaves runtime evidence pending; it skips only the historical broad backup/restore smoke, because the new job runs the narrowly affected runtime tail. Its default behavior remains the existing packaged backup/restore smoke for older callers.
+
+## Historical baseline and certification
+
+The baseline reader retrieves the already accepted smaller1533 artifact ZIP (`bbeec7ab04c8be1b5484eb4d57b8d3ce7ca3e0ea2b87e93a26e211803afd18aa`). It reads only the unique `linux14-baseline13/original4e-normal13.tar.gz` member, size28,364,798, with canonical SHA `cc73c54b606181f7f2c2ea500cbe0665f2aeb07138ee3c74db5553dec1ad129a`. The original existing strict13 consumer validates its source, ELF, binary and complete original raw/fresh proof. It remains compiled4e, baseline only, never current393.
+
+Managed certification retains the exact accepted390 family and adds exact393 family. The complete count/digest, default host configuration, source/binary/witness pairing, fresh requirement, snapshot hashes and sidecars remain mandatory. Linux delegation requires actual Release; Mac Debug control is evidence only for its actual platform. Installation's full strong package consumer remains the admission gate; runtime certification of a retained already verified package does not allow arbitrary self-labeled package JSON.
+
+## Affected runtime and archive
+
+The runtime fixture is solely authored by the backend owner, with an explicit frozen managed-module SHA. It must exercise real stopped13 with empty registry to current393Release startup/reopen and the original request UUID, real SIGKILL/nonempty WAL same-version managed recovery, and the newly affected Unknown/future/bad-WAL guard boundary. Existing stable DDL/rollback/full migration/installer CAS evidence is reused, not rerun. Raw old13 future-sidefile limitations remain recorded; managed guarantees do not generalize to raw binaries, external writers or other prefixes.
+
+The fixture output separates `flow` (all runtime DB, registry, requests, logs, process and physical facts) from `runtime-prefix` (the two immutable package copies and actual leases/activation links). The latter is preserved in the original private run; its path, activation and package hashes are captured in flow. Only flow is diagnostically archived; canonical old/new tar payloads are uploaded once each. The existing diagnostic-special-inodes archive and independent consumer preserve socket/FIFO metadata, never capture their contents, never follow outer links, and explicitly reject the claim of a full restorable filesystem. Failure data and original first failures remain retained. Runtime scope and archive cannot prove a daily installation, App/device behavior, publisher signature, Keychain, ACP or whole-program completion.
+
+## Current evidence layers
+
+Source controls are private at `/private/tmp/pcw-linux393-release-source-3e65s5cu`: sixteen scope combinations and unchanged older job bodies, new embedded Python/shell syntax, two help successes and real non-Linux build refusal before output/compile, actual retained1533 ZIP/member hashes, production baseline reader full immutable13 qualification and four no-output refusal cases, and actual accepted Macnormal09 full393 certificate positive with five refusal variants. No Core/Rust/CI runtime was executed for these controls. Final runtime fixture source/hashes and source-cut acceptance must precede the root's unique necessary Linux dispatch.
+
+## Actual complete Linux unit accepted (compiled source remains e630)
+
+The sole necessary manual run `38670397185`, job `116211931916`, completed successfully in 4m53s from **`e630d3e25dab2c67a39057b3c61ab54f258894b6`**. The other scopes and ordinary full matrix were skipped. QA independently accepted the complete unit in `/private/tmp/pcw-linux393-release-e630-actual-01/complete-unit-independent.json`, SHA `fb8fec6ddc2083bf84ce29e0edee5aeabd6eecb3cc96df12b59c4297d31692d4`.
+
+Actual current393 default Release, eleven owning packages/twelve fresh targets and full source/raw proof were verified. Binary SHA is `b791de5f1497cea877858b52d9b3ef1556349d0285b8a6e7670841839548f18f`; canonical tar SHA is `997c851720ae03657c7dad040083b1c16e862b26f545aee6dee610a5a5e97160`. Original4e baseline remains374 inputs and its original compiled source. Actual stopped13→current14 startup, original UUID reopen, real45,352-byte WAL recovery and Unknown/bad-WAL/future physical protection passed. The provider marker remained at the single calibration baseline. All eight owned cleanup statuses were retained distinctly (normal0, SIGKILL-9, explicit cleanup-15 and rejected-start1); these are not generalized into a claim that every process exited0.
+
+The actual diagnostic archive contained53 regular members and no special inode omissions. Source controls for socket/FIFO metadata do not imply those types appeared in the real Linux tail. No second CI/build or stable migration rerun is required. Any commit saving this paragraph is documentation only and never changes the actual compiled e630 source. This acceptance is an isolated distribution/affected-recovery unit, not a system installation, public release, App/device/credential verification, all-features run or full product completion. Historical raw old13 limitations and the installer-CAS/version-chain reuse boundaries remain intact.

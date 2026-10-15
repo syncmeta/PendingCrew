@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,pathlib,platform,shutil,subprocess,sys,tarfile
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
- a=argparse.ArgumentParser();a.add_argument('output');args=a.parse_args()
+ a=argparse.ArgumentParser();a.add_argument('output');a.add_argument('--package-only',action='store_true',help='build/verify canonical package without the historical backup/restore smoke; requires separate affected runtime gate');args=a.parse_args()
  if platform.system()!='Linux' or platform.machine()!='x86_64':raise ValueError('build on actual Linux x86_64; cross compile is not runtime acceptance')
  repo=pathlib.Path(__file__).resolve().parents[2];out=pathlib.Path(args.output).resolve()
  if out.exists():raise ValueError('fresh output required; retain previous evidence')
@@ -22,12 +22,14 @@ def main():
  shutil.copytree(evidence,package/'normal-build');shutil.copy2(out/'normal-build-witness.json',package/'normal-build-witness.json')
  (package/'README.txt').write_text('PendingCrew development Linux backend candidate\nSource: '+ref+'\nUnpacking never installs a service or migrates data.\nRun bin/crewd --help to inspect commands. For explicit isolated use:\n  bin/crewd --data-dir /absolute/fresh-directory serve\nRemote access is disabled by default. Pairing requires an explicit authenticated local invitation and configuration.\nKeep normal-build/ and normal-build-witness.json with the binary.\nDo not replace a daily database or start a system service without separate authorization.\n')
  manifest={'format':1,'sourceProofTier':'fresh-owning-workspace-production-graph','sourceRef':ref,'platform':'linux-x86_64','binary':'bin/crewd','binarySHA256':sha(package/'bin/crewd'),'witness':'normal-build-witness.json','witnessSHA256':sha(package/'normal-build-witness.json'),'distribution':'development-candidate','installed':False,'published':False}
+ if args.package_only:manifest['runtimeValidation']='not-run-here; separate affected runtime evidence required'
  (package/'candidate.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
  subprocess.run(['python3',str(repo/'scripts/dev/check-crewd-linux-candidate.py'),str(package)],check=True)
- subprocess.run(['python3',str(repo/'scripts/dev/smoke-crewd-linux-candidate.py'),str(package),str(out/'runtime-smoke')],check=True)
+ if not args.package_only:
+  subprocess.run(['python3',str(repo/'scripts/dev/smoke-crewd-linux-candidate.py'),str(package),str(out/'runtime-smoke')],check=True)
  archive=out/('crewd-linux-x86_64-'+ref[:8]+'.tar.gz')
  with tarfile.open(archive,'w:gz') as t:t.add(package,arcname=package.name)
  (out/'archive-sha256.txt').write_text(sha(archive)+'  '+archive.name+'\n')
- print('BUILT development Linux candidate with actual isolated packaged-runtime evidence:',archive)
+ print('BUILT canonical development Linux candidate; '+('separate affected runtime gate pending' if args.package_only else 'actual isolated packaged-runtime evidence retained')+':',archive)
 try:main()
 except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise SystemExit('FAIL: '+str(e))
