@@ -1,4 +1,4 @@
-//! Native returned-row and full-cut projection for the separate schema15 unit.
+//! Native returned-row and full-cut projection for the separate schema16 unit.
 //! WorkBook/execution/public-command receipts remain the effects authorities.
 //! Only the kernel-bound Core adapter may supply verified source snapshots.
 //! Append observations never establish full coverage by themselves.
@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub const MAX_ROW_BYTES: usize = 8 * 1_048_576;
 pub const MAX_CUT_BYTES: usize = 64 * 1_048_576;
 pub const MAX_CUT_ROWS: usize = 100_000;
-pub const V15_DDL: &str = r#"
+pub const V16_DDL: &str = r#"
 CREATE TABLE native_history_streams(
  history_id TEXT PRIMARY KEY,
  runtime_id TEXT NOT NULL REFERENCES native_execution_runtimes(runtime_id) ON DELETE CASCADE,
@@ -157,7 +157,7 @@ fn current(c: &Connection, binding: &Binding) -> Result<()> {
 /// Mutable access is needed solely for nested savepoints: each history operation
 /// must roll back its own failed row/cut even when the outer Core task handles
 /// that error. This does not open another connection or change with_tx callers.
-/// The separate schema15 migration remains required before history use.
+/// The separate schema16 migration remains required before history use.
 pub fn with_transaction<T>(
     store: &mut crate::Store,
     f: impl FnOnce(&mut rusqlite::Transaction<'_>) -> Result<T>,
@@ -366,7 +366,7 @@ mod tests {
     fn fixture() -> (Connection, Binding) {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE native_execution_runtimes(runtime_id TEXT PRIMARY KEY,revoked INTEGER NOT NULL);").unwrap();
-        c.execute_batch(V15_DDL).unwrap();
+        c.execute_batch(V16_DDL).unwrap();
         let binding = Binding {
             history_id: id(),
             runtime_id: id(),
