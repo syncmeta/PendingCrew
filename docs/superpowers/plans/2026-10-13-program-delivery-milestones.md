@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 Jev 首轮获准实现，source06 实际停点与下一诊断来源冻结
+
+用户已批准 Jev 首轮完整模块：复用 TypeSafe，公共 Choice/Score/Predicate，需求接收路由、唤醒、消息归属三业务，全局单 provider 手动配置、无跨 provider 级联，确定性规则优先，状态缓存/期限/原始 usage/失败回机长。后端唯一 Rust/schema 作者实施，QA 独立整块验收，客户端负责原前端设置接线；不是已交付。复用既有 extra 内 typed version1，不新增 DDL/版本，Requirement 不伪造 owner/Plan/验收，消息归属不修改 reply/@/Ask。配置采用既有本机 Human anchor 信任门、凭证 keep/set/clear 与失败 pending barrier，不实际调用真实凭证或模型。自动审批曾拒绝生产源码写入；同一动作凭明确实现授权复核后放行，原拒绝保留。其他厂商/OAuth、个人记忆和团队知识不纳入首轮。此前“Jev 待讨论”仅为历史状态。
+
+准确来源 33206e401d813fe905f90dfff043da7784c7e12d 的 actual normal13 独验 f13dbeef768af301025a05482ad493e0f54c34718edfa9f8882cb83fb060473e，Mac queue06 独验 ec10bd9195d9a569a70f6c91016cdc53ef80157c8aaa6516b391dbe23c3a40ab，code pin a9e80ae3adf634b0e381c601fa22a6df7f07302b，均保持原来源。local main 已受保护快进至 33206，264 项保留，独立 actual postflight bf3a8793fc710c8f6f55b96179c5d015c10be8ed56d07cf994bb0203268bf18b；远端 main 未推。
+
+source06 唯一 prepare f0648b 实际 exit0，txn f19a78f9-c9ef-4a43-8492-8e0df7d8fb17，scope 7b8f4b2f6877d05e34fd2b8e6c8e04146df1a75875cf619ac575df77f21a8ea3；11 历史及旧 scope 81f66 保全，独验 ba78c50694a6d50ecf3075aab1996ad867ca46902f7a49882e96b8bf51ce9678。raw0644 原件未改，另存同字节0600副本供闭集 gate；根 separate true gate b811cce2edd18340c5a33d5ad34eac0d809a7e503ab9f85ea494f3be6cd2e518。唯一 P1 tool97496 终态1，GUI75207原poll0，helper未qualified，未配对/凭据/N/P2；实际 closed log endpointIdentity 组拒绝且五外层 matches true，独验6c93fa947226856194d31b5b3e326b672d60e94e153f903df8362af7afd405c2。仅本次组定位，不回推旧57553；具体子因果未知，不重放。
+
+有限 production 谓词三优化配置与完整枚举重建全部通过，未复现 App 拒绝，因果对照独验 ba1856ddb8a7ab031bd1b2578a07990412e5ea39c495d0f57730103134b87c7a，不能据此猜 Bool/优化修复。客户端完整单 Swift 诊断源2cdcfe90abd6e2e4bf702eeba766344d7f072148获独验47c78a4bd1dcde25e6c5f93851ba0a96665d900dadc4446e0d50a7fe2b563d09：原 guard 条件/顺序及成功路径不变，只在失败后复算十个固定匹配布尔，无 raw 值。-Onone/-O各53控制及371输入类型检查实际0；若未来原 guard 拒绝而复算全true，必须 Unknown停保，不循环加日志/重包。根本次精确组合一Swift及两份统筹记录，下一完整ref须重新取得 actual normal 与不可变候选来源，不改标旧33206产物。本段不是根因修复或窗口验收完成。
+
+全工程仍约60–65%综合粗估，诊断不算新阶段；Native15真实SDK/完整生产生命周期、原窗口P1/N/P2、正式publisher与真机、安装/日常切换/公开发布仍未完成，各守具体授权。旧all-features完整配置仍未验；不重稳定全套/CI，不清受保护资产。
+
+
 ## 2026-10-15 全工程进度与原前端真实启动停点
 
 本次应人类要求，按已定义六个完整交付关口粗估全工程约60–65%；这是能力、真实验收及交付的综合估计，无精确工时分母，不能换算剩余时间。诊断、单次修补、控制通过不增加独立里程碑。M1工作闭环、M5确定性跟进调度模块已验；M2原前端主要实现与接线已验但最终窗口未闭；M3已有本地main整合及准确后台/候选准备但日常交付未闭；M4 Core14持久执行恢复底座已验、Native15完整生产能力未激活；M6 TLS/权限与Linux Release隔离包恢复已验，移动端编译已验，真机/正式签名/安装升级与剩余交付仍待。Jev、个人记忆及团队知识仅待讨论，不算已实现。
