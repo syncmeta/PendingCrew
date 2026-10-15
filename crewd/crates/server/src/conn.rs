@@ -110,6 +110,9 @@ where
         let mut changes = remote_writer.as_ref().and_then(|p| p.changes().ok());
         let mut locally_closed = writer_scope.closed_signal();
         'frames: loop {
+            if !writer_scope.output_is_live() {
+                break;
+            }
             let frame = tokio::select! {
                 biased;
                 _=locally_closed.changed()=>break,
@@ -120,7 +123,7 @@ where
                 },
                 frame = rx.recv() => match frame { Some(frame) => frame, None => break },
             };
-            if !writer_scope.is_live() {
+            if !writer_scope.output_is_live() {
                 break;
             }
             if let Some(principal) = &remote_writer
@@ -186,9 +189,15 @@ where
     )
     .await;
 
-    // Close custody before any slow watcher/writer drain. A peer EOF cannot
-    // leave manual bytes enabled while unrelated output is being flushed.
-    drop(connection_guard);
+    // Close input/custody before any slow output drain. Retaining this abort
+    // guard keeps only already accepted output alive, never manual permission;
+    // revoke/slow-client closures independently cancel the writer's output.
+    if connection_scope
+        .fence_input_until(std::time::Instant::now() + std::time::Duration::from_secs(2))
+        .is_err()
+    {
+        eprintln!("connection manual fence closure remains unknown");
+    }
     // 无论怎么退出（EOF、读错误、行过长）都要收尾。
     if let Some(f) = forwarder {
         if !*drain.borrow() {
@@ -198,6 +207,7 @@ where
     }
     drop(tx);
     let _ = writer.await;
+    drop(connection_guard);
     result
 }
 

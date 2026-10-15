@@ -226,10 +226,10 @@ impl PeerPolicy {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut first_error = None;
         for (_, (trust, scope)) in connections.iter() {
-            if !live_ids.contains(trust) {
-                if let Err(error) = scope.close_until(deadline) {
-                    first_error.get_or_insert(error);
-                }
+            if !live_ids.contains(trust)
+                && let Err(error) = scope.close_until(deadline)
+            {
+                first_error.get_or_insert(error);
             }
         }
         connections.retain(|_, (_, scope)| scope.is_live());
@@ -1468,6 +1468,7 @@ mod enrollment_wait_controls {
 #[cfg(test)]
 mod public_physical_controls {
     use super::*;
+    use crewd_exec::registry::ProbeResult;
     use std::{
         io::{BufRead, BufReader},
         os::unix::process::CommandExt,
@@ -1561,9 +1562,13 @@ else:
                 .owned_runtime_birth("foreign-session", native_pid as u32)
                 .is_none()
         );
-        let key = crewd_exec::registry::ProcessParticipant::AcpHelper { generation }
-            .key()
-            .unwrap();
+        let key = roots
+            .try_entries()
+            .unwrap()
+            .into_iter()
+            .find(|(_, identity)| identity == custody.helper_identity())
+            .expect("actual enrolled helper registration")
+            .0;
         roots.forget(&key).unwrap();
         assert!(
             policy

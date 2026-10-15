@@ -221,7 +221,34 @@ fn stopped() -> ControlError {
     ControlError::ShuttingDown
 }
 
+#[cfg(feature = "testkit")]
+pub struct TestActorPause(Option<oneshot::Sender<()>>);
+#[cfg(feature = "testkit")]
+impl Drop for TestActorPause {
+    fn drop(&mut self) {
+        if let Some(release) = self.0.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
 impl Handle {
+    /// Exact actor mailbox boundary for transaction-fault integration tests.
+    /// This grants no caller identity and exposes no wire operation.
+    #[cfg(feature = "testkit")]
+    pub async fn pause_for_test(&self) -> Result<TestActorPause, ControlError> {
+        let (entered, ready) = oneshot::channel();
+        let (release, wait) = oneshot::channel();
+        self.tx
+            .send(Input::PauseForTest {
+                entered,
+                release: wait,
+            })
+            .map_err(|_| stopped())?;
+        ready.await.map_err(|_| stopped())?;
+        Ok(TestActorPause(Some(release)))
+    }
+
     #[cfg(test)]
     pub(crate) fn panic_for_serve_test(&self) {
         self.test_panic.send(()).unwrap();
@@ -239,7 +266,10 @@ impl Handle {
     ) -> Result<serde_json::Value, crewd_proto::RpcError> {
         let (reply, response) = oneshot::channel();
         self.tx
-            .send(Input::Cmd(Cmd::PublicExecution { call, reply }))
+            .send(Input::Cmd(Cmd::PublicExecution {
+                call: Box::new(call),
+                reply,
+            }))
             .map_err(|_| rpc::rpc_err(stopped()))?;
         response.await.map_err(|_| rpc::rpc_err(stopped()))?
     }

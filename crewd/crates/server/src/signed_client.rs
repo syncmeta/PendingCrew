@@ -127,18 +127,18 @@ mod mac {
         Ok(unsafe { CFDictionary::wrap_under_create_rule(out) })
     }
     fn string(info: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<String> {
-        info.find(&self::key(key))?
+        info.find(self::key(key))?
             .downcast::<CFString>()
             .map(|s| s.to_string())
     }
     fn flags(info: &CFDictionary<CFString, CFType>) -> io::Result<i64> {
-        info.find(&key(unsafe { kSecCodeInfoFlags }))
+        info.find(key(unsafe { kSecCodeInfoFlags }))
             .and_then(|v| v.downcast::<CFNumber>())
             .and_then(|n| n.to_i64())
             .ok_or_else(denied)
     }
     fn debugging(info: &CFDictionary<CFString, CFType>) -> bool {
-        let Some(value) = info.find(&key(unsafe { kSecCodeInfoEntitlementsDict })) else {
+        let Some(value) = info.find(key(unsafe { kSecCodeInfoEntitlementsDict })) else {
             return false;
         };
         // CFDictionary cannot use unchecked downcast; use type-ID before wrap.
@@ -148,7 +148,7 @@ mod mac {
         let dict = unsafe {
             CFDictionary::<CFString, CFType>::wrap_under_get_rule(value.as_CFTypeRef() as _)
         };
-        dict.find(&CFString::new("com.apple.security.get-task-allow"))
+        dict.find(CFString::new("com.apple.security.get-task-allow"))
             .is_some_and(|v| v.downcast::<CFBoolean>().is_none_or(|v| v.into()))
     }
     pub(super) fn grant(
@@ -171,7 +171,7 @@ mod mac {
             return Err(denied());
         }
         let hash = info
-            .find(&key(unsafe { kSecCodeInfoUnique }))
+            .find(key(unsafe { kSecCodeInfoUnique }))
             .and_then(|v| v.downcast::<CFData>())
             .ok_or_else(denied)?
             .bytes()

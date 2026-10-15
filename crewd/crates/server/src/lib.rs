@@ -22,7 +22,9 @@ mod terminal_runtime;
 pub mod token;
 pub(crate) mod wake_adapter;
 
-use crewd_exec::registry::{ApplyOutcome, OrphanDecision, OrphanReport, ProcessRegistry};
+use crewd_exec::registry::ProcessRegistry;
+use crewd_exec::registry::recovery::RecoveryReport;
+pub mod recovery;
 use crewd_store::{Db, Store};
 pub use hub::Hub;
 use std::future::Future;
@@ -208,33 +210,28 @@ pub const PROCESS_REGISTRY_FILE: &str = "exec-registry.json";
 /// 读登记表并回收上次崩溃留下的孤儿。**必须先拿到数据目录锁**（确认没有别的 crewd 活着）。
 /// 返回登记表（之后起的会话继续往里登记）和每一条的处置说明。
 /// 拒绝执行 / 杀失败 / 读不到身份的条目仍留在登记表里（见 `crewd_exec::registry::reap_orphans`）。
-pub fn reap_orphans(data_dir: &Path) -> anyhow::Result<(Arc<ProcessRegistry>, Vec<OrphanReport>)> {
-    let registry = Arc::new(ProcessRegistry::load(
-        &data_dir.join(PROCESS_REGISTRY_FILE),
-    )?);
-    let reports = crewd_exec::registry::reap_orphans(&registry)?;
-    Ok((registry, reports))
+pub fn reap_orphans(
+    data_dir: &Path,
+) -> anyhow::Result<(Arc<ProcessRegistry>, Vec<RecoveryReport>)> {
+    recovery::recover_locked(data_dir, true)
 }
 
 /// 把回收结果逐条打到 stderr（`message` 已按真实结果写：没动手的、杀失败的都说清）；
 /// 有登记留在表里就再补一行，别让「回收过了」盖住「还有一条没处理」。
-pub fn log_reap_reports(reports: &[OrphanReport]) {
-    for r in reports {
-        eprintln!("crewd: {}", r.message);
+pub fn log_reap_reports(reports: &[RecoveryReport]) {
+    for report in reports {
+        eprintln!(
+            "crewd: orphan {} pid {}: {}",
+            report.key, report.original.pid, report.detail
+        );
     }
     let kept = reports
         .iter()
-        .filter(|r| {
-            matches!(r.decision, OrphanDecision::Unreadable(_))
-                || matches!(
-                    r.outcome,
-                    ApplyOutcome::Refused(_) | ApplyOutcome::Failed(_)
-                )
-        })
+        .filter(|report| !report.confirmed_gone)
         .count();
     if kept > 0 {
         eprintln!(
-            "crewd: 有 {kept} 条孤儿登记没能处理，仍留在 {PROCESS_REGISTRY_FILE} 里，需要人来看。"
+            "crewd: {kept} unresolved orphan obligations retained in {PROCESS_REGISTRY_FILE}; no ordinary admission"
         );
     }
 }
@@ -392,6 +389,7 @@ async fn serve_with_hooks_inner(
     let _ = build_info::exe();
     let (registry, reports) = reap_orphans(&data_dir)?;
     log_reap_reports(&reports);
+    recovery::require_settled(&registry)?;
     #[cfg(feature = "testkit")]
     if let Some(ready) = opts.test_registry_ready.take() {
         ready(registry.clone())?;
@@ -861,9 +859,13 @@ mod tests {
         drop(reg);
         let (registry, reports) = reap_orphans(root.path()).unwrap();
         assert_eq!(reports.len(), 1);
-        assert_eq!(
-            reports[0].decision,
-            crewd_exec::registry::OrphanDecision::AlreadyGone
+        assert!(
+            reports[0].confirmed_gone,
+            "original birth AND group absence must be confirmed"
+        );
+        assert!(
+            !reports[0].signal_sent,
+            "already-gone recovery sends zero signals"
         );
         assert!(registry.entries().is_empty());
         assert!(

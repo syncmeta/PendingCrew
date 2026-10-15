@@ -200,6 +200,16 @@ fn transfer(fd: i32, buffer: &mut [u8], read: bool, deadline: i64) -> io::Result
     Ok(())
 }
 
+/// Same production transfer/clock primitive for the actual fixture's complete
+/// Core-side birth report. Five seconds is one whole frame budget, not per-read.
+#[cfg(test)]
+pub(crate) fn receive_for_test(fd: i32) -> io::Result<BirthReport> {
+    let deadline = monotonic_ms()?.saturating_add(5_000);
+    let mut bytes = [0; REPORT_LEN];
+    transfer(fd, &mut bytes, true, deadline)?;
+    BirthReport::decode(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

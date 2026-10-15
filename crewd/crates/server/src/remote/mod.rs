@@ -740,16 +740,16 @@ impl Manager {
         self.refresh_pins(&identity.public.authority_id).await?;
         self.changed
             .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
-        if let Some(state) = self.state.upgrade() {
-            if let Some(factory) = state.native_helpers.get() {
-                factory.revoke_grant(&revoke_id).await.map_err(|_| {
-                    RpcError::new(
-                        RpcError::CONFLICT,
-                        "grant is durably revoked; physical manual barrier remains unknown",
-                    )
-                    .with_refusal("remote.physical_revocation_unknown")
-                })?;
-            }
+        if let Some(state) = self.state.upgrade()
+            && let Some(factory) = state.native_helpers.get()
+        {
+            factory.revoke_grant(&revoke_id).await.map_err(|_| {
+                RpcError::new(
+                    RpcError::CONFLICT,
+                    "grant is durably revoked; physical manual barrier remains unknown",
+                )
+                .with_refusal("remote.physical_revocation_unknown")
+            })?;
         }
         serde_json::to_value(grant).map_err(dispatch::internal)
     }
@@ -826,7 +826,7 @@ impl Principal {
             &self.configuration_revision,
         )
         .map_err(store_error)?;
-        if !grant.is_some_and(|g| g.revision == self.binding.grant_revision) {
+        if grant.is_none_or(|g| g.revision != self.binding.grant_revision) {
             return Err(denied());
         }
         Ok(())

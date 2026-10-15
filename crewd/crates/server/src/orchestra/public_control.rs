@@ -551,7 +551,7 @@ impl<P: Port> Core<P> {
             expect: params.fingerprint,
             action,
             reply: super::core::AnswerReply::Public {
-                call,
+                call: Box::new(call),
                 inbox: self.inbox.clone(),
             },
             public_target: Some(target),

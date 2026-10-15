@@ -1203,7 +1203,12 @@ os.close(master)
                 .unwrap()
                 .unwrap();
             assert_eq!(count, 1);
-            let slot = route.peer.enrollment().slot();
+            let slot = match &route.peer {
+                NativeReceiptPeer::Proxy(peer) => peer.enrollment().slot(),
+                NativeReceiptPeer::Direct(_) => {
+                    panic!("proxy fixture lost its actual enrolled proxy")
+                }
+            };
             route.socket.write_all(b"Q\n").unwrap();
             physical.channel.write_all(b"Q").unwrap();
             assert!(physical.child.wait().unwrap().success());
@@ -1296,7 +1301,10 @@ os.close(master)
                 .await
                 .is_err()
         );
-        let slot = route.peer.enrollment().slot();
+        let slot = match &route.peer {
+            NativeReceiptPeer::Proxy(peer) => peer.enrollment().slot(),
+            NativeReceiptPeer::Direct(_) => panic!("proxy fixture lost its actual enrolled proxy"),
+        };
         route.socket.write_all(b"Q\n").unwrap();
         physical.channel.write_all(b"Q").unwrap();
         assert!(physical.child.wait().unwrap().success());

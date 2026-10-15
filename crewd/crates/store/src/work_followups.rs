@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            13
+            crate::schema::SCHEMA_VERSION
         );
         assert!(baseline_required(&c).unwrap());
         assert_eq!(
@@ -176,7 +176,10 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("crewd-v12-pre-v13-")
+                    .starts_with(&format!(
+                        "crewd-v12-pre-v{}-",
+                        crate::schema::SCHEMA_VERSION
+                    ))
             })
             .collect();
         assert_eq!(backups.len(), 1);

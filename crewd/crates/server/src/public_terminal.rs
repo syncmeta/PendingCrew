@@ -169,30 +169,29 @@ pub(crate) async fn watch(
                         .authorize(&state, SESSION_TERMINAL_WATCH)
                         .await
                         .is_ok()
+                    && let Ok(now) = current(&state, &actor, &target.session_id).await
                 {
-                    if let Ok(now) = current(&state, &actor, &target.session_id).await {
-                        let output = TerminalOutput {
-                            target: now,
-                            cursor: cursor(runtime.generation(), binding.epoch, next),
-                            next_cursor: cursor(runtime.generation(), binding.epoch, next),
-                            bytes_base64: String::new(),
-                            truncated: true,
-                            exited: runtime.original_gone(),
-                        };
-                        let event = TerminalWatchEvent {
-                            watch_id: watch_id.clone(),
-                            output,
-                            closed: true,
-                        };
-                        if tx
-                            .try_send(ServerFrame::Event(Event {
-                                event: TERMINAL_OUTPUT_EVENT.into(),
-                                data: serde_json::to_value(event).unwrap_or(Value::Null),
-                            }))
-                            .is_err()
-                        {
-                            task_scope.close();
-                        }
+                    let output = TerminalOutput {
+                        target: now,
+                        cursor: cursor(runtime.generation(), binding.epoch, next),
+                        next_cursor: cursor(runtime.generation(), binding.epoch, next),
+                        bytes_base64: String::new(),
+                        truncated: true,
+                        exited: runtime.original_gone(),
+                    };
+                    let event = TerminalWatchEvent {
+                        watch_id: watch_id.clone(),
+                        output,
+                        closed: true,
+                    };
+                    if tx
+                        .try_send(ServerFrame::Event(Event {
+                            event: TERMINAL_OUTPUT_EVENT.into(),
+                            data: serde_json::to_value(event).unwrap_or(Value::Null),
+                        }))
+                        .is_err()
+                    {
+                        task_scope.close();
                     }
                 }
                 break;
