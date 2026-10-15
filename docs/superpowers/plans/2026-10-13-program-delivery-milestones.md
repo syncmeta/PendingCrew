@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 全工程进度与原前端真实启动停点
+
+本次应人类要求，按已定义六个完整交付关口粗估全工程约60–65%；这是能力、真实验收及交付的综合估计，无精确工时分母，不能换算剩余时间。诊断、单次修补、控制通过不增加独立里程碑。M1工作闭环、M5确定性跟进调度模块已验；M2原前端主要实现与接线已验但最终窗口未闭；M3已有本地main整合及准确后台/候选准备但日常交付未闭；M4 Core14持久执行恢复底座已验、Native15完整生产能力未激活；M6 TLS/权限与Linux Release隔离包恢复已验，移动端编译已验，真机/正式签名/安装升级与剩余交付仍待。Jev、个人记忆及团队知识仅待讨论，不算已实现。
+
+当前实际产物来源仍3e628fa5，normal12与queue05不可改标。source05整块预检已实际闭合：txn acd77f38-0ccc-487a-9ac3-c4e7880adf01真实prepare退出0、完整外部stdout/receipt/prepared及备份保全获独验ed718b74345a54c80eef1329d7a65a0f24ff29ae2468d0601431f2d3c8cf16ae；同一f401根仅sourceRef86→3e，原scope275948与全部旧证据保留。非秘密原Core空锁0644不chmod，kernel有效UID筛选与强Missing分类按权威来源限定；有限稳定cut仅为cooperative停态与同inode lease/已审launcher协议，不冒原子OS隔离。此前模式拒绝、kernel Unknown及PID1 EPERM三个实际失败均单列保留；无新CI/全量测试/重复诊断。
+
+唯一新P1会话5930实际终态1：GUI57553经真实birth/guest/code资格后自退0，App日志称scope在凭据/helper startup前拒绝；无qualified helper/业务/AX相位。实际失败独验818223cb24f578a8cef0156d184945182ba399fc247bdab20022e9cb599c18a5。该日志不证明全局无helper/凭据调用，GUI0不证明流程成功。独立只读精确qualify诊断实际compile/CLI0、重建上下文通过，独验7f50b9fde5c02a35220e7fdc1dd2a8164694f957baea71ec7c9aade61ebc1b5e；不等原Bundle.main/ProcessInfo/Swift argv，原具体拒绝因果仍Unknown，未重启旧App。
+
+客户端完整Validation-only入口诊断源码单元（两Swift路径）已冻结bb1b596ba73e0c479cea1448c1ad3611f36c57bb并获整块独验d1e2795f6dbc5eb6ea8b441596f01bb74400a40cd501f2e023e08b9a535162d4：原资格谓词不松，仅固定typed阶段与预期匹配布尔、无rawenv/argv/path/账户/证书/错误原文；完整提案52f42400bc81d1d09933c61c68585cb53d2df6d73af791acd3e9381c115db803。根已精确纳入该已验两路径，随本次提交形成新fullref，后台唯一编译者作新准确normal，客户端作新不可变Mac包及来源/加载/签封独验；不重签旧3e或把旧normal12冒新源。然后从当前3e scope/最新P1 Unknown及原86完整历史继续新具体同根动作，最终须真实P1配对保存/并发N只读退出/P1 owner退出/P2恢复读取移除退出。当前尚无该整条流程、正式publisher、真机或安装/日常数据切换成果。
+
+本轮未推远端main；本地main最后完整独验为68dd7ce0、264项用户/保留文件保全。全工程目标未完成，Native15 SDK06/OS资格及完整生产生命周期、设备和交付动作仍各守既有授权。旧all-features ENOSPC的完整配置仍未验；唯一新增testkit路由已有未变字节的双平台实际证据，根决定不为补历史措辞重跑稳定全套，保留准确限制。
+
+
 ## 2026-10-15 原前端新不可变 Mac 候选准备整块接受，完整窗口延续动作准备中
 
 准确完整编译来源3e628fa5a0a4bc7a1839307a449f06f1cf74136b的normal12已实际独验接受（/private/tmp/pcw-Core14-normal3e628fa5-independent-12.json，SHA744903ab62442a475cb552d64c4af3ea4287a75342742c7fca5eeae5cf04f14c），新queue05原target Mac包也获整块actual接受：/private/tmp/pcw-delivery-validation-artifact-queue-05/complete-mac-artifact-independent-05.json，SHAe57faf2740f54de911a94c635f283d6e74b4d74a593045c7328b540ce925b56f。包 /private/tmp/pcw-delivery-validation-artifact-queue-05/artifact/PendingCrew Delivery Validation.app，实际code pin dbd86a685afc9d29f56e8366901df84e0f843bea。driver4805/作者proper94670/独立proper24164均终态0，完整1378Git/3738SPM、50products/2MachO/3loaded含seal、target→stage及normal→sealedhelper代码等价全部核齐。GUI Validation Release -O与helper defaultDebug/non-test/空features分层，adhoc/runtime/无Team，非publisher。

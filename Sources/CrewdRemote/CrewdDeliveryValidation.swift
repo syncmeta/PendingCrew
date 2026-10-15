@@ -19,44 +19,114 @@ enum CrewdDeliveryValidation {
         let database: String?
         let pin: String?
     }
+    /// Closed diagnostics contain no raw configuration or credential values.
+    enum QualificationStage: String, CaseIterable {
+        case entryArguments, bundleIdentifier, validationMarker, sourceStamp, manifestEnvironment
+        case canonicalPathUnavailable, canonicalPathMismatch, pathContainment, pathMetadata
+        case manifestNameAndRef, manifestOpen, manifestDescriptor, manifestRead, manifestChanged
+        case manifestIdentityAndActions, endpointIdentity, endpointShape, macScopeAndEnvironment
+        case providerCanonicalPath, providerMetadata, providerHash, mobileContainer, mobileScopeAndEnvironment
+        case credentialAction, unexpected
+    }
+    enum QualificationMatch: String, CaseIterable {
+        case entryArgumentsEmpty, bundleIdentifierMatches, validationMarkerMatches, sourceStampPresent, manifestEnvironmentPresent
+    }
+    struct QualificationRejection: LocalizedError {
+        let stage: QualificationStage
+        let matches: [QualificationMatch: Bool]
+        init(_ stage: QualificationStage, matches: [QualificationMatch: Bool] = [:]) {
+            self.stage = stage; self.matches = matches
+        }
+        // Preserve the existing generic user-facing storage failure.
+        var errorDescription: String? { CrewdRemoteError.storageFailure.errorDescription }
+    }
+    static func requireEntryArguments(_ arguments: [String]) throws {
+        guard arguments.dropFirst().isEmpty else {
+            throw QualificationRejection(.entryArguments, matches: [.entryArgumentsEmpty: false])
+        }
+    }
+    static func startupDiagnostic(_ error: Error, entryArgumentsEmpty: Bool) -> String {
+        let rejection = error as? QualificationRejection
+        var matches = rejection?.matches ?? [:]
+        matches[.entryArgumentsEmpty] = entryArgumentsEmpty
+        let event: [String: Any] = [
+            "kind": "deliveryValidationAdmissionRefused",
+            "stage": (rejection?.stage ?? .unexpected).rawValue,
+            "matches": Dictionary(uniqueKeysWithValues: matches.map { ($0.key.rawValue, $0.value) })
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: event, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{\"kind\":\"deliveryValidationAdmissionRefused\",\"matches\":{},\"stage\":\"unexpected\"}\n"
+        }
+        return text + "\n"
+    }
     static func qualified() throws -> Scope {
-        guard Bundle.main.bundleIdentifier == "com.pendingname.pendingcrew.native-candidate",
-              Bundle.main.object(forInfoDictionaryKey: "PendingCrewDeliveryValidation") as? Bool == true,
-              let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
-              let path = ProcessInfo.processInfo.environment["PENDINGCREW_VALIDATION_MANIFEST"] else { throw CrewdRemoteError.storageFailure }
+        // Capture the original application context once; no fallback bundle or
+        // environment substitution is permitted.
+        let bundle = Bundle.main
+        let identifier = bundle.bundleIdentifier
+        let marker = bundle.object(forInfoDictionaryKey: "PendingCrewDeliveryValidation") as? Bool
+        let ref = bundle.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String
+        let environment = ProcessInfo.processInfo.environment
         #if os(macOS)
-        return try qualify(manifest: URL(fileURLWithPath: path), sourceRef: ref, environment: ProcessInfo.processInfo.environment, platform: .mac)
+        return try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
+                                      environment: environment, platform: .mac)
         #else
-        // The real sandbox container is supplied by the OS, never an env path.
-        return try qualify(manifest: URL(fileURLWithPath: path), sourceRef: ref, environment: ProcessInfo.processInfo.environment, platform: .mobile, container: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
+        // Delayed until the existing outer qualification succeeds, as before.
+        return try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
+                                      environment: environment, platform: .mobile,
+                                      container: { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) })
         #endif
     }
+    static func qualifyApplication(bundleIdentifier: String?, validationMarker: Bool?, sourceRef: String?,
+                                   environment: [String: String], platform: Platform,
+                                   container: (() -> URL)? = nil) throws -> Scope {
+        let matches: [QualificationMatch: Bool] = [
+            .bundleIdentifierMatches: bundleIdentifier == "com.pendingname.pendingcrew.native-candidate",
+            .validationMarkerMatches: validationMarker == true,
+            .sourceStampPresent: sourceRef != nil,
+            .manifestEnvironmentPresent: environment["PENDINGCREW_VALIDATION_MANIFEST"] != nil
+        ]
+        do {
+            guard bundleIdentifier == "com.pendingname.pendingcrew.native-candidate" else { throw QualificationRejection(.bundleIdentifier) }
+            guard validationMarker == true else { throw QualificationRejection(.validationMarker) }
+            guard let ref = sourceRef else { throw QualificationRejection(.sourceStamp) }
+            guard let path = environment["PENDINGCREW_VALIDATION_MANIFEST"] else { throw QualificationRejection(.manifestEnvironment) }
+            return try qualify(manifest: URL(fileURLWithPath: path), sourceRef: ref, environment: environment,
+                               platform: platform, container: container?())
+        } catch let failure as QualificationRejection {
+            throw QualificationRejection(failure.stage, matches: matches.merging(failure.matches) { _, inner in inner })
+        } catch {
+            // Do not include localized descriptions, URLs, paths or raw errors.
+            throw QualificationRejection(.unexpected, matches: matches)
+        }
+    }
     static func privatePath(_ url: URL, root: URL?, directory: Bool) throws {
-        guard url.path.hasPrefix("/"), let resolved = realpath(url.path, nil) else { throw CrewdRemoteError.storageFailure }
+        guard url.path.hasPrefix("/"), let resolved = realpath(url.path, nil) else { throw QualificationRejection(.canonicalPathUnavailable) }
         defer { free(resolved) }
-        guard String(cString: resolved) == url.path else { throw CrewdRemoteError.storageFailure }
-        if let root { guard url.path.hasPrefix(root.path + "/") else { throw CrewdRemoteError.storageFailure } }
+        guard String(cString: resolved) == url.path else { throw QualificationRejection(.canonicalPathMismatch) }
+        if let root { guard url.path.hasPrefix(root.path + "/") else { throw QualificationRejection(.pathContainment) } }
         var s = stat()
         guard lstat(url.path, &s) == 0, s.st_uid == geteuid(),
               (s.st_mode & S_IFMT) == (directory ? S_IFDIR : S_IFREG),
-              (s.st_mode & 0o777) == (directory ? 0o700 : 0o600) else { throw CrewdRemoteError.storageFailure }
+              (s.st_mode & 0o777) == (directory ? 0o700 : 0o600) else { throw QualificationRejection(.pathMetadata) }
     }
     static func qualify(manifest: URL, sourceRef: String, environment: [String: String], platform: Platform = .mac, container: URL? = nil) throws -> Scope {
-        guard sourceRef.count == 40, sourceRef.allSatisfy({ "0123456789abcdef".contains($0) }), manifest.lastPathComponent == "scope.json" else { throw CrewdRemoteError.storageFailure }
+        guard sourceRef.count == 40, sourceRef.allSatisfy({ "0123456789abcdef".contains($0) }), manifest.lastPathComponent == "scope.json" else { throw QualificationRejection(.manifestNameAndRef) }
         let root = manifest.deletingLastPathComponent()
         try privatePath(root, root: nil, directory: true)
         try privatePath(manifest, root: root, directory: false)
         let fd = open(manifest.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { throw CrewdRemoteError.storageFailure }
+        guard fd >= 0 else { throw QualificationRejection(.manifestOpen) }
         defer { close(fd) }
         var first = stat()
         guard fstat(fd, &first) == 0, first.st_uid == geteuid(), (first.st_mode & S_IFMT) == S_IFREG,
-              (first.st_mode & 0o777) == 0o600, first.st_size > 0, first.st_size <= 65536 else { throw CrewdRemoteError.storageFailure }
+              (first.st_mode & 0o777) == 0o600, first.st_size > 0, first.st_size <= 65536 else { throw QualificationRejection(.manifestDescriptor) }
         var bytes = [UInt8](repeating: 0, count: Int(first.st_size))
-        guard read(fd, &bytes, bytes.count) == bytes.count else { throw CrewdRemoteError.storageFailure }
+        guard read(fd, &bytes, bytes.count) == bytes.count else { throw QualificationRejection(.manifestRead) }
         var last = stat()
         guard fstat(fd, &last) == 0, first.st_ino == last.st_ino, first.st_size == last.st_size,
-              first.st_mtimespec.tv_sec == last.st_mtimespec.tv_sec, first.st_mtimespec.tv_nsec == last.st_mtimespec.tv_nsec else { throw CrewdRemoteError.storageFailure }
+              first.st_mtimespec.tv_sec == last.st_mtimespec.tv_sec, first.st_mtimespec.tv_nsec == last.st_mtimespec.tv_nsec else { throw QualificationRejection(.manifestChanged) }
         guard let v = try JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any],
               let format = v["format"] as? NSNumber, CFGetTypeID(format) != CFBooleanGetTypeID(), Set(["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"]).contains(String(cString: format.objCType)), format.doubleValue == 1.0, format.intValue == 1, v["sourceRef"] as? String == sourceRef,
               v["validationDomain"] as? String == "pendingcrew.fake-only.delivery-validation.v1",
@@ -64,7 +134,7 @@ enum CrewdDeliveryValidation {
               let service = v["service"] as? String, service == "com.pendingname.pendingcrew.delivery-validation." + scopeID,
               let accountText = v["account"] as? String, let account = UUID(uuidString: accountText), accountText == account.uuidString.lowercased(),
               let actions = v["actions"] as? [String], Set(actions).count == actions.count,
-              !actions.isEmpty, Set(actions).isSubset(of: ["records", "read", "save", "remove"]) else { throw CrewdRemoteError.storageFailure }
+              !actions.isEmpty, Set(actions).isSubset(of: ["records", "read", "save", "remove"]) else { throw QualificationRejection(.manifestIdentityAndActions) }
         let common: Set<String> = ["format", "sourceRef", "scopeID", "service", "account", "actions", "mode", "validationDomain", "endpoint", "expectedAuthorityID", "expectedDatabaseID", "expectedServerPin"]
         guard let rawEndpoint = v["endpoint"] as? [String: Any], Set(rawEndpoint.keys) == ["host", "port"],
               let host = rawEndpoint["host"] as? String, let portValue = rawEndpoint["port"] as? NSNumber,
@@ -72,9 +142,9 @@ enum CrewdDeliveryValidation {
               (1...65535).contains(portValue.intValue),
               let aid = v["expectedAuthorityID"] as? String, CrewdRemoteText.uuid(aid),
               let db = v["expectedDatabaseID"] as? String, CrewdRemoteText.databaseID(db),
-              let spki = v["expectedServerPin"] as? String, CrewdRemoteText.pin(spki) else { throw CrewdRemoteError.storageFailure }
+              let spki = v["expectedServerPin"] as? String, CrewdRemoteText.pin(spki) else { throw QualificationRejection(.endpointIdentity) }
         let listed = CrewdRemoteEndpoint(host: host, port: UInt16(portValue.intValue))
-        guard listed.valid else { throw CrewdRemoteError.storageFailure }
+        guard listed.valid else { throw QualificationRejection(.endpointShape) }
         var data: URL
         let endpoint: CrewdRemoteEndpoint? = listed, authority: String? = aid, database: String? = db, pin: String? = spki
         switch platform {
@@ -87,21 +157,21 @@ enum CrewdDeliveryValidation {
                   let codex = v["codexProgram"] as? String, codex == root.appendingPathComponent("bin/fake-codex").path,
                   let claude = v["claudeProgram"] as? String, claude == "/usr/bin/false",
                   environment["PENDINGCREW_CODEX_PROGRAM"] == codex, environment["PENDINGCREW_CLAUDE_PROGRAM"] == claude,
-                  environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw CrewdRemoteError.storageFailure }
+                  environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw QualificationRejection(.macScopeAndEnvironment) }
             data = root.appendingPathComponent("data")
             for directory in [data, root.appendingPathComponent("work"), root.appendingPathComponent("bin")] { try privatePath(directory, root: root, directory: true) }
             let fake = URL(fileURLWithPath: codex)
-            guard let resolved = realpath(fake.path, nil) else { throw CrewdRemoteError.storageFailure }
+            guard let resolved = realpath(fake.path, nil) else { throw QualificationRejection(.providerCanonicalPath) }
             defer { free(resolved) }
             var s = stat()
             guard String(cString: resolved) == fake.path, lstat(fake.path, &s) == 0, s.st_uid == geteuid(),
-                  (s.st_mode & S_IFMT) == S_IFREG, (s.st_mode & 0o777) == 0o700 else { throw CrewdRemoteError.storageFailure }
+                  (s.st_mode & S_IFMT) == S_IFREG, (s.st_mode & 0o777) == 0o700 else { throw QualificationRejection(.providerMetadata) }
             for (program, key) in [(codex, "codexSHA256"), (claude, "claudeSHA256")] {
                 guard let expected = v[key] as? String, expected.count == 64, expected.allSatisfy({ "0123456789abcdef".contains($0) }),
-                      SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: program))).map({ String(format: "%02x", $0) }).joined() == expected else { throw CrewdRemoteError.storageFailure }
+                      SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: program))).map({ String(format: "%02x", $0) }).joined() == expected else { throw QualificationRejection(.providerHash) }
             }
         case .mobile:
-            guard let container, let resolved = realpath(container.path, nil) else { throw CrewdRemoteError.storageFailure }
+            guard let container, let resolved = realpath(container.path, nil) else { throw QualificationRejection(.mobileContainer) }
             defer { free(resolved) }
             let actualContainer = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
             let parent = actualContainer.appendingPathComponent("Library/Application Support/PendingCrewDeliveryValidation")
@@ -111,7 +181,7 @@ enum CrewdDeliveryValidation {
                   v["mode"] as? String == "remoteMobile", root.path == parent.appendingPathComponent(scopeID).path,
                   v["presentationDirectory"] as? String == root.appendingPathComponent("presentation").path,
                   environment["PENDINGCREW_CODEX_PROGRAM"] == nil, environment["PENDINGCREW_CLAUDE_PROGRAM"] == nil,
-                  environment["PENDINGCREW_CREWD_DATA_DIR"] == nil, environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw CrewdRemoteError.storageFailure }
+                  environment["PENDINGCREW_CREWD_DATA_DIR"] == nil, environment["PENDINGCREW_CREWD_PROGRAM"] == nil else { throw QualificationRejection(.mobileScopeAndEnvironment) }
             data = root.appendingPathComponent("presentation");try privatePath(data, root: root, directory: true)
         }
         return Scope(root: root, data: data, service: service, account: account, actions: Set(actions),
@@ -129,7 +199,7 @@ enum CrewdDeliveryValidation {
     }
     static func permits(_ action: String, account: UUID) throws -> Scope {
         let s = try qualified()
-        guard s.account == account, s.actions.contains(action) else { throw CrewdRemoteError.storageFailure }
+        guard s.account == account, s.actions.contains(action) else { throw QualificationRejection(.credentialAction) }
         return s
     }
 }

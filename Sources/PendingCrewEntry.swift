@@ -20,8 +20,14 @@ import AppKit
 struct PendingCrewEntry {
     static func main() {
         #if PENDINGCREW_DELIVERY_VALIDATION
-        guard CommandLine.arguments.dropFirst().isEmpty, (try? CrewdDeliveryValidation.qualified()) != nil else {
-            fputs("Delivery validation scope refused before credential/helper startup.\n", stderr)
+        let validationArguments = CommandLine.arguments
+        do {
+            try CrewdDeliveryValidation.requireEntryArguments(validationArguments)
+            _ = try CrewdDeliveryValidation.qualified()
+        } catch {
+            // Only fixed stages and expected-match booleans; no raw arguments,
+            // environment, paths, service/account, certificate or error text.
+            fputs(CrewdDeliveryValidation.startupDiagnostic(error, entryArgumentsEmpty: validationArguments.dropFirst().isEmpty), stderr)
             return
         }
         #endif
