@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.22.1"
+crewd-jev = { version = "0.1.0", path = "../jev" }
 crewd-remote = { version = "0.1.0", path = "../remote" }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }

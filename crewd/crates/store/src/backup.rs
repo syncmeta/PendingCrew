@@ -224,6 +224,7 @@ fn snapshot_steps(
             crate::work_followups::restored(&tx)?;
             crate::command_receipts::restored(&tx, &crate::now_ts())?;
             crate::local_clients::restored(&tx)?;
+            crate::judgment_state::restored(&tx)?;
             tx.commit()?;
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。

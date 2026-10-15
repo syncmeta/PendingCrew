@@ -414,6 +414,21 @@ async fn request_step(
                 Err(e) => ServerFrame::Response(Response::err(id, e)),
             }
         }
+        Ok(req) if crewd_proto::judgments::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "agent cannot access judgment configuration or inspection",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::judgments::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crate::public_commands::is_method(&req.method) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

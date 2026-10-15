@@ -244,16 +244,38 @@ impl Client {
             .body(body.to_vec())
             .send()
             .await;
-        let response = match sent {
+        let mut response = match sent {
             Ok(r) => r,
             Err(e) => return (Err(transport_error(e)), None),
         };
         let status = response.status().as_u16();
         let wait = retry_after(response.headers());
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => return (Err(transport_error(e)), wait),
-        };
+        const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+        if response
+            .content_length()
+            .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+        {
+            return (
+                Err(CallError::Malformed("response exceeds byte limit".into())),
+                None,
+            );
+        }
+        let mut bytes = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if chunk.len() <= MAX_RESPONSE_BYTES - bytes.len() => {
+                    bytes.extend_from_slice(&chunk)
+                }
+                Ok(Some(_)) => {
+                    return (
+                        Err(CallError::Malformed("response exceeds byte limit".into())),
+                        None,
+                    );
+                }
+                Ok(None) => break,
+                Err(e) => return (Err(transport_error(e)), wait),
+            }
+        }
         if (200..300).contains(&status) {
             let parsed = serde_json::from_slice::<Response>(&bytes)
                 .map(|r| (r, String::from_utf8_lossy(&bytes).into_owned()))

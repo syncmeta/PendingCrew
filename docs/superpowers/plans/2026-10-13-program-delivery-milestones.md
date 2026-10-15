@@ -1,5 +1,20 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 当前统筹检查点：Jev 正式格式15与资源生命周期交付协议
+
+本节是当前状态；下方旧检查点中的“Jev无版本迁移”“Native15预留”和旧main/产物来源均为历史事实，按本节更新。全工程目标继续进行，不以诊断或局部控制通过增加交付里程碑。
+
+- 整合前global与本地main均为31f0b512b7e54bb6d7a34dc715a1aca0db1caad6；global普通推送及local main受264项保护整合已独验，远端main未推。主目录README、design、旧ACP研究及未归因`:-`保留。已验原源码normal15（构建序号，Core格式14）和queue08 Mac包保持31f0实际来源，pin90ba3751538aa16d3d17e94c2b6e5eac4f5632ef，不改标下一源码。
+- Jev首轮已获人类实现授权。原前端全局设置整块9ee2f814006155cac6c4e2e86c23c317fe03ccd0已独验并普通推送，尚未单独合入宣称可用。后端三业务、typed判断、权限、配置Unknown屏障与恢复epoch已整块冻结630babe2，独验接受 `/private/tmp/pcw-Jev-first-whole-freeze-04/independent-whole-review.json`，SHA41adccac07c458c0f5a9f2b4f8eca51b98ccbb2fbe00b070a64e1cadbb3c6483。本次精确组合其无Native补丁a534e22a与原设置9ee2，Rust树必须为7de79679b5af93ae91a91b3757b15bd1279965aa；普通推送已核，不wholemerge后端祖先。根发现旧Core14会将新judgment-route作为Ordinary消费，因此正式使用14→15兼容屏障，旧14必须先拒新版库；不是仅写meta假装旧版可拒。12/13/14原DDL不变，15无新表，保护备份后独立事务写格式marker与PRAGMA。Native下一预留为16，未激活；其8路径增量及独立预留提交不得混入Jev整合。原wire02 JSON不变，“最低store15”另作不可变兼容附录，不修改旧证据hash。
+- 完整14→15物理机制独验接受：`/private/tmp/pcj15-migrate-owned-02/independent-whole-migration-mechanism-review.json`，SHA5419ce7cc31b7c67f6dbecd1f5fd1612c5891dbbd8b42fa2c647f8836911ca2f。精确无Native诊断组合实际编译90832/56952d终态0、迁移实际baecb3终态0；402 Rust/408输入绑定。真old14建需求与receipt、备份障碍、marker故障同事务回滚、新15保护升级与重开、old14对15零物理改动拒写、8个精确Popen终态及无Native表均核齐。原夹具sidecar失败与preflight手抄错误保留。该结果不是normal、新包、Linux或完整Jev交付；最终迁移/guard/startup改变须裁定影响，否则直接复用。
+- queue08尚未启动。三次source08准备均保持Unknown；最终closure02实际ca45eb终态1保留454条闭合数值审计，当前同birth/eUID进程的BSD完整可读但image路径返回0/ENOENT，分类FULL_BSD_NOT_MISSING，无pair重取。独验`/private/tmp/pcw-delivery-validation-artifact-queue-08/runtime-execution-08-closure02/independent-actual-closed-audit-unknown-review.json`，SHA81bdccf4f29e312fa05007806a616f73c8aa639dfc600cf0a02e73de7c8718fd。当前scopefcc1和23项历史完全保留，attempt08未创建，无P1gate；不能推该进程用途、Zombie/无关或旧失败因果。此路线全部probe/prepare/log/候选迭代停止。
+- 根裁决新的完整执行架构B：`/private/tmp/pcw-resource-protocol-root-architecture-decision-01/decision.json`，SHA1ab814750d548413f0a0ab19c79dc426229dd84308c67a0888ce51c549e851a3。专用DeliveryValidation factory自身在Core或凭据操作前取得并实际持有workflow SH生命周期租约，publisher按workflow EX→原Core精确inode EX顺序；durable launch intent先于Popen，supervisor消失而intent未决仍拒。保留legacy精确生命周期核实、scope/产物绑定、正式权限/同FD/helper/phasegates及原耐久性，不把不可读进程当无关，不承诺任意sameUID隔离。普通生产与移动端行为不改。客户端仅实施完整源码/action及私有假验证，原f401新增协调文件/准备/App执行仍需精确冻结、独验、根技术审定与正常工具审批；service/account不扩大，原human未见新hash。待与Jev准确组合统一构建，不单独再造旧候选。
+
+三条固定执行线继续：后端唯一Rust/schema作者完成Jev后接跨厂商Native16完整生命周期与恢复；客户端唯一Swift/工程/构建作者完成上述协议和原前端实际交付；质量线只做独立整块验收，缺陷交作者，根负责架构、接口、冻结和精确整合。共享Rust target唯一编译者沿用，暖Xcode/SPM复用，未触发新GitHub CI、未清受保护资产。
+
+M1工作闭环、M5确定性跟进、Core14与既有TLS/权限/撤销、既有Linux旧源隔离交付证据继续复用。尚缺本次Jev组合的准确normal/包及实际App设置运行、Native16/SDK真实完整生产生命周期、原App配对保存→并发N只读退出→owner退出→新P2恢复移除、正式publisher/设备/剩余平台、安装与日常数据切换及发布。旧all-features完整范围仍未验。安装、日常数据、公开发布、真实模型各守具体授权；其他Jev厂商/OAuth、个人记忆与团队知识仍不实施。
+
+
 ## 2026-10-15 单次数据库身份校验整块接受与 Jev wire02 冻结
 
 准确c4ca来源normal14及queue07静态Mac整包已验：normal报告91cd5d9cd8efdcb7cafacd6cd9b5501c838c34cc2f6391cec947d414d479d1ed，Mac报告b2232e5c5f95183cb538b259351c48301b26debe5a85385387063f9ee5b05c5f，actualpin6aad9cbd986f807ba665be9c052fdda38e9d10af。normal原工具48796/0与封存77889/0由执行作者直接确认、原chunkID未恢复；独立strong consumer完整输入/配置/actualfresh均通过，层级明列，不补造。global及client2cdc普通推送已服务器核，远端main未推。本地主main实际受264保护快进c4ca，独立postflight a8c6f907c7eef54f5c067f90cd0c99a03074debfca79c4035bf57179328a3751；README/design/旧研究及未归因:-原样保留，无安装/日常切换。

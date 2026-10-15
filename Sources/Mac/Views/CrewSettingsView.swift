@@ -14,6 +14,8 @@ struct CrewSettingsView: View {
             BackendsSettingsTab()
                 .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
             } else {
+                CrewdJudgmentSettingsTab(window: model.crewdWindow)
+                    .tabItem { Label("判断模型", systemImage: "slider.horizontal.3") }
                 Form { Text("当前机组和执行由 crewd 管理。连接、权限和撤销请使用主窗口的电脑与设备连接入口。") }
                     .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
             }

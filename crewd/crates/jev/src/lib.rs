@@ -14,3 +14,5 @@ pub mod model;
 pub mod prompts;
 pub mod scrub;
 pub mod shuffle;
+
+pub mod provider;

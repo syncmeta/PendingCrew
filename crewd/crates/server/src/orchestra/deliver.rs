@@ -154,6 +154,9 @@ impl<P: Port> Core<P> {
         let Some((msg, text)) = self.port.message(&r).await? else {
             return Ok(());
         };
+        if self.port.judgment_managed(&msg.id).await? {
+            return Ok(());
+        }
         let now = self.now();
         let Some(ctx) = self.port.channel_ctx(&r.channel, now).await? else {
             return Ok(());
@@ -1137,6 +1140,9 @@ impl<P: Port> Core<P> {
         let mut ctxs: BTreeMap<String, Option<ChannelCtx>> = BTreeMap::new();
         for s in self.port.all_session_ids().await? {
             for msg in self.port.unread(&s).await? {
+                if self.port.judgment_managed(&msg.id).await? {
+                    continue;
+                }
                 if !ctxs.contains_key(&msg.at.channel) {
                     let ctx = self.port.channel_ctx(&msg.at.channel, now).await?;
                     ctxs.insert(msg.at.channel.clone(), ctx);

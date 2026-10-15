@@ -7,6 +7,7 @@ mod connection_scope;
 pub mod control;
 pub mod dispatch;
 pub mod hub;
+mod judgments;
 pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;
@@ -52,6 +53,10 @@ pub struct AppState {
     pub(crate) remote: std::sync::OnceLock<Arc<remote::Manager>>,
     pub(crate) native_helpers: std::sync::OnceLock<Arc<native_helpers::NativeFactory>>,
     pub(crate) runtime_binding_id: String,
+    pub(crate) judgment_runtime: std::sync::OnceLock<Arc<judgments::Runtime>>,
+    #[cfg(test)]
+    pub(crate) judgment_test_http: std::sync::atomic::AtomicBool,
+    pub(crate) judgment_settings_mutation: tokio::sync::Mutex<()>,
     pub(crate) terminal_supported: std::sync::atomic::AtomicBool,
     pub(crate) runtime_identity: std::sync::OnceLock<crewd_proto::commands::RuntimeIdentity>,
     #[cfg(any(test, feature = "testkit"))]
@@ -78,6 +83,10 @@ impl AppState {
             remote: std::sync::OnceLock::new(),
             native_helpers: std::sync::OnceLock::new(),
             runtime_binding_id: uuid::Uuid::new_v4().to_string(),
+            judgment_runtime: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            judgment_test_http: std::sync::atomic::AtomicBool::new(false),
+            judgment_settings_mutation: tokio::sync::Mutex::new(()),
             terminal_supported: std::sync::atomic::AtomicBool::new(false),
             runtime_identity: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "testkit"))]
@@ -471,6 +480,8 @@ async fn serve_with_hooks_inner(
                 helper,
             )));
     }
+    let judgment_runtime =
+        judgments::Runtime::start(&state, data_dir.clone(), opts.orchestra.is_some()).await?;
     let mut handle = None;
     let mut actor = None;
     let mut forwarder = None;
@@ -634,6 +645,9 @@ async fn serve_with_hooks_inner(
             }
             drop(listener); // stop intake before actor/storage cleanup
         }
+    }
+    if let Some(judgment) = &judgment_runtime {
+        judgment.shutdown().await;
     }
     state.hub.publish(crewd_proto::Event {
         event: crewd_proto::events::SYSTEM_SHUTDOWN.into(),

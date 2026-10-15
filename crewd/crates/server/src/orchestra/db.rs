@@ -963,6 +963,18 @@ impl Port for DbPort {
         self.write(move |tx| collab::hibernate::put(tx, &r)).await
     }
 
+    async fn judgment_managed(&self, id: &str) -> Result<bool> {
+        let id = id.to_owned();
+        self.read(move |c| {
+            Ok(collab::judgments::record(
+                c,
+                &crewd_proto::judgments::JudgmentSourceKind::Message,
+                &id,
+            )?
+            .is_some())
+        })
+        .await
+    }
     async fn message(&self, r: &MessageRef) -> Result<Option<(MsgFacts, String)>> {
         let r = r.clone();
         let now = Ms(crewd_store::now_ms());

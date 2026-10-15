@@ -238,6 +238,9 @@ pub(crate) fn followup_note(
     if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("work-transfer:") {
         return crate::work_transfer::followup_note(conn, row);
     }
+    if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("judgment-route:") {
+        return crate::judgments::route_note(conn, row);
+    }
     if row.kind == crate::wakes::WakeKind::System && row.source.starts_with("requirement-new:") {
         return crate::requirements::followup_note(conn, row);
     }

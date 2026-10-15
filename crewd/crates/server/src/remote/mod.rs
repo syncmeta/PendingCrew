@@ -888,6 +888,7 @@ fn allowed_method(method: &str) -> bool {
     matches!(
         method,
         "system.hello"
+            | "judgment.inspect"
             | "command.submit"
             | "command.lookup"
             | "command.listUnknown"

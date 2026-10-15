@@ -205,6 +205,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
+            if state.judgment_runtime.get().is_some() {
+                capabilities.push("judgment".into());
+            }
             if state.runtime_identity.get().is_some() {
                 capabilities.push("command.receipts".into());
             }

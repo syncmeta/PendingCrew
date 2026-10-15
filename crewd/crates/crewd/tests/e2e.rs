@@ -627,6 +627,11 @@ fn rpc_drives_every_client_method() {
         ("session.controlTarget", "null", Code(-32602)),
         ("session.terminal.inspect", "null", Code(-32602)),
         ("session.terminal.watch", "null", Code(-32602)),
+        // Optional judgment configuration is a real local Human route. Typed
+        // invalid writes never read a credential or contact a provider.
+        ("judgment.settings.get", "null", Ok),
+        ("judgment.settings.set", "null", Code(-32602)),
+        ("judgment.inspect", "null", Code(-32602)),
         // Hibernate ends the server, so it is the final method in this table.
         ("crewd.hibernate", "null", Ok),
     ];

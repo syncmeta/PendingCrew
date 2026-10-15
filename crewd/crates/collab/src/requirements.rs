@@ -174,7 +174,14 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<Requi
         crew_id: p.crew_id.clone(),
         id: id.clone(),
     });
-    if let Some(captain) = crews::captain_of(tx.conn(), &p.crew_id)? {
+    let judgment_reserved = crate::judgments::reserve(
+        tx,
+        crewd_proto::judgments::JudgmentSourceKind::Requirement,
+        &id,
+    )?;
+    if let Some(captain) = crews::captain_of(tx.conn(), &p.crew_id)?
+        && !judgment_reserved
+    {
         let session = sessions::get(tx.conn(), &captain)?;
         if session.crew_id != p.crew_id {
             return Err(
