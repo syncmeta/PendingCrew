@@ -1,0 +1,23 @@
+{
+  "kind": "ROOT_ARCHITECTURE_DECISION",
+  "status": "approved source implementation; actual renderer qualification still required",
+  "date": "2026-10-15",
+  "publicDTO": "unchanged public02",
+  "container": {
+    "trustedHost": "Author-code-free top main frame is sole native bridge; never raw interpolate author bytes into trusted script or attributes. Use safe parameter serialization.",
+    "authorFrame": "Host-owned iframe sandbox=allow-scripts only; no allow-same-origin, top navigation, forms, popups or downloads.",
+    "permissionsPolicy": "geolocation 'none'; camera 'none'; microphone 'none'; display-capture 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'",
+    "bridge": "Parent accepts closed requests only from exact current iframe.contentWindow with opaque origin null; native rechecks actual WK/main-frame identity, captured namespace, view revision, generation and Core ACL. Child direct native calls and nested frames rejected. No generic Core RPC or JS-supplied identity/grant.",
+    "revocation": "Navigation, frame reload, crash, namespace or code change revokes bridge and late asynchronous results. WindowProxy/origin-null alone is insufficient evidence.",
+    "failure": "Unknown policy/eligibility fails closed to unsupported code execution; native data/documents remain usable."
+  },
+  "platform": {
+    "appMinimum": "iOS17 unchanged",
+    "ios17Through18_3": "Code views may be stored/edited but not executed; native knowledge/docs/RPC continue.",
+    "codeEligibilityMinimum": "iOS18.4 public WKUIDelegate runOpenPanel callback with explicit denial; no private APIs, JS removal substitutes, or OS permission bypass.",
+    "evidence": "Actual local iPhoneOS SDK WKUIDelegate.h lines291-295: iOS without delegate matches Safari; callback available iOS18.4. Geolocation denial delegate is iOS27-only, so older systems require independently qualified origin/permissions policy.",
+    "qualification": "Source/DI checks do not prove actual WebKit isolation. Full authorized renderer flow must prove file/network/media/location/clipboard/navigation and late-result boundaries."
+  },
+  "controlPlane": "Ordinary scoped knowledge Apply only under native host grant. Initialize, branch, merge, restore, Unknown resolution and grant changes require genuine native Human action; synthetic JS clicks or acknowledge=true do not qualify.",
+  "authorization": "No new App/OS-permission probe, installation, real provider or daily-data action authorized by this design decision."
+}

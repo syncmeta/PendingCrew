@@ -1,0 +1,148 @@
+{
+  "kind": "INDEPENDENT_COMPLETE_ACTUAL_LINUX15_RELEASE_AND_AFFECTED_RUNTIME_REVIEW",
+  "accepted": true,
+  "acceptanceScope": "Exact development-candidate Release/source and mandatory affectedfake/physicaltail unit; not installation/publicrelease/fullstableCI/App/model",
+  "reviewedAt": "2026-10-15T14:28:17.204369+00:00",
+  "sourceRef": "5f6300525ee6b1f8a656a3eef8ceb2f41e1eed21",
+  "runId": 38737765008,
+  "jobId": 116431333921,
+  "actualRunAttempt": 1,
+  "otherScopesSkipped": true,
+  "artifact": {
+    "id": 11974910186,
+    "bytes": 67289703,
+    "sha256": "05ae79b9c8508938c43699d5410252f6a6fbe78f9d19df13679e24de0a66f0d7",
+    "zipEntries": 19,
+    "completeZIPCRCIndependent": true,
+    "path": "/private/tmp/pcw-linux15-5f630052-actual-01/complete-artifact-private-01/recovery-02/artifact11974910186.zip"
+  },
+  "transport": {
+    "firstFullAttempt": "96356 timedout1800s,48,103,424B/febc779 original retained",
+    "first206": "19638 realexact206 thenidle180,7,421,952B/b276165 original retained",
+    "localSnapshot": "55,525,376B/2d104365 exact two-piece concat, not historicalfailedpartial oracceptedartifact",
+    "finalSingle206": {
+      "actualToolSession": 52377,
+      "initialChunk": "fc3752",
+      "terminalChunk": "d60002",
+      "exitCode": 0,
+      "elapsedSeconds": 853.9101459999999,
+      "range": "bytes 55525376-67289702/67289703",
+      "bytes": 11764327,
+      "suffixSHA256": "a887238612a879a4fd476201d2563e6ea0042d57e97555645622f09b93e17dcd",
+      "childPoll": 0,
+      "cleanupErrors": [],
+      "whole1800idle300": true
+    },
+    "noLiveNetworkOrFurtherRetries": true,
+    "allOriginalFragmentHashesAndMetadataUnchanged": true
+  },
+  "actualTests": {
+    "nextestProfile": "ci",
+    "selectedTests": 26,
+    "passed": 26,
+    "failed": 0,
+    "flakyOrRerunEntries": 0,
+    "ignoredInSelectedJUnit": 0,
+    "outsideFilterSkipped": 1516,
+    "binariesBuilt": 7,
+    "counts": {
+      "crewd-server": 8,
+      "crewd-collab": 6,
+      "crewd-store": 3,
+      "crewd-jev::provider": 8,
+      "crewd-proto::judgment_layout": 1
+    },
+    "bodyDurationSeconds": 2.281,
+    "testCompileSeconds": 70,
+    "ordinaryS1OrAllFeaturesClaim": false,
+    "JUnitAndRawNamesVerified": true
+  },
+  "actualPackage": {
+    "canonicalTarSHA256": "ecca56d19f90a8174053606eb7c515e1a9dbb49a11efcd13ba56e884d904af0a",
+    "binarySHA256": "93e10186f1a8492f12ebdb3d664cd342ce0fc4725e6673f5fb599ccb7a7b3796",
+    "witnessSHA256": "5bb524f3b497df3d8ec4f9a8ab7b1b3c4979d771b44dcd6f701b166bf9399d93",
+    "actualELF": "64bit littleendian x86_64",
+    "configuration": "Rust1.94 cargo1.94 x86_64-unknown-linux-gnu/defaultRelease opt3/debuginfo0/assertionsfalse/overflowfalse/non-test/allfeaturesfalse/emptydeclared+artifact+allworkspacefeatures",
+    "rustInputs": 402,
+    "rustInputDigest": "4c2f2c7b1b56d01eb85f2c5306caa9cb3c93f0f4e66afc7b61b117207aa1c4c9",
+    "immutableGitSnapshotAll402Exact": true,
+    "ownPackages": 12,
+    "ownTargets": 13,
+    "allOwnRawFreshFalse": true,
+    "sevenCompilerEnvironmentAndThreeSidecars": true,
+    "independentActualStrongRequireFresh": {
+      "tool": "dcc6ab/0",
+      "requireFresh": true
+    },
+    "independentLinuxProper": {
+      "tool": "09c39f/0",
+      "sourceTier": "fresh-owning-workspace-production-graph"
+    },
+    "additionalRecipeGitInputsExact": 11,
+    "lockedBeforeAfterEqualAndCleanRecorded": true,
+    "notInstalledNotPublished": true
+  },
+  "historicalBaseline": {
+    "source": "e630d3e25dab2c67a39057b3c61ab54f258894b6",
+    "format": 14,
+    "rustInputs": 393,
+    "canonicalTarSHA256": "997c851720ae03657c7dad040083b1c16e862b26f545aee6dee610a5a5e97160",
+    "binarySHA256": "b791de5f1497cea877858b52d9b3ef1556349d0285b8a6e7670841839548f18f",
+    "acceptedOldEvidenceReusedByExactCanonicalSHA": true,
+    "notNew15SourceProof": true
+  },
+  "physicalTail": {
+    "resultSHA256": "602bc27aa04aee210b46b8d9d3e03ad0f4d4dee2f12c7361a69be6bc987c296c",
+    "fixtureSHA256": "c6c3afbd65ee9fb14a8ecce84a021f67f5989b54ba146452ead85cc0f3e4462b",
+    "managedModuleSHA256": "2139f9e9fb441bc2636f9bff6942b8de789ffc83e3df18a17676f71000dbc136",
+    "durationSeconds": 4.157501133000039,
+    "regularEvidenceHashesVerified": 65,
+    "checks": [
+      "Realold14 publiccreatedoriginalUUIDrequirement and normalquiesce/registryabsent",
+      "New15 managedstartup protectedv14backup/schema15marker1/sameDB/noNativeactivation; exact originalRequirement replayreadback survives migration/reopen withno duplicateeffect",
+      "Rawold14 future15refusal exit1/noSocket/fullrecordedphysicalbeforeafterequal",
+      "ActualSIGKILL -9 leaves53,592B WAL>32; managednew15recovery returns exactcommitted #2/originalUUID, immutableclosedSQLitehasexact2todoids; runtimebindingsfresh andsameDBpeeridentities matched",
+      "BadWAL/future16main andlegacyemptybootUnknown allrefuse/noSocket/calibratedproviderunchanged; protectedfileSHA/size bytes matchrecords; registryUnknown retains originalcontrolledsleep birth untilownedcleanup",
+      "Publicsettings.clear absentpriorbinding withrealfinalconfigurationSQLfault retains pendingUnknown; newprocesspureGEToriginalID identical state, noSET replay, keydirectoryabsent/providerunchanged; finalimmutableDB retains originalpending request metadata",
+      "11 actualownedPopen cleanupentries reaped/terminal; no claim fullunrelatedprocessgroupcensus fromdirectchild cleanup"
+    ],
+    "scopeLimits": [
+      "No credentialSet/privateKey/realprovider/App orpublisher evidence",
+      "Stablebackup-DDLrollback andinstallerCAS notrerun; priorwhole acceptedmechanisms reused",
+      "Controlledlegacyemptyboot availability test doesnot prove arbitrarynamespace/group physicalsettlement",
+      "No rawold13 sidefiledeletion guarantee oroldfailedCIcause upgrade"
+    ]
+  },
+  "diagnosticArchive": {
+    "sha256": "120be0fd8b0fc5ea9f8c26de5e41bfa0bce7c3290c1e87a056e05e8894bc0f10",
+    "manifestRows": 66,
+    "all66RegularRowsExactSHAAndTarInventory": true,
+    "actualSpecialRows": 0,
+    "specialContentsCaptured": false,
+    "dereference": false,
+    "restorableCompleteFilesystem": false,
+    "scope": "This actualtail archived no remaining socket/FIFO nodes; priorrealdiagnostic-special-inode sourcecontrols remain separate, notfabricated asnewactualspecialcapture. runtime-prefix packages intentionally notduplicated in flowtar, originalcanonical tar includedseparately."
+  },
+  "remainingDeliveryGates": [
+    "Not fullordinary/default/allfeatures CI or S1 unsupportedtarget repair",
+    "Not new15 productionRelease publish/install/manageddailydata migration ordevices",
+    "Not MacP1/N/P2 or realJevSettingsUI/model/Keychain",
+    "DoltLite/Core16 and Native17 futuremodules notpresent in thisStore15 package"
+  ],
+  "performedByQA": "One approvedsource03 network invocation then readonlyfullZIP/tar/proof/JUnit/record/hash consumption, independentverifiedPython strong/proper consumers and immutableclosedSQLitereads withbeforeafterhash. No ELF/Core execution, test rerun, build, installation, originalscope modification or additionalnetwork.",
+  "evidenceSHA256": {
+    "/private/tmp/pcw-linux15-5f630052-actual-01/terminal-run-api.json": "b7ac023a22f9f849dce53759dcbb85f29dc752c68f56f88c4718089d11f5918d",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/terminal-jobs-api.json": "82a872235b7208fd9cf24248892b6a0eae3f98c1138660573e8cb14d7a08fcfe",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/artifact-api.json": "0d85a9775fc479eb3dedc257a4e98712d45690fdc80da2af1e4f04bcd0017025",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/actual-job.log": "d7cf7669a045ba5d0d4f51b8ef8c308decf2ecdc1847f0fb1576b5b2cfa4f236",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/complete-artifact-private-01/recovery-02/recovery-terminal.json": "08152ff17a807c42acd2fa85dcc7495bd98274dea142f9635c6c927b25b6fdcb",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/final-suffix-recovery-tool-started.json": "34b2315801f42fa963e36c9d2aaa56594499ff7a635b9ab98bd51e674c693e9f",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/affected-junit.xml": "a13d86831db5ea82c205826f95aac695fb5b37515460f5cc8d438ddb73cbedb3",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/affected-nextest.log": "e6580d50ebc2253e81aedf6105c4e333e48b067a4ae20ed67fa4b0431510b43e",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/release-independent-source.json": "de201f67d3e9b833b1c915330304b66872d732c9f9740588983366a6b0baa1c3",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/source-action.json": "4c046948ae0cb257b5b63f18d52b52c4fb9089349a6bfa13b39daf618051d1a8",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/physical.tar.gz.json": "28dd4a0898112c6880dd7b4bb5767dcc01114c9f91b5a28a2db7aff2f843e26a",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15/physical-driver.log": "4880777c242de90d80ea3675e2292843425888a82c6d240ea2759692d160bb27",
+    "/private/tmp/pcw-linux15-5f630052-actual-01/whole-artifact-consumption-01/linux15-baseline14/baseline-composition.json": "b1de4e9b1350bcc8a2cb00dd077284c886dafeec443908c99822c9a6c0fa6a49"
+  }
+}

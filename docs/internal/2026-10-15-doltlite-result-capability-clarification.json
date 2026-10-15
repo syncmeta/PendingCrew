@@ -1,0 +1,35 @@
+{
+  "status": "root-approved02 implementation semantics, unchanged DTO/JSON",
+  "resultContext": [
+    "DataChangeResult.context is the recorded observed post-context. Successful actions may advance branch/head; dbId/authorityId/restoreEpoch/crew/namespace remain the request authority. beforeHead is the submitted head; afterHead equals successful context.head.",
+    "Pending/Unknown without a proved publication retains original submitted coordinates. UUID facts inside Dolt never embed their own future commit hash; the real hash is obtained from protected UUID fact plus unique version publication witness and stored in Core result.",
+    "Clients persist original request context for pure lookup. Lookup returns the immutable old recorded result; current workspace is returned separately. Advancing current HEAD or deleting old branch does not block lookup or rewrite a historical result.",
+    "Next independent explicit write uses observed successful post-context or a fresh workspace.get; unknown/notFound never authorizes replay or a replacement UUID."
+  ],
+  "capability": {
+    "name": "data",
+    "condition": "Only when Core16 control-plane/authority/paired restore qualification and exact sibling worker IPC1/runtime are ready. Missing/unqualified worker/authority suppresses advertisement; document.* on Core16 fails closed rather than use old SQLite documents.",
+    "scope": "Capability is implementation availability, not per-crew ACL or data health. workspace.get reports uninitialized/unavailable namespace; each operation rechecks current ACL/epoch.",
+    "readonly": "workspace.get and request.get never initialize or write.",
+    "firstWrite": "Initialize or explicit first Apply with expectedHead=None gets a durable UUID/control capsule and stable namespace/IDs before worker initialize. A lost reply or half-initialization is Unknown; lookup never repeats or creates. An existing file is verified/recovered read-only under the original UUID, never silently overwritten."
+  },
+  "renderer": "Scoped standing knowledge-write only permits ordinary Apply under declared host grant. Initialize/branch/merge/restore/ResolveUnknown or grant changes require a real native host Human action/one-shot confirmation and Core actual permission; acknowledge:true from JS or synthetic click is not authorization.",
+  "bindings": {
+    "manifest": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/manifest.json",
+      "sha256": "06c584a4b75f3c27e9ef787b64c86ad620e66bdcf7623faf82455f2291b18bfe"
+    },
+    "DTO": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/team_data.rs",
+      "sha256": "db6fa5624b8b75f531dbca0be3ff911f20073607a6e15c6023547b6498a09ace"
+    },
+    "contract": {
+      "path": "/private/tmp/pcw-doltlite-public-contract-02/contract.md",
+      "sha256": "6c6b5e3591c96d12cb6b01ed1dbc3cb1e70ce86547f471e9608ffc244b106ac5"
+    },
+    "rootLock": {
+      "path": "/private/tmp/pcw-doltlite-root-public-interface-lock-02/lock.json",
+      "sha256": "cd3547a0b7b3eaa78f5fa1c1363383dafd08cd41398f3cfe1a8fb20ec7e31683"
+    }
+  }
+}

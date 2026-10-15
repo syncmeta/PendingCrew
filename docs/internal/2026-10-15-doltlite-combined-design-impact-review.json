@@ -1,0 +1,40 @@
+{
+  "kind": "INDEPENDENT_COMPLETE_DOLTLITE_RESULT_CAPABILITY_AND_RENDERER_CONTAINER_DESIGN_IMPACT",
+  "acceptedDesign": true,
+  "implementationRuntimeOrPlatformQualified": false,
+  "inputs": {
+    "resultCapabilityAddendumSHA256": "426b403eef76e57dc5e8f3c1e01290b376841dd716f0fc0ddd78542a72ba7c94",
+    "rendererContainerDecisionSHA256": "53529cfbe51caae42613e4416c404f7cf25bb791fc3d33cde680f5ea299cbc58",
+    "public02LockSHA256": "cd3547a0b7b3eaa78f5fa1c1363383dafd08cd41398f3cfe1a8fb20ec7e31683",
+    "priorWholeDesignQA": "09cf65be1b25787b7bacd187438688635e6b251004e017a287dffe396a954ada",
+    "priorBindingQA": "e6dc77c2159833549a78770adaa5d46ab368a9e9b494532dd995cd1ffa1161ff",
+    "priorResolutionQA": "508801a56ec2b968caf149b7f30c4fe66a2045c4d9d5fd6118268a58caf650ff",
+    "priorControlPlaneDecision": "b265615d04bb0bcdc468c6f71a85ab1561a8744cc9b29e134ea900b00fe53bde"
+  },
+  "DTOAndJSONUnchanged": true,
+  "findings": [],
+  "resultAndCapabilityChecks": [
+    "Successful resultcontext is immutable observedpost-context; original submittedcontext stays in durableclientrequest forpurelookup. Currentworkspace separate, deletedoldbranch/advancedHEAD cannot rewrite/block originalrecordedresult. Next explicitwrite uses successfulpostcontext orfreshworkspace, notoldlookupcoordinate",
+    "Pending/Unknown has no provedpostpublication context and retains submittedcoordinates; actualDolt UUIDfact cannotselfembed futurecommit hash, Coreuniqueversionwitness required forsettledresult",
+    "FirstInitialize/ApplyexpectedHeadNone must durably allocate requestUUID/namespace/IDs before workerinit; halfinit/lostreply Unknown, purelookups never create/replay/replaceUUID oroverwrite anexistingfile",
+    "data capability denotes qualified implementation/IPC1/controlplane availability, never percrewrights orhealthyworkspace. Missing/unqualifiedworker/authority suppressesdata and Core16document fallback; eachopcurrentACL/epoch and readonlyquerynoinitialization",
+    "Standingwebknowledgewrite only ordinaryApply; initialization/branch/merge/restore/Unknownack/grant changes require realnativeHuman and hostconstructedexactrequest, notJSack/syntheticclick"
+  ],
+  "rendererDesignChecks": [
+    "Authorfree trustedtopframe withsafeparameterserialization; untrustedauthorcode only hostowned sandbox allow-scripts iframe withoutsameorigin/forms/popups/download/topnavigation",
+    "Closed parentmessages require exactcurrentchildcontentWindow+opaqueorigin and actualnativeWK/mainframe/capturedscope/revision/generation/currentACL; sourceWindow/originnull alone notauthority",
+    "PermissionsPolicy deny location/camera/mic/display/clipboard/fullscreen and originalhostlockedCSP/resourceclosedset remain required; authorHTML cannot overridepolicy or accessgenericRPC/credentials/files/ambientnetwork",
+    "Navigation/reload/crash/scope/codechange revokesoldbridge/grant anddropslateasyncreplies; retainedbindingname never carriesoldcodegrant",
+    "iOS17 minimum unchanged:17 through18.3 stores/editscode but doesnotexecute it, retainsnativeknowledge/docs/RPC.18.4 publicfile-open denial is a necessary eligibility prerequisite, not evidenceotherresourceboundaries work; unknownqualification unsupportedcodefailclosed only"
+  ],
+  "wholeFrozenImplementationEvidenceRequired": [
+    "Native publicSDK availability/actualdelegate wiring by platform, no privateAPI orJScontrol-removal substitute. This audit accepts rooteligibilityrules, doesnot independently certify SDKavailability or OS behavior",
+    "Realpinnedengine firstwrite crash/Unknown/reopen/originalpurelookup; postcontextversusoriginalrequest coordinates under branchswitch/delete/restore and staleACL",
+    "Actual capabilityadvertisement suppression/missingworker/authority recovery and namespace-uninitialized no-write queries; originalnativefeatures stillusable whencodeunsupported",
+    "ExactWK/topframe/child/source/generation qualification with nestedframe/directnative/spoofednullsource/reload/windowproxyreuse/latecallback negatives",
+    "Actual codeview file/network/media/location/clipboard/navigation/download boundary qualification for each claimedOS; iOS18.4filedenial alone cannot qualifythese. Runtimeineligible OS mustnotexecute authorcode",
+    "UntrustedJS cannot initialize/restore/ackUnknown/regrant via standingApplycap orsyntheticclick; legitimate nativeHumancontrol stillworks withoriginalUUID/CAS/authority",
+    "Bad/missingpolicy rejectscodeexecution while preserving nativeview/data/documentavailability; no assertionWebKit sandbox/CSP is fullOSsecurityisolation"
+  ],
+  "authorizationBoundary": "No new App/native/OSpermission/query/install/provider/Solid/dailydata action authorized. No movingimplementation source read, compilation, controls or runtime executed. Productcandidate5f and existingSTOP_UNKNOWN untouched."
+}
