@@ -458,6 +458,13 @@ fn post_with(
     if let Some((crew, h)) = &answering {
         asks::answer(tx, crew, h, &message.text)?;
     }
+    if message.sender_kind == SenderKind::Human {
+        crate::judgments::reserve(
+            tx,
+            crewd_proto::judgments::JudgmentSourceKind::Message,
+            &message.id,
+        )?;
+    }
     Ok(Posted {
         message,
         unwatched_human_mention,

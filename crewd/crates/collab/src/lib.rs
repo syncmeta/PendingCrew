@@ -15,6 +15,7 @@ pub mod documents;
 #[cfg(test)]
 mod global_workflow_core;
 pub mod hibernate;
+pub mod judgments;
 pub mod listens;
 pub mod message_provenance;
 pub mod messages;

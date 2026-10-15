@@ -22,7 +22,7 @@ mod sim;
 #[cfg(test)]
 mod t10c;
 #[cfg(test)]
-mod testkit;
+pub(crate) mod testkit;
 pub mod work_context;
 pub mod work_idle;
 pub mod worktree;

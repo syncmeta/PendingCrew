@@ -546,6 +546,9 @@ pub trait Port: Send + Sync + 'static {
     /// 整份写入（`prompt_id` 原样保留调用方给的）。
     fn put_hibernate(&self, r: &HibernateRecord) -> impl Future<Output = Result<()>> + Send;
     // —— 协作数据（M3a 的 Collab）
+    fn judgment_managed(&self, _id: &str) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
     /// 消息的规划要素 + 正文（正文只给 Arbiter）。
     fn message(
         &self,

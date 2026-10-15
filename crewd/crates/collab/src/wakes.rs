@@ -184,6 +184,7 @@ pub fn automatic_work_paused(conn: &Connection, session: &str) -> Result<bool> {
 /// inflight 只记意图、不提前写终态：迟到的真实 Delivered 仍须原子确认行与游标；未确认的旧行后续退回/失败/boot
 /// 都经共享 event_after_cancel 作废（含没有内存主人的行）。返回本次作废的 pending，给 Port 发布变化。
 pub fn human_stop(tx: &mut Tx<'_>, session: &str) -> Result<Vec<WakeRow>> {
+    crate::judgments::note_stop(tx, session)?;
     crate::sessions::set_desired(tx, session, crewd_proto::Desired::Stopped)?;
     crate::sessions::set_working(tx, session, false)?;
     let floor: i64 = tx.conn().query_row(

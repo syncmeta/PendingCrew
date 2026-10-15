@@ -60,6 +60,7 @@ pub fn import(
         crewd_store::work_followups::restored(tx)?;
         crewd_store::command_receipts::restored(tx, &crewd_store::now_ts())?;
         crewd_store::local_clients::restored(tx)?;
+        crewd_store::judgment_state::restored(tx)?;
         let mut cx = Ctx {
             src,
             report: &mut report,

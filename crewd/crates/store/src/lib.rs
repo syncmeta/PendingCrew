@@ -9,6 +9,7 @@ pub mod db;
 pub mod db_health;
 pub mod documents;
 pub mod fsutil;
+pub mod judgment_state;
 pub mod local_clients;
 pub mod messages;
 pub mod native_execution;

@@ -1289,6 +1289,62 @@
       ],
       "type": "object"
     },
+    "CredentialState": {
+      "enum": [
+        "missing",
+        "recorded_unverified",
+        "update_unknown",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "CredentialUpdate": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "set",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "clear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Crew": {
       "properties": {
         "captainExecutor": {
@@ -2964,6 +3020,454 @@
         "owners",
         "waitedMs",
         "tier"
+      ],
+      "type": "object"
+    },
+    "JudgmentBackend": {
+      "enum": [
+        "typesafe"
+      ],
+      "type": "string"
+    },
+    "JudgmentConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string"
+        },
+        "choiceMin": {
+          "format": "double",
+          "type": "number"
+        },
+        "credentialSource": {
+          "default": "platform",
+          "description": "Storage implementation, scoped to this database and an explicitly written secret slot.",
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "wakeYes": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "provider",
+        "baseUrl",
+        "model",
+        "choiceMin",
+        "wakeYes"
+      ],
+      "type": "object"
+    },
+    "JudgmentConfigurationOutcome": {
+      "enum": [
+        "committed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "JudgmentInspect": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/JudgmentSourceKind"
+        }
+      },
+      "required": [
+        "crewId",
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "JudgmentInspection": {
+      "properties": {
+        "record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/JudgmentInspect"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "JudgmentLink": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/JudgmentObjectKind"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "JudgmentObjectKind": {
+      "enum": [
+        "requirement",
+        "work",
+        "message"
+      ],
+      "type": "string"
+    },
+    "JudgmentPhase": {
+      "enum": [
+        "pending",
+        "dispatched",
+        "settled",
+        "suppressed",
+        "historical"
+      ],
+      "type": "string"
+    },
+    "JudgmentProbabilitySource": {
+      "enum": [
+        "native",
+        "generated_estimate"
+      ],
+      "type": "string"
+    },
+    "JudgmentReason": {
+      "enum": [
+        "answered",
+        "prepared",
+        "unconfigured",
+        "deadline",
+        "provider_error",
+        "invalid_response",
+        "restart_unknown",
+        "stale",
+        "busy",
+        "configuration_changed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "JudgmentRequestLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/JudgmentSettingsResult"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "not_found",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JudgmentSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "JudgmentSettingsGet": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "JudgmentSettingsResponse": {
+      "properties": {
+        "requestLookup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentRequestLookup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "view": {
+          "$ref": "#/$defs/JudgmentSettingsView"
+        }
+      },
+      "required": [
+        "view"
+      ],
+      "type": "object"
+    },
+    "JudgmentSettingsResult": {
+      "properties": {
+        "historical": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "$ref": "#/$defs/JudgmentConfigurationOutcome"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/JudgmentSettingsView"
+        }
+      },
+      "required": [
+        "historical",
+        "requestId",
+        "outcome",
+        "view"
+      ],
+      "type": "object"
+    },
+    "JudgmentSettingsSet": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credentialUpdate": {
+          "$ref": "#/$defs/CredentialUpdate",
+          "default": {
+            "action": "keep"
+          }
+        },
+        "expectedRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "JudgmentSettingsView": {
+      "properties": {
+        "credentialState": {
+          "$ref": "#/$defs/CredentialState"
+        },
+        "pendingRequestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settings": {
+          "$ref": "#/$defs/JudgmentSettings"
+        }
+      },
+      "required": [
+        "settings",
+        "credentialState"
+      ],
+      "type": "object"
+    },
+    "JudgmentSourceKind": {
+      "enum": [
+        "requirement",
+        "message"
+      ],
+      "type": "string"
+    },
+    "JudgmentUsageView": {
+      "properties": {
+        "inputTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outputTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "JudgmentView": {
+      "properties": {
+        "attempts": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "attribution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backend": {
+          "$ref": "#/$defs/JudgmentBackend"
+        },
+        "calibrated": {
+          "type": "boolean"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "latencyMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/JudgmentPhase"
+        },
+        "probabilitySource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentProbabilitySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/JudgmentReason"
+        },
+        "recipients": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentUsageView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decisionId",
+        "phase",
+        "reason",
+        "backend",
+        "calibrated",
+        "recipients"
       ],
       "type": "object"
     },
@@ -7779,6 +8283,37 @@
       },
       "result": {
         "$ref": "#/$defs/Subscribed"
+      }
+    },
+    "judgment.inspect": {
+      "params": {
+        "$ref": "#/$defs/JudgmentInspect"
+      },
+      "result": {
+        "$ref": "#/$defs/JudgmentInspection"
+      }
+    },
+    "judgment.settings.get": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JudgmentSettingsGet"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/JudgmentSettingsResponse"
+      }
+    },
+    "judgment.settings.set": {
+      "params": {
+        "$ref": "#/$defs/JudgmentSettingsSet"
+      },
+      "result": {
+        "$ref": "#/$defs/JudgmentSettingsResult"
       }
     },
     "loop.list": {

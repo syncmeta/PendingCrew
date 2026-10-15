@@ -268,7 +268,11 @@ pub fn configure(
     if expected_revision <= 0 || expected_revision == i64::MAX || !endpoint.is_valid() {
         return Err(StoreError::Invalid("invalid remote configuration".into()));
     }
-    Ok(conn.execute("UPDATE remote_configuration SET revision=revision+1,enabled=?1,listen_host=?2,port=?3 WHERE singleton=1 AND revision=?4", params![enabled, host, port, expected_revision])? == 1)
+    let changed = conn.execute("UPDATE remote_configuration SET revision=revision+1,enabled=?1,listen_host=?2,port=?3 WHERE singleton=1 AND revision=?4", params![enabled, host, port, expected_revision])? == 1;
+    if changed {
+        crate::judgment_state::remote_reconfigured(conn, expected_revision)?;
+    }
+    Ok(changed)
 }
 
 /// Re-evaluate the authoritative binding and grant for an already authenticated

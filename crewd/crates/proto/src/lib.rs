@@ -12,6 +12,7 @@
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
 pub mod commands;
+pub mod judgments;
 mod model;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
@@ -125,6 +126,9 @@ pub mod methods {
 
     /// 客户端可调的全部方法（契约测试与 `crewd rpc` 端到端都按它逐个核）。
     pub const ALL: &[&str] = &[
+        crate::judgments::SETTINGS_GET,
+        crate::judgments::SETTINGS_SET,
+        crate::judgments::INSPECT,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
@@ -601,6 +605,27 @@ pub fn api_schema() -> Value {
             m(
                 sub::<commands::TerminalWatchParams>(g),
                 sub::<commands::TerminalWatchStarted>(g),
+            ),
+        ),
+        (
+            judgments::SETTINGS_GET,
+            m(
+                sub::<Option<judgments::JudgmentSettingsGet>>(g),
+                sub::<judgments::JudgmentSettingsResponse>(g),
+            ),
+        ),
+        (
+            judgments::SETTINGS_SET,
+            m(
+                sub::<judgments::JudgmentSettingsSet>(g),
+                sub::<judgments::JudgmentSettingsResult>(g),
+            ),
+        ),
+        (
+            judgments::INSPECT,
+            m(
+                sub::<judgments::JudgmentInspect>(g),
+                sub::<judgments::JudgmentInspection>(g),
             ),
         ),
         (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),

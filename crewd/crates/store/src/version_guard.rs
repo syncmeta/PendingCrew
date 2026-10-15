@@ -397,7 +397,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.db");
         let held = wal_database(&source);
-        held.execute_batch("PRAGMA user_version=15;").unwrap();
+        held.execute_batch(&format!(
+            "PRAGMA user_version={};",
+            crate::schema::SCHEMA_VERSION + 1
+        ))
+        .unwrap();
         let before = census(&source);
         let dest = root.path().join("backup.db");
         assert!(crate::backup::backup_db_quiescent(&source, &dest).is_err());
@@ -418,8 +422,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("proof.db");
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE proof(x); PRAGMA user_version=15;")
-            .unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE proof(x); PRAGMA user_version={};",
+            crate::schema::SCHEMA_VERSION + 1
+        ))
+        .unwrap();
         drop(conn);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
         let before = census(&path);
@@ -431,7 +438,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("proof.db");
         let conn = wal_database(&path);
-        conn.execute_batch("PRAGMA user_version=15;").unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA user_version={};",
+            crate::schema::SCHEMA_VERSION + 1
+        ))
+        .unwrap();
         let main = fs::read(&path).unwrap();
         assert_eq!(header(&main).unwrap().0, 14);
         let before = census(&path);

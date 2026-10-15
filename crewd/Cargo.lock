@@ -498,6 +498,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "crewd-collab",
  "crewd-exec",
+ "crewd-jev",
  "crewd-proto",
  "crewd-remote",
  "crewd-store",

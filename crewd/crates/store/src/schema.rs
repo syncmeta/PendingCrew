@@ -2,7 +2,7 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -865,6 +865,23 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 14 {
         migrate_v14(conn)?;
     }
+    if v < 15 {
+        migrate_v15(conn)?;
+    }
+    Ok(())
+}
+
+/// Jev uses existing JSON/meta rows, but its routing wakes require new consumers.
+/// This format barrier rejects old Core14 before it can falsely ACK an ordinary
+/// System wake. It installs no Native history table or producer capability.
+pub(crate) fn migrate_v15(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("PRAGMA user_version=15;")?;
+    tx.execute(
+        "INSERT INTO meta(key,value) VALUES('judgment.format.v1','1')",
+        [],
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2766,5 +2783,41 @@ mod organization_version_tests {
         assert_eq!(snapshots.len(), 1);
         let backup = Connection::open(&snapshots[0]).unwrap();
         assert_eq!(version(&backup), 11);
+    }
+}
+
+#[cfg(test)]
+mod judgment_format_tests {
+    use super::*;
+    #[test]
+    fn v15_format_marker_failure_rolls_back_version_and_retry_installs_no_native_tables() {
+        // A mechanical transaction stub, not evidence of a genuine old14 DB.
+        // The formal migration gate uses the sealed real old Core14 binary.
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); PRAGMA user_version=14; CREATE TRIGGER deny_jev_marker BEFORE INSERT ON meta WHEN new.key='judgment.format.v1' BEGIN SELECT RAISE(ABORT,'injected marker fault'); END;").unwrap();
+        assert!(migrate_v15(&c).is_err());
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            14
+        );
+        assert!(crate::meta_get(&c, "judgment.format.v1").unwrap().is_none());
+        c.execute_batch("DROP TRIGGER deny_jev_marker").unwrap();
+        migrate_v15(&c).unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
+        assert_eq!(
+            crate::meta_get(&c, "judgment.format.v1")
+                .unwrap()
+                .as_deref(),
+            Some("1")
+        );
+        assert!(crate::judgment_state::format_available(&c).unwrap());
+        crate::meta_set(&c, "judgment.format.v1", "unknown-version").unwrap();
+        assert!(!crate::judgment_state::format_available(&c).unwrap());
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'native_history_%'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
     }
 }
