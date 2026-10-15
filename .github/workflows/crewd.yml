@@ -607,7 +607,7 @@ jobs:
         env:
           PHYSICAL_ROOT: ${{ steps.physical.outputs.parent }}/tail/flow
         run: |
-          python3 -B scripts/dev/archive-crewd-linux-lifecycle.py "$PHYSICAL_ROOT" "$RUNNER_TEMP/core14-recovery/physical.tar.gz" --diagnostic-special-inodes
+          python3 -B scripts/dev/archive-crewd-linux-lifecycle.py "$PHYSICAL_ROOT" "$RUNNER_TEMP/linux393/physical.tar.gz" --diagnostic-special-inodes
           python3 - <<'PYARCHIVE'
           import hashlib,json,os,pathlib,tarfile
           evidence=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux393'
