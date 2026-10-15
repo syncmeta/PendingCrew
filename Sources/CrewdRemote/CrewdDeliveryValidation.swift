@@ -25,15 +25,13 @@ enum CrewdDeliveryValidation {
         case canonicalPathUnavailable, canonicalPathMismatch, pathContainment, pathMetadata
         case manifestNameAndRef, manifestOpen, manifestDescriptor, manifestRead, manifestChanged
         case manifestIdentityAndActions, endpointIdentity, endpointShape, macScopeAndEnvironment
+        case databaseIDStringCast, databaseIDEmpty, databaseIDUTF8Bound, databaseIDTrimChanged, databaseIDControlScalar
         case providerCanonicalPath, providerMetadata, providerHash, mobileContainer, mobileScopeAndEnvironment
         case credentialAction, unexpected
     }
     enum QualificationMatch: String, CaseIterable {
         case entryArgumentsEmpty, bundleIdentifierMatches, validationMarkerMatches, sourceStampPresent, manifestEnvironmentPresent
-        // These describe a failure-only recomputation, never the first guard evaluation.
-        case endpointRecomputedObject, endpointRecomputedKeys, endpointRecomputedHost
-        case endpointRecomputedNumber, endpointRecomputedNonBoolean, endpointRecomputedIntegral, endpointRecomputedRange
-        case endpointRecomputedAuthority, endpointRecomputedDatabase, endpointRecomputedPin
+
     }
     struct QualificationRejection: LocalizedError {
         let stage: QualificationStage
@@ -63,26 +61,6 @@ enum CrewdDeliveryValidation {
             return "{\"kind\":\"deliveryValidationAdmissionRefused\",\"matches\":{},\"stage\":\"unexpected\"}\n"
         }
         return text + "\n"
-    }
-    /// Observe only after the unchanged admission guard rejects. Optional casts
-    /// and Foundation predicates run again here; the booleans are a second
-    /// snapshot, not proof of which original short-circuit expression failed.
-    /// No raw identity, endpoint, numeric value or object description is emitted.
-    static func endpointFailureRecomputedMatches(_ value: [String: Any]) -> [QualificationMatch: Bool] {
-        let endpoint = value["endpoint"] as? [String: Any]
-        let number = endpoint?["port"] as? NSNumber
-        return [
-            .endpointRecomputedObject: endpoint != nil,
-            .endpointRecomputedKeys: endpoint.map { Set($0.keys) == ["host", "port"] } ?? false,
-            .endpointRecomputedHost: endpoint?["host"] is String,
-            .endpointRecomputedNumber: number != nil,
-            .endpointRecomputedNonBoolean: number.map { CFGetTypeID($0) != CFBooleanGetTypeID() } ?? false,
-            .endpointRecomputedIntegral: number.map { $0.doubleValue == Double($0.intValue) } ?? false,
-            .endpointRecomputedRange: number.map { (1...65535).contains($0.intValue) } ?? false,
-            .endpointRecomputedAuthority: (value["expectedAuthorityID"] as? String).map(CrewdRemoteText.uuid) ?? false,
-            .endpointRecomputedDatabase: (value["expectedDatabaseID"] as? String).map(CrewdRemoteText.databaseID) ?? false,
-            .endpointRecomputedPin: (value["expectedServerPin"] as? String).map(CrewdRemoteText.pin) ?? false
-        ]
     }
     static func qualified() throws -> Scope {
         // Capture the original application context once; no fallback bundle or
@@ -164,11 +142,23 @@ enum CrewdDeliveryValidation {
               let host = rawEndpoint["host"] as? String, let portValue = rawEndpoint["port"] as? NSNumber,
               CFGetTypeID(portValue) != CFBooleanGetTypeID(), portValue.doubleValue == Double(portValue.intValue),
               (1...65535).contains(portValue.intValue),
-              let aid = v["expectedAuthorityID"] as? String, CrewdRemoteText.uuid(aid),
-              let db = v["expectedDatabaseID"] as? String, CrewdRemoteText.databaseID(db),
-              let spki = v["expectedServerPin"] as? String, CrewdRemoteText.pin(spki) else {
-            throw QualificationRejection(.endpointIdentity, matches: endpointFailureRecomputedMatches(v))
+              let aid = v["expectedAuthorityID"] as? String, CrewdRemoteText.uuid(aid) else { throw QualificationRejection(.endpointIdentity) }
+        // Evaluate the cast and each existing database predicate exactly once,
+        // at their original position between authority and SPKI checks. Scope
+        // receives the accepted value from this same evaluation, not a recheck.
+        guard let databaseText = v["expectedDatabaseID"] as? String else { throw QualificationRejection(.databaseIDStringCast) }
+        let db: String
+        switch CrewdRemoteText.validateDatabaseID(databaseText) {
+        case .accepted(let original): db = original
+        case .rejected(let reason):
+            switch reason {
+            case .empty: throw QualificationRejection(.databaseIDEmpty)
+            case .utf8Bound: throw QualificationRejection(.databaseIDUTF8Bound)
+            case .trimChanged: throw QualificationRejection(.databaseIDTrimChanged)
+            case .controlScalar: throw QualificationRejection(.databaseIDControlScalar)
+            }
         }
+        guard let spki = v["expectedServerPin"] as? String, CrewdRemoteText.pin(spki) else { throw QualificationRejection(.endpointIdentity) }
         let listed = CrewdRemoteEndpoint(host: host, port: UInt16(portValue.intValue))
         guard listed.valid else { throw QualificationRejection(.endpointShape) }
         var data: URL
