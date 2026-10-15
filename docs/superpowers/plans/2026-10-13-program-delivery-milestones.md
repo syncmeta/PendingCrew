@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 单次数据库身份校验整块接受与 Jev wire02 冻结
+
+准确c4ca来源normal14及queue07静态Mac整包已验：normal报告91cd5d9cd8efdcb7cafacd6cd9b5501c838c34cc2f6391cec947d414d479d1ed，Mac报告b2232e5c5f95183cb538b259351c48301b26debe5a85385387063f9ee5b05c5f，actualpin6aad9cbd986f807ba665be9c052fdda38e9d10af。normal原工具48796/0与封存77889/0由执行作者直接确认、原chunkID未恢复；独立strong consumer完整输入/配置/actualfresh均通过，层级明列，不补造。global及client2cdc普通推送已服务器核，远端main未推。本地主main实际受264保护快进c4ca，独立postflight a8c6f907c7eef54f5c067f90cd0c99a03074debfca79c4035bf57179328a3751；README/design/旧研究及未归因:-原样保留，无安装/日常切换。
+
+source07原动作漏检当前attempt07私有目录，被QA拒收，原freeze b1b10保留；closure01以动态RUNTIME前置资格修复，wholeQAc14ff接受，root技术10d5与独立truegate67c226另列、原human回复不改且未见新hash。唯一txn65d22实际prepare88c7f4/0，原raw0600、scopefcc1/backup7b8/17历史保全，独验d0645b909d63efd82e344aa56b67340accead1f03e993969b54d19d9efe9daae。唯一P1 tool72120/f67392终态1、GUI98658原poll0、helper未qualified；closed日志十项复算仅Database=false，另九项及外五项true，独验f2626345856ea3713cbc74180627da99c4ceeab0ceaeacc7150826b19e29b759。只是第二snapshot的String cast+predicate复合false，不冒首次原因、不回推旧75207/57553；未native/配对/N/P2、未重试。
+
+静态因果矩阵和固定Mach-O有限只读核对未发现UUID旧规则、命名遮蔽或控制集变更；冻结d668/独验8b11293仅接受证据边界，仍不证明原App原因。根批准单次求值完整两Swift单元：String cast在authority后SPKI前一次，原empty→UTF8≤256→trim→control短路顺序及opaque身份接受集合不变，成功原串入Scope，Validation仅固定失败enum，移除十项失败后复算。client clean dc0892ffd75327b4f6be868d3f783c4c9dd81757已获whole独验3d7b41449bbdf023cf0db613282e4edf419ea8451e9b61770ad4d5af00806339；1142文件+5ref、2645×2差分、62×2生产DI/隐私、Mac/iPhoneOS/sim各371类型输入及终态核齐。根本次精确组合两Swift和两统筹记录，下一fullref需新actualnormal/不可变包，不改标旧c4ca来源；尚非运行修复证明。一次未来准确新actual仍不解释则Unknown停，不继续追加日志/候选循环。
+
+Jev首轮持续实施，非已交付：wire02接口根锁6ea295e，immutable manifest dade150a283da202446fef96b1ad3067cb8a735c8992180fce7f38f1d3c5b0fd，DTO aa26f1904facd837317ff69ef5f43cbc445322ed8e71818472f0cbc60f9d4fa7。原三judgment方法、既有本机Human anchor信任门、keep/set/clear与Unknown barrier；settings.get(requestId)纯只读查询known/not_found/historical，不用set查询/不持久secret/不自动新UUID重试。新生产HTTPS-only，HTTP仅cfg(test)显式FakeJev。client在原⌘,全局设置独立cut接线，backend继续三业务/真实SQLite重开耐久与正式restore/import同事务meta epoch（dbId保留仍须旧绑定历史化），无DDL/Native15激活。裸文件回滚不夸exactly-once；secret值不得入通用日志/receipt/事件。Jev独立patch排除e101相对c4ca的8条Native15增量，不wholemerge。
+
+全工程仍未完成，诊断不计独立阶段；既验M1/M5/Core14/TLS与Linux真实旧源证据复用。Native15完整SDK/生产生命周期、原App全P1/N/P2、正式publisher/真机/安装日常切换/公开发布及旧all-features完整范围仍待。其他Jev厂商/OAuth、个人记忆和团队知识未实施；真实模型/Keychain等新执行不由源码授权自动覆盖。
+
+
 ## 2026-10-15 Jev 首轮获准实现，source06 实际停点与下一诊断来源冻结
 
 用户已批准 Jev 首轮完整模块：复用 TypeSafe，公共 Choice/Score/Predicate，需求接收路由、唤醒、消息归属三业务，全局单 provider 手动配置、无跨 provider 级联，确定性规则优先，状态缓存/期限/原始 usage/失败回机长。后端唯一 Rust/schema 作者实施，QA 独立整块验收，客户端负责原前端设置接线；不是已交付。复用既有 extra 内 typed version1，不新增 DDL/版本，Requirement 不伪造 owner/Plan/验收，消息归属不修改 reply/@/Ask。配置采用既有本机 Human anchor 信任门、凭证 keep/set/clear 与失败 pending barrier，不实际调用真实凭证或模型。自动审批曾拒绝生产源码写入；同一动作凭明确实现授权复核后放行，原拒绝保留。其他厂商/OAuth、个人记忆和团队知识不纳入首轮。此前“Jev 待讨论”仅为历史状态。

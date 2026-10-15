@@ -78,9 +78,24 @@ enum CrewdRemoteText {
     static func uuid(_ value: String) -> Bool { UUID(uuidString: value)?.uuidString.lowercased() == value }
     // Store generates lower(hex(randomblob(16))); database identity is opaque
     // and existing meta.dbId is preserved, rather than reformatted as UUID.
+    enum DatabaseIDFailure { case empty, utf8Bound, trimChanged, controlScalar }
+    enum DatabaseIDValidation {
+        case accepted(String)
+        case rejected(DatabaseIDFailure)
+    }
+    /// Same opaque identity policy and short-circuit order as databaseID.
+    /// The accepted value is the original string, never a normalized identity.
+    /// No raw value, length, scalar or error description is logged here.
+    static func validateDatabaseID(_ value: String) -> DatabaseIDValidation {
+        guard !value.isEmpty else { return .rejected(.empty) }
+        guard value.utf8.count <= 256 else { return .rejected(.utf8Bound) }
+        guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else { return .rejected(.trimChanged) }
+        guard !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return .rejected(.controlScalar) }
+        return .accepted(value)
+    }
     static func databaseID(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= 256 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        if case .accepted = validateDatabaseID(value) { return true }
+        return false
     }
     static func revision(_ value: String) -> Bool { Int64(value).map { $0 > 0 && String($0) == value } ?? false }
     static func pin(_ value: String) -> Bool { value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }
