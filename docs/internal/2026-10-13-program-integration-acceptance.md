@@ -1,5 +1,16 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 原前端新不可变 Mac 候选准备整块接受，完整窗口延续动作准备中
+
+准确完整编译来源3e628fa5a0a4bc7a1839307a449f06f1cf74136b的normal12已实际独验接受（/private/tmp/pcw-Core14-normal3e628fa5-independent-12.json，SHA744903ab62442a475cb552d64c4af3ea4287a75342742c7fca5eeae5cf04f14c），新queue05原target Mac包也获整块actual接受：/private/tmp/pcw-delivery-validation-artifact-queue-05/complete-mac-artifact-independent-05.json，SHAe57faf2740f54de911a94c635f283d6e74b4d74a593045c7328b540ce925b56f。包 /private/tmp/pcw-delivery-validation-artifact-queue-05/artifact/PendingCrew Delivery Validation.app，实际code pin dbd86a685afc9d29f56e8366901df84e0f843bea。driver4805/作者proper94670/独立proper24164均终态0，完整1378Git/3738SPM、50products/2MachO/3loaded含seal、target→stage及normal→sealedhelper代码等价全部核齐。GUI Validation Release -O与helper defaultDebug/non-test/空features分层，adhoc/runtime/无Team，非publisher。
+
+实际Xcode系统tmp映射、双Info stamp/无根seal及linker资格、载荷排除前重核、target及最终全架构system-only加载闭包均通过；Sparkle不存在，无disable-LV。9producer+1target及8QA独立codesign只读query的真实0700cwd/0600记录/argv-stdout-stderr-exit-log SHA/无意外文件均实核，实际官方“- --xml”输出0B符合无entitlements语义。原86 deepseal通过但首次App dyld-6、50 queue04 alias拒绝65、原259pre-prune拒收及全部修复证据保留，不改标。包资格不证明实际dyld启动、AX路由、helper资格、配对持久化或P1/N/P2流程；新包尚未启动或访问SecItem。
+
+人类已明确指定native AX与原f401根/单假service-account完整流程，技术指定不重复询问。source05正准备同原私有范围的可审延续：保留原scope/证据/Unknown，核实真实旧值与当前停态/并发资格，再作明确manifest保全与原子发布事务，新attempt证据独立、原数据不重置、任何不符零写。原始人类回复只证明其原source04动作SHA，不伪称已看新ref；root技术修复审链单列新准确action/ref/pin并核对既有授权与具体工具审批。当前只准备源码，尚未修改旧scope/启动新App/发native或凭据操作；不放宽正式factory根规则，不新namespace/服务或日常数据，不重放旧Unknown ID。
+
+本地main记录时仍d146c121，原263用户文件加新增未归因“:-”共264项保留。最终一次本地源码保护快进拟纳本候选已验产品源及本次doc-only检查点，实际执行以 /private/tmp/pcw-local-main-source-integration-mac05-01/independent-actual-postflight.json 为准；该actual PASS报告缺失即不算完成。此前50的guard仅拒绝/准备，未FF。后续doc-only HEAD不得改标已编3e的normal12或候选来源；source05固定3e Git对象与冻结依赖，不要求live HEAD停3e。远端main未推送，无安装/日常切换/发布/新CI；iOS设备与sim旧0601、Linuxe630实际来源不变。完整Native15 producer/历史/生命周期/OS资格/SDK06、真机与publisher、额外all-features缺失仍未交付；Jev/记忆等继续仅待讨论，持续目标未完成。
+
+
 ## 2026-10-15 实际构建拒绝与查询隔离同批修复接受，下一准确产物组合冻结
 
 50b6e425准确normal11已获强来源独验，报告 /private/tmp/pcw-Core14-normal50b6e425-independent-11.json，SHAe22eaebc534db8056289440d3d454b56f2b23200155c7cdf6725edf4a1e77749；实际97364终态0约41秒，393/raw11包12targets全部fresh=false、Debug/non-test/空features、事后1378Git逐blob及外部工具绑定齐。binary SHAde72105c218f9ebdd3991a13091f82edb55cbe3936b3948991cfee74fa66ea59；197容量样本最小86,498,238,464B不冒连续峰值，Popen38592仅recorder，target租约已释放。其来源永久50b6，不改标后续组合。
