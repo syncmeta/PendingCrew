@@ -673,7 +673,7 @@ jobs:
   linux15-release:
     if: ${{ inputs.linux15_release == true && inputs.recovery_gate != true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux393_release != true }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       CARGO_INCREMENTAL: '0'
