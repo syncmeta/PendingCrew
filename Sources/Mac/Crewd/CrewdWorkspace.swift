@@ -214,6 +214,7 @@ final class CrewdWorkspace: ObservableObject {
         let runtimeBindingID: String
     }
     private var ownedIPCBinding: OwnedIPCBinding?
+    private var ownedLifecycle: CrewdOwnedLocalLifecycle?
     #endif
     private var again = false
     private var recoverNeeded = false
@@ -369,85 +370,38 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    /// Hibernate only the child authenticated on this very IPC descriptor.
-    /// An RPC acknowledgement does not prove the process physically exited.
+    /// Business retirement never transfers ownership. Only the independently
+    /// captured original-child lifecycle may reconnect for bounded owned Quit.
     func quitOwnedLocalHelper() async throws {
         guard let owned = backend, owned.isRunning else { return }
-        guard !retired, client.connected, let birth = ownedChildIdentity,
-              let binding = ownedIPCBinding, binding.generation == generation,
-              owned.processIdentifier == birth.pid,
-              (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth,
-              (try? client.verifiedLocalPeerIdentity()) == binding.peer, binding.peer == birth,
-              client.runtimeIdentity["dbId"].string == binding.dbID,
-              client.runtimeIdentity["runtimeBindingId"].string == binding.runtimeBindingID else {
-            throw CrewdClientError(message: "本 App 的后台尚无当前内核连接与进程实例的完整核对，退出保留待确认，不会停止其它后台。", kind: .notSubmitted)
+        guard let lifecycle = ownedLifecycle, lifecycle.matches(owned, birth: ownedChildIdentity) else {
+            throw CrewdClientError(message: "本 App 的后台尚无原内核连接与就绪历史的关闭资格；保留待确认。", kind: .notSubmitted)
         }
-        // Capture ready authority/journal while normal submission is still open.
-        // Sleeping blocks all ordinary writes; only this fixed owned hibernate
-        // envelope may use the captured qualification, revalidated before send.
-        let captured = try publicCommandBinding(for: client)
-        guard let journal = originalJournal, originalJournalReady else {
-            throw CrewdClientError(message: "原关闭历史尚未就绪；退出未提交。", kind: .notSubmitted)
-        }
-        let epoch = generation
-        let envelope = try CrewdPublicCommandEnvelope(request: UUID(), binding: client.runtimeIdentity,
-                                                     operation: .hibernate, params: .object([:]))
         sleeping = true; reconnect?.cancel(); sync?.cancel()
-        let closingBinding: () throws -> CrewdPublicCommands.Binding = { [weak self, weak owned] in
-            guard let self, let owned, self.sleeping, !self.retired,
-                  self.generation == epoch, self.backend === owned,
-                  self.client.connectionEpoch == captured.connectionEpoch,
-                  self.client.runtimeIdentity["dbId"].string == captured.databaseID,
-                  self.client.runtimeIdentity["runtimeBindingId"].string == captured.runtimeBindingID,
-                  self.presentationScope == captured.scope, self.originalJournal === journal,
-                  self.ownedChildIdentity == birth, self.hasVerifiedOwnedLocalHelper else {
-                throw CrewdClientError(message: "原关闭作用域或真实后台拥有关系已改变；未重新提交。", kind: .notSubmitted)
-            }
-            return captured
-        }
-        let closing = CrewdPublicCommands(binding: closingBinding,
-        ownsDaemon: { [weak self] in self?.hasVerifiedOwnedLocalHelper == true },
-        call: { [weak self] method, params in
-            guard let self, method == "command.submit", params == envelope.value else {
-                throw CrewdClientError(message: "关闭作用域只允许这项固定休眠原请求。", kind: .notSubmitted)
-            }
-            _ = try closingBinding()
-            return try await self.client.call(method, params)
-        }, prepare: { proposed, crew in
-            guard proposed.value == envelope.value else { throw CrewdPublicWire.invalid() }
-            return try journal.prepare(method: "command.submit", params: proposed.value, crew: crew)
-        }, finish: { [weak self] record, state, detail in
-            try journal.finish(record, state: state, detail: detail)
-            if let self, self.generation == epoch, self.client.connectionEpoch == captured.connectionEpoch,
-               self.originalJournal === journal, state == "unknown" { self.durableUnknown = try journal.unknownRecords() }
-        })
-        do {
-            let receipt = try await closing.submit(envelope, crew: crewID)
-            guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
-                throw CrewdClientError(message: "关闭原请求结果尚未确认；仅等待本 App 的原后台实际退出。")
-            }
-            if [.suppressed, .rejected].contains(receipt.phase) {
-                throw CrewdClientError(message: "原关闭请求已拒绝，后台保留。", kind: .notSubmitted, code: -32009, data: receipt.value["result"])
-            }
-        }
+        do { try await lifecycle.quit(crew: crewID) }
         catch {
-            if !CrewdClientError.isUncertainSubmission(error) {
-                if generation == epoch, backend === owned { sleeping = false }
-                throw error
-            }
+            if !retired, backend === owned { sleeping = false }
+            throw error
         }
-        for _ in 0..<300 {
-            if !owned.isRunning {
-                if generation == epoch, backend === owned {
-                    backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil
-                }
-                return
-            }
-            try await Task.sleep(for: .milliseconds(100))
+        // A late original close cannot clear a replacement Process or scope.
+        if backend === owned, !owned.isRunning {
+            backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil
+            if ownedLifecycle === lifecycle { ownedLifecycle = nil }
         }
-        throw CrewdClientError(message: "尚未确认本 App 的后台已退出；休眠结果待核对，不强制终止进程。")
+    }
+    private func captureOwnedLifecycle() {
+        guard hasVerifiedOwnedLocalHelper, originalJournalReady,
+              let owned = backend, let birth = ownedChildIdentity,
+              let journal = originalJournal, let directory = dataDirectory,
+              let origin = try? publicCommandBinding(for: client) else { return }
+        if ownedLifecycle?.matches(owned, birth: birth) == true { return }
+        // Capture only while the original business connection/journal is ready.
+        // This object exposes no crew, message, terminal or remote write API.
+        ownedLifecycle = try? CrewdOwnedLocalLifecycle.live(owned: owned, birth: birth,
+                                                           origin: origin, journal: journal, directory: directory)
     }
     private func associateOwnedIPC(_ epoch: UUID) {
+        guard acceptsObservation(epoch) else { return }
         ownedIPCBinding = nil
         guard let process = backend, process.isRunning, let birth = ownedChildIdentity,
               process.processIdentifier == birth.pid,
@@ -456,6 +410,8 @@ final class CrewdWorkspace: ObservableObject {
               let db = client.runtimeIdentity["dbId"].string, !db.isEmpty, db.utf8.count <= 256,
               let instance = client.runtimeIdentity["runtimeBindingId"].string, UUID(uuidString: instance) != nil else { return }
         ownedIPCBinding = OwnedIPCBinding(generation: epoch, peer: peer, dbID: db, runtimeBindingID: instance)
+        // Either journal readiness or verified peer association may arrive first.
+        captureOwnedLifecycle()
     }
     #endif
     private func connectOnly() async throws {
@@ -625,14 +581,26 @@ final class CrewdWorkspace: ObservableObject {
         guard originalJournalRequired, originalJournal == nil, preparingJournal != connection,
               journalFailureConnection != connection, client.connected, !retired else { return }
         preparingJournal = connection
-        defer { if preparingJournal == connection { preparingJournal = nil } }
+        defer {
+            if preparingJournal == connection { preparingJournal = nil }
+            #if os(macOS)
+            if acceptsObservation(epoch), client.connectionEpoch == connection { captureOwnedLifecycle() }
+            #endif
+        }
         do {
             let identity: CrewdValue
             if dataDirectory != nil { identity = try await readValue("remote.status")["identity"] }
             else { identity = client.authorityBinding }
             guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            let localDirectory: String?
+            if let directory = dataDirectory {
+                guard let resolved = realpath(directory.path, nil) else { throw CrewdPublicWire.invalid() }
+                defer { free(resolved) }
+                guard String(cString: resolved) == directory.path else { throw CrewdPublicWire.invalid() }
+                localDirectory = directory.path
+            } else { localDirectory = nil }
             let scope = CrewdPresentationJournal.Scope(namespace: authorityRecordID,
-                localDirectory: dataDirectory?.standardizedFileURL.resolvingSymlinksInPath().path,
+                localDirectory: localDirectory,
                 authorityID: identity["authorityId"].string, databaseID: client.runtimeIdentity["dbId"].string ?? identity["dbId"].string,
                 grantID: identity["grantId"].string, grantRevision: identity["grantRevision"].string)
             let journal = try CrewdPresentationJournal(root: root, scope: scope)
@@ -839,3 +807,174 @@ final class CrewdWorkspace: ObservableObject {
         catch { return false }
     }
 }
+
+#if os(macOS)
+/// A retained capability for one real App-owned child. It is separate from the
+/// retired business workspace and never grants old crew/terminal write access.
+@MainActor
+final class CrewdOwnedLocalLifecycle {
+    struct Connection {
+        let binding: () throws -> CrewdPublicCommands.Binding
+        let call: CrewdPublicCommands.Call
+        let close: () -> Void
+    }
+    typealias Connect = () async throws -> Connection
+    private let owned: Process
+    private let birth: CrewdKernelProcessIdentity
+    private let origin: CrewdPublicCommands.Binding
+    private let journal: CrewdPresentationJournal
+    private let verifyChild: (Int32) throws -> CrewdKernelProcessIdentity
+    private let connect: Connect
+    private let wait: () async throws -> Void
+    private let maximumWaits: Int
+    private var closing = false
+    private var submitted = false
+    private var originalPrepared: CrewdPresentationJournal.Prepared?
+    private var originalObservationFinished = false
+    private(set) var originalEnvelope: CrewdPublicCommandEnvelope?
+    private(set) var lastReceipt: CrewdPublicReceipt?
+
+    init(owned: Process, birth: CrewdKernelProcessIdentity, origin: CrewdPublicCommands.Binding,
+         journal: CrewdPresentationJournal, connect: @escaping Connect,
+         verifyChild: @escaping (Int32) throws -> CrewdKernelProcessIdentity = CrewdKernelProcessIdentity.ownChild,
+         maximumWaits: Int = 300,
+         wait: @escaping () async throws -> Void = { try await Task.sleep(for: .milliseconds(100)) }) throws {
+        guard maximumWaits > 0, maximumWaits <= 300, owned.isRunning, owned.processIdentifier == birth.pid,
+              try verifyChild(birth.pid) == birth, journal.scope == origin.scope,
+              origin.scope.localDirectory != nil, origin.scope.databaseID == origin.databaseID,
+              UUID(uuidString: origin.runtimeBindingID) != nil else {
+            throw CrewdClientError(message: "原本机后台或提交历史未具备关闭资格。", kind: .notSubmitted)
+        }
+        self.owned = owned; self.birth = birth; self.origin = origin; self.journal = journal
+        self.connect = connect; self.verifyChild = verifyChild; self.wait = wait; self.maximumWaits = maximumWaits
+    }
+    func matches(_ process: Process, birth: CrewdKernelProcessIdentity?) -> Bool {
+        owned === process && birth == self.birth
+    }
+    private var ownsLiveChild: Bool {
+        owned.isRunning && owned.processIdentifier == birth.pid && (try? verifyChild(birth.pid)) == birth
+    }
+    private func qualified(_ socket: Connection) throws -> CrewdPublicCommands.Binding {
+        guard ownsLiveChild else { throw CrewdClientError(message: "原后台直接子进程身份未确认，关闭未提交。", kind: .notSubmitted) }
+        let actual = try socket.binding()
+        guard actual.scope == origin.scope, actual.databaseID == origin.databaseID,
+              actual.runtimeBindingID == origin.runtimeBindingID else {
+            throw CrewdClientError(message: "原关闭连接的数据库或实例已经改变，未提交。", kind: .notSubmitted)
+        }
+        return actual
+    }
+    /// New socket admission and same original child/DB/instance are reverified.
+    /// An unknown earlier send permits lookup only, never another submit.
+    func quit(crew: String) async throws {
+        if !owned.isRunning { return } // Foundation owns and reaps this exact Process.
+        guard !closing, ownsLiveChild else {
+            throw CrewdClientError(message: "原后台关闭正在核对或拥有关系未确认。", kind: .notSubmitted)
+        }
+        closing = true; defer { closing = false }
+        let socket: Connection
+        do { socket = try await connect() }
+        catch {
+            if !owned.isRunning { return }
+            throw CrewdClientError(message: "原后台关闭连接未能重新核实；保留后台：" + error.localizedDescription, kind: .notSubmitted)
+        }
+        defer { socket.close() }
+        let captured: CrewdPublicCommands.Binding
+        do { captured = try qualified(socket) }
+        catch { if !owned.isRunning { return }; throw error }
+        let envelope: CrewdPublicCommandEnvelope
+        if let existing = originalEnvelope { envelope = existing }
+        else {
+            envelope = try CrewdPublicCommandEnvelope(request: UUID(),
+                binding: .object(["dbId": .string(origin.databaseID), "runtimeBindingId": .string(origin.runtimeBindingID)]),
+                operation: .hibernate, params: .object(["deadlineSecs": .number(0)]))
+            originalEnvelope = envelope
+        }
+        let controller = CrewdPublicCommands(binding: { [self] in
+            let value = try qualified(socket)
+            guard value == captured else { throw CrewdClientError(message: "原关闭连接已更换，未提交。", kind: .notSubmitted) }
+            return value
+        }, ownsDaemon: { [self] in ownsLiveChild }, call: { [self] method, params in
+            _ = try qualified(socket)
+            if method == "command.submit", params == envelope.value, !submitted {
+                submitted = true // Conservatively retained before the real call.
+            } else if method != "command.lookup" || params != envelope.lookup {
+                throw CrewdClientError(message: "原拥有关闭仅允许固定休眠或原请求只读核对。", kind: .notSubmitted)
+            }
+            return try await socket.call(method, params)
+        }, prepare: { [self] proposed, selectedCrew in
+            guard proposed == envelope else { throw CrewdPublicWire.invalid() }
+            let record = try journal.prepare(method: "command.submit", params: proposed.value, crew: selectedCrew)
+            originalPrepared = record
+            return record
+        }, finish: { [self] record, state, detail in
+            // Observations are immutable. Keep the first durable fact, including
+            // Unknown; a later physical wait or lookup must not overwrite it.
+            guard !originalObservationFinished else { return }
+            try journal.finish(record, state: state, detail: detail)
+            originalObservationFinished = true
+        })
+        do {
+            let receipt: CrewdPublicReceipt?
+            if submitted {
+                guard let original = originalPrepared, original.params == envelope.value else {
+                    throw CrewdClientError(message: "原关闭已经发送；只读核对资料尚未就绪，不会再次发送。")
+                }
+                try controller.restore([original])
+                guard let observation = controller.observations[envelope.requestID] else { throw CrewdPublicWire.invalid() }
+                receipt = try await controller.lookup(observation)
+            } else { receipt = try await controller.submit(envelope, crew: crew) }
+            lastReceipt = receipt
+            if let receipt, [.suppressed, .rejected].contains(receipt.phase) {
+                throw CrewdClientError(message: "原关闭请求已经拒绝，后台保留。", kind: .notSubmitted)
+            }
+        } catch {
+            if !owned.isRunning { return } // Unknown journal remains retained.
+            if !CrewdClientError.isUncertainSubmission(error) { throw error }
+        }
+        for _ in 0..<maximumWaits {
+            if !owned.isRunning { return }
+            try await wait()
+        }
+        // Exit may occur during the last bounded wait, including lookup.
+        if !owned.isRunning { return }
+        if let original = originalPrepared, !originalObservationFinished {
+            try journal.finish(original, state: "unknown", detail: "原后台实际退出仍未确认；只读核对原关闭，不重发。")
+            originalObservationFinished = true
+        }
+        throw CrewdClientError(message: "尚未确认原后台实际退出；原请求保留，不强制终止或重发。")
+    }
+
+    static func live(owned: Process, birth: CrewdKernelProcessIdentity, origin: CrewdPublicCommands.Binding,
+                     journal: CrewdPresentationJournal, directory: URL) throws -> CrewdOwnedLocalLifecycle {
+        guard let resolved = realpath(directory.path, nil) else { throw CrewdPublicWire.invalid() }
+        defer { free(resolved) }
+        // POSIX canonical paths preserve /private/tmp; Foundation may rewrite
+        // that system path to /tmp. Still reject every noncanonical input.
+        guard String(cString: resolved) == directory.path,
+              origin.scope.localDirectory == directory.path else { throw CrewdPublicWire.invalid() }
+        return try CrewdOwnedLocalLifecycle(owned: owned, birth: birth, origin: origin, journal: journal, connect: {
+            guard owned.isRunning, (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth else {
+                throw CrewdClientError(message: "原 App 的真实子进程已经改变，未建立关闭连接。", kind: .notSubmitted)
+            }
+            let next = CrewdClient()
+            do {
+                try await next.connect(path: directory.appendingPathComponent("crewd.sock").path)
+                let binding: () throws -> CrewdPublicCommands.Binding = {
+                    guard owned.isRunning, next.connected,
+                          (try? CrewdKernelProcessIdentity.ownChild(birth.pid)) == birth,
+                          (try? next.verifiedLocalPeerIdentity()) == birth,
+                          next.capabilities.contains("command.receipts"),
+                          next.runtimeIdentity["dbId"].string == origin.databaseID,
+                          next.runtimeIdentity["runtimeBindingId"].string == origin.runtimeBindingID else {
+                        throw CrewdClientError(message: "原后台的新关闭连接未通过内核对端和实例核对。", kind: .notSubmitted)
+                    }
+                    return .init(scope: origin.scope, databaseID: origin.databaseID,
+                                 runtimeBindingID: origin.runtimeBindingID, connectionEpoch: next.connectionEpoch)
+                }
+                _ = try binding()
+                return Connection(binding: binding, call: { method, params in try await next.call(method, params) }, close: { next.retire() })
+            } catch { next.retire(); throw error }
+        })
+    }
+}
+#endif

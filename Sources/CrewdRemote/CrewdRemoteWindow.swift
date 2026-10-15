@@ -88,6 +88,22 @@ import Combine
         install(next);await connectSelected(next)
     }
     #endif
+    /// Confirmation binds the exact displayed saved computer. A changed record
+    /// never silently redirects this local credential deletion to another one.
+    @discardableResult func forget(_ computer: CrewdRemotePairSummary) -> Bool {
+        guard computers.contains(computer) else {
+            error = "已存电脑记录已经改变，请重新读取后确认移除。"; return false
+        }
+        do {
+            let current = try pairing.summaries().first { $0.id == computer.id }
+            guard current == computer else {
+                error = "配对记录已经改变，未移除其它凭据。"; return false
+            }
+            try pairing.forget(computer.id)
+            if selected == computer.id { retireSelected() }
+            refresh(); return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
     func forget(_ id: UUID) {
         do {
             try pairing.forget(id)

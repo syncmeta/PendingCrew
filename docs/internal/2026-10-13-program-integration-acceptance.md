@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-15 原 Mac 移除与退役后原后台生命周期整块源码接受，下一准确产物组合冻结
+
+客户端完整 efc9639ffff3a7e0735ac4da5c44a078ebfefe29 源码闭合获独立验收：/private/tmp/pcw-mac-pairing-owned-close-unit-01/independent-whole-source-closure-efc9639.json，SHA ad4e22a4a1dfa21b52eb07de16f474b787ee3a6a2ee8b681ce4127fc67dddbdc；closure manifest SHA e342b2ced7819aeca26b265fed890bd3653f9dcc706d6021ca72fbcfc9a76fe8。三条 Swift 与一份 owned 模块记录为唯一差异。真实 Mac 已保存电脑移除确认接正式 window/credential factory；原 owner 控制独立保留于业务退役/断连之外，经 fresh 同连接 kernel peer、原 Process birth/DB/runtime/journal 资格，只发送一个正式 hibernate 或查询原 Unknown ID，有限等待且最后重核原 Process，不移交 owner、不恢复退役普通写、不授非 owner Stop。
+
+实际入口与生命周期现统一 POSIX canonical 合同；journal/peer 任一先就绪均触发合格捕获，late epoch 或 stale associate 不发布/不清新 owner；未靠 sleep 或权限放宽修时序。29 输入/证据 hash、Git 三生产源/四实际方法片段与完整 lifecycle class 字节闭合；18 场景有真实 own-child/kernel birth 与私有 journal FS，但 RPC/peer/凭据 store 为模型化控制。最终三平台类型检查均实际终态0，各371复制输入明确是370 Git source 加1 generated asset source，不称371 Git文件。原 b427 整块拒收、所有 RED 与 run02 旧 compiledDriver/probe SHA 绑定缺失明确保留；新证据不冒原未记录输入。
+
+根只精确组合 base b1dff50c→efc9639 的4路径及本次两份统筹记录；crewd tree 与已验 fd/a8cb 的393 Rust集合完全相同，公共 schema/接口/构建文件未修改、Native15未带入。提交后的准确新 full Git ref作为下一唯一 normal09与完整原三平台 DeliveryValidation 包输入，复用 warm Rust/Xcode/SPM 缓存；正常后台 default Debug/non-test 与 GUI Release -O 分层披露，所有 raw-own fresh/全Git/SPM/SDK/config/外部recipe来源独验后才能接受对应包。未启动此新构建或运行；fd normal08及三平台旧包、实际Linux a8cb编译证明永久保持原ref，不重标。稳定业务、M5及Linux恢复按实际字节影响复用，无新重复CI。
+
+完整原App持久动作方案仅private准备，仍待新实际normal/包/code pin绑定与具体动作授权；P1 ownedQuit→P2恢复/移除→P2 ownedQuit不构成nonowner负例，真正nonowner须额外并发GUI、实际OS code admission与owner/helper存活证据。设备本日已有只读记录显示两个iPhone配对但tunnel断连/DDI不可用、无physical iPad，已有sim未boot；不擅选签名身份或安装设备。Native OS资格失败/精确诊断与TypeScript工具授权保持独立阻断；main产品、真实窗口/SecItem/publisher/设备、安装日常切换/公开发布/真实模型、完整Native producer/history/PTY/恢复及旧all-features缺失仍待。Jev/记忆等仍待讨论，不算完成。
+
 ## 2026-10-15 三平台实际产物准备与正式 Phase0 已验，原 Mac 完整流程修复继续
 
 准确来源 fd528110512919a99c757f426faad2679ce713b5 的正常 Mac 后台 08 与原 PendingCrew target 的 DeliveryValidation 三平台完整产物准备已获独立接受。normal 报告 /private/tmp/pcw-Core14-normalfd528110-independent-08.json，SHA bc55cb4856c521a5e6f8498f01dea674d69ffc3c0b4d23942b65acf47e643a80；三平台整块报告 /private/tmp/pcw-delivery-validation-artifact-queue-01/complete-whole-apple-independent-01.json，SHA 9e34210720f4df68324776394a8380a26199ce37d28415ebd27aeb76e96254ff。393 Rust/raw-own fresh 输入、1371 Git/3738 SPM、实际工具链/配置及逐层产物来源核齐。Mac GUI 为 Release -O 私有 ad-hoc，helper 为实际 default Debug；设备与模拟器均为同一原 target、实际 family 1,2，覆盖 iPhone/iPad 通用编译准备。移动外部 driver/consumer 是另列完整 hash 的输入，不冒称存在于 fd Git。没有 App 窗口、Keychain、publisher、真机安装或运行证明。此前“产物待构建”仅为历史停点；旧来源保持不改标。
