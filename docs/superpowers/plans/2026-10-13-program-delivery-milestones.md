@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 本地main源码已整合；正式验证授权入口修复已验，下一准确Mac产物待构建
+
+本地主目录main已从fe68022f源码快进到621168557349446f41994e01af539a26c2156da9，完整程序树等于已验52d7d3ac；历史合入远端main的手动CI政策，两份工作流采用已验原blob，未新增逻辑或自动CI。README及262个untracked文件共263项内容/模式/mtime/inode和原status逐字保留，独立实际postflight /private/tmp/pcw-local-main-source-integration-621-01/independent-actual-local-main-postflight.json，SHAd4528406404c76e50652318b63fbf8ad748b5c0f8d60f621cd64b69b85cbc7dc。远端main仍未推送，安装/运行/日常数据/发布未执行；此本地main随后尚未带入本节新Mac入口修复。
+
+完整App动作source03独验发现已编0601验证包candidate宏分支不可达、toolbar角色、配对往返和N真实只读路径四处缺口，原拒收SHAe65168b0a63203f2e87965537b13fee81b468f5d32ced4276a7fe8e99ad213c2保留。旧0601实际产物的构建来源证据仍成立，其完整App流程未通过。根批准在同一完整流程内修正式入口，并禁止裸RPC/假pin/替代helper补洞。
+
+客户端b35353e59a603f1864e38a49ff76dd5f65d1fe07的完整最小产品cut已独验接受：仅真实Mac LocalTrustView将显式DeliveryValidation纳入原exactCode候选UI，并增加仅presentation dismiss的关闭按钮；普通prod及ownedHuman/OSidentity/epoch/正式committed回执/后台allowlist不变。actual Mac37924全371输入类型检查0（370Git+1generated），三个真实编译条件ordinary=false/native与validation=true，原37377宏服务失败保留。报告 /private/tmp/pcw-local-trust-validation-ui-unit-01/independent-product-source-gate-b353.json，SHAf476840c6d12613c8545480b2c7071032719a33b9be19049facfcf4770aacd60。
+
+根仅精确整合上述Swift/owned文档两路径及本节两份统筹记录，Rust393、schema14、工程和iOS源不变。下一次normal10与新Mac候选必须以本组合提交的准确完整ref和配置实际生成/独验，当前尚未构建，不给旧0601/normal09改标。唯一共享Rust owner由后端线承接，沿原target与Xcode/SPM缓存；无新LinuxCI或稳定业务重跑，iOS已验06产物按原ref复用。
+
+source04须在同一模块闭合实际toolbar/配对往返/N普通只读/owner存活及新P2恢复移除，再绑定实际新包与code pin完成whole source/action审。nativeAX技术请求与具体新App/假凭据动作授权仍未取得，当前无native/OSguest/App/SecItem执行。Linux已验e630实际Release保持原来源；Native15/SDK06/TypeScript/OS隔离资格、窗口/设备、远端main、安装日常切换与公开发布仍各待证，目标继续active。
+
 ## 2026-10-15 准确 Apple0601 与 Linux393 Release 已验，完整模块组合继续
 
 Apple normal09及原target三平台DeliveryValidation实际产物已独验接受，实际完整编译来源永久为0601a424966bea5e3cec825ba3281ff254312295。normal09报告 /private/tmp/pcw-Core14-normal0601a424-independent-09.json（SHA9a9f9a5a43317652e274612bca3f2c5d35025de2fbcaa707ff02ebec797b2310）；三平台报告 /private/tmp/pcw-delivery-validation-artifact-queue-02/complete-whole-apple-independent-02.json（SHAb3879349b71ce607ca54979a670515df8879130ef121cf8e64f19b084bef228c）。实际1372Git/3738SPM；GUI Release -O与正常后台default Debug分别披露，iPhone/iPad原统一target设备及模拟器编译不代表窗口、SecItem、真机或publisher验收。
