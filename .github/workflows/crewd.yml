@@ -673,7 +673,7 @@ jobs:
   linux15-release:
     if: ${{ inputs.linux15_release == true && inputs.recovery_gate != true && inputs.linux_install_upgrade != true && inputs.linux14_install_recovery != true && inputs.linux393_release != true }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 25
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       CARGO_INCREMENTAL: '0'
@@ -755,7 +755,7 @@ jobs:
       - name: First Linux15 affected Jev fake and persistence suite only
         run: |
           rm -f crewd/target/nextest/ci/junit.xml
-          cargo nextest run --manifest-path crewd/Cargo.toml --locked --offline --profile ci -p crewd-server -p crewd-collab -p crewd-store -p crewd-jev -p crewd-proto -E 'test(judgments::tests::) | test(judgment_state::tests::) | test(schema::judgment_format_tests::) | binary(provider) | binary(judgment_layout)' > "$RUNNER_TEMP/linux15/affected-nextest.log" 2>&1
+          cargo nextest run --manifest-path crewd/Cargo.toml --locked --offline --profile ci -p crewd-server -p crewd-collab -p crewd-store -p crewd-jev -p crewd-proto --lib --test provider --test judgment_layout -E 'test(judgments::tests::) | test(judgment_state::tests::) | test(schema::judgment_format_tests::) | binary(provider) | binary(judgment_layout)' > "$RUNNER_TEMP/linux15/affected-nextest.log" 2>&1
           python3 - <<'PYJUNIT'
           import pathlib,xml.etree.ElementTree as E
           root=E.parse('crewd/target/nextest/ci/junit.xml').getroot()
