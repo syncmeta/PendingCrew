@@ -1,5 +1,18 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 实际构建拒绝与查询隔离同批修复接受，下一准确产物组合冻结
+
+50b6e425准确normal11已获强来源独验，报告 /private/tmp/pcw-Core14-normal50b6e425-independent-11.json，SHAe22eaebc534db8056289440d3d454b56f2b23200155c7cdf6725edf4a1e77749；实际97364终态0约41秒，393/raw11包12targets全部fresh=false、Debug/non-test/空features、事后1378Git逐blob及外部工具绑定齐。binary SHAde72105c218f9ebdd3991a13091f82edb55cbe3936b3948991cfee74fa66ea59；197容量样本最小86,498,238,464B不冒连续峰值，Popen38592仅recorder，target租约已释放。其来源永久50b6，不改标后续组合。
+
+新Mac queue04唯一会话7010实际driver1/Xcode65，发生在target资格门禁，未产生immutableApp/prune/adhoc封口或App启动。调用DD参数已/private/tmp，Xcode实际settings却回/tmp；标准系统别名与门禁字面canonical冲突是确定原因。actual target双Info stamp正确50、主代码linker0x20002/noTeam且生产MachO parser仅系统库，证明专用配置的SPU编译/链接排除在实际target有效，不证明新包可启动。实际FAIL独验 /private/tmp/pcw-delivery-validation-artifact-queue-04/failed-target-evidence/independent-actual-failure-review.json，SHAf09eaa0ce12341ceec7a18dc2f171ab75387cdcd955d44e02a9a5eddf1a655fa；原输入/日志/Main/Info及旧86的dyldFAIL均保留，无临时patch或第二启动。
+
+本地main仍d146c121。50快进前保护检查因新增untracked“:-”正确拒绝，未执行merge；原263指纹不变，新自有单链接regular与11目标无冲突，已另建264项保留清单。该文件未删、未读内容、不归因。有限源审发现codesign查询继承cwd与deprecated“:-”输出语法，旧warning+空stdout不足单独证明空entitlements；来源核对报告 /private/tmp/pcw-local-main-source-integration-50b6-02/limited-query-cwd-review.json（SHAfd57730d470b2ec4a916b3c42d8d3c94fddfff00e4b0cd86c4aba04a294bf726）。未重跑旧查询来归因，main的本次快进暂缓至完整候选收口；远端main未推送。
+
+客户端43b7ce5d55e219792e3be29fdc8f0d3e9e30affc在8aa基础仅4owned路径同批闭合标准系统别名和查询输出边界，整块独验接受：/private/tmp/pcw-validation-system-alias-source-closure-01/independent-whole-source-closure-review-43b7.json，SHA7a3ff56def4f4265ae297a5914916d0bafdd8d166ef2bb5c154a39dfbe7538d3。仅允许已核/tmp→/private/tmp关系，任意其他alias/外逃仍拒。全部codesign读取固定独立0700私有cwd与闭集argv、10秒预算，依本机官方手册使用“- --xml”stdout语义；argv/cwd/stdout/stderr/exit/日志/record的实际绑定及unexpected-files拒绝加入独立consumer。18alias/21query/20资格控制为DI和真实privateFS，不冒新实际OSquery。Rust/PBX/配置/Shared及370Git+1generated Swift逐字不变，原类型与未变层复用，不重跑业务。
+
+根仅精确组合8aa→43b7的4路径及两份统筹记录，下一新完整ref供唯一normal12与新queue05Mac实际构建、全加载/签态/查询边界和properconsumer独验。50/normal11/queue04及86/normal10/首次P1原Unknown均不改标或重放；无新CI/冷缓存/清理旧证据。native AX技术已明确授权，不因技术重复询问；具体后续动作须以实际新包/ref/pin、旧现场保全、既定私有边界及已有授权范围作可审查核对，脚本旗标或JSON不代人类授权。此时尚无新包、窗口、凭据或真机成果；Native15/正式publisher/安装日常切换/公开发布/新真实模型仍各待证，Jev/记忆仍待讨论。
+
+
 ## 2026-10-15 首次真实窗口启动失败已独验；验证通道加载闭包修复整块源码接受
 
 更正后的明确人类回复 call_0e45c29d038047d6bb69b971b8bdd074 授权 native AX 与指定 source04/86包/单假service-account完整P1/N/P2动作。根真实回复记录和胶囊已核；唯一实际P1 prepare终态0，唯一launch会话75509终态1。原GUI36183/birth1792040031696630/parent34782由原Popen回收-6，daemon=null，terminal为UNKNOWN startup unconfirmed。gui.log显示dyld拒载Sparkle，main与Sparkle实查均adhoc/runtime/无Team，并非两个具名Team不同；完整12个sealed对象字节仍原。独验 /private/tmp/pcw-delivery-validation.f401171b-fa4d-461c-acc0-db848d9977e9/app-qualification-evidence/P1/independent-first-P1-qualification-failure.json，SHAfb66b524299d1e5afde96259816660ddd3dbb3ec8576421247487ba4d0a6c670。QA ps被sandbox拒，未外推当前全组census。尚无qualified helper/native UI/pairing证据；不从日志缺失推全局凭据调用不存在。原scope/包/源/Unknown与回执保留，无第二启动或原包重签。旧normal10与包86的静态来源/签封证明保持成立，不能因此称可启动。

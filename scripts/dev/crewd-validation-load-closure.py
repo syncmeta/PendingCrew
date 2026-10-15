@@ -4,7 +4,7 @@ Does not launch, sign, strip code, access credentials, or relax library validati
 Only prune-target mutates the newly built, unsigned Validation target (never an
 artifact); it removes an unused updater payload after checking every other image.
 """
-import argparse,hashlib,json,os,pathlib,plistlib,re,shutil,stat,struct,subprocess
+import argparse,hashlib,json,os,pathlib,plistlib,re,shutil,stat,struct,subprocess,tempfile,shlex
 MAGIC={bytes.fromhex(x) for x in ['cffaedfe','feedfacf','cafebabe','bebafeca','cafebabf','bfbafeca']}
 LOAD={0xc:'load',0x80000018:'weak',0x8000001f:'reexport',0x80000023:'upward',0x20:'lazy'}
 POLICY='validation-system-libraries-only-v1'
@@ -96,30 +96,88 @@ def audit(app,exclude_updater=False):
  if not exclude_updater and updater.exists():fail('updater payload retained in validation product')
  return {'policy':POLICY,'images':rows,'libraryValidationRelaxed':False,'runtimeLaunchProven':False,'updaterCovered':False}
 
+QUERY_PREFIX='pcw-validation-code-query-'
+
+def validate_query_record(q):
+ required={'command','cwd','exitCode','stdout','stderr','privateCwdQualified','unexpectedOutputs'}
+ if set(q)!=required or q['privateCwdQualified'] is not True or q['unexpectedOutputs']!=[]:fail('incomplete private query record')
+ cwd=pathlib.Path(q['cwd'])
+ if cwd.parent!=pathlib.Path('/private/tmp') or not re.fullmatch(QUERY_PREFIX+'[a-z0-9_]{8}',cwd.name):fail('unreviewed query working directory record')
+ options=[['--display','--verbose=4'],['--display','--entitlements','-','--xml'],['--verify','--strict'],['--verify','--deep','--strict']]
+ argv=q['command']
+ if not isinstance(argv,list) or len(argv)<3 or argv[0]!='/usr/bin/codesign' or argv[1:-1] not in options or not pathlib.Path(argv[-1]).is_absolute():fail('unreviewed read-only codesign command')
+ if type(q['exitCode']) is not int or not isinstance(q['stdout'],str) or not isinstance(q['stderr'],str):fail('invalid OS query result types')
+ if 'deprecated' in q['stderr'].lower():fail('ambiguous/deprecated query output rejected')
+ return q
+
+def readonly_query(argv):
+ # No inherited working directory. Retain every fresh empty 0700 context,
+ # including failures; never delete an unexpected relative output file.
+ cwd=pathlib.Path(tempfile.mkdtemp(prefix=QUERY_PREFIX,dir='/private/tmp'))
+ st=cwd.lstat()
+ if cwd.is_symlink() or cwd.resolve(strict=True)!=cwd or st.st_uid!=os.getuid() or stat.S_IMODE(st.st_mode)!=0o700:fail('private query cwd qualification failed')
+ seed={'command':list(map(str,argv)),'cwd':str(cwd),'exitCode':0,'stdout':'','stderr':'','privateCwdQualified':True,'unexpectedOutputs':[]};validate_query_record(seed)
+ if list(cwd.iterdir()):fail('query cwd was not empty')
+ # Reserve only our own evidence file with O_EXCL/NOFOLLOW inside the private
+ # context; no sibling/caller file can be overwritten, even on query failures.
+ record=cwd/'query-result.json';fd=os.open(record,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,'w') as evidence:
+  try:
+   p=subprocess.run(seed['command'],cwd=str(cwd),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
+   q=dict(seed,exitCode=p.returncode,stdout=p.stdout,stderr=p.stderr)
+  except subprocess.TimeoutExpired as e:
+   text=lambda value:value.decode(errors='replace') if isinstance(value,bytes) else value or ''
+   q=dict(seed,exitCode=-1,stdout=text(e.stdout),stderr=text(e.stderr)+'\nREAD_ONLY_QUERY_TIMEOUT')
+  except OSError as e:q=dict(seed,exitCode=-1,stderr='READ_ONLY_QUERY_OS_ERROR: '+str(e))
+  q['unexpectedOutputs']=sorted(x.name for x in cwd.iterdir() if x.name!=record.name)
+  inode=record.lstat();held=os.fstat(evidence.fileno())
+  if stat.S_ISLNK(inode.st_mode) or (inode.st_dev,inode.st_ino)!=(held.st_dev,held.st_ino):q['unexpectedOutputs'].append('query-evidence-path-changed')
+  evidence.write(json.dumps(q,sort_keys=True,indent=2)+'\n')
+ print('READ_ONLY_SIGNATURE_QUERY '+str(record)+' SHA256='+sha(record.read_bytes()))
+ return validate_query_record(q)
+
+def query_log(q):
+ validate_query_record(q)
+ return 'Command: '+shlex.join(q['command'])+'\nCwd: '+q['cwd']+'\nStdout:\n'+q['stdout']+'\nStderr:\n'+q['stderr']+'\nExit: '+str(q['exitCode'])+'\n'
+
+def signature_facts(rows):
+ result=[]
+ for row in rows:
+  queries=[]
+  for query in row['queries']:
+   validate_query_record(query);queries.append({key:value for key,value in query.items() if key!='cwd'})
+  result.append({'path':row['path'],'queries':queries})
+ return result
+
+def entitlements_from_stdout(text):
+ if not isinstance(text,str):fail('entitlement stdout must be text')
+ if text=='':return {}
+ value=plistlib.loads(text.encode())
+ if not isinstance(value,dict):fail('entitlement XML must be a dictionary')
+ return value
+
 def signature_audit(app,closure):
  # OS verification is read-only; no identity/key query and no signature mutation.
  rows=[]
  for image_row in closure['images']:
   path=pathlib.Path(app)/image_row['path'];queries=[]
-  for options in [['--verify','--strict'],['--display','--verbose=4'],['--display','--entitlements',':-']]:
-   argv=['/usr/bin/codesign',*options,str(path)];p=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
-   if p.returncode:fail('actual code signature query failed: '+image_row['path'])
-   queries.append({'command':argv,'exitCode':p.returncode,'stdout':p.stdout,'stderr':p.stderr})
+  for options in [['--verify','--strict'],['--display','--verbose=4'],['--display','--entitlements','-','--xml']]:
+   q=readonly_query(['/usr/bin/codesign',*options,str(path)])
+   if q['exitCode']:fail('actual code signature query failed: '+image_row['path'])
+   queries.append(q)
   display=queries[1]['stdout']+queries[1]['stderr']
   if 'Signature=adhoc' not in display or 'TeamIdentifier=not set' not in display or 'runtime)' not in display:fail('every actual code image must have explicit adhoc/runtime/noTeam seal')
   if not re.search(r'^CDHash=[0-9a-f]{40}$',display,re.M):fail('missing actual code-directory hash')
-  ent=queries[2]['stdout'].strip()
-  if ent and plistlib.loads(ent.encode()):fail('entitlements on actual loaded code forbidden')
+  if entitlements_from_stdout(queries[2]['stdout']):fail('entitlements on actual loaded code forbidden')
   rows.append({'path':image_row['path'],'queries':queries})
  return rows
 
 def main_build_signature(path):
  path=pathlib.Path(path);before=path.read_bytes();image(before)
  argv=['/usr/bin/codesign','--display','--verbose=4',str(path)]
- p=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
- q={'command':argv,'exitCode':p.returncode,'stdout':p.stdout,'stderr':p.stderr}
- text=p.stdout+p.stderr
- if p.returncode==1 and 'code object is not signed at all' in text:
+ q=readonly_query(argv)
+ text=q['stdout']+q['stderr']
+ if q['exitCode']==1 and 'code object is not signed at all' in text:
   # A malformed/unreadable embedded signature is Unknown, never unsigned.
   for _,part in slices(before):
    endian='<' if part[:4]==bytes.fromhex('cffaedfe') else '>';h=struct.unpack_from(endian+'8I',part);cursor=32
@@ -128,7 +186,7 @@ def main_build_signature(path):
     if command==0x1d and (size!=16 or struct.unpack_from(endian+'II',part,cursor+8)!=(0,0)):fail('unsigned query contradicts embedded signature range')
     cursor+=size
   state='unsigned'
- elif p.returncode==0:
+ elif q['exitCode']==0:
   flags=re.findall(r'flags=0x([0-9a-fA-F]+)\(',text)
   if len(flags)!=1 or int(flags[0],16)!=0x20002 or 'Signature=adhoc' not in text or 'TeamIdentifier=not set' not in text:fail('main is not a known linker-only adhoc build image')
   state='linker-only-adhoc'
@@ -155,16 +213,32 @@ def qualify_unsigned_target(app,ref):
  signature=main_build_signature(main)
  return {'sourceRef':ref,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
 
+TARGET_PRODUCTS=pathlib.Path('/private/tmp/pcw-codex-first-xcode/Build/Products')
+
+def reviewed_target_root(value,existing=False):
+ # Xcode reports the /tmp spelling even for canonical -derivedDataPath input.
+ # Only this OS-known top-level alias is normalized; no arbitrary symlink,
+ # traversal, alternate volume spelling, or different cache may qualify.
+ raw=os.fspath(value)
+ if not isinstance(raw,str) or not raw.startswith('/') or raw!=str(pathlib.PurePosixPath(raw)) or '..' in pathlib.PurePosixPath(raw).parts:fail('noncanonical target path spelling')
+ if raw.startswith('/tmp/'):
+  if os.path.realpath('/tmp')!='/private/tmp':fail('standard tmp system alias no longer matches')
+  raw='/private/tmp/'+raw[len('/tmp/'):]
+ root=pathlib.Path(raw)
+ if not root.is_relative_to(TARGET_PRODUCTS) or root==TARGET_PRODUCTS:fail('target outside reviewed warm product directory')
+ if existing and (not root.is_dir() or root.is_symlink() or root.resolve(strict=True)!=root):fail('target directory contains an unreviewed alias')
+ return root
+
 def prune_target(env):
  # Ordinary configs/platforms are byte-preserving no-ops, including iPhone/iPad.
  if env.get('CONFIGURATION')!='DeliveryValidation' or env.get('PLATFORM_NAME')!='macosx':return {'mode':'NOT_APPLICABLE','mutated':False}
  ref=env.get('PENDINGCREW_VALIDATION_SOURCE_REF','')
  if not re.fullmatch('[0-9a-f]{40}',ref):fail('reviewed full source ref missing')
  if env.get('CODE_SIGNING_ALLOWED')!='NO' or env.get('ENABLE_HARDENED_RUNTIME')!='YES' or env.get('CODE_SIGN_ENTITLEMENTS','') or env.get('DEVELOPMENT_TEAM',''):fail('unsigned hardened/empty-entitlement target required')
- root=pathlib.Path(env.get('TARGET_BUILD_DIR',''));name=env.get('FULL_PRODUCT_NAME','')
- if not root.is_absolute() or root.resolve(strict=True)!=root or not root.is_relative_to('/private/tmp/pcw-codex-first-xcode/Build/Products') or pathlib.PurePosixPath(name).name!=name or not name.endswith('.app'):fail('only reviewed warm target product may be changed')
+ raw_root=env.get('TARGET_BUILD_DIR','');root=reviewed_target_root(raw_root,existing=True);name=env.get('FULL_PRODUCT_NAME','')
+ if pathlib.PurePosixPath(name).name!=name or not name.endswith('.app'):fail('only reviewed warm target product may be changed')
  app=root/name
- return dict(finalize_unsigned_target(app,ref),mode='BUILD_TARGET_ONLY',sourceRef=ref)
+ return dict(finalize_unsigned_target(app,ref),mode='BUILD_TARGET_ONLY',sourceRef=ref,targetDirectoryInput=raw_root,targetDirectoryCanonical=str(root))
 
 def finalize_unsigned_target(app,ref):
  app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref)
