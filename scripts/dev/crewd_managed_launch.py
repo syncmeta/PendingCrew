@@ -4,7 +4,12 @@ sys.dont_write_bytecode = True
 DB_COMMANDS = {'serve', 'backup', 'check', 'restore', 'import'}
 # This whole production input was independently accepted for Store's no-touch
 # WAL guard/recovery. A future/schema label alone never grants delegation.
-CORE14_RECOVERY_INPUT = '8dfa60de8ed9097b3478b659085fe059f1fef96fd69a1ae72812161a7c183910'
+CORE14_RECOVERY_INPUTS = {
+    # Historical accepted release390 and current393 have distinct complete
+    # inventories. Do not infer delegation from schema14, count, or a label.
+    '8dfa60de8ed9097b3478b659085fe059f1fef96fd69a1ae72812161a7c183910': 390,
+    '530de912ebc0fb615f36ed444e7ed1867bcf72510b639f6467e5633195e09a06': 393,
+}
 
 def sha(path):
     h = hashlib.sha256()
@@ -79,7 +84,8 @@ def certified_core14_recovery(package, maximum):
     witness = json.loads(witness_path.read_text())
     if candidate.get('sourceProofTier') != 'fresh-owning-workspace-production-graph' or witness.get('binarySHA256') != candidate['binarySHA256'] or witness.get('sourceRef') != candidate['sourceRef']:
         raise ValueError('recovery requires original source/binary/fresh proof pairing')
-    if witness.get('rustInputDigest') != CORE14_RECOVERY_INPUT or witness.get('freshWorkspaceArtifacts') is not True:
+    certified_count = CORE14_RECOVERY_INPUTS.get(witness.get('rustInputDigest'))
+    if certified_count is None or witness.get('freshWorkspaceArtifacts') is not True:
         return False
     configuration = witness['buildConfiguration']
     expected = ('x86_64-unknown-linux-gnu', 'release') if sys.platform == 'linux' else ('aarch64-apple-darwin', 'debug')
@@ -92,7 +98,7 @@ def certified_core14_recovery(package, maximum):
         if value.is_absolute() or '..' in value.parts: raise ValueError('recovery proof path escape')
     evidence = package / witness['evidenceDirectory']
     rows = witness['files']
-    if len(rows) != 390 or len({row['path'] for row in rows}) != len(rows):
+    if len(rows) != certified_count or len({row['path'] for row in rows}) != len(rows):
         raise ValueError('complete certified Core14 production inputs required')
     for row in rows:
         relative = pathlib.PurePosixPath(row['path'])
@@ -101,7 +107,7 @@ def certified_core14_recovery(package, maximum):
         source = evidence / witness['snapshotDirectory'] / relative
         if source.resolve() != source or sha(source) != row['sha256']: raise ValueError('certified recovery source changed or aliased')
     digest = hashlib.sha256(''.join(row['path'] + '\t' + row['sha256'] + '\n' for row in sorted(rows, key=lambda row: row['path'])).encode()).hexdigest()
-    if digest != CORE14_RECOVERY_INPUT: raise ValueError('recovery production input digest mismatch')
+    if digest != witness['rustInputDigest']: raise ValueError('recovery production input digest mismatch')
     for name in ['productionGraph', 'sourcePreflight', 'workspaceArtifacts']:
         file = pathlib.PurePosixPath(witness[name + 'File'])
         if file.is_absolute() or '..' in file.parts: raise ValueError('recovery sidecar escape')
