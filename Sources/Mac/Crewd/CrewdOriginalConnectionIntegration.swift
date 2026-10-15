@@ -21,6 +21,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var recovering = false
     @State private var trusting = false
     @State private var pending: CrewdRemotePairSummary?
+    @State private var removing: CrewdRemotePairSummary?
     func body(content: Content) -> some View {
         content
 .toolbar {
@@ -34,6 +35,11 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }
                 Divider()
                 Button("添加电脑") { adding = true }
+                Menu("移除已存电脑") {
+                    ForEach(window.computers) { computer in
+                        Button(computer.name, role: .destructive) { removing = computer }
+                    }
+                }.disabled(window.computers.isEmpty)
             }
             if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
@@ -70,6 +76,12 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }
             }
 
+            .alert("从本设备移除已存电脑", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { computer in
+                Button("移除配对凭据", role: .destructive) { _ = window.forget(computer); removing = nil }
+                Button("取消", role: .cancel) { removing = nil }
+            } message: { computer in
+                Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")
+            }
             .onAppear { window.refresh(); synchronizeAdministration() }
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }
     }
