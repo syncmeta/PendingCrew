@@ -121,7 +121,9 @@ def prune_target(env):
  if env.get('CODE_SIGNING_ALLOWED')!='NO' or env.get('ENABLE_HARDENED_RUNTIME')!='YES' or env.get('CODE_SIGN_ENTITLEMENTS','') or env.get('DEVELOPMENT_TEAM',''):fail('unsigned hardened/empty-entitlement target required')
  root=pathlib.Path(env.get('TARGET_BUILD_DIR',''));name=env.get('FULL_PRODUCT_NAME','')
  if not root.is_absolute() or root.resolve(strict=True)!=root or not root.is_relative_to('/private/tmp/pcw-codex-first-xcode/Build/Products') or pathlib.PurePosixPath(name).name!=name or not name.endswith('.app'):fail('only reviewed warm target product may be changed')
- app=root/name;info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+ app=root/name;info_path=app/'Contents/Info.plist'
+ if app.is_symlink() or app.resolve(strict=True)!=app or info_path.is_symlink() or not info_path.resolve(strict=True).is_relative_to(app):fail('target/Info alias forbidden before reading metadata')
+ info=plistlib.loads(info_path.read_bytes())
  if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True:fail('wrong target identity/channel')
  return dict(finalize_unsigned_target(app),mode='BUILD_TARGET_ONLY',sourceRef=ref)
 
