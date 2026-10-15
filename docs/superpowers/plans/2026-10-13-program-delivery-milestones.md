@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-15 三平台实际产物准备与正式 Phase0 已验，原 Mac 完整流程修复继续
+
+准确来源 fd528110512919a99c757f426faad2679ce713b5 的正常 Mac 后台 08 与原 PendingCrew target 的 DeliveryValidation 三平台完整产物准备已获独立接受。normal 报告 /private/tmp/pcw-Core14-normalfd528110-independent-08.json，SHA bc55cb4856c521a5e6f8498f01dea674d69ffc3c0b4d23942b65acf47e643a80；三平台整块报告 /private/tmp/pcw-delivery-validation-artifact-queue-01/complete-whole-apple-independent-01.json，SHA 9e34210720f4df68324776394a8380a26199ce37d28415ebd27aeb76e96254ff。393 Rust/raw-own fresh 输入、1371 Git/3738 SPM、实际工具链/配置及逐层产物来源核齐。Mac GUI 为 Release -O 私有 ad-hoc，helper 为实际 default Debug；设备与模拟器均为同一原 target、实际 family 1,2，覆盖 iPhone/iPad 通用编译准备。移动外部 driver/consumer 是另列完整 hash 的输入，不冒称存在于 fd Git。没有 App 窗口、Keychain、publisher、真机安装或运行证明。此前“产物待构建”仅为历史停点；旧来源保持不改标。
+
+正式 Phase0 在唯一私有目录完成真实正常后台 hello/status/configure/hibernate，已独验接受：/private/tmp/pcw-delivery-validation.f401171b-fa4d-461c-acc0-db848d9977e9/independent-complete-phase0-facts.json，SHA 85bc05ca53c6728edfa7716ffeaeeb9818a7089ed96873bb0737a410341da144。实际公开 authority/DB/SPKI/endpoint 事实留在私有证据，原 owned Process wait0/birthgone；没有生成邀请或运行 App、Keychain、SDK。这些事实只供下一份精确原 App 持久配对动作方案，不能冒配对/持久性通过或动作授权。
+
+客户端已精确合 fd 到 b1dff50c473998a4b9fe503cf8a77ab7744f72e9，只在三条 owned Swift 路径修完整原 Mac 用户流程，尚未冻结：Mac 实际已保存电脑移除确认入口；业务工作区退役/断连后仍保独立原 owner 生命周期控制，经新 kernel-qualified 同连接重核原 helper birth/DB/runtime，只走正式固定回执 hibernate 或原未知 ID lookup，有限等待真实原 Process。普通退役业务继续拒写，非 owner 不获 Stop，不转让后台所有权。现有 Core 合同足够，不新增 Rust/schema 接口。待整块真实生产方法控制及三平台受影响类型检查终态后独验；接受再精确整合新 full ref，重新生成准确 normal 和相应包，不能给旧 normal08/fd 包补标新源码。稳定业务、M5 schema13 已验调度及实际 Linux a8cb 恢复按影响复用，不重做全量 CI。
+
+Native05 一次实际诊断的失败证据独验接受，OS bootstrap 资格仍失败：/private/tmp/pcw-M15-native-free-isolation-canary-05/independent-complete-diagnostic-05.json，SHA cd9f02e8b2486bc9524a6fdc330e3429c2f62e68d76196d2fffb1d4bd81a2175。精确 owned 子进程 SIGABRT -6 已回收、记录组消失，C 输出/六 listener accept 为零；限定日志正常结束但无可归因行，不能推断缺具体资源或失败原因。两个 Unix socket 文件节点保留，仅 listener 已关闭。停止追加 canary，不扩大权限；需精确 OS 支持诊断。TypeScript 5.9.3 静态工具获取另因自动审批拒绝未具体授权依赖与目的地，明确动作问题待人类答复；未下载，不等同 SDK/模型授权。
+
+当前全工程仍待原窗口/双 App 真实持久凭据与配对、生产 publisher、设备与剩余平台实际交付、main 产品整合、安装/日常数据切换/公开发布及 Native 完整 producer/history/PTY/故障恢复。旧 all-features 磁盘中断仍未验，Jev/记忆等继续待讨论。根不做常规产品实现；三线唯一写者与具体动作授权边界继续。实测磁盘约 4.8–5.2 GiB；不将“释放后回复已释放”文本当完成确认，后续作者按新整块构建重估，不清理受保护资料。
+
 ## 2026-10-15 Linux恢复与Mac包装源码整块接受，完整产物输入待构建
 
 实际 Linux run 38650263649 / job 116147028404、准确来源 a8cb22190f13deb44f9b0807893c6a7020535032 已终态 SUCCESS，并通过整块独立验收。报告 /private/tmp/pcw-Core14-recovery-linux-a8cb-independent-01/complete-unit-independent.json，SHA 73ed135ef5a6dcdc4bca786a2cc0d7cdf5b25e9bd78cfbf71938b9fd0350d93e。artifact11934288235单次取得，ZIP SHA48bcae2e782b3d3b9b9c78a2eaca47556142cd979b5edb98f820f1c4ff01861b；normal SHA60778d1eca399f5be634b6e575010992fd418b3d9aca7bf8b5eed2002ed591d0。393完整Git/snapshot输入、强require-fresh独立consumer、raw11ownpkg12targets全部fresh=false/defaultDebug/non-test空features/Rust1.94、编译环境与sidecar一致；testkit fake另raw/hash，不混normal证明。
