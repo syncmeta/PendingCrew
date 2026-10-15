@@ -27,7 +27,7 @@ enum CrewdDeliveryValidation {
         case manifestIdentityAndActions, endpointIdentity, endpointShape, macScopeAndEnvironment
         case databaseIDStringCast, databaseIDEmpty, databaseIDUTF8Bound, databaseIDTrimChanged, databaseIDControlScalar
         case providerCanonicalPath, providerMetadata, providerHash, mobileContainer, mobileScopeAndEnvironment
-        case credentialAction, unexpected
+        case credentialAction, workflowLease, unexpected
     }
     enum QualificationMatch: String, CaseIterable {
         case entryArgumentsEmpty, bundleIdentifierMatches, validationMarkerMatches, sourceStampPresent, manifestEnvironmentPresent
@@ -71,8 +71,16 @@ enum CrewdDeliveryValidation {
         let ref = bundle.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String
         let environment = ProcessInfo.processInfo.environment
         #if os(macOS)
-        return try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
-                                      environment: environment, platform: .mac)
+        let scope = try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
+                                           environment: environment, platform: .mac)
+        #if PENDINGCREW_DELIVERY_VALIDATION
+        try CrewdValidationWorkflowLease.processLifetime.admit(root: scope.root, manifestSHA256: scope.manifestSHA256) {
+            let current = try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
+                                                 environment: environment, platform: .mac)
+            guard current.manifestSHA256 == scope.manifestSHA256 else { throw QualificationRejection(.workflowLease) }
+        }
+        #endif
+        return scope
         #else
         // Delayed until the existing outer qualification succeeds, as before.
         return try qualifyApplication(bundleIdentifier: identifier, validationMarker: marker, sourceRef: ref,
@@ -258,3 +266,62 @@ final class CrewdValidationCredentials: CrewdRemoteCredentialStore {
     }
     func remove(_ id: UUID) throws { try store("remove", id).remove(id) }
 }
+
+#if os(macOS) && PENDINGCREW_DELIVERY_VALIDATION
+/// This holder belongs to the process, never to a workspace, credentials store,
+/// connection, or presentation. Retirement cannot release its shared lease.
+/// The lease confers no credential, IPC, or Human authority.
+final class CrewdValidationWorkflowLease {
+    static let processLifetime = CrewdValidationWorkflowLease()
+    private let mutex = NSLock()
+    private var held: (fd: Int32, path: String, manifest: String)?
+
+    private func reject() -> CrewdDeliveryValidation.QualificationRejection {
+        CrewdDeliveryValidation.QualificationRejection(.workflowLease)
+    }
+    private func checked(_ fd: Int32, path: String) throws {
+        guard let canonical = realpath(path, nil) else { throw reject() }
+        defer { free(canonical) }
+        guard String(cString: canonical) == path else { throw reject() }
+        var descriptor = stat(), named = stat()
+        guard fstat(fd, &descriptor) == 0, lstat(path, &named) == 0,
+              descriptor.st_dev == named.st_dev, descriptor.st_ino == named.st_ino,
+              descriptor.st_uid == geteuid(), named.st_uid == geteuid(),
+              descriptor.st_nlink == 1, named.st_nlink == 1,
+              descriptor.st_size == 0, named.st_size == 0,
+              (descriptor.st_mode & S_IFMT) == S_IFREG, (named.st_mode & S_IFMT) == S_IFREG,
+              (descriptor.st_mode & 0o7777) == 0o600, (named.st_mode & 0o7777) == 0o600 else { throw reject() }
+    }
+    func admit(root: URL, manifestSHA256: String, revalidate: () throws -> Void) throws {
+        mutex.lock(); defer { mutex.unlock() }
+        try CrewdDeliveryValidation.privatePath(root, root: nil, directory: true)
+        let path = root.appendingPathComponent("validation-execution.lease").path
+        if let existing = held {
+            guard existing.path == path, existing.manifest == manifestSHA256 else { throw reject() }
+            try checked(existing.fd, path: path)
+            try revalidate()
+            try checked(existing.fd, path: path)
+            return
+        }
+        // No creation, replacement, chmod or truncation by the App. Publisher
+        // initializes this exact inode in a separately reviewed transaction.
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw reject() }
+        var retained = false
+        defer { if !retained { close(fd) } }
+        try checked(fd, path: path)
+        guard flock(fd, LOCK_SH | LOCK_NB) == 0 else { throw reject() }
+        try checked(fd, path: path)
+        // Close the prequalification -> SH race: publication may have replaced
+        // scope.json before this SH acquisition. Validate original predicates
+        // again while SH is held, comparing the exact qualified bytes.
+        try revalidate()
+        try checked(fd, path: path)
+        held = (fd, path, manifestSHA256)
+        retained = true
+    }
+    // Tests may own an independent holder; the static processLifetime holder
+    // remains strongly rooted until process termination.
+    deinit { if let value = held { close(value.fd) } }
+}
+#endif
