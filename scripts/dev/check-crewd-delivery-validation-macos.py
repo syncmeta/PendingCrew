@@ -18,7 +18,7 @@ def check(base,ref):
  manifest=json.loads((base/'build-inputs.json').read_text());receipt=json.loads((base/'build-provenance.json').read_text())
  if type(manifest.get('format')) is not int or manifest['format']!=1 or type(receipt.get('format')) is not int or receipt['format']!=1:raise ValueError('closed proof version required')
  if manifest.get('sourceRef')!=ref or receipt.get('sourceRef')!=ref or manifest.get('sourceSelection')!='committed-archive':raise ValueError('explicit source attribution mismatch')
- required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json'}
+ required={'build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json','unsigned-target-finalization.json'}
  if set(receipt.get('files',{}))!=required:raise ValueError('complete evidence file set required')
  for name,digest in receipt['files'].items():
   p=base/name
@@ -91,6 +91,14 @@ def check(base,ref):
    data=(preseal/row['path']).read_bytes()
    target_closure['images'].append({'path':row['path'],'sha256':b.sha(preseal/row['path']),'architectures':closure.image(data)})
  if target_closure!=json.loads((base/'target-load-closure.json').read_text()):raise ValueError('independent actual-target dynamic closure mismatch')
+ finalization=json.loads((base/'unsigned-target-finalization.json').read_text());q=finalization.get('qualification',{});main_name='Contents/MacOS/'+executable
+ if finalization.get('mode')!='BUILD_TARGET_ONLY' or finalization.get('sourceRef')!=ref or q.get('sourceRef')!=ref or q.get('rootAppSealAbsent') is not True or q.get('mainPath')!=main_name or q.get('infoSHA256')!=b.sha(app/'Contents/Info.plist'):raise ValueError('target pre-exclusion source/seal qualification missing')
+ if any(row['path'].startswith('Contents/_CodeSignature') for row in presign):raise ValueError('actual target was already bundle sealed')
+ actual_main_signature=closure.main_build_signature(preseal/main_name);captured=q.get('mainBuildSignature',{})
+ if actual_main_signature['state']!=captured.get('state') or actual_main_signature['sha256']!=captured.get('sha256'):raise ValueError('independent target linker/unsigned main qualification differs')
+ expected_target=pathlib.Path(settings['TARGET_BUILD_DIR'])/settings['FULL_PRODUCT_NAME']
+ if captured.get('query',{}).get('command')!=['/usr/bin/codesign','--display','--verbose=4',str(expected_target/main_name)]:raise ValueError('pre-exclusion main query not bound to actual Xcode target')
+
  if any(row['path'].startswith('Contents/Frameworks/Sparkle.framework') for row in presign):raise ValueError('updater payload remained in original target')
  baseline={row['path']:row for row in presign};comparisons=[]
  for row in code_inputs:

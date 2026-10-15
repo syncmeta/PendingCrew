@@ -90,13 +90,13 @@ targets:
     # basedOnDependencyAnalysis: false —— 没有输入/输出文件可声明，必须每次
     # 构建都跑，否则增量构建会沿用上一次的戳（戳就成了谎报）。
     postBuildScripts:
-      - name: Validate isolated runtime dependency closure
-        script: |
-          /usr/bin/python3 "$SRCROOT/scripts/dev/crewd-validation-load-closure.py" prune-target
-        basedOnDependencyAnalysis: false
       - name: Stamp build info
         script: |
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
+        basedOnDependencyAnalysis: false
+      - name: Validate isolated runtime dependency closure
+        script: |
+          /usr/bin/python3 "$SRCROOT/scripts/dev/crewd-validation-load-closure.py" prune-target
         basedOnDependencyAnalysis: false
     dependencies:
       - package: SwiftCertificates

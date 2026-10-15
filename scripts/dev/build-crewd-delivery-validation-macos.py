@@ -138,7 +138,7 @@ def main():
  # embedding order; it precedes every actual-target inventory/copy, never repairs
  # a sealed/staged artifact. The same full guard is used by the project phase.
  env=dict(settings,PLATFORM_NAME='macosx')
- closure.prune_target(env)
+ finalization=closure.prune_target(env);save(out/'unsigned-target-finalization.json',finalization)
  if (built/'Contents/Helpers/crewd').exists():raise ValueError('unexpected helper in raw Xcode target; normal is injected only after capture')
  target_closure=closure.audit(built);save(out/'target-load-closure.json',target_closure)
  builtrows=products(built);save(out/'xcode-products.json',builtrows);app=out/'PendingCrew Delivery Validation.app';shutil.copytree(built,app,symlinks=True)
@@ -165,7 +165,7 @@ def main():
  final=products(app);save(out/'packaged-products.json',final)
  sealed_closure=closure.audit(app);save(out/'sealed-load-closure.json',sealed_closure)
  save(out/'loaded-code-signatures.json',closure.signature_audit(app,sealed_closure))
- files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json']
+ files=['build-inputs.json','backend-witness.json','original-backend-witness.json','crewd.pre-sign','gui.pre-sign','settings.json','settings.log','toolchain.json','toolchain.log','build.log','dependency-build-inventory.json','xcode-products.json','gui-pre-sign-products.json','packaged-products.json','adhoc-sign.log','signature-check.log','signature-display.log','entitlements.log','entitlements.plist','seal-code-inputs.json','seal-code-equivalence.json','target-load-closure.json','sealed-load-closure.json','loaded-code-signatures.json','unsigned-target-finalization.json']
  save(out/'build-provenance.json',{'format':1,'sourceRef':args.ref,'appDirectory':app.name,'files':{name:sha(out/name) for name in files},'allLoadedCode':loaded_code(app,final),'actualArtifactBuilt':True,'signatureMode':'explicit-adhoc','publisherEligible':False,'actualKeychainUsed':False,'AppLaunched':False,'installed':False,'published':False})
  checker=load(repo/'scripts/dev/check-crewd-delivery-validation-macos.py','validation_consumer');checker.check(out,args.ref)
  print('BUILT private DeliveryValidation artifact; no Keychain/App launch/install/publisher action:',app)

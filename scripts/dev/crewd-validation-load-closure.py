@@ -113,6 +113,48 @@ def signature_audit(app,closure):
   rows.append({'path':image_row['path'],'queries':queries})
  return rows
 
+def main_build_signature(path):
+ path=pathlib.Path(path);before=path.read_bytes();image(before)
+ argv=['/usr/bin/codesign','--display','--verbose=4',str(path)]
+ p=subprocess.run(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=10)
+ q={'command':argv,'exitCode':p.returncode,'stdout':p.stdout,'stderr':p.stderr}
+ text=p.stdout+p.stderr
+ if p.returncode==1 and 'code object is not signed at all' in text:
+  # A malformed/unreadable embedded signature is Unknown, never unsigned.
+  for _,part in slices(before):
+   endian='<' if part[:4]==bytes.fromhex('cffaedfe') else '>';h=struct.unpack_from(endian+'8I',part);cursor=32
+   for _ in range(h[4]):
+    command,size=struct.unpack_from(endian+'II',part,cursor)
+    if command==0x1d and (size!=16 or struct.unpack_from(endian+'II',part,cursor+8)!=(0,0)):fail('unsigned query contradicts embedded signature range')
+    cursor+=size
+  state='unsigned'
+ elif p.returncode==0:
+  flags=re.findall(r'flags=0x([0-9a-fA-F]+)\(',text)
+  if len(flags)!=1 or int(flags[0],16)!=0x20002 or 'Signature=adhoc' not in text or 'TeamIdentifier=not set' not in text:fail('main is not a known linker-only adhoc build image')
+  state='linker-only-adhoc'
+ else:fail('main build signature unreadable/unknown')
+ if path.read_bytes()!=before:fail('main changed during signature qualification')
+ return {'state':state,'sha256':sha(before),'query':q}
+
+def qualify_unsigned_target(app,ref):
+ app=pathlib.Path(app)
+ if not re.fullmatch('[0-9a-f]{40}',ref):fail('complete source ref required')
+ if not app.is_absolute() or app.is_symlink() or app.resolve(strict=True)!=app:fail('target App alias')
+ # A vendor framework's own seal is not this root App bundle seal. Never touch
+ # a root bundle that was already sealed, even if its Info claims this source.
+ seal=app/'Contents/_CodeSignature'
+ if seal.exists() or seal.is_symlink():fail('already sealed root App target')
+ info_path=app/'Contents/Info.plist'
+ if info_path.is_symlink() or not info_path.resolve(strict=True).is_relative_to(app):fail('target Info alias')
+ raw=info_path.read_bytes();info=plistlib.loads(raw)
+ if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True or info.get('PendingCrewSourceRef')!=ref or info.get('BuildStampCommit')!=ref:fail('actual target Info identity/source stamps differ')
+ name=info.get('CFBundleExecutable')
+ if not isinstance(name,str) or pathlib.PurePosixPath(name).name!=name or not name:fail('invalid target executable')
+ main=app/'Contents/MacOS'/name
+ if main.is_symlink() or main.resolve(strict=True)!=main or not main.is_file() or main.stat().st_uid!=os.getuid():fail('actual main missing/aliased/not-owned')
+ signature=main_build_signature(main)
+ return {'sourceRef':ref,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
+
 def prune_target(env):
  # Ordinary configs/platforms are byte-preserving no-ops, including iPhone/iPad.
  if env.get('CONFIGURATION')!='DeliveryValidation' or env.get('PLATFORM_NAME')!='macosx':return {'mode':'NOT_APPLICABLE','mutated':False}
@@ -121,22 +163,22 @@ def prune_target(env):
  if env.get('CODE_SIGNING_ALLOWED')!='NO' or env.get('ENABLE_HARDENED_RUNTIME')!='YES' or env.get('CODE_SIGN_ENTITLEMENTS','') or env.get('DEVELOPMENT_TEAM',''):fail('unsigned hardened/empty-entitlement target required')
  root=pathlib.Path(env.get('TARGET_BUILD_DIR',''));name=env.get('FULL_PRODUCT_NAME','')
  if not root.is_absolute() or root.resolve(strict=True)!=root or not root.is_relative_to('/private/tmp/pcw-codex-first-xcode/Build/Products') or pathlib.PurePosixPath(name).name!=name or not name.endswith('.app'):fail('only reviewed warm target product may be changed')
- app=root/name;info_path=app/'Contents/Info.plist'
- if app.is_symlink() or app.resolve(strict=True)!=app or info_path.is_symlink() or not info_path.resolve(strict=True).is_relative_to(app):fail('target/Info alias forbidden before reading metadata')
- info=plistlib.loads(info_path.read_bytes())
- if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True:fail('wrong target identity/channel')
- return dict(finalize_unsigned_target(app),mode='BUILD_TARGET_ONLY',sourceRef=ref)
+ app=root/name
+ return dict(finalize_unsigned_target(app,ref),mode='BUILD_TARGET_ONLY',sourceRef=ref)
 
-def finalize_unsigned_target(app):
- app=pathlib.Path(app)
+def finalize_unsigned_target(app,ref):
+ app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref)
  report=audit(app,exclude_updater=True);updater=app/'Contents/Frameworks/Sparkle.framework'
  if updater.is_symlink():fail('updater root alias')
  if updater.exists():
-  # Validate all subtree links before deleting only this fresh unsealed build payload.
   for p in updater.rglob('*'):
-   if p.is_symlink() and not p.resolve(strict=True).is_relative_to(updater):fail('updater payload alias escapes')
+   inode=p.lstat()
+   if p.is_symlink():
+    if not p.resolve(strict=True).is_relative_to(updater):fail('updater payload alias escapes')
+   elif not(stat.S_ISREG(inode.st_mode) or stat.S_ISDIR(inode.st_mode)):fail('special updater payload inode')
+  if sha((app/'Contents/Info.plist').read_bytes())!=qualified['infoSHA256'] or sha((app/qualified['mainPath']).read_bytes())!=qualified['mainBuildSignature']['sha256']:fail('target changed before payload exclusion')
   shutil.rmtree(updater)
- return audit(app)
+ return dict(audit(app),qualification=qualified)
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('operation',choices=['audit','prune-target']);p.add_argument('app',nargs='?');args=p.parse_args()

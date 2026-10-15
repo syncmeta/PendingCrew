@@ -73,5 +73,17 @@
     "choosing or enumerating Apple signing identities",
     "new Linux CI / stable migration replay",
     "device boot/install or new iOS artifact claims"
-  ]
+  ],
+  "deletionQualificationClosure": {
+    "prior259Review": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/independent-whole-source-review-259.json",
+    "prior259ReviewSHA256": "c4febb0b782b286a5ddd2dfdb507f15259ceacd29e7b51d6425ab50755d3755b",
+    "finding": "env NOsign/fullref alone did not bind an existing target to this build or prove the root bundle unsealed",
+    "actualQualification": "Original stamp phase now precedes closure; actual Info PendingCrewSourceRef and BuildStampCommit must both match the full reviewed ref. Root App _CodeSignature must be absent. Main must be owned/canonical and actually unsigned or exactly linker-only adhoc (0x20002, noTeam), never runtime, named-team, generic prior adhoc, unreadable or unknown. A nonempty embedded signature cannot be relabeled unsigned. Vendor framework seals do not count as root App sealing.",
+    "chain": "Every removal uses finalize_unsigned_target(app,ref), which runs qualification before closure and every rmtree; main and Info hashes are rechecked immediately before exclusion. Builder post-XCBuild finalization uses this same guarded path.",
+    "consumer": "The captured finalization record is bound to actual Xcode-target command, Info and main SHA. Consumer independently reads archived target main build signature, verifies no pre-seal root bundle seal, actual source stamps, all original code and final load policy.",
+    "controls": "/private/tmp/pcw-validation-library-seal-runtime-unit-01/deletion-qualification-result.json",
+    "count": 20,
+    "controlLayer": "Actual production qualification/finalization functions and real private FS; codesign returns and outer warm target location modeled. No old artifact was modified, no actual new signing/runtime performed.",
+    "reuse": "Initial 259 source freeze, 75 evidence entries, 48 controls and 371-input Mac typecheck retain their original exact source attribution. All 370 Git Swift inputs are byte-identical; no repeated whole typecheck. Final actual artifact will use the next root-integrated full ref and newly proven normal."
+  }
 }

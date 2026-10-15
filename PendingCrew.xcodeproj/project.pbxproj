@@ -2458,8 +2458,8 @@
 				BBCCC3B64E471289E68CB06C /* Sources */,
 				599ED971D55B5B34CD392AAA /* Resources */,
 				0E0737C9900C7640C214951C /* Frameworks */,
-				D2BBBD12EA61B6E6F9AA1C52 /* Validate isolated runtime dependency closure */,
 				BB928EE541185AC90B71A236 /* Stamp build info */,
+				D2BBBD12EA61B6E6F9AA1C52 /* Validate isolated runtime dependency closure */,
 			);
 			buildRules = (
 			);
