@@ -126,7 +126,7 @@ def check(base,ref):
   if query['command']!=argv or query['exitCode']!=0 or (base/logname).read_text()!=closure.query_log(query):raise ValueError('actual root command/cwd/stdout/stderr log mismatch')
  if (base/'entitlements.plist').read_text()!=root_queries[-1]['stdout']:raise ValueError('entitlements file is not exact documented stdout')
  content=(base/'entitlements.plist').read_bytes()
- if content.strip() and plistlib.loads(content):raise ValueError('production/debug/shared entitlements entered validation product')
+ if closure.entitlements_from_stdout(content.decode()):raise ValueError('production/debug/shared entitlements entered validation product')
  if receipt.get('actualArtifactBuilt') is not True or receipt.get('signatureMode')!='explicit-adhoc' or any(receipt.get(key) is not False for key in ['publisherEligible','actualKeychainUsed','AppLaunched','installed','published']):raise ValueError('evidence layer or execution boundary mismatch')
  actual_root_verify=closure.readonly_query(['/usr/bin/codesign','--verify','--deep','--strict',str(app)])
  if actual_root_verify['exitCode']:raise ValueError('independent root seal verification failed')

@@ -162,7 +162,7 @@ def main():
   if query['exitCode']:raise ValueError('actual root signature read failed; preserve '+logname)
  save(out/'root-signature-queries.json',root_queries)
  (out/'entitlements.plist').write_text(root_queries[-1]['stdout'])
- ent=plistlib.loads((out/'entitlements.plist').read_bytes()) if (out/'entitlements.plist').read_bytes().strip() else {}
+ ent=closure.entitlements_from_stdout((out/'entitlements.plist').read_text())
  if ent:raise ValueError('validation bundle must not carry production/debug/shared entitlements')
  seal=load(repo/'scripts/dev/crewd-macho-seal-equivalence.py','validation_seal');equivalence=[]
  for row in code_sources:equivalence.append({'path':row['path'],'comparison':seal.equivalent_files(preseal/row['path'],app/row['path'])})

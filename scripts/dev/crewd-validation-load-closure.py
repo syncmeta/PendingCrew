@@ -149,6 +149,13 @@ def signature_facts(rows):
   result.append({'path':row['path'],'queries':queries})
  return result
 
+def entitlements_from_stdout(text):
+ if not isinstance(text,str):fail('entitlement stdout must be text')
+ if text=='':return {}
+ value=plistlib.loads(text.encode())
+ if not isinstance(value,dict):fail('entitlement XML must be a dictionary')
+ return value
+
 def signature_audit(app,closure):
  # OS verification is read-only; no identity/key query and no signature mutation.
  rows=[]
@@ -161,8 +168,7 @@ def signature_audit(app,closure):
   display=queries[1]['stdout']+queries[1]['stderr']
   if 'Signature=adhoc' not in display or 'TeamIdentifier=not set' not in display or 'runtime)' not in display:fail('every actual code image must have explicit adhoc/runtime/noTeam seal')
   if not re.search(r'^CDHash=[0-9a-f]{40}$',display,re.M):fail('missing actual code-directory hash')
-  ent=queries[2]['stdout'].strip()
-  if ent and plistlib.loads(ent.encode()):fail('entitlements on actual loaded code forbidden')
+  if entitlements_from_stdout(queries[2]['stdout']):fail('entitlements on actual loaded code forbidden')
   rows.append({'path':image_row['path'],'queries':queries})
  return rows
 
