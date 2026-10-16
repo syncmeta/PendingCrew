@@ -75,6 +75,10 @@ impl Fixture {
         let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
         let (socket, _client) = tokio::net::UnixStream::pair().unwrap();
         let actor = Actor::Local(policy.accept(&socket).unwrap());
+        // These routing scenarios represent a team explicitly activated by Human
+        // in this daemon run; reopen intentionally does not restore admission.
+        state.admission.allow(&_cap);
+        state.admission.allow(&worker);
         let runtime = Runtime::start(&state, data, true).await.unwrap().unwrap();
         Self {
             dir,
@@ -937,6 +941,40 @@ async fn old_core_restore_witness_rejects_secret_and_cannot_be_laundered_by_conf
         .unwrap();
     assert_eq!(query["requestLookup"]["status"], "historical");
     assert_eq!(query["view"]["credentialState"], "unknown");
+    assert!(fake.requests().is_empty());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn sqlite_jev_never_calls_provider_before_manual_current_run_admission() {
+    let fake = FakeJev::start(vec![]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    f.state.admission.close();
+    let crew = f.crew.clone();
+    let req = f
+        .state
+        .collab(move |tx| {
+            requirements::create(
+                tx,
+                &Sender::Human,
+                crewd_proto::TodoCreateParams {
+                    crew_id: crew,
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    channel_id: None,
+                    text: "visible data does not authorize execution".into(),
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let row = f
+        .settled(
+            JudgmentSourceKind::Requirement,
+            req.todo.requirement_id.unwrap(),
+        )
+        .await;
+    assert_eq!(row.diagnostic["reason"], "awaiting_manual_resume");
     assert!(fake.requests().is_empty());
     f.close().await;
 }

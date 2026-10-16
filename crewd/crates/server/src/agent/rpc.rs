@@ -20,6 +20,7 @@ use crate::dispatch::internal;
 #[derive(Default)]
 pub struct AgentConn {
     session: Option<String>,
+    data_token: Option<String>,
     attached_flag: Arc<std::sync::atomic::AtomicBool>,
     watcher: Option<JoinHandle<()>>,
 }
@@ -52,14 +53,15 @@ fn to_value<T: serde::Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
 }
 
-pub async fn handle(
+pub(crate) async fn handle(
     state: &Arc<AppState>,
     conn: &mut AgentConn,
     req: Request,
     tx: &mpsc::Sender<ServerFrame>,
+    scope: &crate::connection_scope::ConnectionScope,
 ) -> Response {
     let id = req.id;
-    match route(state, conn, req, tx).await {
+    match route(state, conn, req, tx, scope).await {
         Ok(v) => Response::ok(id, v),
         Err(e) => Response::err(id, e),
     }
@@ -79,6 +81,7 @@ async fn route(
     conn: &mut AgentConn,
     req: Request,
     tx: &mpsc::Sender<ServerFrame>,
+    scope: &crate::connection_scope::ConnectionScope,
 ) -> Result<Value, RpcError> {
     if req.method == methods::ATTACH {
         let p: AttachParams = parse_params(req.params)?;
@@ -108,6 +111,7 @@ async fn route(
             tx.clone(),
         ));
         conn.session = Some(me.session_id.clone());
+        conn.data_token = Some(p.token);
         conn.attached_flag
             .store(true, std::sync::atomic::Ordering::Release);
         let loc = port::locale(state).await.unwrap_or_default();
@@ -138,11 +142,58 @@ async fn route(
         methods::TOOLS => {
             let me = current(state, &session).await?;
             let loc = port::locale(state).await.unwrap_or_default();
-            to_value(catalog::tools_for(&me, loc))
+            let mut list = catalog::tools_for(&me, loc);
+            if state.data_runtime.get().is_some() {
+                list.retain(|tool| !tool.name.starts_with("document_"));
+            }
+            if scope.is_live()
+                && conn
+                    .data_token
+                    .as_ref()
+                    .is_some_and(|token| state.tokens.verify(&session, token))
+                && state
+                    .data_runtime
+                    .get()
+                    .is_some_and(|runtime| runtime.qualified())
+            {
+                list.extend(crewd_proto::team_data_api::agent_tools());
+            }
+            to_value(list)
         }
         methods::CALL => {
             let p: CallParams = parse_params(req.params)?;
             let me = current(state, &session).await?;
+            if let Some(method) = crewd_proto::team_data_api::agent_method(&p.tool) {
+                let token = conn.data_token.clone().ok_or_else(invalid)?;
+                if !scope.is_live() || !state.tokens.verify(&session, &token) {
+                    return Err(invalid());
+                }
+                let runtime = state
+                    .data_runtime
+                    .get()
+                    .filter(|r| r.qualified())
+                    .ok_or_else(invalid)?;
+                let result = runtime
+                    .session(
+                        state.clone(),
+                        me.session_id,
+                        token,
+                        scope.clone(),
+                        method,
+                        p.args,
+                    )
+                    .await;
+                return to_value(match result{
+                    Ok(value)=>crewd_proto::agent::CallResult::ok(serde_json::to_string(&value).map_err(internal)?),
+                    Err(_)=>crewd_proto::agent::CallResult::err("Data operation unavailable or refused; retain the original request UUID and use pure lookup after an unknown outcome.".into()),
+                });
+            }
+            if state.management.get().is_some() && !state.admission.contains(&session) {
+                return Err(RpcError::new(
+                    RpcError::FORBIDDEN,
+                    "Agent execution requires current-run Human admission",
+                ));
+            }
             to_value(tools::call(state, &me, &p.tool, p.args).await)
         }
         methods::HOOK => {

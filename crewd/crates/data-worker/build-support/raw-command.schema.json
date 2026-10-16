@@ -1,0 +1,200 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "argv": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1025,
+      "minItems": 1,
+      "type": "array"
+    },
+    "childEnvironment": {
+      "additionalProperties": false,
+      "properties": {
+        "DEVELOPER_DIR": {
+          "type": "string"
+        },
+        "LANG": {
+          "type": "string"
+        },
+        "LC_ALL": {
+          "type": "string"
+        },
+        "MACOSX_DEPLOYMENT_TARGET": {
+          "type": "string"
+        },
+        "PATH": {
+          "type": "string"
+        },
+        "SDKROOT": {
+          "type": "string"
+        },
+        "TMPDIR": {
+          "type": "string"
+        },
+        "TZ": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "TMPDIR"
+      ],
+      "type": "object"
+    },
+    "childTerminalObserved": {
+      "type": "boolean"
+    },
+    "configSHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "endedAtUtc": {
+      "type": "string"
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exitCode": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "originalChildPID": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "exited",
+        "timeout",
+        "spawnFailure"
+      ]
+    },
+    "outputComplete": {
+      "type": "boolean"
+    },
+    "packageName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "policySHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "recorderSHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "compiler",
+        "archiver"
+      ]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "signal": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "startedAtUtc": {
+      "type": "string"
+    },
+    "stderr": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "stdout": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "toolAfterSHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "toolBeforeSHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "role",
+    "packageName",
+    "argv",
+    "cwd",
+    "startedAtUtc",
+    "endedAtUtc",
+    "outcome",
+    "exitCode",
+    "signal",
+    "originalChildPID",
+    "childTerminalObserved",
+    "outputComplete",
+    "childEnvironment",
+    "toolBeforeSHA256",
+    "toolAfterSHA256",
+    "configSHA256",
+    "policySHA256",
+    "recorderSHA256",
+    "stdout",
+    "stderr",
+    "error"
+  ],
+  "type": "object"
+}

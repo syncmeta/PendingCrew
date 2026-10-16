@@ -126,6 +126,29 @@ final class CrewdWorkspace: ObservableObject {
         guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.submitRPC(method, params)
     }
+    lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
+        guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
+              self.acceptsObservation(self.observationGeneration), let scope = self.presentationScope else { return nil }
+        return .init(scope: scope, observation: self.observationGeneration, connection: self.client.connectionEpoch, crew: self.crewID)
+    }, rpc: { [weak self] method, params in
+        guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
+              self.acceptsObservation(self.observationGeneration) else { throw CrewdKnowledgeStore.Failure.unavailable }
+        // This adapter owns data UUIDs and pure lookup. Never wrap them in a second mutation envelope.
+        return try await self.client.call(method, params)
+    }, journal: { [weak self] in
+        guard let self, self.originalJournalReady, let journal = self.originalJournal else { throw CrewdKnowledgeStore.Failure.unavailable }
+        return journal
+    }, nativeNavigation: { [weak self] reference, context in
+        guard let self, reference.kind == "session", reference.namespace == context.namespace,
+              self.knowledge.workspace?.context == context, context.crewId == self.crewID,
+              self.acceptsObservation(self.observationGeneration), self.client.connected,
+              self.sessions.contains(where: { $0["id"].string == reference.id }) else { return false }
+        self.knowledge.invalidate()
+        self.selectSession(reference.id)
+        self.knowledgeNavigation = UUID()
+        return true
+    })
+    @Published private(set) var knowledgeNavigation = UUID()
     lazy var resources=CrewdResources { [weak self] method,params in
         guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}
         return try await self.submitRPC(method,params)
@@ -253,6 +276,7 @@ final class CrewdWorkspace: ObservableObject {
                let sender = data["senderSessionId"].string, sender != self.sessionID {
                 self.originalObservedUnread[sender, default: 0] += 1
             }
+            self.knowledge.handleEvent(name, data)
             self.authorityEvents.send((name, data))
             self.resources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
@@ -270,14 +294,14 @@ final class CrewdWorkspace: ObservableObject {
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
                 self.closeTerminalDisplays()
-                self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
+                self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
         client.onDisconnect = { [weak self] in
             self?.closeTerminalDisplays()
             guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
-            self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
+            self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
             let attempt = UUID(); self.reconnectID = attempt
@@ -298,12 +322,23 @@ final class CrewdWorkspace: ObservableObject {
 
     /// Retain unknown inputs in this old scope for inspection; never replay them
     /// into the next authority or let a late reconnect reactivate a retired one.
+    #if os(macOS)
+    private var retiredManagementTarget: CrewdRetiredManagement.Target?
+    #endif
     func retire() {
+        #if os(macOS)
+        if managementRole == "owner", dataDirectory != nil, client.connected,
+           (try? client.verifiedLocalPeerIdentity()) != nil,
+           let database = client.runtimeIdentity["dbId"].string,
+           let instance = client.runtimeIdentity["runtimeBindingId"].string {
+            retiredManagementTarget = .init(database: database, instance: instance)
+        }
+        #endif
         closeTerminalDisplays()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
-        resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
+        knowledge.invalidate(); resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
         client.retire(); status = "已切换连接"
     }
     func connect() async {
@@ -337,11 +372,10 @@ final class CrewdWorkspace: ObservableObject {
         }
         do {
             let env = ProcessInfo.processInfo.environment
-            let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/crewd")
-            let program = env["PENDINGCREW_CREWD_PROGRAM"].map { URL(fileURLWithPath: $0) } ?? bundled
-            guard FileManager.default.isExecutableFile(atPath: program.path) else { throw CrewdClientError(message: "未找到配套后台程序，请使用完整的 Codex 首版应用。") }
-            let codexCandidates = [env["PENDINGCREW_CODEX_PROGRAM"], FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"].compactMap {$0}
-            guard let codex = codexCandidates.first(where: {FileManager.default.isExecutableFile(atPath: $0)}) else { throw CrewdClientError(message: "未找到 Codex CLI，请先安装并登录 Codex。") }
+            let program = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/crewd")
+            guard FileManager.default.isExecutableFile(atPath: program.path) else { throw CrewdClientError(message: "未找到配套后台程序，请使用完整的应用包。") }
+            // Fake providers are ordinary explicit validation inputs, never a product requirement.
+            let codex = env["PENDINGCREW_CODEX_PROGRAM"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path
             let p = Process(); p.executableURL = program
             p.arguments = ["--data-dir", dataDirectory.path, "serve", "--codex", codex, "--claude", "/usr/bin/false"]
             p.environment = env
@@ -360,7 +394,7 @@ final class CrewdWorkspace: ObservableObject {
             try log.close()
             for _ in 0..<30 {
                 try await Task.sleep(for: .milliseconds(100))
-                do { try await connectOnly(); return } catch { if sleeping || Task.isCancelled { return } }
+                do { try await connectOnly(); await claimManagement(); return } catch { if sleeping || Task.isCancelled { return } }
                 if !p.isRunning { throw CrewdClientError(message: "后台启动失败，请查看连接信息中的日志。") }
             }
             throw CrewdClientError(message: "后台启动后未能建立连接，请检查后台日志。")
@@ -372,6 +406,71 @@ final class CrewdWorkspace: ObservableObject {
 
     /// Business retirement never transfers ownership. Only the independently
     /// captured original-child lifecycle may reconnect for bounded owned Quit.
+    @Published private(set) var managementRole = "observer"
+    @Published private(set) var managementOwnerPresent = false
+    @Published private(set) var previousExit = "clean"
+    func readManagementStatus() async {
+        guard dataDirectory != nil, client.connected else { return }
+        do { applyManagement(try await client.call("lifecycle.status")) }
+        catch { managementRole = "observer"; error = "无法核对当前本机管理资格。" }
+    }
+    private func applyManagement(_ value: CrewdValue) {
+        managementRole = value["role"].string ?? "observer"
+        managementOwnerPresent = value["ownerPresent"] == .bool(true)
+        previousExit = value["previousExit"].string ?? "clean"
+    }
+    func claimManagement() async {
+        guard dataDirectory != nil, client.connected else { return }
+        do { applyManagement(try await client.call("lifecycle.claim")) }
+        catch { self.error = "当前管理权不可取得；保留观察连接。"; await readManagementStatus() }
+    }
+    func releaseManagement() async throws {
+        guard dataDirectory != nil, client.connected else { return }
+        let status = try await client.call("lifecycle.status")
+        applyManagement(status)
+        if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release")) }
+    }
+    @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
+        guard mode != .background, let directory = dataDirectory else { return false }
+        if retired {
+            guard let target = retiredManagementTarget else { return false } // Former observer, no management authority.
+            return try await CrewdRetiredManagement.exit(target: target, mode: mode) {
+                let next = CrewdClient()
+                do {
+                    try await next.connect(path: directory.appendingPathComponent("crewd.sock").path)
+                    _ = try next.verifiedLocalPeerIdentity()
+                    guard let database = next.runtimeIdentity["dbId"].string,
+                          let instance = next.runtimeIdentity["runtimeBindingId"].string else { throw CrewdRetiredManagement.Failure.unconfirmed }
+                    let actual = CrewdRetiredManagement.Target(database: database, instance: instance)
+                    let epoch = next.connectionEpoch
+                    return .init(target: actual, call: { method, params in
+                        guard next.connected, next.connectionEpoch == epoch,
+                              next.runtimeIdentity["dbId"].string == actual.database,
+                              next.runtimeIdentity["runtimeBindingId"].string == actual.instance else { throw CrewdRetiredManagement.Failure.unconfirmed }
+                        _ = try next.verifiedLocalPeerIdentity()
+                        return try await next.call(method, params)
+                    }, close: { next.retire() })
+                } catch { next.retire(); throw error }
+            }
+        }
+        // Current authenticated management scope, independent of any historic GUI Process handle.
+        guard client.connected, (try? client.verifiedLocalPeerIdentity()) != nil else {
+            throw CrewdClientError(message: "当前本机后台认证连接不可用，尚未提交退出。")
+        }
+        applyManagement(try await client.call("lifecycle.status"))
+        // A concurrent observer exits its own UI only; it cannot stop another owner's work.
+        guard managementRole == "owner" else { return false }
+        sleeping = true; reconnect?.cancel(); sync?.cancel()
+        do {
+            let reply = try await client.call("lifecycle.exit", .object([
+                "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(15000)
+            ]))
+            guard reply["status"].string == "stopped" else {
+                throw CrewdClientError(message: "后台未在期限内确认停止；原操作保留待核对，应用仍保持打开。")
+            }
+        } catch { sleeping = false; throw error }
+        return true
+    }
     func quitOwnedLocalHelper() async throws {
         guard let owned = backend, owned.isRunning else { return }
         guard let lifecycle = ownedLifecycle, lifecycle.matches(owned, birth: ownedChildIdentity) else {
@@ -416,7 +515,7 @@ final class CrewdWorkspace: ObservableObject {
     #endif
     private func connectOnly() async throws {
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
-        resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        knowledge.invalidate(); resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         #if os(macOS)
@@ -439,6 +538,7 @@ final class CrewdWorkspace: ObservableObject {
         guard client.connected else { throw CrewdClientError(message: client.lastError ?? "后台连接已中断。") }
         #if os(macOS)
         associateOwnedIPC(current)
+        await readManagementStatus()
         #endif
     }
 
@@ -467,7 +567,7 @@ final class CrewdWorkspace: ObservableObject {
 
     func selectCrew(_ id: String) {
         guard crewID != id else { return }
-        workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
+        knowledge.invalidate(); workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
         channelWork.selectChannel(crew:id,channel:"")
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
@@ -541,7 +641,7 @@ final class CrewdWorkspace: ObservableObject {
         restartPrompt = restart
         if !crews.contains(where: {$0["id"].string == crewID}) { crewID = crews.first?["id"].string ?? "" }
         let crew = crewID
-        workStore.selectCrew(crew); resources.selectCrew(crew)
+        knowledge.synchronizeOrigin(); workStore.selectCrew(crew); resources.selectCrew(crew)
         if workDirty {
             workDirty = false
             do { try await workStore.refresh() } catch { /* WorkStore retains typed failures; first-edition messaging stays usable. */ }

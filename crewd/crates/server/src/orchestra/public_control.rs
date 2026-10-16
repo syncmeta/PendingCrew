@@ -408,6 +408,9 @@ impl<P: Port> Core<P> {
                 if revoke.is_err() {
                     Err(ControlError::NotRunning(target.session_id.clone()))
                 } else {
+                    if let Some(a) = &self.cfg.admission {
+                        a.revoke(&target.session_id);
+                    }
                     self.held.remove(&target.session_id);
                     if let Some(live) = self.live.get_mut(&target.session_id) {
                         live.stopping = true;

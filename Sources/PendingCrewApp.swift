@@ -150,15 +150,22 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let lifecycle = AppQuitLifecycle.shared
-        if let quit = lifecycle.crewdQuit {
+        if let quit = lifecycle.crewdExit {
             if waitingForDaemon { return .terminateLater }
+            guard let mode = CrewdQuitPreference.choose() else { return .terminateCancel }
             waitingForDaemon = true
             Task { @MainActor [weak self] in
-                do { try await quit(); self?.waitingForDaemon = false; sender.reply(toApplicationShouldTerminate: true) }
-                catch {
+                do {
+                    try await quit(mode)
                     self?.waitingForDaemon = false
-                    let alert = NSAlert(); alert.messageText = "退出尚未确认"; alert.informativeText = error.localizedDescription
-                    alert.addButton(withTitle: "留在 PendingCrew"); alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: true)
+                } catch {
+                    self?.waitingForDaemon = false
+                    let alert = NSAlert()
+                    alert.messageText = "退出尚未确认"
+                    alert.informativeText = error.localizedDescription
+                    alert.addButton(withTitle: "留在 PendingCrew")
+                    alert.runModal()
                     sender.reply(toApplicationShouldTerminate: false)
                 }
             }
@@ -239,7 +246,7 @@ final class AppQuitLifecycle {
             NSRunningApplication(processIdentifier: senderPID)?.bundleIdentifier
         }
     }
-    var crewdQuit: (() async throws -> Void)?
+    var crewdExit: ((CrewdQuitMode) async throws -> Void)?
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
     var resumeViewer: (() -> Void)?

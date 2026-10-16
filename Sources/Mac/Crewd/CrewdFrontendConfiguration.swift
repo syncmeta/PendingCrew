@@ -3,8 +3,22 @@ import Foundation
 /// Production storage is stable across source versions. Candidate storage and
 /// credentials stay isolated; selecting a directory never imports legacy data.
 enum CrewdFrontendConfiguration {
+    /// Stable across candidate rebuilds. Explicit validation roots stay outside daily storage.
+    private static var candidateDirectory: URL? {
+        let env = ProcessInfo.processInfo.environment
+        if let path = env["PENDINGCREW_CREWD_DATA_DIR"], path.hasPrefix("/") {
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            let daily = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew").path
+            guard url.path != daily, !url.path.hasPrefix(daily + "/"), !url.path.contains("pcw-delivery-validation.f401") else { return nil }
+            return url
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("PendingCrewCandidates/SQLite-Mac")
+    }
     static var directory: URL? {
-        #if PENDINGCREW_DELIVERY_VALIDATION
+        #if PENDINGCREW_KNOWLEDGE_VALIDATION
+        return candidateDirectory
+        #elseif PENDINGCREW_DELIVERY_VALIDATION
         return try? CrewdDeliveryValidation.qualified().data
         #else
         #if PENDINGCREW_NATIVE_CANDIDATE

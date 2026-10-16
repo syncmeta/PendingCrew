@@ -577,3 +577,16 @@ Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只�
 新A13具体scope/privateguard经根审与自动审批允许；初8071因heredoc stdin非TTY在App启动前真实拒绝，无receipt/GUI。修正同三SHA的直接shell真实TTY后一次51440已launch：GUI44774 birth1792008698344456、helper44804 birth1792008701861991 parentGUI、exact13路径/6privateenv/fakecwd/falseClaude/namespace0700，同Unix物理fd及helper API3 hello日志已读。UI工具实际Mac locked，完整runtime/cap/可读路由与业务尚未验；已async请求人类手动解锁，未答不自动unlock/重启/UI输入。旧A/B/07/a9保留；B/S noLaunch，ownedQuit仍须完整非owner依赖裁决，不能借source-method模型控制宣称GUI已退出。
 
 所有构建/源捕获均已sealed；本检查点是docs-only新HEAD，07/13/CI实际sourceRef永远保持0f，不重标旧06/12或本次0f产物。产品源码继续冻结。远端main实核1ba3d4ba0973b6abf3f68395611063523b1be03e，仅两CI文件相对fe改变；合并预检仅这两workflow冲突，拟保global精确manual-only blobs，未合main/未push/未碰主目录人类改动。窗口/真机/生产签名与Vault、安装/日常数据切换/公开发布/真实模型及完整M4仍未交付。
+
+
+## 2026-10-16 SQLite 知识与生命周期完整源码单元整合
+
+已整合客户端 43a744e2d672be50fc60229ddba694dfaf21ecec 与后端 b1e0d1bf451cb078467b065f6886fa4653f5d745。此条仅记录源码单元接受和必要作者验证，尚非最终 normal、Mac 包、实际窗口或八组用户流程的接受。
+
+- 客户端完整源码独验：/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-whole-source-closure-review.json，SHA256 c410302cf0869118b6069d9285f4f13b7743174f55fe69760774254748d4c4c5。原三栏通用画布、SQLite wire、持久目录、退出设置及 owner/observer 接线；真实发现并修复退休连接阻断退出。审查复用作者 renderer/journal/serde/management-helper 证据，未冒实际 App/Core socket 执行。
+- 后端完整源码独验：同目录 backend-whole-source-review.json，SHA256 98847348a19b2b4a6dec5a32cbc55db5b9c61fb46df5f44ccd00f12f42e60088。Core FIFO 当前权限检查至知识提交串行，知识业务/版本/原 UUID 同事务，SQL 保护、快照恢复、零自动启动准入、正式 socket management ownership 及有限退出已核；复用作者 31 项必要定向通过及 workspace check，非额外独立全套执行。
+- 后端最终两行增量独验：同目录 backend-final-delta-review.json，SHA256 f4e5422ac90d3b9a9e073d9d3fe20f3aabe675ea21b380685383a4a6fa1aa74a。正式 data_submit 指导与实际 web renderer/version1、knowledge-write 和 closed bridge 对齐；单个真实 MCP 用例通过、fmt 无额外变更。日志 /private/tmp/pcw-backend-web1-fixture-final-20261016.log，SHA256 ae15dfdd5beb3a9e6862ae6c19eb402d42db4be67d76a5a3abc83f4718f0597c。
+
+实际格式 Core DB15 + knowledge DB1。独立质量八组完整场景保存在同目录 whole-user-scenarios.json；同包实际 App、WebKit、启动/退出、crash/Unknown 等仍待组合产物验证。旧 serde 固定文件被最后用例覆盖，旧 hash/当时 Swift PASS 仅作历史证据，不补造原文件，也不冒新形状 WebKit 执行。旧稳定 Core15/Linux15 原证据继续复用；额外 all-features 仍无新增通过声明。
+
+范围边界：仅本机候选，远程持久配对不属此包；普通配置 Keychain 保留。Core-only 跨知识恢复保守拒绝，知识自身恢复可用；旧 Native/Dolt 源 inactive。安装、日常数据、公开发布、真实模型和旧 Unknown 现场均未操作。主目录人类改动保持。

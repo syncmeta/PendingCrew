@@ -506,6 +506,7 @@ dependencies = [
  "crewd-wake",
  "crewd-work",
  "libc",
+ "ring",
  "rusqlite",
  "rustls",
  "security-framework",

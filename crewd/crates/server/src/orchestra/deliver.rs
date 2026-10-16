@@ -161,6 +161,14 @@ impl<P: Port> Core<P> {
         let Some(ctx) = self.port.channel_ctx(&r.channel, now).await? else {
             return Ok(());
         };
+        if self
+            .cfg
+            .admission
+            .as_ref()
+            .is_some_and(|a| !a.any() || msg.created_at.0 < a.started_at)
+        {
+            return Ok(());
+        }
         if plan::needs_arbiter(&msg, &ctx, now) {
             // Jev 要联网：放到派生任务里问，答案（或超时）以 `Input::Arbitrated` 回来，不卡 actor。
             let (arbiter, tx, limit) = (
@@ -216,6 +224,13 @@ impl<P: Port> Core<P> {
         // 先全部入队、再逐个试投（评审 (3)）：一个目标投递出错不能让后面的目标连唤醒都没有。
         let mut fresh = Vec::new();
         for t in targets {
+            // Current admitted Agent work may delegate along the existing planner/ACL
+            // chain. A Human mention alone does not revive an unselected old session.
+            if let (Some(a), Sender::Session { id, .. }) = (&self.cfg.admission, &msg.sender) {
+                if a.contains(id) && msg.created_at.0 >= a.started_at {
+                    a.allow(&t.session);
+                }
+            }
             let w = NewWake {
                 session: t.session.clone(),
                 kind: WakeKind::Message,
@@ -250,6 +265,14 @@ impl<P: Port> Core<P> {
         if self.shutting_down {
             return Ok(false); // 停机中不投、不拉起
         }
+        if self
+            .cfg
+            .admission
+            .as_ref()
+            .is_some_and(|a| !a.contains(session))
+        {
+            return Ok(false);
+        }
         self.retry_terminal(session).await?;
         let now = self.now();
         // 每轮可能把「已注入」的消息类唤醒直接记 delivered，然后重选；最多 4 轮。
@@ -257,7 +280,10 @@ impl<P: Port> Core<P> {
             if self.starting.contains_key(session) {
                 return Ok(false);
             }
-            let pending = self.port.pending(session).await?;
+            let mut pending = self.port.pending(session).await?;
+            if self.cfg.admission.is_some() {
+                pending.retain(|w| w.id > self.held_watermark);
+            }
             if !pending.iter().any(|w| queue::is_due(w, now)) {
                 return Ok(false);
             }
@@ -1049,6 +1075,9 @@ impl<P: Port> Core<P> {
         let now = self.now();
         let mut sessions: BTreeSet<_> = self.port.due_sessions(now).await?.into_iter().collect();
         sessions.extend(self.terminal_sessions());
+        if let Some(a) = &self.cfg.admission {
+            sessions.retain(|s| a.contains(s));
+        }
         for s in sessions {
             // 一个 session 出错（例如 M3a `build_batch` 遇到坏账本 fail-loud）只记日志、不连累别人；它的唤醒留在
             // pending，下一次定时拍 / idle 边沿再试——不在这里原地重试（不紧循环：过期的 not_before 不会让定时器立刻再响，
@@ -1109,6 +1138,9 @@ impl<P: Port> Core<P> {
         let ordered = policy::restart_order(rows);
         let now = self.now();
         for r in &ordered {
+            if let Some(a) = &self.cfg.admission {
+                a.allow(&r.session);
+            }
             self.held.remove(&r.session);
             // 被打断的补「被打断」；被休眠停下的换成休眠附言（C26，只给一次）。
             let note = self.resume_note(&r.session, r.was_working).await;
@@ -1140,6 +1172,14 @@ impl<P: Port> Core<P> {
         let mut ctxs: BTreeMap<String, Option<ChannelCtx>> = BTreeMap::new();
         for s in self.port.all_session_ids().await? {
             for msg in self.port.unread(&s).await? {
+                if self
+                    .cfg
+                    .admission
+                    .as_ref()
+                    .is_some_and(|a| !a.contains(&s) || msg.created_at.0 < a.started_at)
+                {
+                    continue;
+                }
                 if self.port.judgment_managed(&msg.id).await? {
                     continue;
                 }
@@ -3965,5 +4005,72 @@ mod tests {
         rig.emit("w1", SessionEvent::InputDraft(None)).await;
         agrees(&mut rig, "w1", "msg:c1/lobby#2", "inflight").await;
         assert_eq!(rig.core.live_view("w1").await.unwrap().input_draft, None);
+    }
+    #[tokio::test]
+    async fn sqlite_startup_is_observational_until_selected_human_admission() {
+        use crate::lifecycle::Admission;
+        use crate::orchestra::{OrchestraConfig, core::Origin, port::Port};
+        let mut admission = Admission::default();
+        admission.started_at = T0.0;
+        let admission = Arc::new(admission);
+        let cfg = OrchestraConfig {
+            admission: Some(admission.clone()),
+            previous_clean: true,
+            ..OrchestraConfig::for_tests()
+        };
+        let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "old");
+        rig.port.lock().sessions.get_mut("cap").unwrap().desired = Desired::Running;
+        rig.port
+            .enqueue(NewWake {
+                session: "cap".into(),
+                kind: WakeKind::Timer,
+                source: "timer:old".into(),
+                priority: Priority::Auto,
+                not_before: T0,
+                note: Some("old job must not replay".into()),
+                origin: "system".into(),
+            })
+            .await
+            .unwrap();
+        rig.core.boot().await.unwrap();
+        rig.tick(SEC).await;
+        rig.settle().await;
+        assert!(rig.exec.lock().launches.is_empty());
+        assert!(rig.port.lock().restarts.is_empty());
+        rig.post(
+            LOBBY,
+            Sender::Human,
+            at("old"),
+            "new message is not a restore click",
+        )
+        .await;
+        assert!(rig.exec.lock().launches.is_empty());
+        let result = rig
+            .cmd(|reply| Cmd::Resume {
+                session: "old".into(),
+                origin: Origin::Agent,
+                reply,
+            })
+            .await;
+        assert!(result.is_err());
+        rig.run("cap").await;
+        rig.tick(SEC).await;
+        rig.settle().await;
+        assert!(
+            rig.exec.sent("cap").is_empty(),
+            "old timer must remain historical after manual restore"
+        );
+        assert!(rig.exec.launches("old").is_empty());
+        rig.post(
+            LOBBY,
+            Rig::sender("cap"),
+            at("old"),
+            "legitimate current task delegation",
+        )
+        .await;
+        assert_eq!(rig.exec.launches("old").len(), 1);
+        assert!(admission.contains("old"));
     }
 }

@@ -2,7 +2,7 @@
 //! `open_data_dir` is called under crewd.lock. That cooperative authority lock
 //! does not authorize unrelated processes to mutate these files concurrently.
 //! SQLite format: https://sqlite.org/fileformat.html#wal_file_format (§4.1–4.5).
-use crate::{Result, StoreError, schema::SCHEMA_VERSION};
+use crate::{Result, StoreError, schema::SUPPORTED_SCHEMA_VERSION};
 use ring::digest::{Context, SHA256};
 use rusqlite::{Connection, OpenFlags};
 use std::{
@@ -16,9 +16,9 @@ fn unknown() -> StoreError {
     StoreError::Invalid("数据库/WAL 版本或稳定性无法确认；拒绝打开，原数据文件未触碰".into())
 }
 fn version(v: u32) -> Result<()> {
-    if i64::from(v) > SCHEMA_VERSION {
+    if i64::from(v) > SUPPORTED_SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
-            "数据库版本 {v} 比本程序支持的 {SCHEMA_VERSION} 新，拒绝打开"
+            "数据库版本 {v} 比本程序支持的 {SUPPORTED_SCHEMA_VERSION} 新，拒绝打开"
         )));
     }
     Ok(())
@@ -399,7 +399,7 @@ mod tests {
         let held = wal_database(&source);
         held.execute_batch(&format!(
             "PRAGMA user_version={};",
-            crate::schema::SCHEMA_VERSION + 1
+            crate::schema::SUPPORTED_SCHEMA_VERSION + 1
         ))
         .unwrap();
         let before = census(&source);
@@ -424,7 +424,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(&format!(
             "CREATE TABLE proof(x); PRAGMA user_version={};",
-            crate::schema::SCHEMA_VERSION + 1
+            crate::schema::SUPPORTED_SCHEMA_VERSION + 1
         ))
         .unwrap();
         drop(conn);
@@ -440,7 +440,7 @@ mod tests {
         let conn = wal_database(&path);
         conn.execute_batch(&format!(
             "PRAGMA user_version={};",
-            crate::schema::SCHEMA_VERSION + 1
+            crate::schema::SUPPORTED_SCHEMA_VERSION + 1
         ))
         .unwrap();
         let main = fs::read(&path).unwrap();

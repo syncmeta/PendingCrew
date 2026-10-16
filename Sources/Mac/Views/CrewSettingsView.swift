@@ -29,6 +29,7 @@ private struct GeneralSettingsTab: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
     @State private var showResetConfirm = false
+    @AppStorage(CrewdQuitPreference.key) private var quitPreference = "ask"
 
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .default
@@ -50,6 +51,18 @@ private struct GeneralSettingsTab: View {
                 Text("外观")
             }
 
+            if model.usesCrewdAuthority {
+                Section("退出时") {
+                    Picker("默认动作", selection: $quitPreference) {
+                        Text("每次询问").tag("ask")
+                        Text("直接退出").tag("direct")
+                        Text("安全暂停").tag("safePause")
+                        Text("继续后台").tag("background")
+                    }
+                    Text("重新打开应用只读取资料；恢复会话需再次明确选择。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if !model.usesCrewdAuthority {
             Section {
                 Button(role: .destructive) {

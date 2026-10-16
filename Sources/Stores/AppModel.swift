@@ -17,7 +17,7 @@ final class AppModel: ObservableObject {
     init() {
         guard usesCrewdAuthority else { return }
         #if os(macOS)
-        AppQuitLifecycle.shared.crewdQuit = { [weak self] in try await self?.crewdWindow.quitOwnedLocalHelpers() }
+        AppQuitLifecycle.shared.crewdExit = { [weak self] mode in try await self?.crewdWindow.exit(mode: mode) }
         #endif
         authorityObservation = crewdWindow.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in

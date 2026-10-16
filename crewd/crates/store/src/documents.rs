@@ -4,6 +4,15 @@ use crewd_proto::{DocumentSummary, ResourceActor};
 use rusqlite::{Connection, OptionalExtension, params};
 const META: &str =
     "id,crew_id,title,revision,body_length,created_by,updated_by,created_at,updated_at,deleted_at";
+fn legacy_only(c: &Connection) -> Result<()> {
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 16 || crate::meta_get(c, "knowledge.sqlite.v1")?.as_deref() == Some("1") {
+        return Err(StoreError::Invalid(
+            "documents use the SQLite knowledge API".into(),
+        ));
+    }
+    Ok(())
+}
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentSummary> {
     let actor = |i| -> rusqlite::Result<ResourceActor> {
         let raw: String = r.get(i)?;
@@ -36,6 +45,7 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentSummary> {
     })
 }
 pub fn get(conn: &Connection, id: &str) -> Result<Option<DocumentSummary>> {
+    legacy_only(conn)?;
     Ok(conn
         .query_row(
             &format!("SELECT {META} FROM documents WHERE id=?1"),
@@ -45,6 +55,7 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<DocumentSummary>> {
         .optional()?)
 }
 pub fn body(conn: &Connection, id: &str) -> Result<Option<String>> {
+    legacy_only(conn)?;
     Ok(conn
         .query_row("SELECT body FROM documents WHERE id=?1", [id], |r| r.get(0))
         .optional()?)
@@ -56,11 +67,13 @@ pub fn list(
     limit: u32,
     deleted: bool,
 ) -> Result<Vec<DocumentSummary>> {
+    legacy_only(conn)?;
     let mut q=conn.prepare(&format!("SELECT {META} FROM documents WHERE crew_id=?1 AND (?2 IS NULL OR id>?2) AND (?4 OR deleted_at IS NULL) ORDER BY id LIMIT ?3"))?;
     Ok(q.query_map(params![crew, after, limit, deleted], row)?
         .collect::<rusqlite::Result<_>>()?)
 }
 pub fn request(conn: &Connection, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+    legacy_only(conn)?;
     let v: Option<(String, Vec<u8>)> = conn
         .query_row(
             "SELECT document_id,payload_digest FROM document_requests WHERE request_id=?1",
@@ -82,6 +95,7 @@ pub fn insert(
     request: &str,
     digest: &[u8],
 ) -> Result<()> {
+    legacy_only(conn)?;
     conn.execute("INSERT INTO documents(id,crew_id,title,body,body_length,revision,created_by,updated_by,created_at,updated_at)VALUES(?1,?2,?3,?4,?5,1,?6,?6,?7,?7)",
         params![meta.id,meta.crew_id,meta.title,body,body.len() as i64,serde_json::to_string(&meta.created_by)?,meta.created_at])?;
     conn.execute(
@@ -98,6 +112,7 @@ pub fn update(
     actor: &ResourceActor,
     at: &str,
 ) -> Result<bool> {
+    legacy_only(conn)?;
     let rev = revision(old)?
         .checked_add(1)
         .ok_or_else(|| StoreError::Invalid("document revision exhausted".into()))?;
@@ -121,6 +136,7 @@ pub fn delete(
     actor: &ResourceActor,
     at: &str,
 ) -> Result<bool> {
+    legacy_only(conn)?;
     let rev = revision(old)?
         .checked_add(1)
         .ok_or_else(|| StoreError::Invalid("document revision exhausted".into()))?;

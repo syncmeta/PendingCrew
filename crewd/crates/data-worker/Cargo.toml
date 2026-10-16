@@ -1,0 +1,18 @@
+[package]
+name = "crewd-data-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crewd-proto = { path = "../proto" }
+crewd-data-protocol = { path = "../data-protocol" }
+doltlite = "=0.51.0"
+serde_json = "1.0.151"
+serde = { version = "1.0.229", features = ["derive"] }
+uuid = { version = "1.27.0", features = ["v4"] }
+ring = "0.17.14"
+
+[dev-dependencies]
+crewd-exec = { path = "../exec" }
+tempfile = "3.27.0"

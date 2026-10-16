@@ -7,7 +7,7 @@ set -eu
 
 PLIST="${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}"
 if [ ! -f "$PLIST" ]; then
-    if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
+    if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ] || [ "${CONFIGURATION:-}" = "KnowledgeValidation" ]; then
         echo "error: NativeCandidate product Info.plist is missing"
         exit 1
     fi
@@ -15,9 +15,9 @@ if [ ! -f "$PLIST" ]; then
 	exit 0
 fi
 
-if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
+if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "DeliveryValidation" ] || [ "${CONFIGURATION:-}" = "KnowledgeValidation" ]; then
     COMMIT=${PENDINGCREW_CANDIDATE_SOURCE_REF:-}
-    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then COMMIT=${PENDINGCREW_VALIDATION_SOURCE_REF:-}; fi
+    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ] || [ "${CONFIGURATION:-}" = "KnowledgeValidation" ]; then COMMIT=${PENDINGCREW_VALIDATION_SOURCE_REF:-}; fi
     case "$COMMIT" in
         *[!0-9a-f]*|"") echo "error: NativeCandidate requires a reviewed full source ref"; exit 1 ;;
     esac
@@ -28,7 +28,11 @@ if [ "${CONFIGURATION:-}" = "NativeCandidate" ] || [ "${CONFIGURATION:-}" = "Del
     /usr/libexec/PlistBuddy -c "Delete :PendingCrewSourceRef" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Delete :PendingCrewNativeCandidate" "$PLIST" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Add :PendingCrewSourceRef string $COMMIT" "$PLIST"
-    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ]; then
+    /usr/libexec/PlistBuddy -c "Delete :PendingCrewKnowledgeValidation" "$PLIST" 2>/dev/null || true
+    if [ "${CONFIGURATION:-}" = "KnowledgeValidation" ]; then
+        /usr/libexec/PlistBuddy -c "Add :PendingCrewKnowledgeValidation bool true" "$PLIST"
+    fi
+    if [ "${CONFIGURATION:-}" = "DeliveryValidation" ] || [ "${CONFIGURATION:-}" = "KnowledgeValidation" ]; then
         /usr/libexec/PlistBuddy -c "Delete :PendingCrewDeliveryValidation" "$PLIST" 2>/dev/null || true
         /usr/libexec/PlistBuddy -c "Add :PendingCrewDeliveryValidation bool true" "$PLIST"
     else

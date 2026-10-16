@@ -44,7 +44,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                         members: workspace.sessions, crews: workspace.crews).padding(10)
                     }
                 } else if workspace.originalSection == "文档" {
-                    CrewdDocumentsView(store: workspace.resources, drafts: $workspace.resourceDrafts).padding(10)
+                    CrewdKnowledgeDocumentsEntry(workspace: workspace)
                 } else if workspace.originalSection == "进展" {
                     CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
                         resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,

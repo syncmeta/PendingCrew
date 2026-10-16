@@ -89,6 +89,7 @@ pub struct CoreNativeReceipts {
     socket: UnixStream,
     runtime: n::Runtime,
     closed: bool,
+    effective_content: Option<crewd_exec::acp::content_chunks::Assembly>,
 }
 impl CoreNativeReceipts {
     pub async fn authenticate(
@@ -177,6 +178,7 @@ impl CoreNativeReceipts {
             socket,
             runtime,
             closed: false,
+            effective_content: None,
         };
         route.verify()?;
         Ok(route)
@@ -254,12 +256,23 @@ impl CoreNativeReceipts {
         request: String,
         body: Vec<u8>,
     ) -> io::Result<(n::Receipt, bool)> {
+        if self.effective_content.is_some() {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native request interleaves incomplete content",
+            ));
+        }
         self.commit(move |tx, runtime| {
             n::prepare(tx, runtime, &request, &body, &crewd_store::now_ts())
         })
         .await
     }
     pub async fn cancel(&mut self, request: String, revision: i64) -> io::Result<n::Receipt> {
+        // Cancellation discards every incomplete body. Its durable phase guard
+        // still owns acceptance; a later remainder cannot become a fresh body.
+        self.effective_content = None;
         self.commit(move |tx, runtime| {
             n::request_cancel(tx, runtime, &request, revision, &crewd_store::now_ts())
         })
@@ -268,6 +281,7 @@ impl CoreNativeReceipts {
     /// The transport may release a matching manual-input ACK only after this
     /// succeeds. A cancelled waiter remains an unknown admitted FIFO outcome.
     pub async fn revoke_before_raw(&mut self, revision: i64) -> io::Result<()> {
+        self.effective_content = None;
         self.commit(move |tx, runtime| {
             n::revoke_before_raw(tx, runtime, revision, &crewd_store::now_ts())
         })
@@ -304,6 +318,103 @@ impl CoreNativeReceipts {
         self.observation(&frame.generation, frame.epoch, frame.sequence, frame.event)
             .await
     }
+    /// Separate closed chunk envelope. Native/Mod JSON cannot select a peer or
+    /// runtime; every part still passes the same physical admission and sequence.
+    /// None is transport progress only, never a durable-content acknowledgement.
+    pub async fn content_chunk_frame(&mut self, bytes: &[u8]) -> io::Result<Option<n::Receipt>> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Frame {
+            generation: String,
+            epoch: u64,
+            sequence: u64,
+            chunk: crewd_exec::acp::content_chunks::ContentChunk,
+        }
+        if bytes.len() > crewd_exec::acp::wire::MAX_CONTROL {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native content frame limit",
+            ));
+        }
+        let frame: Frame = match serde_json::from_slice(bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                self.effective_content = None;
+                self.closed = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "native content frame malformed",
+                ));
+            }
+        };
+        self.content_chunk(&frame.generation, frame.epoch, frame.sequence, frame.chunk)
+            .await
+    }
+    /// Large effective content uses a bounded sequence of authenticated native
+    /// observations. Intermediate frames carry no content/effect ACK. Only the
+    /// complete body enters the existing FIFO receipt transaction, and only its
+    /// durable result may release the final ACK. This grants no SDK capability.
+    pub async fn content_chunk(
+        &mut self,
+        generation: &str,
+        epoch: u64,
+        sequence: u64,
+        chunk: crewd_exec::acp::content_chunks::ContentChunk,
+    ) -> io::Result<Option<n::Receipt>> {
+        let result = async {
+            self.verify()?;
+            {
+                let held = self
+                    .custody
+                    .lock()
+                    .map_err(|_| io::Error::other("native custody poisoned"))?;
+                self.peer
+                    .admit(&self.socket, &held, generation, epoch, sequence)?;
+            }
+            if self.effective_content.is_none() {
+                self.effective_content = Some(crewd_exec::acp::content_chunks::Assembly::new(
+                    chunk.request.clone(),
+                    chunk.revision,
+                    chunk.prompt.clone(),
+                    chunk.total_bytes as usize,
+                    std::time::Duration::from_secs(2),
+                )?);
+            }
+            let request = chunk.request.clone();
+            let revision = chunk.revision;
+            let prompt = chunk.prompt.clone();
+            let body = self
+                .effective_content
+                .as_mut()
+                .ok_or_else(|| io::Error::other("native assembly unavailable"))?
+                .push(chunk)?;
+            let Some(body) = body else {
+                return Ok(None);
+            };
+            self.effective_content = None;
+            self.commit(move |tx, runtime| {
+                n::accept_content(
+                    tx,
+                    runtime,
+                    &request,
+                    revision,
+                    &prompt,
+                    &body,
+                    &crewd_store::now_ts(),
+                )
+            })
+            .await
+            .map(Some)
+        }
+        .await;
+        if result.is_err() {
+            self.effective_content = None;
+            self.closed = true;
+        }
+        result
+    }
     pub async fn observation(
         &mut self,
         generation: &str,
@@ -311,6 +422,14 @@ impl CoreNativeReceipts {
         sequence: u64,
         event: NativeEvent,
     ) -> io::Result<n::Receipt> {
+        if self.effective_content.is_some() {
+            self.effective_content = None;
+            self.closed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native observation interleaves incomplete content",
+            ));
+        }
         let admitted = {
             let held = self
                 .custody
@@ -364,6 +483,7 @@ impl CoreNativeReceipts {
     /// or unblock automatic input. The existing Core custody owner must stop
     /// and kernel-settle the registered process group separately.
     pub async fn disconnected(&mut self) -> io::Result<()> {
+        self.effective_content = None;
         self.closed = true;
         self.custody
             .lock()
@@ -1073,16 +1193,38 @@ os.close(master)
         BufReader::new(wire).read_until(b'\n', &mut echoed).unwrap();
         route.observation_frame(&echoed).await.unwrap()
     }
+    async fn observed_content_frame(
+        route: &mut CoreNativeReceipts,
+        frame: &serde_json::Value,
+    ) -> io::Result<Option<n::Receipt>> {
+        let mut wire = route.socket.try_clone()?;
+        wire.write_all(&serde_json::to_vec(frame).map_err(io::Error::other)?)?;
+        wire.write_all(b"\n")?;
+        let mut echoed = Vec::new();
+        BufReader::new(wire).read_until(b'\n', &mut echoed)?;
+        route.content_chunk_frame(&echoed).await
+    }
     #[tokio::test]
     async fn actual_enrolled_pty_proxy_core_fifo_exact_content_cancel_late_start_raw_and_disconnect()
      {
-        actual_flow(false).await;
+        actual_flow(false, false, None).await;
     }
     #[tokio::test]
     async fn actual_enrolled_proxy_cancelled_fifo_waiter_is_unknown_and_cannot_reemit() {
-        actual_flow(true).await;
+        actual_flow(true, false, None).await;
     }
-    async fn actual_flow(cancel_waiter: bool) {
+    #[tokio::test]
+    async fn actual_enrolled_proxy_full_body_chunks_commit_only_after_complete_authenticated_cut() {
+        actual_flow(false, true, None).await;
+    }
+    #[tokio::test]
+    async fn actual_enrolled_proxy_partial_content_cancel_gap_and_foreign_identity_never_ack_or_replay()
+     {
+        for refusal in ["cancel", "gap", "foreign"] {
+            actual_flow(false, true, Some(refusal)).await;
+        }
+    }
+    async fn actual_flow(cancel_waiter: bool, chunked: bool, partial_case: Option<&str>) {
         let dir = tempfile::tempdir().unwrap();
         let registry = Arc::new(ProcessRegistry::load(&dir.path().join("processes.json")).unwrap());
         let listener = UnixListener::bind(dir.path().join("proxy.sock")).unwrap();
@@ -1145,7 +1287,13 @@ os.close(master)
         );
         let request = uuid::Uuid::new_v4().to_string();
         let prompt = uuid::Uuid::new_v4().to_string();
-        let body = b" exact body\n".to_vec();
+        let body = if chunked {
+            // JSON byte arrays would exceed the control frame bound for this
+            // legal body. Chunk framing must retain every control byte losslessly.
+            vec![b'\r'; 1_048_576]
+        } else {
+            b" exact body\n".to_vec()
+        };
         if cancel_waiter {
             let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
             let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -1227,18 +1375,154 @@ os.close(master)
         let (same, retry) = route.prepare(request.clone(), body.clone()).await.unwrap();
         assert!(retry);
         assert_eq!(same, prepared);
-        let accepted = observed(
-            &mut route,
-            &generation.to_string(),
-            1,
-            NativeEvent::Content {
-                request: request.clone(),
-                revision: prepared.revision,
-                prompt: prompt.clone(),
-                effective: body.clone(),
-            },
-        )
-        .await;
+        if let Some(refusal) = partial_case {
+            let mut chunks = crewd_exec::acp::content_chunks::encode(
+                &request,
+                prepared.revision,
+                &prompt,
+                std::str::from_utf8(&body).unwrap(),
+            )
+            .unwrap()
+            .into_iter();
+            let first = chunks.next().unwrap();
+            let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":1,"chunk":first});
+            assert!(
+                observed_content_frame(&mut route, &frame)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let expected = if refusal == "cancel" {
+                route
+                    .cancel(request.clone(), prepared.revision)
+                    .await
+                    .unwrap()
+                    .phase
+            } else {
+                n::Phase::Prepared
+            };
+            let mut second = chunks.next().unwrap();
+            match refusal {
+                "cancel" => {} // discarded first chunk; remainder cannot start a new call
+                "gap" => second.index += 1,
+                "foreign" => second.prompt = uuid::Uuid::new_v4().to_string(),
+                _ => unreachable!(),
+            }
+            let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":2,"chunk":second});
+            assert!(observed_content_frame(&mut route, &frame).await.is_err());
+            assert!(route.closed);
+            assert!(route.effective_content.is_none());
+            let rid = request.clone();
+            let saved = db
+                .call_result(move |store| n::get(store.conn(), &rid))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                saved.phase, expected,
+                "poisoned content cannot advance durable phase"
+            );
+            assert!(
+                route.prepare(request.clone(), body.clone()).await.is_err(),
+                "same route cannot replay remainder"
+            );
+            route.disconnected().await.unwrap();
+            let rid = request.clone();
+            let unknown = db
+                .call_result(move |store| n::get(store.conn(), &rid))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(unknown.phase, n::Phase::Unknown);
+            let slot = match &route.peer {
+                NativeReceiptPeer::Proxy(peer) => peer.enrollment().slot(),
+                NativeReceiptPeer::Direct(_) => panic!("actual proxy fixture lost kernel proxy"),
+            };
+            route.socket.write_all(b"Q\n").unwrap();
+            physical.channel.write_all(b"Q").unwrap();
+            assert!(physical.child.wait().unwrap().success());
+            {
+                let mut owned = custody.lock().unwrap();
+                owned.forget_reaped_bridge(1, slot).unwrap();
+                owned.forget_reaped_native(1).unwrap();
+                owned.forget_reaped_helper().unwrap();
+            }
+            assert!(registry.entries().is_empty());
+            db.shutdown();
+            return;
+        }
+        let mut next_sequence = 1;
+        let accepted = if chunked {
+            let chunks = crewd_exec::acp::content_chunks::encode(
+                &request,
+                prepared.revision,
+                &prompt,
+                std::str::from_utf8(&body).unwrap(),
+            )
+            .unwrap();
+            let count = chunks.len();
+            let mut final_receipt = None;
+            for (index, chunk) in chunks.into_iter().enumerate() {
+                let frame = serde_json::json!({"generation":generation.to_string(),"epoch":1,"sequence":next_sequence,"chunk":chunk});
+                let encoded = serde_json::to_vec(&frame).unwrap();
+                assert!(encoded.len() <= crewd_exec::acp::wire::MAX_CONTROL);
+                let mut wire = route.socket.try_clone().unwrap();
+                wire.write_all(&encoded).unwrap();
+                wire.write_all(b"\n").unwrap();
+                let mut echoed = Vec::new();
+                BufReader::new(wire).read_until(b'\n', &mut echoed).unwrap();
+                let receipt = route.content_chunk_frame(&echoed).await.unwrap();
+                next_sequence += 1;
+                if index + 1 < count {
+                    assert!(
+                        receipt.is_none(),
+                        "partial content must not return a durable ACK"
+                    );
+                    let request = request.clone();
+                    let durable = db
+                        .call_result(move |store| n::get(store.conn(), &request))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(durable.phase, n::Phase::Prepared);
+                    assert_eq!(durable.revision, prepared.revision);
+                } else {
+                    final_receipt = receipt;
+                }
+            }
+            let receipt = final_receipt.expect("only complete content has durable ACK");
+            let request = request.clone();
+            let expected = body.clone();
+            let runtime = route.runtime_id().to_owned();
+            let effective = db
+                .call_result(move |store| {
+                    n::original_input(store.conn(), &runtime, &request)
+                        .map(|row| row.map(|v| v.bytes().to_vec()))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(effective, Some(expected));
+            receipt
+        } else {
+            let receipt = observed(
+                &mut route,
+                &generation.to_string(),
+                1,
+                NativeEvent::Content {
+                    request: request.clone(),
+                    revision: prepared.revision,
+                    prompt: prompt.clone(),
+                    effective: body.clone(),
+                },
+            )
+            .await;
+            next_sequence += 1;
+            receipt
+        };
         assert_eq!(accepted.phase, n::Phase::ContentAccepted);
         let canceled = route
             .cancel(request.clone(), accepted.revision)
@@ -1248,7 +1532,7 @@ os.close(master)
         let started = observed(
             &mut route,
             &generation.to_string(),
-            2,
+            next_sequence,
             NativeEvent::Started {
                 request: request.clone(),
                 revision: canceled.revision,
@@ -1270,7 +1554,7 @@ os.close(master)
         let completed = observed(
             &mut route,
             &generation.to_string(),
-            3,
+            next_sequence + 1,
             NativeEvent::Completed {
                 request: request.clone(),
                 revision: revoked.revision,

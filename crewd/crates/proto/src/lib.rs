@@ -125,7 +125,7 @@ pub mod methods {
     // M3b / M3c 的方法常量写在各自的段落里，并加进 ALL（契约 json 由后合者重新生成）。
 
     /// 客户端可调的全部方法（契约测试与 `crewd rpc` 端到端都按它逐个核）。
-    pub const ALL: &[&str] = &[
+    const CORE_METHODS: &[&str] = &[
         crate::judgments::SETTINGS_GET,
         crate::judgments::SETTINGS_SET,
         crate::judgments::INSPECT,
@@ -222,6 +222,15 @@ pub mod methods {
         crate::orchestra::methods::HIBERNATE,
         crate::orchestra::methods::MESSAGE_RECEIPTS,
     ];
+    /// Compose extension registries rather than maintaining a second method list.
+    pub static ALL: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        CORE_METHODS
+            .iter()
+            .copied()
+            .chain(crate::team_data_api::METHODS.iter().copied())
+            .chain(crate::lifecycle::METHODS.iter().copied())
+            .collect()
+    });
 }
 
 pub mod events {
@@ -241,6 +250,7 @@ pub mod events {
         "work",
         "documents",
         "viewFolders",
+        "data",
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -254,6 +264,7 @@ pub mod events {
     pub const BADGE_CHANGED: &str = "badge.changed";
     pub const WORK_CHANGED: &str = "work.changed";
     pub const CHANNEL_WORK_CHANGED: &str = "channel.workChanged";
+    pub const DATA_CHANGED: &str = "data.changed";
     pub const DOCUMENT_CHANGED: &str = "document.changed";
     pub const FOLDER_CHANGED: &str = "viewFolder.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
@@ -450,6 +461,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
+        (events::DATA_CHANGED, sub::<CrewRef>(g)),
         (events::DOCUMENT_CHANGED, sub::<DocumentChanged>(g)),
         (events::FOLDER_CHANGED, sub::<FolderChanged>(g)),
         (events::SESSION_CHANGED, sub::<SessionLive>(g)),
@@ -909,6 +921,8 @@ pub fn api_schema() -> Value {
     ]
     .into_iter()
     .chain(orchestra::schema_entries(g).0)
+    .chain(team_data_api::schema_entries(g))
+    .chain(lifecycle::schema_entries(g))
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let events: serde_json::Map<String, Value> = event_payloads(g)
@@ -1622,3 +1636,11 @@ mod tests {
         assert!(s["frames"]["ServerFrame"]["$ref"].is_string());
     }
 }
+
+/// SQLite knowledge API; only implemented methods are registered.
+pub mod team_data;
+
+#[path = "sqlite_data_api.rs"]
+pub mod team_data_api;
+
+pub mod lifecycle;

@@ -11,7 +11,7 @@ crewd-work = { version = "0.1.0", path = "../work" }
 libc = "0.2.190"
 ring = "0.17.14"
 uuid = { version = "1.27.0", features = ["v4"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "backup", "limits"] }
 serde = "1.0.229"
 serde_json = "1.0.151"
 thiserror = "2.0.21"

@@ -18,7 +18,7 @@ struct UpdateSettingsSection: View {
         } header: {
             Text("更新")
         } footer: {
-            #if PENDINGCREW_DELIVERY_VALIDATION
+            #if PENDINGCREW_DELIVERY_VALIDATION || PENDINGCREW_KNOWLEDGE_VALIDATION
             Text("此隔离验证通道不包含自更新；此处不验收更新功能。")
             #else
             if updater.isConfigured {

@@ -19,3 +19,9 @@ pub mod manual_fence;
 pub mod helper_runtime;
 
 pub mod helper_boot;
+
+/// Native returned-row mapping only; source completeness requires a separate verified cut.
+pub mod history_codec;
+
+/// Native15 observation framing; not a content admission or provider capability.
+pub mod content_chunks;

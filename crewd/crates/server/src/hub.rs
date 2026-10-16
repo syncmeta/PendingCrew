@@ -135,6 +135,12 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
                 link_revision: link_revision.clone(),
             },
         )?],
+        Change::DataChanged { crew_id } => vec![ev(
+            events::DATA_CHANGED,
+            &CrewRef {
+                crew_id: crew_id.clone(),
+            },
+        )?],
         Change::DocumentChanged {
             crew_id,
             id,

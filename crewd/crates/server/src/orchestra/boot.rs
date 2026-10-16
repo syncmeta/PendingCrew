@@ -60,10 +60,13 @@ impl<P: Port> Core<P> {
             None
         });
         let reason = self.restart_reason();
-        self.restart_prompt = self
-            .port
-            .open_restart(rows.into_iter().map(|r| r.session).collect(), reason)
-            .await?;
+        self.restart_prompt = if self.cfg.admission.is_some() && self.cfg.previous_clean {
+            None
+        } else {
+            self.port
+                .open_restart(rows.into_iter().map(|r| r.session).collect(), reason)
+                .await?
+        };
         // 询问 id 已由 Port 记进库里的休眠记录（collab `open_with`）；内存这份也记上——之后恢复时写回的就是带着它的那份，
         // 这条询问才一直读得出「休眠」（评审 I4）。
         if reason == RestartReason::Hibernate
@@ -71,7 +74,9 @@ impl<P: Port> Core<P> {
         {
             r.prompt_id = self.restart_prompt;
         }
-        self.replan_unread().await?;
+        if self.cfg.admission.is_none() {
+            self.replan_unread().await?;
+        }
         // C4 的水位：到此为止排着的（含积压补救刚补的旧 @）都不算「询问之后人新 @ 的」。
         self.held_watermark = self
             .port

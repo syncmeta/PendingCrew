@@ -19,7 +19,10 @@ import AppKit
 @main
 struct PendingCrewEntry {
     static func main() {
-        #if PENDINGCREW_DELIVERY_VALIDATION
+        #if PENDINGCREW_KNOWLEDGE_VALIDATION
+        // Candidate isolation is prepared before any UI singleton. No legacy import.
+        CrewdFrontendIsolation.prepare()
+        #elseif PENDINGCREW_DELIVERY_VALIDATION
         let validationArguments = CommandLine.arguments
         do {
             try CrewdDeliveryValidation.requireEntryArguments(validationArguments)
@@ -32,7 +35,9 @@ struct PendingCrewEntry {
         }
         #endif
         #if os(iOS)
+        #if !PENDINGCREW_KNOWLEDGE_VALIDATION
         CrewdFrontendIsolation.prepare()
+        #endif
         PendingCrewApp.main()
         #else
         // 未捕获 NSException 留痕（2026-07-26 布局自激闪退：.ips 里连异常名都没有）。
@@ -59,7 +64,9 @@ struct PendingCrewEntry {
         // Ordinary and candidate builds share the original visual root and
         // one crewd authority. Private presentation preparation precedes UI
         // singleton construction; no legacy orchestration gate is installed.
+        #if !PENDINGCREW_KNOWLEDGE_VALIDATION
         CrewdFrontendIsolation.prepare()
+        #endif
         PendingCrewApp.main()
         return
         #endif

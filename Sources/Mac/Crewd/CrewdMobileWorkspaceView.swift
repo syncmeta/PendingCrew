@@ -84,9 +84,10 @@ private struct CrewdMobileCrewPane: View {
                                 resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                                 planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
                                 members: Array(workspace.knownSessions.values), crews: workspace.crews, progressOnly: tab == .progress)
-            case .documents: CrewdDocumentsView(store: workspace.resources, drafts: $workspace.resourceDrafts)
+            case .documents: CrewdKnowledgeDocumentsEntry(workspace: workspace)
             }
         }.navigationTitle(title)
+        .onChange(of:workspace.knowledgeNavigation) { _,_ in tab = .messages }
         .toolbar { Button("刷新", systemImage: "arrow.clockwise") { workspace.scheduleSync(recoverHistory: true) }.disabled(!workspace.client.connected) }
     }
 }

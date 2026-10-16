@@ -194,8 +194,9 @@ def main_build_signature(path):
  if path.read_bytes()!=before:fail('main changed during signature qualification')
  return {'state':state,'sha256':sha(before),'query':q}
 
-def qualify_unsigned_target(app,ref):
+def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
  app=pathlib.Path(app)
+ if configuration not in ['DeliveryValidation','KnowledgeValidation']:fail('closed target configuration')
  if not re.fullmatch('[0-9a-f]{40}',ref):fail('complete source ref required')
  if not app.is_absolute() or app.is_symlink() or app.resolve(strict=True)!=app:fail('target App alias')
  # A vendor framework's own seal is not this root App bundle seal. Never touch
@@ -205,6 +206,8 @@ def qualify_unsigned_target(app,ref):
  info_path=app/'Contents/Info.plist'
  if info_path.is_symlink() or not info_path.resolve(strict=True).is_relative_to(app):fail('target Info alias')
  raw=info_path.read_bytes();info=plistlib.loads(raw)
+ if configuration=='KnowledgeValidation' and info.get('PendingCrewKnowledgeValidation') is not True:fail('knowledge target marker missing')
+ if configuration=='DeliveryValidation' and info.get('PendingCrewKnowledgeValidation') is True:fail('contradictory target marker')
  if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True or info.get('PendingCrewSourceRef')!=ref or info.get('BuildStampCommit')!=ref:fail('actual target Info identity/source stamps differ')
  name=info.get('CFBundleExecutable')
  if not isinstance(name,str) or pathlib.PurePosixPath(name).name!=name or not name:fail('invalid target executable')
@@ -231,17 +234,17 @@ def reviewed_target_root(value,existing=False):
 
 def prune_target(env):
  # Ordinary configs/platforms are byte-preserving no-ops, including iPhone/iPad.
- if env.get('CONFIGURATION')!='DeliveryValidation' or env.get('PLATFORM_NAME')!='macosx':return {'mode':'NOT_APPLICABLE','mutated':False}
+ if env.get('CONFIGURATION') not in ['DeliveryValidation','KnowledgeValidation'] or env.get('PLATFORM_NAME')!='macosx':return {'mode':'NOT_APPLICABLE','mutated':False}
  ref=env.get('PENDINGCREW_VALIDATION_SOURCE_REF','')
  if not re.fullmatch('[0-9a-f]{40}',ref):fail('reviewed full source ref missing')
  if env.get('CODE_SIGNING_ALLOWED')!='NO' or env.get('ENABLE_HARDENED_RUNTIME')!='YES' or env.get('CODE_SIGN_ENTITLEMENTS','') or env.get('DEVELOPMENT_TEAM',''):fail('unsigned hardened/empty-entitlement target required')
  raw_root=env.get('TARGET_BUILD_DIR','');root=reviewed_target_root(raw_root,existing=True);name=env.get('FULL_PRODUCT_NAME','')
  if pathlib.PurePosixPath(name).name!=name or not name.endswith('.app'):fail('only reviewed warm target product may be changed')
  app=root/name
- return dict(finalize_unsigned_target(app,ref),mode='BUILD_TARGET_ONLY',sourceRef=ref,targetDirectoryInput=raw_root,targetDirectoryCanonical=str(root))
+ return dict(finalize_unsigned_target(app,ref,env['CONFIGURATION']),mode='BUILD_TARGET_ONLY',sourceRef=ref,targetDirectoryInput=raw_root,targetDirectoryCanonical=str(root))
 
-def finalize_unsigned_target(app,ref):
- app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref)
+def finalize_unsigned_target(app,ref,configuration="DeliveryValidation"):
+ app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref,configuration)
  report=audit(app,exclude_updater=True);updater=app/'Contents/Frameworks/Sparkle.framework'
  if updater.is_symlink():fail('updater root alias')
  if updater.exists():

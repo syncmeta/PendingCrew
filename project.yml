@@ -43,9 +43,11 @@ configs:
   Release: release
   NativeCandidate: debug
   DeliveryValidation: release
+  KnowledgeValidation: release
 configFiles:
   NativeCandidate: Config/NativeCandidate.xcconfig
   DeliveryValidation: Config/DeliveryValidation.xcconfig
+  KnowledgeValidation: Config/KnowledgeValidation.xcconfig
   Debug: Config/Signing.xcconfig
   Release: Config/Signing.xcconfig
 settings:
@@ -137,6 +139,9 @@ targets:
         ENABLE_PREVIEWS: YES
         SUPPORTS_MACCATALYST: NO
       configs:
+        KnowledgeValidation:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
+          INFOPLIST_FILE: Config/KnowledgeValidation-Info.plist
         DeliveryValidation:
           PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
           INFOPLIST_FILE: Config/DeliveryValidation-Info.plist
@@ -185,6 +190,10 @@ targets:
           - CrewdOriginalWorkIntegration.swift
           - CrewdMobileWorkspaceView.swift
           - CrewdWorkspaceView.swift
+      # The workspace observes the same SQLite store and renderer contracts.
+      - path: Sources/CrewdRemote/CrewdKnowledgeWire.swift
+      - path: Sources/CrewdRemote/CrewdKnowledgeStore.swift
+      - path: Sources/CrewdRemote/CrewdKnowledgeViewRuntime.swift
       - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
       - path: Sources/Mac/Services/ModelCatalogCenter.swift
       - path: Sources/Mac/Services/QuotaCenter.swift
@@ -594,3 +603,18 @@ schemes:
       config: DeliveryValidation
     archive:
       config: DeliveryValidation
+
+  PendingCrewKnowledgeValidation:
+    build:
+      targets:
+        PendingCrew: all
+    run:
+      config: KnowledgeValidation
+    test:
+      config: KnowledgeValidation
+    profile:
+      config: KnowledgeValidation
+    analyze:
+      config: KnowledgeValidation
+    archive:
+      config: KnowledgeValidation

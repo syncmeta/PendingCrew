@@ -13,12 +13,16 @@ pub mod judgment_state;
 pub mod local_clients;
 pub mod messages;
 pub mod native_execution;
+pub mod native_history;
 pub mod object_refs;
 pub mod remote;
 pub mod runner_usage;
 pub mod schema;
 pub mod sessions;
+#[path = "sqlite_knowledge.rs"]
+pub mod team_data;
 pub mod testing;
+// Historical native import source remains inactive; no legacy data migration.
 pub mod todos;
 mod version_guard;
 pub mod view_folders;

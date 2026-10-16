@@ -861,3 +861,12 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 初始现场核对：global 71f7ec42、backend 7635010a、client 50871579，远端三开发分支一致；远端 main 仍 1ba3d4ba，本地 main 71f7ec42。两作者原 WIP 保留，主目录人类未提交内容保留。磁盘约 52 GiB，窄查询未见 Rust/Xcode 编译进程。
 
 源码开发、必要隔离验证及三开发分支普通保存已有授权；安装、日常数据切换、公开发布和新的真实模型验收仍分别核对具体授权。旧 Unknown 现场保全，不重用旧窗口授权运行新包。当前不是上述范围的已完成声明。
+
+
+### 2026-10-16 完整源码单元接受与组合冻结
+
+客户端完整源 43a744e2d672be50fc60229ddba694dfaf21ecec、后端完整源 b1e0d1bf451cb078467b065f6886fa4653f5d745 已分别独立源码接受并整合。后端最终增量仅补正式 Agent 视图指导及同个 MCP 样本词汇，不改 DTO/权限。对应质量记录见 internal 整合验收记录本日条目。下一关口是此组合完整输入的实际 normal 与原 App Mac 包，再按八组完整流程验收，不重跑旧稳定全量。
+
+实际格式为 Core DB15 + 独立 knowledge DB1；Core16 是本轮知识交付单元名称，不为编号新增 Core DDL/迁移门。旧 Native 历史预留源码仍 inactive，不是 Native 已交付。历史 Dolt/worker/protocol 源保留但 workspace exclude、不链接、不宣告。Core-only restore 按实际 knowledge 目录/标记拒绝不完整恢复；知识自身恢复保留当前 ACL、旋转上下文并保原请求历史。
+
+本轮 Mac 候选明确仅本机使用：本机 SQLite、保存的视图/绑定和设置持久，隔离验收凭据用 process-memory；不宣称此包远程配对持久可用。普通配置已有持久 Keychain 配对未改，远程及其他平台留后续整块。自由 SQL UPDATE/DELETE/REPLACE 保守要求 Human preview/confirm；不承诺 branch/diff/export/任意历史 SQL。未知旧进程义务保留，不自动信号，也不宣称解决旧现场恢复。

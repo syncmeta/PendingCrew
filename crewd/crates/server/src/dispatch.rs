@@ -205,6 +205,12 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
+            if state.data_runtime.get().is_some() {
+                capabilities.push("data".into());
+            }
+            if state.management.get().is_some() {
+                capabilities.push("lifecycle.management".into());
+            }
             if state.judgment_runtime.get().is_some() {
                 capabilities.push("judgment".into());
             }
@@ -220,15 +226,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities.push("session.terminal".into());
             }
             capabilities.extend(
-                [
-                    "work.reassignLost",
-                    "documents",
-                    "viewFolders",
-                    "channelWork",
-                ]
-                .into_iter()
-                .map(str::to_owned),
+                ["work.reassignLost", "viewFolders", "channelWork"]
+                    .into_iter()
+                    .map(str::to_owned),
             );
+            if state.data_runtime.get().is_none() {
+                capabilities.push("documents".into());
+            }
             to_value(Hello {
                 server: "crewd".into(),
                 version: env!("CARGO_PKG_VERSION").into(),

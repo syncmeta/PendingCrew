@@ -27,6 +27,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 .toolbar {
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
+                #if PENDINGCREW_KNOWLEDGE_VALIDATION
+                Text("本轮 SQLite Mac 候选仅使用本机")
+                #else
                 ForEach(window.computers) { computer in
                     Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
                         if computer.paired { Task { await window.select(computer.id) } }
@@ -40,6 +43,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                         Button(computer.name, role: .destructive) { removing = computer }
                     }
                 }.disabled(window.computers.isEmpty)
+                #endif
             }
             if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
@@ -48,7 +52,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Button("原请求核对") { recovering = true }
                 if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
             }
+            #if !PENDINGCREW_KNOWLEDGE_VALIDATION
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
+            #endif
         }.sheet(isPresented: $recovering) {
             if let current = window.workspace {
                 ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)
@@ -100,12 +106,75 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 }
 struct CrewdOriginalConnectionStatus: View {
     @ObservedObject var workspace: CrewdWorkspace
+    @State private var selectingRecovery = false
+    @State private var askRecovery = false
+    @State private var shownPrompt = ""
+    @State private var selected = Set<String>()
     var body: some View {
         HStack {
             Text(workspace.status).font(.caption)
             if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
             Spacer()
+            if workspace.dataDirectory != nil {
+                Text(workspace.managementRole == "owner" ? "当前管理窗口" : "观察窗口").font(.caption)
+                if workspace.managementRole != "owner" {
+                    Button("接管管理…") { Task { await workspace.readManagementStatus(); showingClaim = true } }
+                }
+            }
+            Button("恢复会话…") { selectingRecovery = true }
+                .disabled(!workspace.client.connected)
         }.padding(8)
+        .task {
+            if workspace.previousExit == "unclean", workspace.restartPrompt != .null, shownPrompt.isEmpty {
+                shownPrompt = workspace.restartPrompt["id"].pretty; askRecovery = true
+            }
+        }
+        .onChange(of: workspace.restartPrompt) { _, prompt in
+            let id = prompt["id"].pretty
+            guard prompt != .null, !id.isEmpty, shownPrompt != id else { return }
+            if workspace.previousExit == "unclean" { shownPrompt = id; askRecovery = true }
+        }
+        .onChange(of: workspace.previousExit) { _, value in
+            if value == "unclean", workspace.restartPrompt != .null, shownPrompt.isEmpty {
+                shownPrompt = workspace.restartPrompt["id"].pretty; askRecovery = true
+            }
+        }
+        .alert("上次异常退出，要选择恢复哪些会话吗？", isPresented: $askRecovery) {
+            Button("不恢复", role: .cancel) { declineRecovery() }
+            Button("选择会话…") { selectingRecovery = true }
+        } message: { Text("未选择或取消都不会恢复，也不会重放未确认的工作。") }
+        .confirmationDialog("接管当前本机后台的管理权？不会因此恢复会话。", isPresented: $showingClaim) {
+            Button("接管管理") { Task { await workspace.claimManagement() } }
+            Button("取消", role: .cancel) {}
+        }
+        .sheet(isPresented: $selectingRecovery) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("手动恢复会话").font(.headline)
+                Text("只恢复选中的会话。历史结果未知时仍需核对，不会自动重发旧操作。").font(.caption)
+                ScrollView {
+                    ForEach(Array(workspace.sessions.enumerated()), id: \.offset) { _, session in
+                        if let id = session["id"].string {
+                            Toggle(session["displayName"].string ?? session["title"].string ?? id,
+                                   isOn: Binding(get: { selected.contains(id) }, set: { if $0 { selected.insert(id) } else { selected.remove(id) } }))
+                        }
+                    }
+                }
+                HStack {
+                    Button("取消", role: .cancel) { selected.removeAll(); selectingRecovery = false; declineRecovery() }
+                    Spacer()
+                    Button("恢复所选会话") {
+                        let ids = selected.sorted(); selected.removeAll(); selectingRecovery = false
+                        Task { for id in ids { _ = await workspace.perform("session.resume", .object(["sessionId": .string(id)])) } }
+                    }.disabled(selected.isEmpty || workspace.busy)
+                }
+            }.padding(20).frame(minWidth: 500, minHeight: 320)
+        }
+    }
+    @State private var showingClaim = false
+    private func declineRecovery() {
+        guard workspace.restartPrompt != .null else { return }
+        let id = workspace.restartPrompt["id"]
+        Task { _ = await workspace.perform("restart.answer", .object(["id": id, "answer": .string("later")])) }
     }
 }
 #endif
