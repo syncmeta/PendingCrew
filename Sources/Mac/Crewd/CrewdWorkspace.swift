@@ -383,7 +383,13 @@ final class CrewdWorkspace: ObservableObject {
         do { try await connectOnly(); return } catch {
             guard !sleeping, !Task.isCancelled else { return }
             if let failure = error as? CrewdClientError, failure.kind == .backendHandshake {
-                self.error = failure.localizedDescription; status = "后台协议连接失败"; return
+                #if PENDINGCREW_LOCAL_MAC
+                self.error = "当前运行尚未能连接。若上次运行还未结束，请稍后从「电脑 → 本机」重连；不会自动恢复会话。\n" + failure.localizedDescription
+                status = "尚未连接，可稍后重连"
+                #else
+                self.error = failure.localizedDescription; status = "后台协议连接失败"
+                #endif
+                return
             }
             guard backend?.isRunning != true else { self.error = error.localizedDescription; status = "后台连接失败"; return }
         }

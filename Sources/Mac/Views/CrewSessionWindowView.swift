@@ -114,14 +114,15 @@ struct CrewSessionWindowView: View {
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
         // 初次出现 + 切 crew 都重算（crew 没记 → `.codex`）。
         .onAppear {
-            selectedKind = Self.resolveAgentKind(crewStore.selectedDetail)
+            selectedKind = appModel.usesCrewdAuthority ? .codex : Self.resolveAgentKind(crewStore.selectedDetail)
             startsAsCaptain = false
         }
         .onChange(of: crewStore.selectedDetail?.crew.id) { _, _ in
-            selectedKind = Self.resolveAgentKind(crewStore.selectedDetail)
+            selectedKind = appModel.usesCrewdAuthority ? .codex : Self.resolveAgentKind(crewStore.selectedDetail)
             startsAsCaptain = false
         }
         .onChange(of: selectedKind) { _, kind in
+            if appModel.usesCrewdAuthority, kind != .codex { selectedKind = .codex; return }
             if kind == .terminal { startsAsCaptain = false }
         }
         .confirmationDialog(
@@ -990,9 +991,9 @@ struct CrewSessionWindowView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.inkMuted)
             VStack(spacing: 8) {
-                sessionKindPill(.claudeCode, title: "Claude Code")
+                if !appModel.usesCrewdAuthority { sessionKindPill(.claudeCode, title: "Claude Code") }
                 sessionKindPill(.codex, title: "Codex")
-                sessionKindPill(.terminal, title: "终端")
+                if !appModel.usesCrewdAuthority { sessionKindPill(.terminal, title: "终端") }
             }
             if appModel.usesCrewdAuthority {
                 Toggle("使用独立工作树", isOn: $crewdIsolation)
