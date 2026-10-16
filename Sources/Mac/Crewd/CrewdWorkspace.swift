@@ -412,7 +412,7 @@ final class CrewdWorkspace: ObservableObject {
     func readManagementStatus() async {
         guard dataDirectory != nil, client.connected else { return }
         do { applyManagement(try await client.call("lifecycle.status")) }
-        catch { managementRole = "observer"; error = "无法核对当前本机管理资格。" }
+        catch { managementRole = "observer"; self.error = "无法核对当前本机管理资格。" }
     }
     private func applyManagement(_ value: CrewdValue) {
         managementRole = value["role"].string ?? "observer"
