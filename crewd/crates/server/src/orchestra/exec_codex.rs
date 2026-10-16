@@ -11,7 +11,35 @@ use crewd_exec::{
     registry::ProcessRegistry,
     session::AnswerOutcome,
 };
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::os::unix::ffi::OsStrExt;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// Metadata only: never invoke the configured executable to establish readiness.
+fn checked_program_path(path: &Path) -> Result<PathBuf, LaunchError> {
+    let unavailable = || {
+        LaunchError::NotConfigured(format!(
+            "codex executable {} is unavailable or not executable",
+            path.display()
+        ))
+    };
+    let program = std::fs::canonicalize(path).map_err(|_| unavailable())?;
+    if !std::fs::metadata(&program)
+        .map_err(|_| unavailable())?
+        .is_file()
+    {
+        return Err(unavailable());
+    }
+    let name = std::ffi::CString::new(program.as_os_str().as_bytes()).map_err(|_| unavailable())?;
+    // SAFETY: the owned CString is NUL terminated and remains alive for access(2).
+    if unsafe { libc::access(name.as_ptr(), libc::X_OK) } != 0 {
+        return Err(unavailable());
+    }
+    Ok(program)
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CodexProgram {
@@ -56,9 +84,7 @@ impl CodexExecutor {
         };
         // 只缓存 PATH，每次启动重新核可执行文件，保留更新/删除后的诚实失败。
         let program = match &self.config.program {
-            CodexProgram::Path(path) => std::fs::canonicalize(path).map_err(|e| {
-                LaunchError::NotConfigured(format!("codex path {}: {e}", path.display()))
-            })?,
+            CodexProgram::Path(path) => checked_program_path(path)?,
             CodexProgram::Discover => paths.resolve("codex").ok_or_else(|| {
                 LaunchError::NotConfigured(format!("codex not found in PATH: {child_path}"))
             })?,
@@ -75,11 +101,13 @@ impl Executor for CodexExecutor {
         if self.config.program == CodexProgram::Disabled {
             return Err(LaunchError::NotConfigured("codex is disabled".into()));
         }
-        if crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk) {
-            Ok(())
-        } else {
-            Err(LaunchError::BinaryReplaced)
+        if !crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk) {
+            return Err(LaunchError::BinaryReplaced);
         }
+        if let CodexProgram::Path(path) = &self.config.program {
+            checked_program_path(path)?;
+        }
+        Ok(())
     }
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
@@ -186,5 +214,78 @@ impl ExecHandle for CodexHandle {
     }
     fn status(&self) -> BoxFut<'_, Result<SessionStatus, Closed>> {
         Box::pin(self.0.status())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn executor(program: CodexProgram, directory: &std::path::Path) -> CodexExecutor {
+        CodexExecutor::new(CodexExecutorConfig {
+            program,
+            data_dir: directory.to_path_buf(),
+            helper: std::env::current_exe().unwrap(),
+            registry: None,
+            extra_env: BTreeMap::new(),
+            runtime_dir: directory.join("runtime"),
+            child_path: Some("/usr/bin:/bin".into()),
+        })
+    }
+
+    #[tokio::test]
+    async fn codex_explicit_program_preflight_is_filesystem_only_and_rechecks_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("codex");
+        let selected = executor(CodexProgram::Path(program.clone()), directory.path());
+        assert!(matches!(
+            selected.check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
+        std::fs::create_dir(&program).unwrap();
+        assert!(matches!(
+            selected.check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
+        std::fs::remove_dir(&program).unwrap();
+        let marker = directory.path().join("must-not-run");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            selected.check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        selected.check_launch().unwrap();
+        let resolved = selected.program().await.unwrap();
+        assert_eq!(resolved.0, std::fs::canonicalize(&program).unwrap());
+        assert_eq!(resolved.1, "/usr/bin:/bin");
+        assert!(
+            !marker.exists(),
+            "preflight must not execute the selected program"
+        );
+        std::fs::remove_file(&program).unwrap();
+        symlink(&program, &program).unwrap();
+        assert!(matches!(
+            selected.check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
+        std::fs::remove_file(&program).unwrap();
+        assert!(matches!(
+            selected.check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
+        executor(CodexProgram::Discover, directory.path())
+            .check_launch()
+            .unwrap();
+        assert!(matches!(
+            executor(CodexProgram::Disabled, directory.path()).check_launch(),
+            Err(LaunchError::NotConfigured(_))
+        ));
     }
 }
