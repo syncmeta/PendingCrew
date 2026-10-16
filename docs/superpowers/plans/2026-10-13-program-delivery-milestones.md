@@ -899,3 +899,14 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 综合质量报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/complete-sqlite-mac-candidate-b8-review.json` SHA256 864a8abe890bf7926a1c3a62edc8d75d3ba79fbb85c22c53cae70ab465f5b2b7。最后 final b8 实包所选 worker 唯一启动、原 UUID 核对不重发，保存视图保留，GUI/Core/fake 全部收尾；详细来源和诚实边界见整合验收记录同日最终条目。稳定 bb55/f134/dbc 范围依未变 blob 复用，不冒全套 final b8 重跑，旧失败保留。
 
 本次不扩到 main 安装版、多平台、远程配对、真实 SDK/模型、发布或日常数据切换；这些是后续完整交付单元，需按原授权分别核对。Dolt/旧数据迁移不实现，Native/Solid/个人记忆不自动激活。上文旧授信阻断与“下一包待恢复”检查点均已被本条覆盖；并非授信获批，而是用户取消后台后完成新停工闭环。编译缓存空闲，保留产物与日志，不再重复稳定验收或调用 GitHub CI。
+
+
+### 2026-10-16 Mac 日用版完整交付继续
+
+人类明确按先 Mac 日用、再跨厂商、后远程与其余平台的顺序继续。已接受 b8 SQLite 隔离候选不重做；此次完整目标为正常 Mac 产品入口/配置、新持久数据目录、主线整合与可安装包，并准备真实 Agent 完整业务和安装动作。验收仅覆盖真实差异，保留原三栏、零自动唤醒、显式所选恢复、停工提示可关及强制关闭、防误删和知识恢复；无旧数据迁移、不实现继续后台。
+
+三个唯一责任人：backend_plan 写 Rust/schema/API 和普通后端运行模块；client_plan 写 Swift/构建配置/包装，闭合正常产品入口及交付；quality 独立按完整业务验证权限/耐久/恢复/正常配置来源并直接交作者修复；root 只统筹依赖/接口/范围/冻结/整合与交付。Rust 暂 backend 独占 /private/tmp/pcw-decision-target，暖 Xcode/SPM 只 client；本机实核约31GiB，未清理、无新CI。
+
+最新现场不同于旧检查点：本地main 1bbcc1eb在71f之上新增74个React产品演示资产，global无相同路径修改。根已在开发整合树普通merge为25c12fc35cb6fdf5e27460284c8e36bece3246d8，产品源码差异为零；主目录README/design/旧ACP/未知文件及旧App/Core现场均保留。远端main仍1ba3d4ba，未推main。最终待两作者完整源码冻结后统一整合及一次准确包构建，不在小补件间反复打包。
+
+真实模型/SDK调用、安装、日常数据切换、私钥签名/系统权限及公开发布按具体动作分别核权；先完成已授权源码、必要验证和可审查准备，等待仅阻依赖动作。后续Native/更多平台/Solid/个人记忆不混入Mac日用交付。

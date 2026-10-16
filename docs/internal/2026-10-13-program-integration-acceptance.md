@@ -655,3 +655,10 @@ dbc576901818375e59600c8fd350e3405d229305准确normal/Mac完整来源独核通过
 未执行安装、日常数据切换、公开发布、真实模型/SDK或持久授信；普通打开不授信、不自动启动 session。remote pairing、iOS 真机、新 Linux、完整 Native producer、Solid/个人记忆及额外 all-features 不属于此次接受。Core-only 跨知识恢复仍保守拒绝，不宣称完整联合恢复。主目录 main71f7 与用户 README/design/旧 ACP/未知文件保持；整合在 global 开发分支，未推 main。源码/数据库/日志/实际二进制/构建证明均保留；无新增 GitHub CI 或缓存清理。
 
 交付封装：`/private/tmp/pcw-sqlite-b8abddee-mac-01/PendingCrew-SQLite-Mac-ARM64-b8abddee.zip`，40176276 bytes，SHA256 `309c8276ebfae10ebbb930c2f7f51bbc4639aa1374e91124fdc4af91d7d0d176`，同目录 DELIVERY.txt 与 SHA256SUMS.txt。仅从已验签名 App 封装，ZIP 列表/CRC 通过，App 关键文件及原构建证明前后散列不变；未重建、启动或安装。根已亲核 ZIP 散列与交付说明。
+
+
+## 2026-10-16 Mac 日用版新模块开工基线
+
+人类授权三条代理线按完整模块并行推进Mac日用交付。b8隔离候选综合接受不变；此次是普通产品入口/配置及真实日用交付的新单元，尚未接受。根已核远端三分支b0aa/7165/c1ab，与本地相同；主目录实际main新增1bbcc1eb React产品演示，非旧71f停点。根只合入用户已提交演示资产到global25c12fc3，共74新增路径，无Sources/crewd/scripts/project产品变化。主目录脏文件、远端main和所有旧App/Core未触碰。
+
+backend_plan、client_plan、quality已分别恢复完整模块；唯一写者和完成判据见总计划新节。普通入口与隔离配置的真正差异先闭合，稳定SQLite/WK/退出/恢复证据复用，不造新验收工具、不重全量审查、不追加CI。真实模型、安装、日常切换、签名私钥等后续实际动作未获此次具体授权，先完成可审查准备。
