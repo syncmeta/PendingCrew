@@ -66,7 +66,13 @@ import Combine
             return
         }
         let scopes = retainedWorkspaces + (workspace.map { [$0] } ?? [])
-        for scope in scopes { try await scope.exitOwnedLocalHelper(mode: mode) }
+        var stoppedDirectories = Set<URL>()
+        for scope in scopes {
+            if let directory = scope.dataDirectory, stoppedDirectories.contains(directory) { continue }
+            if try await scope.exitOwnedLocalHelper(mode: mode), let directory = scope.dataDirectory {
+                stoppedDirectories.insert(directory)
+            }
+        }
         close()
     }
     func quitOwnedLocalHelpers() async throws {

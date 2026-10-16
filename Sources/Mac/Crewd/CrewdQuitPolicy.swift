@@ -23,4 +23,40 @@ enum CrewdQuitMode: String { case direct, safePause, background }
         }
     }
 }
+
+/// An original management scope may be retired while its independent backend
+/// remains alive. Explicit application exit may reclaim that same unowned
+/// instance; an observer or replacement instance is never stopped.
+@MainActor enum CrewdRetiredManagement {
+    struct Target: Equatable { let database: String; let instance: String }
+    struct Connection {
+        let target: Target
+        let call: (String, CrewdValue) async throws -> CrewdValue
+        let close: () -> Void
+    }
+    enum Failure: LocalizedError {
+        case unconfirmed
+        var errorDescription: String? { "原本机后台的退出尚未确认，保留当前窗口以便核对。" }
+    }
+    @discardableResult static func exit(target: Target, mode: CrewdQuitMode,
+                     connect: () async throws -> Connection) async throws -> Bool {
+        guard mode != .background else { return false }
+        let connection = try await connect()
+        defer { connection.close() }
+        guard connection.target == target else { return false }
+        let status = try await connection.call("lifecycle.status", .object([:]))
+        guard let role = status["role"].string, ["owner", "observer"].contains(role),
+              case .bool(let ownerPresent) = status["ownerPresent"] else { throw Failure.unconfirmed }
+        if role == "observer" {
+            guard !ownerPresent else { return false }
+            let claimed = try await connection.call("lifecycle.claim", .object([:]))
+            guard claimed["role"].string == "owner" else { throw Failure.unconfirmed }
+        }
+        let reply = try await connection.call("lifecycle.exit", .object([
+            "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(15000)
+        ]))
+        guard reply["status"].string == "stopped" else { throw Failure.unconfirmed }
+        return true
+    }
+}
 #endif

@@ -269,7 +269,7 @@ final class CrewdClient: ObservableObject {
         capabilities = Set(hello["capabilities"].array.compactMap(\.string))
         qualifiedForWork = true
         let topics = ["crew", "session", "message", "channel", "ask", "work", "restart", "system"]
-            + ["documents", "viewFolders"].filter { capabilities.contains($0) }
+            + ["documents", "viewFolders", "data"].filter { capabilities.contains($0) }
         _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
         guard generation == current, !Task.isCancelled else { throw CancellationError() }
         lastError = nil

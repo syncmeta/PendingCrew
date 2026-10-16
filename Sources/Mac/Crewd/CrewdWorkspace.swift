@@ -322,7 +322,18 @@ final class CrewdWorkspace: ObservableObject {
 
     /// Retain unknown inputs in this old scope for inspection; never replay them
     /// into the next authority or let a late reconnect reactivate a retired one.
+    #if os(macOS)
+    private var retiredManagementTarget: CrewdRetiredManagement.Target?
+    #endif
     func retire() {
+        #if os(macOS)
+        if managementRole == "owner", dataDirectory != nil, client.connected,
+           (try? client.verifiedLocalPeerIdentity()) != nil,
+           let database = client.runtimeIdentity["dbId"].string,
+           let instance = client.runtimeIdentity["runtimeBindingId"].string {
+            retiredManagementTarget = .init(database: database, instance: instance)
+        }
+        #endif
         closeTerminalDisplays()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
@@ -419,15 +430,36 @@ final class CrewdWorkspace: ObservableObject {
         applyManagement(status)
         if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release")) }
     }
-    func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws {
-        guard mode != .background, dataDirectory != nil else { return }
+    @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
+        guard mode != .background, let directory = dataDirectory else { return false }
+        if retired {
+            guard let target = retiredManagementTarget else { return false } // Former observer, no management authority.
+            return try await CrewdRetiredManagement.exit(target: target, mode: mode) {
+                let next = CrewdClient()
+                do {
+                    try await next.connect(path: directory.appendingPathComponent("crewd.sock").path)
+                    _ = try next.verifiedLocalPeerIdentity()
+                    guard let database = next.runtimeIdentity["dbId"].string,
+                          let instance = next.runtimeIdentity["runtimeBindingId"].string else { throw CrewdRetiredManagement.Failure.unconfirmed }
+                    let actual = CrewdRetiredManagement.Target(database: database, instance: instance)
+                    let epoch = next.connectionEpoch
+                    return .init(target: actual, call: { method, params in
+                        guard next.connected, next.connectionEpoch == epoch,
+                              next.runtimeIdentity["dbId"].string == actual.database,
+                              next.runtimeIdentity["runtimeBindingId"].string == actual.instance else { throw CrewdRetiredManagement.Failure.unconfirmed }
+                        _ = try next.verifiedLocalPeerIdentity()
+                        return try await next.call(method, params)
+                    }, close: { next.retire() })
+                } catch { next.retire(); throw error }
+            }
+        }
         // Current authenticated management scope, independent of any historic GUI Process handle.
         guard client.connected, (try? client.verifiedLocalPeerIdentity()) != nil else {
             throw CrewdClientError(message: "当前本机后台认证连接不可用，尚未提交退出。")
         }
         applyManagement(try await client.call("lifecycle.status"))
         // A concurrent observer exits its own UI only; it cannot stop another owner's work.
-        guard managementRole == "owner" else { return }
+        guard managementRole == "owner" else { return false }
         sleeping = true; reconnect?.cancel(); sync?.cancel()
         do {
             let reply = try await client.call("lifecycle.exit", .object([
@@ -437,6 +469,7 @@ final class CrewdWorkspace: ObservableObject {
                 throw CrewdClientError(message: "后台未在期限内确认停止；原操作保留待核对，应用仍保持打开。")
             }
         } catch { sleeping = false; throw error }
+        return true
     }
     func quitOwnedLocalHelper() async throws {
         guard let owned = backend, owned.isRunning else { return }
