@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="在浏览器里体验 PendingCrew：交代需求、与私人团队沟通、查看计划、回答问题和阅读工作成果。"><title>PendingCrew · 认识你的私人团队</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<header class="intro"><a class="brand" href="#">PendingCrew</a><nav aria-label="网站导航"><button data-action="scene" data-id="website">介绍</button><button data-action="scene" data-id="trip">工作方式</button><button data-action="scene" data-id="research">开始使用</button><a href="https://docs.pendingname.com/pendingcrew" target="_blank" rel="noopener">文档 ↗</a></nav><select id="scenario" aria-label="介绍章节" hidden></select><button id="guide" hidden>阅读指引</button></header>
+<main class="mac-window" id="app" aria-label="PendingCrew Mac 网页演示"></main>
+<footer class="demo-footer"><span class="status-dot"></span>可交互的产品介绍 · 不连接真实 agent <button id="reset" class="footer-right">重置体验</button></footer>
+<dialog id="modal"><div id="modal-content"></div></dialog><div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="data.js"></script><script src="app.js"></script></body></html>

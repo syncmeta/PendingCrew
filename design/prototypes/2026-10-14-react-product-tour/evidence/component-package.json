@@ -1,0 +1,141 @@
+[
+  {
+    "id": "@pendingname/pendingcrew-product-tour@0.1.0",
+    "name": "@pendingname/pendingcrew-product-tour",
+    "version": "0.1.0",
+    "size": 97010,
+    "unpackedSize": 399280,
+    "shasum": "79b1befb9e3d00ad63229e2f762b9149eacd9506",
+    "integrity": "sha512-dSO/Yr0fOscg5lM5MOaw4uipg00caWkPwEzS3lDZTxFDUJIc3iY0d6gwBGtnqbyLduSha95g1uuvL/qKJ4/VDA==",
+    "filename": "pendingname-pendingcrew-product-tour-0.1.0.tgz",
+    "files": [
+      {
+        "path": "README.md",
+        "size": 11652,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/Chat.d.ts",
+        "size": 61,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/ConversationList.d.ts",
+        "size": 73,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/Dialogs.d.ts",
+        "size": 71,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/FolderControls.d.ts",
+        "size": 214,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/Inspector.d.ts",
+        "size": 66,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/MessageText.d.ts",
+        "size": 178,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/primitives.d.ts",
+        "size": 1096,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/ResizeHandle.d.ts",
+        "size": 137,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/Sidebar.d.ts",
+        "size": 64,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/Workspace.d.ts",
+        "size": 376,
+        "mode": 420
+      },
+      {
+        "path": "lib/domain/contentMigration.d.ts",
+        "size": 204,
+        "mode": 420
+      },
+      {
+        "path": "lib/domain/reducer.d.ts",
+        "size": 184,
+        "mode": 420
+      },
+      {
+        "path": "lib/domain/seed.d.ts",
+        "size": 407,
+        "mode": 420
+      },
+      {
+        "path": "lib/domain/selectors.d.ts",
+        "size": 1156,
+        "mode": 420
+      },
+      {
+        "path": "lib/domain/types.d.ts",
+        "size": 4773,
+        "mode": 420
+      },
+      {
+        "path": "lib/index.d.ts",
+        "size": 156,
+        "mode": 420
+      },
+      {
+        "path": "lib/main.d.ts",
+        "size": 11,
+        "mode": 420
+      },
+      {
+        "path": "lib/pendingcrew-tour.css",
+        "size": 30154,
+        "mode": 420
+      },
+      {
+        "path": "lib/pendingcrew-tour.js",
+        "size": 132015,
+        "mode": 420
+      },
+      {
+        "path": "lib/pendingcrew-tour.js.map",
+        "size": 212917,
+        "mode": 420
+      },
+      {
+        "path": "lib/PendingCrewTour.d.ts",
+        "size": 673,
+        "mode": 420
+      },
+      {
+        "path": "lib/state/persistence.d.ts",
+        "size": 246,
+        "mode": 420
+      },
+      {
+        "path": "lib/state/TourContext.d.ts",
+        "size": 1043,
+        "mode": 420
+      },
+      {
+        "path": "package.json",
+        "size": 1353,
+        "mode": 420
+      }
+    ],
+    "entryCount": 25,
+    "bundled": []
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "checks": [
+    "all crews and conversations use product copy; no composer hint",
+    "saved copy refresh retains drafts"
+  ]
+}

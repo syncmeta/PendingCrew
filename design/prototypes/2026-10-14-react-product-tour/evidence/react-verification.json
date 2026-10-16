@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Visual geometry, typography and bubble appearance match the original",
+    "Typing preserves the same DOM input and caret",
+    "Sending, escaping HTML and drafts remain isolated",
+    "Scroll position survives unrelated UI state changes and returning to conversation",
+    "Blocked plan error stays in the open dialog without partially writing",
+    "Global inbox routes to the unique source ask and unblocks its plan",
+    "New documents, requests and custom crews persist and reset correctly",
+    "Sharing a reference preserves the current draft",
+    "Unavailable storage does not break interactions",
+    "Built component works inside a host React website in StrictMode",
+    "Separate instances cannot change each other or the host resize variables"
+  ],
+  "errors": []
+}

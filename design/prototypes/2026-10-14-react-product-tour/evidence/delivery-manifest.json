@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "typecheck": "strict",
+  "contentRevision": 5,
+  "domainTests": 15,
+  "browserChecks": 40,
+  "artifacts": {
+    "PendingCrew-React-Portable.zip": "835f863a7132cc1634679844fc389d3b91b9132e962066e5003999972717873a",
+    "PendingCrew-React-Source.zip": "8966f526031737a3200b55daebb98a5b0c62fd374f92e5d660ce48d1c84f386f",
+    "PendingCrew-React-Website.zip": "7f8e343a60792798c3f947005ebce90e25d7bbead5ca14a134c22a8269bc2934",
+    "PendingCrew-React-Component.zip": "2432960576c98d93d2065ad67f1bc64f4307b58864302940bf5a52602d6ab060",
+    "pendingname-pendingcrew-product-tour-0.1.0.tgz": "4985f42058289514e178ca34d4469127634594e6a88a48ac3c1dfec4bbaf1f5d"
+  },
+  "published": false,
+  "modifiedProductSources": false
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+lib/
+portable/
+.DS_Store
+
+# Generated delivery archives; rebuild from source.
+*.zip
+*.tgz
