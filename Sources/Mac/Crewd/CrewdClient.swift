@@ -106,12 +106,14 @@ final class CrewdNDJSONDecoder {
 @MainActor
 final class CrewdClient: ObservableObject {
     @Published private(set) var connected = false
+    /// Socket attachment is observable before hello and subscription are complete.
+    @Published private(set) var readyForWork = false
     @Published private(set) var version = ""
     @Published private(set) var authorityBinding: CrewdValue = .null
     @Published private(set) var capabilities:Set<String>=[]
     /// The authoritative hello advertises the orchestra capability group,
     /// not an individual capability named after every session RPC.
-    var supportsSessionStart: Bool { Self.sessionStartSupported(connected: connected, capabilities: capabilities) }
+    var supportsSessionStart: Bool { Self.sessionStartSupported(connected: readyForWork, capabilities: capabilities) }
     static func sessionStartSupported(connected: Bool, capabilities: Set<String>) -> Bool {
         connected && capabilities.contains("orchestra")
     }
@@ -272,13 +274,14 @@ final class CrewdClient: ObservableObject {
             + ["documents", "viewFolders", "data"].filter { capabilities.contains($0) }
         _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
         guard generation == current, !Task.isCancelled else { throw CancellationError() }
+        readyForWork = true
         lastError = nil
     }
 
     func call(_ method: String, _ params: CrewdValue = .null, timeout: Duration = .seconds(40)) async throws -> CrewdValue {
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
         guard !Task.isCancelled else { throw CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted) }
-        guard qualifiedForWork || method == "system.hello" else { throw CrewdClientError(message: "尚未核实电脑身份，操作未提交。", kind: .notSubmitted) }
+        guard readyForWork || method == "system.hello" || (qualifiedForWork && method == "events.subscribe") else { throw CrewdClientError(message: "尚未核实电脑身份，操作未提交。", kind: .notSubmitted) }
         guard connected, terminalFailure == nil, hasTransport else { throw CrewdClientError(message: "后台尚未连接。",kind:.notSubmitted) }
         let id = nextID; nextID += 1
         var data:Data
@@ -364,7 +367,7 @@ final class CrewdClient: ObservableObject {
             if let id = frame["id"].int {
                 if frame["error"] != .null { finish(id, .failure(CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。", code: frame["error"]["code"].int, data: frame["error"]["data"]))) }
                 else { finish(id, .success(frame["result"])) }
-            } else if let event = frame["event"].string, qualifiedForWork { onEvent?(event, frame["data"]) }
+            } else if let event = frame["event"].string, readyForWork { onEvent?(event, frame["data"]) }
         }
     }
     private func finish(_ id: Int, _ result: Result<CrewdValue, Error>) {
@@ -381,6 +384,7 @@ final class CrewdClient: ObservableObject {
         local?.onData = nil; local?.onEnd = nil; local?.close()
         #endif
         runtimeIdentity = .null; authorityBinding = .null
+        readyForWork = false
         qualifiedForWork = false
         connected = false; capabilities=[]; receivePending = false; terminalFailure = nil; decoder = CrewdNDJSONDecoder(); lastError = message
         ready?.resume(throwing: CrewdClientError(message: message)); ready = nil
