@@ -242,7 +242,14 @@ struct CodexActivityPresentation: Equatable {
             details: details, bad: failed)
     }
 
-    static func tool(name: String, status: String?) -> Self {
+    static func tool(name: String, status: String?, knowledgeFailure: CodexKnowledgeFailure? = nil) -> Self {
+        if let failure = knowledgeFailure {
+            var details = [Detail(label: "工具", value: name),
+                           Detail(label: "原输入", value: failure.arguments ?? "后台未返回原输入详情。"),
+                           Detail(label: "结构化错误", value: failure.error ?? "后台未返回结构化错误详情。")]
+            if let response = failure.failureResponse { details.append(.init(label: "失败响应", value: response)) }
+            return .init(icon: "exclamationmark.triangle", headline: "知识操作未完成", details: details, bad: true)
+        }
         let failed = status == "failed"
         var details = [Detail(label: "工具", value: name)]
         if let status, !status.isEmpty { details.append(.init(label: "状态", value: status)) }
@@ -359,5 +366,31 @@ struct CodexActivityPresentation: Equatable {
         guard let equal = word.firstIndex(of: "="), equal != word.startIndex else { return false }
         let name = word[..<equal]
         return name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+}
+
+/// Only the already-authorized current crew projection supplies these values.
+/// Never inspect account/configuration fields or infer payloads from model prose.
+struct CodexKnowledgeFailure: Equatable {
+    static let maximumDetailBytes = 64 * 1024
+    static let tools: Set<String> = ["data_workspace_get", "data_submit", "data_request_get", "data_object_get",
+        "data_object_list", "data_schema_get", "data_query", "data_table_get", "data_history", "data_preview"]
+    let arguments: String?
+    let error: String?
+    let failureResponse: String?
+    static func observed(_ item: [String: Any]) -> Self? {
+        guard item["type"] as? String == "mcpToolCall", item["server"] as? String == "crew",
+              let tool = item["tool"] as? String, tools.contains(tool) else { return nil }
+        let result = item["result"] as? [String: Any]
+        let failedResult = result?["isError"] as? Bool == true
+        let error = item["error"].flatMap { $0 is NSNull ? nil : $0 }
+        guard item["status"] as? String == "failed" || error != nil || failedResult else { return nil }
+        return .init(arguments: text(item["arguments"]), error: text(error), failureResponse: failedResult ? text(result) : nil)
+    }
+    private static func text(_ value: Any?) -> String? {
+        guard let value, !(value is NSNull),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .prettyPrinted, .sortedKeys]) else { return nil }
+        guard data.count <= maximumDetailBytes else { return "原值超过 64 KiB 显示上限，未显示完整详情。" }
+        return String(data: data, encoding: .utf8)
     }
 }
