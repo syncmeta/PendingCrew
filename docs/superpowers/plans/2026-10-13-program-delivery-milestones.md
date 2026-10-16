@@ -870,3 +870,10 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 实际格式为 Core DB15 + 独立 knowledge DB1；Core16 是本轮知识交付单元名称，不为编号新增 Core DDL/迁移门。旧 Native 历史预留源码仍 inactive，不是 Native 已交付。历史 Dolt/worker/protocol 源保留但 workspace exclude、不链接、不宣告。Core-only restore 按实际 knowledge 目录/标记拒绝不完整恢复；知识自身恢复保留当前 ACL、旋转上下文并保原请求历史。
 
 本轮 Mac 候选明确仅本机使用：本机 SQLite、保存的视图/绑定和设置持久，隔离验收凭据用 process-memory；不宣称此包远程配对持久可用。普通配置已有持久 Keychain 配对未改，远程及其他平台留后续整块。自由 SQL UPDATE/DELETE/REPLACE 保守要求 Human preview/confirm；不承诺 branch/diff/export/任意历史 SQL。未知旧进程义务保留，不自动信号，也不宣称解决旧现场恢复。
+
+
+### 2026-10-16 当前检查点：知识/WK已实跑，后台重附着授权待答
+
+以整合验收记录同日最新条目及私有 checkpoint 的 currentSimplifiedCandidatePlan 为准。准确 f134 实包已过原 App 手动 Agent→正式 MCP→知识/自由视图→实际 WK 独立写授权/撤桥→回收恢复→后台退出，尚非完整可重开候选。只读授权状态8854已独验，不写信任，未打入f134包。
+
+后台重附着源码编辑被自动审批实际拒绝，理由为退出授权未明确覆盖持久exactCode授信；原动作未执行，已向真人请求实现与新私域隔离验证授权。答复前不代写绕过。答复后前后端唯一写者完成同一安全闭环，质量影响复验，根一次冻结/准确normal/暖Mac包；不重复稳定业务或旧场景。SQLite、无需旧数据迁移、原三栏Agent自由视图、重开零自动唤醒及退出三选/设置不变；安装/日常切换/发布/真实模型另核。

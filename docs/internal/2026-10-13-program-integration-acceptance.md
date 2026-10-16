@@ -590,3 +590,20 @@ Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只�
 实际格式 Core DB15 + knowledge DB1。独立质量八组完整场景保存在同目录 whole-user-scenarios.json；同包实际 App、WebKit、启动/退出、crash/Unknown 等仍待组合产物验证。旧 serde 固定文件被最后用例覆盖，旧 hash/当时 Swift PASS 仅作历史证据，不补造原文件，也不冒新形状 WebKit 执行。旧稳定 Core15/Linux15 原证据继续复用；额外 all-features 仍无新增通过声明。
 
 范围边界：仅本机候选，远程持久配对不属此包；普通配置 Keychain 保留。Core-only 跨知识恢复保守拒绝，知识自身恢复可用；旧 Native/Dolt 源 inactive。安装、日常数据、公开发布、真实模型和旧 Unknown 现场均未操作。主目录人类改动保持。
+
+
+## 2026-10-16 SQLite 实包主链通过，重附着待明确授权
+
+准确 compiled source 是 f13478147fcb2cc1712184366423db5126a9b8d1，包为 /private/tmp/pcw-sqlite-f1347814-mac-01/PendingCrew SQLite Candidate.app；candidate.json SHA256 8e4c68a896226b5176757a9ce344c39f71dfd68d3763b87762c04bd03a2b51db。默认非测试 normal 完整来源、实际 Mac 编译、签名及签前后代码等价已独核。后续只读接口和文档 HEAD 不是这个包的输入，旧失败包不改标。
+
+独立实际原 App 流程：共享目录手动 Agent→包内正式 MCP 保存知识块/自由视图→原文档页/真实 WK 读取；写权限关闭无新回执，独立授权后写入；data.changed 撤销旧代码/写权限；原 session UUID 核对解除对应提示；回收恢复同视图。三选与固定后台退出已实际 GUI wait0，后台留存。完整记录 /private/tmp/pcw-sqlite-f1347814-runtime-20261016-01/actual-knowledge-WK-user-flow-groups.json，SHA256 474d3df0d8ad7e847fc76ef3b9a41974bfc33404b76723bd38f52b832b3e5969。
+
+同批已修并独验：握手/订阅完成后才发布可写原 App；目录规范化；知识 Core 身份与配对身份分离；确定 worktree 准备失败用 Rejected；原 UUID 可信终态精确解除对应草稿，保留旧 Unknown，覆盖 prepared 后缺 outcome 的崩溃窗口。客户端53b4/后台9b已合f134；稳定 SQL/耐久及旧31项验证复用，未跑新增 GitHub CI。
+
+剩余实际阻断为后台后重开。已知 B/C hello 存在，但界面路由/实际就绪未完全分离，未声称亲见具体拒绝回包。私域 local_client_trust 实读 count=0（观察 SHA256 1606fe40f900587945c97d327e09b580eaef8d0fa603e9a3bc051719b15a63c5）。源码新非原父 GUI 需持久代码 pin；hello 特许不等于订阅/读取资格。更正先前过宽说法：CrewdLocalTrustView 已有手动授信调用，缺后台退出集成与当前有效性查询。旧未知实例/Unknown 不输入、不重放、不补pin。
+
+独立只读 status 单元8854a2a6782a34e0d78c02ea8e86ec7e86c5ee92已接受：local.clientTrust.status {}，仅当前 Local Human，当前动态 OS 身份与未撤 exactCode，严格拒 PID/未知字段，不写 pin/receipt，不变 DB 格式。报告 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/backend-local-trust-readonly-status-review.json，SHA256 d5a7db4671eca1a6c066cc2385fb861715c442272faaf9e03ea27e2004af4ef9。该接口未在 f134 包内，尚无新 normal/App。
+
+自动审批真实拒绝客户端原生确认后持久 exactCode 授信再后台退出的源码编辑，认为既有退出授权未明确覆盖持久安全设置。编辑未执行，客户端53b4干净，无实际授信。已向真人请求具体实现及新私域隔离验证授权，未答不换工具/作者代写。拟定：仅首次后台/代码变化/已撤销时明确确认；有效pin免重复；普通打开不授信，旧固定设置不复活撤销；失败/Unknown保留窗口与原UUID。
+
+因此知识/WK主链已验，完整可重开候选尚未接受。待授权后完成同一后台→新GUI资格/数据视图保留/零自动唤醒、observer退出、safe/direct单元，独验后一次冻结、准确normal及暖Mac包。主目录main71f7及用户README/design/旧ACP资料保持，远端main未动；未安装、切日常数据、发布或用真实模型。Native/其余平台/Solid/个人记忆/all-features不扩大完成声明。当前完整状态见 /private/tmp/pcw-fd528-delivery-current-checkpoint.json 的 currentSimplifiedCandidatePlan。

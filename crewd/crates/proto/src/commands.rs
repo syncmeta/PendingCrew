@@ -13,6 +13,18 @@ pub struct RuntimeIdentity {
     pub runtime_binding_id: String,
 }
 
+pub const LOCAL_CLIENT_TRUST_STATUS: &str = "local.clientTrust.status";
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalClientTrustStatusParams {}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalClientTrustStatus {
+    pub valid_exact_code: bool,
+    pub bootstrap_allowed: bool,
+    pub trust_id: Option<String>,
+}
+
 pub const COMMAND_SUBMIT: &str = "command.submit";
 pub const COMMAND_LOOKUP: &str = "command.lookup";
 pub const COMMAND_LIST_UNKNOWN: &str = "command.listUnknown";

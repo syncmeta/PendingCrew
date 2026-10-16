@@ -320,6 +320,30 @@ impl ConnectionPeer {
         }
         matches!(registry::parent(parent), ParentProbe::Found { identity, .. } if same_birth(peer, &identity))
     }
+    pub(crate) fn local_trust_status(
+        &self,
+        pins: &[crewd_store::local_clients::TrustedClient],
+    ) -> Result<crewd_proto::commands::LocalClientTrustStatus, RpcError> {
+        self.command_principal()?;
+        let bootstrap = self.is_human_anchor();
+        let trust_id = self.identity.as_ref().and_then(|peer| {
+            pins.iter()
+                .find(|pin| {
+                    pin.mode == "exactCode"
+                        && self.signed_lineage_current(peer)
+                        && crate::signed_client::verify(peer, pin).is_ok()
+                        && self.signed_lineage_current(peer)
+                })
+                .map(|pin| pin.id.clone())
+        });
+        self.command_principal()?;
+        Ok(crewd_proto::commands::LocalClientTrustStatus {
+            valid_exact_code: trust_id.is_some(),
+            bootstrap_allowed: bootstrap && self.is_human_anchor(),
+            trust_id,
+        })
+    }
+
     pub(crate) fn command_principal(&self) -> Result<String, RpcError> {
         if !matches!(self.authority(), Authority::Human) {
             return Err(RpcError::new(
