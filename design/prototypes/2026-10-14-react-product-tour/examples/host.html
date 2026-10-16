@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>官网组件接入验证</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #f0f2fa;
+        font:
+          17px Georgia,
+          serif;
+      }
+      #host-nav {
+        color: #123456;
+        padding: 12px;
+      }
+      #host-button {
+        background: #deedff;
+        color: #123456;
+        border: 2px solid #123456;
+        border-radius: 0;
+        font:
+          17px Georgia,
+          serif;
+      }
+      .host-section {
+        max-width: 1300px;
+        margin: 24px auto;
+      }
+    </style>
+  </head>
+  <body>
+    <nav id="host-nav">官网导航 <button id="host-button">宿主按钮</button></nav>
+    <div id="root"></div>
+    <script type="module" src="/examples/host.tsx"></script>
+  </body>
+</html>

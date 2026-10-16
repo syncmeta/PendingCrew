@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Compact website navigation, no hero or scenario chooser",
+    "Content introduces PendingCrew itself",
+    "Crew colors follow original FNV HSV and inherited half segments",
+    "Long group previews stay within row and use ellipsis",
+    "Website nav chooses product chapters",
+    "Product document includes document and release links",
+    "Original conversation structure and native bubble style retained",
+    "Three-layer plan and shared progress note",
+    "Introduction Todo opens its original detail",
+    "Folder classification remains independent of other views",
+    "Reset restores only current reading experience",
+    "Mobile navigation and long previews never overflow",
+    "Website embed stays functional"
+  ],
+  "errors": []
+}

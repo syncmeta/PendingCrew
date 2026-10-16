@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "checks": [
+    "group list, members and consecutive messages",
+    "gray selection and tabs right of conversations",
+    "group documents and Todo isolation with reload",
+    "mobile segmented tabs"
+  ],
+  "errors": []
+}

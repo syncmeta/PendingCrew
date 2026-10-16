@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Overview title and three authored captain messages",
+    "Communication and mention filters sit to the right of chat name",
+    "Three requested Todos replace the onboarding items",
+    "Mobile title and header do not overflow",
+    "Saved old introduction refreshes without losing visitor draft"
+  ],
+  "errors": []
+}
