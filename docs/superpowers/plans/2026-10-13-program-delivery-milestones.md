@@ -931,3 +931,12 @@ client8ade与backend517d+58bd均独立接受并精确整合，完整证据与边
 backend0631（10个自足知识工具schema与firstwrite/原origin指导）和clientf8e8（原session.runnerItem当前知识失败的有限折叠详情）均独验接受并精确整合。无权限/SQLite/UUID/Unknown放宽，不加新初始化/inspect RPC/日志或验收平台。先前inspect.items源误判已撤回，只用真实既有事件链；旧真实首拒raw仍缺，不补造原因。
 
 本冻结提交下一准确normal→独核→普通Mac Release0.1.44新build；global全冻结，复用原Rust/Xcode/SPM缓存，无新CI/全量重跑。仅MCP与必要启动/失败展示影响复验；7df稳定GUI-only crash/SQLite/WK/退出证据原来源复用。旧7df仍是不完整真实知识验收，保留包与记录。下一真实Codex单任务须届时具体新授权，安装/日常切换/发布仍未授权，不把源修复冒日用最终交付。
+
+
+### 2026-10-17 当前交付门：889 普通 Mac 新包接受
+
+完整编译源码889a2e62，普通原App0.1.44/build20742.58276，准确默认非测试normal、普通Release签封与新包内10工具MCP/first-write/持久关联视图影响验收通过；原App明确启动前零执行，实际退出全收尾。稳定7df SQLite/WK/GUI-only crash/退出证据复用，不重全套；新失败详情不冒本App真实事件。完整证据与SHA见整合验收记录最新节。
+
+现有SPM缓存缺失经限定八个锁定checkout/唯一artifact恢复，同暖缓存、保坏原件、无源码修改；缺失原因未知。实际包与ZIP在 `/private/tmp/pcw-mac-daily-889a2e62-mac-02/`，ZIP SHA256 `4f1e68397583cea3da92400d51f35938306dcf3ae889c029fd10437abfd6acf3`。本地main已安全快进889并保全185用户路径，远端main未推；本交付记录提交不作为包新输入。
+
+剩余Mac完整关口：对这个准确新包另取一次真实Codex单任务授权并执行，随后核对具体安装/新PendingCrewLocal首次日用启动授权，保旧整包备份和数据不迁移。旧7df一次授权已用完，同问项重复回复不扩权。安装、真实日用、发布均未执行；不新增CI、不扩工具工程，不提前启动后续跨厂商/远程/其余平台、Solid或个人记忆模块。

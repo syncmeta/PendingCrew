@@ -697,3 +697,16 @@ clientf8e892c47c4572f082524d1f5c53129e900f330f完整四路径独验接受，clie
 根已精确合入backend0631与clientf8e8，后端完整crewd及客户端四路径逐字对齐。此冻结提交后global源码/文档停止变更，唯一Rust作者新准确默认非测试normal，独核后客户端原暖缓存一次普通Release0.1.44新build包；7df包/ZIP/真实失败原件全部保原输入，不重标新source。主目录main当前7df与185用户改动保留，下一包接受后再安全快进；远端main不推。无新CI/冷cache/稳定全套审查。
 
 下一验收仅新MCP/失败事件展示与普通启动必要影响，7df GUI-only crash/parent/SQLite/WK/退出的未变证据继续复用。此次7df真实首拒因raw未存仍未知，独立source缺陷修好不能冒已证因果。第二次真实任务未获授权，待准确新包和可审查动作后另问真人；不自动重试原UUID、不安装/切日常/私钥签名/公开发布。
+
+
+## 2026-10-17 Mac 日用新版完整包接受，真实任务待新授权
+
+准确编译输入仍为 `889a2e6273c83d995065d6cf8b1efea9e9980cda`；本次保存仅更新交付记录，不是新包输入。普通原 App `0.1.44 / 20742.58276` 位于 `/private/tmp/pcw-mac-daily-889a2e62-mac-02/PendingCrew.app`，GUI Release ARM64、后台默认 Debug 非测试，adhoc runtime/noTeam。normal 独核 `daily-normal-889a-independent-review.json` SHA256 `d3dba4823b044152b0fc61f8b8af0910d045e1d0eee21eac0012a8a83808b333`；candidate.json SHA256 `0ababfceaa78dc7f194e5fc0b2d1081abe858e8115bb94f116e1bb36db931bf9`；GUI SHA256 `c5331c8ad54a9b1c04d1fb51333bca0ce24ef17d574419a0d55eec052f609a3c`，签后 helper `618e920e5d402534f24e62caa04ef808fc429567cac4ec9d50174ebf8ee5abc5` 与准确 normal 签前代码等价。
+
+独立完整影响门 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/ordinary-mac-889a-whole-impact-review.json` SHA256 `012d47a5da32f2bc90408162795b82fea2ee5a571151ce1d0ebf2565d13ef71a` 已由根亲读核散列：原 App 普通打开零执行，人类明确选择假 worker 后，包内 production MCP 43帧完成全部10知识工具、first-write 内容块/持久视图、原 context UUID查询及重试不重复、对象/SQL/历史/preview与拒绝边界；原App读到保存页面和绑定源码，code/write关闭。Direct GUI实际0，已知GUI/Core/fake均无，socket无/registry空。7df未变 GUI-only crash、SQLite/WK/退出组按准确历史来源复用；失败详情只以生产receiver控制及新版完整编译为证，不冒本包真实失败事件。
+
+mac-01的Xcode65原件保留：共享SPM八个checkout及Sparkle artifact缺文件，原因未知，不认定由finalizer删除。只恢复这八个锁定版本及校验匹配的官方artifact，原坏leaf保留，另外三项manifest/HEAD不变，同暖DD/SPM不新建冷缓存；最终来源独核通过。恢复记录 `/private/tmp/pcw-mac-daily-889a2e62-cache-recovery-01/recovery-result.json` SHA256 `e650ae6714d10cbdae5f973c9fe1d77a8ed2f8010894b63f5bc010f9487e4ddd`。不因缓存恢复修改源码或重标旧包。
+
+可交付ZIP `/private/tmp/pcw-mac-daily-889a2e62-mac-02/PendingCrew-0.1.44-20742.58276-macOS-arm64.zip`，39821849 bytes，SHA256 `4f1e68397583cea3da92400d51f35938306dcf3ae889c029fd10437abfd6acf3`；根亲核散列、交付说明和同目录安装方案。ZIP CRC与关键App文件逐hash匹配，旧App备份/整体替换/回退已准备，尚未执行。
+
+本地main已从7df安全快进到889（实际37892d exit0），185用户路径状态与文件散列不变，用户tracked diff SHA256仍 `b7608967dfe693f721bbbf147b10655ba47f6523f370847d2623d020b71c964c`；远端main未推。此前call_83df授权已消耗于7df真实首拒，重复同一问项回复不扩大到本包。新包真实单任务提案 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/real-codex-889a-single-task-proposal.json` SHA256 `d14d4b26fcac098c50dd1008d5c1160aa08086032a5f26cfadb5fd7f7660f8f5` 已备，待新的直接真人授权；新私域、一任务、300秒停工无重试，使用正常用户任务与产品引导。未安装、启动新日常数据、发布、持久授信或私钥签名；Mac日用交付与整个多平台工程均未冒称完成。
