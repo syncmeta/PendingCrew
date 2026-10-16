@@ -95,8 +95,11 @@ enum CrewdCodexConfiguration {
         return paths.first { executable($0) }
     }
     static func launchArguments(directory: URL, program: String?) -> [String] {
-        ["--data-dir", directory.path, "serve", "--claude", "/usr/bin/false"] +
-            (program.flatMap { executable($0) ? $0 : nil }.map { ["--codex", $0] } ?? [])
+        var arguments = ["--data-dir", directory.path, "serve", "--claude", "/usr/bin/false"]
+        #if PENDINGCREW_LOCAL_MAC
+        arguments.append("--managed-parent")
+        #endif
+        return arguments + (program.flatMap { executable($0) ? $0 : nil }.map { ["--codex", $0] } ?? [])
     }
     static func executable(_ path: String) -> Bool {
         var directory: ObjCBool = false
