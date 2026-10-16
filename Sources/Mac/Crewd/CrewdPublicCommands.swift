@@ -32,16 +32,18 @@ final class CrewdPublicCommands: ObservableObject {
     private let call: Call
     private let prepare: Prepare
     private let finish: Finish
+    private let allowsSubmission: () -> Bool
     private var sent = Set<UUID>()
     private let maximumObservations = 256
     init(binding: @escaping () throws -> Binding, ownsDaemon: @escaping () -> Bool,
-         call: @escaping Call, prepare: @escaping Prepare, finish: @escaping Finish) {
+         call: @escaping Call, prepare: @escaping Prepare, finish: @escaping Finish, allowsSubmission: @escaping () -> Bool = { true }) {
         self.binding = binding; self.ownsDaemon = ownsDaemon; self.call = call
-        self.prepare = prepare; self.finish = finish
+        self.prepare = prepare; self.finish = finish; self.allowsSubmission = allowsSubmission
     }
     /// One explicit send, only after its immutable original scope/payload/UUID
     /// has been privately persisted. A refused/unknown response never clears it.
     func submit(_ envelope: CrewdPublicCommandEnvelope, crew: String) async throws -> CrewdPublicReceipt {
+        guard allowsSubmission() else { throw notSubmitted("正在停工，不再接受新执行。") }
         let captured = try binding()
         if observations.count >= maximumObservations {
             let settled = observations.values.filter { row in

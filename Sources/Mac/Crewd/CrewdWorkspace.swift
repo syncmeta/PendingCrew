@@ -9,9 +9,12 @@ final class CrewdWorkspace: ObservableObject {
     private var originalJournal: CrewdPresentationJournal?
     private var preparingJournal: UUID?
     private var journalFailureConnection: UUID?
-    var originalJournalReady: Bool {
+    var originalJournalReady: Bool { originalJournalBound && acceptsObservation(generation) }
+    /// Stop closes execution, but the same authenticated scope can still look
+    /// up its original receipts without reopening admission.
+    private var originalJournalBound: Bool {
         guard originalJournal != nil, let scope = presentationScope,
-              preparingJournal == nil, acceptsObservation(generation) else { return false }
+              preparingJournal == nil, !retired, client.readyForWork else { return false }
         if client.capabilities.contains("command.receipts"), scope.databaseID != client.runtimeIdentity["dbId"].string { return false }
         if dataDirectory == nil {
             let current = client.authorityBinding
@@ -49,7 +52,7 @@ final class CrewdWorkspace: ObservableObject {
             try journal.finish(record, state: state, detail: detail)
             self?.originalFirstMessageHistory = try journal.firstMessageRecords()
             if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
-        })
+        }, allowsSubmission: { [weak self] in self?.stopping == false })
     func makeTerminalCommands(for connection: CrewdClient) -> CrewdPublicCommands {
         CrewdPublicCommands(binding: { [weak self, weak connection] in
             guard let self, let connection else { throw CrewdClientError(message: "原终端连接已关闭，尚未提交。", kind: .notSubmitted) }
@@ -64,11 +67,11 @@ final class CrewdWorkspace: ObservableObject {
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原终端历史未就绪。") }
             try journal.finish(record, state: state, detail: detail)
             if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
-        })
+        }, allowsSubmission: { [weak self] in self?.stopping == false })
     }
     func publicCommandBinding(for connection: CrewdClient) throws -> CrewdPublicCommands.Binding {
         guard !retired, client.connected, connection.connected,
-              (!originalJournalRequired || originalJournalReady),
+              (!originalJournalRequired || originalJournalReady || (stopping && originalJournalBound)),
               connection.capabilities.contains("command.receipts"),
               let scope = presentationScope,
               let db = connection.runtimeIdentity["dbId"].string, !db.isEmpty,
@@ -470,7 +473,7 @@ final class CrewdWorkspace: ObservableObject {
                               next.runtimeIdentity["dbId"].string == actual.database,
                               next.runtimeIdentity["runtimeBindingId"].string == actual.instance else { throw CrewdRetiredManagement.Failure.unconfirmed }
                         _ = try next.verifiedLocalPeerIdentity()
-                        return try await next.call(method, params)
+                        return try await next.call(method, params, timeout: method == "lifecycle.exit" && params["mode"].string == "safePause" ? .seconds(140) : .seconds(30))
                     }, close: { next.retire() })
                 } catch { next.retire(); throw error }
             }
@@ -792,6 +795,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
+        guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         _ = try publicCommandBinding(for: client)
         let envelope: CrewdPublicCommandEnvelope
         do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }

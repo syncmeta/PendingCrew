@@ -53,7 +53,7 @@ enum CrewdQuitMode: String { case direct, safePause, background }
             guard claimed["role"].string == "owner" else { throw Failure.unconfirmed }
         }
         let reply = try await connection.call("lifecycle.exit", .object([
-            "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(15000)
+            "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(120000)
         ]))
         guard reply["status"].string == "stopped" else { throw Failure.unconfirmed }
         return true
