@@ -971,7 +971,10 @@ impl<P: Port> Core<P> {
                         self.finish_public_start(req, Some(path), call.clone())
                             .await
                     }
-                    Err(error) => Err(ControlError::Worktree(error)),
+                    Err(error) => {
+                        self.public_worktree_rejected(&call, error).await;
+                        return;
+                    }
                 };
                 if let Err(error) = outcome {
                     self.public_start_failed(&call, error).await;

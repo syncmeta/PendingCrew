@@ -228,6 +228,7 @@ struct CrewdRunnerItemView: View {
 /// Shared-platform Codex start form; the host supplies its configured
 /// model and account. This view never starts a runner merely by appearing.
 struct CrewdSessionStartView: View {
+    @State private var isolation = false
     @ObservedObject var workspace: CrewdWorkspace
     @Binding var drafts: CrewdDrafts
     @State private var failure: String?
@@ -240,7 +241,8 @@ struct CrewdSessionStartView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(2...6)
-            Text("在工作电脑上启动 Codex，沿用那里的模型和设置，并使用独立工作树。").font(.caption).foregroundStyle(.secondary)
+            Toggle("使用独立工作树", isOn: $isolation)
+            Text(isolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。").font(.caption).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
             ForEach(unknown.indices, id: \.self) { index in
                 Text("此前启动结果未确认，可能已创建成员；原任务：" + unknown[index].text).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
@@ -256,12 +258,12 @@ struct CrewdSessionStartView: View {
             Button("启动 Codex 成员") {
                 let snapshot = drafts.snapshot(for: context), owner = workspace
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
-                let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string("codex"), "brief": .string(snapshot.text), "isolation": .bool(true)])
+                let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string("codex"), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
                 failure = nil; readUnknown = false; reviewedUnknown = false
                 Task {
                     do { _ = try await owner.performValue("session.start", fields); drafts.clearIfUnchanged(snapshot) }
                     catch {
-                        if CrewdClientError.isUncertainSubmission(error) { owner.uncertainSessionStarts.append(snapshot) }
+                        owner.recordUncertainSessionStart(snapshot, error: error)
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
                     }
                 }

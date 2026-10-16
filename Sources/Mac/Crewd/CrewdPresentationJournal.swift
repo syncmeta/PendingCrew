@@ -49,6 +49,7 @@ final class CrewdPresentationJournal {
         try Self.privateDirectory(directory)
         try Self.privateDirectory(directory.appendingPathComponent("prepared"))
         try Self.privateDirectory(directory.appendingPathComponent("outcomes"))
+        try Self.privateDirectory(directory.appendingPathComponent("reconciled"))
     }
     static func localNamespace(directory: URL) throws -> UUID {
         let canonical = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -136,6 +137,27 @@ final class CrewdPresentationJournal {
         let result = Outcome(format: 1, observationID: record.id, preparedSHA256: Self.hash(try Data(contentsOf: prepared)), state: state, observedAt: Date(), detail: detail)
         try Self.immutableWrite(encoder.encode(result), to: directory.appendingPathComponent("outcomes").appendingPathComponent(record.id.uuidString.lowercased() + ".json"))
     }
+    /// Append a verified observation without rewriting the immutable Unknown.
+    func acknowledge(_ record: Prepared, detail: String) throws {
+        guard record.scope == scope else { throw StorageError.refused("核对作用域不符。") }
+        let name = record.id.uuidString.lowercased() + ".json"
+        let prepared = directory.appendingPathComponent("prepared").appendingPathComponent(name)
+        try Self.privateFile(prepared)
+        let bytes = try Data(contentsOf: prepared)
+        let saved = try decoder.decode(Prepared.self, from: bytes)
+        guard saved.id == record.id, saved.scope == record.scope, saved.params == record.params,
+              saved.method == record.method, saved.crew == record.crew else { throw StorageError.refused("核对原记录不符。") }
+        let hash = Self.hash(bytes)
+        let destination = directory.appendingPathComponent("reconciled").appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try Self.privateFile(destination)
+            let old = try decoder.decode(Outcome.self, from: Data(contentsOf: destination))
+            guard old.format == 1, old.observationID == record.id, old.preparedSHA256 == hash, old.state == "replyObserved" else { throw StorageError.refused("核对观察与原记录不符。") }
+            return
+        }
+        let result = Outcome(format: 1, observationID: record.id, preparedSHA256: hash, state: "replyObserved", observedAt: Date(), detail: detail)
+        try Self.immutableWrite(encoder.encode(result), to: destination)
+    }
     func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
     /// Original successful-observation snapshots remain available for lookup;
     /// their existence is not a durable server success or a replay permission.
@@ -152,10 +174,23 @@ final class CrewdPresentationJournal {
             let bytes = try Data(contentsOf: file), record = try decoder.decode(Prepared.self, from: bytes)
             guard record.format == 1, record.scope.namespace == scope.namespace, file.lastPathComponent == record.id.uuidString.lowercased() + ".json" else { throw StorageError.refused("原前端历史身份或来源不符。") }
             let result = directory.appendingPathComponent("outcomes").appendingPathComponent(file.lastPathComponent)
-            if !FileManager.default.fileExists(atPath: result.path) { rows.append(record); continue }
-            try Self.privateFile(result)
-            let outcome = try decoder.decode(Outcome.self, from: Data(contentsOf: result))
-            guard outcome.format == 1, outcome.observationID == record.id, outcome.preparedSHA256 == Self.hash(bytes) else { throw StorageError.refused("原前端历史结果与提交快照不符。") }
+            var observed: Outcome?
+            if FileManager.default.fileExists(atPath: result.path) {
+                try Self.privateFile(result)
+                let outcome = try decoder.decode(Outcome.self, from: Data(contentsOf: result))
+                guard outcome.format == 1, outcome.observationID == record.id, outcome.preparedSHA256 == Self.hash(bytes),
+                      ["unknown", "replyObserved", "refused"].contains(outcome.state) else { throw StorageError.refused("原前端历史结果与提交快照不符。") }
+                observed = outcome
+            }
+            let reconciled = directory.appendingPathComponent("reconciled").appendingPathComponent(file.lastPathComponent)
+            if FileManager.default.fileExists(atPath: reconciled.path) {
+                try Self.privateFile(reconciled)
+                let observation = try decoder.decode(Outcome.self, from: Data(contentsOf: reconciled))
+                guard observation.format == 1, observation.observationID == record.id,
+                      observation.preparedSHA256 == Self.hash(bytes), observation.state == "replyObserved" else { throw StorageError.refused("终态核对与原记录不符。") }
+                observed = observation
+            }
+            guard let outcome = observed else { rows.append(record); continue }
             if outcome.state == "unknown" { rows.append(record) }
             else if includeObservedFirstMessages, outcome.state == "replyObserved",
                     record.method == "command.submit", record.params["command"]["operation"].string == "crew.createFirstMessage" { rows.append(record) }

@@ -172,7 +172,19 @@ final class CrewdWorkspace: ObservableObject {
     struct TextSubmission:Identifiable {let id:UUID;let method:String;let params:CrewdValue;let snapshot:CrewdDrafts.Snapshot}
     @Published private(set) var uncertainTextSubmissions:[TextSubmission]=[]
     var uncertainTextSnapshots:[CrewdDrafts.Snapshot] {uncertainTextSubmissions.map(\.snapshot)}
-    @Published var uncertainSessionStarts: [CrewdDrafts.Snapshot] = []
+    struct UncertainSessionStart { let request: UUID?; let snapshot: CrewdDrafts.Snapshot }
+    @Published private(set) var uncertainSessionStartRecords: [UncertainSessionStart] = []
+    var uncertainSessionStarts: [CrewdDrafts.Snapshot] { uncertainSessionStartRecords.map(\.snapshot) }
+    func recordUncertainSessionStart(_ snapshot: CrewdDrafts.Snapshot, error: Error) {
+        guard CrewdClientError.isUncertainSubmission(error) else { return }
+        let request = (error as? CrewdClientError)?.data["requestId"].string.flatMap(UUID.init(uuidString:))
+        let observation = request.flatMap { publicCommands.observations[$0] }
+        let matches = observation?.envelope.operation == .sessionStart &&
+            observation?.prepared.scope == presentationScope &&
+            observation?.envelope.command["params"]["crewId"].string == snapshot.context.crew &&
+            observation?.envelope.command["params"]["brief"].string == snapshot.text
+        uncertainSessionStartRecords.append(.init(request: matches ? request : nil, snapshot: snapshot))
+    }
     struct OriginalFirstMessage: Identifiable {
         enum Phase { case creating, created, posting, refused, unknown, accepted }
         let id: UUID // presentation identity, never a server request receipt
@@ -727,10 +739,15 @@ final class CrewdWorkspace: ObservableObject {
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let receipt = try await submitPublicCommand(operation, params: params, crew: params["crewId"].string ?? crewID)
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
-                throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。")
+                throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。", data: receipt.value)
             }
             if [.suppressed, .rejected].contains(receipt.phase) {
-                throw CrewdClientError(message: "原命令未执行：" + (receipt.value["result"]["refusal"].string ?? "当前权限或代际已改变。"), code: -32009, data: receipt.value["result"])
+                let result = receipt.value["result"]
+                let refusal = result["refusal"].string ?? result["refusal"]["refusal"].string
+                let reason = refusal == "session.worktree.not_repo"
+                    ? "独立工作树需要已提交的 Git 仓库；可选择共享工作目录后重新启动。"
+                    : (refusal ?? "当前权限或代际已改变。")
+                throw CrewdClientError(message: "原命令未执行：" + reason, code: -32009, data: result)
             }
             let result = receipt.value["result"]
             if operation == .sessionStart {
@@ -768,7 +785,20 @@ final class CrewdWorkspace: ObservableObject {
         let envelope: CrewdPublicCommandEnvelope
         do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }
         catch { throw CrewdClientError(message: "命令参数尚未满足正式契约，未发送：" + error.localizedDescription, kind: .notSubmitted) }
-        return try await publicCommands.submit(envelope, crew: crew)
+        do { return try await publicCommands.submit(envelope, crew: crew) }
+        catch {
+            // Retain the exact submitted identity even when the reply is lost.
+            // A pre-send failure has no submitted observation and stays unlinked.
+            if publicCommands.observations[request] != nil {
+                let original = error as? CrewdClientError
+                var fields: [String: CrewdValue] = [:]
+                if let original, case .object(let data) = original.data { fields = data }
+                fields["requestId"] = .string(request.uuidString)
+                throw CrewdClientError(message: error.localizedDescription, kind: original?.kind ?? .general,
+                    code: original?.code, data: .object(fields))
+            }
+            throw error
+        }
     }
     @discardableResult func refreshControlTarget(_ id: String) async throws -> CrewdCommandTarget {
         guard client.capabilities.contains("command.receipts") else { throw CrewdClientError(message: "当前后台尚无正式代际控制。", kind: .notSubmitted) }
@@ -786,7 +816,13 @@ final class CrewdWorkspace: ObservableObject {
         }
         try publicCommands.restore([record])
         guard let observation = publicCommands.observations[id] else { throw CrewdPublicWire.invalid() }
-        return try await publicCommands.lookup(observation)
+        let receipt = try await publicCommands.lookup(observation)
+        if let receipt, settledSessionStart(receipt), observation.envelope.operation == .sessionStart {
+            // Local presentation acknowledgement only, after lookup of the
+            // original UUID. This never dispatches a replacement operation.
+            try acknowledgeOriginalCommand(record, receipt: receipt)
+        }
+        return receipt
     }
     /// Explicit read-only receipt recovery. Historical SQL acceptance alone
     /// cannot prove current presence; verify both current crew/channel before
@@ -812,6 +848,13 @@ final class CrewdWorkspace: ObservableObject {
         selectCrew(crew); selectChannel(channel)
         return crew
     }
+    private func settledSessionStart(_ receipt: CrewdPublicReceipt) -> Bool {
+        guard !receipt.historical else { return false }
+        if [.rejected, .suppressed].contains(receipt.phase) { return true }
+        return [.committed, .launched].contains(receipt.phase) &&
+            receipt.value["result"]["sessionRegistered"] == .bool(true) &&
+            receipt.value["result"]["sessionId"].string.map { !$0.isEmpty } == true
+    }
     func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) throws {
         _ = try publicCommandBinding(for: client)
         guard record.scope == presentationScope, !receipt.historical,
@@ -821,8 +864,12 @@ final class CrewdWorkspace: ObservableObject {
               record.params["command"] == receipt.value["command"],
               [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
               let journal = originalJournal else { throw CrewdPublicWire.invalid() }
-        try journal.finish(record, state: "replyObserved", detail: "人类明确核对原后台回执；没有重放。")
+        if record.params["command"]["operation"].string == "session.start", !settledSessionStart(receipt) { throw CrewdPublicWire.invalid() }
+        try journal.acknowledge(record, detail: "人类明确核对原后台回执；没有重放。")
         durableUnknown = try journal.unknownRecords()
+        if record.params["command"]["operation"].string == "session.start" {
+            uncertainSessionStartRecords.removeAll { $0.request == receipt.requestID }
+        }
     }
     func isCurrentOriginalObservation(_ record: CrewdPresentationJournal.Prepared) -> Bool {
         record.scope == presentationScope

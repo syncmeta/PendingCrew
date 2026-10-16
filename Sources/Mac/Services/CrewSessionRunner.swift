@@ -3422,7 +3422,7 @@ final class CrewSessionRunner: ObservableObject {
             if let captain = detail.crew.captainBotId {
                 _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(captain)]))
             } else {
-                _ = try await workspace.performValue("session.start", .object(["crewId": .string(detail.crew.id), "role": .string("captain"), "executor": .string("codex"), "brief": .string(openingBrief ?? wakeText ?? "维护本机组的工作闭环"), "title": .string(title), "isolation": .bool(true)]))
+                _ = try await workspace.performValue("session.start", .object(["crewId": .string(detail.crew.id), "role": .string("captain"), "executor": .string("codex"), "brief": .string(openingBrief ?? wakeText ?? "维护本机组的工作闭环"), "title": .string(title), "isolation": .bool(false)]))
             }
             return true // Typed RPC acknowledgement; not a claim that a model ran.
         }

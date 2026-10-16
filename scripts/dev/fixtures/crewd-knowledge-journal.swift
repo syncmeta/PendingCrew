@@ -1,6 +1,6 @@
 import Foundation
 @MainActor final class FakeRPC {
-    var context = CrewdDataContext(dbId:"db",authorityId:"authority",restoreEpoch:"epoch",crewId:"crew",namespace:"namespace",generation:"1")
+    var context = CrewdDataContext(dbId:"db",authorityId:"db",restoreEpoch:"epoch",crewId:"crew",namespace:"namespace",generation:"1")
     var submitted = 0
     var requestID = ""
     func info() -> CrewdDataWorkspaceInfo { .init(context:context,state:"ready",engineVersion:"sqlite",reason:nil) }
