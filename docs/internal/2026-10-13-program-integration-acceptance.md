@@ -675,3 +675,14 @@ backend_plan、client_plan、quality已分别恢复完整模块；唯一写者�
 根已精确cherry-pick完整作者单元，当前产品组合6410223a；客户端19路径与8ade、后台四条新增文件与作者ref逐字对齐。main1bb的React资产已保留合入，用户主目录脏文件未动。三作者开发分支均已普通保存；本冻结提交后停止global所有源码及文档修改，唯一后端作者准确默认非测试normal，独核后客户端用原暖Xcode/SPM一次普通Release包。Rust目录仍/private/tmp/pcw-decision-target。旧b8/normal/包/各次失败永不重标，不追加CI、全量审查或稳定知识/退出重跑。
 
 最终普通同包仍需验证：新私域无程序可打开数据UI、明确fake执行写知识/保存视图；仅杀原GUI后后台真实收尾，新GUI/新Core同DB保数据视图，异常提示未答/拒恢复零执行，明确选择才恢复。已有稳定SQLite/WK与退出证据按未变范围复用。普通bundle共享UserDefaults，验收不改真实设置，现有参数域临时覆盖quit与显式私域/program；正常OS窗口偏好副作用不冒零写。真实模型/SDK、安装/日常切换、私钥签名/系统权限、公开发布仍未执行，待准确包及完整动作准备后分别核权。
+
+
+## 2026-10-16 普通7df包实测通过，单次真实Codex首知识工具拒绝停工
+
+准确7df普通包0.1.44/build20742.54731完整编译/签封独验接受，manifest SHA b253dd3f729308f0dd9d44e37cecb6c141ec42f9a59982e227bbf8711352d92f；GUI Release ARM64、Core defaultDebug非test须区分。普通package独验daily-package-7df-independent-review.json SHA5076164b9117a73c725cdc3fa8f66d737da9b8afbd46222939d9edef5cadee26；完整fake实际链 `/private/tmp/pcw-mac-daily-7df9979a-runtime-01/ordinary-Mac-whole-affected-actual-review.json` SHA2e0e10bd1cbe4dc2f89e754c0fc7ac2d72a68a3b857efedca50a1c052b38bce9。无CLI资料UI、明确fake经MCP保存块/视图和真实WK、仅杀GUI14331后Core14333/fake14431自行结束、新GUI/newCore保数据视图且异常询问未答/否零自启、仅所选恢复及正常收尾均通过。综合ordinary-mac-daily-7df-whole-review.json SHA3b8e98212337d26abcfa7586058cea1c5b51a6c0c72031852a4481c51ef4fff0是此层接受，非真实模型或安装。
+
+根已安全ff-only本地main1bb→7df，185用户dirty/untracked状态与tracked diff字节不变；未推remote main。ZIP `/private/tmp/pcw-mac-daily-7df9979a-mac-01/PendingCrew-0.1.44-20742.54731-macOS-arm64.zip` SHA7e156c52abd4fa58bc0ecc08072cb93e5eac97663ad9208b78268f92bdc6884b及安装回退清单已备，未安装/创建日用PendingCrewLocal。7df仍精确compiled source，本条docs HEAD不是包来源；原二进制/日志/证明保留不重标。
+
+真人明确批准call_83dfab27c8aa4c1dbd683a747e7515d0的一次真实Codex单任务。执行仅新私域 `/private/tmp/pcw-mac-daily-7df9979a-real-codex-01`：原GUI16203、真实Codex16669，session.start UUIDa5044b38-30bb-4145-8db3-30ee0bc06ecd实际launched。模型首crew.data_schema_get显示失败后按约停止，知识落库NOT_PASS，无成功正式data receipt；不把模型说未创建当耐久证明。约62秒内正常Direct，原GUIwait0、knownGUI/Codex无、socket无/registry空；未取得原Core PID，不能冒Core Popen/OS确认。未新JS/第二任务/重试/安装。完整停止修订报告single-real-codex-stopped-review-revision-02.json SHA0f197ae6d36b51061fd502ecd1bb09cde407a9fe028e8fd475b16d4f20017847；原ad4d保留但‘无目录’文字撤回，directory exists不推初始化/写结果。真实参数/错误码未保存，具体首拒原因仍未证；mode=ro失败后未用immutable/复制WAL/重开服务绕过，未读账号auth/config。
+
+后端独立源核发现正式知识MCP inputSchema引用shared generator的$defs但单工具未携带定义，假fixture硬编码正确参数未覆盖advertised消费；首次新workspace正确路径也缺清晰指导。这是已证源码缺陷，不能反推就是此次实际唯一原因。backend唯一作者正按整套工具自足schema/可达定义、workspace→合法firstsubmit→read及准确拒绝合同整块修复、无模型正式MCP验证。读不初始化，已获writeACL Agent首submit可建库；无新增Human初始化按钮/自动读建库/权限放宽，client保持8ade。此次真实授权已用完，下一真实调用须新具体授权；不安装7df冒日用完成。其余稳定SQLite/WK/parent/退出证据继续准确复用，不新CI/全量重审或验收工具。

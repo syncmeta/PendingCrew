@@ -917,3 +917,10 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 client8ade与backend517d+58bd均独立接受并精确整合，完整证据与边界见整合验收记录同日新节。普通Mac版本0.1.44、固定新PendingCrewLocal、无程序也能读写资料、明确Codex路径下次Core启动生效、旧后台/远程Keychain/更新副作用关闭。仅普通自身spawn启用无PID的managed-parent，原App确认死亡后后台沿现有机制收尾，保异常提示和零自启；不恢复持久授信、不扩成守护平台。
 
 本冻结提交是下一准确normal/普通Release App的完整输入；此前compiled b8只属已验隔离候选。唯一Rust作者做新normal，独核后唯一客户端沿原暖缓存完整打包；期间global代码/文档均冻结。仅做普通配置与GUI-only异常新差异，稳定SQL/WK/退出证据复用，不重全量、不新CI。新包接受后才主目录安全快进；旧main用户文件保留，远端main未推。真实模型和安装等具体动作另核，不把源码接受冒完整日用交付。
+
+
+### 2026-10-16 日用最新门：真实模型首知识工具拒绝，完整MCP接缝修复中
+
+7df普通Release包的来源与完整fake实际差异链已接受，本地main已安全快进且185用户路径保全；尚未安装，远端main未推。一次真实Codex任务经真人具体批准后启动成功，但首crew.data_schema_get泛拒，约62秒内按约停工；知识落库未通过、原始args/errorcode未保存，不能确称原因。准确停止修订报告与边界见整合验收记录最新节。
+
+后端已独立证实advertised知识工具schema有悬空根引用/缺defs，并正整块修复所有工具自足与首次合法写入指导；假fixture硬编码路径没有覆盖模型消费工具定义。无模型production MCP接缝先闭合和独验，不反复单字段补丁后耗真实模型，不增加初始化UI或read建库/宽ACL。client无必要变更。新source完整接受后再准确normal/普通包，只验证MCP影响与普通启动，7df parent/SQLite/WK稳定证据不重跑。旧7df包与证明保原来源；这次真实授权已消耗，不擅自重试或安装，待新可审查准确动作另问真人。
