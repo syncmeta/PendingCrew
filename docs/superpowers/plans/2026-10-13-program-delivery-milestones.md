@@ -887,3 +887,6 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 
 
 - 最新停工检查点补充：6f实包因AppKit terminateLater重复Quit可提前终止GUI而未接受；7f5f客户端因果修复已独验（Cancel持有停工Task，真实完成才最终terminate），后端仍精确c1ab。需新准确组合normal/暖Mac补实际退出重开，旧6f失败证据保留，不新grant/AX框架。
+
+
+- 最新候选门：dbc实包已完成停工提示隐藏/重复Quit/force真实结束、sameDB新Core重开数据视图保留且零自启、safe/direct及异常询问未答/否零执行。仅实际显式恢复发现旧入口缺完整target，7165客户端统一现有纯读target→正式原UUID适配已独验。下一准确包只补实际所选一会话恢复与必要停工小收尾；不重复知识/退出整套，Rust仍c1ab、不新增信任或协议。完整证据见验收记录最新条目。

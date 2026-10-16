@@ -627,3 +627,12 @@ Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只�
 私域纯AppKit原生控制实证：首terminateLater后第二terminate直接触发willTerminate而不再进delegate；pending期间main DispatchQueue也未运行。客户端7f5f56a96d63189bdd15022d211ea32acf493a1c仅改crewd分支为Cancel持有原停工Task/Panel，实际settled后唯一新terminate取得Now。生产delegate逐字抽取+实际Panel/Coordinator的success/force/Unknown三控制通过；仅legacy依赖/stopreceiver替身，不冒候选Core/UI实跑。独核 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-repeat-quit-7f5f-review.json，SHA256 7f7f491091d0c36f1151c5687d740fee32d60c94ee4f4b38967de8005f2aaf33。后端c1ab无新变更/发现，旧6f包原样保留。
 
 本次准确新组合冻结后重建normal与暖Mac，只补实际提示隐藏/重复Quit/force及同DB重开零唤醒/数据视图保留，不重稳定知识链或Hibernate套件，不授信、不重开旧scope。
+
+
+### 2026-10-16 dbc 实包退出整组通过，显式恢复适配接受
+
+dbc576901818375e59600c8fd350e3405d229305准确normal/Mac完整来源独核通过；实包停工首Quit→隐藏提示→重复Quit保持原GUI/原Panel→force，原GUI93158实际wait0，Core93164及登记fake93209/93228窄PID观察均不在，registry空/socket无。明确新C93520/Core93522同DB管理，块/视图hash不变、fake9行原SHA不变，零自启；固定safePause和每次询问Direct均实际GUI0/Core无。最小同包异常受控退出后，明确新F原App确有恢复询问，未答/不恢复均fake不增/registry空，原view仍在，最终safe退出0/Core无。记录 /private/tmp/pcw-sqlite-dbc57690-runtime-20261016-01/actual-user-flow-groups-dbc.json，SHA256 5f7eac11faba4e71062e4b9488602c28e3612a47586eb816196d9a22112ed74e。当前scope无遗留运行。
+
+实际仅所选旧worker恢复本地未发送，原因是旧sessionId-only入口交严格Envelope时缺generation/controlRevision/turnId；不是后端拒绝或已启动。客户端7165823fd3003b98941e1eab455f27193df97238现用既有session.controlTarget纯读统一closedlegacy显式resume/interrupt及stop形状，再经原正式请求提交；typedtarget不刷新CAS，混合/未知形状仍拒，前后同connection/runtime/db/grant/restoregeneration且非stopping，失败/foreign/晚响应零prepare/submit。读target不执行任务，只有明确人类所选操作提交；原Unknown/UUID不盲重发。
+
+该三路径单元已独验，10项实际生产Workspace/Client/IPC/Journal receiver控制通过，源/runtime边界注明，不冒新包实跑；报告 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-explicit-control-7165-review.json，SHA256 9574f563397234952b586cabe8a3b0394e8a79626df3d4e4cf8d8531caca0747。Rust仍c1ab逐字不变。准确新组合normal/暖Mac后仅补实际只选一会话恢复、核唯一启动及必要停止小收尾，已验知识/WK/退出全组不重跑、不改标dbc来源。未授信、安装、切换日常数据、公开发布或用真实模型。
