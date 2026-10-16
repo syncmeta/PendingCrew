@@ -220,6 +220,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var status = "未连接"
     @Published var error: String?
     @Published var busy = false
+    @Published private(set) var stopping = false
     /// Immutable cache/draft namespace. The pairing transport must separately
     /// authenticate the peer; a namespace UUID is never authentication evidence.
     let authorityRecordID: UUID
@@ -312,7 +313,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onDisconnect = { [weak self] in
             self?.closeTerminalDisplays()
-            guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
+            guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
@@ -336,6 +337,7 @@ final class CrewdWorkspace: ObservableObject {
     /// into the next authority or let a late reconnect reactivate a retired one.
     #if os(macOS)
     private var retiredManagementTarget: CrewdRetiredManagement.Target?
+    private let retiredStopChannel = CrewdRetiredStopChannel()
     #endif
     func retire() {
         #if os(macOS)
@@ -354,7 +356,7 @@ final class CrewdWorkspace: ObservableObject {
         client.retire(); status = "已切换连接"
     }
     func connect() async {
-        guard !retired, !booting else { return }
+        guard !retired, !booting, !stopping else { return }
         #if os(macOS)
         if let dataDirectory { await connectLocal(dataDirectory); return }
         #endif
@@ -442,11 +444,19 @@ final class CrewdWorkspace: ObservableObject {
         applyManagement(status)
         if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release", .object([:]))) }
     }
+    var canForceManagedStop: Bool {
+        guard dataDirectory != nil else { return false }
+        if retired { return retiredManagementTarget != nil }
+        return client.readyForWork && managementRole == "owner" && (try? client.verifiedLocalPeerIdentity()) != nil
+    }
     @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
-        guard mode != .background, let directory = dataDirectory else { return false }
+        guard let directory = dataDirectory else { return false }
+        stopping = true; sleeping = true
+        reconnect?.cancel(); sync?.cancel(); closeTerminalDisplays(); knowledge.invalidate()
+        status = mode == .direct ? "正在强制停止" : "正在叫他们停工"
         if retired {
             guard let target = retiredManagementTarget else { return false } // Former observer, no management authority.
-            return try await CrewdRetiredManagement.exit(target: target, mode: mode) {
+            return try await retiredStopChannel.exit(target: target, mode: mode) {
                 let next = CrewdClient()
                 do {
                     try await next.connect(path: directory.appendingPathComponent("crewd.sock").path)
@@ -475,12 +485,12 @@ final class CrewdWorkspace: ObservableObject {
         sleeping = true; reconnect?.cancel(); sync?.cancel()
         do {
             let reply = try await client.call("lifecycle.exit", .object([
-                "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(15000)
-            ]))
+                "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(120000)
+            ]), timeout: mode == .direct ? .seconds(30) : .seconds(140))
             guard reply["status"].string == "stopped" else {
                 throw CrewdClientError(message: "后台未在期限内确认停止；原操作保留待核对，应用仍保持打开。")
             }
-        } catch { sleeping = false; throw error }
+        } catch { self.error = error.localizedDescription; throw error }
         return true
     }
     func quitOwnedLocalHelper() async throws {
@@ -736,6 +746,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) { return try await client.call(method, params) }
+        guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let receipt = try await submitPublicCommand(operation, params: params, crew: params["crewId"].string ?? crewID)
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
