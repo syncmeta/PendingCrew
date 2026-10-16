@@ -618,3 +618,12 @@ Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只�
 完整后端c1ab54b3865bd12f42bcde0a02c3e75bd42882c6已独验。同原Human/owner的lifecycle.exit先关准入并enqueue既有Hibernate，等待回执不再堵readloop，最多4个在途completion，同连接direct可提前期限，observer仍拒；EOF先撤输入fence再排原输出，已接受停工不因断连撤销。真实私域开发Core+slowfake验证safe→direct、observer拒、双回执排空及实际Popen.wait后台0；safe timedOut/interrupted和direct stopped/interrupted不冒clean。force仍有现有最多10秒owned-child收尾，不把ACK当停完。报告 backend-stop-same-socket-c1ab-review.json，SHA256 d89e82d9f125b7dfb497e9e49fbb901f38b3a1252e0efcfe105a215c07812832。无新method/schema/trust机制。
 
 本条仅源码模块接受和原始影响证据，未宣称新normal/Mac/GUI通过。下一步根冻结完整组合，唯一Rust作者准确新normal，客户端原暖缓存完整Mac包，独立质量实际提示隐藏/force/owner停Core→同DB新Core重开零唤醒/数据视图保留及必要知识冒烟。f134知识/MCP/WK授权撤桥/回收组和bb55耐久/权限/Core管理证据按未变范围复用，来源不改标；不因新GUI身份问题再引入已取消授信或AX框架，不改旧Unknown/旧现场，不安装/切日常/发布/真实模型或新增GitHubCI。
+
+
+### 2026-10-16 实包重复退出 RED 与 AppKit 因果修复
+
+准确6f实包完整编译/来源/签名通过，但实际GUI90475通知停工→关闭提示→第二次Quit时提前退出，原Core90505/fake90634当时仍活，故未放行。记录 /private/tmp/pcw-sqlite-6f710187-runtime-20261016-01/actual-stop-incomplete-handoff.json，SHA256 3c7017d2a047b7be12ec8e1fdc0fa3dec29d7d514e67b96b8e7a8e2183e7ba72。后来窄ps零行证明两个已知进程已不在，只作后续时点，不抹早先失败、不补造停工回执。
+
+私域纯AppKit原生控制实证：首terminateLater后第二terminate直接触发willTerminate而不再进delegate；pending期间main DispatchQueue也未运行。客户端7f5f56a96d63189bdd15022d211ea32acf493a1c仅改crewd分支为Cancel持有原停工Task/Panel，实际settled后唯一新terminate取得Now。生产delegate逐字抽取+实际Panel/Coordinator的success/force/Unknown三控制通过；仅legacy依赖/stopreceiver替身，不冒候选Core/UI实跑。独核 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-repeat-quit-7f5f-review.json，SHA256 7f7f491091d0c36f1151c5687d740fee32d60c94ee4f4b38967de8005f2aaf33。后端c1ab无新变更/发现，旧6f包原样保留。
+
+本次准确新组合冻结后重建normal与暖Mac，只补实际提示隐藏/重复Quit/force及同DB重开零唤醒/数据视图保留，不重稳定知识链或Hibernate套件，不授信、不重开旧scope。
