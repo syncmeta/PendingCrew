@@ -263,7 +263,7 @@ struct CrewdSessionStartView: View {
                 Task {
                     do { _ = try await owner.performValue("session.start", fields); drafts.clearIfUnchanged(snapshot) }
                     catch {
-                        if CrewdClientError.isUncertainSubmission(error) { owner.uncertainSessionStarts.append(snapshot) }
+                        owner.recordUncertainSessionStart(snapshot, error: error)
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
                     }
                 }

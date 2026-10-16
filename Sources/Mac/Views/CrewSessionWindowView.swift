@@ -1101,7 +1101,7 @@ struct CrewSessionWindowView: View {
                         "executor": .string("codex"), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
                     workspace.messageDrafts.clearIfUnchanged(snapshot)
                 } catch {
-                    if CrewdClientError.isUncertainSubmission(error) { workspace.uncertainSessionStarts.append(snapshot) }
+                    workspace.recordUncertainSessionStart(snapshot, error: error)
                     throw error
                 }
                 guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
