@@ -9,9 +9,12 @@ final class CrewdWorkspace: ObservableObject {
     private var originalJournal: CrewdPresentationJournal?
     private var preparingJournal: UUID?
     private var journalFailureConnection: UUID?
-    var originalJournalReady: Bool {
+    var originalJournalReady: Bool { originalJournalBound && acceptsObservation(generation) }
+    /// Stop closes execution, but the same authenticated scope can still look
+    /// up its original receipts without reopening admission.
+    private var originalJournalBound: Bool {
         guard originalJournal != nil, let scope = presentationScope,
-              preparingJournal == nil, acceptsObservation(generation) else { return false }
+              preparingJournal == nil, !retired, client.readyForWork else { return false }
         if client.capabilities.contains("command.receipts"), scope.databaseID != client.runtimeIdentity["dbId"].string { return false }
         if dataDirectory == nil {
             let current = client.authorityBinding
@@ -49,7 +52,7 @@ final class CrewdWorkspace: ObservableObject {
             try journal.finish(record, state: state, detail: detail)
             self?.originalFirstMessageHistory = try journal.firstMessageRecords()
             if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
-        })
+        }, allowsSubmission: { [weak self] in self?.stopping == false })
     func makeTerminalCommands(for connection: CrewdClient) -> CrewdPublicCommands {
         CrewdPublicCommands(binding: { [weak self, weak connection] in
             guard let self, let connection else { throw CrewdClientError(message: "原终端连接已关闭，尚未提交。", kind: .notSubmitted) }
@@ -64,11 +67,11 @@ final class CrewdWorkspace: ObservableObject {
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原终端历史未就绪。") }
             try journal.finish(record, state: state, detail: detail)
             if state == "unknown" { self?.durableUnknown = try journal.unknownRecords() }
-        })
+        }, allowsSubmission: { [weak self] in self?.stopping == false })
     }
     func publicCommandBinding(for connection: CrewdClient) throws -> CrewdPublicCommands.Binding {
         guard !retired, client.connected, connection.connected,
-              (!originalJournalRequired || originalJournalReady),
+              (!originalJournalRequired || originalJournalReady || (stopping && originalJournalBound)),
               connection.capabilities.contains("command.receipts"),
               let scope = presentationScope,
               let db = connection.runtimeIdentity["dbId"].string, !db.isEmpty,
@@ -220,6 +223,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var status = "未连接"
     @Published var error: String?
     @Published var busy = false
+    @Published private(set) var stopping = false
     /// Immutable cache/draft namespace. The pairing transport must separately
     /// authenticate the peer; a namespace UUID is never authentication evidence.
     let authorityRecordID: UUID
@@ -312,7 +316,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onDisconnect = { [weak self] in
             self?.closeTerminalDisplays()
-            guard let self, !self.retired, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
+            guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
@@ -336,6 +340,7 @@ final class CrewdWorkspace: ObservableObject {
     /// into the next authority or let a late reconnect reactivate a retired one.
     #if os(macOS)
     private var retiredManagementTarget: CrewdRetiredManagement.Target?
+    private let retiredStopChannel = CrewdRetiredStopChannel()
     #endif
     func retire() {
         #if os(macOS)
@@ -354,7 +359,7 @@ final class CrewdWorkspace: ObservableObject {
         client.retire(); status = "已切换连接"
     }
     func connect() async {
-        guard !retired, !booting else { return }
+        guard !retired, !booting, !stopping else { return }
         #if os(macOS)
         if let dataDirectory { await connectLocal(dataDirectory); return }
         #endif
@@ -442,11 +447,19 @@ final class CrewdWorkspace: ObservableObject {
         applyManagement(status)
         if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release", .object([:]))) }
     }
+    var canForceManagedStop: Bool {
+        guard dataDirectory != nil else { return false }
+        if retired { return retiredManagementTarget != nil }
+        return client.readyForWork && managementRole == "owner" && (try? client.verifiedLocalPeerIdentity()) != nil
+    }
     @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
-        guard mode != .background, let directory = dataDirectory else { return false }
+        guard let directory = dataDirectory else { return false }
+        stopping = true; sleeping = true
+        reconnect?.cancel(); sync?.cancel(); closeTerminalDisplays(); knowledge.invalidate()
+        status = mode == .direct ? "正在强制停止" : "正在叫他们停工"
         if retired {
             guard let target = retiredManagementTarget else { return false } // Former observer, no management authority.
-            return try await CrewdRetiredManagement.exit(target: target, mode: mode) {
+            return try await retiredStopChannel.exit(target: target, mode: mode) {
                 let next = CrewdClient()
                 do {
                     try await next.connect(path: directory.appendingPathComponent("crewd.sock").path)
@@ -460,7 +473,7 @@ final class CrewdWorkspace: ObservableObject {
                               next.runtimeIdentity["dbId"].string == actual.database,
                               next.runtimeIdentity["runtimeBindingId"].string == actual.instance else { throw CrewdRetiredManagement.Failure.unconfirmed }
                         _ = try next.verifiedLocalPeerIdentity()
-                        return try await next.call(method, params)
+                        return try await next.call(method, params, timeout: method == "lifecycle.exit" && params["mode"].string == "safePause" ? .seconds(140) : .seconds(30))
                     }, close: { next.retire() })
                 } catch { next.retire(); throw error }
             }
@@ -475,12 +488,12 @@ final class CrewdWorkspace: ObservableObject {
         sleeping = true; reconnect?.cancel(); sync?.cancel()
         do {
             let reply = try await client.call("lifecycle.exit", .object([
-                "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(15000)
-            ]))
+                "mode": .string(mode == .direct ? "direct" : "safePause"), "timeoutMs": .integer(120000)
+            ]), timeout: mode == .direct ? .seconds(30) : .seconds(140))
             guard reply["status"].string == "stopped" else {
                 throw CrewdClientError(message: "后台未在期限内确认停止；原操作保留待核对，应用仍保持打开。")
             }
-        } catch { sleeping = false; throw error }
+        } catch { self.error = error.localizedDescription; throw error }
         return true
     }
     func quitOwnedLocalHelper() async throws {
@@ -736,6 +749,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) { return try await client.call(method, params) }
+        guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let receipt = try await submitPublicCommand(operation, params: params, crew: params["crewId"].string ?? crewID)
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
@@ -781,6 +795,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
+        guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         _ = try publicCommandBinding(for: client)
         let envelope: CrewdPublicCommandEnvelope
         do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }

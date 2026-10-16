@@ -560,9 +560,24 @@ impl Handle {
         &self,
         deadline: Option<Duration>,
     ) -> Result<hibernate::HibernateReport, ControlError> {
-        let deadline_ms = deadline.map(|d| d.as_millis().min(i64::MAX as u128) as i64);
-        self.call(|reply| Cmd::Hibernate { deadline_ms, reply })
+        self.enqueue_hibernate(deadline)?
             .await
+            .map_err(|_| stopped())?
+    }
+
+    /// Enqueue irreversibly before a connection releases its request reader.
+    /// Dropping a reply waiter never cancels the already admitted stop.
+    pub(crate) fn enqueue_hibernate(
+        &self,
+        deadline: Option<Duration>,
+    ) -> Result<oneshot::Receiver<Result<hibernate::HibernateReport, ControlError>>, ControlError>
+    {
+        let deadline_ms = deadline.map(|d| d.as_millis().min(i64::MAX as u128) as i64);
+        let (reply, response) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::Hibernate { deadline_ms, reply }))
+            .map_err(|_| stopped())?;
+        Ok(response)
     }
 
     /// 停机：叫停全部会话（crewd 叫停，不是人停：desired / was_working 不动，带着的唤醒原样退回），最多等 `limit`。

@@ -147,28 +147,27 @@ struct PendingCrewApp: App {
 @MainActor
 final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var waitingForDaemon = false
+    private var stopCoordinator: CrewdStopCoordinator?
+    private var stopProgress: CrewdStopProgressWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let lifecycle = AppQuitLifecycle.shared
         if let quit = lifecycle.crewdExit {
-            if waitingForDaemon { return .terminateLater }
+            if waitingForDaemon { stopProgress?.present(); return .terminateLater }
             guard let mode = CrewdQuitPreference.choose() else { return .terminateCancel }
             waitingForDaemon = true
-            Task { @MainActor [weak self] in
-                do {
-                    try await quit(mode)
-                    self?.waitingForDaemon = false
-                    sender.reply(toApplicationShouldTerminate: true)
-                } catch {
-                    self?.waitingForDaemon = false
-                    let alert = NSAlert()
-                    alert.messageText = "退出尚未确认"
-                    alert.informativeText = error.localizedDescription
-                    alert.addButton(withTitle: "留在 PendingCrew")
-                    alert.runModal()
-                    sender.reply(toApplicationShouldTerminate: false)
-                }
+            let progress = CrewdStopProgressWindow()
+            let coordinator = CrewdStopCoordinator(stop: { try await quit(.safePause) }, force: { try await quit(.direct) }, mayForce: { lifecycle.crewdMayForceStop?() == true })
+            stopCoordinator = coordinator; stopProgress = progress
+            progress.forceRequested = { [weak coordinator] in coordinator?.requestForce() }
+            coordinator.changed = { [weak progress, weak coordinator] state in
+                progress?.update(state, forceAvailable: coordinator?.forceAvailable == true)
             }
+            coordinator.completed = { [weak self, weak progress] in
+                progress?.window?.orderOut(nil); self?.waitingForDaemon = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            progress.present(); coordinator.begin(forceImmediately: mode == .direct)
             return .terminateLater
         }
         if waitingForDaemon { return .terminateLater }
@@ -247,6 +246,7 @@ final class AppQuitLifecycle {
         }
     }
     var crewdExit: ((CrewdQuitMode) async throws -> Void)?
+    var crewdMayForceStop: (() -> Bool)?
     var runningSessionCount: (() -> Int)?
     var pauseViewer: (() -> (() -> DaemonLaunchRace.ChildState)?)?
     var resumeViewer: (() -> Void)?

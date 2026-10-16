@@ -58,18 +58,18 @@ import Combine
     }
     func close() {retireSelected()}
     #if os(macOS)
+    var canForceManagedStop: Bool {
+        (retainedWorkspaces + (workspace.map { [$0] } ?? [])).contains { $0.canForceManagedStop }
+    }
     func exit(mode: CrewdQuitMode) async throws {
-        if mode == .background {
-            // Release viewers only. Existing execution authority does not expand.
-            for scope in retainedWorkspaces + (workspace.map { [$0] } ?? []) { try await scope.releaseManagement() }
-            close()
-            return
-        }
+        // Historical fixed-background preferences now notify stop; no path
+        // releases management and leaves work running on application Quit.
+        let stopMode: CrewdQuitMode = mode == .background ? .safePause : mode
         let scopes = retainedWorkspaces + (workspace.map { [$0] } ?? [])
         var stoppedDirectories = Set<URL>()
         for scope in scopes {
             if let directory = scope.dataDirectory, stoppedDirectories.contains(directory) { continue }
-            if try await scope.exitOwnedLocalHelper(mode: mode), let directory = scope.dataDirectory {
+            if try await scope.exitOwnedLocalHelper(mode: stopMode), let directory = scope.dataDirectory {
                 stoppedDirectories.insert(directory)
             }
         }

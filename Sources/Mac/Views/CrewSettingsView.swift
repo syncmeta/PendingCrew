@@ -57,7 +57,7 @@ private struct GeneralSettingsTab: View {
                         Text("每次询问").tag("ask")
                         Text("直接退出").tag("direct")
                         Text("安全暂停").tag("safePause")
-                        Text("继续后台").tag("background")
+                        Text("通知停工后退出").tag("background")
                     }
                     Text("重新打开应用只读取资料；恢复会话需再次明确选择。")
                         .font(.caption).foregroundStyle(.secondary)

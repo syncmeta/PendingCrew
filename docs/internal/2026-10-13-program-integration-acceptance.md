@@ -607,3 +607,14 @@ Quit在sleeping前捕获已就绪journal/原ownbirth/scope/epoch/runtime，只�
 自动审批真实拒绝客户端原生确认后持久 exactCode 授信再后台退出的源码编辑，认为既有退出授权未明确覆盖持久安全设置。编辑未执行，客户端53b4干净，无实际授信。已向真人请求具体实现及新私域隔离验证授权，未答不换工具/作者代写。拟定：仅首次后台/代码变化/已撤销时明确确认；有效pin免重复；普通打开不授信，旧固定设置不复活撤销；失败/Unknown保留窗口与原UUID。
 
 因此知识/WK主链已验，完整可重开候选尚未接受。待授权后完成同一后台→新GUI资格/数据视图保留/零自动唤醒、observer退出、safe/direct单元，独验后一次冻结、准确normal及暖Mac包。主目录main71f7及用户README/design/旧ACP资料保持，远端main未动；未安装、切日常数据、发布或用真实模型。Native/其余平台/Solid/个人记忆/all-features不扩大完成声明。当前完整状态见 /private/tmp/pcw-fd528-delivery-current-checkpoint.json 的 currentSimplifiedCandidatePlan。
+
+
+## 2026-10-16 用户改为通知停工：完整源码单元接受，待新包
+
+最新用户明确取消继续后台：让任务停工，显示可关闭的“正在叫他们停工”提示，提供强制关闭。因此上一条持久重连授信提问已被需求变更取代，未获授信授权，也未实现被拒授信；不是绕过拒绝。普通启动和退出不新增信任。按用户字面先保留直接退出/安全暂停，仅第三项及旧background偏好改为通知停工后退出；可选澄清不阻共同停工核心。关闭提示仅隐藏，不撤停工，重复退出重现同一进度而非重发。
+
+完整客户端415d68874c5cba4a8a210045e330c2b2e67f1e71（含ba831）已独验。NSPanel与协调者持有任务/原连接；开始停工后所有真正public/terminal提交入口先拒绝再prepare，原UUID纯查仍严格绑定可读；Unknown/timeout不复工、不假完成；退休scope与当前连接都能同socket强制提前deadline。控制与新提交闸实际生产依赖切片通过，379整源typecheck未重复，最终Mac构建承担完整编译。报告 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-stop-complete-415d-review.json，SHA256 08d22143bdba6e6bdf3246df861e2526eab24589aa6a2298a9fb88815907b29c。
+
+完整后端c1ab54b3865bd12f42bcde0a02c3e75bd42882c6已独验。同原Human/owner的lifecycle.exit先关准入并enqueue既有Hibernate，等待回执不再堵readloop，最多4个在途completion，同连接direct可提前期限，observer仍拒；EOF先撤输入fence再排原输出，已接受停工不因断连撤销。真实私域开发Core+slowfake验证safe→direct、observer拒、双回执排空及实际Popen.wait后台0；safe timedOut/interrupted和direct stopped/interrupted不冒clean。force仍有现有最多10秒owned-child收尾，不把ACK当停完。报告 backend-stop-same-socket-c1ab-review.json，SHA256 d89e82d9f125b7dfb497e9e49fbb901f38b3a1252e0efcfe105a215c07812832。无新method/schema/trust机制。
+
+本条仅源码模块接受和原始影响证据，未宣称新normal/Mac/GUI通过。下一步根冻结完整组合，唯一Rust作者准确新normal，客户端原暖缓存完整Mac包，独立质量实际提示隐藏/force/owner停Core→同DB新Core重开零唤醒/数据视图保留及必要知识冒烟。f134知识/MCP/WK授权撤桥/回收组和bb55耐久/权限/Core管理证据按未变范围复用，来源不改标；不因新GUI身份问题再引入已取消授信或AX框架，不改旧Unknown/旧现场，不安装/切日常/发布/真实模型或新增GitHubCI。
