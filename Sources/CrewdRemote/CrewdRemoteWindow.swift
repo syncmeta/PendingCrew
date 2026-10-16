@@ -58,6 +58,17 @@ import Combine
     }
     func close() {retireSelected()}
     #if os(macOS)
+    func exit(mode: CrewdQuitMode) async throws {
+        if mode == .background {
+            // Release viewers only. Existing execution authority does not expand.
+            for scope in retainedWorkspaces + (workspace.map { [$0] } ?? []) { try await scope.releaseManagement() }
+            close()
+            return
+        }
+        let scopes = retainedWorkspaces + (workspace.map { [$0] } ?? [])
+        for scope in scopes { try await scope.exitOwnedLocalHelper(mode: mode) }
+        close()
+    }
     func quitOwnedLocalHelpers() async throws {
         let scopes = retainedWorkspaces + (workspace.map { [$0] } ?? [])
         for scope in scopes { try await scope.quitOwnedLocalHelper() }

@@ -67,13 +67,14 @@ struct CrewdWorkspaceView: View {
                     case .messages: messageLayout
                     case .todo: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews)
                     case .progress: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,progressOnly:true)
-                    case .documents: CrewdDocumentsView(store:workspace.resources,drafts:$workspace.resourceDrafts)
+                    case .documents: CrewdKnowledgeDocumentsEntry(workspace: workspace)
                     }
                 }
             }.background(CrewdChatStyle.canvas(colorScheme))
         }.foregroundStyle(CrewdChatStyle.ink(colorScheme)).frame(minWidth:1150,minHeight:700)
         .sheet(isPresented:$creatingCrew){CrewdCrewCreationView(workspace:workspace)}
         .task {if autoConnect {await workspace.connect()}}
+        .onChange(of:workspace.knowledgeNavigation) { _,_ in tab = .messages }
         .onChange(of:workspace.inspection["runnerRequest"]) {_,value in if value != .null {runnerExpanded=true}}
     }
     private func crewButton(_ crew:CrewdValue) -> some View {

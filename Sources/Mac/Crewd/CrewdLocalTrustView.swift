@@ -11,7 +11,7 @@ struct CrewdLocalTrustView: View {
     @State private var busy = false
     @State private var result: String?
     private var candidate: Bool {
-        #if PENDINGCREW_NATIVE_CANDIDATE || PENDINGCREW_DELIVERY_VALIDATION
+        #if PENDINGCREW_NATIVE_CANDIDATE || PENDINGCREW_DELIVERY_VALIDATION || PENDINGCREW_KNOWLEDGE_VALIDATION
         return true
         #else
         return false
