@@ -147,13 +147,15 @@ struct PendingCrewApp: App {
 @MainActor
 final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var waitingForDaemon = false
+    private var crewdStopConfirmed = false
     private var stopCoordinator: CrewdStopCoordinator?
     private var stopProgress: CrewdStopProgressWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if crewdStopConfirmed { return .terminateNow }
         let lifecycle = AppQuitLifecycle.shared
         if let quit = lifecycle.crewdExit {
-            if waitingForDaemon { stopProgress?.present(); return .terminateLater }
+            if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
             guard let mode = CrewdQuitPreference.choose() else { return .terminateCancel }
             waitingForDaemon = true
             let progress = CrewdStopProgressWindow()
@@ -164,11 +166,16 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
                 progress?.update(state, forceAvailable: coordinator?.forceAvailable == true)
             }
             coordinator.completed = { [weak self, weak progress] in
-                progress?.window?.orderOut(nil); self?.waitingForDaemon = false
-                sender.reply(toApplicationShouldTerminate: true)
+                guard let self else { return }
+                progress?.window?.orderOut(nil); self.waitingForDaemon = false
+                self.crewdStopConfirmed = true
+                sender.terminate(nil)
             }
             progress.present(); coordinator.begin(forceImmediately: mode == .direct)
-            return .terminateLater
+            // AppKit pending termination runs a modal loop and a second Quit
+            // can terminate without reentering this delegate. Keep ownership
+            // here until the actual stop completes, then request final Quit.
+            return .terminateCancel
         }
         if waitingForDaemon { return .terminateLater }
         let reason = AppQuitDaemonPolicy.resolveReason(
