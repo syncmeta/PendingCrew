@@ -751,7 +751,8 @@ final class CrewdWorkspace: ObservableObject {
         if isReadOnly(method) { return try await client.call(method, params) }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
-            let receipt = try await submitPublicCommand(operation, params: params, crew: params["crewId"].string ?? crewID)
+            let commandParams = try await explicitControlParameters(operation, params)
+            let receipt = try await submitPublicCommand(operation, params: commandParams, crew: params["crewId"].string ?? crewID)
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
                 throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。", data: receipt.value)
             }
@@ -793,6 +794,30 @@ final class CrewdWorkspace: ObservableObject {
             }
             throw error
         }
+    }
+    /// Original explicit controls supplied only a session ID. Resolve that
+    /// closed legacy shape through a current read; never replace a caller's
+    /// already typed CAS target or infer a target from a cached session row.
+    private func explicitControlParameters(_ operation: CrewdPublicOperation, _ params: CrewdValue) async throws -> CrewdValue {
+        guard [.sessionResume, .sessionInterrupt, .sessionStop].contains(operation),
+              case .object(let fields) = params else { return params }
+        let legacyKeys: Set<String> = operation == .sessionStop ? ["sessionId", "reason"] : ["sessionId"]
+        guard Set(fields.keys) == legacyKeys else { return params } // Typed/mixed shapes retain strict canonical validation.
+        guard let id = fields["sessionId"]?.string, !id.isEmpty else {
+            throw CrewdClientError(message: "原会话身份不完整；控制尚未提交。", kind: .notSubmitted)
+        }
+        let epoch = generation, restoreEpoch = knowledge.workspace?.context.restoreEpoch
+        let origin = try publicCommandBinding(for: client)
+        let target: CrewdCommandTarget
+        do { target = try await refreshControlTarget(id) }
+        catch { throw CrewdClientError(message: "当前会话代际未能读取；控制尚未提交：" + error.localizedDescription, kind: .notSubmitted) }
+        guard !stopping, acceptsObservation(epoch),
+              (try? publicCommandBinding(for: client)) == origin,
+              knowledge.workspace?.context.restoreEpoch == restoreEpoch else {
+            throw CrewdClientError(message: "读取期间连接或恢复范围已改变；控制尚未提交。", kind: .notSubmitted)
+        }
+        if operation == .sessionStop { return .object(["target": target.value, "reason": fields["reason"]!]) }
+        return target.value
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
