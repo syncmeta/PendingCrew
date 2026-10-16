@@ -293,6 +293,8 @@ impl S5RequestFaultControl {
 pub type TestRegistryReady = Box<dyn FnOnce(Arc<ProcessRegistry>) -> std::io::Result<()> + Send>;
 #[derive(Default)]
 pub struct ServeOptions {
+    /// Opt-in Mac GUI helper lifetime; never an arbitrary caller-selected PID.
+    pub managed_parent: bool,
     pub orchestra: Option<OrchestraServe>,
     #[cfg(feature = "testkit")]
     pub test_registry_ready: Option<TestRegistryReady>,
@@ -370,6 +372,9 @@ async fn serve_with_hooks_inner(
     hooks: Option<orchestra::hooks::Hooks>,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
+    if opts.managed_parent && !cfg!(target_os = "macos") {
+        anyhow::bail!("managed parent lifetime is only available for Mac helpers");
+    }
     // A missing explicit program fails before binding or creating storage.
     if let Some(o) = &mut opts.orchestra {
         if let orchestra::exec_codex::CodexProgram::Path(p) = &mut o.codex {
@@ -414,6 +419,10 @@ async fn serve_with_hooks_inner(
         ready(registry.clone())?;
     }
     let peer_policy = Arc::new(peer::PeerPolicy::new(Some(registry.clone()))?);
+    if opts.managed_parent && !peer_policy.has_managed_parent() {
+        anyhow::bail!("managed helper requires an original kernel-confirmed parent");
+    }
+    let managed_policy = peer_policy.clone();
     let _ = std::fs::remove_file(&sock);
     if let Some(o) = &opts.orchestra {
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
@@ -596,6 +605,17 @@ async fn serve_with_hooks_inner(
     let mut fatal = None;
     let mut ended = false;
     let mut reason = "stop";
+    let managed_admission = state.admission.clone();
+    let managed_parent = opts.managed_parent;
+    let mut parent_exit = Box::pin(async move {
+        if managed_parent {
+            managed_policy
+                .wait_for_managed_parent_exit(&managed_admission)
+                .await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    });
     let (drain_tx, drain_rx) = tokio::sync::watch::channel(false);
     let mut conns = tokio::task::JoinSet::new();
     match listener {
@@ -627,6 +647,11 @@ async fn serve_with_hooks_inner(
             tokio::pin!(shutdown);
             loop {
                 tokio::select! {
+                    _ = &mut parent_exit => {
+                        state.admission.close();
+                        reason = "parent_exit";
+                        break;
+                    }
                     _ = &mut shutdown => break,
                     changed = exit.changed(), if handle.is_some() => {
                         match changed {
@@ -710,7 +735,9 @@ async fn serve_with_hooks_inner(
     }
     drop(handle);
     drop(cell);
-    let clean = fatal.is_none() && registry.try_entries()?.is_empty();
+    // A confirmed GUI crash is still an abnormal application exit even when
+    // owned children settle cleanly; never erase its manual-recovery prompt.
+    let clean = reason != "parent_exit" && fatal.is_none() && registry.try_entries()?.is_empty();
     if clean {
         db.call_result(|s| crewd_store::meta_set(s.conn(), "lifecycle.clean", "true"))
             .await??;

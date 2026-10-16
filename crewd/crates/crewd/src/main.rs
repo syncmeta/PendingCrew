@@ -30,6 +30,9 @@ enum Cmd {
     NativeHelper,
     /// 前台运行服务
     Serve {
+        /// Mac App-owned helper: stop when the original OS parent is confirmed gone.
+        #[arg(long)]
+        managed_parent: bool,
         #[arg(long, env = "CREWD_CODEX")]
         codex: Option<PathBuf>,
         #[arg(long = "codex-env", value_name = "K=V", hide = true)]
@@ -185,6 +188,7 @@ async fn run() -> anyhow::Result<()> {
             }
         }
         Cmd::Serve {
+            managed_parent,
             claude,
             claude_env,
             codex,
@@ -211,6 +215,7 @@ async fn run() -> anyhow::Result<()> {
                 .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
                 .map(|d| d.join("projects"));
             let opts = crewd_server::ServeOptions {
+                managed_parent: *managed_parent,
                 orchestra: Some(crewd_server::OrchestraServe {
                     codex: match codex {
                         Some(path) => {

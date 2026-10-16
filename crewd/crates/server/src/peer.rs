@@ -13,6 +13,34 @@ use tokio::net::UnixStream;
 fn same_birth(a: &ProcessIdentity, b: &ProcessIdentity) -> bool {
     a.pid == b.pid && a.start_time == b.start_time && a.boot_id == b.boot_id
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedParentState {
+    Alive,
+    Gone,
+    Unknown,
+}
+
+fn managed_parent_state(
+    parent: &ProcessIdentity,
+    daemon: &ProcessIdentity,
+    mut probe: impl FnMut(i32) -> ParentProbe,
+) -> ManagedParentState {
+    match probe(parent.pid) {
+        ParentProbe::Missing => ManagedParentState::Gone,
+        ParentProbe::Found { identity, .. } if !same_birth(parent, &identity) => {
+            ManagedParentState::Gone
+        }
+        ParentProbe::Unreadable(_) => ManagedParentState::Unknown,
+        ParentProbe::Found { .. } => match probe(daemon.pid) {
+            ParentProbe::Found {
+                identity,
+                parent: pid,
+            } if same_birth(daemon, &identity) && pid == parent.pid => ManagedParentState::Alive,
+            _ => ManagedParentState::Unknown,
+        },
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Authority {
     Human,
@@ -66,6 +94,43 @@ impl PeerPolicy {
             managed_peers: Mutex::new(BTreeMap::new()),
         })
     }
+    pub(crate) fn has_managed_parent(&self) -> bool {
+        self.human_anchors.get(1).is_some()
+    }
+
+    /// Optional Mac helper lifetime only. Caller JSON and socket ownership never
+    /// choose the monitored process; it is the original kernel-captured parent.
+    pub(crate) async fn wait_for_managed_parent_exit(
+        &self,
+        admission: &crate::lifecycle::Admission,
+    ) {
+        let Some(parent) = self.human_anchors.get(1) else {
+            admission.close();
+            std::future::pending::<()>().await;
+            return;
+        };
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut warned = false;
+        loop {
+            tick.tick().await;
+            match managed_parent_state(parent, &self.daemon_birth, registry::parent) {
+                ManagedParentState::Alive => {}
+                ManagedParentState::Gone => {
+                    admission.close();
+                    return;
+                }
+                ManagedParentState::Unknown => {
+                    admission.close();
+                    if !warned {
+                        eprintln!("crewd: managed parent identity unavailable; new execution held");
+                        warned = true;
+                    }
+                }
+            }
+        }
+    }
+
     /// A driver observation becomes public physical evidence only when the
     /// exact current kernel child matches this session's spawn enrollment.
     pub(crate) fn owned_runtime_birth(&self, session: &str, pid: u32) -> Option<ProcessIdentity> {
@@ -728,6 +793,66 @@ fn kernel_pid(_: &UnixStream) -> io::Result<i32> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    #[test]
+    fn managed_parent_observation_requires_original_birth_and_never_calls_unknown_dead() {
+        let parent = identity(20, 100);
+        let daemon = identity(30, 200);
+        let found_parent = || ParentProbe::Found {
+            identity: parent.clone(),
+            parent: 1,
+        };
+        let found_daemon = |pid| ParentProbe::Found {
+            identity: daemon.clone(),
+            parent: pid,
+        };
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |pid| {
+                if pid == parent.pid {
+                    found_parent()
+                } else {
+                    found_daemon(parent.pid)
+                }
+            }),
+            ManagedParentState::Alive
+        );
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |_| ParentProbe::Missing),
+            ManagedParentState::Gone
+        );
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |_| ParentProbe::Found {
+                identity: identity(parent.pid, 999),
+                parent: 1,
+            }),
+            ManagedParentState::Gone
+        );
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |_| ParentProbe::Unreadable(libc::EACCES)),
+            ManagedParentState::Unknown
+        );
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |pid| {
+                if pid == parent.pid {
+                    found_parent()
+                } else {
+                    found_daemon(1)
+                }
+            }),
+            ManagedParentState::Unknown
+        );
+        assert_eq!(
+            managed_parent_state(&parent, &daemon, |pid| {
+                if pid == parent.pid {
+                    found_parent()
+                } else {
+                    ParentProbe::Unreadable(libc::EACCES)
+                }
+            }),
+            ManagedParentState::Unknown
+        );
+        assert!(!crate::ServeOptions::default().managed_parent);
+    }
+
     fn identity(pid: i32, birth: u64) -> ProcessIdentity {
         ProcessIdentity {
             pid,
