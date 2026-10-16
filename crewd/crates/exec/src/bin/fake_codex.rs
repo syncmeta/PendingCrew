@@ -9,6 +9,7 @@
 //! - `FAKE_CODEX_PID`：启动时把自己的 pid 写到这个文件。
 //! - `FAKE_CODEX_CHILD_PID`：`spawn_child` 模式下把起的 `sleep` 的 pid 写到这个文件。
 //! - `FAKE_CODEX_TERM_LOG`：`count_term` 模式下每收到一次 SIGTERM 往这个文件追加一个 `T`。
+//! - `FAKE_CODEX_KNOWLEDGE_CREW`：可选显式crew ID；crew_mcp 经正式MCP创建共享block与web视图。
 //! - `FAKE_CODEX_MODE`：逗号分隔的开关：
 //!   `die_on_init`（收到 initialize 就往 stderr 写一句、exit 3）、`init_silent`（不回 initialize）、
 //!   `stderr_flood`（回 initialize 之前往 stderr 灌 1 MiB）、`resume_fails`、`turn_hangs`（不回
@@ -454,6 +455,47 @@ fn exercise_crew_mcp(params: &Value) {
         called.get("result").is_some() && called["result"]["isError"] != true,
         "{called}"
     );
+    // Optional whole-App fixture: use the real injected MCP helper and actor.
+    // The ordinary crew_mcp fixture keeps its directory-only behavior.
+    if let Ok(crew) = std::env::var("FAKE_CODEX_KNOWLEDGE_CREW") {
+        assert!(!crew.is_empty(), "explicit knowledge crew required");
+        let decode = |reply: &Value| -> Value {
+            assert!(reply["result"]["isError"] != true, "{reply}");
+            let text = reply["result"]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|item| item["text"].as_str())
+                .expect("MCP text result required");
+            serde_json::from_str(text).unwrap()
+        };
+        let workspace_call = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"data_workspace_get","arguments":{"crewId":crew}}});
+        transcript.push(workspace_call.clone());
+        writeln!(input, "{workspace_call}").unwrap();
+        input.flush().unwrap();
+        let workspace = decode(&read_response(4, &mut output, &mut transcript));
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let submit = json!({
+            "requestId":request_id,"context":workspace["context"],
+            "change":{"kind":"apply","message":"Synthetic Agent generated knowledge", "edits":[
+                {"kind":"createBlock","alias":"shared","contentType":"text/plain","content":"Shared Agent block","sources":[],"attributes":{}},
+                {"kind":"createView","alias":"canvas","title":"Agent generated workspace","sources":[],"attributes":{},"definition":{
+                    "kind":"web","renderer":"web","rendererVersion":"1",
+                    "html":"<article><button id='change'>Apply</button><main id='content'></main></article>",
+                    "css":"article { color: navy; padding: 24px }",
+                    "javascript":"let shared; knowledge.request('read',{binding:'shared'}).then(({response})=>{shared=response.value.object;document.querySelector('#content').textContent=shared.content;}); document.querySelector('#change').onclick=async()=>{if(!shared)return;const result=await knowledge.request('write',{message:'Update shared block',edits:[{kind:'updateBlock',id:shared.id,expectedRevision:shared.revision,contentType:shared.contentType,content:'Applied by generated view',sources:null,attributes:{}}]});document.querySelector('#content').textContent=result.response.status;};",
+                    "bindings":[{"kind":"set","id":"shared","source":{"kind":"object","reference":{"kind":"created","alias":"shared"},"atRevision":null},"attributes":{}}],
+                    "requestedCapabilities":["knowledge-write"],"attributes":{}
+                }}
+            ]}
+        });
+        let submit_call = json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"data_submit","arguments":submit}});
+        transcript.push(submit_call.clone());
+        writeln!(input, "{submit_call}").unwrap();
+        input.flush().unwrap();
+        let committed = decode(&read_response(5, &mut output, &mut transcript));
+        assert_eq!(committed["phase"], "committed", "{committed}");
+    }
     if let Ok(path) = std::env::var("FAKE_CODEX_MCP_LOG") {
         std::fs::write(path, serde_json::to_vec(&transcript).unwrap()).unwrap();
     }
