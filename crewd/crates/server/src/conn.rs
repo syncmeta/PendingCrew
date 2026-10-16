@@ -175,6 +175,7 @@ where
     let _writer_guard = AbortOnDrop(writer.abort_handle());
     let mut forwarder: Option<JoinHandle<()>> = None;
     let mut forward_guard: Option<AbortOnDrop> = None;
+    let mut lifecycle_exits = tokio::task::JoinSet::new();
     let result = read_loop(
         &state,
         rd,
@@ -186,6 +187,7 @@ where
             writer_done: &mut writer_done,
         },
         &peer,
+        &mut lifecycle_exits,
     )
     .await;
 
@@ -198,6 +200,9 @@ where
     {
         eprintln!("connection manual fence closure remains unknown");
     }
+    // Accepted stops already belong to Core. Preserve their bounded terminal
+    // replies through server drain, but never retain input authority after EOF.
+    while lifecycle_exits.join_next().await.is_some() {}
     // 无论怎么退出（EOF、读错误、行过长）都要收尾。
     if let Some(f) = forwarder {
         if !*drain.borrow() {
@@ -228,6 +233,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     forward_guard: &mut Option<AbortOnDrop>,
     signals: ConnectionSignals<'_>,
     peer: &Caller,
+    lifecycle_exits: &mut tokio::task::JoinSet<()>,
 ) -> anyhow::Result<()> {
     let ConnectionSignals { drain, writer_done } = signals;
     let mut rd = BufReader::new(rd);
@@ -293,6 +299,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
             tx,
             (forwarder, forward_guard),
             drain,
+            lifecycle_exits,
         ))
         .await
         {
@@ -358,6 +365,7 @@ async fn request_step(
     tx: &mpsc::Sender<ServerFrame>,
     forwarding: (&mut Option<JoinHandle<()>>, &mut Option<AbortOnDrop>),
     drain: &mut watch::Receiver<bool>,
+    lifecycle_exits: &mut tokio::task::JoinSet<()>,
 ) -> RequestStep {
     let (forwarder, forward_guard) = forwarding;
     // The exact kernel-captured peer remains the sole authority. This executes inside
@@ -420,6 +428,36 @@ async fn request_step(
                     req.id,
                     RpcError::new(RpcError::FORBIDDEN, "Agent cannot manage daemon lifecycle"),
                 ))
+            } else if req.method == "lifecycle.exit" {
+                while lifecycle_exits.try_join_next().is_some() {}
+                if lifecycle_exits.len() >= 4 {
+                    return RequestStep::Reply(ServerFrame::Response(Response::err(
+                        req.id,
+                        RpcError::new(RpcError::CONFLICT, "stop completion limit reached"),
+                    )));
+                }
+                let id = req.id;
+                match crate::lifecycle::begin_exit(state, &peer.command_actor(), req.params).await {
+                    Err(error) => ServerFrame::Response(Response::err(id, error)),
+                    Ok(pending) => {
+                        let state = state.clone();
+                        let tx = tx.clone();
+                        lifecycle_exits.spawn(async move {
+                            let result =
+                                catch_request(crate::lifecycle::finish_exit(&state, pending))
+                                    .await
+                                    .unwrap_or_else(|_| {
+                                        Err(crate::dispatch::internal("stop completion panicked"))
+                                    });
+                            let response = match result {
+                                Ok(value) => Response::ok(id, value),
+                                Err(error) => Response::err(id, error),
+                            };
+                            let _ = tx.send(ServerFrame::Response(response)).await;
+                        });
+                        return RequestStep::Continue;
+                    }
+                }
             } else {
                 let id = req.id;
                 let result =
