@@ -8,6 +8,7 @@ import Combine
 final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     let workspace: CrewdWorkspace
     let sessionID: String
+    private let observedCrew: String
     let kind: LocalCodingAgentKind
     let terminalView: TerminalMirrorView?
     let transcript: CodexTranscript?
@@ -25,8 +26,8 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     private var renderingCoreOutput = false
     private var retired = false
     private(set) var hasObservedLive = false
-    init(workspace: CrewdWorkspace, sessionID: String, kind: LocalCodingAgentKind) {
-        self.workspace = workspace; self.sessionID = sessionID; self.kind = kind
+    init(workspace: CrewdWorkspace, crewID: String, sessionID: String, kind: LocalCodingAgentKind) {
+        self.workspace = workspace; self.sessionID = sessionID; self.kind = kind; observedCrew = crewID
         terminalView = kind == .codex ? nil : TerminalMirrorView(frame: .zero)
         transcript = kind == .codex ? CodexTranscript() : nil
         publicTerminal = kind != .codex && workspace.client.capabilities.contains("session.terminal")
@@ -49,7 +50,11 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
         }
     }
     func update(live: CrewdValue, inspection: CrewdValue, items: [CrewdValue]) {
-        guard !retired, workspace.acceptsObservation(workspace.observationGeneration), live["sessionId"].string == sessionID else { return }
+        guard !retired, workspace.acceptsObservation(workspace.observationGeneration), live["sessionId"].string == sessionID else {
+            transcript?.revokeKnowledgeFailureDetails(); return
+        }
+        let currentCrew = workspace.crewID == observedCrew && workspace.sessionID == sessionID
+        if !currentCrew { transcript?.revokeKnowledgeFailureDetails() }
         hasObservedLive = true
         status = live["running"] == .bool(true) ? .running : .exited(nil)
         isWorking = live["working"] == .bool(true)
@@ -70,6 +75,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
             guard let raw = item.pretty.data(using: .utf8),
                   let decoded = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { continue }
             transcript?.apply(method: "item/completed", params: ["item": decoded])
+            if currentCrew { transcript?.observeKnowledgeFailure(decoded) }
         }
     }
     func send(_ text: String) { failure = "请通过机组消息发送，或在此原会话页明确取得手工终端控制。" }
@@ -79,6 +85,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     func resume() { command("session.resume", ["sessionId": .string(sessionID)]) }
     func retireDisplay() {
         retired = true
+        transcript?.revokeKnowledgeFailureDetails()
         publicTerminal?.retire()
         terminalView?.onSendBytes = nil; terminalView?.onResize = nil
     }
@@ -153,13 +160,16 @@ final class CrewdOriginalSessionProjection {
             projections.removeAll(); observedGeneration = epoch
             runner.installCrewdProjection([], workspace: workspace)
         }
+        for old in projections.values where !workspace.acceptsObservation(epoch) || old.crewId != workspace.crewID || old.sessionId != workspace.sessionID {
+            (old.backend as? CrewdOriginalSessionBackend)?.transcript?.revokeKnowledgeFailureDetails()
+        }
         guard workspace.acceptsObservation(epoch) else { return }
         for row in workspace.sessions {
             guard let id = row["id"].string, let crew = row["crewId"].string, let executor = row["executor"].string else { continue }
             guard executor == "codex" || executor == "claude" || executor.hasPrefix("acp:") else { continue }
             if projections[id] == nil {
                 let kind: LocalCodingAgentKind = executor == "codex" ? .codex : .claudeCode
-                let backend = CrewdOriginalSessionBackend(workspace: workspace, sessionID: id, kind: kind)
+                let backend = CrewdOriginalSessionBackend(workspace: workspace, crewID: crew, sessionID: id, kind: kind)
                 let display = CrewSessionRun(crewId: crew, sessionId: id, kind: kind,
                     taskBrief: row["brief"].string ?? "", title: row["title"].string ?? "",
                     workingDirectory: URL(fileURLWithPath: row["workingDirectory"].string ?? "/"),
