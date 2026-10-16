@@ -55,7 +55,14 @@ def main():
         raise ValueError('Source changed during the coordinated build; preserve output and freeze before retrying')
     if digest(backend) != args.backend_sha256:
         raise ValueError('Coordinated backend input changed during GUI compilation')
+    # Xcode may copy package frameworks after post-build scripts in an incremental build.
+    # Finalize the actual unsigned target after all Xcode tasks, before capture/sealing.
+    sys.dont_write_bytecode = True
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('candidate_closure',repo/'scripts/dev/crewd-validation-load-closure.py')
+    closure = importlib.util.module_from_spec(spec); spec.loader.exec_module(closure)
     built = pathlib.Path(DD)/'Build/Products/KnowledgeValidation/PendingCrew.app'
+    finalization = closure.finalize_unsigned_target(built, args.ref, 'KnowledgeValidation')
     app = out/'PendingCrew SQLite Candidate.app'
     shutil.copytree(built, app, symlinks=True)
     helpers = app/'Contents/Helpers'
@@ -77,16 +84,11 @@ def main():
         run(['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(path)], repo, out/'sign.log')
     run(['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app)], repo, out/'sign.log')
     run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)], repo, out/'signature-check.log')
-    # Reuse the existing dependency loader inspection; no compiler-chain proof machinery.
-    sys.dont_write_bytecode = True
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('candidate_closure',repo/'scripts/dev/crewd-validation-load-closure.py')
-    closure = importlib.util.module_from_spec(spec); spec.loader.exec_module(closure)
     loaded = closure.audit(app)
     facts = {'sourceRef':args.ref,'configuration':'KnowledgeValidation','app':str(app),
         'backendInputSHA256':args.backend_sha256,'backendSHA256':digest(helpers/'crewd'),
         'binaryHashes':{str(path.relative_to(app)):digest(path) for path in code},
-        'buildLogSHA256':digest(out/'build.log'),'loadClosure':loaded,'signing':'ad-hoc',
+        'buildLogSHA256':digest(out/'build.log'),'loadClosure':loaded,'unsignedTargetFinalization':finalization,'signing':'ad-hoc',
         'buildCommand':command,'configurationHashes':{name:digest(repo/name) for name in ['Config/KnowledgeValidation.xcconfig','Config/KnowledgeValidation-Info.plist','project.yml','PendingCrew.xcodeproj/project.pbxproj']},
         'launched':False,'installed':False,'published':False}
     (out/'candidate.json').write_text(json.dumps(facts,ensure_ascii=False,indent=2)+'\n')
