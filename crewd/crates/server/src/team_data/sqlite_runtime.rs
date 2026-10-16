@@ -146,6 +146,15 @@ fn encode(v: impl Serialize) -> Result<Value, KnowledgeError> {
 }
 impl Runtime {
     pub(crate) fn new(root: PathBuf) -> crewd_store::Result<Self> {
+        let parent = root
+            .parent()
+            .ok_or_else(|| crewd_store::StoreError::Invalid("knowledge parent missing".into()))?;
+        let name = root.file_name().ok_or_else(|| {
+            crewd_store::StoreError::Invalid("knowledge directory name missing".into())
+        })?;
+        // Core already opened this data directory. Normalize its ancestor aliases
+        // (such as macOS /tmp) without following a symlink at the knowledge root.
+        let root = std::fs::canonicalize(parent)?.join(name);
         store::private_dir(&root)?;
         Ok(Self { root })
     }
@@ -789,6 +798,37 @@ mod tests {
     use crate::agent::testkit::Fixture;
     use crewd_proto::agent::methods;
     use serde_json::json;
+    #[test]
+    fn sqlite_runtime_accepts_parent_alias_but_rejects_unsafe_knowledge_root() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(temporary.path()).unwrap();
+        let data = parent.join("data");
+        std::fs::create_dir(&data).unwrap();
+        let alias = parent.join("data-alias");
+        symlink(&data, &alias).unwrap();
+
+        let runtime = Runtime::new(alias.join("knowledge")).unwrap();
+        assert_eq!(runtime.root, data.join("knowledge"));
+        std::fs::remove_dir(&runtime.root).unwrap();
+
+        let elsewhere = parent.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&elsewhere, data.join("knowledge")).unwrap();
+        assert!(Runtime::new(alias.join("knowledge")).is_err());
+        std::fs::remove_file(data.join("knowledge")).unwrap();
+
+        std::fs::create_dir(data.join("knowledge")).unwrap();
+        std::fs::set_permissions(
+            data.join("knowledge"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(Runtime::new(alias.join("knowledge")).is_err());
+    }
+
     async fn runtime(f: &Fixture) -> Arc<Runtime> {
         let root = std::fs::canonicalize(f.data_dir())
             .unwrap()

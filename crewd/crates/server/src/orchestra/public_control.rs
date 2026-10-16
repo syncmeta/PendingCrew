@@ -682,6 +682,9 @@ impl<P: Port> Core<P> {
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
+        if let Some(admission) = &self.cfg.admission {
+            admission.allow(&row.id);
+        }
         self.launch(row.clone(), executor, brief, vec![], vec![])
             .await
             .map_err(ControlError::from_port)?;
