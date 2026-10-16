@@ -16,7 +16,7 @@ struct CrewSettingsView: View {
             } else {
                 CrewdJudgmentSettingsTab(window: model.crewdWindow)
                     .tabItem { Label("判断模型", systemImage: "slider.horizontal.3") }
-                Form { Text("当前机组和执行由 crewd 管理。连接、权限和撤销请使用主窗口的电脑与设备连接入口。") }
+                CrewdLocalSettingsTab()
                     .tabItem { Label("后端", systemImage: "externaldrive.connected.to.line.below") }
             }
         }
@@ -448,4 +448,47 @@ private struct BackendsSettingsTab: View {
     }
 }
 
+#endif
+
+#if os(macOS)
+private struct CrewdLocalSettingsTab: View {
+    @EnvironmentObject private var model: AppModel
+    @AppStorage(CrewdCodexConfiguration.key) private var selectedProgram = ""
+    @State private var selectionError: String?
+    private var program: String? { CrewdCodexConfiguration.program() }
+    var body: some View {
+        Form {
+            Section("本机工作区") {
+                Text(model.crewdDirectory?.path ?? "数据目录配置不可用").textSelection(.enabled)
+                Text("使用独立持久目录，不导入旧版或候选资料。打开应用只加载资料；启动和恢复会话需要你明确选择。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("下次后台启动使用的 Codex") {
+                Text(program ?? "尚未找到 Codex，请选择已安装的可执行文件。").textSelection(.enabled)
+                if let program {
+                    Text(CrewdCodexConfiguration.executable(program) ? "已找到可执行文件；尚未检查登录或实际模型连接。" : "所选文件不存在或不可执行；资料仍可使用，新后台将禁用执行。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("选择 Codex…") {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let path = panel.url?.path {
+                            if CrewdCodexConfiguration.executable(path) { selectedProgram = path; selectionError = nil }
+                            else { selectionError = "请选择可执行的 Codex 文件。" }
+                        }
+                    }
+                    Button("使用自动发现") { selectedProgram = ""; selectionError = nil }
+                }
+                if let selectionError { Text(selectionError).foregroundStyle(.red) }
+                Text("请先在终端安装并登录 Codex。这里不读取登录凭据，也不代你登录。路径变更在下次本机后台启动时生效；请先停工退出，再重新打开应用。显式环境配置优先于此设置。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("当前版本") {
+                Text(AppBuildStamp.current).textSelection(.enabled)
+                Text("当前本机版本不连接旧版自动更新渠道；远程电脑连接暂不提供。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.formStyle(.grouped).padding()
+    }
+}
 #endif

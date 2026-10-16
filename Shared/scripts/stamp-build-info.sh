@@ -42,6 +42,10 @@ elif ! COMMIT=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
 	echo "warning: stamp-build-info: $SRCROOT 不是 git 仓库（或没装 git），本次构建不带版本戳"
 	exit 0
 fi
+if [ "${PLATFORM_NAME:-}" = "macosx" ] && { [ "${CONFIGURATION:-}" = "Debug" ] || [ "${CONFIGURATION:-}" = "Release" ]; }; then
+    /usr/libexec/PlistBuddy -c "Delete :PendingCrewSourceRef" "$PLIST" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :PendingCrewSourceRef string $COMMIT" "$PLIST"
+fi
 DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 /usr/libexec/PlistBuddy -c "Delete :BuildStampCommit" "$PLIST" 2>/dev/null || true

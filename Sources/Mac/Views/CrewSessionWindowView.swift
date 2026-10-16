@@ -82,7 +82,7 @@ struct CrewSessionWindowView: View {
         .task {
             // Read-only detection. The explicit notice owns both confirmation
             // clicks; merely opening this pane must never install a CLI.
-            guard !appModel.usesCrewdAuthority || appModel.crewdBackend?.workspace.dataDirectory != nil else { return }
+            guard !appModel.usesCrewdAuthority else { return }
             if cliVersions.codexProvisioningState == nil {
                 await cliVersions.refresh(.codex)
             }
@@ -322,7 +322,7 @@ struct CrewSessionWindowView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            if selectedKind == .codex && sessionRunner.lastStartError == nil {
+            if !appModel.usesCrewdAuthority && selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——

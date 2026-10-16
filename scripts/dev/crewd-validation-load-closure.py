@@ -196,7 +196,7 @@ def main_build_signature(path):
 
 def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
  app=pathlib.Path(app)
- if configuration not in ['DeliveryValidation','KnowledgeValidation']:fail('closed target configuration')
+ if configuration not in ['DeliveryValidation','KnowledgeValidation','Debug','Release']:fail('closed target configuration')
  if not re.fullmatch('[0-9a-f]{40}',ref):fail('complete source ref required')
  if not app.is_absolute() or app.is_symlink() or app.resolve(strict=True)!=app:fail('target App alias')
  # A vendor framework's own seal is not this root App bundle seal. Never touch
@@ -208,7 +208,10 @@ def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
  raw=info_path.read_bytes();info=plistlib.loads(raw)
  if configuration=='KnowledgeValidation' and info.get('PendingCrewKnowledgeValidation') is not True:fail('knowledge target marker missing')
  if configuration=='DeliveryValidation' and info.get('PendingCrewKnowledgeValidation') is True:fail('contradictory target marker')
- if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True or info.get('PendingCrewSourceRef')!=ref or info.get('BuildStampCommit')!=ref:fail('actual target Info identity/source stamps differ')
+ if configuration in ['Debug','Release']:
+  if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew' or info.get('PendingCrewLocalMac') is not True or any(info.get(k) for k in ['PendingCrewKnowledgeValidation','PendingCrewDeliveryValidation','PendingCrewNativeCandidate','SUFeedURL','SUPublicEDKey']):fail('ordinary local product identity differs')
+ elif info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True:fail('candidate product identity differs')
+ if info.get('PendingCrewSourceRef')!=ref or info.get('BuildStampCommit')!=ref:fail('actual target source stamps differ')
  name=info.get('CFBundleExecutable')
  if not isinstance(name,str) or pathlib.PurePosixPath(name).name!=name or not name:fail('invalid target executable')
  main=app/'Contents/MacOS'/name

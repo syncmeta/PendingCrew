@@ -27,8 +27,8 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 .toolbar {
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
-                #if PENDINGCREW_KNOWLEDGE_VALIDATION
-                Text("本轮 SQLite Mac 候选仅使用本机")
+                #if PENDINGCREW_KNOWLEDGE_VALIDATION || PENDINGCREW_LOCAL_MAC
+                Text("当前使用本机工作区")
                 #else
                 ForEach(window.computers) { computer in
                     Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
@@ -52,7 +52,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Button("原请求核对") { recovering = true }
                 if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
             }
-            #if !PENDINGCREW_KNOWLEDGE_VALIDATION
+            #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
             #endif
         }.sheet(isPresented: $recovering) {
@@ -88,7 +88,12 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             } message: { computer in
                 Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")
             }
-            .onAppear { window.refresh(); synchronizeAdministration() }
+            .onAppear {
+                #if !PENDINGCREW_LOCAL_MAC
+                window.refresh()
+                #endif
+                synchronizeAdministration()
+            }
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }
     }
     private func chooseLocal() async {
@@ -96,12 +101,14 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         synchronizeAdministration()
     }
     private func synchronizeAdministration() {
+        #if !PENDINGCREW_LOCAL_MAC
         let current = window.workspace
         if admin?.workspace === current { return }
         if let old = admin { old.retire(); previousAdmins.append(old) }
         managing = false
         if let current, current.dataDirectory != nil { admin = CrewdRemoteAdmin(workspace: current) }
         else { admin = nil }
+        #endif
     }
 }
 struct CrewdOriginalConnectionStatus: View {
@@ -113,6 +120,9 @@ struct CrewdOriginalConnectionStatus: View {
     var body: some View {
         HStack {
             Text(workspace.status).font(.caption)
+            if workspace.dataDirectory != nil, !(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false) {
+                Text("下次后台启动未配置可执行的 Codex；资料仍可使用，请在设置中准备后停工重开。").font(.caption).foregroundStyle(.secondary)
+            }
             if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
             Spacer()
             if workspace.dataDirectory != nil {

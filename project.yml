@@ -96,6 +96,10 @@ targets:
         script: |
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
         basedOnDependencyAnalysis: false
+      - name: Embed coordinated local Core
+        script: |
+          "$SRCROOT/Shared/scripts/embed-crewd-macos.sh"
+        basedOnDependencyAnalysis: false
       - name: Validate isolated runtime dependency closure
         script: |
           /usr/bin/python3 "$SRCROOT/scripts/dev/crewd-validation-load-closure.py" prune-target
@@ -139,6 +143,16 @@ targets:
         ENABLE_PREVIEWS: YES
         SUPPORTS_MACCATALYST: NO
       configs:
+        Debug:
+          "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
+          "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC"
+          "OTHER_LDFLAGS[sdk=macosx*]": "$(inherited) -Wl,-dead_strip_dylibs"
+        Release:
+          "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
+          "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) PENDINGCREW_LOCAL_MAC"
+          "OTHER_LDFLAGS[sdk=macosx*]": "$(inherited) -Wl,-dead_strip_dylibs"
         KnowledgeValidation:
           PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate
           INFOPLIST_FILE: Config/KnowledgeValidation-Info.plist

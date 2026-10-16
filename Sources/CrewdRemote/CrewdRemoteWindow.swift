@@ -16,11 +16,16 @@ import Combine
     let pairing: CrewdRemotePairing
     init(pairing: CrewdRemotePairing = CrewdRemotePairing(credentials: CrewdRemoteCredentials.application())) {
         self.pairing = pairing
+        #if !PENDINGCREW_LOCAL_MAC
         changes=NotificationCenter.default.publisher(for:CrewdRemotePairing.changed).sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        #endif
     }
     func refresh() {
+        #if PENDINGCREW_LOCAL_MAC
+        computers = []
+        #else
         do {
             computers = try pairing.summaries(); error = nil
             if let id=selected, (try? pairing.paired(id).2) != selectedReceipt { retireSelected() }
@@ -29,6 +34,7 @@ import Combine
             self.error = error.localizedDescription
             if let id=selected, (try? pairing.paired(id).2) != selectedReceipt {retireSelected()}
         }
+        #endif
     }
     private func retireCurrent() {
         selectionEpoch=UUID();connectionTask?.cancel();connectionTask=nil

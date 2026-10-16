@@ -85,7 +85,9 @@ struct PendingCrewApp: App {
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
         }
         .commands {
+            #if !PENDINGCREW_LOCAL_MAC
             if !model.usesCrewdAuthority { PendingCrewUpdateCommands() }
+            #endif
             CommandGroup(replacing: .appTermination) {
                 Button("退出 PendingCrew") {
                     AppQuitLifecycle.shared.userRequestedQuit = true
