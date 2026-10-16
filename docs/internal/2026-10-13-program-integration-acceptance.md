@@ -686,3 +686,14 @@ backend_plan、client_plan、quality已分别恢复完整模块；唯一写者�
 真人明确批准call_83dfab27c8aa4c1dbd683a747e7515d0的一次真实Codex单任务。执行仅新私域 `/private/tmp/pcw-mac-daily-7df9979a-real-codex-01`：原GUI16203、真实Codex16669，session.start UUIDa5044b38-30bb-4145-8db3-30ee0bc06ecd实际launched。模型首crew.data_schema_get显示失败后按约停止，知识落库NOT_PASS，无成功正式data receipt；不把模型说未创建当耐久证明。约62秒内正常Direct，原GUIwait0、knownGUI/Codex无、socket无/registry空；未取得原Core PID，不能冒Core Popen/OS确认。未新JS/第二任务/重试/安装。完整停止修订报告single-real-codex-stopped-review-revision-02.json SHA0f197ae6d36b51061fd502ecd1bb09cde407a9fe028e8fd475b16d4f20017847；原ad4d保留但‘无目录’文字撤回，directory exists不推初始化/写结果。真实参数/错误码未保存，具体首拒原因仍未证；mode=ro失败后未用immutable/复制WAL/重开服务绕过，未读账号auth/config。
 
 后端独立源核发现正式知识MCP inputSchema引用shared generator的$defs但单工具未携带定义，假fixture硬编码正确参数未覆盖advertised消费；首次新workspace正确路径也缺清晰指导。这是已证源码缺陷，不能反推就是此次实际唯一原因。backend唯一作者正按整套工具自足schema/可达定义、workspace→合法firstsubmit→read及准确拒绝合同整块修复、无模型正式MCP验证。读不初始化，已获writeACL Agent首submit可建库；无新增Human初始化按钮/自动读建库/权限放宽，client保持8ade。此次真实授权已用完，下一真实调用须新具体授权；不安装7df冒日用完成。其余稳定SQLite/WK/parent/退出证据继续准确复用，不新CI/全量重审或验收工具。
+
+
+## 2026-10-16 完整知识 MCP 契约与当前失败详情单元接受、下一组合冻结
+
+backend06310dc3270d764510672f3e4a42fe65139bce2a完整三文件独验接受，报告backend-knowledge-mcp-0631-independent-review.json SHA89d1cea38b6cc1b2450defff6bdd11478d40e76a04914d1b8f978fc3e4f89283（均在/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01）。每工具schema_for自足、根object/strict、全部ref可解析且仅可达defs，未把共享全库复制给每工具。workspace→获writeACL首submit→read与原origin lookup说明及拒绝保numericRPCcode；无SQLite/ACL/UUID/Unknown逻辑变化。正式真实crewd mcp无模型43帧覆盖10工具：首读拒不init、foreign拒、首写committed、同UUID重试等原receipt/原context lookup、对象/SQL/schema/table/query/history/preview及danger/protected/stale拒仍row1。作者development接缝非新normal或模型证明，原fixture超时/错误latestcontext被正确拒原样保留。
+
+clientf8e892c47c4572f082524d1f5c53129e900f330f完整四路径独验接受，client-knowledge-failure-f8e8-independent-review.json SHA56e26f2aabe93c92d45394bbc9634c813c0f11ba348220295153919a3767d653。真实链是session.runnerItem事件→当前crew/selectedsession→transcript投影；此前quality只读消费端而误称session.inspect.items含raw，已核DTO/handler无items并明确撤回，未按误判添加接口。当前10知识工具失败原arguments/error/result.isError有限纯文本64KiB/200项、默认折叠、无raw明示、非当前/epoch/retire/late撤销；无新RPC/存盘/日志导出/clipboard/权限。生产slice与receiver通过，payload是合成事件，不冒真实SDK或7df旧raw补回。
+
+根已精确合入backend0631与clientf8e8，后端完整crewd及客户端四路径逐字对齐。此冻结提交后global源码/文档停止变更，唯一Rust作者新准确默认非测试normal，独核后客户端原暖缓存一次普通Release0.1.44新build包；7df包/ZIP/真实失败原件全部保原输入，不重标新source。主目录main当前7df与185用户改动保留，下一包接受后再安全快进；远端main不推。无新CI/冷cache/稳定全套审查。
+
+下一验收仅新MCP/失败事件展示与普通启动必要影响，7df GUI-only crash/parent/SQLite/WK/退出的未变证据继续复用。此次7df真实首拒因raw未存仍未知，独立source缺陷修好不能冒已证因果。第二次真实任务未获授权，待准确新包和可审查动作后另问真人；不自动重试原UUID、不安装/切日常/私钥签名/公开发布。

@@ -924,3 +924,10 @@ client8ade与backend517d+58bd均独立接受并精确整合，完整证据与边
 7df普通Release包的来源与完整fake实际差异链已接受，本地main已安全快进且185用户路径保全；尚未安装，远端main未推。一次真实Codex任务经真人具体批准后启动成功，但首crew.data_schema_get泛拒，约62秒内按约停工；知识落库未通过、原始args/errorcode未保存，不能确称原因。准确停止修订报告与边界见整合验收记录最新节。
 
 后端已独立证实advertised知识工具schema有悬空根引用/缺defs，并正整块修复所有工具自足与首次合法写入指导；假fixture硬编码路径没有覆盖模型消费工具定义。无模型production MCP接缝先闭合和独验，不反复单字段补丁后耗真实模型，不增加初始化UI或read建库/宽ACL。client无必要变更。新source完整接受后再准确normal/普通包，只验证MCP影响与普通启动，7df parent/SQLite/WK稳定证据不重跑。旧7df包与证明保原来源；这次真实授权已消耗，不擅自重试或安装，待新可审查准确动作另问真人。
+
+
+### 2026-10-16 完整 MCP 修复与失败详情已接受，冻结下一准确包
+
+backend0631（10个自足知识工具schema与firstwrite/原origin指导）和clientf8e8（原session.runnerItem当前知识失败的有限折叠详情）均独验接受并精确整合。无权限/SQLite/UUID/Unknown放宽，不加新初始化/inspect RPC/日志或验收平台。先前inspect.items源误判已撤回，只用真实既有事件链；旧真实首拒raw仍缺，不补造原因。
+
+本冻结提交下一准确normal→独核→普通Mac Release0.1.44新build；global全冻结，复用原Rust/Xcode/SPM缓存，无新CI/全量重跑。仅MCP与必要启动/失败展示影响复验；7df稳定GUI-only crash/SQLite/WK/退出证据原来源复用。旧7df仍是不完整真实知识验收，保留包与记录。下一真实Codex单任务须届时具体新授权，安装/日常切换/发布仍未授权，不把源修复冒日用最终交付。
