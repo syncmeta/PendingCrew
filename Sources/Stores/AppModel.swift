@@ -25,6 +25,10 @@ final class AppModel: ObservableObject {
                 let selected = self.crewdWindow.workspace
                 if let selected {
                     selected.originalJournalRequired = true
+                    guard selected.client.readyForWork else {
+                        if self.crewdBackend != nil { self.crewdBackend = nil }
+                        return
+                    }
                     guard let directory = self.crewdDirectory else {
                         self.crewdBackend = nil
                         let message = "当前后台数据目录配置不可用，连接未建立。"
@@ -37,8 +41,7 @@ final class AppModel: ObservableObject {
                     guard self.crewdWindow.workspace === selected, selected.acceptsObservation(epoch), selected.client.connectionEpoch == connection else { return }
                     guard selected.originalJournalReady else {
                         self.crewdBackend = nil
-                        let message = selected.error ?? "原提交历史尚未就绪；连接仅供只读核对。"
-                        if self.crewdWindow.error != message { self.crewdWindow.error = message }
+                        if let message = selected.error, self.crewdWindow.error != message { self.crewdWindow.error = message }
                         self.objectWillChange.send()
                         return
                     }
@@ -67,12 +70,13 @@ final class AppModel: ObservableObject {
         #endif
         if let workspace = crewdWindow.workspace {
             workspace.originalJournalRequired = true
+            guard workspace.client.readyForWork else { crewdBackend = nil; return }
             let epoch = workspace.observationGeneration, connection = workspace.client.connectionEpoch
             await workspace.prepareOriginalJournal(root: directory.appendingPathComponent("frontend-presentation/unknown-submissions"))
             guard crewdWindow.workspace === workspace, workspace.acceptsObservation(epoch), workspace.client.connectionEpoch == connection else { return }
             guard workspace.originalJournalReady else {
                 crewdBackend = nil
-                crewdWindow.error = workspace.error ?? "原提交历史尚未就绪；连接仅供只读核对。"
+                if let message = workspace.error { crewdWindow.error = message }
                 return
             }
             if crewdBackend?.workspace !== workspace { crewdBackend = CrewdPendingCrewBackend(workspace: workspace) }

@@ -219,7 +219,7 @@ final class CrewdWorkspace: ObservableObject {
     private var generation = UUID()
     var observationGeneration: UUID { generation }
     func acceptsObservation(_ epoch: UUID) -> Bool {
-        !retired && !sleeping && client.connected && generation == epoch
+        !retired && !sleeping && client.readyForWork && generation == epoch
     }
     private var selection = UUID()
     private var sessionDirectoryQuery = UUID()
@@ -679,7 +679,7 @@ final class CrewdWorkspace: ObservableObject {
     func prepareOriginalJournal(root: URL) async {
         let epoch = generation, connection = client.connectionEpoch, runtime = client.runtimeIdentity, binding = client.authorityBinding
         guard originalJournalRequired, originalJournal == nil, preparingJournal != connection,
-              journalFailureConnection != connection, client.connected, !retired else { return }
+              journalFailureConnection != connection, client.readyForWork, !retired else { return }
         preparingJournal = connection
         defer {
             if preparingJournal == connection { preparingJournal = nil }
