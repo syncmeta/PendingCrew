@@ -58,21 +58,50 @@ enum CrewdFrontendConfiguration {
         guard let ref = Bundle.main.object(forInfoDictionaryKey: "PendingCrewSourceRef") as? String,
               ref.count == 40, ref.allSatisfy({ "0123456789abcdef".contains($0) }) else { return nil }
         #endif
-        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"],
-           !explicit.isEmpty {
+        if let explicit = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"], !explicit.isEmpty {
+            #if os(macOS)
+            return candidateDirectory(path: explicit)
+            #else
             guard explicit.hasPrefix("/") else { return nil }
             return URL(fileURLWithPath: explicit).standardizedFileURL
+            #endif
         }
         #if PENDINGCREW_NATIVE_CANDIDATE
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("PendingCrewNativeCandidates")
-            .appendingPathComponent(ref)
+            .appendingPathComponent("PendingCrewNativeCandidates").appendingPathComponent(ref)
         #else
-        // A sibling of the legacy PendingCrew root, never an automatic import
-        // source. Strict owner/mode/alias validation happens before any store.
+        #if os(macOS)
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            .flatMap { candidateDirectory(path: $0.appendingPathComponent("PendingCrewLocal").path) }
+        #else
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("PendingCrewCore").standardizedFileURL
         #endif
         #endif
+        #endif
     }
 }
+
+#if os(macOS)
+/// Local file selection only. Never probes a CLI, login state or credentials.
+enum CrewdCodexConfiguration {
+    static let key = "pendingcrew.crewd.codexProgram.v1"
+    static func program(environment: [String: String] = ProcessInfo.processInfo.environment,
+                        defaults: UserDefaults = .standard, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+        if let explicit = environment["PENDINGCREW_CODEX_PROGRAM"], !explicit.isEmpty { return explicit }
+        if let selected = defaults.string(forKey: key), !selected.isEmpty { return selected }
+        let paths = [home.appendingPathComponent(".local/bin/codex").path, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"] +
+            (environment["PATH"] ?? "").split(separator: ":").filter { $0.hasPrefix("/") }.map { String($0) + "/codex" }
+        return paths.first { executable($0) }
+    }
+    static func launchArguments(directory: URL, program: String?) -> [String] {
+        ["--data-dir", directory.path, "serve", "--claude", "/usr/bin/false"] +
+            (program.flatMap { executable($0) ? $0 : nil }.map { ["--codex", $0] } ?? [])
+    }
+    static func executable(_ path: String) -> Bool {
+        var directory: ObjCBool = false
+        return path.hasPrefix("/") && FileManager.default.fileExists(atPath: path, isDirectory: &directory) &&
+            !directory.boolValue && FileManager.default.isExecutableFile(atPath: path)
+    }
+}
+#endif

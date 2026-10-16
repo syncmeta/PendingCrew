@@ -44,7 +44,11 @@ final class CrewdRemoteMemoryCredentials: CrewdRemoteCredentialStore {
 enum CrewdRemoteCredentials {
     private static let isolated = CrewdRemoteMemoryCredentials()
     static func application() -> CrewdRemoteCredentialStore {
-        #if PENDINGCREW_KNOWLEDGE_VALIDATION
+        #if PENDINGCREW_LOCAL_MAC
+        // The local product exposes no pairing flow and never opens its vault.
+        // Existing persistent entries and their implementation remain untouched.
+        return CrewdRefusedCredentials()
+        #elseif PENDINGCREW_KNOWLEDGE_VALIDATION
         return isolated
         #elseif PENDINGCREW_DELIVERY_VALIDATION
         guard let scope = try? CrewdDeliveryValidation.qualified() else { return CrewdRefusedCredentials() }

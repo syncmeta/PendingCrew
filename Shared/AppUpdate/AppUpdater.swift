@@ -1,7 +1,7 @@
 #if os(macOS)
 import Combine
 import Foundation
-#if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION
+#if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
 import Sparkle
 #endif
 
@@ -24,14 +24,14 @@ final class AppUpdater: NSObject, ObservableObject {
 
     @Published private(set) var canCheckForUpdates = false
     let isConfigured: Bool
-    #if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION
+    #if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
     private var controller: SPUStandardUpdaterController?
     private var cancellable: AnyCancellable?
 
     #endif
 
     private override init() {
-        #if PENDINGCREW_DELIVERY_VALIDATION || PENDINGCREW_KNOWLEDGE_VALIDATION
+        #if PENDINGCREW_DELIVERY_VALIDATION || PENDINGCREW_KNOWLEDGE_VALIDATION || PENDINGCREW_LOCAL_MAC
         // This private channel verifies pairing/vault/lifecycle, never self-update.
         isConfigured = false
         super.init()
@@ -53,13 +53,13 @@ final class AppUpdater: NSObject, ObservableObject {
     }
 
     func checkForUpdates() {
-        #if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION
+        #if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
         controller?.checkForUpdates(nil)
         #endif
     }
 }
 
-#if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION
+#if !PENDINGCREW_DELIVERY_VALIDATION && !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
 extension AppUpdater: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         onWillInstallUpdate?()

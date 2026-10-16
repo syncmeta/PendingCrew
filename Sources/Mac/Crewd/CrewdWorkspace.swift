@@ -392,9 +392,9 @@ final class CrewdWorkspace: ObservableObject {
             let program = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/crewd")
             guard FileManager.default.isExecutableFile(atPath: program.path) else { throw CrewdClientError(message: "未找到配套后台程序，请使用完整的应用包。") }
             // Fake providers are ordinary explicit validation inputs, never a product requirement.
-            let codex = env["PENDINGCREW_CODEX_PROGRAM"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path
+            let codex = CrewdCodexConfiguration.program(environment: env)
             let p = Process(); p.executableURL = program
-            p.arguments = ["--data-dir", dataDirectory.path, "serve", "--codex", codex, "--claude", "/usr/bin/false"]
+            p.arguments = CrewdCodexConfiguration.launchArguments(directory: dataDirectory, program: codex)
             p.environment = env
             // crewd owns a lock and its sessions. GUI reconnect never imports data or replays tasks.
             let logs = dataDirectory.appendingPathComponent("client-backend.log")

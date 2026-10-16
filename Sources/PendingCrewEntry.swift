@@ -22,6 +22,8 @@ struct PendingCrewEntry {
         #if PENDINGCREW_KNOWLEDGE_VALIDATION
         // Candidate isolation is prepared before any UI singleton. No legacy import.
         CrewdFrontendIsolation.prepare()
+        #elseif PENDINGCREW_LOCAL_MAC
+        CrewdFrontendIsolation.prepare()
         #elseif PENDINGCREW_DELIVERY_VALIDATION
         let validationArguments = CommandLine.arguments
         do {
@@ -35,7 +37,7 @@ struct PendingCrewEntry {
         }
         #endif
         #if os(iOS)
-        #if !PENDINGCREW_KNOWLEDGE_VALIDATION
+        #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
         CrewdFrontendIsolation.prepare()
         #endif
         PendingCrewApp.main()
@@ -47,8 +49,11 @@ struct PendingCrewEntry {
         // 只有 256，批量读一次顶穿 → EMFILE → 被误判成文件损坏）。放在 helper 分支
         // **之前** —— 同一个二进制的 helper 子进程压的是同一批文件，一样要抬。
         FileDescriptorLimit.raiseSoftLimitToHardLimit()
+        #if !PENDINGCREW_LOCAL_MAC
         if McpHelperMain.runIfHelper(CommandLine.arguments) { return }
+        #endif
         #if os(macOS)
+        #if !PENDINGCREW_LOCAL_MAC
         // P5 无界面自检：必须在 daemon / GUI 身份之前截住，绝不为查状态开窗口。
         if SessionDaemonStatusMain.runIfRequested(CommandLine.arguments) { return }
         // 同一拍的第二支：无界面 viewer 探针（P5a 证据工具）。同样绝不开窗口 ——
@@ -61,10 +66,11 @@ struct PendingCrewEntry {
         // 身份三：常驻后台（前后端分离 P4）。**这一支不会返回** —— 它自己跑 runloop。
         if SessionDaemonMain.runIfDaemon(CommandLine.arguments) { return }
         if MainActor.assumeIsolated({ renderTranscriptSnapshotIfRequested(CommandLine.arguments) }) { return }
+        #endif
         // Ordinary and candidate builds share the original visual root and
         // one crewd authority. Private presentation preparation precedes UI
         // singleton construction; no legacy orchestration gate is installed.
-        #if !PENDINGCREW_KNOWLEDGE_VALIDATION
+        #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
         CrewdFrontendIsolation.prepare()
         #endif
         PendingCrewApp.main()

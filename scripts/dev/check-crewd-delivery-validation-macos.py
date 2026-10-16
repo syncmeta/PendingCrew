@@ -12,7 +12,10 @@ def check(root, expected_ref=None):
     if app.parent != root or not app.is_dir() or app.is_symlink():
         raise ValueError('Candidate application path mismatch')
     info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
-    if info.get('PendingCrewSourceRef') != facts['sourceRef'] or info.get('PendingCrewKnowledgeValidation') is not True:
+    ordinary = facts['configuration'] in ['Debug', 'Release']
+    if ordinary and (info.get('CFBundleIdentifier') != 'com.pendingname.pendingcrew' or any(info.get(k) for k in ['PendingCrewKnowledgeValidation','PendingCrewDeliveryValidation','PendingCrewNativeCandidate','SUFeedURL','SUPublicEDKey'])):
+        raise ValueError('Ordinary product contains candidate or old update configuration')
+    if info.get('PendingCrewSourceRef') != facts['sourceRef'] or info.get('BuildStampCommit') != facts['sourceRef'] or info.get('PendingCrewLocalMac' if ordinary else 'PendingCrewKnowledgeValidation') is not True:
         raise ValueError('Actual application source/config differs')
     if (app/'Contents/Helpers/crewd-data-worker').exists(): raise ValueError('Retired worker present')
     if sha(app/'Contents/Helpers/crewd') != facts['backendSHA256']:
