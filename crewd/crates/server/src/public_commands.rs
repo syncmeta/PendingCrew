@@ -120,7 +120,8 @@ impl Actor {
 pub(crate) fn is_method(method: &str) -> bool {
     matches!(
         method,
-        COMMAND_SUBMIT
+        LOCAL_CLIENT_TRUST_STATUS
+            | COMMAND_SUBMIT
             | COMMAND_LOOKUP
             | COMMAND_LIST_UNKNOWN
             | SESSION_CONTROL_TARGET
@@ -136,6 +137,12 @@ pub(crate) async fn handle(
 ) -> crewd_proto::Response {
     let id = req.id;
     let result = match req.method.as_str() {
+        LOCAL_CLIENT_TRUST_STATUS => {
+            match serde_json::from_value::<LocalClientTrustStatusParams>(req.params) {
+                Ok(_) => local_trust_status(state, actor).await,
+                Err(_) => Err(malformed("local trust status requires an empty object")),
+            }
+        }
         SESSION_TERMINAL_INSPECT => match crewd_proto::parse_params(req.params) {
             Ok(p) => crate::public_terminal::inspect(state, actor, p).await,
             Err(e) => Err(e),
@@ -179,6 +186,26 @@ pub(crate) async fn handle(
         Ok(value) => crewd_proto::Response::ok(id, value),
         Err(error) => crewd_proto::Response::err(id, error),
     }
+}
+
+async fn local_trust_status(state: &Arc<AppState>, actor: &Actor) -> Result<Value, RpcError> {
+    let Actor::Local(peer) = actor else {
+        return Err(RpcError::new(RpcError::FORBIDDEN, "local caller required"));
+    };
+    peer.command_principal()?;
+    let peer = peer.clone();
+    // Share the Core FIFO with pin grant/revocation. No receipt, JSON PID or
+    // cached client-side consent can substitute for the current OS caller.
+    let status = state
+        .db
+        .call(move |store| -> Result<LocalClientTrustStatus, RpcError> {
+            let pins =
+                crewd_store::local_clients::list(store.conn()).map_err(dispatch::internal)?;
+            peer.local_trust_status(&pins)
+        })
+        .await
+        .map_err(dispatch::internal)??;
+    serde_json::to_value(status).map_err(dispatch::internal)
 }
 
 fn malformed(message: &str) -> RpcError {
@@ -526,6 +553,59 @@ mod tests {
         assert!(matches!(peer.authority(), crate::peer::Authority::Human));
         (state, Actor::Local(peer), db)
     }
+    #[tokio::test]
+    async fn local_trust_status_is_readonly_and_bound_to_current_caller() {
+        let (state, actor, _) = state_actor().await;
+        let read = |params| crewd_proto::Request {
+            id: 1,
+            method: "local.clientTrust.status".into(),
+            params,
+        };
+        let status = handle(&state, &actor, read(serde_json::json!({})))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            status,
+            serde_json::json!({
+                "validExactCode":false,"bootstrapAllowed":true,"trustId":null
+            })
+        );
+        let bad = handle(&state, &actor, read(serde_json::json!({"clientPid":1})))
+            .await
+            .into_result()
+            .unwrap_err();
+        assert_eq!(bad.code, RpcError::INVALID_PARAMS);
+        let counts = state
+            .db
+            .call(|store| -> rusqlite::Result<(i64, i64)> {
+                Ok((
+                    store
+                        .conn()
+                        .query_row("SELECT COUNT(*) FROM local_client_trust", [], |r| r.get(0))?,
+                    store.conn().query_row(
+                        "SELECT COUNT(*) FROM public_command_receipts",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(counts, (0, 0));
+        actor
+            .connection_scope()
+            .close_until(std::time::Instant::now() + std::time::Duration::from_secs(1))
+            .unwrap();
+        let closed = handle(&state, &actor, read(serde_json::json!({})))
+            .await
+            .into_result()
+            .unwrap_err();
+        assert_eq!(closed.code, RpcError::FORBIDDEN);
+        state.db.clone().shutdown();
+    }
+
     #[tokio::test]
     async fn eof_fenced_actor_cannot_dispatch_while_accepted_output_drains() {
         let (state, actor, db) = state_actor().await;

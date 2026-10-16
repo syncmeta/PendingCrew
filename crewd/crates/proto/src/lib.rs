@@ -129,6 +129,7 @@ pub mod methods {
         crate::judgments::SETTINGS_GET,
         crate::judgments::SETTINGS_SET,
         crate::judgments::INSPECT,
+        crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
@@ -577,6 +578,13 @@ pub fn api_schema() -> Value {
     let g = &mut generator;
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
+        (
+            commands::LOCAL_CLIENT_TRUST_STATUS,
+            m(
+                sub::<commands::LocalClientTrustStatusParams>(g),
+                sub::<commands::LocalClientTrustStatus>(g),
+            ),
+        ),
         (
             commands::COMMAND_SUBMIT,
             m(
