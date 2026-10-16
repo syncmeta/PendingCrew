@@ -17,10 +17,15 @@ import Foundation
   precondition(record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == id)
   // An unmatched transport failure is not cleared alongside a known UUID.
   workspace.recordUncertainSessionStart(snapshot,error:CrewdClientError(message:"unmatched transport failure"))
+  let outcome = root.appendingPathComponent("frontend-presentation/unknown-submissions/"+workspace.presentationScope!.namespace.uuidString.lowercased()+"/outcomes/"+record.id.uuidString.lowercased()+".json")
+  if phase == "missing-outcome" {
+   try FileManager.default.removeItem(at:outcome) // Synthetic crash window in this fresh fixture only.
+   precondition(workspace.hasOriginalUnknown(method:"session.start",crew:"crew"))
+  }
   var receipt: CrewdPublicReceipt?
   do { receipt=try await workspace.lookupOriginalCommand(record) }
   catch { if phase != "foreign" { throw error } }
-  if ["rejected","suppressed","launched"].contains(phase) {
+  if ["rejected","suppressed","launched","missing-outcome"].contains(phase) {
    precondition(receipt != nil && !workspace.hasOriginalUnknown(method:"session.start",crew:"crew"))
    precondition(workspace.uncertainSessionStartRecords.count == 1 && workspace.uncertainSessionStartRecords[0].request == nil)
   } else {
@@ -29,11 +34,14 @@ import Foundation
   }
   let reopened = try CrewdPresentationJournal(root:root.appendingPathComponent("frontend-presentation/unknown-submissions"),scope:workspace.presentationScope!)
   let pending = try reopened.unknownRecords()
-  precondition(pending.contains { $0.id == record.id } == !["rejected","suppressed","launched"].contains(phase))
-  let outcome = root.appendingPathComponent("frontend-presentation/unknown-submissions/"+workspace.presentationScope!.namespace.uuidString.lowercased()+"/outcomes/"+record.id.uuidString.lowercased()+".json")
-  let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-  let originalOutcome = try decoder.decode(CrewdPresentationJournal.Outcome.self,from:Data(contentsOf:outcome))
-  precondition(originalOutcome.state == "unknown")
+  precondition(pending.contains { $0.id == record.id } == !["rejected","suppressed","launched","missing-outcome"].contains(phase))
+  if phase == "missing-outcome" {
+   precondition(!FileManager.default.fileExists(atPath:outcome.path))
+  } else {
+   let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+   let originalOutcome = try decoder.decode(CrewdPresentationJournal.Outcome.self,from:Data(contentsOf:outcome))
+   precondition(originalOutcome.state == "unknown")
+  }
   workspace.retire()
   print("PASS original UUID dispatched→lookup \(phase): matched draft only; unmatched/Unknown/missing/historical/foreign remain; no resend")
  }
