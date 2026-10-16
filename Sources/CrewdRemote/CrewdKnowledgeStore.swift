@@ -9,6 +9,9 @@ import CryptoKit
         let observation: UUID
         let connection: UUID
         let crew: String
+        // SQLite Core authority is the authenticated database identity. Remote
+        // pairing authority/grant remain separate in scope and Origin equality.
+        var knowledgeAuthorityID: String? { scope.databaseID.flatMap { $0.isEmpty ? nil : $0 } }
     }
     struct Intent: Codable, Equatable, Identifiable {
         let id: UUID
@@ -99,7 +102,7 @@ import CryptoKit
             for record in stored {
                 let intent = try Self.decode(record.params, Intent.self)
                 guard intent.context.crewId == o.crew, intent.context.dbId == o.scope.databaseID,
-                      intent.context.authorityId == o.scope.authorityID, records[intent.id] == nil else { throw Failure.invalid }
+                      intent.context.authorityId == o.knowledgeAuthorityID, records[intent.id] == nil else { throw Failure.invalid }
                 records[intent.id] = record; pending.append(intent)
             }
             active = o
@@ -111,7 +114,7 @@ import CryptoKit
         if origin() == o { busy = false } else { invalidate() }
     }
     private func checked(_ context: CrewdDataContext, _ o: Origin) throws {
-        guard context.dbId == o.scope.databaseID, context.authorityId == o.scope.authorityID,
+        guard context.dbId == o.scope.databaseID, context.authorityId == o.knowledgeAuthorityID,
               context.crewId == o.crew, !context.namespace.isEmpty, !context.restoreEpoch.isEmpty, !context.generation.isEmpty else { throw Failure.invalid }
     }
     private func sameAuthority(_ a: CrewdDataContext, _ b: CrewdDataContext) -> Bool {

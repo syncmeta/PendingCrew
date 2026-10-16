@@ -730,7 +730,12 @@ final class CrewdWorkspace: ObservableObject {
                 throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。")
             }
             if [.suppressed, .rejected].contains(receipt.phase) {
-                throw CrewdClientError(message: "原命令未执行：" + (receipt.value["result"]["refusal"].string ?? "当前权限或代际已改变。"), code: -32009, data: receipt.value["result"])
+                let result = receipt.value["result"]
+                let refusal = result["refusal"].string ?? result["refusal"]["refusal"].string
+                let reason = refusal == "session.worktree.not_repo"
+                    ? "独立工作树需要已提交的 Git 仓库；可选择共享工作目录后重新启动。"
+                    : (refusal ?? "当前权限或代际已改变。")
+                throw CrewdClientError(message: "原命令未执行：" + reason, code: -32009, data: result)
             }
             let result = receipt.value["result"]
             if operation == .sessionStart {
