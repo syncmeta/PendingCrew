@@ -890,3 +890,12 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 
 
 - 最新候选门：dbc实包已完成停工提示隐藏/重复Quit/force真实结束、sameDB新Core重开数据视图保留且零自启、safe/direct及异常询问未答/否零执行。仅实际显式恢复发现旧入口缺完整target，7165客户端统一现有纯读target→正式原UUID适配已独验。下一准确包只补实际所选一会话恢复与必要停工小收尾；不重复知识/退出整套，Rust仍c1ab、不新增信任或协议。完整证据见验收记录最新条目。
+
+
+### 2026-10-16 最终覆盖：精简 Mac SQLite 完整候选已接受
+
+本轮目标已完成至“整合的、完整可用的本机 Mac 开发候选”。准确 compiled ref b8abddee89312e3cfab9abb140a35ce9ff10dcdf，实际 App `/private/tmp/pcw-sqlite-b8abddee-mac-01/PendingCrew SQLite Candidate.app`；原三栏、SQLite 知识块/自由持久视图、防误删/知识恢复/原 UUID 耐久、普通重开零唤醒及显式只恢复选中会话均有分层实际证据。退出改为通知停工、可关闭进度和 owner 强制关闭，旧继续后台不再执行；关闭提示不取消停工。
+
+综合质量报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/complete-sqlite-mac-candidate-b8-review.json` SHA256 864a8abe890bf7926a1c3a62edc8d75d3ba79fbb85c22c53cae70ab465f5b2b7。最后 final b8 实包所选 worker 唯一启动、原 UUID 核对不重发，保存视图保留，GUI/Core/fake 全部收尾；详细来源和诚实边界见整合验收记录同日最终条目。稳定 bb55/f134/dbc 范围依未变 blob 复用，不冒全套 final b8 重跑，旧失败保留。
+
+本次不扩到 main 安装版、多平台、远程配对、真实 SDK/模型、发布或日常数据切换；这些是后续完整交付单元，需按原授权分别核对。Dolt/旧数据迁移不实现，Native/Solid/个人记忆不自动激活。上文旧授信阻断与“下一包待恢复”检查点均已被本条覆盖；并非授信获批，而是用户取消后台后完成新停工闭环。编译缓存空闲，保留产物与日志，不再重复稳定验收或调用 GitHub CI。

@@ -636,3 +636,22 @@ dbc576901818375e59600c8fd350e3405d229305准确normal/Mac完整来源独核通过
 实际仅所选旧worker恢复本地未发送，原因是旧sessionId-only入口交严格Envelope时缺generation/controlRevision/turnId；不是后端拒绝或已启动。客户端7165823fd3003b98941e1eab455f27193df97238现用既有session.controlTarget纯读统一closedlegacy显式resume/interrupt及stop形状，再经原正式请求提交；typedtarget不刷新CAS，混合/未知形状仍拒，前后同connection/runtime/db/grant/restoregeneration且非stopping，失败/foreign/晚响应零prepare/submit。读target不执行任务，只有明确人类所选操作提交；原Unknown/UUID不盲重发。
 
 该三路径单元已独验，10项实际生产Workspace/Client/IPC/Journal receiver控制通过，源/runtime边界注明，不冒新包实跑；报告 /private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-explicit-control-7165-review.json，SHA256 9574f563397234952b586cabe8a3b0394e8a79626df3d4e4cf8d8531caca0747。Rust仍c1ab逐字不变。准确新组合normal/暖Mac后仅补实际只选一会话恢复、核唯一启动及必要停止小收尾，已验知识/WK/退出全组不重跑、不改标dbc来源。未授信、安装、切换日常数据、公开发布或用真实模型。
+
+
+## 2026-10-16 精简 Mac SQLite 完整候选验收与交付冻结
+
+本轮约定的本机 Mac SQLite 可用候选已综合接受，准确编译源码为 b8abddee89312e3cfab9abb140a35ce9ff10dcdf，实际包 `/private/tmp/pcw-sqlite-b8abddee-mac-01/PendingCrew SQLite Candidate.app`。这是已整合的开发候选，不等于 main 产品、安装或整个多平台计划完成；本条保存后的 docs-only HEAD 不是包输入。
+
+独立综合报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/complete-sqlite-mac-candidate-b8-review.json` SHA256 `864a8abe890bf7926a1c3a62edc8d75d3ba79fbb85c22c53cae70ab465f5b2b7`，根已亲读并核 SHA。八目标映射实际原 App/MCP/WK、打包 Core 和生产控制证据；bb55 SQLite/backup 与 f134 Store/runtime 关键 blob 对 final b8 逐字相同，复用原准确来源，不重跑稳定全套、不把历史证明换标。
+
+最后实包记录 `/private/tmp/pcw-sqlite-b8abddee-runtime-20261016-01/actual-selected-resume-and-final-cleanup.json` SHA256 `1526ab0357e2679875eef86e0ef1717ceaf3c2f77b0569a71ffd393048ca9098`：明确新进程重开先为零 fake 启动；用户只选 worker-68ad89e6f25f，原请求 ef024b1c-9673-407f-90f4-f151c7cb39f8 实际 launched，登记仅此 worker，新 fake97402，未选 captain 未启动。真实 thread/resume 使用原 thread；原 UUID 纯查保持唯一回执与 fake13行不变，无重发。保存视图仍可预览且代码/写授权关闭。最终 GUI97378 wait0，已知 Core97380/fake97402 不在、registry 空、socket 无。
+
+最新退出需求已交付：取消继续后台，第三选项及历史 background 偏好通知停工；提示“正在叫他们停工”可关闭，关闭只隐藏、原停工继续，再次 Quit 显示同一进度；强制关闭仅当前 owner 的既有受控范围。dbc 实包已实际验证隐藏/重复 Quit/force、safe/direct、同 DB 新 Core 数据视图保留、异常询问未答及拒绝恢复均零执行。final b8 仅补实际选中会话恢复与必要收尾；未重复 dbc 整套，未抹 6f 失败记录。强制收尾仍可使用现有最多10秒 owned-child预算，Unknown 不假称停完。
+
+最终默认非测试 normal 来源独验 SHA `da7a81ffb4cfcd2067c77f23ca0855c8a414e1e270df4c27cc01bbfc84e98c52`；完整暖 Mac 包独验 SHA `478b3443721d66d6f2637d95500a46bb42483e675385e8d7bd17c15105c04445`。candidate.json SHA `88cc352b106f8296527c2f4fe8cfc9eccc223e92453de11e6b5b1a75b4e426e8`，GUI postsign `5b4ce5587b9b249f388cf2ed6c88383af1cbe286f0fec104736146487617057e`，helper postsign `dda604c7edcca4731c6eeb4e0e299838335df5e21f8df2a750a2062310ef8481`；ARM64、adhoc hardened-runtime/noTeam、严格签名及签前后代码等价通过。manifest 内 launched:false 是构建时事实，后续运行证据单列，未改写。
+
+范围保留：原三栏、SQLite Core DB15/knowledge DB1、共享内容块与 Agent 自由持久视图、受控 SQL/防误删/知识快照恢复/原 UUID 耐久处理已交付本轮候选。默认独立持久数据目录 `~/Library/Application Support/PendingCrewCandidates/SQLite-Mac`；实际验收全部新私域、假模型。observer 保护来自实际 Core 双 socket 和生产客户端 noStop 控制，未冒新增第二 GUI 持久授信。UI 通用 Unknown 横幅可能在可信终态核对后仍留，按原 UUID 结果为准，不为清横幅重发。
+
+未执行安装、日常数据切换、公开发布、真实模型/SDK或持久授信；普通打开不授信、不自动启动 session。remote pairing、iOS 真机、新 Linux、完整 Native producer、Solid/个人记忆及额外 all-features 不属于此次接受。Core-only 跨知识恢复仍保守拒绝，不宣称完整联合恢复。主目录 main71f7 与用户 README/design/旧 ACP/未知文件保持；整合在 global 开发分支，未推 main。源码/数据库/日志/实际二进制/构建证明均保留；无新增 GitHub CI 或缓存清理。
+
+交付封装：`/private/tmp/pcw-sqlite-b8abddee-mac-01/PendingCrew-SQLite-Mac-ARM64-b8abddee.zip`，40176276 bytes，SHA256 `309c8276ebfae10ebbb930c2f7f51bbc4639aa1374e91124fdc4af91d7d0d176`，同目录 DELIVERY.txt 与 SHA256SUMS.txt。仅从已验签名 App 封装，ZIP 列表/CRC 通过，App 关键文件及原构建证明前后散列不变；未重建、启动或安装。根已亲核 ZIP 散列与交付说明。
