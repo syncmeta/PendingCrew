@@ -27,6 +27,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 .toolbar {
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
+                #if PENDINGCREW_KNOWLEDGE_VALIDATION
+                Text("本轮 SQLite Mac 候选仅使用本机")
+                #else
                 ForEach(window.computers) { computer in
                     Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
                         if computer.paired { Task { await window.select(computer.id) } }
@@ -40,6 +43,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                         Button(computer.name, role: .destructive) { removing = computer }
                     }
                 }.disabled(window.computers.isEmpty)
+                #endif
             }
             if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
@@ -48,7 +52,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Button("原请求核对") { recovering = true }
                 if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
             }
+            #if !PENDINGCREW_KNOWLEDGE_VALIDATION
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
+            #endif
         }.sheet(isPresented: $recovering) {
             if let current = window.workspace {
                 ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)

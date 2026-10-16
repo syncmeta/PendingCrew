@@ -51,6 +51,10 @@ def main():
         raise ValueError('Existing warm caches are required; do not start a cold build')
     out.mkdir(mode=0o700)
     run(command, repo, out/'build.log')
+    if subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip() != args.ref or subprocess.check_output(['git','status','--porcelain','--untracked-files=all'],cwd=repo,text=True).strip():
+        raise ValueError('Source changed during the coordinated build; preserve output and freeze before retrying')
+    if digest(backend) != args.backend_sha256:
+        raise ValueError('Coordinated backend input changed during GUI compilation')
     built = pathlib.Path(DD)/'Build/Products/KnowledgeValidation/PendingCrew.app'
     app = out/'PendingCrew SQLite Candidate.app'
     shutil.copytree(built, app, symlinks=True)
