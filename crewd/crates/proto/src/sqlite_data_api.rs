@@ -34,7 +34,7 @@ pub fn agent_tools() -> Vec<ToolDef> {
         .filter(|(m, _)| !matches!(*m, "data.confirm" | "data.restore" | "data.snapshots" | "data.preview.get"))
         .map(|(m, s)| ToolDef {
             name: m.replace('.', "_"),
-            description: format!("SQLite knowledge {m}. Current crew ACL applies. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation."),
+            description: format!("SQLite knowledge {m}. Current crew ACL applies. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation.{}", if m == "data.submit" { " For executable Mac views use definition kind='web', renderer='web', rendererVersion='1'. Supply your own HTML/CSS/JavaScript and declared bindings. The closed JavaScript bridge is window.knowledge.request(operation,input), resolving {callID,response}; read uses {binding:'bindingId'} and returns response.value. Writes use operation='write' with exactly {message,edits} and require requestedCapabilities:['knowledge-write'] plus separate native Human code-enable and write grants for this version. Readonly views need no write capability. Unknown writes must be looked up through the retained original writeCallID; never retry by inventing a new call ID. The bridge also supports lookup with {writeCallID} and navigate with an authorized Core reference; it grants no arbitrary RPC, network or file access." } else { "" }),
             input_schema: s["params"].clone(),
             annotations: Some(ToolHints { read_only_hint: !matches!(m, "data.submit" | "data.preview"), destructive_hint: m == "data.submit", idempotent_hint: true, open_world_hint: false }),
         }).collect()
