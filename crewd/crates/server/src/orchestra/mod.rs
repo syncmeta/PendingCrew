@@ -48,6 +48,9 @@ use crewd_wake::text::Lang;
 
 #[derive(Clone, Debug)]
 pub struct OrchestraConfig {
+    /// Production admission is ephemeral and starts empty on every daemon run.
+    pub admission: Option<Arc<crate::lifecycle::Admission>>,
+    pub previous_clean: bool,
     pub batch: BatchLimits,
     pub loops: LoopLimits,
     /// 两次拉起之间至少隔多久（§22.7 Q1）。
@@ -74,6 +77,8 @@ pub struct OrchestraConfig {
 impl Default for OrchestraConfig {
     fn default() -> Self {
         Self {
+            admission: None,
+            previous_clean: true,
             batch: BatchLimits::default(),
             loops: LOOP_LIMITS,
             stagger_ms: DEFAULT_STAGGER_MS,

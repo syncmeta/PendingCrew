@@ -414,6 +414,45 @@ async fn request_step(
                 Err(e) => ServerFrame::Response(Response::err(id, e)),
             }
         }
+        Ok(req) if req.method.starts_with("lifecycle.") => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(RpcError::FORBIDDEN, "Agent cannot manage daemon lifecycle"),
+                ))
+            } else {
+                let id = req.id;
+                let result =
+                    crate::lifecycle::handle(state, &peer.command_actor(), &req.method, req.params)
+                        .await;
+                ServerFrame::Response(match result {
+                    Ok(v) => Response::ok(id, v),
+                    Err(e) => Response::err(id, e),
+                })
+            }
+        }
+        Ok(req) if crate::team_data::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "attached agents require the authenticated data tool surface",
+                    ),
+                ))
+            } else if let Some(runtime) = state.data_runtime.get() {
+                ServerFrame::Response(
+                    runtime
+                        .handle(state.clone(), peer.command_actor(), req)
+                        .await,
+                )
+            } else {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(RpcError::FORBIDDEN, "SQLite knowledge runtime unavailable"),
+                ))
+            }
+        }
         Ok(req) if crewd_proto::judgments::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(
@@ -467,7 +506,7 @@ async fn request_step(
             if agent.is_attached()
                 && p.topics
                     .iter()
-                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders"))
+                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders" | "data"))
             {
                 return RequestStep::Reply(ServerFrame::Response(Response::err(
                     id,
@@ -501,6 +540,8 @@ async fn request_step(
                 tx.clone(),
                 drain.clone(),
                 agent.attached_flag(),
+                state.clone(),
+                peer.command_actor(),
             );
             *forward_guard = Some(AbortOnDrop(task.abort_handle()));
             *forwarder = Some(task);
@@ -558,7 +599,16 @@ async fn request_step(
         Ok(req) if req.method.starts_with("agent.") => {
             #[cfg(any(test, feature = "testkit"))]
             s5_poll_fault(state, req.id).await;
-            ServerFrame::Response(crate::agent::rpc::handle(state, agent, req, tx).await)
+            ServerFrame::Response(
+                crate::agent::rpc::handle(
+                    state,
+                    agent,
+                    req,
+                    tx,
+                    peer.command_actor().connection_scope(),
+                )
+                .await,
+            )
         }
 
         Ok(req) => {
@@ -631,12 +681,52 @@ fn topic_of(event: &str) -> &str {
     }
 }
 
+/// A data hint has no authority of its own. Check the real connection and its
+/// current target-crew read ACL on the DB thread immediately before queueing.
+/// Malformed/extra fields are dropped rather than leaking a future payload.
+async fn data_event_allowed(
+    state: &Arc<AppState>,
+    actor: &crate::public_commands::Actor,
+    data: &serde_json::Value,
+) -> bool {
+    let Some(object) = data.as_object() else {
+        return false;
+    };
+    if object.len() != 1 {
+        return false;
+    }
+    let Some(crew) = object.get("crewId").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let crew = crew.to_owned();
+    let actor = actor.clone();
+    let owned_state = state.clone();
+    state
+        .db
+        .call(move |store| {
+            actor
+                .authorize_tx(&owned_state, store.conn(), "data.workspace.get")
+                .is_ok()
+                && crewd_collab::team_data::authorize(
+                    store.conn(),
+                    &crewd_collab::Sender::Human,
+                    &crew,
+                    false,
+                )
+                .is_ok()
+        })
+        .await
+        .unwrap_or(false)
+}
+
 fn spawn_forwarder(
     mut rx: broadcast::Receiver<Event>,
     topics: Vec<String>,
     tx: mpsc::Sender<ServerFrame>,
     mut drain: watch::Receiver<bool>,
     attached: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<AppState>,
+    actor: crate::public_commands::Actor,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -664,14 +754,22 @@ fn spawn_forwarder(
                     if attached.load(std::sync::atomic::Ordering::Acquire)
                         && matches!(
                             e.event.as_str(),
-                            events::DOCUMENT_CHANGED
+                            events::DATA_CHANGED
+                                | events::DOCUMENT_CHANGED
                                 | events::FOLDER_CHANGED
                                 | "channel.workChanged"
                         ) =>
                 {
                     continue;
                 }
-                Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => ServerFrame::Event(e),
+                Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => {
+                    if e.event == events::DATA_CHANGED
+                        && !data_event_allowed(&state, &actor, &e.data).await
+                    {
+                        continue;
+                    }
+                    ServerFrame::Event(e)
+                }
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(n)) => ServerFrame::Event(Event {
                     event: events::LAGGED.into(),

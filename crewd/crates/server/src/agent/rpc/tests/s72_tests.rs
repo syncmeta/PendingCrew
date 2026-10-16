@@ -177,6 +177,7 @@ impl Rig {
                     }),
                 },
                 &rig.output,
+                &crate::connection_scope::ConnectionScope::new(),
             ),
         )
         .await
@@ -237,6 +238,7 @@ impl Rig {
                     }),
                 },
                 &self.output,
+                &crate::connection_scope::ConnectionScope::new(),
             ),
         )
         .await

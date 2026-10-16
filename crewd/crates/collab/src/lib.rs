@@ -86,6 +86,10 @@ pub enum Change {
         channel_id: String,
         link_revision: String,
     },
+    /// Confirmed team-data publication; invalidation only, never a receipt.
+    DataChanged {
+        crew_id: String,
+    },
     DocumentChanged {
         crew_id: String,
         id: String,
@@ -389,3 +393,5 @@ mod tests {
         assert_eq!(ts, "1970-01-01T00:00:00.000Z");
     }
 }
+
+pub mod team_data;

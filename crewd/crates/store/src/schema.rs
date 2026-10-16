@@ -2,7 +2,9 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
+/// Knowledge files have an independent SQLite schema; Core remains version 15.
 pub const SCHEMA_VERSION: i64 = 15;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
 BEGIN;

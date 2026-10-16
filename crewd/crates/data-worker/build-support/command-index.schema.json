@@ -1,0 +1,132 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "artifactRole": {
+      "const": "crewd-data-worker"
+    },
+    "evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "originalPath": {
+            "type": "string"
+          },
+          "pointer": {
+            "pattern": "^/",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "snapshotPath": {
+            "pattern": "^objects/[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pointer",
+          "originalPath",
+          "snapshotPath",
+          "sha256",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "policySHA256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "records": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commandIndex": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "bytes": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "originalPath": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "pattern": "^/",
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "snapshotPath": {
+                  "pattern": "^objects/[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pointer",
+                "originalPath",
+                "snapshotPath",
+                "sha256",
+                "bytes"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "snapshotPath": {
+            "pattern": "^objects/[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commandIndex",
+          "snapshotPath",
+          "sha256",
+          "bytes",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRef": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "policySHA256",
+    "sourceRef",
+    "artifactRole",
+    "evidence",
+    "records"
+  ],
+  "type": "object"
+}

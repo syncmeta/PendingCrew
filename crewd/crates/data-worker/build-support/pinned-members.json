@@ -1,0 +1,68 @@
+{
+  "entries": [
+    {
+      "bytes": 123,
+      "logicalPath": "doltlite-0.51.0/.cargo_vcs_info.json",
+      "origin": "registry",
+      "sha256": "932c0ab190e88300b7f52a611dd8e92442bdf70c04d72212283415f554f5de82"
+    },
+    {
+      "bytes": 803,
+      "logicalPath": "doltlite-0.51.0/Cargo.lock",
+      "origin": "registry",
+      "sha256": "16f7a40b58c8d62ccb490d228249dfee0743d53c6145355c39c6f1dad9287b31"
+    },
+    {
+      "bytes": 1345,
+      "logicalPath": "doltlite-0.51.0/Cargo.toml",
+      "origin": "registry",
+      "sha256": "afb32c51ecfff3f661d02c0a4f97ca7712d8aa074873bca4e6517e872ddbb145"
+    },
+    {
+      "bytes": 694,
+      "logicalPath": "doltlite-0.51.0/Cargo.toml.orig",
+      "origin": "registry",
+      "sha256": "6dfea3e7d03157eaabd0d0ec22bd6d495e6c1677c8b158070c57b82d0795fba7"
+    },
+    {
+      "bytes": 5489,
+      "logicalPath": "doltlite-0.51.0/LICENSE.md",
+      "origin": "registry",
+      "sha256": "5b78f210510da30fb03e73a304cf3034c1aa92d7f39a77006fc226a82c8e38c2"
+    },
+    {
+      "bytes": 2778,
+      "logicalPath": "doltlite-0.51.0/README.md",
+      "origin": "registry",
+      "sha256": "36be4d7bd37ec8337ed6deacac6ef2c45ce13cc61a13c293bc2cb0e2a3f7abd5"
+    },
+    {
+      "bytes": 1212,
+      "logicalPath": "doltlite-0.51.0/build.rs",
+      "origin": "registry",
+      "sha256": "660a1fc0dfef6c77cc5361147ea10c1feb0666a49130fc7b29c3df0386f872a5"
+    },
+    {
+      "bytes": 15987,
+      "logicalPath": "doltlite-0.51.0/src/lib.rs",
+      "origin": "registry",
+      "sha256": "c8223463ffd16c7d5a1227ff63bcf596de4a8ab7a6c70a7ec1d28b3987557140"
+    },
+    {
+      "bytes": 20720103,
+      "logicalPath": "doltlite-0.51.0/vendor/doltlite.c",
+      "origin": "registry",
+      "sha256": "ef452dac49cd159dc8938b62e942f1368db9ca2b2bd20f42acf4d5cdfd1a4a98"
+    },
+    {
+      "bytes": 698478,
+      "logicalPath": "doltlite-0.51.0/vendor/doltlite.h",
+      "origin": "registry",
+      "sha256": "7b20e3223d6068c252f40b3dd9dadf40b6f8daceeb2a8a9e5dc9c063785cd8bd"
+    }
+  ],
+  "evidenceLevel": "Exact contents read from already verified official pinned archive, each byte compared with current registry member. No new native compile.",
+  "registryCrateSHA256": "e5f68bfa70f0f6e238a7faf925b6dd0a43be5dd61aa025947f5e810f81b30145",
+  "schemaVersion": 1,
+  "upstreamCommit": "50d7b303b4490cacdd55e9deba9f37a5f00d50a4"
+}

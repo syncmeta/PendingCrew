@@ -1,0 +1,35 @@
+{
+  "ambientInjection": "Known compiler/library/include/loader/config injection keys and DYLD_/CCC_/CLANG_CONFIG* prefixes cause refusal before tool launch; report key names only. Child env is rebuilt, so no unlisted ambient value is forwarded.",
+  "argvGuard": "Reject @response, config/config-directory, -B tool search override, gcc-toolchain/resource-dir, plugin/load/Xclang/Xassembler/Xpreprocessor, external assembler, forced include/imacros, specs/sysroot overrides (including joined/equal suffix forms). Reviewed cc-generated -isysroot/-I and target/deployment arguments must match qualified source/SDK and source inventory at semantic sealing. No arbitrary CFLAGS/ARFLAGS accepted by outer producer.",
+  "childEnvironment": {
+    "ambientMap": "The original finite contract02 environment map is unchanged. LANG/LC_ALL/TZ/TMPDIR and extra actual child values occur only in hashed config/raw records, not added to that map.",
+    "optionalLinux": [],
+    "optionalMac": [
+      "SDKROOT",
+      "DEVELOPER_DIR",
+      "MACOSX_DEPLOYMENT_TARGET"
+    ],
+    "qualification": "Optional values are explicit reviewed canonical system SDK/developer path and target deployment version, fixed in hashed per-build config. No HOME or ambient inheritance. No credential/environment export. Each raw command records exactly the actual Popen env mapping, consumer compares to config and this policy.",
+    "required": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "PATH": "/usr/bin:/bin",
+      "TMPDIR": "<owned recordRoot>/tmp, canonical current-UID 0700",
+      "TZ": "UTC"
+    }
+  },
+  "commandSemantics": "Every invocation retained, including other C crates and failed probes. Only packageName=doltlite AND exact pinned vendor/doltlite.c argv/object linkage plus matching libdoltlite.a archive and final successful current Cargo/link qualifies Dolt. exit0, outputComplete, childTerminalObserved, exact tools/env/config/policy/recorder hashes mandatory for required commands. Probes are not proof of compile.",
+  "compiler": "Platform-qualified exact canonical Clang path and SHA; --no-default-config prepended to each invocation. Actual Clang version/help evidence must establish support separately on each target platform. No implicit GCC or another driver fallback.",
+  "contract02ManifestSHA256": "3a0aabf975ef050f42b217a43000e96f2df1563d3944a72161c11d187202c9e5",
+  "evidenceLevel": "Design/source supplement. No new actual C rebuild has run under this policy.",
+  "mapping": "commandIndex JSON uses command-index.schema.json. evidence is a bijection for EVERY sidecar file-proof object except commandIndex itself, using RFC6901 pointers to its containing object. Preserve actual absolute originalPath in sidecar; copy bytes into sealed evidence objects/<sha256>. Source before/after entries each mapped, even when deduplicated. Tool executable bytes, registry 10 files, cc helpers, workspace/Cargo.lock, recorder/config/wrappers, SDK settings, native objects/archives, version stdout/stderr and Cargo log are included. No moving workspace/tool re-read required by consumer. All snapshots regular, no symlinks or traversal; maximum 512MiB per file, 2GiB unique snapshot total. Consumer verifies pointer/originalPath/SHA/bytes equality and exact pointer coverage; no implicit path rewrite or guessed logicalPath mapping.",
+  "outputAndCleanup": "Pipe capture at most 16MiB per stream; excess marks outputComplete=false and required build fails, preserving captured-prefix SHA. Command wall budget <=300s plus <=5s exact unreaped-Popen kill/wait; no signal to cached/reaped PID, unrelated process or group. Unknown terminal cannot pass.",
+  "rawRecords": "records[i].commandIndex is the unique ordinal into sidecar commands. Raw record is separately content-addressed and its file proofs stdout/stderr have their own complete evidence pointer map; index itself is excluded to avoid self-reference. All commands exactly once. Compare raw argv/cwd/times/outcome/exit/signal/tool hashes/stdout/stderr to sidecar summary. Role compiler/archiver equals summary.tool. Actual child env from raw equals hashed recorder config, absent keys truly absent. Raw packageName used only for crosslinking not independent authority. Index/schema/raw record do not establish compilation without whole semantic checks.",
+  "references": [
+    "https://clang.llvm.org/docs/UsersManual.html#configuration-files",
+    "https://clang.llvm.org/docs/UsersManual.html#ccc-override-options"
+  ],
+  "rootLockSHA256": "e121d93065c54040fac31a9d12b1916a7c62a4a71642b6d4b5fc9b44d9949f8c",
+  "scope": "native C/AR producer evidence only; no runtime/API/engine acceptance",
+  "version": 1
+}

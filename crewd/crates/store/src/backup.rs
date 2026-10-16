@@ -664,12 +664,41 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let app: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if (app != 0 && app != crate::APPLICATION_ID)
-        || !(1..=crate::schema::SCHEMA_VERSION).contains(&version)
+        || !(1..=crate::schema::SUPPORTED_SCHEMA_VERSION).contains(&version)
     {
         return Err(StoreError::Invalid(format!(
             "{} 不是本程序能用的 crewd 库（application_id={app}，user_version={version}）",
             from.display()
         )));
+    }
+    if crate::meta_get(&src, "knowledge.sqlite.v1")?.as_deref() == Some("1")
+        || data_dir.join("knowledge").exists()
+    {
+        return Err(StoreError::Invalid("Core-only restore cannot replace a knowledge workspace; restore a knowledge snapshot under current ACL".into()));
+    }
+    // A standalone SQLite restore must never split the Core16/native authority.
+    // Its owning paired controller validates/copies the complete bundle into a
+    // fresh private stage before any original file is touched.
+    let native_present = match std::fs::symlink_metadata(data_dir.join("native-data")) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.into()),
+    };
+    if version >= 16 || native_present {
+        return Err(StoreError::Invalid(
+            "paired Core16/native-data restore required; legacy standalone restore refused".into(),
+        ));
+    }
+    if db.try_exists()?
+        && crate::version_guard::with_quiescent_copy(&db, |c| {
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .map_err(StoreError::from)
+        })? >= 16
+    {
+        return Err(StoreError::Invalid(
+            "pre16 backup cannot replace a native authority in place; use an isolated target"
+                .into(),
+        ));
     }
     ensure_ok(&open_for_check(from)?, Check::Integrity)?;
     let src_id = crate::meta_get(&src, "dbId")?;
@@ -747,5 +776,78 @@ mod tests {
             assert_eq!(pragma(&c, "checkpoint_fullfsync"), 1);
         }
         assert_eq!(pragma(&open_for_check(&db).unwrap(), "query_only"), 1);
+    }
+}
+
+/// Staging primitive used only after the owning paired controller has verified
+/// the complete Core/native bundle. It never replaces an existing database and
+/// applies the ORIGINAL restore trust/receipt/epoch invalidation transaction.
+#[cfg(any())]
+pub fn native_restore_stage(from: &Path, destination: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| StoreError::Invalid("native restore stage parent missing".into()))?;
+    let m = std::fs::symlink_metadata(parent)?;
+    if !parent.is_absolute()
+        || std::fs::canonicalize(parent)? != parent
+        || !m.is_dir()
+        || m.uid() != unsafe { libc::geteuid() }
+        || m.mode() & 0o777 != 0o700
+        || destination.file_name() != Some(std::ffi::OsStr::new(crate::DB_FILE))
+        || match std::fs::symlink_metadata(destination) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        }
+    {
+        return Err(StoreError::Invalid(
+            "fresh private native restore stage required".into(),
+        ));
+    }
+    let source = open_read_only(from)?;
+    let version: i64 = source.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version != 16 {
+        return Err(StoreError::Invalid(
+            "paired native restore stage requires Core16".into(),
+        ));
+    }
+    crate::team_data::validate_active(&source)?;
+    ensure_ok(&source, Check::Integrity)?;
+    snapshot_steps(&source, destination, 0, true)
+}
+
+#[cfg(test)]
+mod sqlite_knowledge_restore_guard_tests {
+    use super::*;
+    #[test]
+    fn sqlite_core_only_restore_cannot_roll_back_acl_beside_knowledge_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = std::fs::canonicalize(dir.path()).unwrap();
+        let db = data.join(crate::DB_FILE);
+        let backup = data.join("core-before.sqlite");
+        let store = crate::Store::open(&db).unwrap();
+        crate::meta_set(store.conn(), "fixture.currentAcl", "old").unwrap();
+        drop(store);
+        backup_db(&db, &backup).unwrap();
+        let store = crate::Store::open(&db).unwrap();
+        crate::meta_set(store.conn(), "fixture.currentAcl", "current").unwrap();
+        drop(store);
+        crate::team_data::private_dir(&data.join("knowledge")).unwrap();
+        assert!(restore(&data, &backup).is_err());
+        let store = crate::Store::open(&db).unwrap();
+        assert_eq!(
+            crate::meta_get(store.conn(), "fixture.currentAcl")
+                .unwrap()
+                .as_deref(),
+            Some("current")
+        );
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
     }
 }

@@ -19,7 +19,10 @@ pub mod remote;
 pub mod runner_usage;
 pub mod schema;
 pub mod sessions;
+#[path = "sqlite_knowledge.rs"]
+pub mod team_data;
 pub mod testing;
+// Historical native import source remains inactive; no legacy data migration.
 pub mod todos;
 mod version_guard;
 pub mod view_folders;

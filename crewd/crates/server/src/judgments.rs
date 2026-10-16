@@ -376,10 +376,16 @@ impl Runtime {
         let elapsed = crewd_store::now_ms().saturating_sub(record.prepared_at_ms);
         let remaining =
             std::time::Duration::from_millis(2000u64.saturating_sub(elapsed.max(0) as u64));
-        let result = if recovery || remaining.is_zero() || self.closed.load(Ordering::Acquire) {
+        let result = if recovery
+            || remaining.is_zero()
+            || self.closed.load(Ordering::Acquire)
+            || !state.admission.any()
+        {
             JudgmentResult::Deferred {
                 reason: if recovery {
                     "restart_unknown"
+                } else if !state.admission.any() {
+                    "awaiting_manual_resume"
                 } else {
                     "deadline"
                 }

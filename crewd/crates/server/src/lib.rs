@@ -19,12 +19,14 @@ mod public_execution;
 mod public_terminal;
 pub(crate) mod remote;
 mod signed_client;
+pub mod team_data;
 mod terminal_runtime;
 pub mod token;
 pub(crate) mod wake_adapter;
 
 use crewd_exec::registry::ProcessRegistry;
 use crewd_exec::registry::recovery::RecoveryReport;
+pub mod lifecycle;
 pub mod recovery;
 use crewd_store::{Db, Store};
 pub use hub::Hub;
@@ -40,6 +42,8 @@ struct DbWriteBarrier {
 }
 
 pub struct AppState {
+    pub(crate) admission: Arc<lifecycle::Admission>,
+    pub(crate) management: std::sync::OnceLock<lifecycle::Management>,
     pub db: Db,
     pub hub: Hub,
     pub sessions: Arc<dyn control::SessionControl>,
@@ -53,6 +57,7 @@ pub struct AppState {
     pub(crate) remote: std::sync::OnceLock<Arc<remote::Manager>>,
     pub(crate) native_helpers: std::sync::OnceLock<Arc<native_helpers::NativeFactory>>,
     pub(crate) runtime_binding_id: String,
+    pub(crate) data_runtime: std::sync::OnceLock<Arc<team_data::runtime::Runtime>>,
     pub(crate) judgment_runtime: std::sync::OnceLock<Arc<judgments::Runtime>>,
     #[cfg(test)]
     pub(crate) judgment_test_http: std::sync::atomic::AtomicBool,
@@ -83,7 +88,10 @@ impl AppState {
             remote: std::sync::OnceLock::new(),
             native_helpers: std::sync::OnceLock::new(),
             runtime_binding_id: uuid::Uuid::new_v4().to_string(),
+            admission: Arc::new(lifecycle::Admission::default()),
+            management: std::sync::OnceLock::new(),
             judgment_runtime: std::sync::OnceLock::new(),
+            data_runtime: std::sync::OnceLock::new(),
             #[cfg(test)]
             judgment_test_http: std::sync::atomic::AtomicBool::new(false),
             judgment_settings_mutation: tokio::sync::Mutex::new(()),
@@ -396,9 +404,11 @@ async fn serve_with_hooks_inner(
     ensure_data_dir(&data_dir)?;
     let lock = lock_data_dir(&data_dir)?;
     let _ = build_info::exe();
-    let (registry, reports) = reap_orphans(&data_dir)?;
+    // Opening the application observes old ownership obligations without signalling.
+    let (registry, reports) = recovery::recover_locked(&data_dir, false)?;
     log_reap_reports(&reports);
-    recovery::require_settled(&registry)?;
+    // Unresolved obligations remain registered and block their execution paths.
+    // Read-only application startup must remain available.
     #[cfg(feature = "testkit")]
     if let Some(ready) = opts.test_registry_ready.take() {
         ready(registry.clone())?;
@@ -409,6 +419,10 @@ async fn serve_with_hooks_inner(
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
     }
     let mut store = Store::open_data_dir(&data_dir)?;
+    let previous_clean =
+        crewd_store::meta_get(store.conn(), "lifecycle.clean")?.as_deref() != Some("false");
+    crewd_store::meta_set(store.conn(), "lifecycle.clean", "false")?;
+    crewd_store::meta_set(store.conn(), "knowledge.sqlite.v1", "1")?;
     // Registry recovery and the data-directory lock precede this transaction.
     // Stored birth/session receipts are observations, never fresh authority.
     {
@@ -465,6 +479,18 @@ async fn serve_with_hooks_inner(
             runtime_binding_id: state.runtime_binding_id.clone(),
         });
     let _ = state.peer_policy.set(peer_policy);
+    state.admission.blocked.store(
+        !registry.try_entries()?.is_empty(),
+        std::sync::atomic::Ordering::Release,
+    );
+    let _ = state
+        .management
+        .set(lifecycle::Management::new(previous_clean));
+    let _ = state
+        .data_runtime
+        .set(Arc::new(team_data::runtime::Runtime::new(
+            data_dir.join("knowledge"),
+        )?));
     state.terminal_supported.store(
         opts.orchestra
             .as_ref()
@@ -522,7 +548,11 @@ async fn serve_with_hooks_inner(
                 .with("codex", Arc::new(codex)),
             hooks,
             Arc::new(orchestra::clock::SystemClock),
-            o.config,
+            orchestra::OrchestraConfig {
+                admission: Some(state.admission.clone()),
+                previous_clean,
+                ..o.config
+            },
         )
         .await
         {
@@ -680,6 +710,11 @@ async fn serve_with_hooks_inner(
     }
     drop(handle);
     drop(cell);
+    let clean = fatal.is_none() && registry.try_entries()?.is_empty();
+    if clean {
+        db.call_result(|s| crewd_store::meta_set(s.conn(), "lifecycle.clean", "true"))
+            .await??;
+    }
     drop(state);
     close_storage(backups, db).await?;
     #[cfg(test)]

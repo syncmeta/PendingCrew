@@ -1282,6 +1282,9 @@ impl<P: Port> Core<P> {
         req: &StartSession,
         origin: Origin,
     ) -> Result<Option<PathBuf>, ControlError> {
+        if origin == Origin::Agent && self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
+            return Err(ControlError::ShuttingDown);
+        }
         let exec = self
             .execs
             .get(&req.executor)
@@ -1394,6 +1397,9 @@ impl<P: Port> Core<P> {
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));
         }
+        if let Some(a) = &self.cfg.admission {
+            a.allow(&row.id);
+        }
         self.launch(row.clone(), exec, brief, vec![], vec![])
             .await
             .map_err(ControlError::from_port)?;
@@ -1406,6 +1412,9 @@ impl<P: Port> Core<P> {
         origin: Origin,
     ) -> Result<(), ControlError> {
         if self.shutting_down {
+            return Err(ControlError::ShuttingDown);
+        }
+        if origin == Origin::Agent && self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Err(ControlError::ShuttingDown);
         }
         if self.live.contains_key(session) || self.starting.contains_key(session) {
@@ -1436,6 +1445,9 @@ impl<P: Port> Core<P> {
         } else {
             None
         };
+        if let Some(a) = &self.cfg.admission {
+            a.allow(session);
+        }
         self.launch(row, exec, text, vec![], vec![])
             .await
             .map_err(ControlError::from_port)
@@ -1461,6 +1473,9 @@ impl<P: Port> Core<P> {
             .map_err(ControlError::from_port)?;
         if !pending.is_empty() {
             self.port.publish(wake_changed(session, &pending));
+        }
+        if let Some(a) = &self.cfg.admission {
+            a.revoke(session);
         }
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
@@ -1843,6 +1858,16 @@ impl<P: Port> Core<P> {
         text: Option<String>,
         mut batch: Batch,
     ) -> anyhow::Result<bool> {
+        if self
+            .cfg
+            .admission
+            .as_ref()
+            .is_some_and(|a| !a.contains(&row.id))
+        {
+            return Err(anyhow::anyhow!(
+                "session awaits explicit current-run Human admission"
+            ));
+        }
         // 一个 session 一个进程（裁定 6）：所有拉起路径都经过这里，所以在这里挡，不只靠调用方先查。
         if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
             return Err(ControlError::AlreadyRunning(row.id).into());
@@ -2959,6 +2984,9 @@ impl<P: Port> Core<P> {
         self.notify_drafts().await?;
         self.notifier.flush(now, self.lang()).await?;
         // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
+        if self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
+            return Ok(());
+        }
         log_err(self.port.apply_due_defaults().await);
         log_err(self.port.enqueue_work_checkpoints().await);
         log_err(self.prune(now).await);
