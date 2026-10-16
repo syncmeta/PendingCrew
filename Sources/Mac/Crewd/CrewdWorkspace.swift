@@ -411,7 +411,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published private(set) var previousExit = "clean"
     func readManagementStatus() async {
         guard dataDirectory != nil, client.connected else { return }
-        do { applyManagement(try await client.call("lifecycle.status")) }
+        do { applyManagement(try await client.call("lifecycle.status", .object([:]))) }
         catch { managementRole = "observer"; self.error = "无法核对当前本机管理资格。" }
     }
     private func applyManagement(_ value: CrewdValue) {
@@ -421,14 +421,14 @@ final class CrewdWorkspace: ObservableObject {
     }
     func claimManagement() async {
         guard dataDirectory != nil, client.connected else { return }
-        do { applyManagement(try await client.call("lifecycle.claim")) }
+        do { applyManagement(try await client.call("lifecycle.claim", .object([:]))) }
         catch { self.error = "当前管理权不可取得；保留观察连接。"; await readManagementStatus() }
     }
     func releaseManagement() async throws {
         guard dataDirectory != nil, client.connected else { return }
-        let status = try await client.call("lifecycle.status")
+        let status = try await client.call("lifecycle.status", .object([:]))
         applyManagement(status)
-        if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release")) }
+        if managementRole == "owner" { applyManagement(try await client.call("lifecycle.release", .object([:]))) }
     }
     @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
         guard mode != .background, let directory = dataDirectory else { return false }
@@ -457,7 +457,7 @@ final class CrewdWorkspace: ObservableObject {
         guard client.connected, (try? client.verifiedLocalPeerIdentity()) != nil else {
             throw CrewdClientError(message: "当前本机后台认证连接不可用，尚未提交退出。")
         }
-        applyManagement(try await client.call("lifecycle.status"))
+        applyManagement(try await client.call("lifecycle.status", .object([:])))
         // A concurrent observer exits its own UI only; it cannot stop another owner's work.
         guard managementRole == "owner" else { return false }
         sleeping = true; reconnect?.cancel(); sync?.cancel()
