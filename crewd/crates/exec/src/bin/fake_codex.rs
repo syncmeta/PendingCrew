@@ -10,6 +10,7 @@
 //! - `FAKE_CODEX_CHILD_PID`：`spawn_child` 模式下把起的 `sleep` 的 pid 写到这个文件。
 //! - `FAKE_CODEX_TERM_LOG`：`count_term` 模式下每收到一次 SIGTERM 往这个文件追加一个 `T`。
 //! - `FAKE_CODEX_KNOWLEDGE_CREW`：可选显式crew ID；crew_mcp 经正式MCP创建共享block与web视图。
+//! - `FAKE_CODEX_KNOWLEDGE_CONTRACT`：同一可选fixture核全部知识schema/工具与拒绝边界。
 //! - `FAKE_CODEX_MODE`：逗号分隔的开关：
 //!   `die_on_init`（收到 initialize 就往 stderr 写一句、exit 3）、`init_silent`（不回 initialize）、
 //!   `stderr_flood`（回 initialize 之前往 stderr 灌 1 MiB）、`resume_fails`、`turn_hangs`（不回
@@ -418,6 +419,9 @@ fn exercise_crew_mcp(params: &Value) {
             );
             let value: Value = serde_json::from_str(&line).unwrap();
             transcript.push(value.clone());
+            if let Ok(path) = std::env::var("FAKE_CODEX_MCP_LOG") {
+                std::fs::write(path, serde_json::to_vec(&transcript).unwrap()).unwrap();
+            }
             if value["id"] == wanted {
                 return value;
             }
@@ -459,6 +463,45 @@ fn exercise_crew_mcp(params: &Value) {
     // The ordinary crew_mcp fixture keeps its directory-only behavior.
     if let Ok(crew) = std::env::var("FAKE_CODEX_KNOWLEDGE_CREW") {
         assert!(!crew.is_empty(), "explicit knowledge crew required");
+        let contract = std::env::var_os("FAKE_CODEX_KNOWLEDGE_CONTRACT").is_some();
+        if contract {
+            fn check_schema(root: &Value, value: &Value) {
+                match value {
+                    Value::Object(fields) => {
+                        if let Some(reference) = fields.get("$ref").and_then(Value::as_str) {
+                            let pointer =
+                                reference.strip_prefix('#').expect("local schema reference");
+                            assert!(
+                                root.pointer(pointer).is_some(),
+                                "unresolved tool reference {reference}"
+                            );
+                        }
+                        for child in fields.values() {
+                            check_schema(root, child);
+                        }
+                    }
+                    Value::Array(items) => {
+                        for child in items {
+                            check_schema(root, child);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let tools = listed["result"]["tools"].as_array().unwrap();
+            let knowledge = tools
+                .iter()
+                .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("data_")))
+                .collect::<Vec<_>>();
+            assert_eq!(knowledge.len(), 10);
+            for tool in knowledge {
+                let schema = &tool["inputSchema"];
+                assert_eq!(schema["type"], "object", "{tool}");
+                assert_eq!(schema["additionalProperties"], false);
+                check_schema(schema, schema);
+            }
+            assert!(!tools.iter().any(|t| t["name"] == "data_confirm"));
+        }
         let decode = |reply: &Value| -> Value {
             assert!(reply["result"]["isError"] != true, "{reply}");
             let text = reply["result"]["content"]
@@ -469,11 +512,37 @@ fn exercise_crew_mcp(params: &Value) {
                 .expect("MCP text result required");
             serde_json::from_str(text).unwrap()
         };
-        let workspace_call = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"data_workspace_get","arguments":{"crewId":crew}}});
-        transcript.push(workspace_call.clone());
-        writeln!(input, "{workspace_call}").unwrap();
-        input.flush().unwrap();
-        let workspace = decode(&read_response(4, &mut output, &mut transcript));
+        let mut invoke = |id: i64, name: &str, arguments: Value| {
+            let call = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}});
+            transcript.push(call.clone());
+            writeln!(input, "{call}").unwrap();
+            input.flush().unwrap();
+            read_response(id, &mut output, &mut transcript)
+        };
+        let workspace = decode(&invoke(4, "data_workspace_get", json!({"crewId":crew})));
+        if contract {
+            assert_eq!(workspace["state"], "uninitialized");
+            let refused = invoke(
+                40,
+                "data_schema_get",
+                json!({"context":workspace["context"],"atRevision":null,"after":null,"limit":10}),
+            );
+            assert_eq!(
+                refused["result"]["isError"], true,
+                "uninitialized read must not create a database: {refused}"
+            );
+            let still = decode(&invoke(41, "data_workspace_get", json!({"crewId":crew})));
+            assert_eq!(still["state"], "uninitialized");
+            let denied = invoke(
+                42,
+                "data_workspace_get",
+                json!({"crewId":"not-an-authorized-crew"}),
+            );
+            assert_eq!(
+                denied["result"]["isError"], true,
+                "foreign crew access must be denied"
+            );
+        }
         let request_id = uuid::Uuid::new_v4().to_string();
         let submit = json!({
             "requestId":request_id,"context":workspace["context"],
@@ -489,12 +558,114 @@ fn exercise_crew_mcp(params: &Value) {
                 }}
             ]}
         });
-        let submit_call = json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"data_submit","arguments":submit}});
-        transcript.push(submit_call.clone());
-        writeln!(input, "{submit_call}").unwrap();
-        input.flush().unwrap();
-        let committed = decode(&read_response(5, &mut output, &mut transcript));
+        let committed = decode(&invoke(5, "data_submit", submit.clone()));
         assert_eq!(committed["phase"], "committed", "{committed}");
+        if contract {
+            let context = committed["context"].clone();
+            let reference = committed["created"]["shared"]["object"]["reference"].clone();
+            let canvas = committed["created"]["canvas"]["object"]["reference"].clone();
+            assert_eq!(
+                decode(&invoke(6, "data_submit", submit)),
+                committed,
+                "original UUID retry must return its original receipt"
+            );
+            let receipt = decode(&invoke(
+                7,
+                "data_request_get",
+                json!({"context":workspace["context"],"requestId":request_id}),
+            ));
+            assert_eq!(receipt["lookup"]["status"], "known");
+            let detail = decode(&invoke(
+                8,
+                "data_object_get",
+                json!({"context":context,"reference":canvas,"atRevision":null}),
+            ));
+            assert_eq!(detail["object"]["definition"]["renderer"], "web");
+            let blocks = decode(&invoke(
+                9,
+                "data_object_list",
+                json!({"context":context,"objectType":"block","after":null,"limit":10,"atRevision":null,"includeArchived":false}),
+            ));
+            assert_eq!(blocks["items"].as_array().unwrap().len(), 1);
+            let history = decode(&invoke(
+                10,
+                "data_history",
+                json!({"context":context,"reference":reference,"after":null,"limit":10}),
+            ));
+            assert_eq!(history["items"].as_array().unwrap().len(), 1);
+            let schema = decode(&invoke(
+                11,
+                "data_schema_get",
+                json!({"context":context,"atRevision":null,"after":null,"limit":10}),
+            ));
+            assert!(schema["objects"].as_array().unwrap().is_empty());
+            let sql_request = uuid::Uuid::new_v4().to_string();
+            let sql = decode(&invoke(
+                12,
+                "data_submit",
+                json!({"context":context,"requestId":sql_request,"change":{"kind":"apply","message":"Synthetic authorized business SQL","edits":[{"kind":"sql","statements":[{"sql":"CREATE TABLE measurements(id INTEGER PRIMARY KEY, label TEXT)","params":[]},{"sql":"INSERT INTO measurements VALUES(1, 'synthetic')","params":[]}]}]}}),
+            ));
+            assert_eq!(sql["phase"], "committed");
+            let current = sql["context"].clone();
+            let schema = decode(&invoke(
+                13,
+                "data_schema_get",
+                json!({"context":current,"atRevision":null,"after":null,"limit":10}),
+            ));
+            assert_eq!(schema["objects"][0]["name"], "measurements");
+            let query = decode(&invoke(
+                14,
+                "data_query",
+                json!({"context":current,"statement":{"sql":"SELECT label FROM measurements WHERE id=?1","params":[{"type":"integer","value":"1"}]},"limit":10,"atRevision":null,"cursor":null}),
+            ));
+            assert_eq!(
+                query["rows"][0][0],
+                json!({"type":"text","value":"synthetic"})
+            );
+            let table = decode(&invoke(
+                15,
+                "data_table_get",
+                json!({"context":current,"table":"measurements","afterKey":null,"atRevision":null,"limit":10}),
+            ));
+            assert_eq!(table["rows"].as_array().unwrap().len(), 1);
+            let preview = decode(&invoke(
+                16,
+                "data_preview",
+                json!({"context":current,"statements":[{"sql":"DELETE FROM measurements","params":[]}]}),
+            ));
+            assert!(preview["token"].is_string());
+            let refused = invoke(
+                17,
+                "data_submit",
+                json!({"context":current,"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"apply","message":"Must refuse unconfirmed destructive SQL","edits":[{"kind":"sql","statements":[{"sql":"DELETE FROM measurements","params":[]}]}]}}),
+            );
+            assert_eq!(refused["result"]["isError"], true);
+            let protected = invoke(
+                18,
+                "data_query",
+                json!({"context":current,"statement":{"sql":"SELECT * FROM _pc_receipts","params":[]},"limit":10,"atRevision":null,"cursor":null}),
+            );
+            assert_eq!(protected["result"]["isError"], true);
+            let stale = invoke(
+                19,
+                "data_schema_get",
+                json!({"context":context,"atRevision":null,"after":null,"limit":10}),
+            );
+            assert_eq!(
+                stale["result"]["isError"], true,
+                "stale context must remain refused"
+            );
+            let preserved = decode(&invoke(
+                20,
+                "data_table_get",
+                json!({"context":current,"table":"measurements","afterKey":null,"atRevision":null,"limit":10}),
+            ));
+            assert_eq!(
+                preserved["rows"].as_array().unwrap().len(),
+                1,
+                "preview/refused SQL must not change business data"
+            );
+        }
     }
     if let Ok(path) = std::env::var("FAKE_CODEX_MCP_LOG") {
         std::fs::write(path, serde_json::to_vec(&transcript).unwrap()).unwrap();

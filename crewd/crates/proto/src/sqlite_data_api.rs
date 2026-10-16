@@ -29,13 +29,27 @@ pub fn agent_method(name: &str) -> Option<&'static str> {
     })
 }
 pub fn agent_tools() -> Vec<ToolDef> {
-    let mut g = schemars::SchemaGenerator::default();
-    schema_entries(&mut g).into_iter()
-        .filter(|(m, _)| !matches!(*m, "data.confirm" | "data.restore" | "data.snapshots" | "data.preview.get"))
+    fn input<T: schemars::JsonSchema>() -> Value {
+        // Each MCP tool is a separate schema document, unlike the shared RPC registry.
+        // schema_for retains only this argument type's reachable definitions.
+        serde_json::to_value(schemars::schema_for!(T)).expect("static knowledge tool schema")
+    }
+    vec![
+        (METHODS[0], input::<DataWorkspaceGetParams>()),
+        (METHODS[1], input::<DataSubmitParams>()),
+        (METHODS[2], input::<DataRequestGetParams>()),
+        (METHODS[3], input::<DataObjectGetParams>()),
+        (METHODS[4], input::<DataObjectListParams>()),
+        (METHODS[5], input::<DataSchemaParams>()),
+        (METHODS[6], input::<DataQueryParams>()),
+        (METHODS[7], input::<DataTableParams>()),
+        (METHODS[8], input::<DataHistoryParams>()),
+        (METHODS[9], input::<DataPreviewParams>()),
+    ].into_iter()
         .map(|(m, s)| ToolDef {
             name: m.replace('.', "_"),
-            description: format!("SQLite knowledge {m}. Current crew ACL applies. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation.{}", if m == "data.submit" { " For executable Mac views use definition kind='web', renderer='web', rendererVersion='1'. Supply your own HTML/CSS/JavaScript and declared bindings. The closed JavaScript bridge is window.knowledge.request(operation,input), resolving {callID,response}; read uses {binding:'bindingId'} and returns response.value. Writes use operation='write' with exactly {message,edits} and require requestedCapabilities:['knowledge-write'] plus separate native Human code-enable and write grants for this version. Readonly views need no write capability. Unknown writes must be looked up through the retained original writeCallID; never retry by inventing a new call ID. The bridge also supports lookup with {writeCallID} and navigate with an authorized Core reference; it grants no arbitrary RPC, network or file access." } else { "" }),
-            input_schema: s["params"].clone(),
+            description: format!("SQLite knowledge {m}. Current crew ACL applies. First call data_workspace_get with crewId to obtain the complete current context; never invent or shorten context fields. An uninitialized workspace has no database to read: an authorized first data_submit apply creates it. Reads, including data_schema_get, do not initialize it. After a committed submit use its returned context for later reads and new writes; data_request_get and exact retries instead require the original request context, including its original generation. SQL/schema reads describe business SQL tables, not blocks or views; use data_object_get/list for knowledge objects. SQL/schema atRevision must be null. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation.{}", if m == "data.submit" { " For executable Mac views use definition kind='web', renderer='web', rendererVersion='1'. Supply your own HTML/CSS/JavaScript and declared bindings. The closed JavaScript bridge is window.knowledge.request(operation,input), resolving {callID,response}; read uses {binding:'bindingId'} and returns response.value. Writes use operation='write' with exactly {message,edits} and require requestedCapabilities:['knowledge-write'] plus separate native Human code-enable and write grants for this version. Readonly views need no write capability. Unknown writes must be looked up through the retained original writeCallID; never retry by inventing a new call ID. The bridge also supports lookup with {writeCallID} and navigate with an authorized Core reference; it grants no arbitrary RPC, network or file access." } else { "" }),
+            input_schema: s,
             annotations: Some(ToolHints { read_only_hint: !matches!(m, "data.submit" | "data.preview"), destructive_hint: m == "data.submit", idempotent_hint: true, open_world_hint: false }),
         }).collect()
 }
@@ -98,4 +112,73 @@ pub(crate) fn schema_entries(g: &mut schemars::SchemaGenerator) -> Vec<(&'static
             json!({"params":crate::sub::<DataPreviewGetParams>(g),"result":crate::sub::<DataPreview>(g)}),
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertised_knowledge_tools_have_self_contained_object_schemas() {
+        fn check_refs(root: &Value, value: &Value, tool: &str) {
+            match value {
+                Value::Object(fields) => {
+                    if let Some(reference) = fields.get("$ref").and_then(Value::as_str) {
+                        let pointer = reference
+                            .strip_prefix('#')
+                            .expect("local tool schema reference");
+                        assert!(
+                            root.pointer(pointer).is_some(),
+                            "{tool}: unresolved {reference}"
+                        );
+                    }
+                    for child in fields.values() {
+                        check_refs(root, child, tool);
+                    }
+                }
+                Value::Array(items) => {
+                    for child in items {
+                        check_refs(root, child, tool);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let tools = agent_tools();
+        assert_eq!(tools.len(), 10);
+        for tool in tools {
+            assert_eq!(
+                tool.input_schema["type"], "object",
+                "{} has no object input schema",
+                tool.name
+            );
+            check_refs(&tool.input_schema, &tool.input_schema, &tool.name);
+            let required = tool.input_schema["required"]
+                .as_array()
+                .expect("typed required fields");
+            let identity = if tool.name == "data_workspace_get" {
+                "crewId"
+            } else {
+                "context"
+            };
+            assert!(
+                required.iter().any(|field| field == identity),
+                "{} must describe {identity}",
+                tool.name
+            );
+            if tool.name == "data_submit" || tool.name == "data_request_get" {
+                assert!(required.iter().any(|field| field == "requestId"));
+            }
+            assert!(
+                tool.input_schema["properties"].is_object(),
+                "{} has no described input fields",
+                tool.name
+            );
+            assert_eq!(
+                tool.input_schema["additionalProperties"], false,
+                "{} must retain strict typed arguments",
+                tool.name
+            );
+        }
+    }
 }

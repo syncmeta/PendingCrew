@@ -183,9 +183,14 @@ async fn route(
                         p.args,
                     )
                     .await;
-                return to_value(match result{
-                    Ok(value)=>crewd_proto::agent::CallResult::ok(serde_json::to_string(&value).map_err(internal)?),
-                    Err(_)=>crewd_proto::agent::CallResult::err("Data operation unavailable or refused; retain the original request UUID and use pure lookup after an unknown outcome.".into()),
+                return to_value(match result {
+                    Ok(value) => crewd_proto::agent::CallResult::ok(
+                        serde_json::to_string(&value).map_err(internal)?,
+                    ),
+                    Err(error) => crewd_proto::agent::CallResult::err(format!(
+                        "Data operation unavailable or refused (RPC code {}); check the tool argument schema and current crew ACL. Obtain context from data_workspace_get; reads do not initialize a workspace. Retain the original request UUID and use pure lookup after an unknown outcome.",
+                        error.code
+                    )),
                 });
             }
             if state.management.get().is_some() && !state.admission.contains(&session) {
