@@ -704,6 +704,32 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
+    /// Worktree preparation returned before session allocation or model launch.
+    /// Git may have left preparation artifacts; that is distinct from an unknown
+    /// session execution outcome and must not block every later explicit start.
+    pub(crate) async fn public_worktree_rejected(
+        &self,
+        call: &crate::public_execution::PublicExecution,
+        error: super::worktree::WorktreeError,
+    ) {
+        use crewd_proto::commands::CommandPhase;
+        let error = super::rpc::rpc_err(ControlError::Worktree(error));
+        if let Err(error) = call
+            .settle(
+                CommandPhase::Dispatched,
+                CommandPhase::Rejected,
+                serde_json::json!({
+                    "actualOutcome":"start_rejected_before_session",
+                    "sessionExecutionDispatched":false,
+                    "refusal":error.data
+                }),
+            )
+            .await
+        {
+            eprintln!("public worktree refusal settlement unconfirmed: {error:?}");
+        }
+    }
+
     pub(crate) async fn public_start_failed(
         &self,
         call: &crate::public_execution::PublicExecution,
