@@ -910,3 +910,10 @@ completed代理必须用followup_task实际启动；send_message只用于运行�
 最新现场不同于旧检查点：本地main 1bbcc1eb在71f之上新增74个React产品演示资产，global无相同路径修改。根已在开发整合树普通merge为25c12fc35cb6fdf5e27460284c8e36bece3246d8，产品源码差异为零；主目录README/design/旧ACP/未知文件及旧App/Core现场均保留。远端main仍1ba3d4ba，未推main。最终待两作者完整源码冻结后统一整合及一次准确包构建，不在小补件间反复打包。
 
 真实模型/SDK调用、安装、日常数据切换、私钥签名/系统权限及公开发布按具体动作分别核权；先完成已授权源码、必要验证和可审查准备，等待仅阻依赖动作。后续Native/更多平台/Solid/个人记忆不混入Mac日用交付。
+
+
+### 2026-10-16 Mac 日用源码完整冻结，进入唯一普通包
+
+client8ade与backend517d+58bd均独立接受并精确整合，完整证据与边界见整合验收记录同日新节。普通Mac版本0.1.44、固定新PendingCrewLocal、无程序也能读写资料、明确Codex路径下次Core启动生效、旧后台/远程Keychain/更新副作用关闭。仅普通自身spawn启用无PID的managed-parent，原App确认死亡后后台沿现有机制收尾，保异常提示和零自启；不恢复持久授信、不扩成守护平台。
+
+本冻结提交是下一准确normal/普通Release App的完整输入；此前compiled b8只属已验隔离候选。唯一Rust作者做新normal，独核后唯一客户端沿原暖缓存完整打包；期间global代码/文档均冻结。仅做普通配置与GUI-only异常新差异，稳定SQL/WK/退出证据复用，不重全量、不新CI。新包接受后才主目录安全快进；旧main用户文件保留，远端main未推。真实模型和安装等具体动作另核，不把源码接受冒完整日用交付。

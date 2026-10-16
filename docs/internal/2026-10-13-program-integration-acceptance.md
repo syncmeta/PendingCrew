@@ -662,3 +662,16 @@ dbc576901818375e59600c8fd350e3405d229305准确normal/Mac完整来源独核通过
 人类授权三条代理线按完整模块并行推进Mac日用交付。b8隔离候选综合接受不变；此次是普通产品入口/配置及真实日用交付的新单元，尚未接受。根已核远端三分支b0aa/7165/c1ab，与本地相同；主目录实际main新增1bbcc1eb React产品演示，非旧71f停点。根只合入用户已提交演示资产到global25c12fc3，共74新增路径，无Sources/crewd/scripts/project产品变化。主目录脏文件、远端main和所有旧App/Core未触碰。
 
 backend_plan、client_plan、quality已分别恢复完整模块；唯一写者和完成判据见总计划新节。普通入口与隔离配置的真正差异先闭合，稳定SQLite/WK/退出/恢复证据复用，不造新验收工具、不重全量审查、不追加CI。真实模型、安装、日常切换、签名私钥等后续实际动作未获此次具体授权，先完成可审查准备。
+
+
+## 2026-10-16 Mac 日用完整源码接受与组合冻结
+
+客户端完整单元8ade40a2d786cf355ab8acc07a96ea4d85902b76（7165后5ead/cc0a/8ade、19路径）独验接受：`/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-ordinary-daily-8ade-source-review.json` SHA256 `1da5b708a773be261a8e62afb11ccbce1bb75bd6791c304d1f2adbd8f2518721`。普通Mac Debug/Release沿原App与三栏、本机新PendingCrewLocal默认目录、Codex显式路径设置和纯FS就绪、无程序时Disabled数据Core、仅Codex界面；旧后台/自动恢复早退、远程factory/refresh/notify/admin不读Keychain、旧Sparkle feed与入口关闭。Mac版本0.1.44，build沿现UTC epochday.seconds一次计算，非本轮平台不冒已交付。builder扩现普通配置、准确helper预嵌入与Xcode完成后原finalizer；目标alias/hardlink/FIFO拒绝控制已齐，不另造验收工具。
+
+后端517de37d7dce66428f2865ff60234d8e348b9331独验接受，报告backend-daily-preflight-517d-review.json SHA256 `e40f7ce307dccd5353ac7b152f430af3a228d86a0032a6f76babcece667ccc86`：显式程序路径在会话分配前做纯FS检查，四类正式请求Suppressed/session0/fake0，修复后原UUID不重派，新意图才真实fake执行。初始CLI缺路径原拒、Discover/Disabled及剩余TOCTOU Unknown语义保留，无新增API。
+
+日用新增必要异常差异也已整块接受：58bd7b9a5fae9044371a626ad82080920fcc10a2，backend-managed-parent-58bd-review.json SHA256 `5564970529ca5586a21ec68d94ff819ccb2c842569074816e84001327ac46503`。旧DBC同时终止GUI和Core不能证明GUI-only crash；源核原EOF只fence/release会留活Core，新GUI无pin不可连接。最小修复仅Mac serve --managed-parent无PID opt-in，绑定既有OS原parent birth；确认Missing/换birth才关准入并沿既有有界shutdown/owned清理，Unknown仅关闭准入继续观察，不冒死亡；独立serve/observer不变、不写clean=true、不新schema/trust。实际开发私域mockApp父结束后known Core/fake均不在/socket无/registry空，新Core保unclean/session/原UUID历史且fake不增。原Core是knownPID观察，非外层Popen.wait；最初只读SQLite打开失败原件保留，续接正式API，不作immutable/WAL绕过。非最终普通App证明。
+
+根已精确cherry-pick完整作者单元，当前产品组合6410223a；客户端19路径与8ade、后台四条新增文件与作者ref逐字对齐。main1bb的React资产已保留合入，用户主目录脏文件未动。三作者开发分支均已普通保存；本冻结提交后停止global所有源码及文档修改，唯一后端作者准确默认非测试normal，独核后客户端用原暖Xcode/SPM一次普通Release包。Rust目录仍/private/tmp/pcw-decision-target。旧b8/normal/包/各次失败永不重标，不追加CI、全量审查或稳定知识/退出重跑。
+
+最终普通同包仍需验证：新私域无程序可打开数据UI、明确fake执行写知识/保存视图；仅杀原GUI后后台真实收尾，新GUI/新Core同DB保数据视图，异常提示未答/拒恢复零执行，明确选择才恢复。已有稳定SQLite/WK与退出证据按未变范围复用。普通bundle共享UserDefaults，验收不改真实设置，现有参数域临时覆盖quit与显式私域/program；正常OS窗口偏好副作用不冒零写。真实模型/SDK、安装/日常切换、私钥签名/系统权限、公开发布仍未执行，待准确包及完整动作准备后分别核权。
