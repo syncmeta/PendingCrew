@@ -6,21 +6,21 @@ import Foundation
 @MainActor
 final class CodexTranscript: ObservableObject {
     @Published private(set) var items: [CodexThreadItem] = []
-    @Published private(set) var knowledgeFailures: [String: CodexKnowledgeFailure] = [:]
-    private var knowledgeFailureOrder: [String] = []
+    @Published private(set) var knowledgeCalls: [String: CodexKnowledgeCall] = [:]
+    private var knowledgeCallOrder: [String] = []
     /// Called only with items from the current authenticated crew projection.
-    func observeKnowledgeFailure(_ item: [String: Any]) {
+    func observeKnowledgeCall(_ item: [String: Any]) {
         guard let id = item["id"] as? String, !id.isEmpty else { return }
-        guard let failure = CodexKnowledgeFailure.observed(item) else {
-            knowledgeFailures.removeValue(forKey: id); knowledgeFailureOrder.removeAll { $0 == id }; return
+        guard let call = CodexKnowledgeCall.observed(item) else {
+            knowledgeCalls.removeValue(forKey: id); knowledgeCallOrder.removeAll { $0 == id }; return
         }
-        if knowledgeFailures[id] == nil { knowledgeFailureOrder.append(id) }
-        knowledgeFailures[id] = failure
-        while knowledgeFailureOrder.count > 200 { knowledgeFailures.removeValue(forKey: knowledgeFailureOrder.removeFirst()) }
+        if knowledgeCalls[id] == nil { knowledgeCallOrder.append(id) }
+        knowledgeCalls[id] = call
+        while knowledgeCallOrder.count > 200 { knowledgeCalls.removeValue(forKey: knowledgeCallOrder.removeFirst()) }
     }
-    func revokeKnowledgeFailureDetails() {
-        if !knowledgeFailures.isEmpty { knowledgeFailures.removeAll() }
-        knowledgeFailureOrder.removeAll()
+    func revokeKnowledgeCallDetails() {
+        if !knowledgeCalls.isEmpty { knowledgeCalls.removeAll() }
+        knowledgeCallOrder.removeAll()
     }
     enum InputDelivery: String { case queued, accepted, started, failed }
     @Published private(set) var inputDelivery: [String: InputDelivery] = [:]

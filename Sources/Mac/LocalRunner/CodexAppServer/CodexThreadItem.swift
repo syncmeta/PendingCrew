@@ -242,13 +242,14 @@ struct CodexActivityPresentation: Equatable {
             details: details, bad: failed)
     }
 
-    static func tool(name: String, status: String?, knowledgeFailure: CodexKnowledgeFailure? = nil) -> Self {
-        if let failure = knowledgeFailure {
+    static func tool(name: String, status: String?, knowledgeCall: CodexKnowledgeCall? = nil) -> Self {
+        if let call = knowledgeCall {
             var details = [Detail(label: "工具", value: name),
-                           Detail(label: "原输入", value: failure.arguments ?? "后台未返回原输入详情。"),
-                           Detail(label: "结构化错误", value: failure.error ?? "后台未返回结构化错误详情。")]
-            if let response = failure.failureResponse { details.append(.init(label: "失败响应", value: response)) }
-            return .init(icon: "exclamationmark.triangle", headline: "知识操作未完成", details: details, bad: true)
+                           Detail(label: "原输入", value: call.arguments ?? "后台未返回原输入详情。"),
+                           Detail(label: "结构化错误", value: call.error ?? "后台未返回结构化错误详情。")]
+            details.append(.init(label: "原结果", value: call.result ?? "后台未返回原结果详情。"))
+            return .init(icon: call.failed ? "exclamationmark.triangle" : "wrench.and.screwdriver",
+                         headline: call.failed ? "知识操作未完成" : "知识工具调用", details: details, bad: call.failed)
         }
         let failed = status == "failed"
         var details = [Detail(label: "工具", value: name)]
@@ -371,21 +372,22 @@ struct CodexActivityPresentation: Equatable {
 
 /// Only the already-authorized current crew projection supplies these values.
 /// Never inspect account/configuration fields or infer payloads from model prose.
-struct CodexKnowledgeFailure: Equatable {
+struct CodexKnowledgeCall: Equatable {
     static let maximumDetailBytes = 64 * 1024
     static let tools: Set<String> = ["data_workspace_get", "data_submit", "data_request_get", "data_object_get",
         "data_object_list", "data_schema_get", "data_query", "data_table_get", "data_history", "data_preview"]
     let arguments: String?
     let error: String?
-    let failureResponse: String?
+    let result: String?
+    let failed: Bool
     static func observed(_ item: [String: Any]) -> Self? {
         guard item["type"] as? String == "mcpToolCall", item["server"] as? String == "crew",
               let tool = item["tool"] as? String, tools.contains(tool) else { return nil }
         let result = item["result"] as? [String: Any]
         let failedResult = result?["isError"] as? Bool == true
         let error = item["error"].flatMap { $0 is NSNull ? nil : $0 }
-        guard item["status"] as? String == "failed" || error != nil || failedResult else { return nil }
-        return .init(arguments: text(item["arguments"]), error: text(error), failureResponse: failedResult ? text(result) : nil)
+        let failed = item["status"] as? String == "failed" || error != nil || failedResult
+        return .init(arguments: text(item["arguments"]), error: text(error), result: text(item["result"]), failed: failed)
     }
     private static func text(_ value: Any?) -> String? {
         guard let value, !(value is NSNull),

@@ -51,10 +51,10 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     }
     func update(live: CrewdValue, inspection: CrewdValue, items: [CrewdValue]) {
         guard !retired, workspace.acceptsObservation(workspace.observationGeneration), live["sessionId"].string == sessionID else {
-            transcript?.revokeKnowledgeFailureDetails(); return
+            transcript?.revokeKnowledgeCallDetails(); return
         }
         let currentCrew = workspace.crewID == observedCrew && workspace.sessionID == sessionID
-        if !currentCrew { transcript?.revokeKnowledgeFailureDetails() }
+        if !currentCrew { transcript?.revokeKnowledgeCallDetails() }
         hasObservedLive = true
         status = live["running"] == .bool(true) ? .running : .exited(nil)
         isWorking = live["working"] == .bool(true)
@@ -75,7 +75,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
             guard let raw = item.pretty.data(using: .utf8),
                   let decoded = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { continue }
             transcript?.apply(method: "item/completed", params: ["item": decoded])
-            if currentCrew { transcript?.observeKnowledgeFailure(decoded) }
+            if currentCrew { transcript?.observeKnowledgeCall(decoded) }
         }
     }
     func send(_ text: String) { failure = "请通过机组消息发送，或在此原会话页明确取得手工终端控制。" }
@@ -85,7 +85,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     func resume() { command("session.resume", ["sessionId": .string(sessionID)]) }
     func retireDisplay() {
         retired = true
-        transcript?.revokeKnowledgeFailureDetails()
+        transcript?.revokeKnowledgeCallDetails()
         publicTerminal?.retire()
         terminalView?.onSendBytes = nil; terminalView?.onResize = nil
     }
@@ -161,7 +161,7 @@ final class CrewdOriginalSessionProjection {
             runner.installCrewdProjection([], workspace: workspace)
         }
         for old in projections.values where !workspace.acceptsObservation(epoch) || old.crewId != workspace.crewID || old.sessionId != workspace.sessionID {
-            (old.backend as? CrewdOriginalSessionBackend)?.transcript?.revokeKnowledgeFailureDetails()
+            (old.backend as? CrewdOriginalSessionBackend)?.transcript?.revokeKnowledgeCallDetails()
         }
         guard workspace.acceptsObservation(epoch) else { return }
         for row in workspace.sessions {
