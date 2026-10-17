@@ -710,3 +710,14 @@ mac-01的Xcode65原件保留：共享SPM八个checkout及Sparkle artifact缺文�
 可交付ZIP `/private/tmp/pcw-mac-daily-889a2e62-mac-02/PendingCrew-0.1.44-20742.58276-macOS-arm64.zip`，39821849 bytes，SHA256 `4f1e68397583cea3da92400d51f35938306dcf3ae889c029fd10437abfd6acf3`；根亲核散列、交付说明和同目录安装方案。ZIP CRC与关键App文件逐hash匹配，旧App备份/整体替换/回退已准备，尚未执行。
 
 本地main已从7df安全快进到889（实际37892d exit0），185用户路径状态与文件散列不变，用户tracked diff SHA256仍 `b7608967dfe693f721bbbf147b10655ba47f6523f370847d2623d020b71c964c`；远端main未推。此前call_83df授权已消耗于7df真实首拒，重复同一问项回复不扩大到本包。新包真实单任务提案 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/real-codex-889a-single-task-proposal.json` SHA256 `d14d4b26fcac098c50dd1008d5c1160aa08086032a5f26cfadb5fd7f7660f8f5` 已备，待新的直接真人授权；新私域、一任务、300秒停工无重试，使用正常用户任务与产品引导。未安装、启动新日常数据、发布、持久授信或私钥签名；Mac日用交付与整个多平台工程均未冒称完成。
+
+
+### 2026-10-17 新889包一次真实任务：未写入，正常停止，原因仍待证
+
+真人以call_af606364753641b7a4f2de3a09fba5ca授权新版0.1.44/build20742.58276的一次任务，已在新私域执行并耗用授权。正式UUID 98f63069-fc8b-417a-bcdf-332e99669621 实际launched；原App观察workspace_get及resources/templates列表completed，但成功工具UI未暴露原args/result，不冒原始payload已保存。模型自述参数结构不可得而停止；未观察data_submit或成功知识/视图回执，目标NOT_PASS。模型说辞不能确证schema/SDK缺陷。没有追加任务、重试、制造失败或为未建对象补持久性测试。
+
+准确停止报告 /private/tmp/pcw-mac-daily-889a2e62-real-codex-01/single-real-codex-stopped-review.json，SHA256 a30cd49a576da4b42acc957b381ba537c5d45b4a1811bf2d29514123ff12726e，根亲读核散列。约116.9秒正常收尾：GUI49486原wait0，Core49488/Codex49748已知PID均无，socket无/registry空。未安装、切日常、读取账号或外部rollout；本条不代表真实知识成功。
+
+有界源码独核：PendingCrew config仅注入crew command/args，未自设allowlist/defer；Bridge直接返回正式agent.tools全表。已有十工具自足schema及生产MCP证据保留。指导为workspace_get→获准first-submit→read，未发现要求通过resources找schema的矛盾；资源列表不能证明工具导入表缺失。缺口为实际Codex导入/筛选/模型发现工具边界，无依据猜修源码或重包。
+
+下一步仅准备一次无模型SDK工具导入控制：新隔离HOME/CODEX_HOME、现有test-ownedFixture与正式helper/handler，不冒normal Core/App整条路径；仅initialize/thread-start/status，无turn/inference，不复用旧token/scope、不读原账号或外部日志。实际网络限制及执行范围待根和质量核定，未启动SDK。889的fake影响门仍通过，Mac日用完整验收未达成；新的模型调用及安装仍须具体授权。
