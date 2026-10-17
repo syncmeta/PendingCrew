@@ -854,6 +854,233 @@ mod tests {
         .await
         .unwrap()
     }
+    /// Preparation-only unless the owner authorizes one real, offline SDK import.
+    /// No turn, tool invocation, login, or version request is available on this client.
+    #[tokio::test]
+    #[ignore = "real SDK import only: requires explicit CREWD_CODEX_INVENTORY_ONCE=1 authorization"]
+    async fn real_codex_imported_knowledge_inventory_without_turn() {
+        use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        assert_eq!(
+            std::env::var("CREWD_CODEX_INVENTORY_ONCE").as_deref(),
+            Ok("1")
+        );
+        let root = PathBuf::from("/private/tmp/pcw-codex-import-inventory-20261017-01");
+        assert!(
+            root.is_dir(),
+            "owner must create the reviewed private root first"
+        );
+        assert!(
+            !root.join("sdk-started.json").exists(),
+            "single attempt only"
+        );
+        let sdk = PathBuf::from(
+            "/Users/hey/.codex/packages/standalone/releases/0.162.1-aarch64-apple-darwin/bin/codex",
+        );
+        let helper = PathBuf::from(
+            "/private/tmp/pcw-mac-daily-889a2e62-mac-02/PendingCrew.app/Contents/Helpers/crewd",
+        );
+        fn sha(path: &std::path::Path) -> String {
+            ring::digest::digest(&ring::digest::SHA256, &std::fs::read(path).unwrap())
+                .as_ref()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        }
+        assert_eq!(
+            sha(&sdk),
+            "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+        );
+        assert_eq!(
+            sha(&helper),
+            "618e920e5d402534f24e62caa04ef808fc429567cac4ec9d50174ebf8ee5abc5"
+        );
+        let f = Fixture::new().await;
+        assert!(
+            f.data_dir().starts_with(root.join("tmp")),
+            "isolated TMPDIR required"
+        );
+        let _rt = runtime(&f).await;
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let socket_task = f.spawn_owned_socket(stop_rx).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let token_file = root.join("agent-token");
+        let mut grant = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&token_file)
+            .unwrap();
+        std::io::Write::write_all(&mut grant, f.token(&f.worker).as_bytes()).unwrap();
+        drop(grant);
+        let quote = |v: &std::path::Path| serde_json::to_string(v.to_str().unwrap()).unwrap();
+        // All IP networking is denied. The sole socket exception is this fixture.
+        // The account HOME is denied, except public executable resources.
+        let profile = format!(
+            "(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote unix-socket (literal {})))\n(deny file-read* file-write* (subpath \"/Users/hey\"))\n(allow file-read* (subpath \"/Users/hey/.codex/packages/standalone/releases/0.162.1-aarch64-apple-darwin\"))\n(deny mach-lookup (global-name \"com.apple.securityd\"))\n",
+            quote(&socket)
+        );
+        let sandbox_file = root.join("offline.sb");
+        std::fs::write(&sandbox_file, profile).unwrap();
+        // Syntax was checked separately with /usr/bin/true; this does not run SDK discovery.
+        let mut command = tokio::process::Command::new("/usr/bin/sandbox-exec");
+        command.args([
+            "-f".as_ref(),
+            sandbox_file.as_os_str(),
+            sdk.as_os_str(),
+            "app-server".as_ref(),
+        ]);
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", root.join("home"))
+            .env("CODEX_HOME", root.join("codex-home"))
+            .env("TMPDIR", root.join("tmp"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("SHELL", "/usr/bin/false")
+            .current_dir(root.join("work"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        command.as_std_mut().process_group(0);
+        // The marker remains even if startup fails: no alternate API or second SDK attempt.
+        std::fs::write(
+            root.join("sdk-started.json"),
+            json!({"sdk":sdk,"helper":helper,"noTurns":true}).to_string(),
+        )
+        .unwrap();
+        let spawned = command.spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                f.state.tokens.revoke(&f.worker);
+                let _ = std::fs::remove_file(&token_file);
+                let _ = stop_tx.send(());
+                let _ = socket_task.await;
+                panic!("single SDK startup failed, no retry: {error}");
+            }
+        };
+        let mut input = child.stdin.take().unwrap();
+        let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = child.stderr.take().unwrap();
+        let stderr_task = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            use tokio::io::AsyncReadExt;
+            let _ = (&mut stderr).take(1_048_576).read_to_end(&mut bytes).await;
+            bytes
+        });
+        let mut frames = Vec::new();
+        async fn send(
+            input: &mut tokio::process::ChildStdin,
+            frames: &mut Vec<Value>,
+            packet: Value,
+        ) -> anyhow::Result<()> {
+            let method = packet["method"].as_str().unwrap_or_default();
+            anyhow::ensure!(
+                matches!(
+                    method,
+                    "initialize" | "initialized" | "thread/start" | "mcpServerStatus/list"
+                ),
+                "outgoing method is outside the no-model allowlist"
+            );
+            frames.push(packet.clone());
+            input.write_all(format!("{packet}\n").as_bytes()).await?;
+            Ok(())
+        }
+        async fn receive(
+            lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+            frames: &mut Vec<Value>,
+            id: u64,
+        ) -> anyhow::Result<Value> {
+            loop {
+                let line =
+                    tokio::time::timeout(std::time::Duration::from_secs(20), lines.next_line())
+                        .await??
+                        .ok_or_else(|| anyhow::anyhow!("SDK EOF"))?;
+                anyhow::ensure!(line.len() <= 4_194_304, "SDK frame bound exceeded");
+                let packet: Value = serde_json::from_str(&line)?;
+                frames.push(packet.clone());
+                anyhow::ensure!(
+                    !(packet.get("method").is_some() && packet.get("id").is_some()),
+                    "SDK requested an unexpected action; stop without approval"
+                );
+                if packet["id"] == id {
+                    anyhow::ensure!(
+                        packet.get("error").is_none(),
+                        "SDK unsupported/auth/error: {packet}"
+                    );
+                    return Ok(packet["result"].clone());
+                }
+            }
+        }
+        let outcome: anyhow::Result<Value> = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            async {
+            send(&mut input, &mut frames, json!({"id":1,"method":"initialize","params":crewd_exec::codex::proto::initialize_params("inventory-once")})).await?;
+            receive(&mut lines, &mut frames, 1).await?;
+            send(&mut input, &mut frames, json!({"method":"initialized"})).await?;
+            let options = crewd_exec::codex::proto::ThreadOptions {
+                mcp_servers: Some(crewd_exec::codex::proto::mcp_servers(&helper, &[
+                    "mcp".into(), "--data-dir".into(), f.data_dir().display().to_string(),
+                    "--session".into(), f.worker.clone(), "--token-file".into(), token_file.display().to_string(),
+                ])),
+                ..Default::default()
+            };
+            send(&mut input, &mut frames, json!({"id":2,"method":"thread/start","params":crewd_exec::codex::proto::thread_start_params(&root.join("work"), &options)})).await?;
+            let thread = receive(&mut lines, &mut frames, 2).await?;
+            let thread_id = thread["thread"]["id"].as_str().ok_or_else(|| anyhow::anyhow!("thread id absent"))?;
+            let mut cursor = Value::Null;
+            let mut pages = Vec::new();
+            for index in 0..4u64 {
+                let id = 10 + index;
+                send(&mut input, &mut frames, json!({"id":id,"method":"mcpServerStatus/list","params":{"threadId":thread_id,"serverName":"crew","detail":"toolsAndAuthOnly","cursor":cursor,"limit":100}})).await?;
+                let page = receive(&mut lines, &mut frames, id).await?;
+                cursor = page.get("nextCursor").cloned().unwrap_or(Value::Null);
+                pages.push(page);
+                if cursor.is_null() { return Ok(json!({"pages":pages,"threadId":thread_id})); }
+            }
+            anyhow::bail!("bounded inventory exceeded four pages; no alternative query")
+            },
+        )
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("fixed 120-second SDK protocol deadline exceeded; no retry")));
+        drop(input); // EOF is the normal SDK shutdown; no model or tool call was sent.
+        let exit =
+            match tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await {
+                Ok(exit) => format!("{exit:?}"),
+                Err(_) => {
+                    let _ = child.start_kill(); // Only the exact held new SDK child.
+                    format!("owned SDK EOF timeout; kill/wait {:?}", child.wait().await)
+                }
+            };
+        f.state.tokens.revoke(&f.worker);
+        let _ = std::fs::remove_file(&token_file);
+        let _ = stop_tx.send(());
+        let _ = socket_task.await;
+        let stderr = tokio::time::timeout(std::time::Duration::from_secs(2), stderr_task).await;
+        let _ = std::fs::write(
+            root.join("sdk-frames.json"),
+            serde_json::to_vec_pretty(&frames).unwrap(),
+        );
+        if let Ok(Ok(bytes)) = stderr {
+            let _ = std::fs::write(root.join("sdk-stderr.txt"), bytes);
+        }
+        let result = match outcome {
+            Ok(inventory) => {
+                json!({"scope":"real SDK + formal 889 helper + test-owned production handler/ACL","inventory":inventory,"sdkExit":exit,"turnStartSent":false,"originalAccountPolicyReproduced":false})
+            }
+            Err(error) => {
+                json!({"scope":"single offline SDK inventory attempt","stopped":error.to_string(),"sdkExit":exit,"turnStartSent":false,"retryAllowed":false})
+            }
+        };
+        std::fs::write(
+            root.join("result.json"),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn sqlite_formal_mcp_acl_free_view_and_cross_language_wire() {
         let f = Fixture::new().await;
