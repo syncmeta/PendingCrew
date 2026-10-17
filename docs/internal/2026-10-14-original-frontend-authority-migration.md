@@ -78,3 +78,34 @@ The next immutable combination is built sequentially for Mac, generic iPhoneOS a
 Mac actual dedicated build at 422 completed successfully, with immutable source/settings/SPM before-after inputs, composed normal13 proof and signed candidate retained at `/private/tmp/pcw-original-frontend-candidate13-422ecaca-02`. No launch is permitted from that package: its credential factory still used the candidate Keychain namespace. The next complete source adds one shared factory at the window constructor, covering original AppModel plus retained migration/mobile entry points. Candidate compilation always uses process-local memory credentials without constructing Keychain; ordinary production preserves its policy, and explicit fixtures can opt into `PENDINGCREW_ISOLATED_CREDENTIALS=memory`. Memory records are lost on relaunch, so this does not prove paired credential restart recovery. Actual source-backed factory/store controls with the real wire DTOs passed shared-window save/read/remove, missing/oversize refusals and a fresh empty lifetime at `/private/tmp/pcw-candidate-memory-vault-01/result-02.log`. TLS, SPKI, signed confirmation and grants are unchanged.
 
 The independent Mac test target was fully linked as well. Its first build retained an exit65 log at `/private/tmp/pcw-original-frontend-719e8b2f-mac-test-target-01.log`: the real work view dependency graph required original `Sources/Mac/Design/CrewColorHash.swift`. Registering that actual shared visual source closed the graph; `/private/tmp/pcw-original-frontend-719-working-mac-test-target-02.log` completed `TEST BUILD SUCCEEDED` with the dedicated condition and retained DD/SPM. This compiles the complete real standalone bundle (498 inputs) without executing stable legacy tests. Product Swift and Rust are unchanged by the final one-file source registration. Final immutable source proof and mobile SDK complete links use this complete project composition.
+
+
+## 原 App 初始化拒绝的完整修复（源码审查静止点）
+
+703 原窗口的实际连接仍未通过：现场 PID24151 和隔离目录保持原样，未重启、未手起 helper。实际启动后存在两个0755目录；原 QA 的“空”仅指无普通文件，不能说无目录。真实源码控制复现：App 的 CaptainTemplateStore.shared 在连接之前创建 frontend-presentation 为0755，随后严格0700命名空间拒绝；原窗口又把该拒绝隐藏为“正在连接”。
+
+初始化现在先调用现有严格命名空间准备，再单独准备0700 ui-cache；namespace/unknown记录与 UI cache 隔离。没有 chmod、接纳旧宽权限目录或借路径自造 authority。原模板 UI 在 crewd 配置使用内存 presentation store，Mac和iPhone/iPad都不初始化旧模板文件。普通配置的原模板持久政策保留。本机显式连接也重复严格验证，失败显示真实错误和显式重试；不无限假装正在连接，不自动回放未知操作。原窗口和三栏/移动组件继续保留。
+
+实际生产 Foundation 文件编译和控制证据：`/private/tmp/pcw-original-startup-private-first-02`。新私有准备→实际模板操作→稳定 namespace、旧数据和cache无模板/账文件通过；既有0755目录和符号链接拒绝且不改变，显式回到原有效根保持同namespace。该层不证明 SwiftUI App 全目标构建、真实后台连接或原窗口业务；修复后的专用全目标构建、新不可变 GUI 来源与实际窗口仍待本单元后续完成。Rust输入未变，后台仅可诚实复用原2bf编译来源，不能重标新版GUI或14。
+
+
+### 822实际原窗口启动后的旧缓存构造边界
+
+QA实际822原Root已正常启动并连接真实packaged normal13（原compiled2bf），新GUI/helper/kernelpeer/fake-only资格通过。首次创建crew因Mac锁屏未执行，原现场未重启，完整窗口业务仍未验。ui-cache下空whiteboards0755不能被解释成无旧store初始化。明确源链为CrewStore eager humanTodoCache→CrewHumanTodoAttentionCache默认human/agent `.shared`参数→LocalTodoStore.init创建defaultDirectory；当前crewd预览分支走正式message.list/ask.list及纯static aggregate，没有调用该旧缓存读取，但构造副作用本身是漏口。
+
+将humanTodoCache与既有lastMessageCache均限于legacy路径首次需要时创建；reset也显式仅legacy路径触clear，避免lazy缓存被重置反而实例化。两缓存的唯一其余访问位于refreshLastWhiteboardMessages的usesCrewdAuthority早返回之后。CrewStore其它eager默认依赖为内存队列、draft/rollback状态与仅计算fileURL的PendingCrewRecoveryStore；presentation SessionHost/Runner已有factory及constructor早返回，不执行旧store、bridge、watcher。原Root驾驶舱也只在legacy模式出现。该修复保留旧模式缓存行为，crewd数据权威不变。
+
+822不可变包没有包含此新源码，不重标其输入或现场结果。完整新GUI源码组合需按影响编译/来源证明与原窗口复验，Rust输入不变可诚实复用已验对应normal原compiled来源。未因这个sourcecut宣称最终窗口、14请求恢复/终端/Quit、真机或main产品交付通过。
+
+## 07真实原窗口后的完整创建/Todo/消息分类修复（source-review freeze，待新包/窗口）
+
+本轮实测原07 GUI编译输入仍为5cdf，helper仍原2bf正常13，未改变或重标旧包。受控新的执行上下文已可连接后台，真实privatework首消息→crew/lobby、正式需求#1→无owner计划W2→Todo/进展同实体、文档正文+独立文档分类已留下证据；没有启动真实模型。旧07仍有四项整块失败：新建枚举daily CrewGround/chooser默认Documents；原右栏旧Todo读/锁/sweep实例；旧composer checklist的承诺与实际拒绝不符；原消息缺文件夹入口。它们不被上述稳定CRUD通过覆盖。
+
+此次九个产品源文件在同一批收口：
+
+- Core新建标题只用选中authority的roster projection，不枚举真实home默认根。本机目录chooser先严格取得同authority私有presentation UI-cache根，身份不明拒绝；回调核同workspace/draft，不回填默认。远端只接受明确服务器路径，不打开本机chooser猜服务器。13首消息仍split create/post，unknown保留，不声称原子14。
+- 原右Todo区域保留原布局但显示已存在正式ChannelTodo组件；旧CrewTodoPanel的task/read/detail/异步读回和旧唤醒恢复menu不得成为Core腿。正式需求/人类待决、viewFolder与work parent仍各有原契约，不迁入第二白板。
+- 原Mac/iPhone/iPad composer checklist直接使用现有`todo.create`，真实参数`requestId/crewId/text/channelId`，工作store仍验证原crew/text和channelAssociation回执。独立composer草稿不覆盖中央Todo编辑；未知结果保留同请求UUID/原文，只有人明确确认才复用同资源请求，绝不自动重放，也不把该资源幂等扩大到13的一般message/crew/session操作。附件、reply和定向mention不能被吞后伪称需求成功；Core附件picker/paste/drop摄入门禁也不进入旧暂存/落盘路径。历史附件metadata保持不可本机解释的引用。
+- **消息文件夹正式分类对象是channel**（collab/view_folders.rs及Resources.parseFolders现行合同），不是单条正文或Todo父子关系。原消息视图增加该view的filter/manage/classify和真实channel选择。原聊天adapter读写同选中channel，不再固定lobby；读响应检查authority observation epoch及channel。聊天实例按channel重建，草稿以authority/crew/channel隔离，原authority/lobby旧key仅为该lobby保留恢复，不能跨channel复用。权限/分类/CAS仍由后台决定，未添加公共schema或本地账。
+
+当前验证仅完整九源`swiftc -frontend -parse -D PENDINGCREW_NATIVE_CANDIDATE`及diff检查；没有因此声称SwiftUI全链接、新包或上述新入口实际窗口通过。已有07正式业务/既有资源幂等证据不重复；下一必要门禁是这一批完整候选增量构建、新immutable GUI输入/配置/SPM证明和新窗口受影响整流程。Rust未变，若复用old2bf helper必须继续诚实记录原compiledRef；14公共receipt/PTy/可信重连/ownedQuit尚需后端正常全模块冻结，不由本轮菜单或本机UUID替代。
