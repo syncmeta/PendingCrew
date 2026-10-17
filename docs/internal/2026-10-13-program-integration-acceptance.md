@@ -730,3 +730,17 @@ mac-01的Xcode65原件保留：共享SPM八个checkout及Sparkle artifact缺文�
 唯一无模型SDK控制已执行并独核通过：隔离SDK连接47个crew工具，含完整10个data工具，data_submit根object、required字段及本地引用完整；仅四个白名单协议方法，无turn/toolcall。SDKexit0、stderr空，一次性grant/socket/auth.json不存在；test-ownedFixture生产handler/ACL加889正式helper，不冒普通normal/App全链或原账号policy。实际结果 /private/tmp/pcw-codex-import-inventory-20261017-01/result.json SHA256 dd20cee0ea667601364e8821e02bf43569a62bfeef8d39b3d2f988a89cebec86；独核 sdk-import-inventory-actual-independent-review.json SHA256 fc56a6283839fc833678437202f86bdf199358d349d04d89d088b3c4ce9d2043（质量目录同上）。未记录helperPID，不冒逐PID退出证明。人类已确认原Codex为官方OpenAI服务，原真实任务停止原因仍未证、知识目标仍NOT_PASS。
 
 本次分支合并只补已验测试、历史记录与此事实记录，产品代码相对7ee18f15无新实现，不重跑稳定流程或重建App。实际已封包仍准确编译自889a2e62，不能将既有normal/App证明换标为本次main提交。安装/新日用启动/公开发布与新模型调用未执行；只进行已获明确授权的main普通推送与开发分支同步，保留用户未提交文件、旧工作树及全部分支。
+
+
+### 2026-10-17 交付准备及有界诊断收口，继续闭合真实业务
+
+四分支此前已统一至63114b46；185份原用户未提交文件已依明确指令逐字保存并推送。本轮独验接受后端 f22154e182baf3787470ee942dd34e260bb8cd6e 两文件 test-only 单元，已快进本地main；仅扩现有ignored控制和公开既有test HTTP reader，无生产实现、schema、Swift或构建配置变化。作者推送遇GitHub HTTP2错误，不能冒远端成功，根整合后统一推送核实。
+
+本地合成provider控制01未取得完整请求，且初版在turn ACK后漏读stdout，已撤回“SDK没有后续帧”的推断。修复持续读取后的02在47/10工具导入及唯一合成turn ACK后收到SDK实际连接发送错误，HTTP status null，当即停止、SDK退出0、token/socket移除；仍无完整HTTP/模型工具投影，原因未证。willRetry:true仅SDK原字段；作者没有第二turn或重启，不能宣称SDK内部零尝试。同一原profile的无SDK curl资格核对唯一假请求成功，只能证明curl本机通信可用，不外推SDK。未第三SDK控制、不猜修schema/ACL/初始化。02独验 sdk-local-projection-02-actual-review.json SHA256 b9d75f4df5c5ed0e3ab9b03c13f82d9e2acce321cc6d0bee31b1ea890dfd0f11。
+
+完整单份交付说明 /private/tmp/pcw-mac-daily-889a2e62-mac-02/MAC-DELIVERY.txt SHA256 d54e4cb6751545bc93662b15741a06f364c990aa2e618422c4e1a8a98c02b106 已独验接受：准确889输入、GUI Release/Core Debug、ARM64 adhoc、稳定验收复用边界、真实NOT_PASS及安装回退。原包/ZIP/证明未改，未安装或启动新日常目录。综合收口独验 mac-delivery-closure-independent-review.json SHA256 37be47d1ace0899e0f0b7fac82609a96996144313e5eb9b68b19fbe312150d4e，质量目录同前。这是交付准备与诊断保存，不是新产品阶段完成。
+
+源码确认现有RunnerItem可带成功知识MCP原arguments/result/error，但App仅内存保存，成功UI/inspect.screen只显示名称状态，inspect无items；独立外部observer无GUI/Core lineage，不能借token绕过。原真实线程也没有公共inventory查询入口。因此不准备889同包盲重试。根裁最小必要产品接缝：唯一client作者扩现有当前知识工具折叠详情至成功及失败，保持有限纯文本、当前epoch/crew/session、无新RPC/日志/存盘/权限；质量直接按受影响范围独核，整块冻结后才新准确normal及普通包。后端不改业务逻辑，不扩inventory诊断合同。新真实任务须届时新具体授权，两次旧授权均已耗用；安装、日用切换、私钥签名、公开发布仍未执行。
+
+
+完整四文件客户端单元14596438eeaaaa690871e36000312e8170b9a0d9已独验接受并精确快进整合；29+/27-，无Rust/API变化。实际原字段整JSON有限纯文本，completed仅中性“调用”，不冒业务成功；原10工具闭集及64KiB/200、当前crew/session/epoch/retire限制保留。原receiver接缝以合成事件证明三类字段和清理，不能冒普通App真实SDK回包。独验 client-knowledge-call-1459-source-review.json SHA256 cb7357c67c8d9e6868bdd550f09cef5971139bf4e4219ac5db1367bac7255469。根保存本条后冻结全输入，三树同步；唯一后台作者新准确默认非测试normal，独核后客户端原暖缓存一次普通Release包。无新增CI/冷缓存/稳定全套复验；新真实任务的首次原回包可见性和知识目标仍待准确新包及新具体授权，不伪造actor或授信来制造GUI证据。
