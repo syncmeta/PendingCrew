@@ -134,7 +134,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-async fn read_request(sock: &mut TcpStream) -> Option<Recorded> {
+pub(crate) async fn read_request(sock: &mut TcpStream) -> Option<Recorded> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {

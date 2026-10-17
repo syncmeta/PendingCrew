@@ -793,6 +793,10 @@ fn project(
 }
 
 #[cfg(test)]
+#[path = "../../../jev/tests/support/mod.rs"]
+mod projection_http;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::testkit::Fixture;
@@ -859,13 +863,31 @@ mod tests {
     #[tokio::test]
     #[ignore = "real SDK import only: requires explicit CREWD_CODEX_INVENTORY_ONCE=1 authorization"]
     async fn real_codex_imported_knowledge_inventory_without_turn() {
+        run_codex_knowledge_boundary(false).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "local synthetic Responses capture: requires explicit one-shot authorization"]
+    async fn real_codex_tools_projection_to_local_capture() {
+        run_codex_knowledge_boundary(true).await;
+    }
+
+    async fn run_codex_knowledge_boundary(capture: bool) {
         use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        assert_eq!(
-            std::env::var("CREWD_CODEX_INVENTORY_ONCE").as_deref(),
-            Ok("1")
-        );
-        let root = PathBuf::from("/private/tmp/pcw-codex-import-inventory-20261017-01");
+        let (permission, directory) = if capture {
+            (
+                "CREWD_CODEX_PROJECTION_ONCE",
+                "/private/tmp/pcw-codex-tools-projection-20261017-02",
+            )
+        } else {
+            (
+                "CREWD_CODEX_INVENTORY_ONCE",
+                "/private/tmp/pcw-codex-import-inventory-20261017-01",
+            )
+        };
+        assert_eq!(std::env::var(permission).as_deref(), Ok("1"));
+        let root = PathBuf::from(directory);
         assert!(
             root.is_dir(),
             "owner must create the reviewed private root first"
@@ -895,6 +917,16 @@ mod tests {
             sha(&helper),
             "618e920e5d402534f24e62caa04ef808fc429567cac4ec9d50174ebf8ee5abc5"
         );
+        // Reserve the reviewed address before creating any grant or SDK process.
+        let capture_listener = if capture {
+            Some(
+                tokio::net::TcpListener::bind("127.0.0.1:39271")
+                    .await
+                    .expect("fixed local capture endpoint must be free; no fallback"),
+            )
+        } else {
+            None
+        };
         let f = Fixture::new().await;
         assert!(
             f.data_dir().starts_with(root.join("tmp")),
@@ -913,6 +945,44 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut grant, f.token(&f.worker).as_bytes()).unwrap();
         drop(grant);
+        // Reuse the existing HTTP fixture reader; one connection and one response only.
+        // This listener is never a proxy and contains no model or tool executor.
+        let (capture_tx, mut capture_rx) = tokio::sync::oneshot::channel();
+        let capture_task = if let Some(listener) = capture_listener {
+            let output = root.clone();
+            Some(tokio::spawn(async move {
+                let result: anyhow::Result<Value> = async {
+                    let (mut stream, peer) = listener.accept().await?;
+                    drop(listener); // Never accept a retry or a second request.
+                    anyhow::ensure!(peer.ip().is_loopback(), "non-local capture caller");
+                    let request = super::projection_http::read_request(&mut stream).await.ok_or_else(|| anyhow::anyhow!("HTTP request incomplete"))?;
+                    let mut headers = json!({"method":request.method,"path":request.path,"contentType":request.header("content-type"),"contentEncoding":request.header("content-encoding"),"contentLength":request.header("content-length"),"transferEncoding":request.header("transfer-encoding"),"bodyBytes":request.body.len(),"authorizationHeaderPresent":request.header("authorization").is_some()});
+                    std::fs::write(output.join("capture-http.json"), serde_json::to_vec_pretty(&headers)?)?;
+                    std::fs::write(output.join("capture-request-body.bin"), &request.body)?;
+                    let response = json!({"type":"response.completed","sequence_number":0,"response":{"id":"resp_local_projection_capture","object":"response","created_at":0,"status":"completed","output":[],"model":"gpt-6.1-sol","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}});
+                    let body = format!("event: response.completed\ndata: {response}\n\n");
+                    let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                    stream.write_all(head.as_bytes()).await?;
+                    stream.write_all(body.as_bytes()).await?;
+                    stream.shutdown().await?;
+                    anyhow::ensure!(request.method == "POST" && request.path == "/v1/responses", "unexpected first HTTP route; single capture stopped");
+                    anyhow::ensure!(request.header("authorization").is_none(), "unexpected authorization header; no account capture allowed");
+                    anyhow::ensure!(request.header("transfer-encoding").is_none() && request.header("content-encoding").is_none(), "encoded or chunked body: incomplete projection evidence, no retry");
+                    let declared = request.header("content-length").and_then(|value| value.parse::<usize>().ok()).ok_or_else(|| anyhow::anyhow!("missing or invalid Content-Length: incomplete projection evidence"))?;
+                    anyhow::ensure!(declared == request.body.len(), "short or oversized body: incomplete projection evidence");
+                    let body: Value = serde_json::from_slice(&request.body)?;
+                    let tools = body.get("tools").and_then(Value::as_array).ok_or_else(|| anyhow::anyhow!("complete JSON body has no tools array; no projection conclusion"))?;
+                    headers["completeJsonToolsArray"] = json!(true);
+                    headers["toolEntries"] = json!(tools.len());
+                    std::fs::write(output.join("capture-http.json"), serde_json::to_vec_pretty(&headers)?)?;
+                    Ok(headers)
+                }.await;
+                let _ = capture_tx.send(result);
+            }))
+        } else {
+            drop(capture_tx);
+            None
+        };
         let quote = |v: &std::path::Path| serde_json::to_string(v.to_str().unwrap()).unwrap();
         // All IP networking is denied. The sole socket exception is this fixture.
         // The account HOME is denied, except public executable resources.
@@ -920,6 +990,11 @@ mod tests {
             "(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote unix-socket (literal {})))\n(deny file-read* file-write* (subpath \"/Users/hey\"))\n(allow file-read* (subpath \"/Users/hey/.codex/packages/standalone/releases/0.162.1-aarch64-apple-darwin\"))\n(deny mach-lookup (global-name \"com.apple.securityd\"))\n",
             quote(&socket)
         );
+        let profile = if capture {
+            format!("{profile}(allow network-outbound (remote ip \"localhost:39271\"))\n")
+        } else {
+            profile
+        };
         let sandbox_file = root.join("offline.sb");
         std::fs::write(&sandbox_file, profile).unwrap();
         // Syntax was checked separately with /usr/bin/true; this does not run SDK discovery.
@@ -947,7 +1022,8 @@ mod tests {
         // The marker remains even if startup fails: no alternate API or second SDK attempt.
         std::fs::write(
             root.join("sdk-started.json"),
-            json!({"sdk":sdk,"helper":helper,"noTurns":true}).to_string(),
+            json!({"sdk":sdk,"helper":helper,"noTurns":!capture,"localSyntheticCapture":capture})
+                .to_string(),
         )
         .unwrap();
         let spawned = command.spawn();
@@ -974,6 +1050,7 @@ mod tests {
         async fn send(
             input: &mut tokio::process::ChildStdin,
             frames: &mut Vec<Value>,
+            capture: bool,
             packet: Value,
         ) -> anyhow::Result<()> {
             let method = packet["method"].as_str().unwrap_or_default();
@@ -981,7 +1058,7 @@ mod tests {
                 matches!(
                     method,
                     "initialize" | "initialized" | "thread/start" | "mcpServerStatus/list"
-                ),
+                ) || (capture && method == "turn/start"),
                 "outgoing method is outside the no-model allowlist"
             );
             frames.push(packet.clone());
@@ -1017,35 +1094,65 @@ mod tests {
         let outcome: anyhow::Result<Value> = tokio::time::timeout(
             std::time::Duration::from_secs(120),
             async {
-            send(&mut input, &mut frames, json!({"id":1,"method":"initialize","params":crewd_exec::codex::proto::initialize_params("inventory-once")})).await?;
+            send(&mut input, &mut frames, capture, json!({"id":1,"method":"initialize","params":crewd_exec::codex::proto::initialize_params("inventory-once")})).await?;
             receive(&mut lines, &mut frames, 1).await?;
-            send(&mut input, &mut frames, json!({"method":"initialized"})).await?;
+            send(&mut input, &mut frames, capture, json!({"method":"initialized"})).await?;
             let options = crewd_exec::codex::proto::ThreadOptions {
+                model: capture.then(|| "gpt-6.1-sol".to_string()),
                 mcp_servers: Some(crewd_exec::codex::proto::mcp_servers(&helper, &[
                     "mcp".into(), "--data-dir".into(), f.data_dir().display().to_string(),
                     "--session".into(), f.worker.clone(), "--token-file".into(), token_file.display().to_string(),
                 ])),
                 ..Default::default()
             };
-            send(&mut input, &mut frames, json!({"id":2,"method":"thread/start","params":crewd_exec::codex::proto::thread_start_params(&root.join("work"), &options)})).await?;
+            let mut params = crewd_exec::codex::proto::thread_start_params(&root.join("work"), &options);
+            if capture {
+                params["config"]["model_provider"] = json!("pcw_local_capture");
+                params["config"]["model_providers"] = json!({"pcw_local_capture":{"name":"local synthetic capture only","base_url":"http://127.0.0.1:39271/v1","wire_api":"responses","requires_openai_auth":false,"supports_websockets":false,"request_max_retries":0,"stream_max_retries":0}});
+            }
+            send(&mut input, &mut frames, capture, json!({"id":2,"method":"thread/start","params":params})).await?;
             let thread = receive(&mut lines, &mut frames, 2).await?;
             let thread_id = thread["thread"]["id"].as_str().ok_or_else(|| anyhow::anyhow!("thread id absent"))?;
             let mut cursor = Value::Null;
             let mut pages = Vec::new();
             for index in 0..4u64 {
                 let id = 10 + index;
-                send(&mut input, &mut frames, json!({"id":id,"method":"mcpServerStatus/list","params":{"threadId":thread_id,"serverName":"crew","detail":"toolsAndAuthOnly","cursor":cursor,"limit":100}})).await?;
+                send(&mut input, &mut frames, capture, json!({"id":id,"method":"mcpServerStatus/list","params":{"threadId":thread_id,"serverName":"crew","detail":"toolsAndAuthOnly","cursor":cursor,"limit":100}})).await?;
                 let page = receive(&mut lines, &mut frames, id).await?;
                 cursor = page.get("nextCursor").cloned().unwrap_or(Value::Null);
                 pages.push(page);
-                if cursor.is_null() { return Ok(json!({"pages":pages,"threadId":thread_id})); }
+                if cursor.is_null() { break; }
             }
-            anyhow::bail!("bounded inventory exceeded four pages; no alternative query")
+            anyhow::ensure!(cursor.is_null(), "bounded inventory exceeded four pages; no alternative query");
+            let inventory = json!({"pages":pages,"threadId":thread_id});
+            if capture {
+                let ready = pages.iter().flat_map(|p| p["data"].as_array().into_iter().flatten()).any(|server| server["name"] == "crew" && server["runtimeStatus"] == "connected" && server["tools"].get("data_submit").is_some());
+                anyhow::ensure!(ready, "crew inventory is not explicitly connected with data_submit; no turn sent");
+                send(&mut input, &mut frames, capture, json!({"id":30,"method":"turn/start","params":{"threadId":thread_id,"input":[{"type":"text","text":"Synthetic local tool-definition capture only. No business task or tool execution.","text_elements":[]}]}})).await?;
+                receive(&mut lines, &mut frames, 30).await?;
+                // Keep stdout live while HTTP is pending, as the production driver does.
+                // Requests are evidence only: this control never grants an SDK action.
+                let captured = loop {
+                    tokio::select! {
+                        captured = &mut capture_rx => break captured??,
+                        line = lines.next_line() => {
+                            let line = line?.ok_or_else(|| anyhow::anyhow!("SDK EOF before HTTP capture"))?;
+                            anyhow::ensure!(line.len() <= 4_194_304, "SDK frame bound exceeded");
+                            let packet: Value = serde_json::from_str(&line)?;
+                            frames.push(packet.clone());
+                            anyhow::ensure!(!(packet.get("method").is_some() && packet.get("id").is_some()), "SDK requested an unexpected action; recorded and stopped without approval");
+                            anyhow::ensure!(!matches!(packet["method"].as_str(), Some("error" | "turn/completed")), "SDK reported error or turn completion before HTTP capture; recorded and stopped");
+                        }
+                    }
+                };
+                return Ok(json!({"inventory":inventory,"capturedRequest":captured,"modelNameSource":"gpt-6.1-sol was the pinned SDK default in the prior isolated inventory; original account model/policy is not reproduced"}));
+            }
+            Ok(inventory)
             },
         )
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("fixed 120-second SDK protocol deadline exceeded; no retry")));
-        drop(input); // EOF is the normal SDK shutdown; no model or tool call was sent.
+        drop(input); // EOF: inventory sends no turn; capture uses only its fixed local endpoint.
         let exit =
             match tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await {
                 Ok(exit) => format!("{exit:?}"),
@@ -1054,6 +1161,10 @@ mod tests {
                     format!("owned SDK EOF timeout; kill/wait {:?}", child.wait().await)
                 }
             };
+        if let Some(task) = capture_task {
+            task.abort();
+            let _ = task.await;
+        }
         f.state.tokens.revoke(&f.worker);
         let _ = std::fs::remove_file(&token_file);
         let _ = stop_tx.send(());
@@ -1068,10 +1179,10 @@ mod tests {
         }
         let result = match outcome {
             Ok(inventory) => {
-                json!({"scope":"real SDK + formal 889 helper + test-owned production handler/ACL","inventory":inventory,"sdkExit":exit,"turnStartSent":false,"originalAccountPolicyReproduced":false})
+                json!({"scope":"real SDK + formal 889 helper + test-owned production handler/ACL","inventory":inventory,"sdkExit":exit,"turnStartSent":capture,"onlyLocalSyntheticResponse":capture,"originalAccountPolicyReproduced":false})
             }
             Err(error) => {
-                json!({"scope":"single offline SDK inventory attempt","stopped":error.to_string(),"sdkExit":exit,"turnStartSent":false,"retryAllowed":false})
+                json!({"scope":"single offline SDK inventory attempt","stopped":error.to_string(),"sdkExit":exit,"turnStartAllowedOnlyAtLocalCapture":capture,"retryAllowed":false})
             }
         };
         std::fs::write(
