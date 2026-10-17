@@ -1,0 +1,83 @@
+{
+  "app" : "com.bohemiancoding.sketch3",
+  "appVersion" : "2026.3",
+  "autosaved" : 0,
+  "build" : 233959,
+  "commit" : "prototype",
+  "compatibilityVersion" : 99,
+  "created" : {
+    "app" : "com.bohemiancoding.sketch3",
+    "appVersion" : "2026.3",
+    "build" : 233959,
+    "commit" : "",
+    "compatibilityVersion" : 0,
+    "variant" : "NONAPPSTORE",
+    "version" : 146
+  },
+  "pagesAndArtboards" : {
+    "FFE0FE57-D3B1-4921-8213-21C46FBC844B" : {
+      "artboards" : {
+        "1F1E4437-40A7-47A5-A585-D88314DD87DE" : {
+          "name" : "07 备注已保存"
+        },
+        "5A19C408-EC71-4D1F-AA1E-3F4E1384881C" : {
+          "name" : "10 答复已提交"
+        },
+        "8C4601C5-43E5-4650-B47D-C8B82F0F1D02" : {
+          "name" : "03 会话"
+        },
+        "9A337E94-07A6-43C6-8132-9011EE67B828" : {
+          "name" : "14 恢复提示"
+        },
+        "9B3A7FEC-CA26-40CF-AE0D-B988F6B626E7" : {
+          "name" : "16 暂不恢复"
+        },
+        "35B4BBCE-D9B1-4001-9DEF-704C2524387E" : {
+          "name" : "11 稍后处理"
+        },
+        "059CB5AB-1809-4254-BBAB-C3EECA2BEE87" : {
+          "name" : "04 工作"
+        },
+        "60B69F37-6B8A-4E75-9956-E74A7DF80B09" : {
+          "name" : "12 撤回确认"
+        },
+        "166F3AC2-BBAA-4742-8FD6-0EBAD5D87A23" : {
+          "name" : "17 方案"
+        },
+        "371AC218-CF21-4E28-882C-0B9F5A6CAD5C" : {
+          "name" : "02 机组与成员"
+        },
+        "877D7648-4FB6-41FA-A00D-DFD88F031D82" : {
+          "name" : "01 总览"
+        },
+        "12773D24-954A-4921-BFB5-A4905514C76A" : {
+          "name" : "09 答复问题"
+        },
+        "D8A53DA3-A85A-4421-A6C0-854668343B10" : {
+          "name" : "06 备注编辑"
+        },
+        "D8D0D897-B138-45D4-9472-4DE0008CA0C9" : {
+          "name" : "18 冻结工作"
+        },
+        "DA44DF8A-6527-413E-8AFD-4FE22D5AD2E6" : {
+          "name" : "08 待我处理"
+        },
+        "E70C9007-17FC-4395-A4A6-13796D307254" : {
+          "name" : "15 已恢复"
+        },
+        "E708644F-2219-48DB-A677-FDCEACAE5DF0" : {
+          "name" : "13 已撤回"
+        },
+        "EAEC2A2E-FEAB-49FC-84F7-D2BB60A8CC91" : {
+          "name" : "05 计划详情"
+        }
+      },
+      "name" : "PendingCrew · 私人团队草图"
+    }
+  },
+  "saveHistory" : [
+
+  ],
+  "variant" : "NONAPPSTORE",
+  "version" : 146
+}

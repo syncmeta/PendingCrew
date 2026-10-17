@@ -25,7 +25,9 @@
 
 这群开发者变成AI之后呢？你还是需要和AI沟通、协作，并让它们之间高效协作。为此，我做了PendingCrew这个App。
 
-**飞书/钉钉/企业微信是员工的Harness。PendingCrew是Harness的Harness。**这是一个让你和Agent高效协作、共同创造的平台。
+**飞书/钉钉/企业微信是员工的Harness。PendingCrew是Harness的Harness**。这是一个让你和Agent高效协作、共同创造的平台。
+
+下一个准备做的项目是个人数据管理系统。PendingCrew将作为开发工具。
 
 ![PendingCrew 主界面：右侧成员列表里 5 个成员，机长挂 Opus、三个 worker 挂 GPT-5.6-Sol —— 不同厂家的 agent 在同一个群里共事。中间群聊里正在发生真实协作：「终端树渲染」报告提交时撞上共享 Git index 竞态，「HTML 组织图渲染」把这件事挂成待决策、问机长是自己移出去还是由机长统一重整提交；另外两个成员正在输入。](docs/screenshots/crew-collaboration.png)
 

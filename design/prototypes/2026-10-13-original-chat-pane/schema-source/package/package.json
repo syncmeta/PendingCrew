@@ -1,0 +1,49 @@
+{
+  "name": "@sketch-hq/sketch-file-format",
+  "version": "6.5.0",
+  "license": "MIT",
+  "main": "dist/index",
+  "types": "dist/index",
+  "repository": "github:sketch-hq/sketch-document",
+  "keywords": [
+    "sketch",
+    "sketch files",
+    "file format",
+    "file spec",
+    "json",
+    "json schema"
+  ],
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@types/json-schema": "7.0.11"
+  },
+  "devDependencies": {
+    "@sketch-hq/sketch-file": "1.1.5",
+    "@sketch-hq/sketch-reference-files": "2.3.0",
+    "@types/js-yaml": "4.0.5",
+    "@types/json-schema-merge-allof": "0.6.1",
+    "@types/lodash": "4.14.182",
+    "ajv": "8.11.0",
+    "chalk": "4.1.2",
+    "change-case": "4.1.2",
+    "deepdash": "5.3.9",
+    "globby": "11.0.4",
+    "js-yaml": "4.1.0",
+    "json-schema-merge-allof": "0.8.1",
+    "json-transforms": "1.1.2",
+    "lodash": "4.17.21",
+    "node-stream-zip": "1.15.0"
+  },
+  "scripts": {
+    "build": "yarn build:schemas ./schema ./src && yarn build:pkg",
+    "build:schemas": "ts-node ./scripts/build-schemas.ts",
+    "build:pkg": "rm -rf dist && mkdir -p dist && tsc",
+    "validate-schemas": "ts-node ./scripts/validate-schemas.ts",
+    "validate-reference-files": "yarn build:schemas  ./schema ./src && ts-node ./scripts/validate-reference-files.ts",
+    "validate-file": "yarn build:schemas ./schema ./src && ts-node ./scripts/validate-file.ts",
+    "test": "echo \"No test specified\"",
+    "format-check": "prettier --check {**.{ts,md,json},schema/**/*.yaml} --ignore-path ../../.prettierignore"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "checks": [
+    "Mac palette and bubble radius follow source",
+    "Conversations only in message pane",
+    "Group avatars stable, distinct, three glyphs",
+    "Group and DM selection",
+    "Message sending escapes HTML and persists after reload",
+    "Drafts belong to individual conversations",
+    "Individual and full inspector collapse",
+    "Sidebar hierarchy and timeline stay crew-only",
+    "Todo contains three object types and actual three-level plan",
+    "Plan note shared between Todo and Progress",
+    "Blocked plan cannot bypass unresolved human question",
+    "Parent completion requires children ended",
+    "One human answer unblocks the same plan everywhere",
+    "Folder creation, content movement and independent views",
+    "Documents open, new document persists, references work",
+    "Raw request retains original text without fabricating plans",
+    "Scripted agent step updates shared plan and artifact",
+    "Message folder movement keeps stable reference",
+    "Search and references",
+    "Three independent examples and questions",
+    "New crew and member DM persist without modifying app data",
+    "Guide opens three-level plan",
+    "Plan file rename preserves independent classification",
+    "Organization-wide human inbox has unique stable references",
+    "Later and withdrawal preserve one human item",
+    "Native pane widths can be resized",
+    "Responsive mobile conversation and collapsed panels",
+    "Portable file URL and embedding mode",
+    "No external requests or application backend"
+  ],
+  "errors": [],
+  "requests": [
+    "http://127.0.0.1:8766/",
+    "http://127.0.0.1:8766/styles.css",
+    "http://127.0.0.1:8766/data.js",
+    "http://127.0.0.1:8766/app.js",
+    "file:///Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-14-mac-web-demo/dist/index.html?embed=1",
+    "file:///Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-14-mac-web-demo/dist/styles.css",
+    "file:///Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-14-mac-web-demo/dist/data.js",
+    "file:///Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-14-mac-web-demo/dist/app.js"
+  ],
+  "desktop": {
+    "width": 1500,
+    "height": 1050
+  },
+  "mobile": {
+    "width": 390,
+    "height": 844
+  }
+}

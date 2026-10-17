@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "checks": 13,
+  "files": {
+    "index.html": "641aaa5c09b8637eee268fd98adc75de16f08b40af6036a920c1c16c1168a176",
+    "styles.css": "e5c510aebe7f05a5dfc5f9700f5c1322a9859d403f5174a6012e565dfe225d4e",
+    "data.js": "b2e527ef3b5a054215550a50a12a1d4a29bebeb79125a3bd023195973fb51d4e",
+    "app.js": "8b6653494277ca4289ecdde84c7c69a8de3084f19b8d30e5fecc4a068c722465"
+  },
+  "published": false
+}

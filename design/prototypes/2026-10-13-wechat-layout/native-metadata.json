@@ -1,0 +1,77 @@
+{
+  "app" : "com.bohemiancoding.sketch3",
+  "appVersion" : "2026.3",
+  "autosaved" : 0,
+  "build" : 233959,
+  "commit" : "prototype",
+  "compatibilityVersion" : 99,
+  "created" : {
+    "app" : "com.bohemiancoding.sketch3",
+    "appVersion" : "2026.3",
+    "build" : 233959,
+    "commit" : "",
+    "compatibilityVersion" : 0,
+    "variant" : "NONAPPSTORE",
+    "version" : 146
+  },
+  "pagesAndArtboards" : {
+    "B59F56F4-58B2-4837-9169-6E0EF7E3A70A" : {
+      "artboards" : {
+        "5FC78749-D9D1-4BDB-83CF-55E28CC117DB" : {
+          "name" : "13 消息 · 文档详情"
+        },
+        "7EB7B79D-F9CE-4C6C-96FE-889AEEC53F32" : {
+          "name" : "03 通讯录 · 文档"
+        },
+        "9F64B911-3759-40AD-B190-5EF4711C62D1" : {
+          "name" : "04 通讯录 · 进展"
+        },
+        "38EDFA1D-AB52-4F36-86C7-049A987C719D" : {
+          "name" : "07 消息 · 文档"
+        },
+        "52CCA362-1B93-4B47-9BAF-A19E80BA89B2" : {
+          "name" : "11 消息 · Todo详情"
+        },
+        "56B75A2F-F132-40E2-BD65-66FE011C63CA" : {
+          "name" : "15 消息 · 其他机组"
+        },
+        "90A8BEDC-4D85-451F-93A9-56BF670FC0DA" : {
+          "name" : "02 通讯录 · Todo"
+        },
+        "182DA379-23EE-410E-B7F2-C33D510F1D69" : {
+          "name" : "09 消息 · 单聊"
+        },
+        "682A6D7D-EB85-4D44-8CAB-1AD39A32DDC5" : {
+          "name" : "06 消息 · Todo"
+        },
+        "8611B307-C957-47D8-9B15-0C061B24AB58" : {
+          "name" : "12 消息 · 答复后"
+        },
+        "97699A57-0A00-41F4-B3E1-B2CA77D5952E" : {
+          "name" : "16 通讯录 · 折叠层级"
+        },
+        "A6C01D1B-8599-45DE-92F7-3E8E60C75B79" : {
+          "name" : "14 消息 · 进展详情"
+        },
+        "C62B19A8-682B-4A37-9BB4-FDF76C1E87EF" : {
+          "name" : "01 通讯录 · 消息"
+        },
+        "D739E0FC-E8D6-4BEE-917F-39B5DB1976E6" : {
+          "name" : "08 消息 · 进展"
+        },
+        "D563597D-55DA-42E5-8E22-3A54978FE326" : {
+          "name" : "10 通讯录 · 单聊"
+        },
+        "F99EFF4C-F7E2-41A9-9F4B-E5903B98166D" : {
+          "name" : "05 消息 · 消息"
+        }
+      },
+      "name" : "PendingCrew · 微信式布局"
+    }
+  },
+  "saveHistory" : [
+
+  ],
+  "variant" : "NONAPPSTORE",
+  "version" : 146
+}

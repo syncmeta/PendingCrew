@@ -1,0 +1,11 @@
+{
+  "files": {
+    "app.js": "2e6f10450df37fdbbcad75aef42f69b5eb94af7c93ab45cbb24341da6d8d9307",
+    "data.js": "f8c1099bfb3e840125ade66e2f3e45e9b1f601e920f8389768c18598ef750795",
+    "index.html": "d41bd21315f562c7fd7527b56f7c809f0c4ec4a3db76fb8fa5097fa62eecfc0f",
+    "styles.css": "3faf4d994d4c8233c2eea4574ec10c18a09fa6652df6add1248a014553a2d13d"
+  },
+  "browserChecks": "PASS",
+  "archiveSha256": "f94c9fcc1acd96d6f6c1bf132956ab7faad1f424ff86d488f6e4ee9f95493c30",
+  "published": false
+}

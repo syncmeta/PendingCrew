@@ -1,0 +1,5 @@
+Failed to launch Sketch
+
+(SketchTool:6)
+
+Error Domain=NSCocoaErrorDomain Code=259 "未能开启应用程序Sketch，因为它已损坏。" UserInfo={NSURL=file:///Applications/Sketch.app/, NSLocalizedDescription=未能开启应用程序Sketch，因为它已损坏。, NSUnderlyingError=0x78b9260660 {Error Domain=NSOSStatusErrorDomain Code=-10827 "kLSNoExecutableErr: The executable is missing" UserInfo={NSURL=file:///Applications/Sketch.app/}}}
