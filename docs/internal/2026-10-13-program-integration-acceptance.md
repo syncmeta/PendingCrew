@@ -721,3 +721,12 @@ mac-01的Xcode65原件保留：共享SPM八个checkout及Sparkle artifact缺文�
 有界源码独核：PendingCrew config仅注入crew command/args，未自设allowlist/defer；Bridge直接返回正式agent.tools全表。已有十工具自足schema及生产MCP证据保留。指导为workspace_get→获准first-submit→read，未发现要求通过resources找schema的矛盾；资源列表不能证明工具导入表缺失。缺口为实际Codex导入/筛选/模型发现工具边界，无依据猜修源码或重包。
 
 下一步仅准备一次无模型SDK工具导入控制：新隔离HOME/CODEX_HOME、现有test-ownedFixture与正式helper/handler，不冒normal Core/App整条路径；仅initialize/thread-start/status，无turn/inference，不复用旧token/scope、不读原账号或外部日志。实际网络限制及执行范围待根和质量核定，未启动SDK。889的fake影响门仍通过，Mac日用完整验收未达成；新的模型调用及安装仍须具体授权。
+
+
+### 2026-10-17 分支收束与无模型工具导入实证
+
+按人类新指令整理三条开发线并合入main。正常合并客户端历史，补两份已有文档的历史追加；正常合并后端历史，补四份历史文档及772317f8已验ignored测试。唯一add/add冲突的整合原文件逐blob等0631父版本，因此精确采用772的同文件（仅新增227行测试），不整树覆盖。分支独核报告 branch-integration-independent-audit-20261017.json SHA256 5c5fa4ca032ffceff7fb79ff2c2f2ad8afb2690d59219c7c65c1194496b6dd75。历史Native记录不代表激活或新验收。
+
+唯一无模型SDK控制已执行并独核通过：隔离SDK连接47个crew工具，含完整10个data工具，data_submit根object、required字段及本地引用完整；仅四个白名单协议方法，无turn/toolcall。SDKexit0、stderr空，一次性grant/socket/auth.json不存在；test-ownedFixture生产handler/ACL加889正式helper，不冒普通normal/App全链或原账号policy。实际结果 /private/tmp/pcw-codex-import-inventory-20261017-01/result.json SHA256 dd20cee0ea667601364e8821e02bf43569a62bfeef8d39b3d2f988a89cebec86；独核 sdk-import-inventory-actual-independent-review.json SHA256 fc56a6283839fc833678437202f86bdf199358d349d04d89d088b3c4ce9d2043（质量目录同上）。未记录helperPID，不冒逐PID退出证明。人类已确认原Codex为官方OpenAI服务，原真实任务停止原因仍未证、知识目标仍NOT_PASS。
+
+本次分支合并只补已验测试、历史记录与此事实记录，产品代码相对7ee18f15无新实现，不重跑稳定流程或重建App。实际已封包仍准确编译自889a2e62，不能将既有normal/App证明换标为本次main提交。安装/新日用启动/公开发布与新模型调用未执行；只进行已获明确授权的main普通推送与开发分支同步，保留用户未提交文件、旧工作树及全部分支。
