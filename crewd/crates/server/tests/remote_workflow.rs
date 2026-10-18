@@ -332,6 +332,163 @@ async fn approved(
 }
 
 #[tokio::test]
+async fn remote_human_knowledge_recovery_routes_keep_context_and_live_grant() {
+    let root = tempfile::tempdir().unwrap().keep();
+    eprintln!("Remote knowledge evidence: {}", root.display());
+    std::fs::create_dir(root.join("work")).unwrap();
+    let mut running = service(&root).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (client, _, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &client, &identity.spki_sha256).await;
+    remote.call("system.hello", json!({"apiVersion":3})).await;
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Remote knowledge", "workingDirectory":root.join("work")
+            }),
+        )
+        .await;
+    let workspace = remote
+        .call("data.workspace.get", json!({"crewId":crew["id"]}))
+        .await;
+    assert_eq!(workspace["state"], "uninitialized");
+    let original = workspace["context"].clone();
+    let applied = remote
+        .call(
+            "data.submit",
+            json!({
+                "requestId":uuid::Uuid::new_v4().to_string(), "context":original,
+                "change":{"kind":"apply", "message":"First authorized remote knowledge", "edits":[
+                    {"kind":"createBlock", "alias":"shared", "contentType":"text/plain",
+                     "content":"persistent knowledge", "sources":[], "attributes":{}}
+                ]}
+            }),
+        )
+        .await;
+    assert_eq!(applied["phase"], "committed");
+    let current = applied["context"].clone();
+    let preview = remote.call("data.preview", json!({"context":current,
+        "statements":[{"sql":"CREATE TABLE remote_items(id INTEGER PRIMARY KEY)","params":[]}]
+    })).await;
+    let readback = remote
+        .call(
+            "data.preview.get",
+            json!({
+                "context":current, "token":preview["token"]
+            }),
+        )
+        .await;
+    assert_eq!(readback, preview);
+    let empty = remote
+        .call("data.snapshots", json!({"context":current}))
+        .await;
+    assert!(empty["items"].as_array().unwrap().is_empty());
+    // A remotely reachable method still requires the exact current knowledge context.
+    let mut foreign = current.clone();
+    foreign["authorityId"] = json!("foreign-authority");
+    let refused = remote
+        .frame(
+            "data.confirm",
+            json!({
+                "requestId":uuid::Uuid::new_v4().to_string(), "context":foreign,
+                "token":preview["token"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        refused.get("error").is_some(),
+        "foreign context admitted: {refused}"
+    );
+    let confirm_id = uuid::Uuid::new_v4().to_string();
+    let confirm_args = json!({"requestId":confirm_id,"context":current,"token":preview["token"]});
+    let confirmed = remote.call("data.confirm", confirm_args.clone()).await;
+    assert_eq!(confirmed["phase"], "committed");
+    assert_eq!(remote.call("data.confirm", confirm_args).await, confirmed);
+    let after = confirmed["context"].clone();
+    let snapshots = remote
+        .call("data.snapshots", json!({"context":after}))
+        .await;
+    assert_eq!(snapshots["items"].as_array().unwrap().len(), 1);
+    let restore_id = uuid::Uuid::new_v4().to_string();
+    let restore_args = json!({"requestId":restore_id,"context":after,
+        "snapshotId":snapshots["items"][0]["id"]});
+    let restored = remote.call("data.restore", restore_args.clone()).await;
+    assert_eq!(restored["phase"], "committed");
+    assert_ne!(restored["context"]["restoreEpoch"], after["restoreEpoch"]);
+    let historical = remote.call("data.restore", restore_args).await;
+    assert_eq!(historical["phase"], "historical");
+    assert_eq!(historical["context"], restored["context"]);
+    let schema = remote
+        .call(
+            "data.schema.get",
+            json!({"context":restored["context"],
+        "atRevision":null,"after":null,"limit":100}),
+        )
+        .await;
+    assert!(
+        schema["objects"].as_array().unwrap().is_empty(),
+        "restore lost snapshot boundary"
+    );
+    let stale = remote
+        .frame(
+            "data.preview.get",
+            json!({
+                "context":current, "token":preview["token"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        stale.get("error").is_some(),
+        "restore revived a stale preview"
+    );
+    // The new allowlist entries do not expose local daemon administration.
+    let forbidden = remote
+        .frame("lifecycle.exit", json!({"mode":"direct"}))
+        .await
+        .unwrap();
+    assert_eq!(forbidden["error"]["code"], crewd_proto::RpcError::FORBIDDEN);
+    local(
+        &mut running.owner,
+        "remote.revoke",
+        json!({"grantId":accepted.grant.id,
+        "expectedRevision":accepted.grant.revision,"note":"Remote knowledge finished"}),
+    )
+    .await;
+    let post_revoke = tokio::time::timeout(
+        LIMIT,
+        remote.frame("data.snapshots", json!({"context":restored["context"]})),
+    )
+    .await
+    .unwrap();
+    assert!(
+        post_revoke.is_err() || post_revoke.unwrap().get("error").is_some(),
+        "revoked Human retained knowledge access"
+    );
+    // Revoking the transport leaves persisted knowledge available to the local Human.
+    let local_snapshots = local(
+        &mut running.owner,
+        "data.snapshots",
+        json!({"context":restored["context"]}),
+    )
+    .await;
+    assert_eq!(local_snapshots["items"].as_array().unwrap().len(), 2);
+    std::fs::write(
+        root.join("knowledge-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "preview":readback,"confirmed":confirmed,"restored":restored,
+            "snapshots":local_snapshots,"revoked":true
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
 async fn public_pair_backup_revoke_restore_same_server_identity_never_revives_old_certificate_or_accept_witness()
  {
     let root = tempfile::tempdir().unwrap().keep();
