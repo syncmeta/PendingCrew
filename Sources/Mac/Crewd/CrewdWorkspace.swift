@@ -211,6 +211,63 @@ final class CrewdWorkspace: ObservableObject {
     @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
     @Published private(set) var controlTargets: [String: CrewdCommandTarget] = [:]
+    @Published private(set) var executorProfiles: [CrewdExecutorProfile] = []
+    @Published private(set) var executorProfilesFailure: String?
+    private var executorProfilesQuery = UUID()
+    private var executorProfilesBinding: (generation: UUID, connection: UUID, crew: String)?
+    func executorProfile(_ executor: String) -> CrewdExecutorProfile? {
+        guard let binding = executorProfilesBinding, acceptsObservation(binding.generation),
+              binding.connection == client.connectionEpoch, binding.crew == crewID else { return nil }
+        return executorProfiles.first { $0.executor == executor && $0.offeredInOriginalUI }
+    }
+    func requireExecutor(_ executor: String, crew: String) throws {
+        guard !stopping, crew == crewID, let profile = executorProfile(executor), profile.available,
+              profile.initialContext else {
+            throw CrewdClientError(message: executorProfile(executor)?.unavailableDescription ?? "当前执行能力尚未核对，未发送启动请求。", kind: .notSubmitted)
+        }
+    }
+    /// Validate the actual destination, including an explicitly created crew
+    /// that has not become the presentation selection yet. Never change that
+    /// selection or borrow another crew's cached capability to start work.
+    private func requireStartExecutor(_ executor: String, crew: String) async throws {
+        let epoch = generation, connection = client.connectionEpoch, namespace = presentationNamespace
+        guard acceptsObservation(epoch), !stopping, !crew.isEmpty else {
+            throw CrewdClientError(message: "当前执行范围不可用，未发送启动请求。", kind: .notSubmitted)
+        }
+        let profiles: [CrewdExecutorProfile]
+        do {
+            let response = try await client.call("executor.list", .object(["crewId": .string(crew)]))
+            profiles = try CrewdExecutorProfile.list(response)
+        } catch {
+            throw CrewdClientError(message: "当前执行能力未能确认，未发送启动请求：" + error.localizedDescription, kind: .notSubmitted)
+        }
+        guard acceptsObservation(epoch), !stopping, connection == client.connectionEpoch, namespace == presentationNamespace else {
+            throw CrewdClientError(message: "读取期间连接已改变，未发送启动请求。", kind: .notSubmitted)
+        }
+        let profile = profiles.first { $0.executor == executor && $0.offeredInOriginalUI }
+        guard let profile, profile.available, profile.initialContext else {
+            throw CrewdClientError(message: profile?.unavailableDescription ?? "当前执行能力尚未核对，未发送启动请求。", kind: .notSubmitted)
+        }
+    }
+    private func clearExecutorProfiles() {
+        executorProfilesQuery = UUID()
+        executorProfiles = []; executorProfilesFailure = nil; executorProfilesBinding = nil
+    }
+    func refreshExecutorProfiles() async {
+        let epoch = generation, connection = client.connectionEpoch, crew = crewID, selected = selection, query = UUID()
+        executorProfilesQuery = query
+        guard acceptsObservation(epoch), !crew.isEmpty else { clearExecutorProfiles(); return }
+        do {
+            let response = try await client.call("executor.list", .object(["crewId": .string(crew)]))
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, crew == crewID, selected == selection, query == executorProfilesQuery else { return }
+            let profiles = try CrewdExecutorProfile.list(response)
+            executorProfiles = profiles; executorProfilesFailure = nil
+            executorProfilesBinding = (epoch, connection, crew)
+        } catch {
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, crew == crewID, selected == selection, query == executorProfilesQuery else { return }
+            clearExecutorProfiles(); executorProfilesFailure = "无法读取当前后台的执行能力：" + error.localizedDescription
+        }
+    }
     @Published var crewID = ""
     @Published var sessionID = ""
     @Published var channelID = ""
@@ -316,6 +373,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onDisconnect = { [weak self] in
             self?.closeTerminalDisplays()
+            self?.clearExecutorProfiles()
             guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
@@ -352,6 +410,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         #endif
         closeTerminalDisplays()
+        clearExecutorProfiles()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
@@ -600,6 +659,7 @@ final class CrewdWorkspace: ObservableObject {
         guard crewID != id else { return }
         knowledge.invalidate(); workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
         channelWork.selectChannel(crew:id,channel:"")
+        clearExecutorProfiles()
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
@@ -725,7 +785,9 @@ final class CrewdWorkspace: ObservableObject {
             do { try await workStore.refresh() } catch { /* WorkStore retains typed failures; first-edition messaging stays usable. */ }
             guard current == generation, selected == selection, !sleeping, !Task.isCancelled else { return }
         }
-        guard !crew.isEmpty else { return }
+        guard !crew.isEmpty else { clearExecutorProfiles(); return }
+        await refreshExecutorProfiles()
+        guard current == generation, selected == selection, crew == crewID, !sleeping, !Task.isCancelled else { return }
         let sessionQuery = UUID()
         sessionDirectoryQuery = sessionQuery
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
@@ -829,6 +891,7 @@ final class CrewdWorkspace: ObservableObject {
             }
             return result
         }
+        if method == "session.start" { try await requireStartExecutor(params["executor"].string ?? "", crew: params["crewId"].string ?? crewID) }
         guard !originalJournalRequired || originalJournalReady else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
         let prepared: CrewdPresentationJournal.Prepared?
@@ -897,6 +960,7 @@ final class CrewdWorkspace: ObservableObject {
         return target.value
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
+        if operation == .sessionStart { try await requireStartExecutor(params["executor"].string ?? "", crew: crew) }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         _ = try publicCommandBinding(for: client)
         let envelope: CrewdPublicCommandEnvelope

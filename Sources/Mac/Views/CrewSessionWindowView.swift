@@ -130,7 +130,7 @@ struct CrewSessionWindowView: View {
             startsAsCaptain = false
         }
         .onChange(of: selectedKind) { _, kind in
-            if appModel.usesCrewdAuthority, kind != .codex { selectedKind = .codex; return }
+            if appModel.usesCrewdAuthority, kind == .terminal { selectedKind = .codex; return }
             if kind == .terminal { startsAsCaptain = false }
         }
         .confirmationDialog(
@@ -1031,9 +1031,15 @@ struct CrewSessionWindowView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.inkMuted)
             VStack(spacing: 8) {
-                if !appModel.usesCrewdAuthority { sessionKindPill(.claudeCode, title: "Claude Code") }
-                sessionKindPill(.codex, title: "Codex")
-                if !appModel.usesCrewdAuthority { sessionKindPill(.terminal, title: "终端") }
+                if appModel.usesCrewdAuthority, let workspace = appModel.crewdBackend?.workspace {
+                    CrewdExecutorChoiceView(workspace: workspace, executor: Binding(
+                        get: { selectedKind == .claudeCode ? "acp:claude-managed" : "codex" },
+                        set: { selectedKind = $0 == "acp:claude-managed" ? .claudeCode : .codex }))
+                } else {
+                    sessionKindPill(.claudeCode, title: "Claude Code")
+                    sessionKindPill(.codex, title: "Codex")
+                    sessionKindPill(.terminal, title: "终端")
+                }
             }
             if appModel.usesCrewdAuthority {
                 Toggle("使用独立工作树", isOn: $crewdIsolation)
@@ -1138,7 +1144,8 @@ struct CrewSessionWindowView: View {
                     "channelId": .string(detail.crew.id + "/lobby"), "text": .string(text),
                     "mentions": .array([.object(["kind": .string("session"), "targetId": .string(run.sessionId)])])]), snapshot: workspace.messageDrafts.snapshot(for: context))
             } else {
-                guard selectedKind == .codex else { throw CrewdClientError(message: "Claude 的正式 ACP 档案和终端控制协议尚未冻结，当前不能启动。", kind: .notSubmitted) }
+                let executor = selectedKind == .claudeCode ? "acp:claude-managed" : "codex"
+                try workspace.requireExecutor(executor, crew: detail.crew.id)
                 let context = CrewdDrafts.Context.initialTask(crew: detail.crew.id, session: "original-composer")
                 guard !workspace.hasOriginalUnknown(method: "session.start", crew: detail.crew.id), !workspace.uncertainSessionStarts.contains(where: { $0.context == context }) else {
                     throw CrewdClientError(message: "原启动结果未确认；请核对同一机组会话，不会再次启动。", kind: .notSubmitted)
@@ -1149,7 +1156,7 @@ struct CrewSessionWindowView: View {
                 do {
                     result = try await workspace.performValue("session.start", .object([
                         "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
-                        "executor": .string("codex"), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
+                        "executor": .string(executor), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
                     guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
                     workspace.messageDrafts.clearIfUnchanged(snapshot)
                     if stillPresentingSubmission() { workspace.selectSession(id) }

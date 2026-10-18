@@ -9,6 +9,7 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument('--derived-data', required=True)
     a.add_argument('--output')
+    a.add_argument('--module-cache')
     args = a.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
     dd = pathlib.Path(args.derived_data).resolve()
@@ -20,14 +21,14 @@ def main():
     (out/'inputs.json').write_text(json.dumps({'appLibrary':str(library),'sha256':hashlib.sha256(library.read_bytes()).hexdigest()},indent=2)+'\n')
     probe = out/'probe'
     command = ['xcrun', 'swiftc', '-parse-as-library', '-I', str(products),
-               '-module-cache-path', str(out/'cache'), '-Xcc',
+               '-module-cache-path', str(pathlib.Path(args.module_cache) if args.module_cache else out/'cache'), '-Xcc',
                '-fmodule-map-file='+str(dd/'Build/Intermediates.noindex/GeneratedModuleMaps/CTOML.modulemap'),
                str(root/'scripts/dev/fixtures/crewd-original-session-flow.swift'), str(library),
                '-Xlinker', '-rpath', '-Xlinker', str(library.parent),
                '-Xlinker', '-rpath', '-Xlinker', str(library.parent.parent/'Frameworks'), '-o', str(probe)]
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
-    for scenario in ['stopped', 'running', 'malformed', 'switch', 'double-click', 'captain', 'captain-refused']:
+    for scenario in ['captain-before-selection', 'stopped', 'running', 'malformed', 'switch', 'double-click', 'captain', 'captain-refused', 'captain-unavailable', 'captain-connection-switch']:
         path = out/(scenario+'.sock')
         listener = socket.socket(socket.AF_UNIX); listener.bind(str(path)); listener.listen(1)
         calls = []; problems = []; state = {'running': scenario == 'running', 'captain': False}
@@ -41,10 +42,15 @@ def main():
                             result = {'server':'crewd','apiVersion':3,'minApiVersion':1,'version':'synthetic-route', 'capabilities':['orchestra','session.respondRunnerRequest']}
                         elif method == 'crew.list': result = [{'id':'crew-a'}]
                         elif method == 'session.list':
-                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':'codex'}] if state['captain'] or scenario not in ['captain','captain-refused'] else []
+                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':'codex'}] if state['captain'] or not scenario.startswith('captain') else []
                         elif method == 'session.live':
                             if scenario in ['switch','double-click']: time.sleep(.15)
                             result = {} if scenario == 'malformed' else {'sessionId':'session-a','running':state['running']}
+                        elif method == 'executor.list':
+                            assert req['params'] == {'crewId':'crew-a'}
+                            if scenario == 'captain-connection-switch': time.sleep(.2)
+                            available = scenario != 'captain-unavailable'
+                            result = {'profiles':[{'id':'codex','executor':'codex','displayName':'Codex','backend':'codex','available':available,'features':{'initialContext':available,'manualTerminal':False,'structuredDecisions':False,'fullHistoryLoad':False},'unavailableReason':None if available else 'notConfigured'}]}
                         elif method == 'session.start':
                             assert req['params']['role'] == 'captain' and req['params']['crewId'] == 'crew-a'
                             if scenario == 'captain-refused':
@@ -66,9 +72,11 @@ def main():
             assert not problems, problems
             methods = [r['method'] for r in calls]
             assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click'] else 0), methods
-            assert methods.count('session.start') == (1 if scenario.startswith('captain') else 0), methods
+            assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused','captain-before-selection'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
             print('PASS '+scenario)
-        finally: listener.close()
+        finally:
+            (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
+            listener.close()
     print('Evidence: '+str(out))
 if __name__ == '__main__': main()

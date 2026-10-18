@@ -9,11 +9,21 @@ import Foundation
         workspace.crewID = "crew-a"; workspace.sessionID = "session-a"
         defer { workspace.retire() }
         switch scenario {
-        case "captain":
+        case "captain", "captain-before-selection":
+            if scenario == "captain-before-selection" { workspace.crewID = "previous-crew" }
             let first = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(first == "session-a")
             let second = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(second == first)
+            precondition(workspace.crewID == (scenario == "captain-before-selection" ? "previous-crew" : "crew-a"))
+        case "captain-unavailable", "captain-connection-switch":
+            let task = Task { await workspace.startCaptainForCreatedCrew("crew-a") }
+            if scenario == "captain-connection-switch" {
+                try await Task.sleep(for: .milliseconds(50))
+                workspace.client.disconnect()
+            }
+            let result = await task.value
+            precondition(result == nil)
         case "captain-refused":
             let result = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(result == nil && workspace.error?.contains("机组已创建") == true)

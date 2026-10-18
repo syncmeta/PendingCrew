@@ -455,6 +455,7 @@ private struct CrewdLocalSettingsTab: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(CrewdCodexConfiguration.key) private var selectedProgram = ""
     @State private var selectionError: String?
+    @AppStorage(CrewdManagedClaudeConfiguration.key) private var managedClaudeProgram = ""
     private var program: String? { CrewdCodexConfiguration.program() }
     var body: some View {
         Form {
@@ -481,6 +482,24 @@ private struct CrewdLocalSettingsTab: View {
                 }
                 if let selectionError { Text(selectionError).foregroundStyle(.red) }
                 Text("请先在终端安装并登录 Codex。这里不读取登录凭据，也不代你登录。路径变更在下次本机后台启动时生效；请先停工退出，再重新打开应用。显式环境配置优先于此设置。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("下次后台启动使用的受管 Claude") {
+                Text(CrewdManagedClaudeConfiguration.program() ?? "尚未配置受管 Claude。请选择真实 Claude 可执行文件，不是 ACP 包装器。")
+                    .textSelection(.enabled)
+                HStack {
+                    Button("选择 Claude…") {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let path = panel.url?.path {
+                            if CrewdCodexConfiguration.executable(path) { managedClaudeProgram = path; selectionError = nil }
+                            else { selectionError = "请选择可执行的 Claude 文件。" }
+                        }
+                    }
+                    Button("清除选择") { managedClaudeProgram = ""; selectionError = nil }
+                }
+                Text("这里只检查本地文件，不运行程序或检查登录。设置在下次受管后台启动时生效；程序存在仍不代表运行资格已核实，请以当前后台的能力列表为准。环境中的显式配置优先。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("只管理 Core 创建的任务，不拦截 Claude 内部所有入口；完整历史加载暂不可用。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("当前版本") {
