@@ -87,3 +87,24 @@ fn outbound_methods_and_fields_match_the_native_experimental_contract() {
         "these fields require explicit experimental opt-in"
     );
 }
+
+#[test]
+fn trusted_crew_preserves_input_schemas_on_start_and_resume() {
+    let options = ThreadOptions {
+        mcp_servers: Some(proto::mcp_servers(
+            Path::new("/synthetic/helper"),
+            &["mcp".into()],
+        )),
+        ..Default::default()
+    };
+    for params in [
+        proto::thread_start_params(Path::new("/synthetic"), &options),
+        proto::thread_resume_params("thread", Path::new("/synthetic"), &options),
+    ] {
+        let servers = params["config"]["mcp_servers"].as_object().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers["crew"]["tool_input_schema_max_bytes"], 16_384);
+        assert_eq!(servers["crew"]["command"], "/synthetic/helper");
+        assert_eq!(servers["crew"]["args"], json!(["mcp"]));
+    }
+}

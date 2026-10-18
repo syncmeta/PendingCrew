@@ -1238,6 +1238,7 @@ mod tests {
         let request = uuid::Uuid::new_v4().to_string();
         let submit = json!({"requestId":request,"context":context,"change":{"kind":"apply","message":"free view fixture","edits":[
             {"kind":"createBlock","alias":"shared","contentType":"text/plain","content":"durable shared block","sources":[],"attributes":{}},
+            {"kind":"createBlock","alias":"json","contentType":"application/json","content":{"flags":[true,null,3,{"nested":"value"}]},"sources":[],"attributes":{"preview":false}},
             {"kind":"createView","alias":"canvas","title":"Agent generated workspace","definition":{"kind":"web","renderer":"web","rendererVersion":"1","html":"<article><button id='change'>Change</button><main id='content'></main></article>","css":"article { color: navy }","javascript":"let shared; knowledge.request('read',{binding:'shared'}).then(({response})=>{shared=response.value.object;document.querySelector('#content').textContent=shared.content;}); document.querySelector('#change').onclick=async()=>{if(!shared)return;const result=await knowledge.request('write',{message:'Update shared block',edits:[{kind:'updateBlock',id:shared.id,expectedRevision:shared.revision,contentType:shared.contentType,content:'Agent generated',sources:null,attributes:{}}]});document.querySelector('#content').textContent=result.response.status;};","bindings":[{"kind":"set","id":"shared","source":{"kind":"object","reference":{"kind":"created","alias":"shared"},"atRevision":null},"attributes":{}}],"requestedCapabilities":["knowledge-write"],"attributes":{}},"sources":[],"attributes":{}},
             {"kind":"createView","alias":"document","title":"Shared document","definition":{"kind":"document","placements":[{"kind":"set","id":null,"alias":"position","block":{"kind":"created","alias":"shared"},"atRevision":null,"layout":{}}],"layout":{}},"sources":[],"attributes":{}}
         ]}});
@@ -1274,6 +1275,25 @@ mod tests {
         )
         .await;
         assert_eq!(detail["object"]["definition"]["kind"], "web");
+        let json_detail = agent(
+            &rt,
+            &f,
+            "data.object.get",
+            json!({
+                "context":latest,
+                "reference":result["created"]["json"]["object"]["reference"],
+                "atRevision":null
+            }),
+        )
+        .await;
+        assert_eq!(
+            json_detail["object"]["content"],
+            json!({"flags":[true,null,3,{"nested":"value"}]})
+        );
+        assert_eq!(
+            json_detail["object"]["provenance"]["attributes"],
+            json!({"preview":false})
+        );
         let retry = agent(&rt, &f, "data.submit", submit.clone()).await;
         assert_eq!(retry, result);
         let worker_result = rt

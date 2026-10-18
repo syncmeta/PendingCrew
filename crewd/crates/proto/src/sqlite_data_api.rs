@@ -28,11 +28,49 @@ pub fn agent_method(name: &str) -> Option<&'static str> {
         ) && m.replace('.', "_") == name
     })
 }
+/// `true` and `{}` are equivalent JSON Schemas. Codex 0.162.1 lowers the
+/// boolean form to a string schema, so use the object form for arbitrary JSON.
+/// Visit schema positions only; boolean additionalProperties and instance data
+/// in enum/const/default must retain their original meaning.
+fn normalize_model_schema(schema: &mut Value) {
+    if *schema == Value::Bool(true) {
+        *schema = json!({});
+        return;
+    }
+    let Some(fields) = schema.as_object_mut() else {
+        return;
+    };
+    for key in ["properties", "$defs", "definitions"] {
+        if let Some(children) = fields.get_mut(key).and_then(Value::as_object_mut) {
+            for child in children.values_mut() {
+                normalize_model_schema(child);
+            }
+        }
+    }
+    for key in ["items", "additionalProperties"] {
+        if let Some(child) = fields.get_mut(key) {
+            if key != "additionalProperties" || !child.is_boolean() {
+                normalize_model_schema(child);
+            }
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(children) = fields.get_mut(key).and_then(Value::as_array_mut) {
+            for child in children {
+                normalize_model_schema(child);
+            }
+        }
+    }
+}
+
 pub fn agent_tools() -> Vec<ToolDef> {
     fn input<T: schemars::JsonSchema>() -> Value {
         // Each MCP tool is a separate schema document, unlike the shared RPC registry.
         // schema_for retains only this argument type's reachable definitions.
-        serde_json::to_value(schemars::schema_for!(T)).expect("static knowledge tool schema")
+        let mut schema =
+            serde_json::to_value(schemars::schema_for!(T)).expect("static knowledge tool schema");
+        normalize_model_schema(&mut schema);
+        schema
     }
     vec![
         (METHODS[0], input::<DataWorkspaceGetParams>()),
@@ -177,6 +215,66 @@ mod tests {
             assert_eq!(
                 tool.input_schema["additionalProperties"], false,
                 "{} must retain strict typed arguments",
+                tool.name
+            );
+        }
+    }
+    #[test]
+    fn arbitrary_json_tool_inputs_remain_unrestricted_schemas() {
+        let submit = agent_tools()
+            .into_iter()
+            .find(|t| t.name == "data_submit")
+            .unwrap()
+            .input_schema;
+        let create = &submit["$defs"]["DataEdit"]["oneOf"][0]["properties"];
+        assert_eq!(create["content"], json!({}));
+        assert_eq!(create["attributes"], json!({}));
+        assert_eq!(
+            submit["$defs"]["DataEdit"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            10
+        );
+        assert_eq!(
+            submit["$defs"]["DataChange"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn model_schema_normalization_does_not_rewrite_instance_data() {
+        let instance = json!({"properties":{"literal":true},"items":true});
+        let mut schema = json!({
+            "type":"object", "additionalProperties":true,
+            "const":instance, "enum":[instance], "default":instance,
+            "properties":{"payload":true,"denied":false,"array":{"items":true},
+                "map":{"additionalProperties":{"properties":{"payload":true}}}},
+            "$defs":{"choice":{"oneOf":[true,{"properties":{"payload":true}}]}}
+        });
+        normalize_model_schema(&mut schema);
+        assert_eq!(schema["properties"]["payload"], json!({}));
+        assert_eq!(schema["properties"]["denied"], false);
+        assert_eq!(schema["properties"]["array"]["items"], json!({}));
+        assert_eq!(
+            schema["properties"]["map"]["additionalProperties"]["properties"]["payload"],
+            json!({})
+        );
+        assert_eq!(schema["$defs"]["choice"]["oneOf"][0], json!({}));
+        assert_eq!(
+            schema["$defs"]["choice"]["oneOf"][1]["properties"]["payload"],
+            json!({})
+        );
+        assert_eq!(schema["additionalProperties"], true);
+        assert_eq!(schema["const"], instance);
+        assert_eq!(schema["enum"], json!([instance]));
+        assert_eq!(schema["default"], instance);
+        for tool in agent_tools() {
+            assert!(
+                serde_json::to_vec(&tool.input_schema).unwrap().len() <= 16_384,
+                "{} exceeds our supported Codex schema budget",
                 tool.name
             );
         }

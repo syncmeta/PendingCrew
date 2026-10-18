@@ -112,9 +112,18 @@ pub fn fast_mode_for_tier(tier: &str) -> Option<bool> {
 /// 要对上的名字）。
 pub const CREW_MCP_SERVER: &str = "crew";
 
-/// `config.mcp_servers`：`{"crew": {"command": helper, "args": [...]}}`。
+/// Keep our fixed, trusted tool schemas intact in Codex 0.162.1. Its default
+/// 5,000-byte compaction drops local definitions from the knowledge submit schema.
+/// This bound applies only to `crew`, never another configured MCP server.
+pub const CREW_MCP_INPUT_SCHEMA_MAX_BYTES: usize = 16_384;
+
+/// `config.mcp_servers`: our helper, arguments, and bounded schema budget.
 pub fn mcp_servers(helper: &Path, args: &[String]) -> Value {
-    json!({ CREW_MCP_SERVER: { "command": helper.display().to_string(), "args": args } })
+    json!({ CREW_MCP_SERVER: {
+        "command": helper.display().to_string(),
+        "args": args,
+        "tool_input_schema_max_bytes": CREW_MCP_INPUT_SCHEMA_MAX_BYTES,
+    } })
 }
 
 /// `turn/start`：正文是唯一的 `input` 条目；不可信上下文走 `additionalContext`
