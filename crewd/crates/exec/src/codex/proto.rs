@@ -113,9 +113,9 @@ pub fn fast_mode_for_tier(tier: &str) -> Option<bool> {
 pub const CREW_MCP_SERVER: &str = "crew";
 
 /// Keep our fixed, trusted tool schemas intact in Codex 0.162.1. Its default
-/// 5,000-byte compaction drops local definitions from the knowledge submit schema.
+/// compaction must also retain the fully inlined knowledge submit schema.
 /// This bound applies only to `crew`, never another configured MCP server.
-pub const CREW_MCP_INPUT_SCHEMA_MAX_BYTES: usize = 16_384;
+pub const CREW_MCP_INPUT_SCHEMA_MAX_BYTES: usize = 32_768;
 
 /// `config.mcp_servers`: our helper, arguments, and bounded schema budget.
 pub fn mcp_servers(helper: &Path, args: &[String]) -> Value {

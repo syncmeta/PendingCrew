@@ -63,14 +63,137 @@ fn normalize_model_schema(schema: &mut Value) {
     }
 }
 
+// This matches the trusted `crew` configuration in the Codex driver. Keep
+// local DAG expansion bounded before advertising schemas to model consumers.
+const MODEL_SCHEMA_MAX_BYTES: usize = 32_768;
+
+fn inline_model_schema(root: &Value) -> Result<Value, &'static str> {
+    fn expand(
+        root: &Value,
+        node: &Value,
+        refs: &mut Vec<String>,
+        depth: usize,
+        nodes_left: &mut usize,
+    ) -> Result<Value, &'static str> {
+        if depth > 64 || *nodes_left == 0 {
+            return Err("knowledge schema expansion exceeds structural bounds");
+        }
+        *nodes_left -= 1;
+        let Some(fields) = node.as_object() else {
+            return Ok(node.clone());
+        };
+        // A new schema resource changes the base of fragment references.
+        // Our generated schemas have none; never guess that resolution.
+        if fields.contains_key("$id") {
+            return Err("nested knowledge schema resources are unsupported");
+        }
+        let result = if let Some(reference) = fields.get("$ref") {
+            let reference = reference
+                .as_str()
+                .ok_or("invalid knowledge schema reference")?;
+            let pointer = reference
+                .strip_prefix('#')
+                .ok_or("non-local knowledge schema reference")?;
+            if !pointer.is_empty() && !pointer.starts_with('/') {
+                return Err("unsupported knowledge schema fragment");
+            }
+            if refs.iter().any(|active| active == reference) {
+                return Err("cyclic knowledge schema reference");
+            }
+            let target = root
+                .pointer(pointer)
+                .ok_or("missing knowledge schema reference")?;
+            refs.push(reference.to_string());
+            let resolved = expand(root, target, refs, depth + 1, nodes_left);
+            refs.pop();
+            let resolved = resolved?;
+            let siblings = fields
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "$ref" | "$defs" | "definitions"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<serde_json::Map<_, _>>();
+            if siblings.is_empty() {
+                resolved
+            } else {
+                // Ref siblings are a conjunction, not a field overwrite.
+                json!({"allOf":[resolved, expand(root, &Value::Object(siblings), refs, depth + 1, nodes_left)?]})
+            }
+        } else {
+            let mut output = serde_json::Map::new();
+            for (key, value) in fields {
+                if matches!(key.as_str(), "$defs" | "definitions") {
+                    continue;
+                }
+                let child = match key.as_str() {
+                    "properties" | "patternProperties" | "dependentSchemas" => {
+                        let children = value
+                            .as_object()
+                            .ok_or("invalid knowledge schema property map")?;
+                        let mut expanded = serde_json::Map::new();
+                        for (name, child) in children {
+                            expanded.insert(
+                                name.clone(),
+                                expand(root, child, refs, depth + 1, nodes_left)?,
+                            );
+                        }
+                        Value::Object(expanded)
+                    }
+                    "items"
+                    | "additionalProperties"
+                    | "contains"
+                    | "propertyNames"
+                    | "not"
+                    | "if"
+                    | "then"
+                    | "else"
+                    | "unevaluatedProperties"
+                    | "unevaluatedItems" => expand(root, value, refs, depth + 1, nodes_left)?,
+                    "anyOf" | "oneOf" | "allOf" | "prefixItems" => {
+                        let children = value
+                            .as_array()
+                            .ok_or("invalid knowledge schema composition")?;
+                        let mut expanded = Vec::new();
+                        for child in children {
+                            expanded.push(expand(root, child, refs, depth + 1, nodes_left)?);
+                        }
+                        Value::Array(expanded)
+                    }
+                    // enum, const, defaults and descriptions are instance data.
+                    _ => value.clone(),
+                };
+                output.insert(key.clone(), child);
+            }
+            Value::Object(output)
+        };
+        if serde_json::to_vec(&result)
+            .map_err(|_| "invalid knowledge schema JSON")?
+            .len()
+            > MODEL_SCHEMA_MAX_BYTES
+        {
+            return Err("knowledge model schema exceeds byte budget");
+        }
+        Ok(result)
+    }
+    if serde_json::to_vec(root)
+        .map_err(|_| "invalid knowledge schema JSON")?
+        .len()
+        > MODEL_SCHEMA_MAX_BYTES
+    {
+        return Err("knowledge source schema exceeds byte budget");
+    }
+    expand(root, root, &mut Vec::new(), 0, &mut 4096)
+}
+
 pub fn agent_tools() -> Vec<ToolDef> {
     fn input<T: schemars::JsonSchema>() -> Value {
         // Each MCP tool is a separate schema document, unlike the shared RPC registry.
-        // schema_for retains only this argument type's reachable definitions.
+        // Inline only this argument type's reachable definitions for consumers
+        // whose signature renderer limits local-reference expansion.
         let mut schema =
             serde_json::to_value(schemars::schema_for!(T)).expect("static knowledge tool schema");
         normalize_model_schema(&mut schema);
-        schema
+        inline_model_schema(&schema)
+            .expect("static knowledge model schemas must be bounded local DAGs")
     }
     vec![
         (METHODS[0], input::<DataWorkspaceGetParams>()),
@@ -226,23 +349,13 @@ mod tests {
             .find(|t| t.name == "data_submit")
             .unwrap()
             .input_schema;
-        let create = &submit["$defs"]["DataEdit"]["oneOf"][0]["properties"];
+        let change = &submit["properties"]["change"]["oneOf"];
+        let edits = &change[0]["properties"]["edits"]["items"]["oneOf"];
+        let create = &edits[0]["properties"];
         assert_eq!(create["content"], json!({}));
         assert_eq!(create["attributes"], json!({}));
-        assert_eq!(
-            submit["$defs"]["DataEdit"]["oneOf"]
-                .as_array()
-                .unwrap()
-                .len(),
-            10
-        );
-        assert_eq!(
-            submit["$defs"]["DataChange"]["oneOf"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(edits.as_array().unwrap().len(), 10);
+        assert_eq!(change.as_array().unwrap().len(), 2);
     }
     #[test]
     fn model_schema_normalization_does_not_rewrite_instance_data() {
@@ -273,10 +386,75 @@ mod tests {
         assert_eq!(schema["default"], instance);
         for tool in agent_tools() {
             assert!(
-                serde_json::to_vec(&tool.input_schema).unwrap().len() <= 16_384,
+                serde_json::to_vec(&tool.input_schema).unwrap().len() <= MODEL_SCHEMA_MAX_BYTES,
                 "{} exceeds our supported Codex schema budget",
                 tool.name
             );
         }
+    }
+    #[test]
+    fn advertised_model_inputs_need_no_local_reference_expansion() {
+        fn check(value: &Value) {
+            match value {
+                Value::Object(fields) => {
+                    assert!(!fields.contains_key("$ref"));
+                    assert!(!fields.contains_key("$defs"));
+                    for child in fields.values() {
+                        check(child);
+                    }
+                }
+                Value::Array(values) => {
+                    for child in values {
+                        check(child);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for tool in agent_tools() {
+            check(&tool.input_schema);
+        }
+    }
+
+    #[test]
+    fn local_schema_expansion_is_lossless_and_fails_closed() {
+        let original = json!({"$defs":{"scalar":{"type":"string"}},"type":"object",
+            "additionalProperties":false,"required":["value"],
+            "properties":{"value":{"$ref":"#/$defs/scalar","enum":["yes"]}},
+            "const":{"$ref":"literal instance","properties":{"literal":true}}});
+        let expanded = inline_model_schema(&original).unwrap();
+        assert_eq!(
+            expanded["properties"]["value"],
+            json!({"allOf":[{"type":"string"},{"enum":["yes"]}]})
+        );
+        assert_eq!(expanded["additionalProperties"], false);
+        assert_eq!(expanded["required"], json!(["value"]));
+        assert_eq!(expanded["const"], original["const"]);
+        assert!(inline_model_schema(&json!({"$ref":"#/$defs/absent"})).is_err());
+        assert!(
+            inline_model_schema(
+                &json!({"$defs":{"loop":{"$ref":"#/$defs/loop"}},"$ref":"#/$defs/loop"})
+            )
+            .is_err()
+        );
+        assert!(inline_model_schema(&json!({"$ref":"https://example.invalid/schema"})).is_err());
+        assert!(
+            inline_model_schema(
+                &json!({"type":"string","description":"x".repeat(MODEL_SCHEMA_MAX_BYTES)})
+            )
+            .is_err()
+        );
+        let properties = (0..20)
+            .map(|n| (format!("field{n}"), json!({"$ref":"#/$defs/wide"})))
+            .collect::<serde_json::Map<_, _>>();
+        let wide = json!({"$defs":{"wide":{"type":"string","description":"x".repeat(2000)}},
+            "type":"object","properties":properties});
+        assert!(serde_json::to_vec(&wide).unwrap().len() < MODEL_SCHEMA_MAX_BYTES);
+        assert!(inline_model_schema(&wide).is_err());
+        let mut deep = json!({"type":"string"});
+        for _ in 0..66 {
+            deep = json!({"type":"array","items":deep});
+        }
+        assert!(inline_model_schema(&deep).is_err());
     }
 }

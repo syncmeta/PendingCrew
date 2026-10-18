@@ -103,7 +103,7 @@ fn trusted_crew_preserves_input_schemas_on_start_and_resume() {
     ] {
         let servers = params["config"]["mcp_servers"].as_object().unwrap();
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers["crew"]["tool_input_schema_max_bytes"], 16_384);
+        assert_eq!(servers["crew"]["tool_input_schema_max_bytes"], 32_768);
         assert_eq!(servers["crew"]["command"], "/synthetic/helper");
         assert_eq!(servers["crew"]["args"], json!(["mcp"]));
     }
