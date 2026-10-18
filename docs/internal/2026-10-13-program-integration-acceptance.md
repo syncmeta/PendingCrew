@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 远程/移动三平台实际产物收口
+
+完整编译输入固定 `278530ecf556f68e1d730f8953c05e6adcdbd9d1`，不是本节后文档。root 已在构建前普通原子推 main/三开发分支，并实际 ls-remote 核四者同278。两作者源码、当前私域 TLS 完整知识流和准确 normal 的接受记录见下节，稳定范围未重全套、没有新 GitHub CI。
+
+全部实际产物在 `/private/tmp/pcw-remote-mobile-278530ec-native-03`。Mac 为既有 NativeCandidate 隔离配置、候选元数据0.0.2130，实际 App 与 helper 严格签名、签前后代码等价、原完整来源 checker 均通过；GUI SHA256 `8adab547fd604809445c3f1b75571082c5886c05a29c2e008b722e66d03efe0c`，helper `2f1d947b181f8ff931081c5c5a2f391b075590f02cda96f3d177366e33bd41af`。两 iOS 原生 iPhone/iPad family1,2 均实际 SDK27 完整编译并逐文件核 staging；Info 元数据为0.1.43/1、sourceRef双层明确278，不冒普通Mac0.1.44日用包。Simulator 只有链接器 adhoc，iPhoneOS 未签开发者身份，均非可安装发行物。
+
+移动来源明确保留一项有界例外：Simulator Xcode 实际 BUILD SUCCEEDED，但原封包器因依赖3729→3738拒绝收尾。1734项目源及原3729依赖均无缺失或内容变化，新增9项逐字来自既有锁定 Sparkle ZIP，framework子树不变；只接受这个明确增量，不概括为依赖未变。沿原 recipe 尾段复用真实成功 App 封包，iPhoneOS 以真实3738为起点且前后完全相同。补充执行字节 SHA256 `995553ac07dc4ea620131bad55d84e7e202f734ba293fd36c5fcc250a4bb7b61` 绑定两 proof；原 Mac manifest/proof/log 未改，不宣称原 Simulator wrapper PASS。Simulator proof SHA256 `749c4690527b7c1451fe6eb7ee3b1e97d4fced8270673213630130a93d49ee14`；iPhoneOS proof `c4190fcaa51a8ff85957a4fe61f6386b8091532858e40a0b3eb675e6763acf87`。
+
+完整产物独核 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/remote-mobile-three-products-278530ec-independent-review.json`，SHA256 `6bf378605397c99d4f56182f1f6a723172fcff6b08421096bb15e3b5a0a2f378`。既有来源清单完整1734项由成熟 checker 核；质量另核1733 Gitblob，保护项 `:-` 未另读取。原准备失败、旧 SDK 坏副本的整体保全迁移、从保全副本仅补1411缺失叶、Simulator资格拒绝和设备平台 settings 沙箱失败均保留，不重写成全绿；没有删 SDK、重下载依赖、冷建缓存或重跑已成功 Xcode。
+
+本次只接受源码、私域 TLS 业务及实际三平台构建/来源/封装，尚无真实远程配对窗口、真机操作、持久 Keychain、安装或日用交付。普通 a885 包和真实任务暂停不变。三产物完成后释放作者树，后端与客户端接人类新批准的受管 Claude 生产闭环；这不由候选名字激活 Native，也不授权新的真实 SDK/模型调用。
+
 ## 2026-10-18 当前状态与并行边界
 
 人类批准恢复完整模块并行。以总计划顶部“恢复完整模块并行”为当前执行入口，旧章节保留历史来源；不因安排变化增加完成声明。main/三开发树起点均为 `7678847b`，现有普通 Mac 包仍准确编译自 `a885ce6c`，并非后续文档或开发输入。
