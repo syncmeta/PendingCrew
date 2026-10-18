@@ -66,8 +66,9 @@ final class AppModel: ObservableObject {
         #if os(macOS)
         await crewdWindow.selectLocal(directory: directory)
         #else
+        // Loading saved computers is observation, not permission to select one.
+        // The original mobile pairing/list UI explicitly chooses and connects.
         crewdWindow.refresh()
-        if crewdWindow.workspace == nil, let known = crewdWindow.computers.first(where: \.paired) { await crewdWindow.select(known.id) }
         #endif
         if let workspace = crewdWindow.workspace {
             workspace.originalJournalRequired = true

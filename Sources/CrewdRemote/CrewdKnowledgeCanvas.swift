@@ -16,35 +16,14 @@ struct CrewdKnowledgeCanvas: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("代码视图").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if runtime.executionEnabled {
-                    Button("停止代码") {
-                        guard let context = runtime.context else { return }
-                        try? runtime.setExecutionEnabledFromNativeHost(false, context: context)
-                    }
-                } else {
-                    Button("启用此版本代码…") { enableContext = runtime.context }
-                        .disabled(!Self.supported || runtime.context == nil || runtime.failed)
-                }
-                if runtime.pendingWrite?.context.origin == runtime.context?.origin {
-                    Button("查询原写入结果") {
-                        Task {
-                            do { _ = try await runtime.reviewPendingFromNativeHost(); status = "已查询；未重新提交。" }
-                            catch { status = "结果仍未知。" }
-                        }
-                    }
-                }
-                Toggle("允许此版本写入知识数据", isOn: Binding(get: { runtime.writeEnabled }, set: { enabled in
-                    do { try runtime.setWriteEnabledFromNativeHost(enabled); status = "" }
-                    catch { status = "此视图当前不可获得写入能力。" }
-                }))
-                .toggleStyle(.switch).disabled(!Self.supported || runtime.context == nil || runtime.failed || !runtime.renderQualified || runtime.bundle?.declaresKnowledgeWrite != true)
-            }.padding(8)
+            ViewThatFits(in: .horizontal) {
+                HStack { codeControls; pendingReview; writeControl }.fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) { codeControls; pendingReview; writeControl }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
             if !status.isEmpty { Text(status).font(.caption).padding(4) }
             if !Self.supported {
-                ContentUnavailableView("代码执行在此系统版本不可用", systemImage: "lock.rectangle", description: Text("iOS 18.4 起才有公开的文件上传拒绝回调。定义仍可保存和编辑；原生数据与文档继续可用。"))
+                Text("此系统仅提供源码预览；执行代码需要 iOS 18.4 或更新版本。").font(.caption).foregroundStyle(.secondary).padding(8)
+                sourcePreview
             } else if runtime.failed { ContentUnavailableView("视图已停止", systemImage: "exclamationmark.triangle", description: Text(runtime.unsupportedResourcePolicy ? "当前 WebKit 的必要资源拒绝策略无法验证，代码未继续运行；原生数据与文档仍可用。":"未重新提交任何写入。返回原生视图查看状态。")) }
             else if runtime.executionEnabled { CrewdKnowledgeWebSurface(runtime: runtime) }
             else { sourcePreview }
@@ -63,6 +42,38 @@ struct CrewdKnowledgeCanvas: View {
         }
         .onChange(of: runtime.context) { _,_ in enableContext = nil }
         .onDisappear { enableContext = nil; runtime.revoke() }
+    }
+    private var codeControls: some View {
+        HStack {
+                Text("代码视图").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if runtime.executionEnabled {
+                    Button("停止代码") {
+                        guard let context = runtime.context else { return }
+                        try? runtime.setExecutionEnabledFromNativeHost(false, context: context)
+                    }
+                } else {
+                    Button("启用此版本代码…") { enableContext = runtime.context }
+                        .disabled(!Self.supported || runtime.context == nil || runtime.failed)
+                }
+        }
+    }
+    @ViewBuilder private var pendingReview: some View {
+                if runtime.pendingWrite?.context.origin == runtime.context?.origin {
+                    Button("查询原写入结果") {
+                        Task {
+                            do { _ = try await runtime.reviewPendingFromNativeHost(); status = "已查询；未重新提交。" }
+                            catch { status = "结果仍未知。" }
+                        }
+                    }
+                }
+    }
+    private var writeControl: some View {
+                Toggle("允许此版本写入知识数据", isOn: Binding(get: { runtime.writeEnabled }, set: { enabled in
+                    do { try runtime.setWriteEnabledFromNativeHost(enabled); status = "" }
+                    catch { status = "此视图当前不可获得写入能力。" }
+                }))
+                .toggleStyle(.switch).disabled(!Self.supported || runtime.context == nil || runtime.failed || !runtime.renderQualified || runtime.bundle?.declaresKnowledgeWrite != true)
     }
     private var sourcePreview: some View {
         ScrollView {

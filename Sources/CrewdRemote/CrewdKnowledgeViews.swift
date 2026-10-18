@@ -21,16 +21,12 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var confirmingPreview = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Picker("页面", selection: $selected) {
-                    Text("选择页面").tag("")
-                    ForEach(store.objects.filter { $0.objectKind == "view" }, id: \.identity) {
-                        Text($0.displayTitle).tag($0.identity)
-                    }
-                }.frame(maxWidth: 300)
-                Button("重新读取") { Task { await reload() } }.disabled(store.busy)
-                Spacer()
-                Button("系统控制…") { showSystem = true }
+            ViewThatFits(in: .horizontal) {
+                HStack { pagePicker; reloadButton; Spacer(); systemButton }
+                VStack(alignment: .leading, spacing: 8) {
+                    pagePicker
+                    HStack { reloadButton; Spacer(); systemButton }
+                }
             }.padding(8)
             Divider()
             if !available {
@@ -49,7 +45,10 @@ struct CrewdKnowledgeWorkspaceView: View {
             UserDefaults.standard.set(id, forKey: pagePreference(context))
             Task { await store.open(.init(namespace: context.namespace, kind: "view", id: id)) }
         }
-        .onChange(of: store.workspace?.context) { _, _ in
+        .onChange(of: store.workspace?.context) { old, current in
+            if old?.authorityId != current?.authorityId || old?.crewId != current?.crewId || old?.namespace != current?.namespace {
+                selected = ""
+            }
             // Native confirmations bind the state the user actually reviewed.
             confirmArchive = nil; restoreTarget = nil; confirmingPreview = false
             // A new generation/authority invalidates code grants. The page is re-read only.
@@ -57,7 +56,27 @@ struct CrewdKnowledgeWorkspaceView: View {
                 Task { await reload() }
             }
         }
-        .sheet(isPresented: $showSystem) { systemControls.frame(minWidth: 520, minHeight: 360) }
+        .sheet(isPresented: $showSystem) {
+            #if os(macOS)
+            ScrollView { systemControls }.frame(minWidth: 520, minHeight: 360)
+            #else
+            ScrollView { systemControls }
+            #endif
+        }
+    }
+    private var pagePicker: some View {
+        Picker("页面", selection: $selected) {
+            Text("选择页面").tag("")
+            ForEach(store.objects.filter { $0.objectKind == "view" }, id: \.identity) {
+                Text($0.displayTitle).tag($0.identity)
+            }
+        }.frame(maxWidth: 300)
+    }
+    private var reloadButton: some View {
+        Button("重新读取") { Task { await reload() } }.disabled(store.busy)
+    }
+    private var systemButton: some View {
+        Button("系统控制…") { showSystem = true }
     }
     private func reload() async {
         await store.refresh()
@@ -70,7 +89,7 @@ struct CrewdKnowledgeWorkspaceView: View {
         }
     }
     private func pagePreference(_ context: CrewdDataContext) -> String {
-        "pendingcrew.page." + context.authorityId + "." + context.namespace
+        "pendingcrew.page." + context.authorityId + "." + context.crewId + "." + context.namespace
     }
     @ViewBuilder private func page(_ detail: CrewdDataObjectDetail) -> some View {
         switch detail.object {
@@ -123,7 +142,7 @@ struct CrewdKnowledgeWorkspaceView: View {
             }
             Button("读取恢复快照") { Task { await store.loadSnapshots() } }
             if let history = store.snapshots {
-                ScrollView { VStack(alignment: .leading) {
+                VStack(alignment: .leading) {
                     ForEach(history.items, id: \.id) { snapshot in
                         HStack {
                             Text(snapshot.createdAt + " · " + snapshot.generation).font(.caption)
@@ -131,7 +150,7 @@ struct CrewdKnowledgeWorkspaceView: View {
                             Button("恢复…") { restoreTarget = snapshot.id }
                         }
                     }
-                } }
+                }
             }
             Text(store.status).font(.caption).foregroundStyle(.secondary)
         }.padding()
