@@ -54,6 +54,7 @@ pub struct DriverConfig {
     pub delivery_observer: Option<Arc<dyn DeliverySuccessObserver>>,
     /// Private ACP native-child barrier; the helper never writes the core registry.
     pub native_birth_gate: Option<crate::acp::birth::BirthGate>,
+    pub native_plugin_dir: Option<PathBuf>,
     /// Bounded terminal byte enqueue, separate from structured ACP control.
     pub terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
@@ -90,6 +91,7 @@ impl DriverConfig {
             registry: None,
             delivery_observer: None,
             native_birth_gate: None,
+            native_plugin_dir: None,
             terminal_observer: None,
         }
     }
@@ -922,9 +924,10 @@ async fn launch(
         agent.clone(),
         config.runtime_dir.clone(),
     );
-    let (args, files) = blocking(move || prepare_claude(&spec, a, &dir))
+    let (mut args, files) = blocking(move || prepare_claude(&spec, a, &dir))
         .await
         .map_err(StartError::Files)?;
+    args.plugin_dir = config.native_plugin_dir.clone();
     let env = build_env_from_process(&start.child_path, &start.spec.additional_env);
     let since = SystemTime::now();
     let spec = SpawnSpec {

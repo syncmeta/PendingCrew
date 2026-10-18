@@ -32,6 +32,8 @@ impl AgentSessionArg {
 /// 一次 claude 启动的全部 argv 输入。只有值，没有文件 IO。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaudeArgs {
+    /// Only the private managed helper sets this installed source directory.
+    pub plugin_dir: Option<PathBuf>,
     pub session: AgentSessionArg,
     pub permission_mode: String,
     pub system_prompt_file: Option<PathBuf>,
@@ -44,6 +46,7 @@ pub struct ClaudeArgs {
 impl ClaudeArgs {
     pub fn new(session: AgentSessionArg) -> Self {
         Self {
+            plugin_dir: None,
             session,
             permission_mode: "auto".to_string(),
             system_prompt_file: None,
@@ -69,6 +72,7 @@ impl ClaudeArgs {
             ("--append-system-prompt-file", &self.system_prompt_file),
             ("--settings", &self.settings_file),
             ("--mcp-config", &self.mcp_config_file),
+            ("--plugin-dir", &self.plugin_dir),
         ];
         for (flag, file) in files {
             if let Some(f) = file {
@@ -108,7 +112,7 @@ pub const QUICK_HOOK_TIMEOUT_SECS: u64 = 15;
 
 /// crew 通讯（MCP + hooks）要用的 helper 与身份（spec §22.3「身份」）。
 /// 机组、角色、显示名不在这里：会话中途会变（换机长），由 serve 每次现查。
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CommsSpec {
     /// helper 可执行文件（crewd 自己）。
     pub helper: PathBuf,

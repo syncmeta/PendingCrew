@@ -221,6 +221,7 @@ fn snapshot_steps(
             let tx = copy.transaction()?;
             crate::remote::invalidate_for_work_replacement(&tx, "work_restore", &crate::now_ts())?;
             crate::native_execution::invalidate_unknown(&tx)?;
+            crate::native_managed::invalidate_all(&tx, &crate::now_ts())?;
             crate::work_followups::restored(&tx)?;
             crate::command_receipts::restored(&tx, &crate::now_ts())?;
             crate::local_clients::restored(&tx)?;

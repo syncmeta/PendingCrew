@@ -106,6 +106,8 @@ pub struct Launch {
     pub effort: Option<String>,
     pub system_prompt: Option<String>,
     pub additional_env: BTreeMap<String, String>,
+    pub managed_plugin_dir: Option<PathBuf>,
+    pub comms: Option<crewd_exec::launch::CommsSpec>,
 }
 pub struct NativeFactory {
     pub(crate) db: Db,
@@ -220,6 +222,8 @@ impl NativeFactory {
             effort: launch.effort,
             system_prompt: launch.system_prompt,
             additional_env: launch.additional_env,
+            managed_plugin_dir: launch.managed_plugin_dir,
+            comms: launch.comms,
         };
         use std::os::unix::fs::OpenOptionsExt;
         let stderr = std::fs::OpenOptions::new()
@@ -667,7 +671,7 @@ impl Runtime {
             .ok_or_else(error)?;
         held.current_native_binding(epoch)
     }
-    async fn projection(&self) -> io::Result<(native::Runtime, i64)> {
+    pub(crate) async fn projection(&self) -> io::Result<(native::Runtime, i64)> {
         let binding = self.binding()?;
         let session = self.session.clone();
         let current = self
@@ -887,6 +891,17 @@ impl Runtime {
         }
         Ok(())
     }
+    pub(crate) async fn agent_session_id(&self) -> io::Result<String> {
+        let session = self.session.clone();
+        self.db
+            .call_result(move |store| {
+                crewd_store::sessions::agent_session_id(store.conn(), &session)
+            })
+            .await
+            .map_err(|_| error())?
+            .map_err(|_| error())?
+            .ok_or_else(error)
+    }
     pub fn events(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
@@ -988,6 +1003,11 @@ impl Runtime {
                 store.with_tx(|tx| {
                     if let Some(runtime) = native::current_runtime(tx, &session)? {
                         native::invalidate_runtime_unknown(tx, &runtime.id)?;
+                        crewd_store::native_managed::unknown(
+                            tx,
+                            &runtime.id,
+                            &crewd_store::now_ts(),
+                        )?;
                     }
                     Ok(())
                 })

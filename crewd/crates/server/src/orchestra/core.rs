@@ -1451,9 +1451,12 @@ impl<P: Port> Core<P> {
         if let Some(a) = &self.cfg.admission {
             a.allow(session);
         }
-        self.launch(row, exec, text, vec![], vec![])
-            .await
-            .map_err(ControlError::from_port)
+        if origin == Origin::Human {
+            self.launch_human(row, exec, text).await
+        } else {
+            self.launch(row, exec, text, vec![], vec![]).await
+        }
+        .map_err(ControlError::from_port)
     }
 
     /// 人停掉（裁定 10）：一个事务写停止状态 + 单调 wake-ID 取消水位 + pending 作废，提交后才叫停进程。
@@ -1776,7 +1779,20 @@ impl<P: Port> Core<P> {
                         }
                         _ => None,
                     };
-                    let sent = if let Some(binding) = binding {
+                    // Only authoritative Human message wakes qualify. Backlog,
+                    // riders and other producers never gain Human provenance.
+                    let explicit_human = l.inflight.as_ref().is_some_and(|f| {
+                        !f.batch.wakes.is_empty()
+                            && f.batch.cursor_targets.is_empty()
+                            && f.batch.riders.is_empty()
+                            && f.batch
+                                .wakes
+                                .iter()
+                                .all(|w| w.origin == crewd_wake::breaker::HUMAN)
+                    });
+                    let sent = if explicit_human {
+                        l.handle.send_human(text, &extras, binding.as_deref())
+                    } else if let Some(binding) = binding {
                         l.handle.send_bound(text, &extras, binding.as_ref())
                     } else {
                         l.handle.send(text, &extras)
@@ -1853,13 +1869,41 @@ impl<P: Port> Core<P> {
             .map(|_| ())
     }
 
+    /// Checked explicit Human start/resume; never selected by backlog or a timer.
+    pub(crate) async fn launch_human(
+        &mut self,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        text: Option<String>,
+    ) -> anyhow::Result<()> {
+        let batch = Batch {
+            session: row.id.clone(),
+            ..Default::default()
+        };
+        self.launch_carrying_origin(row, exec, text, batch, true)
+            .await
+            .map(|_| ())
+    }
+
     /// 同 [`launch`](Self::launch)，带一整批（含随批的窗口外行 `Batch::riders`）。这批在拉起之前 claim。
     pub(crate) async fn launch_carrying(
         &mut self,
         row: SessionRow,
         exec: Arc<dyn Executor>,
         text: Option<String>,
+        batch: Batch,
+    ) -> anyhow::Result<bool> {
+        self.launch_carrying_origin(row, exec, text, batch, false)
+            .await
+    }
+
+    async fn launch_carrying_origin(
+        &mut self,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        text: Option<String>,
         mut batch: Batch,
+        explicit_human: bool,
     ) -> anyhow::Result<bool> {
         if self
             .cfg
@@ -1964,7 +2008,12 @@ impl<P: Port> Core<P> {
         let tx = self.inbox.clone();
         let task_session = session.clone();
         tokio::spawn(async move {
-            match exec.launch(req).await {
+            let launched = if explicit_human {
+                exec.launch_human(req).await
+            } else {
+                exec.launch(req).await
+            };
+            match launched {
                 Ok((handle, mut events)) => {
                     // 先报 Launched、再转事件：同一个发送端按序到达，actor 先建好 Live 再收 Spawned。
                     let launched = Input::Launched {

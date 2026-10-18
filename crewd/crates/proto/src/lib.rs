@@ -35,6 +35,7 @@ pub use runner_usage::*;
 pub mod wake_lifecycle;
 
 pub mod agent;
+pub mod executors;
 pub use model::*;
 pub use params::*;
 use schemars::JsonSchema;
@@ -230,6 +231,7 @@ pub mod methods {
             .copied()
             .chain(crate::team_data_api::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
+            .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
     });
 }
@@ -931,6 +933,13 @@ pub fn api_schema() -> Value {
     .chain(orchestra::schema_entries(g).0)
     .chain(team_data_api::schema_entries(g))
     .chain(lifecycle::schema_entries(g))
+    .chain(std::iter::once((
+        executors::EXECUTOR_LIST,
+        m(
+            sub::<executors::ExecutorListParams>(g),
+            sub::<executors::ExecutorListResult>(g),
+        ),
+    )))
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let events: serde_json::Map<String, Value> = event_payloads(g)

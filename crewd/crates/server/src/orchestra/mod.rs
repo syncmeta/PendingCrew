@@ -113,6 +113,7 @@ impl OrchestraConfig {
 /// 编排 actor 的句柄。可克隆；客户端 RPC、`SessionControl`、协作事件转发都经它。
 #[derive(Clone)]
 pub struct Handle {
+    execs: Executors,
     tx: mpsc::UnboundedSender<Input>,
     exit: watch::Receiver<bool>,
     #[cfg(test)]
@@ -165,7 +166,7 @@ pub async fn spawn<P: Port>(
     cfg: OrchestraConfig,
 ) -> anyhow::Result<(Handle, Actor)> {
     let (tx, rx) = mpsc::unbounded_channel();
-    let mut core = Core::new(port, execs, hooks, clock, cfg, tx.clone()).await?;
+    let mut core = Core::new(port, execs.clone(), hooks, clock, cfg, tx.clone()).await?;
     core.boot().await?;
     let exit = core.exit.subscribe();
     #[cfg(not(test))]
@@ -181,6 +182,7 @@ pub async fn spawn<P: Port>(
     });
     Ok((
         Handle {
+            execs,
             tx,
             exit,
             #[cfg(test)]
@@ -402,6 +404,10 @@ impl Handle {
     }
 
     /// 实时状态 + 屏幕文本（屏幕在 actor 之外读，不卡 actor）。
+    pub fn executor_profiles(&self) -> Vec<crewd_proto::executors::ExecutorProfile> {
+        self.execs.profiles()
+    }
+
     pub async fn inspect(
         &self,
         session: &str,

@@ -14,6 +14,7 @@ pub mod local_clients;
 pub mod messages;
 pub mod native_execution;
 pub mod native_history;
+pub mod native_managed;
 pub mod object_refs;
 pub mod remote;
 pub mod runner_usage;
@@ -83,6 +84,11 @@ impl StorageKind {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error(
+        "Core database format {found} is unsupported by this fresh-format build ({supported}); original database retained without migration"
+    )]
+    UnsupportedFormat { found: i64, supported: i64 },
+
     #[error(transparent)]
     Sql(rusqlite::Error),
     /// 存储故障（分类见 `StorageKind`）。`rusqlite::Error` 经 `From` 进来时自动归类。
