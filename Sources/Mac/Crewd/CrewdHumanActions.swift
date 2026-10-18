@@ -227,7 +227,37 @@ struct CrewdRunnerItemView: View {
 
 /// Shared-platform Codex start form; the host supplies its configured
 /// model and account. This view never starts a runner merely by appearing.
+/// Factory metadata is read-only. Selecting a profile never starts a CLI.
+struct CrewdExecutorChoiceView: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @Binding var executor: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Picker("执行器", selection: $executor) {
+                Text("Codex").tag("codex")
+                Text("受管 Claude").tag("acp:claude-managed")
+            }
+            if let profile = workspace.executorProfile(executor) {
+                Text(profile.available ? "后台已开放此执行器；实际启动与任务结果仍以原请求及会话状态为准。" : profile.unavailableDescription)
+                    .font(.caption).foregroundStyle(profile.available ? Color.secondary : Color.orange)
+                Text("手工终端：\(profile.manualTerminal ? "支持" : "未开放") · 结构化审批：\(profile.structuredDecisions ? "支持" : "未开放")")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !profile.fullHistoryLoad {
+                    Text("完整历史加载不可用。恢复只在你明确选择后启动新一代会话，不补发未知输入。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(workspace.executorProfilesFailure ?? "尚未读取当前后台的执行能力，不能启动。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("重新读取执行能力") { Task { await workspace.refreshExecutorProfiles() } }
+                .disabled(!workspace.client.readyForWork || workspace.crewID.isEmpty)
+        }
+    }
+}
+
 struct CrewdSessionStartView: View {
+    @State private var executor = "codex"
     @State private var isolation = false
     @ObservedObject var workspace: CrewdWorkspace
     @Binding var drafts: CrewdDrafts
@@ -240,6 +270,7 @@ struct CrewdSessionStartView: View {
     private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); reviewedUnknown = false }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            CrewdExecutorChoiceView(workspace: workspace, executor: $executor)
             TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(2...6)
             Toggle("使用独立工作树", isOn: $isolation)
             Text(isolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。").font(.caption).foregroundStyle(.secondary)
@@ -255,10 +286,10 @@ struct CrewdSessionStartView: View {
                 }}.disabled(reading || workspace.busy)
                 Toggle("我已核对，仍要启动这个任务", isOn: $reviewedUnknown).disabled(!readUnknown || reading)
             }
-            Button("启动 Codex 成员") {
+            Button("启动所选成员") {
                 let snapshot = drafts.snapshot(for: context), owner = workspace
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
-                let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string("codex"), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
+                let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(executor), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
                 failure = nil; readUnknown = false; reviewedUnknown = false
                 Task {
                     do { _ = try await owner.performValue("session.start", fields); drafts.clearIfUnchanged(snapshot) }
@@ -267,7 +298,7 @@ struct CrewdSessionStartView: View {
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
                     }
                 }
-            }.disabled(reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
+            }.disabled(workspace.executorProfile(executor)?.available != true || reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
         }.onChange(of: workspace.crewID) { _, _ in
             failure = nil; readUnknown = false; reviewedUnknown = false
         }

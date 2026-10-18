@@ -12,6 +12,12 @@ struct CrewdOriginalSessionControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let failure = backend.failure { Text(failure).font(.caption).foregroundStyle(.orange) }
+            if workspace.sessions.first(where: { $0["id"].string == backend.sessionID })?["executor"].string == "acp:claude-managed" {
+                Text("受管 Claude：只管理 Core 创建的任务。API 接收或派发不代表原生回合已关联或工作完成。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("完整历史加载不可用；恢复需要你明确选择，未知输入不会补发。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if backend.status != .running {
                 Button("恢复这个原会话") { backend.resume() }
                     .disabled(!active || workspace.busy || workspace.controlTargets[backend.sessionID] == nil)
