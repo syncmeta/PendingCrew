@@ -10,6 +10,7 @@ pub mod hub;
 mod judgments;
 pub mod ledger;
 mod legacy_terminal;
+mod managed_native;
 pub mod native_helpers;
 pub mod native_receipts;
 pub mod orchestra;
@@ -317,6 +318,9 @@ pub struct OrchestraServe {
     pub codex_env: std::collections::BTreeMap<String, String>,
     pub claude: orchestra::exec_claude::ClaudeProgram,
     pub claude_env: std::collections::BTreeMap<String, String>,
+    /// Explicit real-Claude program for the managed adapter, never an ACP wrapper.
+    /// Filesystem metadata is not a native API qualification witness.
+    pub managed_claude: Option<PathBuf>,
     pub helper: Option<PathBuf>,
     pub claude_projects_dir: Option<PathBuf>,
     pub runtime_dir: Option<PathBuf>,
@@ -333,6 +337,7 @@ impl Default for OrchestraServe {
             codex_env: Default::default(),
             claude: orchestra::exec_claude::ClaudeProgram::default(),
             claude_env: Default::default(),
+            managed_claude: None,
             helper: None,
             claude_projects_dir: None,
             runtime_dir: None,
@@ -437,6 +442,7 @@ async fn serve_with_hooks_inner(
     {
         let tx = store.conn().unchecked_transaction()?;
         crewd_store::native_execution::invalidate_unknown(&tx)?;
+        crewd_store::native_managed::invalidate_all(&tx, &crewd_store::now_ts())?;
         crewd_store::command_receipts::interrupted(&tx, &crewd_store::now_ts())?;
         tx.commit()?;
     }
@@ -547,6 +553,31 @@ async fn serve_with_hooks_inner(
                 child_path: o.child_path,
             },
         );
+        let managed_reason = if !cfg!(any(target_os = "macos", target_os = "linux")) {
+            crewd_proto::executors::ExecutorUnavailableReason::UnsupportedPlatform
+        } else if !o
+            .managed_claude
+            .as_deref()
+            .is_some_and(orchestra::exec::executable_metadata)
+        {
+            crewd_proto::executors::ExecutorUnavailableReason::NotConfigured
+        } else {
+            crewd_proto::executors::ExecutorUnavailableReason::NativeVerificationPending
+        };
+        let managed_profile = crewd_proto::executors::ExecutorProfile {
+            id: "claude-managed".into(),
+            executor: "acp:claude-managed".into(),
+            display_name: "Claude (managed PTY/ACP)".into(),
+            backend: crewd_proto::executors::ExecutorBackend::NativeAcp,
+            available: false,
+            features: crewd_proto::executors::ExecutorFeatures {
+                initial_context: false,
+                manual_terminal: false,
+                structured_decisions: false,
+                full_history_load: false,
+            },
+            unavailable_reason: Some(managed_reason),
+        };
         match orchestra::spawn(
             Arc::new(orchestra::db::DbPort::new(
                 state.clone(),
@@ -554,7 +585,8 @@ async fn serve_with_hooks_inner(
             )),
             orchestra::exec::Executors::new()
                 .with("claude", Arc::new(executor))
-                .with("codex", Arc::new(codex)),
+                .with("codex", Arc::new(codex))
+                .with_unavailable(managed_profile),
             hooks,
             Arc::new(orchestra::clock::SystemClock),
             orchestra::OrchestraConfig {
@@ -772,6 +804,137 @@ mod tests {
     use super::*;
     use crate::hub::CollabEvent;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn managed_metadata_queries_never_launch_a_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let program = root.path().join("metadata-only-program");
+        let marker = root.path().join("must-not-execute");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf forbidden > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let opts = ServeOptions {
+            orchestra: Some(OrchestraServe {
+                codex: orchestra::exec_codex::CodexProgram::Path(program.clone()),
+                claude: orchestra::exec_claude::ClaudeProgram::Disabled,
+                managed_claude: Some(program),
+                child_path: Some("/usr/bin:/bin".into()),
+                ..Default::default()
+            }),
+            test_ready: Some(Box::new(move |state, _| {
+                let _ = ready_tx.send(state);
+            })),
+            ..Default::default()
+        };
+        let task = tokio::spawn(serve_with(data.clone(), opts, async {
+            let _ = stop_rx.await;
+        }));
+        let state = tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .db
+            .call_result(|store| {
+                crewd_store::crews::upsert(
+                    store.conn(),
+                    &crewd_proto::Crew {
+                        id: "managed-metadata".into(),
+                        title: "Metadata only".into(),
+                        created_at: "now".into(),
+                        updated_at: "now".into(),
+                        ..Default::default()
+                    },
+                    None,
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let mut client = crate::agent::testkit::RpcClient::connect(&data.join("crewd.sock")).await;
+        for _ in 0..2 {
+            let result = client
+                .call(
+                    crewd_proto::executors::EXECUTOR_LIST,
+                    serde_json::json!({"crewId":"managed-metadata"}),
+                )
+                .await
+                .unwrap();
+            let profiles: crewd_proto::executors::ExecutorListResult =
+                serde_json::from_value(result).unwrap();
+            let managed = profiles
+                .profiles
+                .iter()
+                .find(|p| p.executor == "acp:claude-managed")
+                .unwrap();
+            assert!(!managed.available);
+            assert_eq!(
+                managed.unavailable_reason,
+                Some(crewd_proto::executors::ExecutorUnavailableReason::NativeVerificationPending)
+            );
+            assert!(
+                !managed.features.initial_context
+                    && !managed.features.manual_terminal
+                    && !managed.features.structured_decisions
+                    && !managed.features.full_history_load
+            );
+        }
+        assert!(
+            client
+                .call(
+                    crewd_proto::executors::EXECUTOR_LIST,
+                    serde_json::json!({"crewId":"missing"})
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .call(
+                    crewd_proto::executors::EXECUTOR_LIST,
+                    serde_json::json!({"crewId":"managed-metadata","pid":1})
+                )
+                .await
+                .is_err()
+        );
+        assert!(!state.admission.any());
+        let counts = state
+            .db
+            .call_result(|store| -> crewd_store::Result<Vec<i64>> {
+                [
+                    "sessions",
+                    "native_managed_operations",
+                    "native_execution_runtimes",
+                ]
+                .into_iter()
+                .map(|table| {
+                    store
+                        .conn()
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                        .map_err(Into::into)
+                })
+                .collect()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(counts, vec![0, 0, 0]);
+        assert!(!marker.exists());
+        drop(client);
+        stop_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!data.join("crewd.sock").exists());
+    }
 
     #[tokio::test]
     async fn collab_commits_then_publishes_client_and_internal_events() {

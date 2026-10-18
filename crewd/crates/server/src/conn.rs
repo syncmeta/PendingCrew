@@ -469,6 +469,54 @@ async fn request_step(
                 })
             }
         }
+        Ok(req) if req.method == crewd_proto::executors::EXECUTOR_LIST => {
+            let id = req.id;
+            let result = async {
+                if agent.is_attached() {
+                    return Err(RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "executor discovery requires Human authority",
+                    ));
+                }
+                let p: crewd_proto::executors::ExecutorListParams =
+                    crewd_proto::parse_params(req.params)?;
+                let actor = peer.command_actor();
+                let owner = state.clone();
+                state
+                    .db
+                    .call_result(move |store| -> crewd_collab::Result<()> {
+                        actor.authorize_tx(
+                            &owner,
+                            store.conn(),
+                            crewd_proto::executors::EXECUTOR_LIST,
+                        )?;
+                        crewd_collab::team_data::authorize(
+                            store.conn(),
+                            &crewd_collab::Sender::Human,
+                            &p.crew_id,
+                            false,
+                        )?;
+                        Ok(())
+                    })
+                    .await
+                    .map_err(crate::dispatch::internal)?
+                    .map_err(|_| {
+                        RpcError::new(RpcError::FORBIDDEN, "executor crew scope unavailable")
+                    })?;
+                let profiles = state
+                    .orchestra
+                    .get()
+                    .map(|handle| handle.executor_profiles())
+                    .unwrap_or_default();
+                serde_json::to_value(crewd_proto::executors::ExecutorListResult { profiles })
+                    .map_err(crate::dispatch::internal)
+            }
+            .await;
+            ServerFrame::Response(match result {
+                Ok(value) => Response::ok(id, value),
+                Err(error) => Response::err(id, error),
+            })
+        }
         Ok(req) if crate::team_data::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

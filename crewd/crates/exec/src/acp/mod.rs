@@ -25,3 +25,6 @@ pub mod history_codec;
 
 /// Native15 observation framing; not a content admission or provider capability.
 pub mod content_chunks;
+
+/// Core-owned managed API adapter; it makes no all-native-entry admission claim.
+pub mod managed;

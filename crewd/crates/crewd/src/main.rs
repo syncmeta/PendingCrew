@@ -39,6 +39,9 @@ enum Cmd {
         codex_env: Vec<String>,
         #[arg(long, env = "CREWD_CLAUDE")]
         claude: Option<PathBuf>,
+        /// Real Claude executable for managed PTY/ACP; no automatic discovery.
+        #[arg(long = "claude-managed", value_name = "PROGRAM")]
+        managed_claude: Option<PathBuf>,
         #[arg(long = "claude-env", value_name = "K=V", hide = true)]
         claude_env: Vec<String>,
     },
@@ -191,6 +194,7 @@ async fn run() -> anyhow::Result<()> {
             managed_parent,
             claude,
             claude_env,
+            managed_claude,
             codex,
             codex_env,
         } => {
@@ -231,6 +235,7 @@ async fn run() -> anyhow::Result<()> {
                         None => crewd_server::orchestra::exec_claude::ClaudeProgram::Discover,
                     },
                     claude_env: extra,
+                    managed_claude: managed_claude.clone(),
                     claude_projects_dir: projects,
                     runtime_dir: Some(runtime),
                     ..Default::default()

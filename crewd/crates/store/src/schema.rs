@@ -2,8 +2,8 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-/// Knowledge files have an independent SQLite schema; Core remains version 15.
-pub const SCHEMA_VERSION: i64 = 15;
+/// Fresh managed-task format; knowledge files retain their independent schema.
+pub const SCHEMA_VERSION: i64 = 16;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
@@ -811,6 +811,12 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 /// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
 pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if v != 0 && v != SCHEMA_VERSION {
+        return Err(StoreError::UnsupportedFormat {
+            found: v,
+            supported: SCHEMA_VERSION,
+        });
+    }
     if v > SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SCHEMA_VERSION} 新，拒绝打开"
@@ -870,6 +876,19 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 15 {
         migrate_v15(conn)?;
     }
+    if v == 0 {
+        install_managed_v16(conn)?;
+    }
+    Ok(())
+}
+
+/// Only the fresh bootstrap reaches this installer. Old format15 is rejected
+/// before SQLite writes; no automatic old-data migration or Native history DDL.
+fn install_managed_v16(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(crate::native_managed::V16_DDL)?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2821,5 +2840,75 @@ mod judgment_format_tests {
         crate::meta_set(&c, "judgment.format.v1", "unknown-version").unwrap();
         assert!(!crate::judgment_state::format_available(&c).unwrap());
         assert_eq!(c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'native_history_%'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+}
+
+#[cfg(test)]
+mod managed_format_tests {
+    use super::*;
+    #[test]
+    fn fresh16_installs_only_managed_operations_and_refuses_existing15() {
+        let c = Connection::open_in_memory().unwrap();
+        migrate(&c).unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            16
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='native_managed_operations'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'native_history_%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        let old = Connection::open_in_memory().unwrap();
+        old.execute_batch("PRAGMA user_version=15; CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES('old15 retained');").unwrap();
+        assert!(matches!(
+            migrate(&old),
+            Err(StoreError::UnsupportedFormat {
+                found: 15,
+                supported: 16
+            })
+        ));
+        assert_eq!(
+            old.query_row("SELECT value FROM preserved", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "old15 retained"
+        );
+        assert_eq!(
+            old.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
+    }
+    #[test]
+    fn failed_native_install_rolls_back_ddl_and_version() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA user_version=15; CREATE TABLE native_managed_operations(collision TEXT); INSERT INTO native_managed_operations VALUES('preserved');").unwrap();
+        assert!(install_managed_v16(&c).is_err());
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
+        assert_eq!(
+            c.query_row("SELECT collision FROM native_managed_operations", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "preserved"
+        );
+        assert!(c.is_autocommit());
     }
 }

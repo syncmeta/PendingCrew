@@ -96,6 +96,48 @@ impl ClaudeExecutor {
 }
 
 impl Executor for ClaudeExecutor {
+    fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
+        use crewd_proto::executors::{
+            ExecutorBackend, ExecutorFeatures, ExecutorProfile, ExecutorUnavailableReason,
+        };
+        // Resolve only filesystem metadata; login-shell discovery belongs to an explicit launch.
+        let program = match &self.program {
+            ClaudeProgram::Disabled => None,
+            ClaudeProgram::Path(path) => Some(path.clone()),
+            ClaudeProgram::Discover => {
+                let path = self
+                    .child_path
+                    .get()
+                    .cloned()
+                    .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+                AgentPaths { child_path: path }.resolve("claude")
+            }
+        };
+        let configured = program
+            .as_deref()
+            .is_some_and(super::exec::executable_metadata);
+        let reason = if !configured {
+            Some(ExecutorUnavailableReason::NotConfigured)
+        } else if self.check_launch().is_err() {
+            Some(ExecutorUnavailableReason::BinaryChanged)
+        } else {
+            None
+        };
+        Some(ExecutorProfile {
+            id: "claude".into(),
+            executor: "claude".into(),
+            display_name: "Claude (existing PTY)".into(),
+            backend: ExecutorBackend::ExistingClaudePty,
+            available: reason.is_none(),
+            features: ExecutorFeatures {
+                initial_context: false,
+                manual_terminal: true,
+                structured_decisions: false,
+                full_history_load: false,
+            },
+            unavailable_reason: reason,
+        })
+    }
     fn check_launch(&self) -> Result<(), LaunchError> {
         #[cfg(test)]
         if let Some(false) = self.identity_override {

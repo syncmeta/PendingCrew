@@ -40,6 +40,10 @@ pub struct Boot {
     pub effort: Option<String>,
     pub system_prompt: Option<String>,
     pub additional_env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub managed_plugin_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub comms: Option<crate::launch::CommsSpec>,
 }
 fn refused() -> io::Error {
     io::Error::new(
@@ -163,6 +167,7 @@ pub async fn run<R: tokio::io::AsyncRead + Unpin>(input: R) -> io::Result<()> {
     let tap = TerminalTap::new(1, 64).map_err(|_| refused())?;
     let output = tap.subscribe(); // subscribe before native can emit its first byte
     let mut config = DriverConfig::new(boot.runtime_dir);
+    config.native_plugin_dir = boot.managed_plugin_dir;
     config.native_birth_gate = Some(BirthGate::new(birth, boot.nonce, Duration::from_secs(5))?);
     config.terminal_observer = Some(Arc::new(tap.clone()));
     let start = ClaudeStart {
@@ -176,7 +181,7 @@ pub async fn run<R: tokio::io::AsyncRead + Unpin>(input: R) -> io::Result<()> {
             fast_mode: None,
             system_prompt: boot.system_prompt,
             initial_prompt: None,
-            comms: None,
+            comms: boot.comms,
             additional_env: boot.additional_env,
         },
         ledger: ledger.clone(),

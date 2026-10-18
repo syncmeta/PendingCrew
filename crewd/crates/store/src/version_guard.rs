@@ -16,6 +16,12 @@ fn unknown() -> StoreError {
     StoreError::Invalid("数据库/WAL 版本或稳定性无法确认；拒绝打开，原数据文件未触碰".into())
 }
 fn version(v: u32) -> Result<()> {
+    if v != 0 && i64::from(v) != SUPPORTED_SCHEMA_VERSION {
+        return Err(StoreError::UnsupportedFormat {
+            found: i64::from(v),
+            supported: SUPPORTED_SCHEMA_VERSION,
+        });
+    }
     if i64::from(v) > SUPPORTED_SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SUPPORTED_SCHEMA_VERSION} 新，拒绝打开"
@@ -417,6 +423,48 @@ mod tests {
         assert_eq!(before, census(&source));
         assert!(!dest.exists());
     }
+    #[test]
+    fn managed_fresh16_reopens_and_existing15_is_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let fresh = root.path().join("fresh.db");
+        let store = crate::Store::open(&fresh).unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            16
+        );
+        drop(store);
+        let reopened = crate::Store::open(&fresh).unwrap();
+        assert_eq!(
+            reopened
+                .conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM native_managed_operations",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        drop(reopened);
+        let old = root.path().join("old.db");
+        let conn = Connection::open(&old).unwrap();
+        conn.execute_batch("CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES('old15'); PRAGMA user_version=15;").unwrap();
+        drop(conn);
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o640)).unwrap();
+        let before = census(&old);
+        assert!(matches!(
+            crate::Store::open(&old),
+            Err(StoreError::UnsupportedFormat {
+                found: 15,
+                supported: 16
+            })
+        ));
+        assert_eq!(before, census(&old));
+    }
+
     #[test]
     fn future_main_refuses_before_chmod_or_sidecar_touch() {
         let root = tempfile::tempdir().unwrap();

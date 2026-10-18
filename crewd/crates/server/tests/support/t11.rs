@@ -77,6 +77,7 @@ impl Fixture {
         crewd_server::ServeOptions {
             orchestra: Some(crewd_server::OrchestraServe {
                 codex: Default::default(),
+                managed_claude: None,
                 codex_env: Default::default(),
                 claude: crewd_server::orchestra::exec_claude::ClaudeProgram::Path(artifact(
                     "fake_claude",

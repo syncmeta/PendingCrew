@@ -685,7 +685,7 @@ impl<P: Port> Core<P> {
         if let Some(admission) = &self.cfg.admission {
             admission.allow(&row.id);
         }
-        self.launch(row.clone(), executor, brief, vec![], vec![])
+        self.launch_human(row.clone(), executor, brief)
             .await
             .map_err(ControlError::from_port)?;
         if let Some(starting) = self.starting.get(&row.id) {
