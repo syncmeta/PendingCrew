@@ -34,7 +34,7 @@ def check(app):
  for x,h in deps:
   if not x.startswith(('checkouts/','artifacts/')):p.fail('Native unexpected dependency origin')
  cfg=manifest.get('guiBuildConfiguration',{})
- expected={'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved'}
+ expected={'buildSystem':'xcodebuild','scheme':'PendingCrewNativeCandidate','configuration':'NativeCandidate','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) DEBUG PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved'}
  if any(cfg.get(k)!=v for k,v in expected.items()) or not all(isinstance(cfg.get(k),str) and cfg[k] for k in ['xcodeVersion','sdkVersion']):p.fail('Native GUI configuration mismatch')
  gui=proof.get('gui',{});backend=proof.get('backend',{});bc=p.build_configuration(manifest.get('backendBuildConfiguration'))
  if backend.get('mode')!='verified-prebuilt' or p.build_configuration(backend.get('buildConfiguration'))!=bc:p.fail('Native backend configuration/origin mismatch')
@@ -46,9 +46,9 @@ def check(app):
  if len(commands)!=1 or [x[6:] for x in lines if x.startswith('Exit: ')]!=['0'] or '** BUILD SUCCEEDED **' not in lines:p.fail('Native actual Xcode success missing')
  command=commands[0]
  if not command or pathlib.Path(command[0]).name!='xcodebuild' or command[-1]!='build':p.fail('Native actual build command missing')
- for key,want in [('-project',str(snapshot/'PendingCrew.xcodeproj')),('-scheme','PendingCrew'),('-configuration','Debug'),('-destination','platform=macOS,arch=arm64')]:
+ for key,want in [('-project',str(snapshot/'PendingCrew.xcodeproj')),('-scheme','PendingCrewNativeCandidate'),('-configuration','NativeCandidate'),('-destination','platform=macOS,arch=arm64')]:
   if command.count(key)!=1 or command[command.index(key)+1]!=want:p.fail('Native command '+key+' mismatch')
- for token in ['ARCHS=arm64','-disableAutomaticPackageResolution','-skipPackageUpdates','CODE_SIGNING_ALLOWED=NO','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE']:
+ for token in ['ARCHS=arm64','-disableAutomaticPackageResolution','-skipPackageUpdates','CODE_SIGNING_ALLOWED=NO','PENDINGCREW_CANDIDATE_SOURCE_REF='+source]:
   if command.count(token)!=1:p.fail('Native locked build command missing '+token)
  external=manifest.get('externalDependencyPath')
  if not isinstance(external,str) or not pathlib.Path(external).is_absolute() or command.count('-clonedSourcePackagesDirPath')!=1 or command[command.index('-clonedSourcePackagesDirPath')+1]!=external:p.fail('Native external dependency build path mismatch')
@@ -76,7 +76,7 @@ def check(app):
  rows=json.loads(settings.read_text());targets=[x.get('buildSettings',{}) for x in rows if x.get('target')=='PendingCrew']
  if len(targets)!=1:p.fail('Native actual target settings missing')
  actual=targets[0]
- if actual.get('CONFIGURATION')!='Debug' or actual.get('ARCHS')!='arm64' or 'PENDINGCREW_NATIVE_CANDIDATE' not in actual.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() or not actual.get('SDKROOT','').endswith('MacOSX'+cfg['sdkVersion']+'.sdk'):p.fail('Native actual settings differ from candidate inputs')
+ if actual.get('CONFIGURATION')!='NativeCandidate' or actual.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew.native-candidate' or actual.get('PENDINGCREW_CANDIDATE_SOURCE_REF')!=source or 'PENDINGCREW_LOCAL_MAC' in actual.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() or actual.get('CODE_SIGNING_ALLOWED')!='NO' or actual.get('DEVELOPMENT_TEAM') or actual.get('CODE_SIGN_ENTITLEMENTS') or actual.get('PROVISIONING_PROFILE_SPECIFIER') or actual.get('ARCHS')!='arm64' or 'PENDINGCREW_NATIVE_CANDIDATE' not in actual.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() or not actual.get('SDKROOT','').endswith('MacOSX'+cfg['sdkVersion']+'.sdk'):p.fail('Native actual settings differ from candidate inputs')
  wp=p.regular(base,backend.get('witnessFile'))
  if p.sha(wp)!=p.hexsha(backend.get('witnessSHA256')):p.fail('Native backend witness hash mismatch')
  witness=p.load(wp);p.hexsha(witness.get('sourceRef'),40)

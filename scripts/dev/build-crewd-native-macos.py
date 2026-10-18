@@ -120,20 +120,25 @@ def main():
  verify_candidate_entry(snapshot)
  toolchain={'xcodeVersion':query(['xcodebuild','-version'],snapshot,out/'gui-toolchain.log'),'sdkVersion':query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'gui-toolchain.log')}
  save(out/'gui-toolchain.json',toolchain)
- manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'externalDependencyPath':str(spm),'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
+ manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'externalDependencyPath':str(spm),'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrewNativeCandidate','configuration':'NativeCandidate','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) DEBUG PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
  save(out/'build-inputs.json',manifest);(out/'source-head.txt').write_text(ref+'\n');(out/'source-changes.patch').write_text('')
  if not args.execute:
   print('PREPARED only (no compilation or application launch):',out);return
  dd=pathlib.Path(args.derived_data).resolve()
  if dd.is_relative_to(out): raise ValueError('use the existing external DerivedData; no cold build cache in evidence')
- argv=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Debug','-destination','platform=macOS,arch=arm64','-derivedDataPath',str(dd),'-clonedSourcePackagesDirPath',str(spm),'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','CODE_SIGNING_ALLOWED=NO','ARCHS=arm64','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE','build']
+ argv=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrewNativeCandidate','-configuration','NativeCandidate','-destination','platform=macOS,arch=arm64','-derivedDataPath',str(dd),'-clonedSourcePackagesDirPath',str(spm),'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','CODE_SIGNING_ALLOWED=NO','ARCHS=arm64','PENDINGCREW_CANDIDATE_SOURCE_REF='+ref,'build']
  query(argv[:-1]+['-showBuildSettings','-json'],snapshot,out/'gui-build-settings.log',out/'gui-build-settings.json')
+ settings=json.loads((out/'gui-build-settings.json').read_text())
+ actual=next(x['buildSettings'] for x in settings if x.get('target')=='PendingCrew')
+ conditions=actual.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split()
+ if actual.get('CONFIGURATION')!='NativeCandidate' or actual.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew.native-candidate' or actual.get('PENDINGCREW_CANDIDATE_SOURCE_REF')!=ref or 'PENDINGCREW_NATIVE_CANDIDATE' not in conditions or 'PENDINGCREW_LOCAL_MAC' in conditions or actual.get('CODE_SIGNING_ALLOWED')!='NO' or actual.get('DEVELOPMENT_TEAM') or actual.get('CODE_SIGN_ENTITLEMENTS') or actual.get('PROVISIONING_PROFILE_SPECIFIER'):
+  raise ValueError('actual NativeCandidate isolation settings differ')
  run(argv,snapshot,out/'gui-build.log')
  if regular_inventory(snapshot)!=source_rows: raise ValueError('target build changed its source snapshot')
  dependency_after=external_dependency_inventory(spm,pins)
  if dependency_after!=dependency_rows: raise ValueError('complete package inventory changed during build')
  save(out/'dependency-build-inventory.json',{'externalPath':str(spm),'before':dependency_rows,'after':dependency_after})
- built=dd/'Build/Products/Debug/PendingCrew.app'
+ built=dd/'Build/Products/NativeCandidate/PendingCrew.app'
  if not built.is_dir(): raise ValueError('actual Xcode target app missing')
  app=out/'PendingCrew Native Candidate.app';shutil.copytree(built,app,symlinks=True)
  info=app/'Contents/Info.plist';plist=plistlib.loads(info.read_bytes());original=app/'Contents/MacOS'/plist['CFBundleExecutable']
