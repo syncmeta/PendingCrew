@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 受管 Claude 的源码接受层与唯一原生接口阻断
+
+人类对 `call_09a21d659c3b4c67881cb43db1c2c131` 选择受管任务边界；撤去的是此前额外提出的全引擎内部入口强拦截，不是 PTY、标准 ACP 或真实结果要求。这不是新的 SDK/模型运行授权。
+
+客户端 `ef38bddb97e1ad50ff14098373ca4c395d2cba96` 七文件源单元已独验：显式执行器/程序选择、纯元数据资格与不可用原因、提交前当前上下文检查，复用既有终端、审批、Unknown 和停止控件。报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-managed-claude-ef38-independent-review.json` SHA256 `a3d5cf8e086b8dbc8f3f8ea49527b1a438b744bc43bee9d3c1c6e617f1caeb49`；实际控制验证 `474024` exit0，暖 Mac 编译 `9d0af2` BUILD SUCCEEDED。编译时 WIP/source stamp 为 0bef，不能据此宣称已有准确 ef38 候选包。客户端分支普通推送 `e9c9ab` exit0；未孤立合入 main。
+
+独立接口报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/managed-claude-standard-acp-correlation-independent-review.json` SHA256 `b20fdf52dc732854698f1c7bd14d18dd7a7a326cf25ead120410d7a67ce4b72e`，核对所存 2.1.296 声明 SHA256 `ea634205532548aa90020ff3a941e570bff5bec8ae242fb96d09dbcc8fc1bfad` 及官方 Mod reference/api/events。`prompt.submit` 没有 owning submission/turn/completion handle；原生 turn 事件有 turnID，却缺逐次 Core 提交关联；append UUID、classic 可选 prompt_id 和插件来源也没有已证双向 join。此为现存来源不足，不是断言所有版本均不可能。标准 ACP prompt/profile 保持不可用；不以 API 已返回、同文、下一个 turn 或自有扩展伪造 end_turn。
+
+后端源单元冻结 `9bcbbbd4c77fc602047554cb78af728a51aa0b79`，26文件，作者树干净。`67235→a8e648` exit0 的 `cargo check --offline --locked --workspace --all-targets` 原日志为 `/private/tmp/pcw-managed-lifecycle-workspace-check-20261019-01.log`；fresh16/old15不触碰/DDL回滚三项、managed Unknown账两项、真实 socket 元数据无启动一项实际通过，嵌入 JS 仅作所存 exact types 的 noEmit 静态验证。这证明源资产与有限边界，未证明真实原生运行或完整生命周期；factory 未注册，Native profile unavailable，能力项 false。
+
+后端整块差异独核接受隔离开发分支保存，明确 `NOT_MAIN_MERGE`：`/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/managed-claude-9bc-development-save-independent-review.json` SHA256 `2d858e53291628edc34dc1168ad4caa3f8925be3bee2b8374ee50d9205e6dfce`。独核复用原日志、不重跑；检查单 managed 权威/FIFO先记账/Unknown零重放、元数据无启动和当前权限、不可用能力不误报、原 PTY custody 与物理 stop 保留，以及 API 返回不冒原生完成。
+
+当前后端 Core16 是全 Store 默认 fresh-only，所有新源码入口会拒既有15，不能直接合入 Core15 日用 main；本轮仅保存开发分支，客户端依赖单元也不孤立合主干。现有普通入口/产物不改，不新增旧数据迁移、格式开关或日常目录切换。Rust 编译窗口已释放，无存活编译 handle。本轮没有运行新的 SDK、App、模型、设备或安装，没有重跑稳定业务全套。磁盘只读核对约 67 GiB；发现的历史 App/crewd 进程均保留，未终止或清理。
+
 ## 2026-10-19 远程/移动三平台实际产物收口
 
 完整编译输入固定 `278530ecf556f68e1d730f8953c05e6adcdbd9d1`，不是本节后文档。root 已在构建前普通原子推 main/三开发分支，并实际 ls-remote 核四者同278。两作者源码、当前私域 TLS 完整知识流和准确 normal 的接受记录见下节，稳定范围未重全套、没有新 GitHub CI。
