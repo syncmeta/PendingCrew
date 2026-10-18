@@ -1,5 +1,23 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-18 当前状态与并行边界
+
+人类批准恢复完整模块并行。以总计划顶部“恢复完整模块并行”为当前执行入口，旧章节保留历史来源；不因安排变化增加完成声明。main/三开发树起点均为 `7678847b`，现有普通 Mac 包仍准确编译自 `a885ce6c`，并非后续文档或开发输入。
+
+a885 私域01的首消息误填机组标签，`发送并创建` 被自动审批拒绝，未取得任务成功回执；原 GUI94118/监督3936已通过原 handle 正常 wait exit0，私域 tmp 未见残留 socket。Core PID 未捕，不声称独立 Core 物理终态。完整修订停止记录 `/private/tmp/pcw-mac-daily-a885ce6c-real-codex-01/single-real-codex-approval-blocked-review-02.json`，SHA256 `ca949917e4d32c0cf08636fd3accda5ba7d19e773d58d62338fee8d8a3c227fe`。这是工具审批阻断，不能推断本次产品/MCP失败或模型使用次数。
+
+修订真实动作 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/real-codex-a885-revised-single-task-proposal-03.json`、SHA256 `5e87ca68f2944d74cb75ec618fc9a0e547b85f613f9f834015547ec2d610af63` 仅准备。最新回复不构成其授权，私域02及模型操作暂停；不重包、不重复稳定验收。后端接完整跨厂商生产生命周期，客户端接原远程/移动 SQLite 知识整链，质量独立验证冻结模块；真实原生接口/OS 支持不足明确交架构裁决。
+
+### 原远程/移动完整源码与私域 TLS 业务闭合
+
+客户端完整源码 `c1de638226c721a2cf6a50a18321df603d9b3b2e`（六个既有文件）独核接受：iOS 由用户显式选择已配对后台；页面选择按 authority/crew/namespace 隔离；小屏知识与自由视图系统控制竖排/滚动；低于 iOS18.4 仍不执行代码。既有凭据工厂不变。现成 Mac builder/checker 改用既有 NativeCandidate scheme/config 和完整 sourceRef，避免普通 Debug 的本机开关混入远程包；不新增配置或证明平台。
+
+实际 iOSSimulator 完整编译先在 `f3f3319d` 因 macOS-only home API 失败，原日志保留；同模块 `30200fdf` 以 iOS sandbox 目录元数据修正，随后 iOSSimulator 与 Mac NativeCandidate 完整编译均通过。最终 c1de 只另改两打包脚本，AST 通过，不能把302编译改标为c1de全新产物。质量报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/client-remote-mobile-c1de-independent-review.json`，SHA256 `441fdf7edb2514afc84bb660f6e10710af1672f9c1741ec738d55513229d6b9c`。
+
+独核另证正式 Human `data.confirm/restore/snapshots/preview.get` 被旧远程允许表遗漏；后端完整修复 `0e58b3c3336a419d4e6002c418bac28132fe50ed` 只补四个明确生产方法，沿现有测试增加一条完整实际 TLS 业务。原 RED 为 preview.get 返回 remote.permission_denied；同流程 GREEN 通过新库首写、预览/确认/快照/恢复、epoch 旋转与旧 UUID 历史、foreign authority/stale preview 拒绝、在线撤销及本机耐久。远程 lifecycle 仍 Forbidden，原当前 grant/revision、authority/runtime/listener epoch、Actor/FIFO/crew ACL 和事务准入不变，无新 wire。
+
+两作者完整组合已独核接受，报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/remote-mobile-whole-source-closure-independent-review.json`，SHA256 `d31745c2046e007bbb8d9da752ecdba55c3de3b4debba1b0469ab40f61f0d4fb`。按本记录统一整合和完整输入冻结，随后沿原 recipe 生成一次准确后台、Mac 隔离包和 iOSSimulator/iPhoneOS unsigned 组合。源码/编译与私域 TLS 业务不替代当前完整包、真实配对窗口、设备、安装或日用交付；稳定业务不重全套，普通 a885 原包及暂停模型动作保持原边界。
+
 ## 2026-10-15 Linux15 整块验收闭合与新知识模块边界
 
 本节替代旧节 Linux15“传输及完整内容独验待完成”的当前状态，保留原失败与传输记录。唯一 run38737765008/job116431333921/attempt1 的完整 artifact11974910186 已收到：67,289,703字节、API SHA 05ae79b9c8508938c43699d5410252f6a6fbe78f9d19df13679e24de0a66f0d7、19项 ZIP CRC 均核对。最后精确206传输52377/d60002/0完成，无新CI、自动重试或存活下载。
