@@ -20,7 +20,11 @@ enum CrewdFrontendConfiguration {
         guard path.hasPrefix("/"), !path.contains("pcw-delivery-validation.f401"),
               let canonical = canonicalCandidatePath(path),
               !canonical.contains("pcw-delivery-validation.f401") else { return nil }
+        #if os(macOS)
         let daily = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/PendingCrew").path
+        #else
+        let daily = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support/PendingCrew").path
+        #endif
         guard let canonicalDaily = canonicalCandidatePath(daily),
               canonical != canonicalDaily, !canonical.hasPrefix(canonicalDaily + "/") else { return nil }
         return URL(fileURLWithPath: canonical, isDirectory: true)
