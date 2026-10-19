@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-19 网页设计对齐候选已交付，未更新日常安装
+
+完整前端模块已整合普通推送；准确输入永久为 bb867501597935edc9e62e9f041014dea1c9f15b，本节为后记录。普通0.1.44/20745.25883位于 `/private/tmp/pcw-webstyle-bb867501-mac-01/PendingCrew.app`，ZIP SHA256 42530bb9bae8c087f470e1960815e3a36751d586a35d4a8afe2afebc25cdbc06。准确新normal、普通Release来源/签名/代码等价/加载闭包及两包ZIP已独验，不重跑未变后台和稳定业务。
+
+同输入、明确独立purpose的假数据窗口由质量实际观察、root看图：消息内常驻混合会话列、唯一中央频道、右Todo上成员下、网页配色与输入框，A/B未发草稿及隐藏焦点通过。其他三标签使用对应工作区，隐藏会话列合理。截图 `/private/tmp/pcw-webstyle-ui-whole-vx3v4__z/ordinary-private-window.png`。成员中央切换因Computer Use结束未完成，observer正常退出未测；只精确收尾私域进程，没有第三次重启补验。
+
+首次子进程退出后工具曾自动无env重开preview，虽未发送任务且已精确终止，但源码默认可接触PendingCrewLocal presentation/ui-cache，实际程度未知，不能声明零默认目录访问。第二次持有私有env才取得窗口证据；详细事实见验收记录。已有安装未替换，无新真实模型/SDK、安装或公开发布。新版更新动作已具体准备，需新的安装授权；此界面模块收口不代表跨厂商与其余平台或整个工程完成。
+
 ## 2026-10-19 网页设计对齐：完整原 Mac 前端源码已接受，冻结候选输入
 
 用户确认 Codex 已可用后，当前任务改为按 `design/prototypes/2026-10-14-react-product-tour` 的群专属工作空间优化实际 Mac 前端。已接受 fd0af51b 与 c111f5de：常驻频道/成员会话列、单一中央当前对话、右侧 Todo 在成员之上、暖色侧栏与深玉色主题、四标签容器及独立草稿。实际入口为 PendingCrewApp → MacThreePaneView，不拿替代 workspace 或演示假业务冒普通产品；知识/文档内容继续由 Agent 自由生成。

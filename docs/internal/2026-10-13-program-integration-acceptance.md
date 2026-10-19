@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 前端完整候选与有限实际窗口验收收口
+
+准确输入永久为 bb867501597935edc9e62e9f041014dea1c9f15b，已普通推送 origin main/global 并实际核远端一致；本节是构建后记录，不是包的新输入。新 normal 位于 `/private/tmp/pcw-webstyle-bb867501-normal-01/crewd-presign`，SHA256 f13a7ba32c29b06da75deb9936ad54310d9bf228a0563a45a6e676efd8562a48；同级 `normal-01-witness.json` SHA256 ea343055e9789ccec1fd8de56a37d1a5f53ddc8fbbb42c53d29823b0c4255d39。独立质量亲核443当前及快照输入、sidecar、实际13自有 fresh:false、空 features、非测试默认 Debug/ARM64、pre/post clean及自检。初次mtime受sandbox限制仅在Cargo前失败，同一已授权动作正常escalation后实际成功，原日志保留，无缓存清理或新CI。
+
+普通候选 `/private/tmp/pcw-webstyle-bb867501-mac-01/PendingCrew.app` 为0.1.44/20745.25883、正常ID、Release/LOCAL_MAC；GUI SHA256 71fb9b7f29aea7a688c3643c4629f5748840e042ea97cd5563b7deba103529aa，签后helper 3cf1d69af74627c45d826988db17b619636bb12dc28ab55a11bbd50e35073594。同输入的独立 ui-preview 包在 `/private/tmp/pcw-webstyle-bb867501-ui-preview-01/PendingCrew UI Preview.app`，build20745.26310，不能作为正常安装包。质量亲核两包来源/配置/hash、严格签名、normal与GUI签前后代码等价、两系统映像加载闭包；两ZIP CRC及四关键字节均等实际App。普通ZIP SHA256 42530bb9bae8c087f470e1960815e3a36751d586a35d4a8afe2afebc25cdbc06，preview ZIP 909fd653238f348d28112074edf79a93b5ed5e9ae429fb3bd30ef3f2603a9b34。ARM64、ad-hoc/runtime/noTeam、未公证；root亲读MAC-DELIVERY及新待用INSTALLATION-PROPOSAL，没有执行更新。
+
+真正私域窗口 `/private/tmp/pcw-webstyle-ui-whole-vx3v4__z` 使用准确normal及已验fake_codex直接binary，不用绑定旧crew的wrapper；最少正式Human seed调用的错误字段/非法command原日志保留，没有重发原创建。held父进程持有并核私有env，确认uniqueID已运行后绑定，异常询问选择不恢复，无接管/恢复/发送。实际通过消息内频道/成员混排、唯一中央频道、右Todo在成员上、A/B未发草稿切换及隐藏输入焦点隔离。截图 `ordinary-private-window.png` 与AX原件同私域，root已实际看图。其他三个标签使用各自工作区并隐藏会话列，为root明确裁定。成员中央切换前Computer Use结束，该项及observer正常退出未实测；不再重启补验。root亲读held-cleanup.json：previewExit -15/serverExit0，onlyRecordedPrivateChildren true，精确私有进程均wait收尾。
+
+必须并列保留隔离意外：首次exec父进程退出收走私域子进程后，CUA getApp自动无env重开uniqueID preview；未点击连接/新建/发送，退出没有提交，最终精确SIGTERM误进程48125。backend限定源码确认uniqueID只隔离偏好，缺数据根env可默认准备PendingCrewLocal的presentation/namespace/ui-cache并自动连接或启动本地Core。因此此次可能接触默认目录，实际程度未知，未探日用补证，不能宣称零访问。第二次严格私域窗口通过不覆盖该意外；未观察或提交新模型任务，不因补证放宽信任或新增验收平台。
+
+完整前端候选模块收口，未替换日常安装；原788安装授权不扩大至本包。下一必要人类动作是具体新版更新授权，保留日常数据、旧整包备份和现有任务。成员选择等有限缺口及首次误启动边界如上；稳定业务复用，不冒全套新验或全工程完成。
+
 ## 2026-10-19 完整前端设计模块源码接受，进入准确候选构建
 
 实际整合 fd0af51b7b894bc144f0c1de38a527d46add69b3、c111f5de8bdf3d50a391d389a71bd7077027af5e 和 4cac27b3518584481c47598838e970462556f62e，10 路径共 334+/51-，Rust tree 仍为 13e99edd3dd154afbefcf5ae560d8b0bef4a1db3。前七路径对应普通 Mac 真实入口和知识容器：会话常驻、中央所选对话、右 Todo/成员及网页参考的颜色与间距；不移植 React 假业务、不固定 Agent 生成视图、不改权限/UUID/Unknown/自动启动/停工合同。
