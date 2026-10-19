@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 两个真实剩余交付单元并行，稳定 Linux 候选不重做
+
+当前源码核对发现，已接受c8 Linux raw候选不等于受管分发：launcher的schema15恢复资格仅含历史402输入，不含当前443/digest673cd2，真实非空WAL会被外壳拒绝。后端唯一作者在独立 `codex/linux-managed-current-20261020` 从66992d59推进完整当前同版单元：准确原c8包、完整proof不重标，补受管资格、freshprefix安装/运行锁/CAS/Unknown、真实SIGKILL后的Core与知识/视图/原UUID恢复及归档；不扩旧11→13/14迁移fixture、不造第二版本、不改Store或权限guard。新controller/fixture源码身份与compiledRef=c8严格分开，既有七绿和当前Release证明复用。
+
+客户端唯一作者在 `codex/apple-current-delivery-20261020` 冻结准确source66992d59，封当前Core15原远程Mac、iOSSimulator及iPhoneOS unsigned整target。旧278之后有13个Swift输入变化，包含共享知识页/Human组件/机长与原请求观察，尚未有当前iOS整target包；未发现另需实现的知识接线，不为填空新增功能。准确defaultDebug ARM64 normal已实际exit0，443输入digest同673cd2，Rustlease释放；1761源码与3738实际SPM快照固定，Mac原配方已启动，移动两目标随后沿同暖缓存。准确来源恒为669，不拿日用dirty20746.1或旧278冒新包。
+
+两个作者各自完整实现/预验再交独立质量；同一个新Macnormal来源只核一次，供Apple封包与受管模块Mac开发复用。共享Rust/Xcode/SPM仍用原目录，不新冷缓存或清理数据。受管Mac开发适配仅私域fixture，不能冒Linux/proc平台；其真实Linux tail后续由根冻结新controller一次必要运行，原c8二进制不重编。当前不启动App/Simulator/设备、不触Keychain/日常数据/真实模型SDK、不系统安装/发布；这些依赖不暂停上述已授权源码和完整候选准备。
+
 ## 2026-10-20 当前 Linux 候选完整交付单元已接受
 
 准确source `c8d70482e42b0e9f777df11f9db720a910a91115` 的实际run39297913612/attempt1/job118215155234成功；default Release、443完整Rust输入、6recipe与12包13target fresh证明独验闭合。实际同一ELF完成知识/自由视图snapshot后修改再恢复、权限拒绝/epoch/历史UUID、Core-only防覆盖、正常关停与同库重开，双Core exit0。七项已绿业务复用准确6+1原证，本run没有重复testkit或七用例。

@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前 Apple 完整候选与 Linux 受管同版恢复：实际剩余范围
+
+最新有界源码delta核对：Linux launcher的CORE15_RECOVERY_INPUTS仍只有旧4c2f/402，当前c8的673cd2/443真实不匹配，非空WAL会failclosed；原raw候选的成功不能外推受管恢复。客户端main相对已验278有13个Swift路径变化，其中共享知识页面、Human组件和Workspace会进入移动target，当前未封完整移动产品；无需重造知识/自由视图实现。两项分别交唯一作者的独立分支，从main66992d59继续；旧Claude268/客户端341引用完整保留。根只协调与整合，生产Rust/Store、旧迁移和已验稳定业务不动。
+
+客户端准确normal实际构建exit0，来源66992d592046992385f63c929b58c2869005fd95，binary SHA256 `20e753dc16dcc70c39e04779164e0088094b899cc65da1572ae47554cd2cafaa`，witness SHA256 `c86983353f5c2b5f4171b2eb50fdb29169fa581d46d96acc49a6d78ddcb68f6f`，443输入digest673cd2；原件在 ignored `docs/private/preserved-delivery-artifacts/apple-current-66992d59-20261020/`。Rustlease已释放。独立质量亲核443输入逐字Git、12包13target raw fresh=false/non-test/defaultDebug/emptyfeatures、preflight失效与4sidecar/binary闭合，接受此shared normal来源供两模块复用；actual terminal62410/44e094 exit0。不以normal来源接受冒三平台或受管全模块完成。1761源码/SPM3738已固定，sourceDigest `bc5917018f1fca73f39c1febe5e5a203b83bc0d162d3392258463a7d64058312`，build-inputs SHA256 `7ace428d59892c3e583e30256a8c362458d6c662a67d4c004efafd24c768acbd`。Mac原recipe session65810已启动，尚未据此宣称三个target完成；本节后记录不改包的669来源。
+
+容量开始前实核55GiB；无cargo/rustc/xcodebuild活动。另Swift35220/codex34777已约14小时、cwd/Users/hey、无PendingCrew或三共享cache引用，未终止或干预；现有target/Xcode/SPM路径均实体，未新建冷目录、清理缓存。受管作者可对准确新Mac normal做新私域开发验证，最终Linux必须原Linux ELF/原平台门；当前未授权系统服务安装、日用操作或真实SDK/模型，未启动任何GUI/设备来补证。
+
 ## 2026-10-20 当前源码 Linux 完整候选实际接受并稳定保全
 
 准确构建来源永久为 `c8d70482e42b0e9f777df11f9db720a910a91115`，实际 run39297913612/attempt1、job118215155234终态success；本节为后记录，不能重标二进制输入。唯一artifact12209198414，38192659B ZIP SHA256 `d44c2c5577ec9b539c9b8637ccb6bedc2d1b1e9b3a45d6b73c7b914b7588079b` 与API digest相等。原下载session19483/gh93682、birth2026-10-20 01:58:33台北，实际exit0，无第二下载或新attempt；backend传输后client消费同一原件，QA也复用原件。
