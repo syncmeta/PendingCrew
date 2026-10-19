@@ -11,14 +11,14 @@ const records = (s: ReturnType<typeof initialState>) =>
   Object.values(s.cache).flatMap((c) =>
     crewLedgers(c).flatMap(([, db]) => db.docs),
   );
-test("39 distinct curated documents have real sources, valid related references and separate group ownership", () => {
+test("45 distinct curated documents have real sources, valid related references and separate group ownership", () => {
   const state = initialState(),
     docs = records(state),
     authored = docs.filter((d) => d.catalogKey);
-  assert.equal(authored.length, 39);
+  assert.equal(authored.length, 45);
   assert.equal(new Set(docs.map((d) => d.id)).size, docs.length);
   for (const d of authored) {
-    assert(d.body.length > 140);
+    assert(d.body.length > (d.dataView ? 40 : 140));
     assert(d.summary);
     assert(d.sources?.length);
     for (const source of d.sources ?? [])
@@ -53,7 +53,7 @@ test("catalog migration preserves all existing work, visitor content, drafts and
   state.cache.website.db.plans[0].note = "我的下一步";
   const next = refreshContent(state),
     docs = records(next);
-  assert.equal(next.contentRevision, 6);
+  assert.equal(next.contentRevision, 7);
   assert.equal(docs.find((d) => d.id === "D800001")?.body, "不覆盖");
   assert.notEqual(docs.find((d) => d.catalogKey === "position")?.id, "D800001");
   assert.equal(new Set(docs.map((d) => d.id)).size, docs.length);

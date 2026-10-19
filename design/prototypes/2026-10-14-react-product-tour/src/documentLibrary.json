@@ -789,5 +789,332 @@
       }
     ],
     "related": ["admin-split", "human-inbox"]
+  },
+  {
+    "key": "palantir-model",
+    "scene": "website",
+    "conversation": "main",
+    "title": "借鉴 Palantir：对象、关系、动作、视图.md",
+    "folder": "对象与关系",
+    "kind": "已敲定设计",
+    "summary": "面向个人的私人团队，借鉴信息组织方式，而不是照搬企业管理。",
+    "body": "## 对象\n\n把长期协作中的项目、需求、计划、成员、资料、决定和风险识别为有稳定身份的对象。\n\n## 关系\n\n计划来自哪条需求、谁负责、文档说明哪个决定，关系把分散内容连接起来。工作账本仍然负责正式的执行状态。\n\n## 动作\n\n查看、关联、整理、更新和交接，是围绕对象发生的动作。数据视图本身不自动获得执行权限。\n\n## 视图\n\n同一组信息可以用表、文档或其他方式呈现。产品定位是专业可靠、了解你的私人团队，不是默认把个人变成企业管理员。\n\n下面的对象表、SQLite 数据示例和文档组合用 PendingCrew 的产品内容说明这个想法，不连接 Palantir 或真实工作库。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "产品定位 §29 与工作模型 §24"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"]
+  },
+  {
+    "key": "sqlite-direction",
+    "scene": "website",
+    "conversation": "main",
+    "title": "SQLite：数据与视图分开.md",
+    "folder": "SQLite 数据",
+    "kind": "工程说明",
+    "summary": "当前源码已有按机组组织的 SQLite 知识工作区；表与文档都是入口。",
+    "body": "## 当前代码方向\n\n仓库中的 sqlite_knowledge 模块描述按机组保存的 SQLite 知识数据，SQL 表结构、查询、对象与视图读取有明确接口。工作、信任和执行事实不交给业务数据表控制。\n\n## 不只保存 Markdown\n\n团队可以需要结构化记录、关系、来源与文档组合。表结构描述数据，视图决定怎样呈现；展示与存储分开。\n\n## 历史方案\n\n早期讨论过 SQLite 加文本快照，以及 DoltLite 的版本、分支方案。DoltLite 草案是历史设计资料，不能代替当前 SQLite 源码和实际接口。\n\n## 本页演示\n\n下方展示表、字段类型与几条产品数据。筛选和排序在浏览器中完成，SQL 只作结构说明，不执行查询，也不连接电脑上的 SQLite 文件。",
+    "sources": [
+      {
+        "path": "crewd/crates/store/src/sqlite_knowledge.rs",
+        "label": "当前按机组 SQLite 知识库源码"
+      },
+      {
+        "path": "crewd/crates/proto/src/sqlite_data_api.rs",
+        "label": "当前 SQLite 知识 API 注册"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "早期团队数据与语义文档草案（历史方案）"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"]
+  },
+  {
+    "key": "semantic-slicing",
+    "scene": "website",
+    "conversation": "main",
+    "title": "文档切片：按语义，而不是按字数.md",
+    "folder": "内容块与文档",
+    "kind": "已敲定设计",
+    "summary": "内容块保留身份和来源，文档是有序的组合视图。",
+    "body": "## 什么是一块内容\n\n标题、一个完整段落、一条决定或一段有上下文的说明，都可以是有语义的内容。机械地每隔多少字切一刀，容易丢失含义和来源。\n\n## 文档与内容分开\n\n内容块保存信息，文档保存哪些块按什么顺序出现。同一个块可以出现在不同文档或同一文档的多个位置。位置与内容块不是同一个身份。\n\n## 修改的两种含义\n\n明确编辑共享内容块，会影响它的实时引用；创建独立副本则得到新的块和来源关系。不能用一次整篇替换，悄悄覆盖其他文档共享的内容。\n\n## 演示\n\n下面两份产品文档共享同一个工作模型段落。切换文档、选择内容块并保存修改，可以看到同一块在另一份文档中变化。这里是浏览器模型，未运行真实知识库。",
+    "sources": [
+      {
+        "path": "crewd/crates/proto/src/team_data.rs",
+        "label": "内容块、文档视图与数据类型"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "早期团队数据与语义文档草案（历史方案）"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"]
+  },
+  {
+    "key": "product-object-data",
+    "scene": "website",
+    "conversation": "main",
+    "title": "产品对象与关系表",
+    "folder": "对象与关系",
+    "kind": "工程说明",
+    "summary": "点击对象查看关系和资料；同一批数据可以有不同视图。",
+    "body": "## 对象视图示例\n\n这是一组用于解释 PendingCrew 的产品对象。表格支持搜索、排序和选择行，右侧资料入口连接已有产品文档。关系字段只是示意数据，不另建真实工作账本。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "产品定位 §29 与工作模型 §24"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"],
+    "dataView": {
+      "kind": "table",
+      "primaryKey": "id",
+      "description": "以 PendingCrew 自己为例，把项目、需求、成员、文档与决定连接起来。",
+      "columns": [
+        {
+          "key": "id",
+          "label": "对象 ID",
+          "type": "TEXT PRIMARY KEY"
+        },
+        {
+          "key": "type",
+          "label": "类型",
+          "type": "TEXT"
+        },
+        {
+          "key": "name",
+          "label": "名称",
+          "type": "TEXT"
+        },
+        {
+          "key": "relation",
+          "label": "关系",
+          "type": "TEXT"
+        },
+        {
+          "key": "target",
+          "label": "关联对象",
+          "type": "TEXT"
+        }
+      ],
+      "rows": [
+        {
+          "id": "project-pendingcrew",
+          "type": "项目",
+          "name": "PendingCrew",
+          "relation": "包含",
+          "target": "介绍、Todo介绍、Demo开发",
+          "detail": "一个持续的人机协作项目；不同入口承接沟通、执行与资料。",
+          "relatedKeys": ["position", "crew-channel"]
+        },
+        {
+          "id": "requirement-intro",
+          "type": "需求",
+          "name": "用产品自己介绍自己",
+          "relation": "来源于",
+          "target": "产品介绍",
+          "detail": "保留原始要求；展示内容与产品实际概念一致。",
+          "relatedKeys": ["original-request", "demo-content"]
+        },
+        {
+          "id": "member-captain",
+          "type": "成员",
+          "name": "机长",
+          "relation": "协调",
+          "target": "requirement-intro",
+          "detail": "机长组织分工、跟进事项，把关键判断交给人。",
+          "relatedKeys": ["session-members", "human-role"]
+        },
+        {
+          "id": "document-work-model",
+          "type": "文档",
+          "name": "一本账，三种记录",
+          "relation": "说明",
+          "target": "requirement-intro",
+          "detail": "文档与需求、计划之间保留可追溯的引用。",
+          "relatedKeys": ["one-ledger"]
+        },
+        {
+          "id": "decision-independent-folders",
+          "type": "决定",
+          "name": "四个入口独立分类",
+          "relation": "约束",
+          "target": "project-pendingcrew",
+          "detail": "文件夹表达内容分类，不改变负责人、计划状态和父子结构。",
+          "relatedKeys": ["independent-folders"]
+        }
+      ],
+      "schema": "CREATE TABLE product_objects (\n  id TEXT PRIMARY KEY,\n  type TEXT NOT NULL,\n  name TEXT NOT NULL,\n  relation TEXT,\n  target TEXT\n);"
+    }
+  },
+  {
+    "key": "sqlite-data-example",
+    "scene": "website",
+    "conversation": "main",
+    "title": "SQLite 表：产品事项清单",
+    "folder": "SQLite 数据",
+    "kind": "工程说明",
+    "summary": "浏览数据、查看字段类型和 SQL 表结构，NULL 明确显示。",
+    "body": "## 数据示例\n\n这是可能放进团队知识工作区的一张业务表。事项、负责人、状态和资料使用独立字段，不需要把所有信息塞进文档正文。表中的状态只用于说明，不与正式 Todo 状态混写。",
+    "sources": [
+      {
+        "path": "crewd/crates/store/src/sqlite_knowledge.rs",
+        "label": "当前按机组 SQLite 知识库源码"
+      },
+      {
+        "path": "crewd/crates/proto/src/sqlite_data_api.rs",
+        "label": "当前 SQLite 知识 API 注册"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"],
+    "dataView": {
+      "kind": "table",
+      "primaryKey": "id",
+      "description": "可能用来整理产品需求与资料的业务表；不作为真实任务执行状态。",
+      "columns": [
+        {
+          "key": "id",
+          "label": "编号",
+          "type": "TEXT PRIMARY KEY"
+        },
+        {
+          "key": "title",
+          "label": "事项",
+          "type": "TEXT NOT NULL"
+        },
+        {
+          "key": "owner",
+          "label": "负责人",
+          "type": "TEXT"
+        },
+        {
+          "key": "state",
+          "label": "状态",
+          "type": "TEXT"
+        },
+        {
+          "key": "document",
+          "label": "关联资料",
+          "type": "TEXT"
+        }
+      ],
+      "rows": [
+        {
+          "id": "item-01",
+          "title": "介绍产品定位",
+          "owner": "机长",
+          "state": "已整理",
+          "document": "Harness 的 Harness",
+          "detail": "产品定位来自仓库 README，说明持续协作与人的认知参与。",
+          "relatedKeys": ["position"]
+        },
+        {
+          "id": "item-02",
+          "title": "解释 Todo 与进展",
+          "owner": "Todo介绍",
+          "state": "已整理",
+          "document": "一本账，三种记录",
+          "detail": "需求、计划与人的事项互相引用，进展使用相同计划。",
+          "relatedKeys": ["one-ledger", "progress-view"]
+        },
+        {
+          "id": "item-03",
+          "title": "展示语义内容块",
+          "owner": "Demo开发",
+          "state": "进行中",
+          "document": "文档切片与复用",
+          "detail": "在网页里用共享段落说明文档组合，不表示生产引擎已经运行。",
+          "relatedKeys": ["semantic-slicing"]
+        },
+        {
+          "id": "item-04",
+          "title": "整理个人记忆方向",
+          "owner": "人",
+          "state": "待讨论",
+          "document": null,
+          "detail": "个人记忆与成员持续学习保留为后续方向，不补造已经确定的实现方案。",
+          "relatedKeys": ["knowledge-direction"]
+        }
+      ],
+      "schema": "CREATE TABLE product_items (\n  id TEXT PRIMARY KEY,\n  title TEXT NOT NULL,\n  owner TEXT,\n  state TEXT CHECK (state IN ('已整理', '进行中', '待讨论')),\n  document TEXT\n);"
+    }
+  },
+  {
+    "key": "shared-block-example",
+    "scene": "website",
+    "conversation": "main",
+    "title": "两份文档，共享一个内容块.md",
+    "folder": "内容块与文档",
+    "kind": "工程说明",
+    "summary": "切换文档、查看块来源和复用位置，编辑后会同步到另一份文档。",
+    "body": "## 组合视图示例\n\n产品概览与协作说明是两份视图。工作模型只有一份内容身份，但有两个展示位置。修改下方共享块会同时反映到两份视图；修改只保存在这份浏览器演示里。",
+    "sources": [
+      {
+        "path": "crewd/crates/proto/src/team_data.rs",
+        "label": "内容块、文档视图与数据类型"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "早期团队数据与语义文档草案（历史方案）"
+      }
+    ],
+    "related": ["knowledge-direction", "semantic-blocks", "custom-tables"],
+    "dataView": {
+      "kind": "composition",
+      "description": "两份产品文档引用同一个「工作模型」内容块。编辑共享块，两个文档一起变化。",
+      "blocks": [
+        {
+          "id": "block-position",
+          "title": "产品定位",
+          "body": "PendingCrew 是让你与 AI 持续协作的空间。",
+          "source": "产品说明"
+        },
+        {
+          "id": "block-work-model",
+          "title": "工作模型",
+          "body": "一本账连接原始需求、计划和待人类处理；进展是同一份计划的视图。",
+          "source": "工作模型 §24.1"
+        },
+        {
+          "id": "block-view-data",
+          "title": "数据与视图",
+          "body": "内容以有身份的语义块保存，文档通过有序位置组合内容，视图与数据分开。",
+          "source": "语义文档设计"
+        }
+      ],
+      "views": [
+        {
+          "id": "view-product",
+          "title": "产品概览",
+          "placements": [
+            {
+              "id": "placement-a1",
+              "blockId": "block-position"
+            },
+            {
+              "id": "placement-a2",
+              "blockId": "block-work-model"
+            }
+          ]
+        },
+        {
+          "id": "view-collaboration",
+          "title": "协作说明",
+          "placements": [
+            {
+              "id": "placement-b1",
+              "blockId": "block-work-model"
+            },
+            {
+              "id": "placement-b2",
+              "blockId": "block-view-data"
+            }
+          ]
+        }
+      ]
+    }
   }
 ]

@@ -3,15 +3,20 @@
     "id": "@pendingname/pendingcrew-product-tour@0.1.0",
     "name": "@pendingname/pendingcrew-product-tour",
     "version": "0.1.0",
-    "size": 115689,
-    "unpackedSize": 462020,
-    "shasum": "e31e846f89c1bf5bfc325f36999429f33a1564be",
-    "integrity": "sha512-/ttS3NNKDNkp2oiVJAqvPH4I6+okRrtzkIrc/z1kgypH7org/7Kxacun/i8M2VjPebm7dy20wivTvtD+/P1ekQ==",
+    "size": 171584,
+    "unpackedSize": 578579,
+    "shasum": "1d1c82c126b08284a29502a9706be8dd8b8c1c01",
+    "integrity": "sha512-XYD41JbEFz0x5zW+Vz/3SU8XP2Ty0pH+9NfZrPIn5XEfJv7yqgG0PzP06X681H4OMCSqPCOBEFCft25bWkAkpA==",
     "filename": "pendingname-pendingcrew-product-tour-0.1.0.tgz",
     "files": [
       {
         "path": "README.md",
-        "size": 13544,
+        "size": 15587,
+        "mode": 420
+      },
+      {
+        "path": "lib/app-icon.png",
+        "size": 18898,
         "mode": 420
       },
       {
@@ -22,6 +27,11 @@
       {
         "path": "lib/components/ConversationList.d.ts",
         "size": 73,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/DataViewPanel.d.ts",
+        "size": 202,
         "mode": 420
       },
       {
@@ -75,8 +85,13 @@
         "mode": 420
       },
       {
+        "path": "lib/domain/dataViews.d.ts",
+        "size": 115,
+        "mode": 420
+      },
+      {
         "path": "lib/domain/documentLibrary.d.ts",
-        "size": 681,
+        "size": 3234,
         "mode": 420
       },
       {
@@ -96,7 +111,7 @@
       },
       {
         "path": "lib/domain/types.d.ts",
-        "size": 4995,
+        "size": 5775,
         "mode": 420
       },
       {
@@ -111,22 +126,22 @@
       },
       {
         "path": "lib/pendingcrew-tour.css",
-        "size": 31135,
+        "size": 34219,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js",
-        "size": 177941,
+        "size": 222218,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js.map",
-        "size": 225764,
+        "size": 270373,
         "mode": 420
       },
       {
         "path": "lib/PendingCrewTour.d.ts",
-        "size": 673,
+        "size": 671,
         "mode": 420
       },
       {
@@ -145,7 +160,7 @@
         "mode": 420
       }
     ],
-    "entryCount": 27,
+    "entryCount": 30,
     "bundled": []
   }
 ]

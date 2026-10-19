@@ -1,7 +1,7 @@
 {
   "status": "PASS",
   "checks": [
-    "Compact website navigation, no hero or scenario chooser",
+    "Only the product demo and reset remain outside the window",
     "Content introduces PendingCrew itself",
     "Crew colors follow original FNV HSV and inherited half segments",
     "Long group previews stay within row and use ellipsis",

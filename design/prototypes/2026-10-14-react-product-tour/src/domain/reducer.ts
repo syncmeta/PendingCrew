@@ -1,3 +1,4 @@
+import { validDataView } from "./dataViews";
 import { refreshDocumentLibrary } from "./documentLibrary";
 import { freshScene } from "./seed";
 import {
@@ -243,6 +244,14 @@ export function reducer(previous: TourState, command: Command): TourState {
         ui.kind = "requests";
         ui.selectedFolders.todo = "all";
         showNotice(state, "原文已保存，尚未生成计划。");
+        break;
+      }
+      case "saveDataView": {
+        const doc = db.docs.find((d) => d.id === command.id);
+        if (!doc || !validDataView(command.dataView))
+          throw Error("数据视图不存在或格式无效。");
+        doc.dataView = command.dataView;
+        showNotice(state, "共享内容块已保存，引用它的文档同步更新。");
         break;
       }
       case "newDocument": {

@@ -1,3 +1,4 @@
+import { DataViewPanel } from "./DataViewPanel";
 import { DocumentContent } from "./DocumentContent";
 import { Fragment } from "react";
 import { useTour } from "../state/TourContext";
@@ -355,7 +356,13 @@ function Documents() {
       </Button>
       <h3>{d.title}</h3>
       <div className="byline">
-        {d.author} · {d.kind ?? "产品说明"} · {folderOf(data.db, d, "document")}
+        {d.author} ·{" "}
+        {d.dataView
+          ? d.dataView.kind === "table"
+            ? "数据表"
+            : "组合文档"
+          : (d.kind ?? "产品说明")}{" "}
+        · {folderOf(data.db, d, "document")}
       </div>
       {d.summary && <p className="document-summary">{d.summary}</p>}
       {d.kind === "已敲定设计" && (
@@ -369,6 +376,15 @@ function Documents() {
         </p>
       )}
       <DocumentContent body={d.body} />
+      {d.dataView && (
+        <DataViewPanel
+          key={d.id}
+          value={d.dataView}
+          onSave={(dataView) =>
+            dispatch({ type: "saveDataView", id: d.id, dataView })
+          }
+        />
+      )}
       {d.related?.length ? (
         <section className="document-related">
           <h4>相关文档</h4>
@@ -437,8 +453,8 @@ function Documents() {
   ) : (
     <>
       <div className="document-library-note">
-        本群文档 · {filtered(data, data.db.docs, "document").length} 份
-        <span>产品说明、设计约定与规划资料</span>
+        本群文档/数据 · {filtered(data, data.db.docs, "document").length} 份
+        <span>说明文档、结构化数据与组合视图</span>
       </div>
       {filtered(data, data.db.docs, "document").map((d) => (
         <Button
@@ -475,7 +491,7 @@ export function Workspace() {
       ? {
           message: "消息",
           todo: "Todo",
-          document: "本群文档",
+          document: "本群文档/数据",
           progress: "本群进展",
         }[ui.tab]
       : ui.selectedFolders[ui.tab];
@@ -491,7 +507,7 @@ export function Workspace() {
                 ? "同一份计划的进展视图 · 三层可折叠"
                 : ui.tab === "todo"
                   ? "一本账 · 原始需求、计划、待人类处理"
-                  : "说明、笔记与工作产物"}
+                  : "说明、业务数据与内容视图"}
             </p>
           </div>
           <div>

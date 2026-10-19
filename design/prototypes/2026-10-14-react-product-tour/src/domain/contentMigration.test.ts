@@ -54,7 +54,7 @@ test("product feature refresh preserves visitor documents, edits and stable IDs"
   db.plans[2].owner = "你";
   const after = refreshContent(before),
     updated = after.cache.website.db;
-  assert.equal(after.contentRevision, 6);
+  assert.equal(after.contentRevision, 7);
   assert(updated.docs.some((d) => d.id === "D103" && d.body === "不能覆盖"));
   assert(
     updated.docs.some(

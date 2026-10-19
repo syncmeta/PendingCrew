@@ -1,6 +1,7 @@
 import catalog from "../documentLibrary.json";
 import type {
   DocumentRecord,
+  DataView,
   GroupWork,
   Scene,
   SceneState,
@@ -53,6 +54,10 @@ export function installDocumentLibrary(
       summary: item.summary,
       kind: item.kind as DocumentRecord["kind"],
       sources: item.sources,
+      dataView:
+        "dataView" in item
+          ? (structuredClone(item.dataView) as DataView)
+          : undefined,
     });
     if (!work.folders.document.includes(item.folder))
       work.folders.document.push(item.folder);
@@ -97,6 +102,6 @@ export function refreshDocumentLibrary(state: TourState): TourState {
     installDocumentLibrary(scene, next.cache[scene.id], used, resolved);
   for (const scene of next.scenes)
     installDocumentLibrary(scene, next.cache[scene.id], used, resolved);
-  next.contentRevision = 6;
+  next.contentRevision = 7;
   return next;
 }

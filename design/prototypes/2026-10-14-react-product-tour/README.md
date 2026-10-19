@@ -100,7 +100,7 @@ SSR 官网中把该组件放在客户端交互区。初始渲染使用确定的�
 
 ## 验证证据
 
-`evidence/browser-verification.json`：原版 13 项验收在 React 版通过。`evidence/react-verification.json`：额外 11 项检查，包括原版几何/字体/气泡逐项对照、焦点与光标、滚动位置、输入转义、持久化、跨机组答复、StrictMode 官网接入、样式隔离和两个实例的独立操作。状态层另有 18 项测试。
+`evidence/browser-verification.json`：原版 13 项验收在 React 版通过。`evidence/react-verification.json`：额外 11 项检查，包括原版几何/字体/气泡逐项对照、焦点与光标、滚动位置、输入转义、持久化、跨机组答复、StrictMode 官网接入、样式隔离和两个实例的独立操作。状态层另有 20 项测试。
 
 截图：`original-baseline.png` 与 `react-baseline.png`，以及桌面、手机和 `website-embedding.png`。正式构建、类型检查与本地交互证据不等同于已部署官网或安装版 GUI 验收。
 
@@ -112,7 +112,7 @@ SSR 官网中把该组件放在客户端交互区。初始渲染使用确定的�
 
 右侧展示三条原始 Todo，「可以点我试试看」打开真实的 Todo 详情。contentRevision 迁移替换旧介绍，保留访客新增消息、草稿及记录，发生编号冲突时保持访客原引用。
 
-新增 overview-verification.json 的 5 项检查；当前合计 46 项浏览器检查、18 项状态测试通过。视觉对照只要求未被这次明确修改的框架、列宽和原样式保持一致。
+新增 overview-verification.json 的 5 项检查；当前合计 51 项浏览器检查、20 项状态测试通过。视觉对照只要求未被这次明确修改的框架、列宽和原样式保持一致。
 
 ## 产品功能介绍与原生控件
 
@@ -151,3 +151,19 @@ contentRevision 5 迁移旧机组共享记录到总群，保留访客内容和�
 contentRevision 6 以 catalogKey 和稳定文档 ID 添加资料，保留现有内容、工作状态、选中的群、草稿和分类。编号冲突时保留访客原编号，重新分配预置资料的 ID，并在全组织范围解析相关引用。重置后再次解析跨机组引用。来源与标签字段进入保存状态校验。
 
 验证：documentLibrary.test.ts 检查 39 篇资料、来源文件存在、相关引用可定位、群归属、编号冲突、迁移幂等和重置后的跨群引用；verify-library.cjs 的 6 项浏览器验收覆盖阅读/来源、跨群关系、文档分享、行政与专题资料、旧状态恢复和手机显示。
+
+## 独立预览外壳
+
+独立页面只保留产品窗口和重置按钮。删除外围品牌、网站导航、介绍与状态文字；窗口使用视口空间，机组切换统一走产品侧栏。嵌入组件继续只呈现产品窗口，宿主可自行组织官网导航。重置按钮保持可见，桌面与手机检查覆盖新的侧栏导航路径。
+
+## 文档/数据与语义块示例
+
+页面 title 与窗口品牌统一为 PendingCrew，使用 docs/app-icon.png 的原产品图标；public/app-icon.png 用于 favicon，src/assets/app-icon.png 由构建打入组件与便携包。机组名保留在标题栏上下文中。
+
+「文档」入口改为「文档/数据」。资料库增至 45 篇/项：补充 Palantir 借鉴、当前 SQLite 方向、语义切分三篇说明，以及产品对象与关系、SQLite 产品事项表、共享内容块组合三个可操作数据视图。
+
+出处核对：产品规格 §29 明确对象/关系/动作/视图与私人团队定位；当前 crewd/crates/store/src/sqlite_knowledge.rs 和 proto/src/sqlite_data_api.rs 展示每机组 SQLite 知识 API，早期 DoltLite 公共契约作为历史方案保留，不当作当前实现。team_data.rs 提供内容块、组合视图与字段类型依据。没有修改这些产品源码。
+
+数据表支持搜索、列排序、选择行与关联资料；SQLite 表结构仅为示意，不执行 SQL。组合视图具有内容块 ID 和独立 placement ID，两份视图复用同一个内容块，编辑通过 saveDataView 仅写入网页文档记录与浏览器状态，不改变 Work/owner/完成状态。数据视图采用闭集类型和恢复校验，JSON/HTML/SQL 均不执行。
+
+contentRevision 7 添加新资料，保留现有视图编辑与草稿；旧版本文档迁移先处理原始文档，再全局分配资料 ID，避免新资料编号与访客旧编号相撞。新增 dataViews.test.ts 两项检查与 verify-data.cjs 五项浏览器验收，覆盖品牌图标、对象关系表、字段/NULL、共享块保存/刷新和手机宽度。

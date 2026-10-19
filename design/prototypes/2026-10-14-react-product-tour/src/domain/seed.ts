@@ -52,7 +52,7 @@ export function initialState(
   initialScene = "website",
 ): TourState {
   return refreshDocumentLibrary({
-    contentRevision: 6,
+    contentRevision: 7,
     sceneId: initialScenes.some((s) => s.id === initialScene)
       ? initialScene
       : "website",

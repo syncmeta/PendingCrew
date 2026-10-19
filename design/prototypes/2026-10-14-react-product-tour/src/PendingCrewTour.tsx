@@ -1,3 +1,4 @@
+import appIcon from "./assets/app-icon.png";
 import type { CSSProperties } from "react";
 import { TourProvider, useTour } from "./state/TourContext";
 import { scopeNames, type Scope } from "./domain/types";
@@ -9,7 +10,7 @@ import { Workspace } from "./components/Workspace";
 import { Dialogs } from "./components/Dialogs";
 import "./styles/pendingcrew.css";
 export interface PendingCrewTourProps {
-  /** Standalone includes the website navigation; embedded includes only the Mac interface. */
+  /** Standalone shows the demo and reset control; embedded shows only the Mac interface. */
   mode?: "standalone" | "embedded";
   height?: CSSProperties["height"];
   className?: string;
@@ -18,63 +19,6 @@ export interface PendingCrewTourProps {
   persist?: boolean;
   initialChapter?: string;
   migrateLegacy?: boolean;
-}
-function WebsiteHeader() {
-  const { state, selectScene, setModal } = useTour();
-  return (
-    <header className="intro">
-      <a
-        className="brand"
-        href="#"
-        onClick={(e) => {
-          e.preventDefault();
-          selectScene("website");
-        }}
-      >
-        PendingCrew
-      </a>
-      <nav aria-label="网站导航">
-        {[
-          ["website", "介绍"],
-          ["trip", "协作方式"],
-          ["research", "组织与沟通"],
-        ].map(([id, label]) => (
-          <Button
-            key={id}
-            action="scene"
-            data-id={id}
-            className=""
-            onClick={() => selectScene(id)}
-          >
-            {label}
-          </Button>
-        ))}
-        <a
-          href="https://docs.pendingname.com/pendingcrew"
-          target="_blank"
-          rel="noopener"
-        >
-          文档 ↗
-        </a>
-      </nav>
-      <select
-        id="scenario"
-        aria-label="介绍章节"
-        hidden
-        value={state.sceneId}
-        onChange={(e) => selectScene(e.target.value)}
-      >
-        {state.scenes.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </select>
-      <Button id="guide" hidden onClick={() => setModal({ kind: "guide" })}>
-        产品结构
-      </Button>
-    </header>
-  );
 }
 function MacWindow() {
   const {
@@ -108,8 +52,11 @@ function MacWindow() {
           >
             <Icon name="menu" />
           </Button>
-          <h2 title={scene.crew}>{scene.crew}</h2>
-          <span className="path">{scene.root} / 本机</span>
+          <img className="product-icon" src={appIcon} alt="PendingCrew 图标" />
+          <h2>PendingCrew</h2>
+          <span className="path" data-current-crew={scene.crew}>
+            {scene.crew} / 本机
+          </span>
           <span className="app-notice">交互介绍</span>
           <label className="search">
             <Icon name="search" />
@@ -188,11 +135,8 @@ function TourView({
       }
       style={mode === "embedded" ? { height: height ?? 800 } : undefined}
     >
-      <WebsiteHeader />
       <MacWindow />
       <footer className="demo-footer">
-        <span className="status-dot" />
-        可交互的产品介绍 · 不连接真实 agent{" "}
         <Button
           id="reset"
           className="footer-right"

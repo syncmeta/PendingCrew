@@ -1,3 +1,4 @@
+import { validDataView } from "../domain/dataViews";
 import { refreshContent } from "../domain/contentMigration";
 import { freshScene, initialState } from "../domain/seed";
 import type {
@@ -59,6 +60,7 @@ function validLedger(v: unknown): v is Ledger {
             String(d.kind),
           )) &&
         (d.related === undefined || strings(d.related)) &&
+        (d.dataView === undefined || validDataView(d.dataView)) &&
         (d.sources === undefined ||
           (Array.isArray(d.sources) &&
             d.sources.every(

@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "checks": [
+    "PendingCrew title, original icon and documents/data tab",
+    "Product objects are filterable, sortable and linked to explanatory documents",
+    "SQLite example presents field types, NULL and a schema without executing SQL",
+    "Shared semantic block edits appear in both composed documents and survive reload",
+    "Data remains readable on mobile without page overflow"
+  ],
+  "errors": []
+}

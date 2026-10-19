@@ -3,7 +3,7 @@ import { freshScene, initialScenes, initialGroupWork } from "./seed";
 import type { TourState } from "./types";
 /** Replace obsolete authored introduction, retaining visitor-created records and drafts. */
 export function refreshContent(state: TourState): TourState {
-  if ((state.contentRevision ?? 0) >= 6) return state;
+  if ((state.contentRevision ?? 0) >= 7) return state;
   if ((state.contentRevision ?? 0) >= 5) return refreshDocumentLibrary(state);
   if ((state.contentRevision ?? 0) >= 4) return migrateGroups(state);
   if ((state.contentRevision ?? 0) >= 3) return unifyProductCopy(state);
@@ -76,6 +76,7 @@ function refreshProductFeatures(state: TourState): TourState {
     const record = next.cache[scene.id];
     if (!record) continue;
     const fresh = freshScene(scene).db;
+    fresh.docs = fresh.docs.filter((d) => !d.catalogKey);
     const authoredIds = new Set(fresh.docs.slice(0, 2).map((d) => d.id));
     const visitors = record.db.docs.filter((d) => !authoredIds.has(d.id));
     const usedIds = new Set(

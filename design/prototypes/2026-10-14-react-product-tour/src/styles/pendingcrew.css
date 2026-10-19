@@ -2038,3 +2038,204 @@
   overflow-wrap: anywhere;
   color: var(--accent);
 }
+
+/* Standalone preview is the product window plus its reset control. */
+.pc-tour:not(.embed) {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 560px;
+  padding: 8px;
+  gap: 4px;
+  background: #fff;
+}
+.pc-tour:not(.embed) .mac-window {
+  width: 100%;
+  max-width: none;
+  height: auto;
+  min-height: 0;
+  flex: 1;
+  margin: 0;
+  box-shadow: none;
+}
+.pc-tour:not(.embed) .demo-footer {
+  width: 100%;
+  max-width: none;
+  flex: 0 0 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0 4px;
+  justify-content: flex-end;
+}
+.pc-tour:not(.embed) .demo-footer .footer-right {
+  margin-left: auto;
+}
+.pc-tour:not(.embed) {
+  box-sizing: border-box;
+}
+.pc-tour .product-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  flex: 0 0 24px;
+  object-fit: contain;
+}
+.pc-tour .data-view {
+  margin: 20px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fdfcf9;
+}
+.pc-tour .data-view > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+.pc-tour .data-view small {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--secondary);
+  margin-top: 5px;
+}
+.pc-tour .data-view > p {
+  font-size: 12px;
+  line-height: 1.65;
+  margin: 12px 0;
+}
+.pc-tour .data-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.pc-tour .data-search input {
+  min-width: 0;
+  flex: 1;
+}
+.pc-tour .data-table-scroll {
+  overflow: auto;
+}
+.pc-tour .data-view table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  text-align: left;
+  background: white;
+}
+.pc-tour .data-view th,
+.pc-tour .data-view td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.pc-tour .data-view th {
+  background: #f3f2ee;
+  font-weight: 500;
+}
+.pc-tour .data-view th button {
+  font-size: 11px;
+}
+.pc-tour .data-view tr.selected {
+  background: #eae9e6;
+}
+.pc-tour .data-row-select {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.pc-tour .data-null {
+  color: var(--secondary);
+  font-size: 10px;
+}
+.pc-tour .data-detail {
+  margin-top: 12px;
+  padding: 12px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.pc-tour .data-detail p {
+  font-size: 12px;
+}
+.pc-tour .data-related .link-pill {
+  margin: 4px 5px 0 0;
+  white-space: normal;
+}
+.pc-tour .data-schema pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 12px 0;
+}
+.pc-tour .composition-tabs {
+  display: inline-flex;
+  margin-bottom: 12px;
+}
+.pc-tour .composition-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pc-tour .composition-block {
+  padding: 12px;
+  text-align: left;
+  background: white;
+  border: 1px solid var(--line);
+}
+.pc-tour .composition-block.selected {
+  border-color: #7c9a8b;
+  box-shadow: 0 0 0 1px #7c9a8b;
+}
+.pc-tour .composition-block > span {
+  font-size: 12px;
+  font-weight: 600;
+}
+.pc-tour .composition-block p {
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 10px;
+  white-space: pre-wrap;
+}
+.pc-tour .block-editor {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.pc-tour .block-usages {
+  font-size: 10px;
+  margin: 10px 0;
+  color: var(--secondary);
+}
+.pc-tour .block-usages > span {
+  display: inline-block;
+  margin: 3px 6px 3px 0;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: #eeece7;
+}
+.pc-tour .block-editor textarea {
+  width: 100%;
+  min-height: 100px;
+  display: block;
+  margin: 10px 0;
+  font-size: 12px;
+}
+@media (max-width: 720px) {
+  .pc-tour .product-icon {
+    width: 20px;
+    height: 20px;
+    flex-basis: 20px;
+  }
+  .pc-tour .data-view {
+    padding: 9px;
+  }
+  .pc-tour .data-view > header {
+    flex-wrap: wrap;
+  }
+}

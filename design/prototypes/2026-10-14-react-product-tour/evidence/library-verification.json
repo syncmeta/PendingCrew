@@ -1,6 +1,6 @@
 {
   "status": "PASS",
-  "catalogDocuments": 39,
+  "catalogDocuments": 45,
   "checks": [
     "Curated documents have folders, summaries, design labels and real source links",
     "Related documents navigate across crews and preserve the underlying group",

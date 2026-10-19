@@ -56,7 +56,27 @@ export interface HumanAsk extends Classified {
   item: string;
   context: string;
 }
+export interface TableDataView {
+  kind: "table";
+  primaryKey: string;
+  description: string;
+  schema: string;
+  columns: { key: string; label: string; type: string }[];
+  rows: Record<string, string | null | string[]>[];
+}
+export interface CompositionDataView {
+  kind: "composition";
+  description: string;
+  blocks: { id: string; title: string; body: string; source: string }[];
+  views: {
+    id: string;
+    title: string;
+    placements: { id: string; blockId: string }[];
+  }[];
+}
+export type DataView = TableDataView | CompositionDataView;
 export interface DocumentRecord extends Classified {
+  dataView?: DataView;
   catalogKey?: string;
   summary?: string;
   kind?: "产品说明" | "已敲定设计" | "规划设想" | "工程说明";
@@ -166,6 +186,7 @@ export type Command =
   | { type: "move"; id: string; scope: Scope; folder: string }
   | { type: "newRequest"; text: string }
   | { type: "newDocument"; title: string; body: string }
+  | { type: "saveDataView"; id: string; dataView: DataView }
   | { type: "newCrew"; name: string; brief: string; id: string }
   | { type: "member"; name: string }
   | { type: "simulate" | "reset" | "dismissNotice" }
@@ -173,7 +194,7 @@ export type Command =
 export const scopeNames: Record<Scope, string> = {
   message: "消息",
   todo: "Todo",
-  document: "文档",
+  document: "文档/数据",
   progress: "进展",
 };
 export const statusLabels: Record<Status, string> = {
