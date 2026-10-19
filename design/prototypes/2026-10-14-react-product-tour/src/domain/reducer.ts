@@ -1,3 +1,4 @@
+import { refreshDocumentLibrary } from "./documentLibrary";
 import { freshScene } from "./seed";
 import {
   current,
@@ -351,7 +352,7 @@ export function reducer(previous: TourState, command: Command): TourState {
       case "reset":
         state.cache[scene.id] = freshScene(scene, ui.inspector);
         showNotice(state, "已恢复预置产品介绍。");
-        break;
+        return refreshDocumentLibrary(state);
     }
     return state;
   } catch (error) {

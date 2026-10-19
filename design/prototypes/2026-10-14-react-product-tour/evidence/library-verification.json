@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "catalogDocuments": 39,
+  "checks": [
+    "Curated documents have folders, summaries, design labels and real source links",
+    "Related documents navigate across crews and preserve the underlying group",
+    "Document sharing is interactive and retains conversation drafts",
+    "Topical and administration groups contain relevant source-based material",
+    "Old revision migrates once without losing drafts, visitor documents or the selected group",
+    "Document library remains usable on a narrow viewport"
+  ],
+  "errors": []
+}

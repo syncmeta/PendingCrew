@@ -1961,8 +1961,80 @@
     min-width: 56px;
   }
 }
-.pc-tour .message-body {position:relative;}
-.pc-tour .message-menu {position:absolute;right:0;bottom:-20px;}
-.pc-tour .message {margin-bottom:8px;}
-.pc-tour .message.consecutive {margin-top:6px;margin-bottom:8px;}
-.pc-tour .message.consecutive:not(.own) {padding-left:39px;}
+.pc-tour .message-body {
+  position: relative;
+}
+.pc-tour .message-menu {
+  position: absolute;
+  right: 0;
+  bottom: -20px;
+}
+.pc-tour .message {
+  margin-bottom: 8px;
+}
+.pc-tour .message.consecutive {
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+.pc-tour .message.consecutive:not(.own) {
+  padding-left: 39px;
+}
+
+.pc-tour .document-library-note {
+  font-size: 12px;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+.pc-tour .document-library-note > span {
+  display: block;
+  font-size: 11px;
+  color: var(--secondary);
+  margin-top: 5px;
+}
+.pc-tour .document-row-summary {
+  display: block;
+  margin-top: 4px;
+  color: var(--secondary);
+  font-weight: 400;
+  line-height: 1.5;
+}
+.pc-tour .doc-row > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pc-tour .document-summary {
+  font-size: 13px;
+  color: var(--secondary);
+}
+.pc-tour .document-status {
+  font-size: 11px;
+  color: var(--secondary);
+  padding: 8px 10px;
+  background: #f4f3ef;
+  border-radius: 6px;
+}
+.pc-tour .document-content h4,
+.pc-tour .document-related h4 {
+  font-size: 13px;
+  margin: 22px 0 8px;
+}
+.pc-tour .document-content p {
+  white-space: pre-wrap;
+}
+.pc-tour .document-related .link-pill {
+  margin: 4px 6px 4px 0;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.pc-tour .document-sources {
+  margin: 18px 0;
+  color: var(--secondary);
+  font-size: 11px;
+}
+.pc-tour .document-sources a {
+  display: block;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  color: var(--accent);
+}

@@ -1,0 +1,793 @@
+[
+  {
+    "key": "position",
+    "scene": "website",
+    "conversation": "main",
+    "title": "Harness 的 Harness.md",
+    "folder": "产品与理念",
+    "kind": "产品说明",
+    "summary": "把人与多个 agent 组织在熟悉的协作空间里。",
+    "body": "## 为什么做 PendingCrew\n\n开发者变成 AI 以后，沟通、分工、组织和判断仍然存在。PendingCrew 希望用熟悉的聊天与组织结构，让你和多个 agent 围绕长期项目持续协作。\n\n飞书、钉钉、企业微信是员工的 Harness。**PendingCrew 是 Harness 的 Harness。**\n\n## 人的角色\n\n人负责目标、边界与重要判断，机长负责组织工作，成员推进具体事项。产品强调人的认知参与，降低组织多个 agent 的负担，而不是让人完全退出。",
+    "sources": [
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      }
+    ],
+    "related": ["human-role", "crew-channel"]
+  },
+  {
+    "key": "human-role",
+    "scene": "website",
+    "conversation": "main",
+    "title": "人的认知参与.md",
+    "folder": "产品与理念",
+    "kind": "产品说明",
+    "summary": "让人有上下文地参与判断，把注意力留给关键问题。",
+    "body": "## 人参与什么\n\n你可以在群里说明目标、调整方向、追问依据，也可以查看需要自己判断的事项。推荐选项应当和背景一起出现，让判断有上下文。\n\n## 为什么用熟悉的界面\n\n通讯录、聊天、Todo 和文档让协作关系可见，减少管理多个 agent 时的认知负担。关键选择仍然由有权参与的人作出。\n\n## 记录留下什么\n\n需求原文、计划、讨论、判断和成果互相引用。之后继续推进时，可以找到当时的目标和依据。",
+    "sources": [
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      },
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["human-inbox", "decision-records"]
+  },
+  {
+    "key": "four-views",
+    "scene": "website",
+    "conversation": "main",
+    "title": "一份工作，四个入口.md",
+    "folder": "协作模型",
+    "kind": "已敲定设计",
+    "summary": "消息沟通，Todo 承接需求，进展展示计划，文档留下成果。",
+    "body": "## 消息\n\n在群聊和单聊里沟通目标、讨论方案、报告结果。会话属于组织中的沟通空间。\n\n## Todo 与进展\n\nTodo 包含原始需求、计划和待人类处理三种记录。**进展是同一份计划的视图**，修改负责人、状态或备注，不应复制出另一套工作状态。\n\n## 文档\n\n文档保存说明、设计和成果。消息可以引用文档，计划可以关联产物，文档之间也可以互相引用。\n\n这份 Demo 按群展示四个入口；真实后端的组织工作账、权限与分类范围仍遵循各自的正式契约。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-14-documents-view-folders-contract.md",
+        "label": "文档与独立文件夹契约"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["one-ledger", "independent-folders"]
+  },
+  {
+    "key": "crew-channel",
+    "scene": "website",
+    "conversation": "main",
+    "title": "机组与群，各自表达什么.md",
+    "folder": "协作模型",
+    "kind": "已敲定设计",
+    "summary": "机组表达组织关系，群表达对话与协作主题。",
+    "body": "## 机组是组织\n\n机组组织机长、成员和持续工作的上下文。部门、小组和组织层级由机组表达。\n\n## 群是对话空间\n\n一个机组可以有多个群。按话题或任务讨论时，可以建群，而不是为了说一句话就新建子机组。单聊也是会话的一种。\n\n## 工作与会话\n\n一个工作项不需要自动建一个群。需要协作时建立关联会话，工作与讨论保留引用关系。\n\n本 Demo 的总群、Todo介绍、演示策划、Demo开发分别承接产品概念、工作模型、展示设计与实现说明。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["organization", "session-members"]
+  },
+  {
+    "key": "independent-folders",
+    "scene": "website",
+    "conversation": "main",
+    "title": "文件夹由内容决定.md",
+    "folder": "分类与文档",
+    "kind": "已敲定设计",
+    "summary": "消息、Todo、文档和进展可以采用不同分类。",
+    "body": "## 同一个机组，不同的分类\n\n消息可能按讨论主题整理，文档按说明或成果整理，Todo 按需求类别整理，进展按工作阶段整理。它们经常不是同一棵树。\n\n## 文件夹的心智\n\n文件夹只负责把内容放在容易找到的位置。移动分类不应改变计划的父子关系、负责人、状态或原始编号。\n\n## 不等于复制\n\n分类和对象身份分开。删除分类不等于删除底下的工作记录。正式文件夹契约的范围与当前网页演示的群内展示范围，分别按各自设计定义。",
+    "sources": [
+      {
+        "path": "docs/superpowers/plans/2026-10-14-documents-view-folders-contract.md",
+        "label": "文档与独立文件夹契约"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["document-lifecycle", "stable-ids"]
+  },
+  {
+    "key": "knowledge-direction",
+    "scene": "website",
+    "conversation": "main",
+    "title": "从文档到组织知识.md",
+    "folder": "分类与文档",
+    "kind": "规划设想",
+    "summary": "让决定、教训、风险和自建表成为可关联的信息。",
+    "body": "## 为什么不止聊天\n\n长期项目会留下大量决定、教训、风险、资料和业务数据。它们需要可以被找到、引用和更新，而不是只埋在聊天历史里。\n\n## 已提出的方向\n\n设计讨论提出对象、链接、动作、视图，以及自建业务表。团队可以根据工作需要建立自己的数据结构。\n\n## 文档如何参与\n\n后续语义文档草案把内容块和展示视图分开，并研究复用、版本与来源。它们用于沉淀组织信息，不替代工作账本的负责人和执行状态。\n\n这是后续设计方向与契约草案；本网页提供阅读与引用演示，没有运行知识数据库或自定义代码视图。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["semantic-blocks", "custom-tables"]
+  },
+  {
+    "key": "scope-map",
+    "scene": "website",
+    "conversation": "main",
+    "title": "产品说明、设计与规划.md",
+    "folder": "产品与理念",
+    "kind": "产品说明",
+    "summary": "区分产品定位、已敲定设计和后续设想。",
+    "body": "## 产品说明\n\n说明 PendingCrew 想解决什么问题、人与 agent 如何共事，以及熟悉的聊天和组织界面为什么有用。\n\n## 已敲定设计\n\n表示相关规则已经在产品讨论或契约中确定，例如三类工作记录、最多三层计划、负责人交接与独立分类。它不是所有安装版本都已交付的证明。\n\n## 规划设想\n\n包括语义文档、团队数据视图与远程协作等后续方向。草案描述未来形态，实际可用范围以对应版本与正式文档为准。\n\n## 这份网页\n\n消息、Todo、文档、进展和分类可以操作，数据保存在浏览器中。它不会启动本机 session、调用模型、连接真实数据库或改变正式产品的数据。",
+    "sources": [
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      },
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["demo-content"]
+  },
+  {
+    "key": "one-ledger",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "一本账，三种记录.md",
+    "folder": "工作模型",
+    "kind": "已敲定设计",
+    "summary": "原始需求、计划、待人类处理互相引用。",
+    "body": "## 原始需求\n\n保留人交代的原文，用稳定编号记录。需求如何推进，通过关联计划体现。\n\n## 计划\n\n计划回答怎样推进：目标、负责人、状态、依赖、下一步、检查时间和成果。可以按最多三层组织拆解。\n\n## 待人类处理\n\n把需要人判断的事项连同上下文和推荐选项一起记录。回答、稍后和撤回分别表达不同动作。\n\n**一本账不等于所有人拥有同样权限。** 稳定引用连接工作，具体操作仍按角色和范围约束。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      }
+    ],
+    "related": ["three-levels", "human-inbox"]
+  },
+  {
+    "key": "original-request",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "原始需求保持原文.md",
+    "folder": "工作模型",
+    "kind": "已敲定设计",
+    "summary": "需求进入以后，拆解和执行另行记录。",
+    "body": "## 原文是起点\n\n人的原始要求不应该在 agent 整理计划时被悄悄改写。计划可以调整，原始要求仍然可以回看。\n\n## 一条需求与多个计划\n\n同一条需求可以关联多个计划；一个计划也可以带有来源引用。关系保留后，可以找到某项工作因何而来。\n\n## Todo 模式\n\n输入框旁的 Todo 模式把一次发送记成原始需求。本 Demo 会保留文字和引用，不会自动编造已经完成的执行过程。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["one-ledger", "stable-ids"]
+  },
+  {
+    "key": "three-levels",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "三层拆解与独立依赖.md",
+    "folder": "计划与跟进",
+    "kind": "已敲定设计",
+    "summary": "层级表达包含关系，依赖表达先后关系。",
+    "body": "## 最多三层\n\n计划可以从目标拆为工作，再细化到可推进的事项。最多三层约束父子拆解的深度。\n\n## 依赖另行记录\n\n父子关系不自动表示执行顺序。某件事要等另一件事完成，应当使用独立的依赖引用。跨机组关系仍在统一工作模型下校验。\n\n## 在 Demo 中\n\n进展左侧箭头可以逐层折叠，也可以全部展开或收起。点击标题查看状态、负责人、备注、来源和产物。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["progress-view", "cross-crew"]
+  },
+  {
+    "key": "progress-view",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "进展不是另一份报告.md",
+    "folder": "计划与跟进",
+    "kind": "已敲定设计",
+    "summary": "Todo 和进展共享同一条计划记录。",
+    "body": "## 同一份数据\n\n进展展示计划的状态、负责人、下一步、卡点和检查时间。它不维护另一套独立的 Step 或 Progress 生命周期。\n\n## 一个备注栏\n\n计划保留当前的下一步或备注。历史变化另行记录，当前视图不需要变成不断追加的长报告。\n\n## 可交互\n\n在进展中点开计划，修改备注，再切回 Todo 的计划，就能看到相同内容。群内引用与文档产物也连接这条记录。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["three-levels", "checks"]
+  },
+  {
+    "key": "human-inbox",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "需要人判断的事项.md",
+    "folder": "人的参与",
+    "kind": "已敲定设计",
+    "summary": "全组织一个收件箱，每条问题都有上下文。",
+    "body": "## 问什么，为什么问\n\n事项要说明背景、关联工作以及推荐方案。让人知道自己的选择会影响哪一部分。\n\n## 三种动作\n\n回答表示给出判断；稍后表示保留等待；不要了表示撤回对应事项。事项结束时不应继续留下过期等待。\n\n## 卡住的是事项\n\n等待一个问题不等于整个 session 都停工。还可以推进的部分应当继续组织工作。\n\n网页里的待人类处理支持这些交互，真实唤醒和执行不在网页中发生。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      }
+    ],
+    "related": ["blocked-item", "human-role"]
+  },
+  {
+    "key": "owner-transfer",
+    "scene": "website",
+    "conversation": "todo",
+    "title": "负责人交接.md",
+    "folder": "计划与跟进",
+    "kind": "已敲定设计",
+    "summary": "发起交接不立即换人，目标接受后才改变负责人。",
+    "body": "## 单一负责人\n\n每项工作有明确负责人。工作记录需要知道目前是谁在跟进，而不是从最后一条回复猜测。\n\n## 交接的两个动作\n\n现负责人提出交接，目标本人接受后才改变负责人。交接说明和实际变更保留在历史里；撤回不冒充已经交接。\n\n## 与指派不同\n\n人或有权的机长进行指派是另一种管理动作。跨机组交接也必须遵守对象范围与实际身份约束。\n\n这份文档展示交接规则，网页尚未加入真实的交接请求流程。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-public-work-transfer.md",
+        "label": "双向工作交接"
+      }
+    ],
+    "related": ["cross-crew", "checks"]
+  },
+  {
+    "key": "demo-content",
+    "scene": "website",
+    "conversation": "planning",
+    "title": "用 PendingCrew 介绍 PendingCrew.md",
+    "folder": "展示内容",
+    "kind": "工程说明",
+    "summary": "直接把产品说明放进聊天、Todo、文档和进展。",
+    "body": "## 内容就是演示\n\n总群说明产品定位，Todo介绍解释工作模型，演示策划记录展示原则，Demo开发记录实现与维护。\n\n## 使用产品自己的入口\n\n文档可以分类、阅读、引用回群聊。计划可以展开和编辑。消息、进展和文档通过引用串起来。\n\n## 不做虚构业务案例\n\n不再拿旅游、网站改版或阅读闯关当示例。展示的内容本身就是 PendingCrew 的产品说明和设计资料。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["information-architecture", "scope-map"]
+  },
+  {
+    "key": "information-architecture",
+    "scene": "website",
+    "conversation": "planning",
+    "title": "机组、会话、内容的层次.md",
+    "folder": "展示内容",
+    "kind": "工程说明",
+    "summary": "侧栏选机组，会话列表选群，右侧切换群内内容。",
+    "body": "## 左侧机组\n\n保留原 PendingCrew 的通讯录和机组关系，以及按身份继承的色条。机组表达组织结构。\n\n## 中间会话\n\n总群、机长单聊和专题群放在同一个列表。选中态用淡灰，暂不对会话再做分组。\n\n## 右侧内容\n\n消息、Todo、文档、进展使用分段控件切换，跟随当前群。聊天右上是 Todo，右下是成员，分别可以收起。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["visual-language", "crew-channel"]
+  },
+  {
+    "key": "visual-language",
+    "scene": "website",
+    "conversation": "planning",
+    "title": "保留 PendingCrew 的原生质感.md",
+    "folder": "界面约定",
+    "kind": "工程说明",
+    "summary": "沿用原版布局，修正控件细节而不整体换风格。",
+    "body": "## 控件\n\n输入区采用独立圆形加号和 Todo 模式按钮、圆角胶囊、内嵌发送箭头。空消息不能发送。\n\n## 记录展示\n\nTodo 使用暖白底、白色卡片、状态圆圈和编号；连续相同发言者的消息不重复头像。\n\n## 导航\n\n群内容采用 macOS 风格分段控件。网站外层保持简短导航，产品界面保留原 PendingCrew 的空间关系。\n\n色条在保留父系分段逻辑的基础上调亮，群聊选中使用淡灰。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["information-architecture", "demo-engineering"]
+  },
+  {
+    "key": "content-rules",
+    "scene": "website",
+    "conversation": "planning",
+    "title": "什么内容进入这份演示.md",
+    "folder": "资料整理",
+    "kind": "工程说明",
+    "summary": "从仓库资料提炼产品说明，同时保留来源和状态。",
+    "body": "## 纳入的内容\n\n产品定位、已经裁定的工作规则、界面约定、适合解释的设计草案和这份 Demo 的维护说明。\n\n## 如何组织\n\n按主题放入群内，再按文件夹分类。每份资料附上简述、类型、依据和相关文档。\n\n## 怎么表达边界\n\n设计已确定不等于当前安装版已经交付。接口快照和研究草案按其状态展示，不把测试记录或局部工程证据写成可用功能。\n\n本页是面向产品理解的整理稿，不是把内部运行日志和环境配置原样公开。",
+    "sources": [
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      },
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["scope-map", "demo-content"]
+  },
+  {
+    "key": "demo-engineering",
+    "scene": "website",
+    "conversation": "development",
+    "title": "React 与 TypeScript 的维护结构.md",
+    "folder": "实现与维护",
+    "kind": "工程说明",
+    "summary": "组件、状态、类型和内容分别维护，方便嵌入官网。",
+    "body": "## 组件\n\n侧栏、会话列表、聊天、输入区、Todo、进展与文档分别实现，界面通过 React 组件组合。\n\n## 数据与状态\n\nTypeScript 描述记录和命令，reducer 处理变更。Todo 与进展使用同一份计划，群之间的工作数据独立保存。\n\n## 内容\n\n产品章节、初始记录和文档资料分开存放。补充产品说明不需要重新编写聊天或文档界面。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["embed-website", "browser-data"]
+  },
+  {
+    "key": "embed-website",
+    "scene": "website",
+    "conversation": "development",
+    "title": "放进产品官网.md",
+    "folder": "实现与维护",
+    "kind": "工程说明",
+    "summary": "独立网页、React 组件与 iframe 三种接入方式。",
+    "body": "## React 官网\n\nPendingCrewTour 可以作为嵌入组件使用，宿主负责网站导航。每个实例使用独立的存储键，样式限定在组件范围内。\n\n## 普通静态网站\n\n构建后的静态文件可以单独部署，也可以用 iframe 嵌入。嵌入模式只展示产品窗口。\n\n## 本地预览\n\nportable 版本可以直接从文件打开。它仍然由同一份 React 源码构建。\n\n这里说明接入方式，不表示网站已经发布。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["demo-engineering", "browser-data"]
+  },
+  {
+    "key": "browser-data",
+    "scene": "website",
+    "conversation": "development",
+    "title": "浏览器数据与 Demo 边界.md",
+    "folder": "实现与维护",
+    "kind": "工程说明",
+    "summary": "交互保存在本机浏览器，旧介绍可以迁移更新。",
+    "body": "## 本地状态\n\n消息、草稿、分类、计划修改和自建内容保存在当前浏览器。没有存储权限时仍可临时操作。\n\n## 内容更新\n\n预置资料有内容版本。新版本补充介绍时保留访客新增记录和草稿，发生编号冲突时保留访客已有引用。\n\n## 范围\n\n网页没有连接真实 agent，也不读写正式 PendingCrew 工作数据库。文件预览、localhost 和将来的官网属于不同来源，不会自动共享浏览器状态。",
+    "sources": [
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["scope-map", "demo-engineering"]
+  },
+  {
+    "key": "backend-separation",
+    "scene": "website",
+    "conversation": "development",
+    "title": "前后端分工.md",
+    "folder": "产品架构",
+    "kind": "已敲定设计",
+    "summary": "客户端负责交互，独立后端负责权威工作状态与调度。",
+    "body": "## 为什么拆分\n\n把数据与协作调度从 Mac 界面中独立出来，让不同客户端围绕同一份工作状态协作。\n\n## crewd 的职责\n\n独立后端承接持久状态、协作调度和执行接口；客户端通过统一契约读取、操作并订阅变化。\n\n## 不复制权威\n\n文档分类、界面缓存或消息引用不能另造一份负责人和完成状态。界面是工作数据的入口，不应成为第二套执行账本。\n\n本网页是交互介绍，不启动或连接 crewd。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      }
+    ],
+    "related": ["knowledge-boundary", "remote-collaboration"]
+  },
+  {
+    "key": "remote-collaboration",
+    "scene": "website",
+    "conversation": "development",
+    "title": "多端与远程协作的方向.md",
+    "folder": "后续设计",
+    "kind": "规划设想",
+    "summary": "配对后的设备操作同一工作空间，信任需要明确确认。",
+    "body": "## 同一个工作空间\n\n多端方向希望让电脑、手机和平板访问相同工作记录，而不是各自维护互不相干的副本。\n\n## 明确配对\n\n远程契约草案要求双方确认身份，设备授权可以撤销；地址变化不等于重新获得信任。\n\n## 恢复与旧授权\n\n数据恢复和设备信任分别处理，旧数据不应悄悄复活已经撤销的连接权限。\n\n这是远程接口设计方向。该契约自身不代表设备端和实际运行能力已经交付，网页也不会开启网络监听或建立配对。",
+    "sources": [
+      {
+        "path": "docs/superpowers/plans/2026-10-14-crewd-remote-pairing-contract.md",
+        "label": "远程配对契约草案"
+      },
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["backend-separation", "scope-map"]
+  },
+  {
+    "key": "cross-crew",
+    "scene": "trip",
+    "conversation": "main",
+    "title": "跨机组协作与统一工作账.md",
+    "folder": "协作规则",
+    "kind": "已敲定设计",
+    "summary": "工作可以跨机组关联，身份、权限和状态仍保持清楚。",
+    "body": "## 统一身份\n\n原始需求、计划和人的事项使用稳定引用，工作调整位置不应生成一份无关的副本。\n\n## 跨机组关系\n\n来源、父子拆解、依赖和卡点可以在统一工作模型下关联。跨机组协作不等于所有成员都可以管理所有工作。\n\n## 规则仍然成立\n\n最多三层只约束父子深度；依赖和卡点另行表达。更换负责人保留交接历史，不把通知当成负责人已接受。",
+    "sources": [
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-public-work-transfer.md",
+        "label": "双向工作交接"
+      }
+    ],
+    "related": ["stable-ids", "owner-transfer"]
+  },
+  {
+    "key": "blocked-item",
+    "scene": "trip",
+    "conversation": "main",
+    "title": "卡住一件，不停下全部.md",
+    "folder": "协作规则",
+    "kind": "已敲定设计",
+    "summary": "等待人或依赖时，把可推进的部分拆出来。",
+    "body": "## 标清卡点\n\n等待需要关联具体的人类事项或其他工作项，让大家知道为什么暂时不能推进。\n\n## 检查其余部分\n\n其中一部分要等人，不代表同一个 session 的全部工作都要停。能够独立推进的部分可以拆出继续做。\n\n## 回复后的恢复\n\n设计要求人的回复能关联回受阻工作和实际负责人。真实调度还要检查当前身份、状态与人工停止边界。\n\n网页可以演示回答与计划解阻，不会真实唤醒本机 agent。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      }
+    ],
+    "related": ["human-inbox", "checks"]
+  },
+  {
+    "key": "checks",
+    "scene": "trip",
+    "conversation": "main",
+    "title": "检查点与持续跟进.md",
+    "folder": "协作规则",
+    "kind": "已敲定设计",
+    "summary": "负责人、下一步与下一次检查把长期工作连起来。",
+    "body": "## 下一步和时间\n\n进行中的工作需要说明下一步，以及何时再次检查。任务跟进不应只依赖 session 自己记住。\n\n## 合并提醒\n\n同一负责人同时到期的工作可以合并提醒，避免为每项工作制造一轮重复上下文。忙碌时使用可靠队列，而不是丢掉提醒。\n\n## 停止与重复\n\n人工停止、已经结束的工作和过期请求必须在实际投递前重新检查。持续跟进不应变成无休止地叫醒同一个 session。\n\n这份设计说明不等于网页正在运行后台定时器。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      }
+    ],
+    "related": ["blocked-item", "admin-followup"]
+  },
+  {
+    "key": "stable-ids",
+    "scene": "trip",
+    "conversation": "main",
+    "title": "稳定编号与可追溯引用.md",
+    "folder": "协作规则",
+    "kind": "已敲定设计",
+    "summary": "位置、分类和可读代号可以变，身份不能随之丢失。",
+    "body": "## 身份与位置分开\n\n需求、工作与人的事项都有稳定身份。调整父项、负责人或分类，不应破坏已有消息和文档中的引用。\n\n## 可读代号\n\n代号帮助人看懂层级，稳定编号帮助系统找到同一对象。设计要求编号全组织唯一、不重复分配，旧代号可追溯。\n\n## 资料关联\n\n文档来源、计划产物和聊天引用一起保留依据。网页里的引用可以跳转到相应群的记录。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+        "label": "全组织工作跟进"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["independent-folders", "cross-crew"]
+  },
+  {
+    "key": "organization",
+    "scene": "research",
+    "conversation": "main",
+    "title": "组织结构与多父机组.md",
+    "folder": "组织与成员",
+    "kind": "已敲定设计",
+    "summary": "层级组织工作，一个机组可以被多个父机组引用。",
+    "body": "## 组织关系\n\n机组之间表达部门、小组与长期协作关系。多父引用让同一个机组可以出现在多个组织入口下。\n\n## 保持同一身份\n\n多个入口指向同一个机组，不是复制多个互相独立的团队。工作上下文和对象身份仍应一致。\n\n## 管理与业务层级\n\n管理机组的正式设计与普通父子机组不同；总机组不是为了方便展示而强行塞进所有业务机组的父边。网页侧栏用于说明组织关系，不复刻全部管理权限。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      }
+    ],
+    "related": ["crew-channel", "session-members"]
+  },
+  {
+    "key": "session-members",
+    "scene": "research",
+    "conversation": "main",
+    "title": "群成员与本机 Session.md",
+    "folder": "组织与成员",
+    "kind": "产品说明",
+    "summary": "agent 成员对应电脑上的 Codex 或 Claude Code 会话。",
+    "body": "## 成员是谁\n\n群里的 agent 成员对应本机的 Codex 或 Claude Code session。人也可以参与群聊，给目标、补充信息和作判断。\n\n## 机长与成员\n\n机长负责组织工作与协调，其他成员围绕具体事项协作。成员身份和群成员资格让讨论、引用和跟进找到相应对象。\n\n## 这份演示\n\n右侧显示机长、Todo介绍和人。它们是浏览器里的展示记录，不会连接或启动你电脑上的真实会话。",
+    "sources": [
+      {
+        "path": "README.md",
+        "label": "PendingCrew 产品说明"
+      },
+      {
+        "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+        "label": "网页 Demo 维护说明"
+      }
+    ],
+    "related": ["human-role", "channels-attention"]
+  },
+  {
+    "key": "channels-attention",
+    "scene": "research",
+    "conversation": "main",
+    "title": "读得到、收到消息与叫醒.md",
+    "folder": "组织与成员",
+    "kind": "已敲定设计",
+    "summary": "可见范围与通知、上下文注入不是同一件事。",
+    "body": "## 三个不同问题\n\n读得到表示有权查看；收到上下文表示相关消息进入当前协作；被叫醒表示实际触发一次运行。它们不能混为一个权限。\n\n## 群与收听\n\n群成员资格和明确的收听关系参与消息投递。更大的可读范围不应自动导致每个 session 收到全组织所有消息。\n\n## 人的注意力\n\nagent 不能默认人正在看每个群。需要人判断时，应保留明确的问题入口和上下文；@ 是提醒，不是已经得到答复。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["human-inbox", "crew-channel"]
+  },
+  {
+    "key": "document-lifecycle",
+    "scene": "research",
+    "conversation": "main",
+    "title": "文档的编辑、分类与归档.md",
+    "folder": "资料与成果",
+    "kind": "已敲定设计",
+    "summary": "共同编辑保留版本依据，删除分类不删除内容。",
+    "body": "## 一份文档\n\n文档有身份、标题、正文、作者与修订信息。修改需要基于当前版本，冲突应当明确呈现，不能悄悄覆盖他人的修改。\n\n## 分类是另一层\n\n文件夹表达组织方式。移动或移除分类不自动改变文档正文和工作状态。\n\n## 生命周期\n\n正式契约保留删除和修改的历史依据。后续团队数据草案进一步研究文档视图与内容块的版本、复用和归档。网页当前提供阅读、创建和分类演示，不提供多人实时编辑。",
+    "sources": [
+      {
+        "path": "docs/superpowers/plans/2026-10-14-documents-view-folders-contract.md",
+        "label": "文档与独立文件夹契约"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["semantic-blocks", "version-history"]
+  },
+  {
+    "key": "admin-split",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "行政与业务的分工.md",
+    "folder": "行政职能",
+    "kind": "已敲定设计",
+    "summary": "机长决定业务方向，行政负责组织运转。",
+    "body": "## 机长负责什么\n\n做什么、怎么做、做到什么程度、优先级与验收，属于业务判断。\n\n## 行政负责什么\n\n账目、编制、督办、档案和人的待办，属于运转工作。行政不能因为觉得不值得做，就替业务把一项工作关闭。\n\n## 依据\n\n行政处理完成、重复、被取代等事项时要基于事实和证据。具体管辖范围、触发频率和自动化交付仍以最终模块设计为准。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["admin-followup", "archive-evidence"]
+  },
+  {
+    "key": "admin-followup",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "督办与异常协调.md",
+    "folder": "行政职能",
+    "kind": "已敲定设计",
+    "summary": "找出无人跟进、检查过期或需要协调的工作。",
+    "body": "## 可核对的事实\n\n负责人是否存在、下一次检查是否过期、依赖是否仍然阻塞，是可以从工作记录核对的事实。\n\n## 需要协调的时候\n\n如果需要换人、拆分或核实是否已经完成，再由相应角色介入，不必为每次例行检查都启动一段模型会话。\n\n## 权限边界\n\n行政提供运转支持，不自动获得机长的业务决策权。异常协调与指派、交接、人工停止等规则需要一起工作。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["checks", "admin-split"]
+  },
+  {
+    "key": "archive-evidence",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "档案与完成依据.md",
+    "folder": "资料与成果",
+    "kind": "已敲定设计",
+    "summary": "讨论、决定与产物留下引用，结论有据可查。",
+    "body": "## 留下什么\n\n原始要求、计划、讨论和实际产物互相引用。完成、重复或被取代的结论需要能回到相应依据。\n\n## 不凭一句话抹平\n\n当前状态与历史记录各自有用。组织调整或归档不应该悄悄丢失来龙去脉。\n\n## 适合放在文档里的内容\n\n产品说明、方案、决策背景、教训、风险和验收说明都可以成为资料。它们为后续工作提供上下文，不单独代替工作账本。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["decision-records", "version-history"]
+  },
+  {
+    "key": "decision-records",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "决定、教训与风险.md",
+    "folder": "组织知识",
+    "kind": "规划设想",
+    "summary": "把有价值的经验沉淀成可关联的对象。",
+    "body": "## 长期项目留下的不只是成果\n\n为什么选这个方案、什么办法失败过、还有哪些风险，这些信息会影响后续工作。\n\n## 对象与链接\n\n已讨论的组织操作系统方向提出决定、教训、风险、自定义对象和表，让不同资料通过引用相连，而不是各写一份孤立文档。\n\n## 仍可被修正\n\n记录是保留依据，不是把某次判断变成永远不能质疑的命令。新的事实可以带来新的结论。\n\n这是信息沉淀的后续方向，网页用说明文档展示，不模拟真实的风险引擎或知识库。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["knowledge-direction", "custom-tables"]
+  },
+  {
+    "key": "semantic-blocks",
+    "scene": "website",
+    "conversation": "main",
+    "title": "语义内容块与文档复用.md",
+    "folder": "组织知识设计",
+    "kind": "规划设想",
+    "summary": "相同内容可以有多个展示位置，身份与展示分开。",
+    "body": "## 内容块\n\n后续草案以段落、标题等有语义的内容块组织资料，块本身有稳定身份、内容类型、来源和属性。\n\n## 视图与位置\n\n一份文档可以是内容块的组合。同一块内容可以出现在多个位置；位置与块是不同身份。\n\n## 修改与复用\n\n共享编辑应当是明确动作。旧式整篇文档替换，不应偷偷改掉别处共享的内容。\n\n## 这份 Demo\n\n这里展示的是方案说明和文档之间的引用，还没有实现内容块引擎或跨文档实时共享编辑。",
+    "sources": [
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["version-history", "document-lifecycle"]
+  },
+  {
+    "key": "version-history",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "版本、分支与来源.md",
+    "folder": "组织知识",
+    "kind": "规划设想",
+    "summary": "团队资料需要可追溯的修改历史与明确版本。",
+    "body": "## 修改的来龙去脉\n\n团队数据草案研究把资料、结构和来源纳入真正的版本历史。查看过去应当看到当时的内容，而不是用今天的数据填回去。\n\n## 分支与恢复\n\n分支可以承接不同方案，差异与合并需要显式处理冲突。版本恢复是一次明确操作，不是自动重放旧请求。\n\n## 来源\n\n文档和对象保存来源引用。引用旧版本与跟随当前版本有不同含义，需要让使用者看清。\n\n这是 DoltLite 团队数据草案中的方向，网页没有运行真实分支、提交或数据恢复。",
+    "sources": [
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["semantic-blocks", "knowledge-boundary"]
+  },
+  {
+    "key": "custom-tables",
+    "scene": "website",
+    "conversation": "main",
+    "title": "自建表与数据视图.md",
+    "folder": "组织知识设计",
+    "kind": "规划设想",
+    "summary": "让团队为自己的业务建立合适的数据结构。",
+    "body": "## 不限于进度表\n\n自建表方向希望让人和 agent 可以根据工作需要定义对象类型、字段、表与展示方式。进展视图仍然读取正式计划，自建业务数据不替换执行账本。\n\n## 表与文档\n\n同一组资料可以用文档说明，也可以用表格、结构化视图或专门的可视化呈现。\n\n## 后续边界\n\n数据视图需要明确读写能力和来源，不能因为一段网页代码被展示出来，就默认拥有执行与权限管理能力。\n\n本 Demo 只放入设计说明，没有实现自由 SQL、自定义业务表或代码渲染器。",
+    "sources": [
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      },
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["knowledge-direction", "knowledge-boundary"]
+  },
+  {
+    "key": "knowledge-boundary",
+    "scene": "website",
+    "conversation": "development",
+    "title": "知识数据与执行状态的边界.md",
+    "folder": "后续设计",
+    "kind": "规划设想",
+    "summary": "资料和视图扩展信息表达，不另建第二套工作执行权威。",
+    "body": "## 两种职责\n\n工作账本管理需求、负责人、计划状态与执行关系。团队数据承接内容、表、来源和视图。两者可以关联，但职责不能混在一起。\n\n## 关联不是权限\n\n某个文档引用了一项工作，不等于它可以更换负责人或宣布完成。资料中的代码视图也不自动获得工作控制能力。\n\n## 不确定结果\n\n后续契约要求写入结果不明确时先查原请求事实，不自动重复执行，也不把看起来相同的当前状态当成原操作已成功。\n\n这些是后续团队数据契约的设计边界，不表示网页具备相应运行能力。",
+    "sources": [
+      {
+        "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+        "label": "团队数据与语义文档设计草案"
+      }
+    ],
+    "related": ["backend-separation", "custom-tables"]
+  },
+  {
+    "key": "judgment-service",
+    "scene": "administration",
+    "conversation": "main",
+    "title": "小判断服务与人的判断.md",
+    "folder": "行政职能",
+    "kind": "规划设想",
+    "summary": "高频小判断可以辅助路由，关键工作规则仍有明确权威。",
+    "body": "## 用在哪\n\n设计讨论把需求路由、消息归因等高频小判断交给可选服务，减少每次都打扰机长的成本。\n\n## 与计划不同\n\n需求分给谁收到、消息关联哪件事，不等于已经创建计划、改变负责人或替人回答问题。\n\n## 可选与可观察\n\n服务可以不配置或关闭。设置状态、判断记录和实际调用成功是不同事实，不能把保存配置写成模型已经可用。\n\n当前来源是判断服务接口快照，完整功能交付需要单独验证；网页不会请求任何外部判断服务。",
+    "sources": [
+      {
+        "path": "docs/internal/2026-10-15-jev-public-contract-02.md",
+        "label": "判断服务接口快照"
+      },
+      {
+        "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+        "label": "协作与工作跟进设计"
+      }
+    ],
+    "related": ["admin-split", "human-inbox"]
+  }
+]

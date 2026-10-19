@@ -23,6 +23,7 @@ try {
   await run("verify-features.cjs");
   await run("verify-copy.cjs");
   await run("verify-groups.cjs");
+  await run("verify-library.cjs");
   await run("verify-react.cjs");
 } finally {
   await server.close();

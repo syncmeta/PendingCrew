@@ -1,3 +1,7 @@
+import {
+  installDocumentLibrary,
+  refreshDocumentLibrary,
+} from "./documentLibrary";
 import content from "../content.json";
 import fixtures from "../fixtures.json";
 import type { Ledger, Scene, SceneState, TourState, GroupWork } from "./types";
@@ -10,7 +14,7 @@ export function freshScene(
   const db = structuredClone(
     data ?? scene.initialLedger ?? fixtures[scene.id as keyof typeof fixtures],
   ) as Ledger;
-  return {
+  const result: SceneState = {
     groups: initialGroupWork(scene, db),
     db,
     ui: {
@@ -40,13 +44,15 @@ export function freshScene(
       counter: 0,
     },
   };
+  installDocumentLibrary(scene, result);
+  return result;
 }
 export function initialState(
   desktop = true,
   initialScene = "website",
 ): TourState {
-  return {
-    contentRevision: 5,
+  return refreshDocumentLibrary({
+    contentRevision: 6,
     sceneId: initialScenes.some((s) => s.id === initialScene)
       ? initialScene
       : "website",
@@ -55,7 +61,7 @@ export function initialState(
       initialScenes.map((s) => [s.id, freshScene(s, desktop)]),
     ),
     notice: null,
-  };
+  });
 }
 
 export function initialGroupWork(
@@ -79,14 +85,12 @@ export function initialGroupWork(
     }) as GroupWork;
     const remap = (id: string) =>
       /^[WNHD]\d+$/.test(id) ? id[0] + (offset + Number(id.slice(1))) : id;
-    work.requests = work.requests
-      .slice(0, 1)
-      .map((r) => ({
-        ...r,
-        id: remap(r.id),
-        code: "#" + remap(r.id).slice(1),
-        text: conv.title + "：" + conv.subtitle,
-      }));
+    work.requests = work.requests.slice(0, 1).map((r) => ({
+      ...r,
+      id: remap(r.id),
+      code: "#" + remap(r.id).slice(1),
+      text: conv.title + "：" + conv.subtitle,
+    }));
     work.plans = work.plans.map((p, i) => ({
       ...p,
       id: remap(p.id),
@@ -99,18 +103,16 @@ export function initialGroupWork(
       owner: "机长",
       evidence: p.evidence ? remap(p.evidence) : undefined,
     }));
-    work.docs = work.docs
-      .slice(0, 1)
-      .map((d) => ({
-        ...d,
-        id: remap(d.id),
-        title: conv.title + "说明.md",
-        author: "机长",
-        body:
-          conv.subtitle +
-          "\n\n" +
-          (db.messages[conv.id]?.[0]?.text ?? "围绕当前群的工作持续协作。"),
-      }));
+    work.docs = work.docs.slice(0, 1).map((d) => ({
+      ...d,
+      id: remap(d.id),
+      title: conv.title + "说明.md",
+      author: "机长",
+      body:
+        conv.subtitle +
+        "\n\n" +
+        (db.messages[conv.id]?.[0]?.text ?? "围绕当前群的工作持续协作。"),
+    }));
     result[conv.id] = work;
   }
   return result;

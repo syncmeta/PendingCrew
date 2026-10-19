@@ -1,16 +1,17 @@
 {
   "status": "PASS",
   "typecheck": "strict",
-  "contentRevision": 5,
-  "domainTests": 15,
-  "browserChecks": 40,
+  "contentRevision": 6,
+  "domainTests": 18,
+  "browserChecks": 46,
   "artifacts": {
-    "PendingCrew-React-Portable.zip": "835f863a7132cc1634679844fc389d3b91b9132e962066e5003999972717873a",
-    "PendingCrew-React-Source.zip": "8966f526031737a3200b55daebb98a5b0c62fd374f92e5d660ce48d1c84f386f",
-    "PendingCrew-React-Website.zip": "7f8e343a60792798c3f947005ebce90e25d7bbead5ca14a134c22a8269bc2934",
-    "PendingCrew-React-Component.zip": "2432960576c98d93d2065ad67f1bc64f4307b58864302940bf5a52602d6ab060",
-    "pendingname-pendingcrew-product-tour-0.1.0.tgz": "4985f42058289514e178ca34d4469127634594e6a88a48ac3c1dfec4bbaf1f5d"
+    "PendingCrew-React-Portable.zip": "dff5d6f027851b47c3a9deb168bb47952ca1857e1fe63833ca99f1341ce260bf",
+    "PendingCrew-React-Source.zip": "4c1db1fc166b3389d2112f22cafc6ac4150f567b152cb25880da2b93dd179725",
+    "PendingCrew-React-Website.zip": "2ca932d1685103e1b07c9932c97a1d6b292407e4b853a52996ef4372e1a4993b",
+    "PendingCrew-React-Component.zip": "d110580d00b726f42fc210039bbfa38347f8a9e54be4e68c1dee332ae533f4f5",
+    "pendingname-pendingcrew-product-tour-0.1.0.tgz": "27fb28bf790536f405e3dffc745dda8774c4c690a5fd9e9acdf92ffe25faffd4"
   },
   "published": false,
-  "modifiedProductSources": false
+  "modifiedProductSources": false,
+  "catalogDocuments": 39
 }

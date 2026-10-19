@@ -48,8 +48,25 @@ function validLedger(v: unknown): v is Ledger {
     v.requests.every(
       (r) => typeof r.text === "string" && typeof r.code === "string",
     ) &&
-    v.docs.every((d) =>
-      ["title", "body", "author"].every((k) => typeof d[k] === "string"),
+    v.docs.every(
+      (d) =>
+        ["title", "body", "author"].every((k) => typeof d[k] === "string") &&
+        ["summary", "catalogKey"].every(
+          (k) => d[k] === undefined || typeof d[k] === "string",
+        ) &&
+        (d.kind === undefined ||
+          ["产品说明", "已敲定设计", "规划设想", "工程说明"].includes(
+            String(d.kind),
+          )) &&
+        (d.related === undefined || strings(d.related)) &&
+        (d.sources === undefined ||
+          (Array.isArray(d.sources) &&
+            d.sources.every(
+              (source) =>
+                record(source) &&
+                typeof source.path === "string" &&
+                typeof source.label === "string",
+            ))),
     ) &&
     v.asks.every(
       (a) =>

@@ -57,6 +57,11 @@ export interface HumanAsk extends Classified {
   context: string;
 }
 export interface DocumentRecord extends Classified {
+  catalogKey?: string;
+  summary?: string;
+  kind?: "产品说明" | "已敲定设计" | "规划设想" | "工程说明";
+  sources?: { path: string; label: string }[];
+  related?: string[];
   title: string;
   body: string;
   author: string;

@@ -3,15 +3,15 @@
     "id": "@pendingname/pendingcrew-product-tour@0.1.0",
     "name": "@pendingname/pendingcrew-product-tour",
     "version": "0.1.0",
-    "size": 97010,
-    "unpackedSize": 399280,
-    "shasum": "79b1befb9e3d00ad63229e2f762b9149eacd9506",
-    "integrity": "sha512-dSO/Yr0fOscg5lM5MOaw4uipg00caWkPwEzS3lDZTxFDUJIc3iY0d6gwBGtnqbyLduSha95g1uuvL/qKJ4/VDA==",
+    "size": 115689,
+    "unpackedSize": 462020,
+    "shasum": "e31e846f89c1bf5bfc325f36999429f33a1564be",
+    "integrity": "sha512-/ttS3NNKDNkp2oiVJAqvPH4I6+okRrtzkIrc/z1kgypH7org/7Kxacun/i8M2VjPebm7dy20wivTvtD+/P1ekQ==",
     "filename": "pendingname-pendingcrew-product-tour-0.1.0.tgz",
     "files": [
       {
         "path": "README.md",
-        "size": 11652,
+        "size": 13544,
         "mode": 420
       },
       {
@@ -27,6 +27,11 @@
       {
         "path": "lib/components/Dialogs.d.ts",
         "size": 71,
+        "mode": 420
+      },
+      {
+        "path": "lib/components/DocumentContent.d.ts",
+        "size": 191,
         "mode": 420
       },
       {
@@ -70,6 +75,11 @@
         "mode": 420
       },
       {
+        "path": "lib/domain/documentLibrary.d.ts",
+        "size": 681,
+        "mode": 420
+      },
+      {
         "path": "lib/domain/reducer.d.ts",
         "size": 184,
         "mode": 420
@@ -86,7 +96,7 @@
       },
       {
         "path": "lib/domain/types.d.ts",
-        "size": 4773,
+        "size": 4995,
         "mode": 420
       },
       {
@@ -101,17 +111,17 @@
       },
       {
         "path": "lib/pendingcrew-tour.css",
-        "size": 30154,
+        "size": 31135,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js",
-        "size": 132015,
+        "size": 177941,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js.map",
-        "size": 212917,
+        "size": 225764,
         "mode": 420
       },
       {
@@ -135,7 +145,7 @@
         "mode": 420
       }
     ],
-    "entryCount": 25,
+    "entryCount": 27,
     "bundled": []
   }
 ]

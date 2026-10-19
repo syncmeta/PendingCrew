@@ -1,3 +1,4 @@
+import { DocumentContent } from "./DocumentContent";
 import { Fragment } from "react";
 import { useTour } from "../state/TourContext";
 import { filtered, folderOf, crewLedgers } from "../domain/selectors";
@@ -345,7 +346,7 @@ function Todos() {
   );
 }
 function Documents() {
-  const { data, scene, state, setUi, setModal, reference } = useTour();
+  const { data, state, setUi, setModal, reference, dispatch } = useTour();
   const d = data.db.docs.find((d) => d.id === data.ui.doc);
   return d ? (
     <div className="doc-reader">
@@ -353,10 +354,47 @@ function Documents() {
         ← 返回文档
       </Button>
       <h3>{d.title}</h3>
-      <div className="byline">{d.author} · 产品说明</div>
-      {d.body.split("\n\n").map((p, i) => (
-        <p key={i}>{p}</p>
-      ))}
+      <div className="byline">
+        {d.author} · {d.kind ?? "产品说明"} · {folderOf(data.db, d, "document")}
+      </div>
+      {d.summary && <p className="document-summary">{d.summary}</p>}
+      {d.kind === "已敲定设计" && (
+        <p className="document-status">
+          设计约定，不代表所有安装版本均已交付。
+        </p>
+      )}
+      {d.kind === "规划设想" && (
+        <p className="document-status">
+          后续方向或契约草案，当前网页仅展示说明。
+        </p>
+      )}
+      <DocumentContent body={d.body} />
+      {d.related?.length ? (
+        <section className="document-related">
+          <h4>相关文档</h4>
+          {d.related.map((id) => (
+            <Reference key={id} id={id} />
+          ))}
+        </section>
+      ) : null}
+      {d.sources?.length ? (
+        <details className="document-sources">
+          <summary>依据与来源 · {d.sources.length}</summary>
+          {d.sources.map((source) => (
+            <a
+              key={source.path}
+              href={
+                "https://github.com/syncmeta/PendingCrew/blob/main/" +
+                source.path.split("/").map(encodeURIComponent).join("/")
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {source.label} ↗
+            </a>
+          ))}
+        </details>
+      ) : null}
       {state.sceneId === "research" && (
         <p>
           <a
@@ -378,6 +416,16 @@ function Documents() {
       )}
       <Reference id={data.db.plans[0].id} />
       <Button
+        action="share-document"
+        className="link-pill"
+        onClick={() => {
+          dispatch({ type: "shareReference", id: d.id });
+          setUi({ tab: "message", mobileChat: true });
+        }}
+      >
+        引用到当前群
+      </Button>
+      <Button
         action="move"
         data-id={d.id}
         data-scope="document"
@@ -388,6 +436,10 @@ function Documents() {
     </div>
   ) : (
     <>
+      <div className="document-library-note">
+        本群文档 · {filtered(data, data.db.docs, "document").length} 份
+        <span>产品说明、设计约定与规划资料</span>
+      </div>
       {filtered(data, data.db.docs, "document").map((d) => (
         <Button
           key={d.id}
@@ -402,7 +454,10 @@ function Documents() {
           <span>
             {d.title}
             <small>
-              {d.author || scene.agent} · {folderOf(data.db, d, "document")}
+              {d.kind ?? "产品说明"} · {folderOf(data.db, d, "document")}
+              {d.summary && (
+                <span className="document-row-summary">{d.summary}</span>
+              )}
             </small>
           </span>
         </Button>
