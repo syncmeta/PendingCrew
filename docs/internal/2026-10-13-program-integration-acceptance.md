@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 Core15 合同修复普通 Mac 完整产物收口
+
+本轮后台及 App 的准确完整输入永久为 `788881e9e2d6fe2953fde15c564738b9eec65fca`；root `a5b1a7` 以四文件已接受的 `1ae4bf60` 快进整合并保存两份构建前记录，普通原子推送 `ad629f/74552→aff573` exit0，`c16f45` 实际核 origin main/global 同788，Native9bc/clientef38仍原样隔离。下述产物完成后才写本节；本节后文档 HEAD 不是这些二进制的新编译来源。
+
+准确 normal `/private/tmp/pcw-mac-daily-788881e9-normal-01/crewd-presign` SHA256 `00767c06c0f43b59e610fe0019873fe4fe7f973d3d3a82d544de4426c4a9d136`；witness `/private/tmp/pcw-mac-daily-788881e9-normal-01-witness.json` SHA256 `b73f5a52a39109c5f108e646f09ef6c65c1d2f4acc9e95eb67bf82276a3a75a5`。原准备 `cfbd2b`、实际 build `b3c5ae/45989→aaded9`、自检/postflight `29a5ef` 均 exit0；443完整输入、13自有目标 fresh:false，cargo/rustc1.94.0，offline/locked/default Debug/ARM64 host/defaultFeatures true/features空/非测试，无显式 target 或 release flag。独核 `daily-normal-788881e9-independent-review.json` SHA256 `d5e91d6f0d9ed2604660ed8e42028f1c474682fd794d3626dc00e17b5f7145ce`，路径在既有 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01`；来源/命令/输出与 before/after clean788 一致。没有另跑稳定套件或启动 daemon/SDK/App/model。
+
+普通包 `/private/tmp/pcw-mac-daily-788881e9-mac-01/PendingCrew.app` 为 `0.1.44 / 20745.06184`，原 PendingCrew/Release/ARM64/LOCAL_MAC 配置；`7eaa57/57852→178a05` exit0，原checker/strict签审/签前后代码等价 `e8b381` exit0。唯一 ZIP `PendingCrew-0.1.44-20745.06184-macOS-arm64.zip` SHA256 `a109efde694837a16817cb17953bd642d08df88b4d4c3f53352ffbbc839ee51c`；151安全唯一 entries、CRC及50个App文件字节一致。75个163B标准 AppleDouble metadata对应实际App文件/目录；QA最初过严比较已纠正，非产品失败，未改包。独核报告 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/daily-package-788881e9-independent-review.json` SHA256 `56a8d77147832cbbf672f6623aa2b0fb0eae8fc69262f7bee60005c90a449df0`，成熟checker `37d7ee` exit0，额外App/helper严格签名与normal→签后helper代码等价通过，Info双ref和普通配置准确、无SUFeedURL。root `0ea548` 已读原件。GUI SHA256 `59ee3adcbcea09a57c7a2a29f95d1d59f10676b238ce3691a6a9bb04c5f335aa`，签后helper `298b8dea605d6bf320d671d77ba981277e97a3bcc1d6c2c0581de86c126c331b`，不冒签后字节与presign同hash。
+
+本轮到这里仅接受源码、准确编译与静态包/签封，不是新真实业务通过，也没有安装、公证或日常数据切换。新模型动作只有一份只读提案 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/real-codex-788881e9-single-task-proposal.json` SHA256 `19e57d5efaf954d3f7a578e12e6c217652403bf618bb5d44287a7c6218b9e49b`；root `8e47cc` 核原件，原两阶段canonical task/唯一普通worker/300秒/拒绝Unknown停/仅成功后重开保持，新的私域01仍不存在、Codex resolved/hash74c6…bdfc0未变。已提出新的具体授权问题，尚无答复或执行。旧a885报告15224的NOT_PASS、旧许可已使用及现场保持，不把修复或新包独验倒灌成旧真实通过。暖缓存复用，无新CI/SDK下载/清理；Rust与Xcode所有者均释放。
+
 ## 2026-10-19 a885 修正流程真实终态与后续合同修复
 
 本次人类直接授权 `call_c7b637e0d31147729e4f16cab1be6d89` 对应原 revision03，动作 SHA256 `5e87ca68f2944d74cb75ec618fc9a0e547b85f613f9f834015547ec2d610af63`。启动前 root 只读 `b807a4` 实核 App/helper/Codex 精确字节、新02目录不存在及四树干净。质量线实际执行结果为 NOT_PASS，报告 `/private/tmp/pcw-mac-daily-a885ce6c-real-codex-02/single-real-codex-stopped-review.json` SHA256 `15224b67312cda19bfb32a568a25eb28d4541d6901d537a1cf5d32a200c5f4ea`；当前窗口原 arguments/result 原件 `current-window-observation.json` SHA256 `a992fce9eea51e401d30f8405a86afd305b20bc50a5fa956037ee4f3ac4d67bf`，root `6ac5ed` 已核报告。未访问全局 rollout 或账号文件。

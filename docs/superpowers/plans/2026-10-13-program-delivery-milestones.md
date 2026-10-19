@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-19 当前入口：合同修复已整合，新普通 Mac 包已产出
+
+本轮完整 Core15 知识合同修复已独核、合入并推远端；准确后台与普通 Mac 包的完整编译输入固定为 `788881e9e2d6fe2953fde15c564738b9eec65fca`。新包为 `0.1.44 / 20745.06184`，目录 `/private/tmp/pcw-mac-daily-788881e9-mac-01`，ZIP `PendingCrew-0.1.44-20745.06184-macOS-arm64.zip`。准确 normal、普通 Release 配置、签名、签前后代码等价及 ZIP 均已独核接受。本节是构建后记录，不能把本节之后的文档提交冒充该包或 normal 的输入。
+
+这是源码修复与准确候选包单元闭合，不是新真实业务或安装通过。旧 a885 的真实任务仍为 NOT_PASS、授权已使用、原现场保留；新包尚未启动 App/模型。唯一新完整动作 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/real-codex-788881e9-single-task-proposal.json`，SHA256 `19e57d5efaf954d3f7a578e12e6c217652403bf618bb5d44287a7c6218b9e49b`，只已准备并向人类请求授权，未获新答复。新私域 `pcw-mac-daily-788881e9-real-codex-01` 实核未创建，Codex 路径/字节未变；成功才允许同私域退出重开验证，然后另核具体安装与首次日用动作。Native 9bc/ef38 继续隔离，不能混入 Core15；完整原生 ACP、设备与剩余平台交付仍未因此完成。不重复 M5/稳定 SQLite/退出链或全平台套件，不新增 CI。
+
 ## 2026-10-19 Mac 真实任务已执行，转入 Core15 工具合同修复
 
 人类对 `call_c7b637e0d31147729e4f16cab1be6d89` 明确回复“授权这一次完整流程”。质量线按原 a885 revision03 完成首消息持久化和唯一普通 Codex worker 启动；首次知识 `data_submit` 返回 RPC -32009，业务结果 NOT_PASS。已正常收尾，未重发、纠正、成功重开或安装；该次真实许可已经使用。它证明启动和原参数可见，不证明知识或页面创建成功。
