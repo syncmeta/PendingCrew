@@ -1,5 +1,21 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 a885 修正流程真实终态与后续合同修复
+
+本次人类直接授权 `call_c7b637e0d31147729e4f16cab1be6d89` 对应原 revision03，动作 SHA256 `5e87ca68f2944d74cb75ec618fc9a0e547b85f613f9f834015547ec2d610af63`。启动前 root 只读 `b807a4` 实核 App/helper/Codex 精确字节、新02目录不存在及四树干净。质量线实际执行结果为 NOT_PASS，报告 `/private/tmp/pcw-mac-daily-a885ce6c-real-codex-02/single-real-codex-stopped-review.json` SHA256 `15224b67312cda19bfb32a568a25eb28d4541d6901d537a1cf5d32a200c5f4ea`；当前窗口原 arguments/result 原件 `current-window-observation.json` SHA256 `a992fce9eea51e401d30f8405a86afd305b20bc50a5fa956037ee4f3ac4d67bf`，root `6ac5ed` 已核报告。未访问全局 rollout 或账号文件。
+
+首消息原 UUID `c36a5b39-cfd2-49cc-8c9d-b2b235761eee` committed，唯一 worker 启动原 UUID `e1fedba8-9263-4189-9a90-2312e4ec35db` launched/sessionRegistered；一次纯原 UUID 查找，不重发。知识原 UUID `6be5ec81-a9db-495b-8d60-93d16bb4f382` 返回 RPC -32009 的泛化拒绝，structuredContent null、无具体错误体。原完整 change 为 createBlock 与 createView/placement；不能从此数码推断原因、断言数据库空或声称页面保存。模型按原任务停止，没有纠正或第二任务；未做仅成功后允许的重开、代码执行、写授权或安装。
+
+本次监督 `94285→f36879` exit0、GUI21232 实际正常退出；从唯一提交保守起点到 GUI 退出 170.84 秒、收尾观察 237.31 秒，均小于300秒。直接 child Core21237、正式回执 Codex21316 与 GUI 的三 PID 窄 ps `554915` 均无行，socket 消失、registry 空；Core birth 未独立记录，不冒整个后代树核验。原私域保留，真实许可已使用。
+
+作者在 Core15 global `97e21439` 用自有 fixture 新 context/UUID/worker token 保持原两 edit 结构，经 Runtime/session→当前 crew ACL→SQLite 生产链得到明确红 `32344→871a00` exit101，日志 `/private/tmp/pcw-knowledge-real02-contract-red-20261019-01.log`：`placement Set needs exact old id or new alias`。这确认现有广告未表达 placement 的稳定标识约束；不补造原真实 wire 的内部 trace。修复保持原 JSON 形状和 keep/set 名称，明确 keep/新 alias-set/旧 id-set 三种既有合法形式，前置输入检查与安全 typed refusal，不放宽编译器/ACL/CAS/Unknown，也不合 Native Core16。
+
+四文件完整源码冻结 `1ae4bf60f810956b1561114cbd5de020e260350a`，父 `97e21439`；独核 `/private/tmp/pcw-simplified-sqlite-whole-quality-20261016-01/knowledge-real02-contract-1ae4-independent-review.json` SHA256 `9bcb332761b9da2a3e263fe996b643c7fd5d86e4037b00ac46cd1133fbee9af3`，root `d3b605` 核原件。real02 两项、既有 formal MCP/freeweb/SQL/ACL 一项、proto 六项及 safe-error 一项全部通过；workspace/all-targets `83582→a2d3ed` exit0、fmt/diffcheck 通过。原失败、旧断言残留失败和零项过滤记录保全，不冒通过或重复产品红。新 tests 的生产调用与独立数据库重开证明正确两 edit 真实提交、block/view/placement 关联、旧 id/keep 和原 UUID、错误 CAS 批次无部分写及 Core15 不变。
+
+复用原 exact renderer-proof/normalizer；十工具生产广告与 renderer 输入独立核为同一结构。data_submit 19894B schema→6364B 最终 TypeScript，alias/id/keep 必需性明确，候选预算仍32768，非 AnyJSON 节点不为 unknown；旧16K对照只作历史，不冒 a885 原预算。MCP 详细错误仅两个静态输入拒绝，SQL/ACL/foreign 等仍泛化；`thisCallApplied=false` 不等于旧原 UUID 无结果，原结果仍 notDetermined，不授重放。
+
+后续由 root 把本节与接受的四文件整合后冻结完整输入，再唯一准确 normal 与普通 Mac 包；64 GiB 空间已实核，不清缓存、不新建冷构建目录。没有新 SDK/模型/App 或原 scope 动作，Swift/稳定 SQLite/退出链复用原证据；旧真实 NOT_PASS 保留。本节不是新包或真实业务通过证明。
+
 ## 2026-10-19 受管 Claude 的源码接受层与唯一原生接口阻断
 
 人类对 `call_09a21d659c3b4c67881cb43db1c2c131` 选择受管任务边界；撤去的是此前额外提出的全引擎内部入口强拦截，不是 PTY、标准 ACP 或真实结果要求。这不是新的 SDK/模型运行授权。
