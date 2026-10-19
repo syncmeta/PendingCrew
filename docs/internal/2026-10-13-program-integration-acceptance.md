@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 Linux首次实际失败与已证recipe修复接受
+
+实际run39292568772/attempt1/sourceffcfb3d0f4502257c7f67700bd02ab47d103ae27、job118196717867已completed/failure。原artifact12206087432共11173B，六项SQLite原log逐一真实exact1passed/0failed/0ignored；第7在support/t11.rs初始化缺target/debug/fake_claude，未进入恢复业务，normal Release build/check均skipped。只选-p crewd遗漏crewd-exec假bin是recipe缺陷；静态核对曾漏此归属，失败保留，不归咎产品。API/jobs/原logs zip/失败artifact/七log/result与短manifest均exclusive保全于ignored `docs/private/preserved-delivery-artifacts/linux-current-ffcfb3d0-failure-20261020/`，原临时取证也保留。
+
+修复b85688c5201ed467b3a160cff9819428a8061577的workflow SHA256 2fc295a6d02488f013b6c67a21fe01afe0ec41cb885a0635aa3547ae37b51153。Cargo metadata --no-deps --offline --locked实证crewd/fake_codex/fake_claude归属crewd/crewd-exec，required-features均空，两package均支持testkit；构建显式两包三bin。独立质量另核metadata、旧ZIP与API digest/CRC、六raw与ZIP内字节一致且命令/实际通过相符，六hash等新workflow固定值。整个crewd树逐字等ffcf的4c96c7c65e38e3e3234feda65a1fb8f7a965a39b；reuse_first_six默认false仍7项，true须该树且记录原source/run/attempt/artifact/六hash，实际只执行第7并明确executed1/reused6，不重跑已绿六项。
+
+默认builder恢复现成normal smoke，不增新平台：该新Release私域serve、remote默认off、供应商/usr/bin/false，todo原UUID→SIGTERM/wait0→正式backup/restore/check→reopen原UUID去重→末次binaryhash。summary必须smoke passed/sourceRef/binarySHA等新normal witness；成功产物含smoke result与日志，原raw图/witness源码仍只在canonical tar，failure保存smoke日志。作者语法/metadata/选择与六日志静态原件 `/private/tmp/pcw-linux-current-repair-static-20261020/` 已独立接受；本节仍是修复运行前记录，不宣称Linux修复或Release闭环已通过。下一次实际新完整ref/新run单次执行后据真结果结算，不rerun原失败attempt或重标不存在的旧normal。
+
 ## 2026-10-20 当前源码Linux候选一次性入口源码接受
 
 后端唯一Linux构建文件作者从main6000f7c0独立分支新增140行workflow，aba16c024a7b133dcee276e1a3d93d75b868e29b已快进整合main；原Claude268404fe开发分支/工作树已完整恢复。唯一新文件SHA256 c1d6481edbcb7c7e55d0596faab8ff2013356bfe7be28aff0d5b49fe9720b728。原件 `/private/tmp/pcw-linux-current-static-20261020/` 为YAML、7段bash -n、4段Python AST、真实runtime/team_data模块别名与7精确函数及参数检查；无Rust编译或CI。独立质量亲核相同字节、manual-only/单Ubuntu24/25min、40hex reviewed_ref=GITHUB_SHA=HEAD/clean先于toolchain/cache/fetch，脚本参数与输出路径正确。

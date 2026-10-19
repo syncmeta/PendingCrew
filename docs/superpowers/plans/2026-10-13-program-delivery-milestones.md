@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 Linux已知recipe失败修复冻结，复用六绿并补实际Release闭环
+
+首个实际run39292568772/attempt1/sourceffcfb3d0终态failure：六项SQLite用例已真绿，第七项在t11夹具初始化缺fake_claude，未进入恢复业务；normal/tar尚未生成。根因是依赖构建只选择crewd，假执行器实际属于crewd-exec；原失败/六份通过日志已稳定保全，不冒为产品恢复失败或包通过。
+
+修复b85688c5201ed467b3a160cff9819428a8061577仅workflow31行差异，Cargo metadata实核两package/三bin，独立质量复核通过。原全部crewd Rust/Cargo/test树严格等4c96c7c65e38e3e3234feda65a1fb8f7a965a39b；本次显式reuse_first_six只在该树下复用原run/source/artifact与六日志hash，重验第7，未来默认仍7项。首次normal构建恢复已有默认私域smoke，准确新Release ELF实际serve→原UUID→正常停止→backup/restore/check→重开去重/末次binaryhash，并独核smoke source/hash等新witness。不是旧run重试或旧normal重标；冻结新完整ref后仅一次新任务，不重造验收平台或稳定业务。
+
 ## 2026-10-20 当前源码Linux交付入口冻结，执行单次必要验证
 
 新增唯一手动入口 `.github/workflows/crewd-linux-current.yml`，源码提交aba16c024a7b133dcee276e1a3d93d75b868e29b，workflow SHA256 c1d6481edbcb7c7e55d0596faab8ff2013356bfe7be28aff0d5b49fe9720b728。单Ubuntu24任务、25min、完整reviewed_ref必须等run/checkout且clean，先执行7个已有SQLite写入/ACL/耐久CAS/防误删恢复/closed scope及b702恢复队列用例，再独立默认无features Release normal与canonical包，强制fresh-own图和完整Git输入证明。每例必须实际1 passed/0failed/0ignored；只上传一份tar与小型日志，旧历史入口及已验模块不改、不重跑旧升级/Jev/M5/全平台。
