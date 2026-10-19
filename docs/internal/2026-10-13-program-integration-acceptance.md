@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 其他会话成果已保存，旧基线已保全后重放
+
+实际接手 main/origin main 均为25e83174，工作区72个变更文件；两作者会话已idle，无MERGE_HEAD/rebase。普通fetch成功，无新增远端main提交；磁盘约56 GiB，无cargo/rustc/xcodebuild活动，日用App仍运行，未对其发信号。保全原diff binary patch、untracked tar与逐文件SHA后，两组分开提交：`b702957c8f8cac2ae7473ed08bc9a959bfbd21dc` 为14路径原生Todo/session修复、夹具和交接；`64a2fee3` 为58路径React文档/数据示例及证据。提交前核原文件无并发变化、索引为空，diff check通过。
+
+复用作者已实际完成的442 orchestra、25 integration（4+3+5+5+2+6）、7实际App模块场景和完整Mac构建。独立质量读原日志并核7场景编译模块SHA256为20495d925706b8f88eeea3b0638db4910a42c79f362b98fb768fa9b8bf39f702，与inputs.json一致；未重跑整套或新增GUI/模型。该switch场景只覆盖读取期间切到其他session，不宣称任意导航/ABA全覆盖。产品仅明确avatar/conversation点击调用恢复；启动/刷新不调用，正常控制只读追踪原UUID，不重发，恢复后fresh CAS与queued-delivery保护保留。Demo51浏览器/20状态测试来自作者保存证据；数据表、schema、共享块均明确浏览器示例，不执行SQL或连接真实SQLite。独立有限审查未发现阻断保存/集成问题。
+
+另一会话已取得人类“替换 安装”授权并安装普通Release正常ID0.1.44/20746.1。其 `/private/tmp/pcw-todo-install-20261019/installed.json` 记录GUI SHA256 de30ccf118fa93d601b0599a89a76aae3c9da67029bedcdf6d4d3d846d5819ee、helper 06bce3b9fa29d737eb93c58f3e299fdd9640957a98d310c45637253ba66e81cb；本轮只读Info确认sourceBase25e83174与dirty=true，包内TodoSessionFixSourceManifest的13代码/夹具输入与现保存输入相同。唯一不相同的是随后追加安装结果的验证文档，保留原文和原清单，不更换来源戳。作者原安装/GUI记录见 `docs/internal/2026-10-19-todo-session-flow-validation.md`；此处不冒为根重新安装或重验窗口。旧备份位于 `~/Library/Application Support/PendingCrewInstallBackups/2026-10-19-todo-session-flow-215013/PendingCrew.app`，本轮未读写日用数据库或调用模型。
+
+统筹8f9→64a实际rebase成功；后台9bc唯一提交无冲突重放为9f2993de60a9bf630d47e884b9b65d0562cb145d。客户端ef38叠加该backend时唯一会话窗口内容冲突由客户端唯一作者解决，自动合并的Workspace/HumanActions语义同批检查；必要影响验证在冻结后按范围执行。旧三tip先保存到 `codex/pre-session-integration-20261020/`，不强推远端。重放不合日用main的schema16、不激活缺完成归属证据的Claude、不重标旧包输入，也不把全工程宣布完成。
+
 ## 2026-10-19 横向裁切修复版已实际更新并首次打开
 
 人类call_0d88caaabbd24812a1cd80d30262bd38明确『授权更新，已正常退出』，对应64d99380/0.1.44/20745.39557及首次无模型打开。唯一安装作者d26711/session82835实际预检确认旧bb/20745.25883的App/helper活动集为空、候选及父链/目标门通过；原handle由fcf476收exit0，备份/stage核验通过，无重复备份或中间改动。116f30 exit0完成两次exclusive whole rename与静态复核，新 `/Applications/PendingCrew.app` 的来源永久为64d99380c17ce93d5f1b3d4f10bbd1b10813c69f、0.1.44/20745.39557，四关键字节等准确候选、ARM64/严格签核通过，前后活动集为空，作者未打开App。
