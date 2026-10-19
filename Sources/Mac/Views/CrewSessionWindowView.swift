@@ -28,6 +28,7 @@ struct CrewSessionWindowView: View {
     @ObservedObject private var cliVersions = AgentCLIVersionCenter.shared
 
     @State private var draft = ""
+    @State private var draftEditRevision = UUID()
     @State private var presentedDraftContext: CrewdDrafts.Context?
     @State private var presentedDraftOwner: CrewdWorkspace?
     @State private var pendingExplicitId: String?
@@ -177,6 +178,17 @@ struct CrewSessionWindowView: View {
         LocalCodingAgentKind.captainDefault(detail?.crew.captainAgentKind)
     }
 
+    /// User edits are versioned synchronously, before an async receipt can finish.
+    private var sessionDraftBinding: Binding<String> {
+        Binding(get: { draft }, set: { value in
+            guard value != draft else { return }
+            draftEditRevision = UUID(); draft = value
+            if presentation == .conversation, let context = presentedDraftContext {
+                presentedDraftOwner?.messageDrafts.set(value, for: context)
+            }
+        })
+    }
+
     private var presentedRouteKey: String {
         let workspace = appModel.crewdBackend?.workspace
         return (workspace?.presentationNamespace ?? "") + "/" + (crewStore.selectedDetail?.crew.id ?? "") + "/" +
@@ -192,6 +204,7 @@ struct CrewSessionWindowView: View {
         guard presentedDraftOwner !== owner || presentedDraftContext != next else { return }
         if let old = presentedDraftContext { presentedDraftOwner?.messageDrafts.set(draft, for: old) }
         presentedDraftOwner = owner; presentedDraftContext = next
+        draftEditRevision = UUID()
         draft = owner.messageDrafts.text(for: next)
     }
 
@@ -946,7 +959,7 @@ struct CrewSessionWindowView: View {
             if let run = sessionRunner.current {
                 CodexSessionComposer(
                     run: run,
-                    draft: $draft,
+                    draft: sessionDraftBinding,
                     onSend: { Task { await send() } })
             }
         }
@@ -991,7 +1004,7 @@ struct CrewSessionWindowView: View {
             } else {
                 // 群聊同款输入胶囊（附件关掉：起 session 不走群聊附件通道）。
                 ComposerView(
-                    input: $draft,
+                    input: sessionDraftBinding,
                     pending: .constant([]),
                     photoItems: .constant([]),
                     cameraImage: .constant(nil),
@@ -1104,13 +1117,23 @@ struct CrewSessionWindowView: View {
 
     private func sendCrewdInput() async {
         guard let workspace = appModel.crewdBackend?.workspace, let detail = crewStore.selectedDetail else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        synchronizePresentedDraft()
+        let originalDraft = draft
+        let text = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        let namespace = workspace.presentationNamespace
+        let route = presentedRouteKey
+        let revision = draftEditRevision
+        func stillPresentingSubmission() -> Bool {
+            appModel.crewdBackend?.workspace === workspace && workspace.presentationNamespace == namespace &&
+                crewStore.selectedDetail?.crew.id == detail.crew.id && presentedRouteKey == route
+        }
         starting = true; defer { starting = false }
         do {
             if isContinuing, let run = sessionRunner.current {
+                guard run.crewId == detail.crew.id else { throw CrewdClientError(message: "会话已切换，未发送。", kind: .notSubmitted) }
                 let context = CrewdDrafts.Context.message(crew: detail.crew.id, channel: detail.crew.id + "/lobby", session: run.sessionId)
-                workspace.messageDrafts.set(text, for: context)
+                workspace.messageDrafts.set(originalDraft, for: context)
                 _ = try await workspace.submitOriginalText(.object([
                     "channelId": .string(detail.crew.id + "/lobby"), "text": .string(text),
                     "mentions": .array([.object(["kind": .string("session"), "targetId": .string(run.sessionId)])])]), snapshot: workspace.messageDrafts.snapshot(for: context))
@@ -1120,23 +1143,29 @@ struct CrewSessionWindowView: View {
                 guard !workspace.hasOriginalUnknown(method: "session.start", crew: detail.crew.id), !workspace.uncertainSessionStarts.contains(where: { $0.context == context }) else {
                     throw CrewdClientError(message: "原启动结果未确认；请核对同一机组会话，不会再次启动。", kind: .notSubmitted)
                 }
-                workspace.messageDrafts.set(text, for: context)
+                workspace.messageDrafts.set(originalDraft, for: context)
                 let snapshot = workspace.messageDrafts.snapshot(for: context)
                 let result: CrewdValue
                 do {
                     result = try await workspace.performValue("session.start", .object([
                         "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
                         "executor": .string("codex"), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
+                    guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
                     workspace.messageDrafts.clearIfUnchanged(snapshot)
+                    if stillPresentingSubmission() { workspace.selectSession(id) }
                 } catch {
                     workspace.recordUncertainSessionStart(snapshot, error: error)
                     throw error
                 }
-                guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
-                workspace.selectSession(id)
             }
-            draft = ""; localError = nil; localErrorAction = nil
-        } catch { localError = error.localizedDescription; localErrorAction = nil }
+            // Only the captured, unchanged editor may react to this receipt.
+            // The workspace separately clears the exact revisioned draft snapshot.
+            if stillPresentingSubmission(), draftEditRevision == revision, draft == originalDraft {
+                draft = ""; localError = nil; localErrorAction = nil
+            }
+        } catch {
+            if stillPresentingSubmission() { localError = error.localizedDescription; localErrorAction = nil }
+        }
     }
 
     /// Zero-config start: crew default dir + runner kind + permission mode, with
