@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 完整前端设计模块源码接受，进入准确候选构建
+
+实际整合 fd0af51b7b894bc144f0c1de38a527d46add69b3、c111f5de8bdf3d50a391d389a71bd7077027af5e 和 4cac27b3518584481c47598838e970462556f62e，10 路径共 334+/51-，Rust tree 仍为 13e99edd3dd154afbefcf5ae560d8b0bef4a1db3。前七路径对应普通 Mac 真实入口和知识容器：会话常驻、中央所选对话、右 Todo/成员及网页参考的颜色与间距；不移植 React 假业务、不固定 Agent 生成视图、不改权限/UUID/Unknown/自动启动/停工合同。
+
+quality_ui 独立整块审查发现 fd0 的 await 后无条件清草稿/选择会话/显示错误可能污染新上下文；c111 捕获 owner、namespace、crew、route、edit revision 与原输入，原 snapshot 的 clearIfUnchanged 结算与当前 UI gate 分开。真实生产方法切片红 d204ce exit1、绿 27441e exit0，九案例各一次提交；质量实核切片等 git 源并亲跑现有绿 binary。证据 `/private/tmp/pcw-webstyle-send-completion-01`，有限 transport/workspace stub，不冒真实模型或 SwiftUI 事件。暖编译 `/private/tmp/pcw-webstyle-mac-wip-03.log` SHA256 fd2da538cd1140a2bb6d8627b9ed602d889a7a21ccd9ffc56a1f7601c067ee0d，实际 BUILD SUCCEEDED；这是 precommit WIP 开发编译，不是新包来源证明。
+
+4cac 的三打包工具只新增显式 product/ui-preview 用途，preview 限普通 Debug/Release 与精确 com.pendingname.pendingcrew.ui-preview，标为 ui-preview-only-not-installable；默认 product 仍严格正常 ID。quality_ui 独读 37+/13-、亲执行六 ID 正反例及非普通 preview/consumer 默认拒绝控制，均通过，未减来源戳、签名或 load-closure 门。私域独立 fixture `/private/tmp/pcw-ui-purpose-independent-qd5ikgey/qualify.app`，作者控制 177eb8 exit0 已核，不重跑已接受七路径。
+
+主线实际从 debad7cb 快进至 4cac，保留已安装 788 包和日常数据。保存本记录后的 clean fullref 才是下一 accurate normal 与普通包的完整输入；旧 788 和 WIP 证据不改标。下一步只做该 ref 的准确默认非测试 normal/普通 Release 包，以及独立偏好域的有限假数据窗口预览；尚无本轮 GUI/新包验收，不启动真实 SDK/模型，不安装或终止用户 App，不新 CI、冷缓存或清理。Native16/跨厂商与其他平台仍隔离。
+
 ## 2026-10-19 实际安装与首次默认目录无模型打开完成
 
 人类直接授权 `call_83003fc7a75c4538b8ea21bf399d3e98`，原提案 `INSTALLATION-PROPOSAL.txt` SHA256 `4b206e5e76473d71438bfa1d6411556451ccf89e815c08de5e881d7938c275ae`。客户端实际预检 `e9240b`、backup+stage `a334a9/56586→6f7bfa`、不覆盖整包替换及复核 `c075bf` 均exit0。新 `/Applications/PendingCrew.app` 为0.1.44/20745.06184，准确输入 `788881e9e2d6fe2953fde15c564738b9eec65fca`、ARM64、adhoc/runtime/noTeam；双来源戳、四关键hash及严格deep签核与已验候选相同。安装不继承旧DeveloperID/Intel或公证资格。
