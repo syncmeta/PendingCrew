@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 实际安装与首次默认目录无模型打开完成
+
+人类直接授权 `call_83003fc7a75c4538b8ea21bf399d3e98`，原提案 `INSTALLATION-PROPOSAL.txt` SHA256 `4b206e5e76473d71438bfa1d6411556451ccf89e815c08de5e881d7938c275ae`。客户端实际预检 `e9240b`、backup+stage `a334a9/56586→6f7bfa`、不覆盖整包替换及复核 `c075bf` 均exit0。新 `/Applications/PendingCrew.app` 为0.1.44/20745.06184，准确输入 `788881e9e2d6fe2953fde15c564738b9eec65fca`、ARM64、adhoc/runtime/noTeam；双来源戳、四关键hash及严格deep签核与已验候选相同。安装不继承旧DeveloperID/Intel或公证资格。
+
+旧包保留为 `/Applications/.PendingCrew-previous-0.1.43-20730.47014-788881e9`，旧Info/主程序/CodeResources字节复核相同；非注册备份 `/Users/hey/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.1.43-20730.47014-before-788881e9.zip` SHA256 `7309f3e52caa0ba313cde80bc186a6ce1bf9b876a13e71ecfde57c5293a732df`，345项CRC和旧关键字节核对通过，安装后ZIP摘要未变。未读旧库、迁移、调用私钥、改系统权限或信任。唯一安装结果 `/private/tmp/pcw-mac-daily-788881e9-mac-01/installation-result.json` SHA256 `b73ba0ca69905915033228db7944cb39405baa24f34dfca7ef79348156807483`，root `0c1a53` 已核原件；其中未首开状态仅为作者交独立质量时点。
+
+独立质量随后从实际安装路径首次打开，GUI33049/原Popen87934（`81daca`），无参数、无fake或数据根env覆盖，removedOverrideKeys空。实际About为0.1.44/20745.06184；后端显示788881e、已连接crewd当前管理窗口，默认根 `/Users/hey/Library/Application Support/PendingCrewLocal` 为新实体目录、DB/socket就绪，机组边栏为空。Codex仅发现现有可执行路径，未检查登录或模型连接。已知直接Core33056无执行子进程，registry尚未创建，不冒为已存在的空对象。原退出询问选择“安全暂停”，无永久设置变更，`87934→ad9523` exit0，退出后socket消失、registry仍未创建。Core物理PID死亡未另行检查，不冒整个进程树证明；不为该字段扩大验证。
+
+首开记录 `/private/tmp/pcw-mac-daily-788881e9-installed-first-open-01/first-installed-open-review.json` SHA256 `27efd2b4d731b9f8637efb4e08b6639e4b7ee55e365d481b51bd0fc48bd165fc`，root `bcba16` 已核原件。接受实际安装、首次默认新目录就绪、零自动执行和安全暂停正常退出；新默认数据目录创建已获明确授权，旧数据没有迁移。无任务/会话恢复、模型/SDK探测、页面代码/写权限、Keychain、旧库读取或配置变更。Mac/Codex主线可交用户日常试用，不能据此宣称Claude/设备/Linux新源或全工程完成；下文待安装的状态均为历史。候选与安装字节仍永久来自788，后续记录提交不重标。
+
 ## 2026-10-19 788 新包真实知识闭环、重开正文与页面显示
 
 人类直接授权 `call_334fb82f01fe41428616c50931c1f645`，对应动作 SHA256 `19e57d5efaf954d3f7a578e12e6c217652403bf618bb5d44287a7c6218b9e49b`，已使用一次。准确编译输入仍为 `788881e9e2d6fe2953fde15c564738b9eec65fca`，普通包 `0.1.44 / 20745.06184`。质量线在新私域 `/private/tmp/pcw-mac-daily-788881e9-real-codex-01` 保存一条 Human 首消息、启动唯一普通 worker；正式知识请求 `bd937db1-c135-4e75-bd6e-0c727cc0ba42` 于 `2026-10-19T02:07:59.469Z` committed，早于300秒期限，generation 0→1。原工具直接回读知识块 `1a7d566d-047a-468a-995a-60e848c976dc` rev1、正文“日用版知识验收完成”，以及页面 `3e93b7b7-69cc-4916-9c59-d55b1af18c61` 和指向该块的 live 关联。
