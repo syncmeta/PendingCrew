@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 原远程 Mac 窗口整块准备接受；旧同身份实例阻断实际执行
+
+纠正此前将所有GUI一概归为另取许可的过度边界：当前669原候选的provider=false、MemoryCredentials、新业务私域/loopback窗口属于既有源码必要隔离验证，未发现针对该动作的审批拒绝。实际入口独立核为PendingCrewEntry→PendingCrewApp→原RootView，不使用NativeNext替代页；准确包与normal沿已接受669输入。候选专用CFPreferences域可正常读写、系统偏好仅正常只读，HOME不是CFPreferences隔离；日用域、Keychain、真实模型/SDK、设备、安装及系统权限均不在动作范围。
+
+完整动作只在全新私域seed两个synthetic crew/channel/Todo、共享block/document及两页纯静态HTML/CSS，再由原界面Memory配对到127.0.0.1、切换草稿/Todo/文档/自由布局、撤本synthetic grant观察拒绝、正常退出与原owner有限收尾。页面作者JavaScript为空，无主动外部入口或写能力，原产品受控bootstrap保持；API写入与GUI显示明确分层，不冒GUI源码编辑或JS写拒。质量技术核对正式DTO/原入口/来源/静态内容/Unknown不重投/原Popen收尾，并补足同owner socket kernel-peer→PID/UID/birth/parent与hello DB/runtime绑定、每5秒及配对/撤销阶段唯一server/fallback检查。仅源码/头文件/AST与哈希检查，未做kernel probe、seed、后台或App启动、CUA、代码执行，不得称实际窗口通过。
+
+原执行目录 `/private/tmp/pcw-current-remote-window-66992d59.zrf4s11z`，scopeID8a006a36-4332-49c3-a070-a2fd5d4fc082。prepared-files SHA256 `769434c7c6ae525a8ee2d38f5ec6e0aefcc82441cd5db0d5feaf9e10873cdd9b`，holder `06aeaeddd601f11acd841ffee35b57a9b499704ad749ba8bb07397879da6e88e`，scope `ede4d2e8123b8855364b78bd1c4a261ff14224f2e70cc65168881358d4ecac8c`，ACTIONS `322bd931a5d7a609bea6d65c758fde5fd2b9cf669f4d1edcb4436f8be70ed614`。稳定审查副本在 ignored `docs/private/preserved-delivery-artifacts/remote-window-prepared-66992d59-20261020/`，17文件/16清单项，preserved-files SHA256 `f4db10fde236352e6a09a587dad62f786a70712001ae11d74548bf5aa907c6aa`；根亲核全部摘要、原scope字节、0700/0600/no symlink/ignored。副本仅审查，不能移动后直接执行；原目录保留且尚未执行。
+
+实际硬阻断为同bundleID `com.pendingname.pendingcrew.native-candidate` 的旧SQLite候选PID90659/PPID1，birth2026-10-16 21:38:03，路径 `/private/tmp/pcw-sqlite-6f710187-mac-01/PendingCrew SQLite Candidate.app/Contents/MacOS/PendingCrew`。作者及根窄ps均确认仍活；候选偏好plist仅查5336B实体非symlink元数据，未读内容。当前任务归属未知；历史6f失败的已知GUI90475不是90659，不能据旧记录擅自关闭。已请求用户方便时正常退出该旧候选，不是退出日用/Applications包。执行前必须旧冲突消失并复核原hash/未执行scope/偏好/端口/同进程现场门；不接管、不强退、不改新包身份绕冲突。此是实际进程阻断，不是自动审批拒绝；没有新模型、CI或全套稳定业务重复。
+
 ## 2026-10-20 当前同版 Linux 私域受管生命周期实际完整接受
 
 准确controller `4f3eecf24423e6ae7092529caddad63826fd0528`、原compiledRef `c8d70482e42b0e9f777df11f9db720a910a91115` 永久分列；run39303182888/attempt1/job118233391149实际success，runtime约7.8秒。没有编译、七绿或旧迁移重跑。实际Linux普通UID1001/proc-fd门与原生产installer运行，developmentMacOnly=false；这不是Mac开发证据重标。

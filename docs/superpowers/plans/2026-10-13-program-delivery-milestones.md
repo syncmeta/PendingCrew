@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 原远程 Mac 窗口准备已接受，实际运行待旧实例退出
+
+已确认下一完整普通窗口流程可沿当前669原候选、准确normal、provider=false、Memory凭据及全新私域loopback进行，无须一概把隔离GUI算新许可关口。准备覆盖原crew/channel/Todo/文档、两静态HTML/CSS自由布局显示与切换、独立未发草稿、撤synthetic grant拒绝可见和正常owner收尾；不冒GUI编辑/JS写拒/持久配对/真机。质量整块技术复核接受，17文件及来源/动作/收尾稳定保全，完整范围与摘要见验收记录最新节；prepared-only，未启动服务、seed、App或CUA，不能当窗口通过。
+
+实际预检发现旧同bundleID候选90659仍活，自2026-10-16 21:38:03运行，当前任务归属未知。新进程可能与它共用候选偏好且工具误绑定，故不得接管、终止或重封新身份绕过。已发用户正常退出旧SQLite候选的具体协助请求；只阻塞实际launch，独立准备已完成。冲突消失后须再核同身份全进程/原件hash/未执行scope/端口/偏好与运行现场门再交QA；无需重复包构建或已接受稳定业务。日用App/数据保持原状。
+
+其余完整交付仍保留Claude完成归属产品待决及真实生命周期、持久Keychain/移动设备/签名与具体安装发布关口；Solid和个人记忆不擅自实施。当前没有已知后台编译/传输工作可冒称仍在推进，不以准备文件或旧候选存活假称运行验收完成。
+
 ## 2026-10-20 当前同版受管 Linux 私域交付单元完整接受
 
 准确controller4f3eecf2的唯一实际run39303182888/attempt1成功，原compiledRef=c8不变；UID1001的真实Linux/proc-fd路径通过freshprefix受管安装/激活、双lease/并发单CASwinner、Unknown只读不重投、SIGKILL非空WAL后原UUID/知识view/placement恢复及正常重开。四Core终态0/-9/0/0，Core坏WAL/未来库原hash+mode不变拒绝；知识坏WAL不冒Core同等no-touch保证。没有新编译、七绿或旧迁移重跑。
