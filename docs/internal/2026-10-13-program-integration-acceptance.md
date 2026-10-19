@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 网页设计新版已安装并首次无模型打开
+
+人类对 call_eb98e4f3d0504a33a16a1011fa507f74 明确授权更新及首次无模型打开。首次只读预检发现旧App仍活动，未做备份/替换/信号；人类随后对 call_3a9d15bd6c264c39931608f9dd0d5b03 确认正常退出。作者重新实际预检57b19b确认精确旧路径及helper活动集为空，旧788/20745.06184、新bb/20745.25883、候选四关键字节/严格签态及目标门均通过，沿同一授权继续，不代停用户任务。
+
+实际备份/stage原handle59839由7f80aa收exit0；旧ZIP177项CRC及关键字节通过。dfdb62 exit0完成两次exclusive renamex_np(RENAME_EXCL4)与安装复核。新 `/Applications/PendingCrew.app` 为0.1.44/20745.25883，准确输入永久为 bb867501597935edc9e62e9f041014dea1c9f15b，四关键字节等候选、ARM64/严格签核通过。旧整包保留 `/Applications/.PendingCrew-previous-0.1.44-20745.06184-bb867501`；ZIP保留 `~/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.1.44-20745.06184-before-bb867501.zip`，SHA256 d5b1b7373157f8b38b473db84ee3e85819a5539191de8452981155e3b5f23451。安装未读/迁移数据库或改设置/信任，作者未启动App。结果 `/private/tmp/pcw-webstyle-bb867501-mac-01/installation-result.json` SHA256 4125eb2f0085d270b2429bc79f6c5ffe64e7a72f265780a2e9b70d5c8f7f299a，root108494亲读、5a2d60亲核散列。
+
+独立质量亲核实际安装四关键字节与严格签核后，标准LaunchServices `open -a /Applications/PendingCrew.app` 一次exit0，无App参数或环境覆盖。2026-10-19台北18:36:03实际GUI57191/PPID1，自有helper57207/PPID57191；连续30秒两者存活，未观察到新增Agent执行子进程。正常默认PendingCrewLocal只核root/socket/DB/ui-cache存在元数据，未读聊天或数据库内容；CUA仅inventory emit:false后保留精确ID/isRunning，不抓AX或截图。没有恢复、发送、接管、设置或SDK/模型探测；界面正文、可见窗口数量、连接显示与异常恢复弹窗是否出现均未检查，不冒已验。App保留运行供用户使用，没有为补验退出重开。
+
+首次打开记录 `/private/tmp/pcw-webstyle-bb867501-mac-01/first-open-observation.json` SHA256 0a5d7e38fbf443a643276d791d4e00de4fc0b29a6749af7b9b58ef6205e2437b，root5a2d60亲读核散列。本节为安装后的记录，不重标二进制输入；覆盖下文等待新版安装授权的历史状态，不抹去早先预览误无env启动及有限窗口验收边界。Mac新版已实际安装/启动，跨厂商原生接口和其他平台仍按原证据边界保留，整个工程不冒完成。
+
 ## 2026-10-19 前端完整候选与有限实际窗口验收收口
 
 准确输入永久为 bb867501597935edc9e62e9f041014dea1c9f15b，已普通推送 origin main/global 并实际核远端一致；本节是构建后记录，不是包的新输入。新 normal 位于 `/private/tmp/pcw-webstyle-bb867501-normal-01/crewd-presign`，SHA256 f13a7ba32c29b06da75deb9936ad54310d9bf228a0563a45a6e676efd8562a48；同级 `normal-01-witness.json` SHA256 ea343055e9789ccec1fd8de56a37d1a5f53ddc8fbbb42c53d29823b0c4255d39。独立质量亲核443当前及快照输入、sidecar、实际13自有 fresh:false、空 features、非测试默认 Debug/ARM64、pre/post clean及自检。初次mtime受sandbox限制仅在Cargo前失败，同一已授权动作正常escalation后实际成功，原日志保留，无缓存清理或新CI。
