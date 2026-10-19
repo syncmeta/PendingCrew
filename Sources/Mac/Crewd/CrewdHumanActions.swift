@@ -13,10 +13,58 @@ enum CrewdChatStyle {
     }
     static func sidebar(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x2A2823,scheme)}
     static func selection(_ scheme:ColorScheme)->Color {color(0xE3EEEA,0x1C3A2F,scheme)}
-    static func bubble(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x2A2823,scheme)}
+    static func bubble(_ scheme:ColorScheme)->Color {color(0xFFFFFF,0x201E1A,scheme)}
+    static func accent(_ scheme:ColorScheme)->Color {color(0x044735,0x57B690,scheme)}
+    static func line(_ scheme:ColorScheme)->Color {color(0xE2E0D7,0x383530,scheme)}
+    static func listSelection(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x33312D,scheme)}
     static func canvas(_ scheme:ColorScheme)->Color {color(0xFFFFFF,0x161512,scheme)}
     static func ink(_ scheme:ColorScheme)->Color {color(0x1B1A14,0xECE9E0,scheme)}
     static func muted(_ scheme:ColorScheme)->Color {color(0x6E6A5C,0xA8A294,scheme)}
+}
+
+/// Shared native chrome, using the product tour's warm neutral surfaces.
+/// These components only present caller-owned data and explicit actions.
+struct CrewdConversationRow<Avatar: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    let title: String
+    let subtitle: String
+    let selected: Bool
+    let action: () -> Void
+    @ViewBuilder let avatar: () -> Avatar
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                avatar()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.system(size: 13, weight: selected ? .semibold : .medium)).lineLimit(1)
+                        .foregroundStyle(CrewdChatStyle.ink(scheme))
+                    Text(subtitle).font(.system(size: 11)).lineLimit(1)
+                        .foregroundStyle(CrewdChatStyle.muted(scheme))
+                }
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 10).padding(.vertical, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(selected ? CrewdChatStyle.listSelection(scheme) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+struct CrewdEmptySurface: View {
+    @Environment(\.colorScheme) private var scheme
+    let title: String
+    let detail: String
+    let symbol: String
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 27, weight: .light))
+                .foregroundStyle(CrewdChatStyle.accent(scheme))
+            Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(CrewdChatStyle.ink(scheme))
+            Text(detail).font(.system(size: 12)).foregroundStyle(CrewdChatStyle.muted(scheme))
+                .multilineTextAlignment(.center).frame(maxWidth: 300)
+        }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(CrewdChatStyle.canvas(scheme))
+    }
 }
 
 /// Window-owned input snapshots only; ask state remains in the organization inbox.

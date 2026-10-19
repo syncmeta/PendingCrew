@@ -19,6 +19,8 @@ import SwiftUI
 /// （事件驱动）刷本 crew 的白板/roster，中栏 CrewChatView 各自订阅同一条流 ——
 /// 两端各订各的，但都已无 3s/2s 定时器。未做共享数据层的合并（v1 可接受）。
 struct CrewSessionWindowView: View {
+    enum Presentation { case automatic, inspector, conversation }
+    var presentation: Presentation = .automatic
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var crewStore: CrewStore
@@ -26,6 +28,8 @@ struct CrewSessionWindowView: View {
     @ObservedObject private var cliVersions = AgentCLIVersionCenter.shared
 
     @State private var draft = ""
+    @State private var presentedDraftContext: CrewdDrafts.Context?
+    @State private var presentedDraftOwner: CrewdWorkspace?
     @State private var pendingExplicitId: String?
     @State private var starting = false
     @State private var localError: String?
@@ -67,7 +71,7 @@ struct CrewSessionWindowView: View {
     /// 「新建」表单）。运行中再发 = 直接把文本注入终端续聊。
     var body: some View {
         Group {
-            if sessionRunner.viewingTerminal {
+            if presentation == .conversation || (presentation == .automatic && sessionRunner.viewingTerminal) {
                 terminalMode
             } else {
                 memberListMode
@@ -110,10 +114,13 @@ struct CrewSessionWindowView: View {
         }
         .onChange(of: draft) { old, new in
             if old != new { pendingExplicitId = nil }
+            if presentation == .conversation, let context = presentedDraftContext { presentedDraftOwner?.messageDrafts.set(new, for: context) }
         }
+        .onChange(of: presentedRouteKey) { _, _ in synchronizePresentedDraft() }
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
         // 初次出现 + 切 crew 都重算（crew 没记 → `.codex`）。
         .onAppear {
+            synchronizePresentedDraft()
             selectedKind = appModel.usesCrewdAuthority ? .codex : Self.resolveAgentKind(crewStore.selectedDetail)
             startsAsCaptain = false
         }
@@ -170,13 +177,33 @@ struct CrewSessionWindowView: View {
         LocalCodingAgentKind.captainDefault(detail?.crew.captainAgentKind)
     }
 
+    private var presentedRouteKey: String {
+        let workspace = appModel.crewdBackend?.workspace
+        return (workspace?.presentationNamespace ?? "") + "/" + (crewStore.selectedDetail?.crew.id ?? "") + "/" +
+            (sessionRunner.isComposingNew ? "new" : sessionRunner.current?.sessionId ?? "new")
+    }
+    private func synchronizePresentedDraft() {
+        guard presentation == .conversation, appModel.usesCrewdAuthority,
+              let owner = appModel.crewdBackend?.workspace, let crew = crewStore.selectedDetail?.crew.id else { return }
+        let current = sessionRunner.current.flatMap { $0.crewId == crew ? $0 : nil }
+        let next: CrewdDrafts.Context = sessionRunner.isComposingNew || current == nil
+            ? .initialTask(crew: crew, session: "original-composer")
+            : .message(crew: crew, channel: crew + "/lobby", session: current?.sessionId ?? "")
+        guard presentedDraftOwner !== owner || presentedDraftContext != next else { return }
+        if let old = presentedDraftContext { presentedDraftOwner?.messageDrafts.set(draft, for: old) }
+        presentedDraftOwner = owner; presentedDraftContext = next
+        draft = owner.messageDrafts.text(for: next)
+    }
+
     // MARK: - 终端模式（切换条 + 终端 + composer）
 
     private var terminalMode: some View {
         HStack(spacing: 0) {
+            if presentation != .conversation {
             // 左侧成员头像竖条 —— 始终保留(含新建 session 占位),当前 session/新建态高亮。
             terminalRail
             Divider()
+            }
             terminalContent
         }
     }
@@ -379,7 +406,7 @@ struct CrewSessionWindowView: View {
 
     private var memberSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("成员 \(memberRowItems.count)")
+            Text("本群成员 \(memberRowItems.count)")
                 .font(Theme.Fonts.caption.weight(.semibold))
                 .foregroundStyle(Theme.Palette.inkMuted)
                 .padding(.horizontal, 14)

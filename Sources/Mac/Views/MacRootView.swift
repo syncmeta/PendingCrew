@@ -59,15 +59,15 @@ struct MacThreePaneView: View {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
-                    .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 340)
+                    .navigationSplitViewColumnWidth(min: 210, ideal: 238, max: 310)
             } content: {
                 CrewCenterView()
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 360, ideal: 520)
+                    .navigationSplitViewColumnWidth(min: 520, ideal: 740)
             } detail: {
-                CrewSessionWindowView()
+                CrewSessionWindowView(presentation: model.usesCrewdAuthority ? .inspector : .automatic)
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 560)
+                    .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 440)
             }
             // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通
             // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，

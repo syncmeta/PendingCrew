@@ -71,6 +71,8 @@ struct CrewSidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Theme.Palette.surfaceMuted.opacity(0.55))
             // 回头路（③）：藏起来的群从这儿找得回来。位置在列表**正下方**、额度行
             // 和身份行之上 —— 它是「这份列表的另一半」，不是页脚信息。
             hiddenCrewsFooter
@@ -79,7 +81,7 @@ struct CrewSidebarView: View {
             if !crewStore.usesCrewdAuthority { quotaFooterLine }
             // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
-        }
+        }.background(Theme.Palette.surfaceMuted.opacity(0.55))
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由

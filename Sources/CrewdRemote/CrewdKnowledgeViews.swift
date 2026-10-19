@@ -13,6 +13,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
 struct CrewdKnowledgeWorkspaceView: View {
     @ObservedObject var store: CrewdKnowledgeStore
     let available: Bool
+    @Environment(\.colorScheme) private var scheme
     @State private var selected = ""
     @State private var showSystem = false
     @State private var showArchived = false
@@ -27,15 +28,15 @@ struct CrewdKnowledgeWorkspaceView: View {
                     pagePicker
                     HStack { reloadButton; Spacer(); systemButton }
                 }
-            }.padding(8)
-            Divider()
+            }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 10)
+                .background(CrewdChatStyle.sidebar(scheme).opacity(0.25))
+            Divider().overlay(CrewdChatStyle.line(scheme))
             if !available {
-                ContentUnavailableView("知识数据尚不可用", systemImage: "externaldrive.badge.questionmark")
+                CrewdEmptySurface(title: "知识数据尚不可用", detail: "连接具备知识权限的后台后，可读取已保存的页面。", symbol: "externaldrive.badge.questionmark")
             } else if let detail = store.detail {
                 page(detail)
             } else {
-                ContentUnavailableView("这里显示你的页面", systemImage: "rectangle.on.rectangle",
-                    description: Text("在聊天中明确告诉 Agent 你需要的界面。生成的页面和数据绑定会保存；打开这里不会自动启动 Agent。"))
+                CrewdEmptySurface(title: "这里显示你的页面", detail: "在聊天中明确告诉 Agent 你需要的界面。页面和数据绑定会保存，打开这里不会启动 Agent。", symbol: "rectangle.on.rectangle")
             }
             Text(store.status).font(.caption).foregroundStyle(.secondary).padding(6)
         }

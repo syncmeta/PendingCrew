@@ -119,11 +119,21 @@ struct CrewdOriginalConnectionStatus: View {
     @State private var selected = Set<String>()
     var body: some View {
         HStack {
-            Text(workspace.status).font(.caption)
+            HStack(spacing: 5) {
+                Circle().fill(workspace.client.readyForWork ? Theme.Palette.accent : Theme.Palette.inkMuted).frame(width: 5, height: 5)
+                Text(workspace.status).font(.system(size: 11)).foregroundStyle(Theme.Palette.inkMuted)
+            }
             if workspace.dataDirectory != nil, !(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false) {
                 Text("下次后台启动未配置可执行的 Codex；资料仍可使用，请在设置中准备后停工重开。").font(.caption).foregroundStyle(.secondary)
             }
-            if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error = workspace.error {
+                DisclosureGroup {
+                    Text(error).font(.caption).textSelection(.enabled)
+                } label: {
+                    Label("当前操作需要核对", systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: 380, alignment: .leading)
+            }
             Spacer()
             if workspace.dataDirectory != nil {
                 Text(workspace.managementRole == "owner" ? "当前管理窗口" : "观察窗口").font(.caption)
@@ -133,7 +143,8 @@ struct CrewdOriginalConnectionStatus: View {
             }
             Button("恢复会话…") { selectingRecovery = true }
                 .disabled(!workspace.client.connected)
-        }.padding(8)
+        }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 5)
+            .background(Theme.Palette.surfaceMuted.opacity(0.35))
         .task {
             if workspace.previousExit == "unclean", workspace.restartPrompt != .null, shownPrompt.isEmpty {
                 shownPrompt = workspace.restartPrompt["id"].pretty; askRecovery = true
