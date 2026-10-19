@@ -82,7 +82,8 @@ final class CrewdPendingCrewBackend: PendingCrewBackend {
         }
         let result = try await call("crew.create", ["title": .string(request.title ?? "新机组"), "workingDirectory": .string(directory)])
         guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果没有正式机组编号，须核对原连接。") }
-        return CreateCrewResponse(crewId: id, captainBotId: result["captainSessionId"].string)
+        let captain = await workspace.startCaptainForCreatedCrew(id)
+        return CreateCrewResponse(crewId: id, captainBotId: captain)
     }
     func attachParent(crewId: String, parentCrewId: String, childKeepsBps: Int) async throws {
         _ = try await call("crew.adopt", ["crewId": .string(crewId), "parentId": .string(parentCrewId)])

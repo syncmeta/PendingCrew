@@ -56,7 +56,9 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
         let currentCrew = workspace.crewID == observedCrew && workspace.sessionID == sessionID
         if !currentCrew { transcript?.revokeKnowledgeCallDetails() }
         hasObservedLive = true
-        status = live["running"] == .bool(true) ? .running : .exited(nil)
+        let nextStatus: SessionStatus = live["running"] == .bool(true) ? .running : .exited(nil)
+        if status != .running, nextStatus == .running { failure = nil }
+        status = nextStatus
         isWorking = live["working"] == .bool(true)
         let kinds: [String: CrewSessionHealth.Kind] = ["auth_required": .authRequired, "usage_limit": .usageLimit,
             "rate_limited": .rateLimited, "launch_failed": .launchFailed, "brief_undelivered": .briefUndelivered,
@@ -92,20 +94,17 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     private func command(_ method: String, _ fields: [String: CrewdValue]) {
         let epoch = workspace.observationGeneration
         guard !retired, workspace.acceptsObservation(epoch) else { return }
-        var fields = fields
-        if workspace.client.capabilities.contains("command.receipts") {
-            guard let target = workspace.controlTargets[sessionID] else { failure = "当前真实代际尚未读取，控制尚未提交。"; return }
-            fields.removeValue(forKey: "sessionId")
-            if method == "session.interrupt" || method == "session.resume" {
-                guard case .object(let current) = target.value else { return }; fields = current
-            } else { fields["target"] = target.value }
-        }
+        // These explicit session-ID controls resolve a fresh CAS target in
+        // Workspace immediately before submission. A cached pre-resume target
+        // belongs to the old generation even when the new live row is visible.
         Task {
             // Authority may have switched while this main-actor task was queued.
-            guard !retired, workspace.acceptsObservation(epoch) else { return }
+            guard !retired, workspace.acceptsObservation(epoch),
+                  workspace.crewID == observedCrew, workspace.sessionID == sessionID else { return }
             do {
                 _ = try await workspace.performValue(method, .object(fields))
                 guard !retired, workspace.acceptsObservation(epoch) else { return }
+                failure = nil
                 await refresh()
             } catch {
                 guard !retired, workspace.acceptsObservation(epoch) else { return }

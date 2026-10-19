@@ -2137,6 +2137,11 @@ impl<P: Port> Core<P> {
             }
         }
         self.publish_live(session).await;
+        // A wake may arrive while this generation is still starting. An idle
+        // resumed thread emits no working-to-idle edge to retry that wake, so
+        // drain it now that the handle is ready. Normal delivery gates still
+        // enforce inflight ownership and any stop requested during launch.
+        log_err(self.try_deliver(session).await.map(|_| ()));
         Ok(())
     }
 

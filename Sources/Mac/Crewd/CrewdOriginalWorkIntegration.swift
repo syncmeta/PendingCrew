@@ -168,13 +168,33 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 if geometry.size.width < 600 {
                     HStack {
                         Button { showConversationPopover = true } label: {
-                            Label("会话列表", systemImage: "bubble.left.and.bubble.right")
+                            Label("群聊与会话", systemImage: "bubble.left.and.bubble.right")
                         }.buttonStyle(.plain).font(.system(size: 12))
                         Spacer()
+                        if showingSession {
+                            Button("返回群聊") { runner.viewingTerminal = false }
+                                .buttonStyle(.plain).font(.system(size: 12))
+                        }
                     }.padding(.horizontal, 12).frame(height: 32)
                         .popover(isPresented: $showConversationPopover) {
                             conversationList.frame(width: 248, height: 440)
                         }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(visibleChannels.compactMap { $0["id"].string }, id: \.self) { id in
+                                if let row = visibleChannels.first(where: { $0["id"].string == id }) {
+                                    Button {
+                                        workspace.selectConversation(id); runner.viewingTerminal = false
+                                    } label: {
+                                        Text(CrewdConversationProjection.title(row))
+                                            .font(.system(size: 12, weight: !showingSession && workspace.channelID == id ? .semibold : .regular))
+                                            .padding(.horizontal, 10).padding(.vertical, 5)
+                                            .background(!showingSession && workspace.channelID == id ? CrewdChatStyle.bubble(scheme) : .clear, in: Capsule())
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }.padding(.horizontal, 8)
+                    }.frame(height: 32)
                     Divider()
                 }
             ZStack {
@@ -258,7 +278,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                                 selected: showingSession && workspace.sessionID == id && !runner.isComposingNew,
                                 action: {
                                     guard let run = runner.runs.first(where: { $0.sessionId == id && $0.crewId == workspace.crewID }) else { return }
-                                    workspace.selectSession(id); runner.select(run.runID); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false
+                                    runner.openSession(run.runID); openedSession = true; showConversationPopover = false
                                 }) { CrewdMemberAvatar(seed: id, colorSeed: workspace.crewID) }
                                 .disabled(!runner.runs.contains { $0.sessionId == id && $0.crewId == workspace.crewID })
                         }

@@ -34,8 +34,7 @@ struct CrewCenterView: View {
                     crewTitle: detail.crew.title,
                     onOpenSession: { runId in
                         // 右栏常驻；点 session 头像只切到「终端」模式 + 选中该 run。
-                        sessionRunner.select(runId)
-                        sessionRunner.viewingTerminal = true
+                        sessionRunner.openSession(runId)
                     },
                     onNewSession: {
                         sessionRunner.composeNew()

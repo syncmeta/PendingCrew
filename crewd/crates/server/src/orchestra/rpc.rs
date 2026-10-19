@@ -1712,18 +1712,29 @@ mod tests {
     /// U1：hello 回 API 版本、最老还认的版本、构建身份；能力只在编排在跑时有（库里的 `serve()` 没有）。
     #[tokio::test]
     async fn hello_reports_versions_build_and_capabilities() {
+        // Capability membership is a set; serialization order is not an API contract.
+        let sorted = |v: &Value| {
+            let mut values: Vec<_> = v
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            values.sort();
+            values
+        };
         let st = state();
         let v = hello(&st, Value::Null).await.unwrap();
         assert_eq!(v["apiVersion"], 3);
         assert_eq!(v["minApiVersion"], crewd_proto::MIN_API_VERSION);
         assert_eq!(
-            v["capabilities"],
-            json!([
+            sorted(&v["capabilities"]),
+            sorted(&json!([
                 "work.reassignLost",
                 "documents",
                 "viewFolders",
                 "channelWork"
-            ]),
+            ])),
             "持久工作能力不要求编排"
         );
         let build = &v["build"];
@@ -1739,8 +1750,8 @@ mod tests {
         assert!(st.orchestra.set(h).is_ok());
         let v = hello(&st, json!({})).await.unwrap();
         assert_eq!(
-            v["capabilities"],
-            json!([
+            sorted(&v["capabilities"]),
+            sorted(&json!([
                 "orchestra",
                 "session.answer",
                 "session.respondRunnerRequest",
@@ -1752,7 +1763,7 @@ mod tests {
                 "documents",
                 "viewFolders",
                 "channelWork"
-            ])
+            ]))
         );
     }
 

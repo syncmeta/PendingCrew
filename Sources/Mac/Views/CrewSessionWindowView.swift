@@ -296,7 +296,7 @@ struct CrewSessionWindowView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? railSelectionColor : .clear))
         if let run = item.run {
-            Button { sessionRunner.select(run.runID) } label: { av }
+            Button { sessionRunner.openSession(run.runID) } label: { av }
                 .buttonStyle(.plain)
                 .accessibilityLabel("切换到 \(item.sender.displayName)")
                 .help(item.sender.displayName)
@@ -514,8 +514,7 @@ struct CrewSessionWindowView: View {
             // 只读 model/effort pill 收在 sessionRowContent 里、与最新一步动作同一行
             // （落在选中框内，不再浮在框外右侧 —— 切换入口仍只在终端页头部，#485/#489）。
             Button {
-                sessionRunner.select(run.runID)
-                sessionRunner.viewingTerminal = true
+                sessionRunner.openSession(run.runID)
             } label: {
                 sessionRowContent(sender: item.sender, run: run)
             }
@@ -792,9 +791,10 @@ struct CrewSessionWindowView: View {
     }
 
     /// composer 是否处于「续聊当前 run」态（反之 = 起新 session 态）。
-    /// 新建态、无 run、当前 run 已退出，都算起新 session。
+    /// crewd 的退出会话仍指向原身份；只有明确新建或没有 run 才创建。
     private var isContinuing: Bool {
-        !sessionRunner.isComposingNew && sessionRunner.current?.status == .running
+        !sessionRunner.isComposingNew && sessionRunner.current != nil
+            && (appModel.usesCrewdAuthority || sessionRunner.current?.status == .running)
     }
 
     // MARK: - session bar (chunk2 T2)
@@ -850,7 +850,7 @@ struct CrewSessionWindowView: View {
                         run: run,
                         isSelected: !sessionRunner.isComposingNew && run.runID == sessionRunner.selectedRunId,
                         badgeCount: badgeCount(for: run),
-                        select: { sessionRunner.select(run.runID) },
+                        select: { sessionRunner.openSession(run.runID) },
                         remove: { sessionRunner.remove(run.runID) }
                     )
                 }

@@ -609,7 +609,54 @@ final class CrewdWorkspace: ObservableObject {
            let member = summary["members"].array.first(where: {$0["kind"].string == "session"})?["id"].string { selectSession(member) }
     }
     var selectedMembers: [CrewdValue] { channelSummaries.first(where: {$0["channel"]["id"].string == channelID})?["members"].array ?? [] }
-    func selectSession(_ id: String) { selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
+    func selectSession(_ id: String) { guard sessionID != id else { return }; selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
+    private var openingSessions = Set<String>()
+    /// Only an explicit user click invokes this path. Refresh live state first;
+    /// never infer a stopped runner from an uninitialized display projection.
+    func restoreOpenedSession(_ id: String, crew: String) async {
+        let epoch = observationGeneration
+        guard crewID == crew, sessionID == id, !openingSessions.contains(id) else { return }
+        openingSessions.insert(id); defer { openingSessions.remove(id) }
+        do {
+            let live = try await readValue("session.live", .object(["sessionId": .string(id)]))
+            guard acceptsObservation(epoch), crewID == crew, sessionID == id else { return }
+            guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
+                throw CrewdClientError(message: "原会话运行状态未能确认，未提交恢复。", kind: .notSubmitted)
+            }
+            if !running {
+                guard !hasOriginalUnknown(method: "session.resume", crew: crew) else {
+                    throw CrewdClientError(message: "原恢复请求结果未确认，请先核对原请求。", kind: .notSubmitted)
+                }
+                _ = try await performValue("session.resume", .object(["sessionId": .string(id)]))
+            }
+        } catch {
+            if acceptsObservation(epoch), crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
+        }
+    }
+
+    /// Called once after an explicitly created crew has a confirmed identity.
+    /// A startup failure must not turn a successful creation into a retry that
+    /// creates a second crew. No appearance/reconnect hook calls this method.
+    @discardableResult func startCaptainForCreatedCrew(_ id: String, brief: String = "你是这个新机组的机长。请读取群聊与 Todo，回应人类需求；没有任务时待命。") async -> String? {
+        let epoch = observationGeneration
+        do {
+            let roster = try await readValue("session.list", .object(["crewId": .string(id)]))
+            guard acceptsObservation(epoch) else { return nil }
+            guard case .array(let rows) = roster else { throw CrewdClientError(message: "机长名册未能确认。", kind: .notSubmitted) }
+            if let captain = rows.first(where: { $0["role"].string == "captain" }) { return captain["id"].string }
+            guard !hasOriginalUnknown(method: "session.start", crew: id) else {
+                throw CrewdClientError(message: "机长原启动结果尚未确认，请核对原请求。", kind: .notSubmitted)
+            }
+            let result = try await performValue("session.start", .object([
+                "crewId": .string(id), "role": .string("captain"), "executor": .string("codex"),
+                "brief": .string(brief), "isolation": .bool(false)]))
+            return result["id"].string
+        } catch {
+            if acceptsObservation(epoch) { self.error = "机组已创建，机长启动未完成：" + error.localizedDescription }
+            return nil
+        }
+    }
+
     func selectChannel(_ id: String) { selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id); messages = []; scheduleSync() }
 
     func scheduleSync(recoverHistory: Bool = false) {
@@ -758,7 +805,10 @@ final class CrewdWorkspace: ObservableObject {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let commandParams = try await explicitControlParameters(operation, params)
-            let receipt = try await submitPublicCommand(operation, params: commandParams, crew: params["crewId"].string ?? crewID)
+            var receipt = try await submitPublicCommand(operation, params: commandParams, crew: params["crewId"].string ?? crewID)
+            if [.sessionStart, .sessionResume, .sessionStop, .sessionInterrupt].contains(operation) {
+                receipt = try await observeSessionControl(receipt)
+            }
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
                 throw CrewdClientError(message: "原命令已有耐久身份，但外部结果尚未确认；请只读核对，不会重发。", data: receipt.value)
             }
@@ -801,6 +851,27 @@ final class CrewdWorkspace: ObservableObject {
             throw error
         }
     }
+    /// Normal session controls first return dispatched. Follow only that original
+    /// receipt while the explicit click is in progress; never submit a second
+    /// command or infer launch success from the roster's desired state.
+    private func observeSessionControl(_ initial: CrewdPublicReceipt) async throws -> CrewdPublicReceipt {
+        var receipt = initial
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !receipt.historical, [.reserved, .admitted, .dispatched].contains(receipt.phase), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+            guard let observation = publicCommands.observations[initial.requestID],
+                  let current = try await publicCommands.lookup(observation) else { break }
+            receipt = current
+        }
+        if receipt.phase != initial.phase, !receipt.historical,
+           let observation = publicCommands.observations[initial.requestID],
+           [.committed, .launched, .confirmed, .written, .suppressed, .rejected].contains(receipt.phase) {
+            try acknowledgeOriginalCommand(observation.prepared, receipt: receipt,
+                detail: "本次明确会话操作期间只读核对原请求终局；没有重放。")
+        }
+        return receipt
+    }
+
     /// Original explicit controls supplied only a session ID. Resolve that
     /// closed legacy shape through a current read; never replace a caller's
     /// already typed CAS target or infer a target from a cached session row.
@@ -901,7 +972,7 @@ final class CrewdWorkspace: ObservableObject {
             receipt.value["result"]["sessionRegistered"] == .bool(true) &&
             receipt.value["result"]["sessionId"].string.map { !$0.isEmpty } == true
     }
-    func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) throws {
+    func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt, detail: String = "人类明确核对原后台回执；没有重放。") throws {
         _ = try publicCommandBinding(for: client)
         guard record.scope == presentationScope, !receipt.historical,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
@@ -911,7 +982,7 @@ final class CrewdWorkspace: ObservableObject {
               [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
               let journal = originalJournal else { throw CrewdPublicWire.invalid() }
         if record.params["command"]["operation"].string == "session.start", !settledSessionStart(receipt) { throw CrewdPublicWire.invalid() }
-        try journal.acknowledge(record, detail: "人类明确核对原后台回执；没有重放。")
+        try journal.acknowledge(record, detail: detail)
         durableUnknown = try journal.unknownRecords()
         if record.params["command"]["operation"].string == "session.start" {
             uncertainSessionStartRecords.removeAll { $0.request == receipt.requestID }

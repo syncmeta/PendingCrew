@@ -97,9 +97,27 @@ async fn codex_runs_through_serve_and_persists_profile_delivery_and_thread_resum
                 .await
                 .unwrap();
             client.stopped(session_id).await;
+            // Explicit avatar restoration resumes the original conversation;
+            // a message alone must not undo a prior human stop.
+            client
+                .call("session.resume", json!({"sessionId":session_id}))
+                .await
+                .unwrap();
         }
         client.call("message.post", json!({"channelId":format!("{crew_id}/lobby"),"text":text,"mentions":[{"kind":"session","targetId":session_id}]})).await.unwrap();
-        wait(text, || turn_count(&fixture, text) == 1).await;
+        let until = tokio::time::Instant::now() + Duration::from_secs(5);
+        while turn_count(&fixture, text) != 1 {
+            if tokio::time::Instant::now() > until {
+                let live = client
+                    .call("session.inspect", json!({"sessionId":session_id}))
+                    .await;
+                let wakes = client
+                    .call("wake.list", json!({"sessionId":session_id}))
+                    .await;
+                panic!("missing {text}; live={live:?}; wakes={wakes:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {

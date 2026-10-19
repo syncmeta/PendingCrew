@@ -363,6 +363,7 @@ final class CrewStore: ObservableObject {
                     throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
                 }
                 update(.accepted, crew: actual)
+                await workspace.startCaptainForCreatedCrew(actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 pendingCrew = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
                 await refreshList(); await refreshDetail(actual)
@@ -379,6 +380,7 @@ final class CrewStore: ObservableObject {
             update(.posting)
             _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
             update(.accepted)
+            await workspace.startCaptainForCreatedCrew(crewID)
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
             pendingCrew = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
             await refreshList(); await refreshDetail(crewID)
