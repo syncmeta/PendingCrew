@@ -1,0 +1,89 @@
+name: crewd current Linux managed lifecycle
+run-name: "Managed same-version c8 candidate — controller ${{ inputs.reviewed_ref }}"
+# Runtime-only: immutable accepted c8 ELF; no compilation, upgrade or service.
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_ref:
+        description: Complete reviewed controller SHA, equal to run and checkout
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  managed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Bind controller source and original compiled Rust family
+        env:
+          REVIEWED_REF: ${{ inputs.reviewed_ref }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess
+          ref=os.environ['REVIEWED_REF'];assert re.fullmatch('[0-9a-f]{40}',ref)
+          assert ref==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert subprocess.check_output(['git','rev-parse','HEAD:crewd'],text=True).strip()=='4c96c7c65e38e3e3234feda65a1fb8f7a965a39b'
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'managed-current';out.mkdir()
+          paths=['.github/workflows/crewd-linux-managed-current.yml','scripts/dev/crewd_managed_launch.py','scripts/dev/smoke-crewd-linux-managed-current.py','scripts/dev/install-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/write-codex-first-provenance.py','scripts/dev/archive-crewd-linux-lifecycle.py']
+          rows=[{'path':p,'sha256':hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()} for p in paths]
+          (out/'controller-action.json').write_text(json.dumps({'controllerRef':ref,'compiledRef':'c8d70482e42b0e9f777df11f9db720a910a91115','recipeInputs':rows,'newCompilation':False,'testsRerun':False},indent=2))
+          PY
+      - name: Obtain only the exact accepted current candidate
+        run: |
+          gh api repos/${{ github.repository }}/actions/runs/39297913612 > "$RUNNER_TEMP/managed-current/original-run.json"
+          gh api repos/${{ github.repository }}/actions/artifacts/12209198414 > "$RUNNER_TEMP/managed-current/original-artifact.json"
+          python3 - <<'PY'
+          import json,os,pathlib
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'managed-current';r=json.loads((out/'original-run.json').read_text());a=json.loads((out/'original-artifact.json').read_text())
+          assert r['id']==39297913612 and r['run_attempt']==1 and r['status']=='completed' and r['conclusion']=='success' and r['head_sha']=='c8d70482e42b0e9f777df11f9db720a910a91115'
+          assert a['id']==12209198414 and a['size_in_bytes']==38192659 and not a['expired'] and a['digest']=='sha256:d44c2c5577ec9b539c9b8637ccb6bedc2d1b1e9b3a45d6b73c7b914b7588079b'
+          PY
+          gh api repos/${{ github.repository }}/actions/artifacts/12209198414/zip > "$RUNNER_TEMP/managed-current/original.zip"
+      - name: Verify pinned ZIP/canonical tar and full original package
+        run: |
+          python3 - <<'PY'
+          import hashlib,os,pathlib,tarfile,zipfile
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'managed-current';z=out/'original.zip'
+          assert z.stat().st_size==38192659 and hashlib.sha256(z.read_bytes()).hexdigest()=='d44c2c5577ec9b539c9b8637ccb6bedc2d1b1e9b3a45d6b73c7b914b7588079b'
+          with zipfile.ZipFile(z) as a:
+              raw=a.read('linux-current-release/crewd-linux-x86_64-c8d70482.tar.gz')
+          assert hashlib.sha256(raw).hexdigest()=='ce3f377134f3c652fb50bc1477cbe5d5867ba1ef2ebcac8f98016f3c940196ab'
+          canonical=out/'original-c8.tar.gz';canonical.write_bytes(raw)
+          with tarfile.open(canonical) as t:
+              for m in t.getmembers():
+                  p=pathlib.PurePosixPath(m.name)
+                  assert not p.is_absolute() and '..' not in p.parts and p.parts[0]=='crewd-linux-x86_64' and (m.isfile() or m.isdir()) and not m.mode&0o6000
+              t.extractall(out/'input',filter='data')
+          PY
+          python3 -B scripts/dev/check-crewd-linux-candidate.py "$RUNNER_TEMP/managed-current/input/crewd-linux-x86_64" > "$RUNNER_TEMP/managed-current/original-package-check.log" 2>&1
+      - name: Current single-version ordinary-user installed runtime lifecycle
+        run: |
+          python3 -B scripts/dev/smoke-crewd-linux-managed-current.py "$RUNNER_TEMP/managed-current/input/crewd-linux-x86_64" "$RUNNER_TEMP/mc-flow" > "$RUNNER_TEMP/managed-current/driver.log" 2>&1
+      - name: Preserve the complete private lifecycle without dereferencing links
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/mc-flow" ]; then
+            python3 -B scripts/dev/archive-crewd-linux-lifecycle.py "$RUNNER_TEMP/mc-flow" "$RUNNER_TEMP/managed-current/lifecycle.tar.gz" --diagnostic-special-inodes > "$RUNNER_TEMP/managed-current/archive.log" 2>&1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crewd-linux-managed-c8-controller-${{ github.sha }}
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/managed-current/*.json
+            ${{ runner.temp }}/managed-current/*.log
+            ${{ runner.temp }}/managed-current/lifecycle.tar.gz
+            ${{ runner.temp }}/mc-flow/result.json
+            ${{ runner.temp }}/mc-flow/terminals.json
+            ${{ runner.temp }}/mc-flow/rpc.jsonl
+          if-no-files-found: error

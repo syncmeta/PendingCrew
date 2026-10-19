@@ -17,6 +17,8 @@ CORE14_RECOVERY_INPUTS = {
 # independent strong-source admission. Historical14 families remain separate.
 CORE15_RECOVERY_INPUTS = {
     '4c2f2c7b1b56d01eb85f2c5306caa9cb3c93f0f4e66afc7b61b117207aa1c4c9': 402,
+    # Current SQLite candidate c8d: source eligibility, not runtime qualification.
+    '673cd2bff312b747ca71bff29aa0d3abe2ba04872ed68108f8966827f4f99d50': 443,
 }
 
 def sha(path):
