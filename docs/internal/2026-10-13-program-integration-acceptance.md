@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 横向裁切修复候选接受，具体更新待授权
+
+准确完整输入永久为64d99380c17ce93d5f1b3d4f10bbd1b10813c69f，main/global已普通推送并实核一致；本节是构建后的记录。新normal `/private/tmp/pcw-responsive-64d99380-normal-01/crewd-presign` SHA256 46b844ed603b04620e1d8347b866c236211a04adefcbdc26a7bf2b6cd7ab72f1，witness `/private/tmp/pcw-responsive-64d99380-normal-01-witness.json` SHA256 82c0fd9374e33d64147f71e435e516047c5bf2c1203e4e759d42c54da25fd93c。独立质量亲核443输入/快照、实际13自有fresh:false、默认Debug/ARM64/空features/非测试、pre/post clean及新ref，未重跑稳定业务。
+
+普通候选 `/private/tmp/pcw-responsive-64d99380-mac-01/PendingCrew.app` 为0.1.44/20745.39557，GUI SHA256 86cd832e072da2aa1cd6e99b7a3828f2b091d09a55de73f08e100cfa924f477e，签后helper 69ef1c0e65ae2bb0ac4ffd23a0e76785bc351ac764e4d072120a2fe1591b88cb，ZIP SHA256 9d739d2dc1dfa5fc170e8859e68f3f89cb4ebd17ee8d34707bdf9fa6e64e3ced。独立purpose预览位于 `/private/tmp/pcw-responsive-64d99380-ui-preview-01`，build20745.39461，ZIP SHA256 86e6d8179fbe167fef92aeaf95b350651e6c07ea745bb1d116aad8956e72f92b。质量实际亲跑两包source/config/严格签态/normal与GUI签前后代码等价/两系统映像闭包；两ZIP全CRC与四关键字节等实际App。ARM64、adhoc/runtime/noTeam、未公证；root2ec96b亲读交付说明和新待用更新方案，不将preview当正常安装包。
+
+真正隔离窗口在 `/private/tmp/pcw-responsive-private-2du84tm3`，持有父进程session27951、准确preview60409/server60395，确认私有env与运行后才CUA绑定，无自动重开/日用数据操作。初始CG系统frame1920×994、实际PNG3840×1988；拖拽/zoom未改变尺寸的原观察保留，不能据此称已测窄窗。后用同CUA标准系统窗口菜单『移动与调整大小→左侧』实际缩至CG系统frame1041×994、截图2082×1988，比用户2216px原失败更窄。frame明确不是contentrect，不从PNG除2填目标尺寸。四边/状态/右Todo成员/底输入完整，窄时原列表popover可达；相同会话仍selected，关闭弹层及恢复wide后RESPONSIVE-DRAFT-UNSENT保持且未发送。root实际view_image看最窄图并亲读window-frames.jsonl，接受真实wide→narrow→wide的两布局分支与往返，不以wide单图代替原失败修复。
+
+更矮窗口、原计划五目标和再窄未测：系统嵌套菜单曾报AXError.invalidUIElement/键盘选择不稳定，未改用其他机制绕过或伪报结果，无权限拒绝、无新产品缺陷证据。root裁决以真实更窄横向绿、popover/选择/草稿及源码影响接受本次横向修复，保留高度/矩阵缺口，不为凑标签扩验收工具。finish marker后holder27951实际exit0，held-cleanup.json为previewExit -15/serverExit0、onlyRecordedPrivateChildren true；没有追加运行或模型/SDK。
+
+当前日用安装仍是bb867501/20745.25883，未为此修复停用户App或替换安装。具体64d更新和首次无模型打开的reviewable方案已备，并请求新授权及用户自行正常退出；原bb安装授权已使用，不扩大复用。整体阶段为Mac日用试用后的实际缺陷收敛，Codex/SQLite主线已交付，Claude原生接口及其他平台仍未完整交付。稳定业务证据复用，不把本次有限布局绿冒全工程完成。
+
 ## 2026-10-19 真实常规窗口裁切：源码修复接受，实际窗口绿待验
 
 用户新图2216×1452px证实普通窗口左右整壳裁切，不能把像素尺寸推为逻辑窗口尺寸。质量复认上轮2080×1464非zoom图也裁切，仅zoom大图通过不足以接受常规尺寸；原失败保留，本轮不以放大窗口绕过。阶段为已安装Mac日用试用中的实际缺陷收敛，跨厂商及其余平台并未因此完成。
