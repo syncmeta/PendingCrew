@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前源码Linux交付入口冻结，执行单次必要验证
+
+新增唯一手动入口 `.github/workflows/crewd-linux-current.yml`，源码提交aba16c024a7b133dcee276e1a3d93d75b868e29b，workflow SHA256 c1d6481edbcb7c7e55d0596faab8ff2013356bfe7be28aff0d5b49fe9720b728。单Ubuntu24任务、25min、完整reviewed_ref必须等run/checkout且clean，先执行7个已有SQLite写入/ACL/耐久CAS/防误删恢复/closed scope及b702恢复队列用例，再独立默认无features Release normal与canonical包，强制fresh-own图和完整Git输入证明。每例必须实际1 passed/0failed/0ignored；只上传一份tar与小型日志，旧历史入口及已验模块不改、不重跑旧升级/Jev/M5/全平台。
+
+作者静态检查与独立整块源码复核均通过；没有以此冒Linux实际构建/运行完成。根只读核实际仓库private=false/visibility=public，GitHub官方说明标准ubuntu-24.04在公开仓库构建分钟免费，因此撤去此前不准确的分钟余额阻断，沿用户既有“源码开发、必要验证、开发分支保存继续推进”授权执行一次精确冻结ref验证。不启用自动CI、不自动重试、不改变安装、真实模型或发布授权；完整输入为本记录冻结后的run SHA，成功产物才可交独立实际验收。
+
 ## 2026-10-20 已验 Linux15 历史产物恢复保全
 
 发现旧临时下载包缺失后，沿原GitHub artifact11974910186/run38737765008单次下载恢复，未触发CI或新构建。ZIP、canonical tar、ELF及原witness均按已提交Linux15完整接受记录核回原摘要，保存到gitignored稳定目录 `docs/private/preserved-delivery-artifacts/linux15-5f630052-20261020/`，不再只依赖临时目录。此处恢复的是5f630052历史已验产物，不是当前main的Linux新版，也不重做原业务验收或扩大为安装/发布。

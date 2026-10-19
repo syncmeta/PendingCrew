@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前源码Linux候选一次性入口源码接受
+
+后端唯一Linux构建文件作者从main6000f7c0独立分支新增140行workflow，aba16c024a7b133dcee276e1a3d93d75b868e29b已快进整合main；原Claude268404fe开发分支/工作树已完整恢复。唯一新文件SHA256 c1d6481edbcb7c7e55d0596faab8ff2013356bfe7be28aff0d5b49fe9720b728。原件 `/private/tmp/pcw-linux-current-static-20261020/` 为YAML、7段bash -n、4段Python AST、真实runtime/team_data模块别名与7精确函数及参数检查；无Rust编译或CI。独立质量亲核相同字节、manual-only/单Ubuntu24/25min、40hex reviewed_ref=GITHUB_SHA=HEAD/clean先于toolchain/cache/fetch，脚本参数与输出路径正确。
+
+7个既有用例覆盖实际SQLite文档/引用与reopen、正式ACL/free-view/撤权、耐久UUID/CAS/owner边界、authorizer rollback/危险确认与snapshot恢复、closed/foreign scope以及真实serve+fake app-server queued-resume。每例code0且精确1passed/0failed/0ignored，防filter0假绿。testkit debug依赖图与默认无features Release normal分离；沿既有recorder/checker强制own fresh=false、完整Git输入、严格normal配置。成功只canonical tar加小日志/json，原Cargo/输入/graph/witness在tar内；failure保必要诊断，不复制裸ELF/解包目录，不下载旧baseline或重跑稳定Jev/M5/迁移。独立接受范围只是交付源码静态准备，尚非Linux已构建、运行或平台交付。
+
+根实际只读GitHub repo API为private=false、visibility=public；官方当前规则 https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job 明确标准公开仓库runner分钟免费，ubuntu-24.04列于该组。此前将余额或缺billing权限当必要Linux验证阻断过于保守，本次沿用户既有必要验证授权推进一次冻结ref任务；不声称取得新的模型/SDK/安装/公开发布许可，不启自动检查、不自动重试。本节为实际运行前冻结；精确full run SHA和实际结果后记录，不能以静态检查冒运行通过。
+
 ## 2026-10-20 原已验Linux15归档恢复与稳定保全
 
 原临时artifact ZIP缺失、解包目录为空；原GitHub artifact11974910186仍未过期，精确run38737765008/job116431333921/source5f6300525ee6b1f8a656a3eef8ceb2f41e1eed21。唯一下载session95019/gh89334（birth2026-10-19T16:26:19Z）持续同一连接，16:59:11Z实际exit0，无重启、替代来源或新CI。67289703B ZIP SHA256 05ae79b9c8508938c43699d5410252f6a6fbe78f9d19df13679e24de0a66f0d7，19项CRC和安全路径通过；495 tar路径已检查，未执行任何下载程序。
