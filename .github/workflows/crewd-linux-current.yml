@@ -12,6 +12,10 @@ on:
         description: Reuse six exact green cases from failed run39292568772; only identical Rust tree permitted
         type: boolean
         default: false
+      reuse_all_seven:
+        description: Reuse six ffcf cases plus the exact green seventh from run39294517568; identical Rust tree only
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -24,6 +28,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
       PENDINGCREW_BUILD_BACKEND_PROFILE: release
       REUSE_FIRST_SIX: ${{ inputs.reuse_first_six && '1' || '0' }}
+      REUSE_ALL_SEVEN: ${{ inputs.reuse_all_seven && '1' || '0' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -35,6 +40,7 @@ jobs:
           python3 - <<'PY'
           import hashlib,json,os,pathlib,re,subprocess
           ref=os.environ['REVIEWED_REF'];repo=pathlib.Path.cwd()
+          assert not (os.environ['REUSE_FIRST_SIX']=='1' and os.environ['REUSE_ALL_SEVEN']=='1'), 'reuse modes are mutually exclusive'
           assert re.fullmatch('[0-9a-f]{40}',ref), 'full reviewed SHA required'
           assert ref==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert not subprocess.check_output(['git','status','--porcelain']).strip()
@@ -42,12 +48,15 @@ jobs:
           paths=['.github/workflows/crewd-linux-current.yml','scripts/dev/build-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/record-crewd-build.py','scripts/dev/write-codex-first-provenance.py','scripts/dev/smoke-crewd-linux-candidate.py']
           rows=[{'path':p,'sha256':hashlib.sha256((repo/p).read_bytes()).hexdigest()} for p in paths]
           (out/'source-action.json').write_text(json.dumps({'reviewedRef':ref,'runRef':os.environ['GITHUB_SHA'],'checkoutRef':ref,'recipeInputs':rows},indent=2))
-          if os.environ['REUSE_FIRST_SIX']=='1':
+          if os.environ['REUSE_FIRST_SIX']=='1' or os.environ['REUSE_ALL_SEVEN']=='1':
               tree=subprocess.check_output(['git','rev-parse','HEAD:crewd'],text=True).strip()
               assert tree=='4c96c7c65e38e3e3234feda65a1fb8f7a965a39b', 'reused cases require the exact original complete Rust/Cargo/test tree'
               hashes=['b28948f0f301e0572bc2e6d1364308b0abfb3f67eee322203302623579e6018a','32c81a639120a2b0b794a6fca3776614da58e61890e8bb0c4f9f7965289de220','0fa0b22767195cfca778c593fc7cd34bbc9d7993174ffe2837d06ccebf6459bf','0c28492060a12a7fb17b3c326b7a350871900edc97573735eb99e5a56d730f70','2a73e7158a9a300e8d0fd6f52af6e78fb73f5b079deb0bf8f46d692d0c5d776a','5828d5bf37789df775b0d4b20a273caabdc9f8c7eb478efa5d3cf887a6f8e423']
               reuse={'sourceRef':'ffcfb3d0f4502257c7f67700bd02ab47d103ae27','rustTree':tree,'runId':39292568772,'attempt':1,'runConclusion':'failure','artifactId':12206087432,'cases':[{'log':f'linux-current/affected-{i:02}.log','sha256':h,'exactlyOnePassed':True} for i,h in enumerate(hashes,1)],'source':'preserved original artifact and independently read six raw logs; not rerun here'}
               (out/'reused-first-six.json').write_text(json.dumps(reuse,indent=2))
+              if os.environ['REUSE_ALL_SEVEN']=='1':
+                  seventh={'sourceRef':'946205e38492958cbf6873247eba51526afcb667','rustTree':tree,'runId':39294517568,'attempt':1,'runConclusion':'failure','artifactId':12207696859,'test':'codex_runs_through_serve_and_persists_profile_delivery_and_thread_resume','log':'linux-current/affected-07.log','sha256':'41ec33996bfd1a8a4f81decb3c4a2837a7afa7ae7cdf645ebd14319e67a1920e','exactlyOnePassed':True,'executedThisRun':False}
+                  (out/'reused-seventh.json').write_text(json.dumps(seventh,indent=2))
           PY
       - name: Read locked toolchain
         id: toolchain
@@ -69,9 +78,11 @@ jobs:
           cargo fetch --locked --manifest-path crewd/Cargo.toml > "$RUNNER_TEMP/linux-current/fetch.log" 2>&1
           test -z "$(git status --porcelain)"
       - name: Build synthetic dependencies once (debug testkit only)
+        if: ${{ inputs.reuse_all_seven != true }}
         run: |
           cargo build --manifest-path crewd/Cargo.toml --locked --offline -p crewd -p crewd-exec --features testkit --bin crewd --bin fake_codex --bin fake_claude > "$RUNNER_TEMP/linux-current/fake-build.log" 2>&1
       - name: Exact affected cases (only seventh when six are explicitly reused)
+        if: ${{ inputs.reuse_all_seven != true }}
         run: |
           python3 - <<'PY'
           import json,os,pathlib,re,subprocess
@@ -127,9 +138,29 @@ jobs:
           archives=list((out/'linux-current-release').glob('crewd-linux-x86_64-*.tar.gz'));assert len(archives)==1
           smoke=json.loads((out/'linux-current-release/runtime-smoke/result.json').read_text())
           assert smoke['passed'] is True and smoke['sourceRef']==ref and smoke['binarySHA256']==w['binarySHA256']
+          assert smoke['developmentMacFixtureOnly'] is False and smoke['knowledgeRestoreEpochChanged'] and smoke['knowledgeRowsAndViewReopened'] and smoke['coreRestoreRefusedUnchanged'] and smoke['postSnapshotBlockAndViewChangesActuallyReverted']
+          assert len(smoke['shutdowns'])==2 and all(s['exitCode']==0 for s in smoke['shutdowns'])
           reuse=os.environ['REUSE_FIRST_SIX']=='1'
-          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesQualified':7,'casesExecutedThisRun':1 if reuse else 7,'casesReusedFrom39292568772':6 if reuse else 0,'packagedNormalSmoke':smoke,'runtimeScope':'debug SQLite/ACL/restore and actual serve/fake queued-resume cases; separate default Release private serve/backup/restore/reopen original UUID; no model or installation'}
+          all_reused=os.environ['REUSE_ALL_SEVEN']=='1'
+          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesQualified':7,'casesExecutedThisRun':0 if all_reused else (1 if reuse else 7),'casesReusedFrom39292568772':6 if (reuse or all_reused) else 0,'casesReusedFrom39294517568':1 if all_reused else 0,'packagedNormalSmoke':smoke,'runtimeScope':'debug SQLite/ACL/restore and actual serve/fake queued-resume cases; separate default Release private serve/backup/restore/reopen original UUID; no model or installation'}
           (out/'linux-current/release-source.json').write_text(json.dumps(summary,indent=2))
+          PY
+      - name: Preserve one explicitly unqualified failed package and complete proof
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,tarfile
+          out=pathlib.Path(os.environ['RUNNER_TEMP']);release=out/'linux-current-release';package=release/'crewd-linux-x86_64'
+          if package.is_dir():
+              evidence=out/'linux-current';evidence.mkdir(exist_ok=True)
+              archive=evidence/'unqualified-failure-package.tar.gz'
+              label={'sourceRef':os.environ['GITHUB_SHA'],'runtimeQualified':False,'candidateAccepted':False,'purpose':'retain actual built ELF, completed witness, raw log and full source snapshot after later failure'}
+              (evidence/'failure-package.json').write_text(json.dumps(label,indent=2))
+              with tarfile.open(archive,'w:gz') as t:
+                  t.add(package,arcname=package.name)
+                  t.add(evidence/'failure-package.json',arcname='UNQUALIFIED-FAILURE.json')
+              label['archiveSHA256']=hashlib.sha256(archive.read_bytes()).hexdigest()
+              (evidence/'failure-package.json').write_text(json.dumps(label,indent=2))
           PY
       # Raw normal log/input/graph/witness lives inside the single canonical tar.
       # Do not upload another ELF or the unpacked package tree.
@@ -145,6 +176,8 @@ jobs:
             ${{ runner.temp }}/linux-current/*.log
             ${{ runner.temp }}/linux-current-release/runtime-smoke/result.json
             ${{ runner.temp }}/linux-current-release/runtime-smoke/*.log
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/*.jsonl
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/shutdowns.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -156,4 +189,7 @@ jobs:
             ${{ runner.temp }}/linux-current-release/normal-build/*.json
             ${{ runner.temp }}/linux-current-release/normal-build/*.log
             ${{ runner.temp }}/linux-current-release/runtime-smoke/*.log
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/*.jsonl
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/shutdowns.json
+            ${{ runner.temp }}/linux-current/unqualified-failure-package.tar.gz
           if-no-files-found: warn
