@@ -8,6 +8,10 @@ on:
         description: Complete reviewed SHA, equal to run and checkout
         required: true
         type: string
+      reuse_first_six:
+        description: Reuse six exact green cases from failed run39292568772; only identical Rust tree permitted
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -19,6 +23,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
       PENDINGCREW_BUILD_BACKEND_PROFILE: release
+      REUSE_FIRST_SIX: ${{ inputs.reuse_first_six && '1' || '0' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,9 +39,15 @@ jobs:
           assert ref==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert not subprocess.check_output(['git','status','--porcelain']).strip()
           out=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-current';out.mkdir()
-          paths=['.github/workflows/crewd-linux-current.yml','scripts/dev/build-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/record-crewd-build.py','scripts/dev/write-codex-first-provenance.py']
+          paths=['.github/workflows/crewd-linux-current.yml','scripts/dev/build-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/record-crewd-build.py','scripts/dev/write-codex-first-provenance.py','scripts/dev/smoke-crewd-linux-candidate.py']
           rows=[{'path':p,'sha256':hashlib.sha256((repo/p).read_bytes()).hexdigest()} for p in paths]
           (out/'source-action.json').write_text(json.dumps({'reviewedRef':ref,'runRef':os.environ['GITHUB_SHA'],'checkoutRef':ref,'recipeInputs':rows},indent=2))
+          if os.environ['REUSE_FIRST_SIX']=='1':
+              tree=subprocess.check_output(['git','rev-parse','HEAD:crewd'],text=True).strip()
+              assert tree=='4c96c7c65e38e3e3234feda65a1fb8f7a965a39b', 'reused cases require the exact original complete Rust/Cargo/test tree'
+              hashes=['b28948f0f301e0572bc2e6d1364308b0abfb3f67eee322203302623579e6018a','32c81a639120a2b0b794a6fca3776614da58e61890e8bb0c4f9f7965289de220','0fa0b22767195cfca778c593fc7cd34bbc9d7993174ffe2837d06ccebf6459bf','0c28492060a12a7fb17b3c326b7a350871900edc97573735eb99e5a56d730f70','2a73e7158a9a300e8d0fd6f52af6e78fb73f5b079deb0bf8f46d692d0c5d776a','5828d5bf37789df775b0d4b20a273caabdc9f8c7eb478efa5d3cf887a6f8e423']
+              reuse={'sourceRef':'ffcfb3d0f4502257c7f67700bd02ab47d103ae27','rustTree':tree,'runId':39292568772,'attempt':1,'runConclusion':'failure','artifactId':12206087432,'cases':[{'log':f'linux-current/affected-{i:02}.log','sha256':h,'exactlyOnePassed':True} for i,h in enumerate(hashes,1)],'source':'preserved original artifact and independently read six raw logs; not rerun here'}
+              (out/'reused-first-six.json').write_text(json.dumps(reuse,indent=2))
           PY
       - name: Read locked toolchain
         id: toolchain
@@ -59,8 +70,8 @@ jobs:
           test -z "$(git status --porcelain)"
       - name: Build synthetic dependencies once (debug testkit only)
         run: |
-          cargo build --manifest-path crewd/Cargo.toml --locked --offline -p crewd --features testkit --bins > "$RUNNER_TEMP/linux-current/fake-build.log" 2>&1
-      - name: Seven exact affected SQLite and queued-resume cases
+          cargo build --manifest-path crewd/Cargo.toml --locked --offline -p crewd -p crewd-exec --features testkit --bin crewd --bin fake_codex --bin fake_claude > "$RUNNER_TEMP/linux-current/fake-build.log" 2>&1
+      - name: Exact affected cases (only seventh when six are explicitly reused)
         run: |
           python3 - <<'PY'
           import json,os,pathlib,re,subprocess
@@ -74,8 +85,10 @@ jobs:
             ('crewd-store','--lib','team_data::tests::sqlite_closed_scope_rolls_back_and_foreign_format_is_not_initialized'),
             ('crewd-server','orchestra_fake_codex','codex_runs_through_serve_and_persists_profile_delivery_and_thread_resume'),
           ]
+          reuse=os.environ['REUSE_FIRST_SIX']=='1'
           results=[]
           for index,(package,target,name) in enumerate(cases,1):
+              if reuse and index<=6:continue
               cmd=['cargo','test','--manifest-path','crewd/Cargo.toml','--locked','--offline','-p',package]
               if package=='crewd-server':cmd+=['--features','testkit']
               cmd+=['--lib'] if target=='--lib' else ['--test',target]
@@ -88,11 +101,11 @@ jobs:
               results.append({'package':package,'target':target,'test':name,'exitCode':code,'exactlyOnePassed':passed,'log':log.name})
               (out/'affected-results.json').write_text(json.dumps(results,indent=2))
               assert passed, f'exact case failed or selected zero tests: {name}'
-          assert len(results)==7
+          assert len(results)==(1 if reuse else 7)
           PY
       - name: Build default-feature normal Release and canonical tar once
         run: |
-          python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux-current-release" --package-only > "$RUNNER_TEMP/linux-current/package-build.log" 2>&1
+          python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux-current-release" > "$RUNNER_TEMP/linux-current/package-build.log" 2>&1
       - name: Verify complete Git inputs, fresh normal graph and package
         run: |
           python3 -B scripts/dev/check-crewd-linux-candidate.py "$RUNNER_TEMP/linux-current-release/crewd-linux-x86_64" > "$RUNNER_TEMP/linux-current/package-check.log" 2>&1
@@ -112,7 +125,10 @@ jobs:
           p.verify_witness(witness,package/'bin/crewd',p.digest(rows),expected,require_fresh=True)
           assert not subprocess.check_output(['git','status','--porcelain']).strip()
           archives=list((out/'linux-current-release').glob('crewd-linux-x86_64-*.tar.gz'));assert len(archives)==1
-          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesPassed':7,'runtimeScope':'existing SQLite/ACL/restore tests and actual serve/fake app-server queue-after-resume; no model, installation or migration'}
+          smoke=json.loads((out/'linux-current-release/runtime-smoke/result.json').read_text())
+          assert smoke['passed'] is True and smoke['sourceRef']==ref and smoke['binarySHA256']==w['binarySHA256']
+          reuse=os.environ['REUSE_FIRST_SIX']=='1'
+          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesQualified':7,'casesExecutedThisRun':1 if reuse else 7,'casesReusedFrom39292568772':6 if reuse else 0,'packagedNormalSmoke':smoke,'runtimeScope':'debug SQLite/ACL/restore and actual serve/fake queued-resume cases; separate default Release private serve/backup/restore/reopen original UUID; no model or installation'}
           (out/'linux-current/release-source.json').write_text(json.dumps(summary,indent=2))
           PY
       # Raw normal log/input/graph/witness lives inside the single canonical tar.
@@ -127,6 +143,8 @@ jobs:
             ${{ runner.temp }}/linux-current-release/archive-sha256.txt
             ${{ runner.temp }}/linux-current/*.json
             ${{ runner.temp }}/linux-current/*.log
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/result.json
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/*.log
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -137,4 +155,5 @@ jobs:
             ${{ runner.temp }}/linux-current/*.log
             ${{ runner.temp }}/linux-current-release/normal-build/*.json
             ${{ runner.temp }}/linux-current-release/normal-build/*.log
+            ${{ runner.temp }}/linux-current-release/runtime-smoke/*.log
           if-no-files-found: warn
