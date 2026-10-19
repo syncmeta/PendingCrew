@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前 Linux 候选完整交付单元已接受
+
+准确source `c8d70482e42b0e9f777df11f9db720a910a91115` 的实际run39297913612/attempt1/job118215155234成功；default Release、443完整Rust输入、6recipe与12包13target fresh证明独验闭合。实际同一ELF完成知识/自由视图snapshot后修改再恢复、权限拒绝/epoch/历史UUID、Core-only防覆盖、正常关停与同库重开，双Core exit0。七项已绿业务复用准确6+1原证，本run没有重复testkit或七用例。
+
+唯一38192659B artifact12209198414单次下载exit0，ZIP摘要等API，canonical tar与实际ELF/完整witness均稳定保全于 ignored `docs/private/preserved-delivery-artifacts/linux-current-c8d70482-20261020/`。独立质量亲核35文件/完整清单/17CRC/543安全成员、精确源码和33条实际RPC后整块接受。最终范围是当前源码Linux开发候选实际构建、私域运行及保全；本节后记录不能重标构建输入，不冒安装/公开发布/真实模型或全工程完成。旧失败和历史5f资产保留，稳定模块不再重跑。
+
+其余关口：Mac现日用20746.1来源仍为另一会话安装的base25e83174+明确dirty修复，不因此倒标clean c8d；Claude生产仍不可用，原生submission与完成归属的产品取舍待人类决定，schema16保持隔离；其他平台实际设备/配对和具体安装/发布按既有授权处理。继续按完整模块与唯一作者推进，避免为了填空重复验收平台、M5或已完业务。
+
 ## 2026-10-20 SQLite-aware 完整 smoke 已独验，进入新完整来源 Linux 构建
 
 两文件完整模块9201e3e2已整合main，生产安全guard未变。准确旧64d Mac normal上的最终私域脚本开发链实际exit0：snapshot后修改知识正文/视图标题及布局，再正式恢复原语义和placement；核revision/Human provenance/epoch、旧context拒绝、Core-only覆盖拒绝且data字节不变、backup/check、同库重开原UUID/历史，以及两个Core正常退出。独立质量核原33条RPC、来源/9路径字节/双退出和全部原件hash，接受此脚本开发证据，明确不冒新Linux运行通过。

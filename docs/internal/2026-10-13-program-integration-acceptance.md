@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前源码 Linux 完整候选实际接受并稳定保全
+
+准确构建来源永久为 `c8d70482e42b0e9f777df11f9db720a910a91115`，实际 run39297913612/attempt1、job118215155234终态success；本节为后记录，不能重标二进制输入。唯一artifact12209198414，38192659B ZIP SHA256 `d44c2c5577ec9b539c9b8637ccb6bedc2d1b1e9b3a45d6b73c7b914b7588079b` 与API digest相等。原下载session19483/gh93682、birth2026-10-20 01:58:33台北，实际exit0，无第二下载或新attempt；backend传输后client消费同一原件，QA也复用原件。
+
+17项ZIP CRC与543条tar安全路径通过，canonical tar38139675B SHA256 `ce3f377134f3c652fb50bc1477cbe5d5867ba1ef2ebcac8f98016f3c940196ab`；内含52726592B ELF SHA256 `72fdab4aeaf1ad256ea488d4aece836f0e2c220de417d49a4113bf75ff597f1a`，witness SHA256 `aa49dcbde0fd097f48998adf5c543340d1ce5c39586dc269a1546411267c34a9`。独立质量亲核443个完整Rust输入逐字等准确Git ref，digest `673cd2bff312b747ca71bff29aa0d3abe2ba04872ed68108f8966827f4f99d50`，6个recipe hash准确，实际defaultRelease/opt3/emptyfeatures/non-test、12自有包13target的raw fresh=false、preflight失效与sidecar/presign ELF闭合。不是旧Macnormal重标，也不是只从日志构造的新证明。
+
+实际封装的同一Linux ELF在私域完成33条Human RPC：snapshot后block/view真实revision1→修改2→恢复3，正文/标题/layout及同一placement恢复，epoch旋转、旧context与未确认危险SQL均typed -32009拒绝；四次旧写入/恢复UUID查询均historical，同todo UUID/requirement重开保留，知识/视图重开逐字等恢复后对象。Core-only restore精确拒绝知识工作区覆盖，两Core3067/3090实际wait0，check为integrity/FK通过。Core拒绝时全部data文件SHA不变由准确smoke源码实际执行断言及exit0支持；独立质量没有从未上传的DB另算该SHA，不扩大证据。smoke sourceRef与ELF/witness一致、developmentMacFixtureOnly=false。原七项业务准确复用前两run的6+1，当前testkit构建与七用例实际skipped，不伪称重跑通过。
+
+原ZIP、唯一canonical tar、完整来源、API/jobs/logs、实际下载终态与RPC/result已exclusive保全至 ignored `docs/private/preserved-delivery-artifacts/linux-current-c8d70482-20261020/`，35文件/34项清单、无symlink、目录0700/文件0600；没有另存裸ELF。`preserved-files.json` SHA256 `52f7e1ba3664cea3c726f58f694850403dc10a1f035951c4f81e09b489bb52d3`，`verification.json` SHA256 `aa09df617e407d853b6c2320fa1e613b063b9b8dc320126703276eebb5a6a52c`。QA亲核稳定清单逐hash、17项内容等原ZIP、tar及证明原件，最终整块接受。旧5f已验资产和两次失败原件独立保留。
+
+此完整交付单元是准确当前源码Linux开发候选的Release构建、私域运行与保全，不是安装/service部署、公开发布、真实供应商/模型或全default/all-features CI。没有本地执行Linux ELF、操作日用App/数据、SDK、设备或权限变更。自动CI仍未启用；Claude可靠完成归属及其余设备/具体安装关口继续保留，不以本次成功宣称整个工程完成。
+
 ## 2026-10-20 SQLite-aware Linux 候选完整脚本接受，冻结新源实际构建
 
 完整模块提交 `9201e3e2f4f62d013ac2e9d202a01680f070e879` 已快进 main；仅 workflow 与既有 smoke 两文件127+/23-，生产 Rust/ACL/restore guard 未改。冻结 workflow SHA256 `6ca76d0647c69051928a43f356d9445b93ae232e8b38c6af2ff07d635e0a0052`，smoke SHA256 `556a8adf0e6ff157115c35f311a8d81a81523182d62130907795d7e969d74fec`。后端工作树已恢复原 Claude268404fe，未合入开发schema16。
