@@ -1,0 +1,140 @@
+name: crewd Linux current candidate
+run-name: "Linux current SQLite candidate — ${{ inputs.reviewed_ref }}"
+# One-shot development candidate; no automatic trigger, installation or publication.
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_ref:
+        description: Complete reviewed SHA, equal to run and checkout
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/crewd/target
+      PENDINGCREW_BUILD_BACKEND_PROFILE: release
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Bind reviewed source before tooling or cache
+        env:
+          REVIEWED_REF: ${{ inputs.reviewed_ref }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess
+          ref=os.environ['REVIEWED_REF'];repo=pathlib.Path.cwd()
+          assert re.fullmatch('[0-9a-f]{40}',ref), 'full reviewed SHA required'
+          assert ref==os.environ['GITHUB_SHA']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-current';out.mkdir()
+          paths=['.github/workflows/crewd-linux-current.yml','scripts/dev/build-crewd-linux-candidate.py','scripts/dev/check-crewd-linux-candidate.py','scripts/dev/record-crewd-build.py','scripts/dev/write-codex-first-provenance.py']
+          rows=[{'path':p,'sha256':hashlib.sha256((repo/p).read_bytes()).hexdigest()} for p in paths]
+          (out/'source-action.json').write_text(json.dumps({'reviewedRef':ref,'runRef':os.environ['GITHUB_SHA'],'checkoutRef':ref,'recipeInputs':rows},indent=2))
+          PY
+      - name: Read locked toolchain
+        id: toolchain
+        run: |
+          python3 - <<'PY'
+          import os,pathlib,tomllib
+          channel=tomllib.loads(pathlib.Path('crewd/rust-toolchain.toml').read_text())['toolchain']['channel']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('channel='+channel+'\n')
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd -> target
+          cache-on-failure: true
+      - name: Fetch locked dependencies, preserving checkout
+        run: |
+          cargo fetch --locked --manifest-path crewd/Cargo.toml > "$RUNNER_TEMP/linux-current/fetch.log" 2>&1
+          test -z "$(git status --porcelain)"
+      - name: Build synthetic dependencies once (debug testkit only)
+        run: |
+          cargo build --manifest-path crewd/Cargo.toml --locked --offline -p crewd --features testkit --bins > "$RUNNER_TEMP/linux-current/fake-build.log" 2>&1
+      - name: Seven exact affected SQLite and queued-resume cases
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib,re,subprocess
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'linux-current'
+          cases=[
+            ('crewd-server','--lib','team_data::runtime::tests::sqlite_real02_document_submit_exposes_placement_identity_contract'),
+            ('crewd-server','--lib','team_data::runtime::tests::sqlite_real02_document_alias_commit_atomicity_and_reopen'),
+            ('crewd-server','--lib','team_data::runtime::tests::sqlite_formal_mcp_acl_free_view_and_cross_language_wire'),
+            ('crewd-store','--lib','team_data::tests::sqlite_durable_uuid_cas_history_and_owner_boundary'),
+            ('crewd-store','--lib','team_data::tests::sqlite_real_authorizer_transaction_rollback_and_dangerous_confirmation'),
+            ('crewd-store','--lib','team_data::tests::sqlite_closed_scope_rolls_back_and_foreign_format_is_not_initialized'),
+            ('crewd-server','orchestra_fake_codex','codex_runs_through_serve_and_persists_profile_delivery_and_thread_resume'),
+          ]
+          results=[]
+          for index,(package,target,name) in enumerate(cases,1):
+              cmd=['cargo','test','--manifest-path','crewd/Cargo.toml','--locked','--offline','-p',package]
+              if package=='crewd-server':cmd+=['--features','testkit']
+              cmd+=['--lib'] if target=='--lib' else ['--test',target]
+              cmd += [name,'--','--exact','--nocapture']
+              log=out/f'affected-{index:02}.log'
+              with log.open('w') as f:
+                  f.write('Command: '+repr(cmd)+'\n');f.flush()
+                  code=subprocess.run(cmd,stdout=f,stderr=subprocess.STDOUT).returncode
+              passed=code==0 and re.search(r'test result: ok\. 1 passed; 0 failed; 0 ignored;',log.read_text()) is not None
+              results.append({'package':package,'target':target,'test':name,'exitCode':code,'exactlyOnePassed':passed,'log':log.name})
+              (out/'affected-results.json').write_text(json.dumps(results,indent=2))
+              assert passed, f'exact case failed or selected zero tests: {name}'
+          assert len(results)==7
+          PY
+      - name: Build default-feature normal Release and canonical tar once
+        run: |
+          python3 -B scripts/dev/build-crewd-linux-candidate.py "$RUNNER_TEMP/linux-current-release" --package-only > "$RUNNER_TEMP/linux-current/package-build.log" 2>&1
+      - name: Verify complete Git inputs, fresh normal graph and package
+        run: |
+          python3 -B scripts/dev/check-crewd-linux-candidate.py "$RUNNER_TEMP/linux-current-release/crewd-linux-x86_64" > "$RUNNER_TEMP/linux-current/package-check.log" 2>&1
+          python3 - <<'PY'
+          import hashlib,importlib.util,json,os,pathlib,subprocess
+          repo=pathlib.Path.cwd();out=pathlib.Path(os.environ['RUNNER_TEMP']);package=out/'linux-current-release/crewd-linux-x86_64'
+          ref=os.environ['GITHUB_SHA'];witness=package/'normal-build-witness.json';w=json.loads(witness.read_text())
+          spec=importlib.util.spec_from_file_location('proof',repo/'scripts/dev/write-codex-first-provenance.py');p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+          rows=[]
+          for path in subprocess.check_output(['git','ls-tree','-r','--name-only',ref,'crewd'],text=True).splitlines():
+              data=subprocess.check_output(['git','show',ref+':'+path]);assert (repo/path).read_bytes()==data
+              rows.append({'path':path,'sha256':hashlib.sha256(data).hexdigest()})
+          assert sorted(rows,key=lambda r:r['path'])==w['files'] and w['sourceRef']==ref
+          expected={'target':'x86_64-unknown-linux-gnu','profile':'release','defaultFeatures':True,'allFeatures':False,'features':[]}
+          cfg=p.complete_configuration(w['buildConfiguration'])
+          assert cfg['artifactFeatures']==[] and not any(cfg['workspaceFeatures'].values()) and cfg['artifactProfile']['test'] is False
+          p.verify_witness(witness,package/'bin/crewd',p.digest(rows),expected,require_fresh=True)
+          assert not subprocess.check_output(['git','status','--porcelain']).strip()
+          archives=list((out/'linux-current-release').glob('crewd-linux-x86_64-*.tar.gz'));assert len(archives)==1
+          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesPassed':7,'runtimeScope':'existing SQLite/ACL/restore tests and actual serve/fake app-server queue-after-resume; no model, installation or migration'}
+          (out/'linux-current/release-source.json').write_text(json.dumps(summary,indent=2))
+          PY
+      # Raw normal log/input/graph/witness lives inside the single canonical tar.
+      # Do not upload another ELF or the unpacked package tree.
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: crewd-linux-current-${{ github.sha }}
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/linux-current-release/crewd-linux-x86_64-*.tar.gz
+            ${{ runner.temp }}/linux-current-release/archive-sha256.txt
+            ${{ runner.temp }}/linux-current/*.json
+            ${{ runner.temp }}/linux-current/*.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crewd-linux-current-failure-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/linux-current/*.json
+            ${{ runner.temp }}/linux-current/*.log
+            ${{ runner.temp }}/linux-current-release/normal-build/*.json
+            ${{ runner.temp }}/linux-current-release/normal-build/*.log
+          if-no-files-found: warn
