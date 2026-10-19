@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 新基线的客户端/后端组合冻结接受
+
+客户端ef38重放到9f2993de时的唯一会话窗口冲突由客户端作者解决，保留动态executor、result.id确认、草稿修订保护及当前上下文选择门。自动合并又暴露真实缺陷：新crew尚未select，旧requireExecutor却要求目标crew等于展示crew，导致机长必拒。作者改为提交层只读executor.list目标crew并核namespace/generation/connectionEpoch及available/initialContext；UI缓存资格仅作展示，明确恢复/freshCAS/Unknown不重投合同保留。
+
+原红版实际App模块成功编译，captain-before-selection真实SIGTRAP，证据 `/private/tmp/pcw-client-combined-red-flow.log`；首构建缺ref的Stamp失败另存不抹去。绿完整App暖构建 `/private/tmp/pcw-client-combined-green-build.log` 为BUILD SUCCEEDED，`/private/tmp/pcw-client-combined-green-flow.log` 为10/10，实际模块SHA256 99c5030a507588ab0f6020c6532c970a2554c832ae7e9a0b8b1a8564da656d06。独立质量逐项核同目录source-inputs.json的390项与最终树一致，wire为session.list→executor.list→唯一session.start→session.list；不可用/查询期间断连均零start。此10场景hello未宣告command.receipts，formal route共用资格/CAS/原UUID核对只做源码有限复核。没有重复旧442/25全套，没有新验收平台、模型或日用GUI。当前是dirty组合模块验证，不冒准确clean候选包或已安装新字节。
+
+客户端重放冻结3d2f2e888b1a4bf2ec96ab80b7941a1658818d3b。为保留旧远端历史并普通推送，后端加入原9bc历史后为268404fece0db51bb7c9327da78a62e464a837a2，树严格等9f2993de；客户端加入该历史及已重放过的原ef38后为34104a5680a46cf0e8629523ae5dbc05892db47f，树严格等3d2f2e88。正常三方连接原ef38产生重复补丁冲突的可选尝试已完整abort；最终明确只连接历史、保留已独验当前树，未丢任一已发布提交。两开发分支实际普通push终态成功，无force；main/global已先普通保存7c87ed3c，后续仅为此记录。所有旧tip另有pre-session-integration-20261020本地保全引用。
+
+后端只读确认on_launched的try_deliver仍经过Stop/admission/starting/因果门，managed仅with_unavailable，生产无Bridge::new/install调用，不会将原生观察结算为完成。M5已验冻结4c356b7843d4efaff6085081fd3f3048b251944c仍是祖先，followup/checkpoint业务无新差异；历史双平台run38521653705引用已提交独验记录，本轮未重新运行或称重核远端。Claude标准任务完成关联、开发schema16与现日用15接合、其余平台实际交付仍未关闭；不为保持忙碌重造已完M5或推测供应商能力。
+
 ## 2026-10-20 其他会话成果已保存，旧基线已保全后重放
 
 实际接手 main/origin main 均为25e83174，工作区72个变更文件；两作者会话已idle，无MERGE_HEAD/rebase。普通fetch成功，无新增远端main提交；磁盘约56 GiB，无cargo/rustc/xcodebuild活动，日用App仍运行，未对其发信号。保全原diff binary patch、untracked tar与逐文件SHA后，两组分开提交：`b702957c8f8cac2ae7473ed08bc9a959bfbd21dc` 为14路径原生Todo/session修复、夹具和交接；`64a2fee3` 为58路径React文档/数据示例及证据。提交前核原文件无并发变化、索引为空，diff check通过。
