@@ -194,9 +194,17 @@ def main_build_signature(path):
  if path.read_bytes()!=before:fail('main changed during signature qualification')
  return {'state':state,'sha256':sha(before),'query':q}
 
-def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
+def expected_bundle_identifier(configuration,purpose="product"):
+ if purpose not in ['product','ui-preview']:fail('closed packaging purpose')
+ if purpose=='ui-preview':
+  if configuration not in ['Debug','Release']:fail('UI preview requires ordinary local configuration')
+  return 'com.pendingname.pendingcrew.ui-preview'
+ return 'com.pendingname.pendingcrew' if configuration in ['Debug','Release'] else 'com.pendingname.pendingcrew.native-candidate'
+
+def qualify_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="product"):
  app=pathlib.Path(app)
  if configuration not in ['DeliveryValidation','KnowledgeValidation','Debug','Release']:fail('closed target configuration')
+ expected_id=expected_bundle_identifier(configuration,purpose)
  if not re.fullmatch('[0-9a-f]{40}',ref):fail('complete source ref required')
  if not app.is_absolute() or app.is_symlink() or app.resolve(strict=True)!=app:fail('target App alias')
  # A vendor framework's own seal is not this root App bundle seal. Never touch
@@ -209,7 +217,7 @@ def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
  if configuration=='KnowledgeValidation' and info.get('PendingCrewKnowledgeValidation') is not True:fail('knowledge target marker missing')
  if configuration=='DeliveryValidation' and info.get('PendingCrewKnowledgeValidation') is True:fail('contradictory target marker')
  if configuration in ['Debug','Release']:
-  if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew' or info.get('PendingCrewLocalMac') is not True or any(info.get(k) for k in ['PendingCrewKnowledgeValidation','PendingCrewDeliveryValidation','PendingCrewNativeCandidate','SUFeedURL','SUPublicEDKey']):fail('ordinary local product identity differs')
+  if info.get('CFBundleIdentifier')!=expected_id or info.get('PendingCrewLocalMac') is not True or any(info.get(k) for k in ['PendingCrewKnowledgeValidation','PendingCrewDeliveryValidation','PendingCrewNativeCandidate','SUFeedURL','SUPublicEDKey']):fail('ordinary local product identity differs')
  elif info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew.native-candidate' or info.get('PendingCrewDeliveryValidation') is not True:fail('candidate product identity differs')
  if info.get('PendingCrewSourceRef')!=ref or info.get('BuildStampCommit')!=ref:fail('actual target source stamps differ')
  name=info.get('CFBundleExecutable')
@@ -217,7 +225,7 @@ def qualify_unsigned_target(app,ref,configuration="DeliveryValidation"):
  main=app/'Contents/MacOS'/name
  if main.is_symlink() or main.resolve(strict=True)!=main or not main.is_file() or main.stat().st_uid!=os.getuid():fail('actual main missing/aliased/not-owned')
  signature=main_build_signature(main)
- return {'sourceRef':ref,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
+ return {'sourceRef':ref,'purpose':purpose,'bundleIdentifier':expected_id,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
 
 TARGET_PRODUCTS=pathlib.Path('/private/tmp/pcw-codex-first-xcode/Build/Products')
 
@@ -246,8 +254,8 @@ def prune_target(env):
  app=root/name
  return dict(finalize_unsigned_target(app,ref,env['CONFIGURATION']),mode='BUILD_TARGET_ONLY',sourceRef=ref,targetDirectoryInput=raw_root,targetDirectoryCanonical=str(root))
 
-def finalize_unsigned_target(app,ref,configuration="DeliveryValidation"):
- app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref,configuration)
+def finalize_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="product"):
+ app=pathlib.Path(app);qualified=qualify_unsigned_target(app,ref,configuration,purpose)
  report=audit(app,exclude_updater=True);updater=app/'Contents/Frameworks/Sparkle.framework'
  if updater.is_symlink():fail('updater root alias')
  if updater.exists():
