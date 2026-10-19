@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前同版受管 Linux 私域交付单元完整接受
+
+准确controller4f3eecf2的唯一实际run39303182888/attempt1成功，原compiledRef=c8不变；UID1001的真实Linux/proc-fd路径通过freshprefix受管安装/激活、双lease/并发单CASwinner、Unknown只读不重投、SIGKILL非空WAL后原UUID/知识view/placement恢复及正常重开。四Core终态0/-9/0/0，Core坏WAL/未来库原hash+mode不变拒绝；知识坏WAL不冒Core同等no-touch保证。没有新编译、七绿或旧迁移重跑。
+
+原artifact12212935424单次下载actualexit0，ZIP/API摘要一致，完整归档保512文件/9链接不解引用，实际安装454文件逐字等已验c8。稳定原件在 ignored `docs/private/preserved-delivery-artifacts/linux-managed-current-4f3eecf2-20261020/`；独立质量核24RPC、原锁/CAS/Unknown/WAL/退出证据及20文件清单后整块接受。此为普通用户新私域同版生命周期和保全，系统服务/日常安装/公开发布仍未执行。
+
+本轮两个真实剩余单元已收口：当前669 Apple三平台准确构建封装、当前c8 Linux配新controller的受管私域运行恢复。既有稳定模块不再重复验证。其余完整交付关口仍包括Claude原生submission完成归属的产品取舍及后续真实生命周期、实际窗口/持久Keychain/移动设备/签名与具体安装发布；Solid及个人记忆保持方案边界。总体工程继续，不以此将所有关口标为完成。
+
 ## 2026-10-20 受管 Linux 当前同版模块冻结，进入唯一实际平台 tail
 
 完整4文件模块46eb1eea已整合，唯一产品机制为当前673cd2/443的精确受管恢复资格；原installer/Rust/Store/旧迁移及Linux/ELF/proc保护不变。准确共享Mac669的完整开发flow03实际exit0并独立接受：真实双lease/CAS/Unknown、SIGKILL后57712B WAL、知识/视图/placement/原UUID恢复、坏WAL与未来库零改拒绝、四Core0/-9/0/0全部收尾，原失败与完整归档保留。此仍不是Linux运行通过。

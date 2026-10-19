@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前同版 Linux 私域受管生命周期实际完整接受
+
+准确controller `4f3eecf24423e6ae7092529caddad63826fd0528`、原compiledRef `c8d70482e42b0e9f777df11f9db720a910a91115` 永久分列；run39303182888/attempt1/job118233391149实际success，runtime约7.8秒。没有编译、七绿或旧迁移重跑。实际Linux普通UID1001/proc-fd门与原生产installer运行，developmentMacOnly=false；这不是Mac开发证据重标。
+
+唯一artifact12212935424共38433847B，ZIP SHA256 `fac8220d2518c3688ca54f06305f7d19048bf49cd56e4f6ba7ebe83dfc52eba0` 等API digest，11项CRC及安全路径通过。客户端唯一下载session83732实际exit0/chunkbcdfa2，backend和QA未重下。唯一lifecycle tar38252963B SHA256 `d75fe41127f367de97fe670009ae8e890248799574dd0c707a8518897934721f`，636安全成员、512文件及9symlink完整manifest逐hash/链接原目标亲核未解引用；安装release454文件逐字对照原已验c8 tar全部相同，原ELF与witness摘要保持前述准确c8来源。controller-action的7recipe逐字等Git4f，实际安装launcher30e41e…4214e。
+
+独立质量亲读24条实际Linux RPC及现场：原todo UUID保持#1，强杀前持久请求保持#2；知识block revision2、view与同placement在恢复/最终重开逐字相同，known历史可查，四次session.list均空。真实跨exec runtime/data lease拒绝live维护和切换；两个真实并发writer仅一个CAS胜者；prepared-unknown请求仅查status，无重投。SIGKILL留下57712B非空CoreWAL，同版受管恢复完成。badCoreWAL和future-main各7个原文件逐hash+mode不变、实际拒绝日志匹配。四个Core2344/2372/2387/2399实际终态0/-9/0/0，正常重开/收尾闭合。当前知识库自身的坏WAL尚未证明Core同等no-touch，不能扩大这项保证。
+
+稳定ignored根 `docs/private/preserved-delivery-artifacts/linux-managed-current-4f3eecf2-20261020/`，20文件/19清单项，原API/jobs/logs/rootaction、原ZIP、归档及原RPC/result/terminals全保留。`preserved-files.json` SHA256 `ec08da1afff821bdccacfea0965d35762a38abfa680b3700ead9127e9bbcbae9`，`verification.json` SHA256 `3bab95a332088e6160d339b0ea90d456e3f93e2009922222838e433c2a17ee54`；QA核全部hash、11项逐字原ZIP、0700/0600、无symlink且ignored，最终整块接受，无阻断。归档保唯一实际release binary/proof，没有额外裸ELF或跟随activation重复复制。
+
+本单元完成当前同版本、普通用户新私域受管安装/激活、锁/CAS/Unknown、崩溃恢复与保全，不是旧版本升级、系统服务/root安装、用户日常安装、公开发布、真实供应商/模型或全工程完成。普通push首个空响应失败后先用API证两ref仍472，再一次普通push实际成功并核4f，随后只一次必要runtime dispatch；未改本机网络、自动CI或系统权限。Apple三平台准备已另完整接受，真实窗口/设备/签名/具体安装及Claude产品待决仍独立保留。
+
 ## 2026-10-20 当前受管 Linux 同版模块源码与完整 Mac 开发证据接受
 
 4文件完整模块提交326c6086后rebase到main472e74eb为 `46eb1eea919075c4cfd77b608e5f4945a6f78e2a`，快进整合；4冻结字节未变。唯一产品机制改动为CORE15精确673cd2/443恢复资格，installer、Rust/Store、旧迁移fixture与生产Linux/ELF/proc门未改。launcher SHA256 `30e41e768cc6178b023e8465876fc1f7c8f2f88b794bf21a9165afe8c6c4214e`，新同版harness `6d0893df63faa2540d8b8a7ec04260eb61e1eefd551b56c6dbf0fdf22d07a64b`，manual workflow `710eb6b4e26954e8d4f004e934189a71daf1f5e7fb9101503759356971d3a1b9`，短说明 `33838ff75881cbabcf41767c18e429435ba3194ed592a0f78c26f9f84f22802a`。后端工作树已恢复原Claude268，独立模块分支保留。
