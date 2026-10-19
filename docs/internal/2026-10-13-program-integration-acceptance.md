@@ -1,12 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
-## 2026-10-19 788 新包真实知识提交成功与重开证据边界
+## 2026-10-19 788 新包真实知识闭环、重开正文与页面显示
 
 人类直接授权 `call_334fb82f01fe41428616c50931c1f645`，对应动作 SHA256 `19e57d5efaf954d3f7a578e12e6c217652403bf618bb5d44287a7c6218b9e49b`，已使用一次。准确编译输入仍为 `788881e9e2d6fe2953fde15c564738b9eec65fca`，普通包 `0.1.44 / 20745.06184`。质量线在新私域 `/private/tmp/pcw-mac-daily-788881e9-real-codex-01` 保存一条 Human 首消息、启动唯一普通 worker；正式知识请求 `bd937db1-c135-4e75-bd6e-0c727cc0ba42` 于 `2026-10-19T02:07:59.469Z` committed，早于300秒期限，generation 0→1。原工具直接回读知识块 `1a7d566d-047a-468a-995a-60e848c976dc` rev1、正文“日用版知识验收完成”，以及页面 `3e93b7b7-69cc-4916-9c59-d55b1af18c61` 和指向该块的 live 关联。
 
 正常退出后同私域重开，原 App 确认原页面标题及完整 HTML/CSS/JavaScript 源码保留；代码始终 OFF。约110秒观察 registry 空、仅有原单次 session.start 回执，无自动恢复或新任务。两次 GUI 均正常退出；最终已知 GUI/Codex/重开 Core 四 PID 窄查询无行，socket 消失、registry 空。首次 Core PID/birth 未独立捕获，不冒整个后代树检查。报告 `single-real-codex-completed-review.json` SHA256 `390960350343c8d15cfe753a61f5b4bbcd0896ece0a6e889fec295a6161e9bf7`，同目录原窗口证据 `current-window-observation.json` SHA256 `0f93a3883db8f059476b0e7c4c1a7015f2081090138961c1195ff3bcf5ed74a9`；root 已核原件。
 
-接受真实提交、退出前正文与关联回读、重开页面源码保留和零自动执行。未接受生成页面实际渲染及重开后块正文独立回读：本次明确禁止生成代码执行；一次精确 SQLite mode=ro 打开报 unable to open database file 后无重试、替代或复制，不推断存储故障。客户端有限静态校准确认原页面 JS 仅调用绑定 read，再用 textContent 显示返回 JSON；桥接结构相容，但静态校准不是实际显示证据。剩余最小动作仅准备同包同私域原 UI 的无模型只读显示提案，执行生成代码须另有明确许可；知识写入保持关闭、源版本不改、核对正文后停止代码并正常退出。未授权或执行该余项，未安装、访问日常数据或取得整项日用交付结论。下文等待授权的状态为此前构建时记录，不覆盖本节实际结果。
+上述首次模型动作只接受真实提交、退出前正文与关联回读、重开页面源码保留和零自动执行；当时生成代码被明确禁止。一次精确 SQLite mode=ro 打开报 unable to open database file 后无重试、替代或复制，不推断存储故障。客户端有限静态校准确认原页面 JS 仅调用绑定 read，再用 textContent 显示返回 JSON；该静态结果本身不算实际显示证据。
+
+后续人类对 `call_f96dfb686b764af2ac48e046f85d3b81` 直接授权一次无模型只读显示，动作 `read-only-render-action-proposal.json` SHA256 `fad47fb23bf9eb18d404020fcdfcd543014c3b84d10bd371a41d6d7ab7e5ea37`、原代码附件 SHA256 `e8df3a87487b6e0643b8c7adedc56477d384ba4c875e11430d08ad3cf566327d` 均在同私域。root 因迟缓的进度回报过早中断了首个只读实例，已向人类说明并纠正；当时未点击启用/确认、没有代码执行或权限拒绝/Unknown，GUI27862正常退出。原 `read-only-render-stopped-before-enable-review.json` SHA256 `3924eda19a461948107e7d18f324161856ea5abac7fd345465e9305013d27515` 保留，不冒成渲染通过，也不把 root 调度暂停当人类撤回许可。
+
+继续同一尚未发生的显示操作后，质量线现场观测：原页面源码与附件相同，唯一原确认后两秒内 WK about:srcdoc 实际显示返回 ObjectDetail，其 object.id 为 `1a7d566d-047a-468a-995a-60e848c976dc`、revision为1、content为“日用版知识验收完成”，原 crew/namespace/generation1；写权限 disabled/OFF。root 接受此实际页面读回作为重开后正文及渲染证据，不冒为 SQL 行检查。GUI29085 原 Popen 正常退出0：同私域 `D-terminal.json` SHA256 `ed4c639b36d463ce8b626f0b57c62f2c60f702dcaa10074c5dac1e2aa06031b5`，exitTime `1792379295.593987`，早于已存60秒期限 `1792379309.286502`；root `cdb91e` 已核原件，`4a84d4` 窄 ps 无行。此处不冒独立 Core PID/birth 或整个后代树证明；授权为内存态，退出不复用。无模型、消息、SQL、源码变更、知识写权限或安装。此后不再扩展安装前验收；独立质量的简明显示/停止记录可附存，不作为新一轮验证前置。
+
+客户端只读安装预检 `73c715` 与精确路径复核 `710050` 均exit0：现 `/Applications/PendingCrew.app` 为实体0.1.43/20730.47014、DeveloperID M42BKJN82S、universal，严格签名通过，精确旧可执行路径无活动实例；准确stage/隐藏旧包保存/备份位置和默认 PendingCrewLocal 均不存在，仅lstat无旧库读取。root 已核既有 `INSTALLATION-PROPOSAL.txt` SHA256 `4b206e5e76473d71438bfa1d6411556451ccf89e815c08de5e881d7938c275ae`，具体请求备份保留旧包、安装准确788及首次默认新目录无模型打开/零自动任务/正常退出，两种副作用在同一问题中明确列出。尚未获答复或执行；ARM64本地签名未公证资格保持，不继承旧包 DeveloperID/Intel资格，不迁移旧数据或绕系统权限。下文等待授权为历史时点，不能覆盖本节已发生结果；完整工程仍未交付。
 
 ## 2026-10-19 Core15 合同修复普通 Mac 完整产物收口
 
