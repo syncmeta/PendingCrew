@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 788 新包真实知识提交成功与重开证据边界
+
+人类直接授权 `call_334fb82f01fe41428616c50931c1f645`，对应动作 SHA256 `19e57d5efaf954d3f7a578e12e6c217652403bf618bb5d44287a7c6218b9e49b`，已使用一次。准确编译输入仍为 `788881e9e2d6fe2953fde15c564738b9eec65fca`，普通包 `0.1.44 / 20745.06184`。质量线在新私域 `/private/tmp/pcw-mac-daily-788881e9-real-codex-01` 保存一条 Human 首消息、启动唯一普通 worker；正式知识请求 `bd937db1-c135-4e75-bd6e-0c727cc0ba42` 于 `2026-10-19T02:07:59.469Z` committed，早于300秒期限，generation 0→1。原工具直接回读知识块 `1a7d566d-047a-468a-995a-60e848c976dc` rev1、正文“日用版知识验收完成”，以及页面 `3e93b7b7-69cc-4916-9c59-d55b1af18c61` 和指向该块的 live 关联。
+
+正常退出后同私域重开，原 App 确认原页面标题及完整 HTML/CSS/JavaScript 源码保留；代码始终 OFF。约110秒观察 registry 空、仅有原单次 session.start 回执，无自动恢复或新任务。两次 GUI 均正常退出；最终已知 GUI/Codex/重开 Core 四 PID 窄查询无行，socket 消失、registry 空。首次 Core PID/birth 未独立捕获，不冒整个后代树检查。报告 `single-real-codex-completed-review.json` SHA256 `390960350343c8d15cfe753a61f5b4bbcd0896ece0a6e889fec295a6161e9bf7`，同目录原窗口证据 `current-window-observation.json` SHA256 `0f93a3883db8f059476b0e7c4c1a7015f2081090138961c1195ff3bcf5ed74a9`；root 已核原件。
+
+接受真实提交、退出前正文与关联回读、重开页面源码保留和零自动执行。未接受生成页面实际渲染及重开后块正文独立回读：本次明确禁止生成代码执行；一次精确 SQLite mode=ro 打开报 unable to open database file 后无重试、替代或复制，不推断存储故障。客户端有限静态校准确认原页面 JS 仅调用绑定 read，再用 textContent 显示返回 JSON；桥接结构相容，但静态校准不是实际显示证据。剩余最小动作仅准备同包同私域原 UI 的无模型只读显示提案，执行生成代码须另有明确许可；知识写入保持关闭、源版本不改、核对正文后停止代码并正常退出。未授权或执行该余项，未安装、访问日常数据或取得整项日用交付结论。下文等待授权的状态为此前构建时记录，不覆盖本节实际结果。
+
 ## 2026-10-19 Core15 合同修复普通 Mac 完整产物收口
 
 本轮后台及 App 的准确完整输入永久为 `788881e9e2d6fe2953fde15c564738b9eec65fca`；root `a5b1a7` 以四文件已接受的 `1ae4bf60` 快进整合并保存两份构建前记录，普通原子推送 `ad629f/74552→aff573` exit0，`c16f45` 实际核 origin main/global 同788，Native9bc/clientef38仍原样隔离。下述产物完成后才写本节；本节后文档 HEAD 不是这些二进制的新编译来源。
