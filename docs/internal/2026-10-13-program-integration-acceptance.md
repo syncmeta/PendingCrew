@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前受管 Linux 同版模块源码与完整 Mac 开发证据接受
+
+4文件完整模块提交326c6086后rebase到main472e74eb为 `46eb1eea919075c4cfd77b608e5f4945a6f78e2a`，快进整合；4冻结字节未变。唯一产品机制改动为CORE15精确673cd2/443恢复资格，installer、Rust/Store、旧迁移fixture与生产Linux/ELF/proc门未改。launcher SHA256 `30e41e768cc6178b023e8465876fc1f7c8f2f88b794bf21a9165afe8c6c4214e`，新同版harness `6d0893df63faa2540d8b8a7ec04260eb61e1eefd551b56c6dbf0fdf22d07a64b`，manual workflow `710eb6b4e26954e8d4f004e934189a71daf1f5e7fb9101503759356971d3a1b9`，短说明 `33838ff75881cbabcf41767c18e429435ba3194ed592a0f78c26f9f84f22802a`。后端工作树已恢复原Claude268，独立模块分支保留。
+
+作者准确Mac669/shared normal的flow03实际exit0；私域开发消费者仅替代Linux host/ELF/proc观察层，不改生产安装器。原archive53058607B SHA256 `483e77b9d52dd13aaa7d99a5800cb660373e41b0e902166c45970398ab7acb0e`，637成员保相对引用未解引用；独立质量亲核24条RPC、57712B真实SIGKILL后CoreWAL、知识block/view/placement/原UUID与最终重开、四次session.list空、跨exec双flock/live拒绝、prepared-unknown只读status、真实两writer单CAS胜者、badWAL/futuremain逐hash+mode不变拒绝，以及四Core实际0/-9/0/0和PID无残留。安装的launcher字节等冻结源，唯一installed release binary等已独验Mac669；原socket复制失败/原UUID数据保留。稳定ignored原件 `docs/private/preserved-delivery-artifacts/linux-managed-current-development-20261020/` 全manifest已独核，整块接受，无阻断；不能以Mac开发冒Linux/kernel通过。
+
+新入口manual-only/15min，完整reviewed controller ref等run/checkout且clean、完整Rust树固定原4c96；原API run/artifact、ZIP/tar/ELF与强normal proof先核，再单次当前同版私域安装/恢复，完整flow归档不跟随链接、失败也保全。准确compiledRef永远c8d70482及其已接受实际ELF，controllerRef独列，不重编Rust、不重复七绿、不构造旧迁移或第二版本。源码整合后保存本记录冻结新controller，再一次真实Linux tail。当前没有运行该新Linux任务、系统服务安装/日常数据/GUI/SDK模型或公开发布，不提前关闭平台关口。
+
 ## 2026-10-20 当前 Core15 三平台完整候选构建与封装接受
 
 准确来源永久为 `66992d592046992385f63c929b58c2869005fd95`，Mac原NativeCandidate完整target及iOSSimulator/iPhoneOS顺序完整target均actual exit0（normal62410、Mac65810、mobile54886）。全程没有源码修复或依赖例外；本节后记录不改产物输入。1761个Git源码逐字匹配，sourceDigest `bc5917018f1fca73f39c1febe5e5a203b83bc0d162d3392258463a7d64058312`；3738个实际SPM输入digest `d6571afdd3de197d52fd5eedbf464f5c8bdce9d11750163df6fee3b639dee9cc`，三平台全部before/after库存一致。准确共享normal的独验复用前条，不重复。

@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 受管 Linux 当前同版模块冻结，进入唯一实际平台 tail
+
+完整4文件模块46eb1eea已整合，唯一产品机制为当前673cd2/443的精确受管恢复资格；原installer/Rust/Store/旧迁移及Linux/ELF/proc保护不变。准确共享Mac669的完整开发flow03实际exit0并独立接受：真实双lease/CAS/Unknown、SIGKILL后57712B WAL、知识/视图/placement/原UUID恢复、坏WAL与未来库零改拒绝、四Core0/-9/0/0全部收尾，原失败与完整归档保留。此仍不是Linux运行通过。
+
+下一新完整controller冻结后手动一次15min runtime-only任务，复用原c8 API/artifact/规范tar/ELF/完整fresh证明，compiledRef保持c8；controller源码另独立记录。无Rust编译、七绿或旧迁移重跑，私域flow一份归档及失败保全。实际Linux平台通过及独立消费原产物后才关闭受管候选分发单元；具体系统安装/公开发布仍分别核权。当前Apple三平台准备已完整接受，其实际窗口/设备/签名/安装边界保持；Claude待决不擅自实现。
+
 ## 2026-10-20 当前三平台候选准备完整接受，受管 Linux 同版模块继续
 
 准确source66992d59的原远程Mac、iOSSimulator和iPhoneOS全部实际整target构建/封装exit0，独立质量核1761源码、3738SPM和6653保全清单全部相符，Mac签态/代码等价与加载闭包通过。共享normal仅独核一次复用；没有重新实现知识接线、运行旧稳定业务或新CI。产物与完整证明在 ignored `docs/private/preserved-delivery-artifacts/apple-current-66992d59-20261020/`，其来源永远669，本计划后更新不重标。
