@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 原已验Linux15归档恢复与稳定保全
+
+原临时artifact ZIP缺失、解包目录为空；原GitHub artifact11974910186仍未过期，精确run38737765008/job116431333921/source5f6300525ee6b1f8a656a3eef8ceb2f41e1eed21。唯一下载session95019/gh89334（birth2026-10-19T16:26:19Z）持续同一连接，16:59:11Z实际exit0，无重启、替代来源或新CI。67289703B ZIP SHA256 05ae79b9c8508938c43699d5410252f6a6fbe78f9d19df13679e24de0a66f0d7，19项CRC和安全路径通过；495 tar路径已检查，未执行任何下载程序。
+
+36461773B canonical tar SHA256 ecca56d19f90a8174053606eb7c515e1a9dbb49a11efcd13ba56e884d904af0a，50242056B ELF SHA256 93e10186f1a8492f12ebdb3d664cd342ce0fc4725e6673f5fb599ccb7a7b3796，原witness SHA256 5bb524f3b497df3d8ec4f9a8ab7b1b3c4979d771b44dcd6f701b166bf9399d93，均对应原 `2026-10-15-linux15-complete-actual-acceptance.json`（SHA256 361d8d7b19d0aa8d80c60a683fc29589dfe1f200b2691919a6ca333cd8fe8d3b）。原candidate来源及README一起保存，不新编来源证明。
+
+7文件exclusive复制并逐hash复核至稳定gitignored `docs/private/preserved-delivery-artifacts/linux15-5f630052-20261020/`，父链实体非symlink、目录0700/文件0600；原取证 `/private/tmp/pcw-linux15-artifact-recovery-20261020-01/` 保留。稳定verification.json SHA256 3b6f76e935bc57b5a9907b291f28af2ae0000df0c6ebeb664fb598561d6966cb。此轮仅恢复原已接受资产，没有源码变更、运行二进制、重验Linux业务、SDK/模型、设备、安装或发布；不能将5f旧产物冒充当前0acb整树的Linux新版。
+
+独立质量另从原已提交接受记录起核：ZIP19项CRC、tar与ZIP内字节、ELF与tar内bin/crewd、原candidate/witness及4c2f2c7b Rust输入digest/default Release/emptyfeatures均相符；稳定7文件等恢复原件，0700/0600且全部ignored，verification自身hash吻合。独验只读且未执行产物，接受原资产恢复，无阻断，不扩大为新源交付。
+
 ## 2026-10-20 新基线的客户端/后端组合冻结接受
 
 客户端ef38重放到9f2993de时的唯一会话窗口冲突由客户端作者解决，保留动态executor、result.id确认、草稿修订保护及当前上下文选择门。自动合并又暴露真实缺陷：新crew尚未select，旧requireExecutor却要求目标crew等于展示crew，导致机长必拒。作者改为提交层只读executor.list目标crew并核namespace/generation/connectionEpoch及available/initialContext；UI缓存资格仅作展示，明确恢复/freshCAS/Unknown不重投合同保留。
