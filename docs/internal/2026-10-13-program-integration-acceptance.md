@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-19 横向裁切修复版已实际更新并首次打开
+
+人类call_0d88caaabbd24812a1cd80d30262bd38明确『授权更新，已正常退出』，对应64d99380/0.1.44/20745.39557及首次无模型打开。唯一安装作者d26711/session82835实际预检确认旧bb/20745.25883的App/helper活动集为空、候选及父链/目标门通过；原handle由fcf476收exit0，备份/stage核验通过，无重复备份或中间改动。116f30 exit0完成两次exclusive whole rename与静态复核，新 `/Applications/PendingCrew.app` 的来源永久为64d99380c17ce93d5f1b3d4f10bbd1b10813c69f、0.1.44/20745.39557，四关键字节等准确候选、ARM64/严格签核通过，前后活动集为空，作者未打开App。
+
+旧bb整包保留 `/Applications/.PendingCrew-previous-0.1.44-20745.25883-64d99380`，ZIP保留 `~/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.1.44-20745.25883-before-64d99380.zip`，SHA256 c08b503bbb9792dd307d699aef3e30cc3fc8c4efe5f6fdff424102a5f28111cd；177项CRC及旧关键字节核过，所有更旧备份保留。安装未读/迁移数据库、改设置/信任或发送进程信号。实际结果 `/private/tmp/pcw-responsive-64d99380-mac-01/installation-result.json` SHA256 e500a112b3e523415c35a08708c95e3271a6eeb96875ff789d3891e02880c373，root043d98亲读核散列。
+
+独立质量亲核installed四关键字节及deep strict签后，台北19:53:20标准LaunchServices `open -a /Applications/PendingCrew.app` 一次exit0，无App参数或env覆盖。实际GUI62351/PPID1、自有helper62369/PPID62351，连续30秒存活，未观察新增Agent执行子进程。CUA仅非内容inventory保留normalID/running，默认PendingCrewLocal仅lstat必要root/socket/DB/ui-cache存在；没有AX/截图/聊天内容记录、恢复/发送/接管/设置或SDK模型探测。App留运行供用户，不复开补验；窗口正文、可见窗口数量和连接显示仍未读取，不冒日用界面已重新视觉验收。首次打开证据 `/private/tmp/pcw-responsive-64d99380-mac-01/first-open-observation.json` SHA256 f9428503b7b5bd02923c24fc703c4fc669ee7a97dd2c20314fc54c5a1bcf6d6f。
+
+本节覆盖下文64d等待安装确认的历史状态，仅为后记录，不重标二进制输入或抹去有限私域宽→窄→宽与高度未验边界。具体修复、实际安装和首次无模型打开已交付；新授权已使用，不扩到其他包或真实调用。整体仍为Mac日用试用/缺陷收敛，其他平台与Claude接口限制按原记录保留。
+
 ## 2026-10-19 横向裁切修复候选接受，具体更新待授权
 
 准确完整输入永久为64d99380c17ce93d5f1b3d4f10bbd1b10813c69f，main/global已普通推送并实核一致；本节是构建后的记录。新normal `/private/tmp/pcw-responsive-64d99380-normal-01/crewd-presign` SHA256 46b844ed603b04620e1d8347b866c236211a04adefcbdc26a7bf2b6cd7ab72f1，witness `/private/tmp/pcw-responsive-64d99380-normal-01-witness.json` SHA256 82c0fd9374e33d64147f71e435e516047c5bf2c1203e4e759d42c54da25fd93c。独立质量亲核443输入/快照、实际13自有fresh:false、默认Debug/ARM64/空features/非测试、pre/post clean及新ref，未重跑稳定业务。
