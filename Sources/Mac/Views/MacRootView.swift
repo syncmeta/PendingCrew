@@ -30,6 +30,7 @@ struct MacThreePaneView: View {
     @State private var cockpit = CockpitPresentation()
 
     var body: some View {
+        GeometryReader { geometry in
         ZStack {
             // 原生三栏：列宽交系统协商。两侧 cap 住、中栏弹性吃 slack（免得右栏像旧版那样霸占
             // 大半屏留白）；窗口窄了系统自动收某列，不会按 ideal 撑窗超屏裁掉 sidebar。
@@ -63,12 +64,13 @@ struct MacThreePaneView: View {
             } content: {
                 CrewCenterView()
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 520, ideal: 740)
+                    .navigationSplitViewColumnWidth(min: 420, ideal: 640)
             } detail: {
                 CrewSessionWindowView(presentation: model.usesCrewdAuthority ? .inspector : .automatic)
                     .environmentObject(sessionRunner)
                     .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 440)
             }
+            .navigationSplitViewStyle(.balanced)
             // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通
             // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，
             // 等于把 #96 刚拆掉的广播接回来一半。
@@ -79,6 +81,7 @@ struct MacThreePaneView: View {
                 CockpitLayer(presentation: cockpit)
                     .environmentObject(crewStore).environmentObject(model).zIndex(1)
             }
+        }.frame(width: geometry.size.width, height: geometry.size.height)
         }
         // ⚠️ **这里不许再挂 `.animation(_:value:)`**（人类 Todo #96）。
         // 它的作用域是整个子树，包括整棵 NavigationSplitView；开关驾驶舱那一下的

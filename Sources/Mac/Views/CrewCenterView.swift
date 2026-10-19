@@ -124,15 +124,17 @@ struct CrewCenterView: View {
             if let crewId = crewStore.selectedCrewId,
                crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
+                    Menu {
+
                     Picker("沟通视图", selection: $communicationView) {
                         ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { view in
                             Text(view.title).tag(view)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.inline)
                     .help("人类沟通只显示给人的消息；完整记录显示所有消息")
-                }
-                ToolbarItem {
+
+
                     // Todo #79 当初把它钉在最右（`.primaryAction`）；#128 人类要它挪到
                     // 那三个按钮**左侧**，所以改成普通 ToolbarItem 并**声明在最前**
                     // —— toolbar 的排布跟声明顺序走。点亮色与发送键共用
@@ -144,14 +146,14 @@ struct CrewCenterView: View {
                         .help(onlyMentions
                               ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
                               : "只显示 @ 你的消息 + 你自己发的")
-                }
-                ToolbarItem {
+
+
                     Button { showingDetail = true } label: {
                         Label("crew 详情", systemImage: "info.circle")
                     }
                     .disabled(crewStore.selectedDetail == nil)
-                }
-                ToolbarItem {
+
+
                     // 驾驶舱 = 叠在群聊之上的临时窗口（#542）；群聊这一栏不卸载，
                     // 关掉驾驶舱回来草稿和滚动位置原样在。关闭在驾驶舱左上角圆形叉。
                     //
@@ -164,11 +166,12 @@ struct CrewCenterView: View {
                         Label("驾驶舱", systemImage: "speedometer")
                     }
                     .disabled(crewStore.selectedDetail == nil)
-                }
-                ToolbarItem {
+
+
                     Button { Task { await crewStore.refreshDetail(crewId) } } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
+                    } label: { Label("机组操作", systemImage: "ellipsis.circle") }
                 }
                 // 「Session 终端」开关已去掉 —— 右栏(成员/终端)在原生三栏里常驻;
                 // 成员列表 ↔ 终端 的切换由右栏内部(viewingTerminal / 点 session)管。

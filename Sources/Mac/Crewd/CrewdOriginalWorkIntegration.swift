@@ -152,13 +152,31 @@ private struct CrewdOriginalMessages<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
     @State private var openedSession = false
     @State private var showFolders = false
+    @State private var showConversationPopover = false
     private var showingSession: Bool { runner.viewingTerminal }
     private var visibleChat: Bool { !showingSession && workspace.originalSection == "消息" && visibleChannels.contains { $0["id"].string == workspace.channelID } }
     #endif
     var body: some View {
         #if os(macOS)
-        HSplitView {
-            conversationList.frame(minWidth: 156, idealWidth: 208, maxWidth: 248)
+        GeometryReader { geometry in
+        HStack(spacing: 0) {
+            if geometry.size.width >= 600 {
+                conversationList.frame(width: min(208, geometry.size.width * 0.30))
+                Divider()
+            }
+            VStack(spacing: 0) {
+                if geometry.size.width < 600 {
+                    HStack {
+                        Button { showConversationPopover = true } label: {
+                            Label("会话列表", systemImage: "bubble.left.and.bubble.right")
+                        }.buttonStyle(.plain).font(.system(size: 12))
+                        Spacer()
+                    }.padding(.horizontal, 12).frame(height: 32)
+                        .popover(isPresented: $showConversationPopover) {
+                            conversationList.frame(width: 248, height: 440)
+                        }
+                    Divider()
+                }
             ZStack {
                 content().environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
                     .opacity(visibleChat ? 1 : 0).allowsHitTesting(visibleChat).disabled(!visibleChat).accessibilityHidden(!visibleChat)
@@ -170,7 +188,9 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 if !showingSession && !visibleChat {
                     CrewdEmptySurface(title: "选择一段会话", detail: "从左侧选择群聊或成员。不同会话的消息和草稿分别保留。", symbol: "bubble.left.and.bubble.right")
                 }
-            }.frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+            }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(width: geometry.size.width, height: geometry.size.height)
         }
         .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (showingSession ? runner.selectedRunId?.uuidString ?? "new" : "channel")))
         .onChange(of: showingSession) { _, value in if value { openedSession = true } }
@@ -217,7 +237,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
             HStack {
                 Text("会话").font(.system(size: 11, weight: .medium))
                 Spacer()
-                Button { runner.composeNew(); runner.viewingTerminal = true; openedSession = true } label: { Image(systemName: "plus") }
+                Button { runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }
                     .buttonStyle(.plain).help("新建成员会话")
             }.foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal, 12).frame(height: 36)
             ScrollView {
@@ -226,7 +246,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                         if let row = visibleChannels.first(where: { $0["id"].string == id }) {
                             CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: row["kind"].string == "dm" ? "群内单聊" : "机组群聊",
                                 selected: !showingSession && workspace.channelID == id,
-                                action: { workspace.selectConversation(id); runner.viewingTerminal = false }) {
+                                action: { workspace.selectConversation(id); runner.viewingTerminal = false; showConversationPopover = false }) {
                                 CrewdGroupAvatar(members: workspace.channelSummaries.first(where: { $0["channel"]["id"].string == id })?["members"].array ?? [], channel: id, name: CrewdConversationProjection.title(row))
                             }
                         }
@@ -238,7 +258,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                                 selected: showingSession && workspace.sessionID == id && !runner.isComposingNew,
                                 action: {
                                     guard let run = runner.runs.first(where: { $0.sessionId == id && $0.crewId == workspace.crewID }) else { return }
-                                    workspace.selectSession(id); runner.select(run.runID); runner.viewingTerminal = true; openedSession = true
+                                    workspace.selectSession(id); runner.select(run.runID); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false
                                 }) { CrewdMemberAvatar(seed: id, colorSeed: workspace.crewID) }
                                 .disabled(!runner.runs.contains { $0.sessionId == id && $0.crewId == workspace.crewID })
                         }

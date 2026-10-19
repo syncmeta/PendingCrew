@@ -25,6 +25,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     func body(content: Content) -> some View {
         content
 .toolbar {
+            Menu {
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || PENDINGCREW_LOCAL_MAC
@@ -55,6 +56,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
             #endif
+            } label: { Label("连接与核对", systemImage: "network") }
         }.sheet(isPresented: $recovering) {
             if let current = window.workspace {
                 ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)
@@ -121,7 +123,7 @@ struct CrewdOriginalConnectionStatus: View {
         HStack {
             HStack(spacing: 5) {
                 Circle().fill(workspace.client.readyForWork ? Theme.Palette.accent : Theme.Palette.inkMuted).frame(width: 5, height: 5)
-                Text(workspace.status).font(.system(size: 11)).foregroundStyle(Theme.Palette.inkMuted)
+                Text(workspace.status).lineLimit(1).truncationMode(.middle).font(.system(size: 11)).foregroundStyle(Theme.Palette.inkMuted)
             }
             if workspace.dataDirectory != nil, !(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false) {
                 Text("下次后台启动未配置可执行的 Codex；资料仍可使用，请在设置中准备后停工重开。").font(.caption).foregroundStyle(.secondary)
