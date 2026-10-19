@@ -557,7 +557,7 @@ pub struct DataSourceInput {
     pub at_revision: Option<String>,
     pub attributes: Value,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -577,6 +577,129 @@ pub enum DataPlacementEdit {
         layout: Value,
     },
 }
+/// The wire retains `kind: set` and nullable identity fields. Its schema must
+/// express the same exactly-one identity rule already enforced by the compiler.
+impl JsonSchema for DataPlacementEdit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "DataPlacementEdit".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let block = g.subschema_for::<DataInputRef>();
+        let layout = g.subschema_for::<Value>();
+        let revision = g.subschema_for::<Option<String>>();
+        schemars::json_schema!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {"type": "string", "const": "keep"},
+                        "id": {
+                            "type": "string",
+                            "description": "Existing placement ID in this same parent view."
+                        },
+                        "layout": layout
+                    },
+                    "required": ["kind", "id", "layout"]
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Create a new stable placement. alias is its own batch-unique identity, independent of the referenced block alias.",
+                    "properties": {
+                        "kind": {"type": "string", "const": "set"},
+                        "id": {"type": "null"},
+                        "alias": {
+                            "type": "string",
+                            "description": "Required fresh batch-unique placement alias."
+                        },
+                        "block": block,
+                        "atRevision": revision,
+                        "layout": layout
+                    },
+                    "required": ["kind", "alias", "block", "layout"]
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Update an existing placement in this same parent view using its exact ID; do not supply a new alias.",
+                    "properties": {
+                        "kind": {"type": "string", "const": "set"},
+                        "id": {
+                            "type": "string",
+                            "description": "Required exact existing placement ID in this parent view."
+                        },
+                        "alias": {"type": "null"},
+                        "block": block,
+                        "atRevision": revision,
+                        "layout": layout
+                    },
+                    "required": ["kind", "id", "block", "layout"]
+                }
+            ]
+        })
+    }
+}
+
+/// Safe public structure errors only: no lookup, ACL facts, paths or stored data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DataPlacementIdentityError {
+    Required,
+    Ambiguous,
+}
+impl DataPlacementIdentityError {
+    pub fn refusal(self) -> &'static str {
+        match self {
+            Self::Required => "data.placement.identity_required",
+            Self::Ambiguous => "data.placement.identity_ambiguous",
+        }
+    }
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Required => {
+                "Document placement kind=set requires exactly one identity: a fresh placement alias for creation, or the exact existing placement id for update. The block alias is a separate identity."
+            }
+            Self::Ambiguous => {
+                "Document placement kind=set cannot contain both a placement id and a placement alias. Use a fresh alias for creation or the exact existing id for update."
+            }
+        }
+    }
+    pub fn from_refusal(value: &str) -> Option<Self> {
+        match value {
+            "data.placement.identity_required" => Some(Self::Required),
+            "data.placement.identity_ambiguous" => Some(Self::Ambiguous),
+            _ => None,
+        }
+    }
+}
+impl DataChange {
+    pub fn placement_identity_error(&self) -> Option<DataPlacementIdentityError> {
+        let Self::Apply { edits, .. } = self else {
+            return None;
+        };
+        for edit in edits {
+            let (DataEdit::CreateView { definition, .. } | DataEdit::UpdateView { definition, .. }) =
+                edit
+            else {
+                continue;
+            };
+            let DataViewDefinitionInput::Document { placements, .. } = definition else {
+                continue;
+            };
+            for placement in placements {
+                if let DataPlacementEdit::Set { id, alias, .. } = placement {
+                    match (id, alias) {
+                        (None, None) => return Some(DataPlacementIdentityError::Required),
+                        (Some(_), Some(_)) => return Some(DataPlacementIdentityError::Ambiguous),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",

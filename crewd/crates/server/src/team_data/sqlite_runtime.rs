@@ -292,6 +292,20 @@ fn route_sync(
     {
         return Err(error("real Human recovery authority required"));
     }
+    // Input-only validation follows current actor/crew authorization, before
+    // creating a namespace or attempting any mutation/receipt transaction.
+    let submit = if method == "data.submit" {
+        let params: DataSubmitParams = parse(args.clone())?;
+        if let Some(problem) = params.change.placement_identity_error() {
+            return Err(KnowledgeError::Rpc(
+                RpcError::new(RpcError::INVALID_PARAMS, problem.message())
+                    .with_refusal(problem.refusal()),
+            ));
+        }
+        Some(params)
+    } else {
+        None
+    };
     let mut knowledge = Knowledge::open(&path, base, write).map_err(error)?;
     let commit_access = access.clone();
     let commit_state = state_for.clone();
@@ -331,7 +345,7 @@ fn route_sync(
             })
         }
         "data.submit" => {
-            let p: DataSubmitParams = parse(args)?;
+            let p = submit.expect("submit was parsed before namespace initialization");
             let digest = store::digest(&p).map_err(error)?;
             if let Some(result) = knowledge
                 .retry(&p.request_id, &p.context, &principal, &digest)
@@ -1192,6 +1206,278 @@ mod tests {
         .unwrap();
     }
 
+    /// Real02's original change, without copying its live context, token or UUID.
+    /// Only fixture-owned workspace contexts/request IDs are used below.
+    fn real02_document_change() -> Value {
+        json!({"kind":"apply","message":"保存日用版验收知识及持久关联的简单页面","edits":[
+            {"kind":"createBlock","alias":"dailyKnowledge","attributes":{},"content":"日用版知识验收完成","contentType":"text/plain","sources":[]},
+            {"kind":"createView","alias":"dailyPage","attributes":{},"definition":{"kind":"document","layout":{},"placements":[{"block":{"alias":"dailyKnowledge","kind":"created"},"kind":"set","layout":{}}]},"sources":[],"title":"日用版知识验收"}
+        ]})
+    }
+
+    #[tokio::test]
+    async fn sqlite_real02_document_submit_exposes_placement_identity_contract() {
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let scope = ConnectionScope::new();
+        let workspace = rt
+            .session(
+                f.state.clone(),
+                f.worker.clone(),
+                f.token(&f.worker),
+                scope.clone(),
+                "data.workspace.get",
+                json!({"crewId":f.crew}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(workspace["state"], "uninitialized");
+        let args = json!({"context":workspace["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":real02_document_change()});
+        let error = rt
+            .session(
+                f.state.clone(),
+                f.worker.clone(),
+                f.token(&f.worker),
+                scope,
+                "data.submit",
+                args,
+            )
+            .await
+            .unwrap_err();
+        println!(
+            "real02 shape, fixture-owned authenticated worker route: {}",
+            serde_json::to_string(&error).unwrap()
+        );
+        assert_eq!(error.code, RpcError::INVALID_PARAMS);
+        assert_eq!(
+            error.data.as_ref().unwrap().refusal,
+            "data.placement.identity_required"
+        );
+
+        let f = Fixture::new().await;
+        let _rt = runtime(&f).await;
+        let socket = f.spawn_socket().await;
+        let mut client = crate::agent::testkit::RpcClient::connect(&socket).await;
+        client
+            .call(
+                methods::ATTACH,
+                json!({"sessionId":f.worker,"token":f.token(&f.worker)}),
+            )
+            .await
+            .unwrap();
+        let workspace = client
+            .call(
+                methods::CALL,
+                json!({"tool":"data_workspace_get","args":{"crewId":f.crew}}),
+            )
+            .await
+            .unwrap();
+        let workspace: Value = serde_json::from_str(workspace["text"].as_str().unwrap()).unwrap();
+        let args = json!({"context":workspace["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":real02_document_change()});
+        let result = client
+            .call(methods::CALL, json!({"tool":"data_submit","args":args}))
+            .await
+            .unwrap();
+        println!("real02 shape through production MCP: {result}");
+        assert_eq!(result["isError"], true);
+        assert!(
+            result["text"]
+                .as_str()
+                .unwrap()
+                .contains("data.placement.identity_required"),
+            "a valid tool call must expose the safe input refusal, not hide it behind an unrelated ACL hint"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_real02_document_alias_commit_atomicity_and_reopen() {
+        async fn call(
+            client: &mut crate::agent::testkit::RpcClient,
+            tool: &str,
+            args: Value,
+        ) -> Value {
+            let result = client
+                .call(methods::CALL, json!({"tool":tool,"args":args}))
+                .await
+                .unwrap();
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let socket = f.spawn_socket().await;
+        let mut client = crate::agent::testkit::RpcClient::connect(&socket).await;
+        client
+            .call(
+                methods::ATTACH,
+                json!({"sessionId":f.worker,"token":f.token(&f.worker)}),
+            )
+            .await
+            .unwrap();
+        let tools = client.call(methods::TOOLS, json!({})).await.unwrap();
+        if let Some(path) = std::env::var_os("CREWD_TEST_KNOWLEDGE_TOOLS_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&tools).unwrap()).unwrap();
+        }
+        if let Some(path) = std::env::var_os("CREWD_TEST_KNOWLEDGE_SCHEMA_OUTPUT") {
+            std::fs::write(
+                path,
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&crewd_proto::api_schema()).unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        let workspace = call(&mut client, "data_workspace_get", json!({"crewId":f.crew})).await;
+        let original = workspace["context"].clone();
+        let refused=client.call(methods::CALL,json!({"tool":"data_submit","args":{"context":original,"requestId":uuid::Uuid::new_v4().to_string(),"change":real02_document_change()}})).await.unwrap();
+        assert_eq!(refused["isError"], true);
+        assert_eq!(
+            call(&mut client, "data_workspace_get", json!({"crewId":f.crew})).await["state"],
+            "uninitialized"
+        );
+        assert_eq!(
+            std::fs::read_dir(&rt.root).unwrap().count(),
+            0,
+            "input-only rejection must not initialize or partially write knowledge"
+        );
+
+        // Same two edits; supply the explicitly required new placement identity.
+        let mut change = real02_document_change();
+        change["edits"][1]["definition"]["placements"][0]["alias"] = json!("dailyPlacement");
+        let request = uuid::Uuid::new_v4().to_string();
+        let args = json!({"context":original,"requestId":request,"change":change});
+        let committed = call(&mut client, "data_submit", args.clone()).await;
+        assert_eq!(committed["phase"], "committed");
+        assert_eq!(committed["context"]["generation"], "1");
+        assert_eq!(committed["created"].as_object().unwrap().len(), 3);
+        let context = committed["context"].clone();
+        let block = committed["created"]["dailyKnowledge"]["object"]["reference"].clone();
+        let view = committed["created"]["dailyPage"]["object"]["reference"].clone();
+        let placement = committed["created"]["dailyPlacement"]["id"].clone();
+        let detail = call(
+            &mut client,
+            "data_object_get",
+            json!({"context":context,"reference":view,"atRevision":null}),
+        )
+        .await;
+        assert_eq!(
+            detail["object"]["definition"]["placements"][0]["id"],
+            placement
+        );
+        assert_eq!(
+            detail["object"]["definition"]["placements"][0]["block"]["reference"],
+            block
+        );
+        assert_eq!(
+            call(
+                &mut client,
+                "data_request_get",
+                json!({"context":original,"requestId":request})
+            )
+            .await["lookup"]["status"],
+            "known"
+        );
+        let duplicate = call(&mut client, "data_submit", args).await;
+        assert_eq!(
+            duplicate["context"]["generation"], "1",
+            "known original UUID is attribution, not a second commit"
+        );
+
+        // Early structure and later compiler/CAS failure both leave earlier
+        // edits in the batch unapplied. Neither is classified as successful.
+        let mut ambiguous = real02_document_change();
+        ambiguous["edits"][1]["definition"]["placements"][0]["alias"] = json!("newPlacement");
+        ambiguous["edits"][1]["definition"]["placements"][0]["id"] = placement.clone();
+        let refused=client.call(methods::CALL,json!({"tool":"data_submit","args":{"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":ambiguous}})).await.unwrap();
+        assert!(
+            refused["text"]
+                .as_str()
+                .unwrap()
+                .contains("data.placement.identity_ambiguous")
+        );
+        let mixed = json!({"kind":"apply","message":"must roll back all edits","edits":[
+            {"kind":"createBlock","alias":"mustNotExist","contentType":"text/plain","content":"not committed","sources":[],"attributes":{}},
+            {"kind":"updateBlock","id":block["id"],"expectedRevision":"999","contentType":"text/plain","content":"wrong CAS","sources":null,"attributes":{}}
+        ]});
+        let refused=client.call(methods::CALL,json!({"tool":"data_submit","args":{"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":mixed}})).await.unwrap();
+        assert_eq!(refused["isError"], true);
+        assert!(
+            !refused["text"].as_str().unwrap().contains("wrong CAS"),
+            "unrelated internal errors retain the conservative MCP message"
+        );
+        let page=call(&mut client,"data_object_list",json!({"context":context,"objectType":"block","after":null,"limit":100,"atRevision":null,"includeArchived":false})).await;
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            call(&mut client, "data_workspace_get", json!({"crewId":f.crew})).await["context"],
+            context
+        );
+
+        let updated=call(&mut client,"data_submit",json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"apply","message":"update exact placement","edits":[
+            {"kind":"updateView","id":view["id"],"expectedRevision":"1","title":"日用版知识验收","definition":{"kind":"document","layout":{},"placements":[{"kind":"set","id":placement,"alias":null,"block":{"kind":"existing","reference":block},"atRevision":null,"layout":{"updated":true}}]},"sources":null,"attributes":{}}
+        ]}})).await;
+        assert_eq!(updated["phase"], "committed");
+        let detail = call(
+            &mut client,
+            "data_object_get",
+            json!({"context":updated["context"],"reference":view,"atRevision":null}),
+        )
+        .await;
+        assert_eq!(
+            detail["object"]["definition"]["placements"][0]["id"],
+            placement
+        );
+        let kept=call(&mut client,"data_submit",json!({"context":updated["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"apply","message":"keep exact placement","edits":[
+            {"kind":"updateView","id":view["id"],"expectedRevision":"2","title":"日用版知识验收","definition":{"kind":"document","layout":{},"placements":[{"kind":"keep","id":placement,"layout":{"kept":true}}]},"sources":null,"attributes":{}}
+        ]}})).await;
+        assert_eq!(kept["phase"], "committed");
+        // Each call already closes its SQLite connection. Reopen independently
+        // and recheck the durable content plus stable placement association.
+        let reopened = Arc::new(Runtime::new(rt.root.clone()).unwrap());
+        let detail = reopened
+            .session(
+                f.state.clone(),
+                f.worker.clone(),
+                f.token(&f.worker),
+                ConnectionScope::new(),
+                "data.object.get",
+                json!({"context":kept["context"],"reference":view,"atRevision":null}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            detail["object"]["definition"]["placements"][0]["id"],
+            placement
+        );
+        let content = reopened
+            .session(
+                f.state.clone(),
+                f.worker.clone(),
+                f.token(&f.worker),
+                ConnectionScope::new(),
+                "data.object.get",
+                json!({"context":kept["context"],"reference":block,"atRevision":null}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(content["object"]["content"], "日用版知识验收完成");
+        let schema = f
+            .state
+            .db
+            .call_result(|store| {
+                store
+                    .conn()
+                    .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            schema, 15,
+            "this fix must not activate the unrelated Native16 development format"
+        );
+    }
+
     #[tokio::test]
     async fn sqlite_formal_mcp_acl_free_view_and_cross_language_wire() {
         let f = Fixture::new().await;
@@ -1337,11 +1623,10 @@ mod tests {
             .await
             .unwrap();
         let fixture = json!({"workspace":workspace,"submit":result,"objectDetail":detail,"preview":preview,"snapshots":snapshots});
-        std::fs::write(
-            "/private/tmp/pcw-sqlite-serde-wire-20261016.json",
-            serde_json::to_vec_pretty(&fixture).unwrap(),
-        )
-        .unwrap();
+        let output = std::env::var_os("CREWD_TEST_SQLITE_WIRE_OUTPUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| f.data_dir().join("serde-wire.json"));
+        std::fs::write(output, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
         let expired = f.token(&f.captain);
         f.state.tokens.revoke(&f.captain);
         assert!(

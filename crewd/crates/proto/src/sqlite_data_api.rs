@@ -209,7 +209,7 @@ pub fn agent_tools() -> Vec<ToolDef> {
     ].into_iter()
         .map(|(m, s)| ToolDef {
             name: m.replace('.', "_"),
-            description: format!("SQLite knowledge {m}. Current crew ACL applies. First call data_workspace_get with crewId to obtain the complete current context; never invent or shorten context fields. An uninitialized workspace has no database to read: an authorized first data_submit apply creates it. Reads, including data_schema_get, do not initialize it. After a committed submit use its returned context for later reads and new writes; data_request_get and exact retries instead require the original request context, including its original generation. SQL/schema reads describe business SQL tables, not blocks or views; use data_object_get/list for knowledge objects. SQL/schema atRevision must be null. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation.{}", if m == "data.submit" { " For executable Mac views use definition kind='web', renderer='web', rendererVersion='1'. Supply your own HTML/CSS/JavaScript and declared bindings. The closed JavaScript bridge is window.knowledge.request(operation,input), resolving {callID,response}; read uses {binding:'bindingId'} and returns response.value. Writes use operation='write' with exactly {message,edits} and require requestedCapabilities:['knowledge-write'] plus separate native Human code-enable and write grants for this version. Readonly views need no write capability. Unknown writes must be looked up through the retained original writeCallID; never retry by inventing a new call ID. The bridge also supports lookup with {writeCallID} and navigate with an authorized Core reference; it grants no arbitrary RPC, network or file access." } else { "" }),
+            description: format!("SQLite knowledge {m}. Current crew ACL applies. First call data_workspace_get with crewId to obtain the complete current context; never invent or shorten context fields. An uninitialized workspace has no database to read: an authorized first data_submit apply creates it. Reads, including data_schema_get, do not initialize it. After a committed submit use its returned context for later reads and new writes; data_request_get and exact retries instead require the original request context, including its original generation. SQL/schema reads describe business SQL tables, not blocks or views; use data_object_get/list for knowledge objects. SQL/schema atRevision must be null. Use the original request UUID; never replay an Unknown outcome. Dangerous SQL needs real Human confirmation.{}", if m == "data.submit" { " Document placements with kind='set' require exactly one placement identity: a fresh batch-unique alias for a new placement, or the exact existing placement id in the same view for an update; leave the other identity null or omitted. A block alias and a placement alias are separate identities. Reuse an existing placement with kind='keep' and its exact id. For executable Mac views use definition kind='web', renderer='web', rendererVersion='1'. Supply your own HTML/CSS/JavaScript and declared bindings. The closed JavaScript bridge is window.knowledge.request(operation,input), resolving {callID,response}; read uses {binding:'bindingId'} and returns response.value. Writes use operation='write' with exactly {message,edits} and require requestedCapabilities:['knowledge-write'] plus separate native Human code-enable and write grants for this version. Readonly views need no write capability. Unknown writes must be looked up through the retained original writeCallID; never retry by inventing a new call ID. The bridge also supports lookup with {writeCallID} and navigate with an authorized Core reference; it grants no arbitrary RPC, network or file access." } else { "" }),
             input_schema: s,
             annotations: Some(ToolHints { read_only_hint: !matches!(m, "data.submit" | "data.preview"), destructive_hint: m == "data.submit", idempotent_hint: true, open_world_hint: false }),
         }).collect()
@@ -342,6 +342,52 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn document_placement_schema_requires_new_alias_or_exact_old_id() {
+        let schema = serde_json::to_value(schemars::schema_for!(DataPlacementEdit)).unwrap();
+        let branches = schema["oneOf"].as_array().unwrap();
+        assert_eq!(branches.len(), 3);
+        let keep = &branches[0];
+        let create = &branches[1];
+        let update = &branches[2];
+        for branch in branches {
+            assert_eq!(branch["additionalProperties"], false);
+        }
+        assert_eq!(keep["properties"]["kind"]["const"], "keep");
+        assert_eq!(create["properties"]["kind"]["const"], "set");
+        assert!(
+            create["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "alias")
+        );
+        assert_eq!(create["properties"]["id"]["type"], "null");
+        assert!(
+            update["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "id")
+        );
+        assert_eq!(update["properties"]["alias"]["type"], "null");
+        for input in [
+            json!({"kind":"set","alias":"newPlacement","block":{"kind":"created","alias":"block"},"layout":{}}),
+            json!({"kind":"set","id":"oldPlacement","block":{"kind":"created","alias":"block"},"layout":{}}),
+            json!({"kind":"keep","id":"oldPlacement","layout":{}}),
+        ] {
+            let parsed: DataPlacementEdit = serde_json::from_value(input).unwrap();
+            let roundtrip = serde_json::to_value(parsed).unwrap();
+            assert!(matches!(roundtrip["kind"].as_str(), Some("set" | "keep")));
+        }
+        let submit = agent_tools()
+            .into_iter()
+            .find(|tool| tool.name == "data_submit")
+            .unwrap();
+        assert!(submit.description.contains("fresh batch-unique alias"));
+        assert!(serde_json::to_vec(&submit.input_schema).unwrap().len() <= 32_768);
+    }
+
     #[test]
     fn arbitrary_json_tool_inputs_remain_unrestricted_schemas() {
         let submit = agent_tools()

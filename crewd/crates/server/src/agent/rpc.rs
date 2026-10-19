@@ -49,6 +49,31 @@ fn invalid() -> RpcError {
     RpcError::new(RpcError::FORBIDDEN, "invalid session or token")
 }
 
+/// Only input-only, closed public refusals may cross the MCP boundary in
+/// detail. Never forward arbitrary Core messages, SQL errors or ACL facts.
+fn knowledge_failure_text(error: &RpcError) -> String {
+    if error.code == RpcError::INVALID_PARAMS {
+        if let Some(problem) = error.data.as_ref().and_then(|data| {
+            crewd_proto::team_data::DataPlacementIdentityError::from_refusal(&data.refusal)
+        }) {
+            return serde_json::json!({
+                "error": {
+                    "code": error.code,
+                    "refusal": problem.refusal(),
+                    "message": problem.message()
+                },
+                "thisCallApplied": false,
+                "originalRequestOutcome": "notDetermined",
+                "guidance": "Retain the original request UUID. Never resend an Unknown request; use data_request_get with the original context to determine any prior outcome."
+            }).to_string();
+        }
+    }
+    format!(
+        "Data operation unavailable or refused (RPC code {}); check the tool argument schema and current crew ACL. Obtain context from data_workspace_get; reads do not initialize a workspace. Retain the original request UUID and use pure lookup after an unknown outcome.",
+        error.code
+    )
+}
+
 fn to_value<T: serde::Serialize>(v: T) -> Result<Value, RpcError> {
     serde_json::to_value(v).map_err(internal)
 }
@@ -187,10 +212,9 @@ async fn route(
                     Ok(value) => crewd_proto::agent::CallResult::ok(
                         serde_json::to_string(&value).map_err(internal)?,
                     ),
-                    Err(error) => crewd_proto::agent::CallResult::err(format!(
-                        "Data operation unavailable or refused (RPC code {}); check the tool argument schema and current crew ACL. Obtain context from data_workspace_get; reads do not initialize a workspace. Retain the original request UUID and use pure lookup after an unknown outcome.",
-                        error.code
-                    )),
+                    Err(error) => {
+                        crewd_proto::agent::CallResult::err(knowledge_failure_text(&error))
+                    }
                 });
             }
             if state.management.get().is_some() && !state.admission.contains(&session) {
@@ -296,6 +320,39 @@ mod tests {
     use crate::agent::testkit::{Fixture, RpcClient};
     use crate::agent::text::{self, Locale};
     use crewd_collab::Change;
+
+    #[test]
+    fn knowledge_mcp_error_detail_is_closed_to_public_input_structure() {
+        let typed = crewd_proto::RpcError::new(
+            crewd_proto::RpcError::INVALID_PARAMS,
+            "untrusted internal detail",
+        )
+        .with_refusal("data.placement.identity_required");
+        let text = super::knowledge_failure_text(&typed);
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["error"]["refusal"],
+            "data.placement.identity_required"
+        );
+        assert_eq!(value["originalRequestOutcome"], "notDetermined");
+        assert!(!text.contains("untrusted internal detail"));
+        for error in [
+            crewd_proto::RpcError::new(
+                crewd_proto::RpcError::FORBIDDEN,
+                "foreign object private path /private/unrelated",
+            ),
+            crewd_proto::RpcError::new(crewd_proto::RpcError::CONFLICT, "SQL/internal details"),
+            crewd_proto::RpcError::new(
+                crewd_proto::RpcError::INVALID_PARAMS,
+                "unexpected input detail",
+            )
+            .with_refusal("foreign.other"),
+        ] {
+            let text = super::knowledge_failure_text(&error);
+            assert!(!text.contains(&error.message));
+            assert!(text.starts_with("Data operation unavailable or refused"));
+        }
+    }
 
     async fn attached(f: &Fixture, session: &str) -> RpcClient {
         let sock = f.spawn_socket().await;
