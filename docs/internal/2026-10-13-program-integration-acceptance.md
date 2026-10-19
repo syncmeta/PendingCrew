@@ -1,5 +1,23 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 SQLite-aware Linux 候选完整脚本接受，冻结新源实际构建
+
+完整模块提交 `9201e3e2f4f62d013ac2e9d202a01680f070e879` 已快进 main；仅 workflow 与既有 smoke 两文件127+/23-，生产 Rust/ACL/restore guard 未改。冻结 workflow SHA256 `6ca76d0647c69051928a43f356d9445b93ae232e8b38c6af2ff07d635e0a0052`，smoke SHA256 `556a8adf0e6ff157115c35f311a8d81a81523182d62130907795d7e969d74fec`。后端工作树已恢复原 Claude268404fe，未合入开发schema16。
+
+作者先用现有准确旧 Mac normal（source64d99380、binary SHA256 `46b844ed603b04620e1d8347b866c236211a04adefcbdc26a7bf2b6cd7ab72f1`）做私域脚本开发验证，9个相关生产源码与946逐字相同；队列3文件差异明确不冒本地覆盖。最终 driver exit0，33条原RPC证实 snapshot 后 block/view revision1→真实修改2→恢复3，正文、标题、layout及同一 placement ID 恢复，Human provenance及 restoreEpoch 更新、旧context实际typed -32009拒绝，重开保留revision3、原submit/restore UUID查回historical。Core-only restore精确拒绝且所有data文件SHA不变，backup/check通过，两个Core实际wait0且PID无残留。早先错误全等断言失败、一次中间绿和最终绿分别保留，不重放旧请求。
+
+原件稳定保存于 ignored `docs/private/preserved-delivery-artifacts/linux-current-smoke-development-20261020/pcw-lkdev-g94fjnz9/`。独立质量亲核manifest所有文件hash、准确旧binary、9路径双ref字节、原RPC、退出记录与来源边界；此接受仅旧Mac脚本开发和新源码整块检查，不能称当前Linux已通过。YAML/8段Bash/5段Python及归档胶水检查通过，没有新本地编译、GUI、SDK或模型。
+
+新 `reuse_all_seven` 默认false、与reuse6互斥，必须完整Rust tree等4c96并记录原两run/七log哈希；真时不再构建testkit或重复七项。独立质量额外亲核run2 API、原ZIP与第7实际1pass锚点。下一次新完整ref仍真实重新构建默认Release；summary要求smoke非Mac开发模式、知识与页面实际还原、epoch/Core拒绝及两次正常退出。失败时单份显著UNQUALIFIED tar保全已产出ELF、完整witness和sourceproof，成功仅canonical tar加小日志，不复制裸ELF。随后仅一次精确新源必要Linux执行，不rerun旧失败或重标旧normal。
+
+## 2026-10-20 当前 Linux Release 已构建，旧恢复 smoke 被正确安全边界拒绝
+
+第二次实际任务为 source `946205e38492958cbf6873247eba51526afcb667`、run39294517568/attempt1、job118203477845，终态 failure，未重试。三 bin 构建成功，第7项会话排队恢复实际1 passed；此前六项按完整 Rust tree `4c96c7c65e38e3e3234feda65a1fb8f7a965a39b` 复用。因此七项业务已有实际通过证据，不需为下一次仅脚本变更重跑。
+
+默认无 features Release 实际编译成功，强来源检查通过：optimizedRelease、defaultFeatures=true、12个自有 package features为空、13项实际产物、构建 exit0。首次打开、正常关停及 Core backup 已执行；旧 smoke 继续用 Core-only restore 覆盖知识工作区，被当前产品明确拒绝：`Core-only restore cannot replace a knowledge workspace; restore a knowledge snapshot under current ACL`。这是必要防误删边界，不能删除知识目录或放宽 Store/ACL 来换绿。该失败未完成恢复重开，也未产生 canonical tar；失败 artifact 没有完整 ELF 与最终 witness，不从日志拼造候选证明。
+
+原 API/jobs/logs 与 artifact12207696859（73052B，ZIP SHA256 `5cf120bafaf1b7fa9d403d97a3aa314b90ad2aefc6da54af54feefbc7e80ac21`）稳定保存于 ignored `docs/private/preserved-delivery-artifacts/linux-current-946205e3-failure-20261020/`。第7项原日志 SHA256 `41ec33996bfd1a8a4f81decb3c4a2837a7afa7ae7cdf645ebd14319e67a1920e`。下一完整单元只适配既有 smoke：正式知识 snapshot/current ACL 恢复、Core-only 拒绝无数据改写、同库重开原 UUID；先用准确旧 Mac normal 做明确标记的脚本开发验证，再冻结新完整来源做真实 Linux Release。旧 Mac 证据不能冒 Linux 验收，新源不能重标946的构建。
+
 ## 2026-10-20 Linux首次实际失败与已证recipe修复接受
 
 实际run39292568772/attempt1/sourceffcfb3d0f4502257c7f67700bd02ab47d103ae27、job118196717867已completed/failure。原artifact12206087432共11173B，六项SQLite原log逐一真实exact1passed/0failed/0ignored；第7在support/t11.rs初始化缺target/debug/fake_claude，未进入恢复业务，normal Release build/check均skipped。只选-p crewd遗漏crewd-exec假bin是recipe缺陷；静态核对曾漏此归属，失败保留，不归咎产品。API/jobs/原logs zip/失败artifact/七log/result与短manifest均exclusive保全于ignored `docs/private/preserved-delivery-artifacts/linux-current-ffcfb3d0-failure-20261020/`，原临时取证也保留。

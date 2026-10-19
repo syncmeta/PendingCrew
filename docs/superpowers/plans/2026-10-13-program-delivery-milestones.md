@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 SQLite-aware 完整 smoke 已独验，进入新完整来源 Linux 构建
+
+两文件完整模块9201e3e2已整合main，生产安全guard未变。准确旧64d Mac normal上的最终私域脚本开发链实际exit0：snapshot后修改知识正文/视图标题及布局，再正式恢复原语义和placement；核revision/Human provenance/epoch、旧context拒绝、Core-only覆盖拒绝且data字节不变、backup/check、同库重开原UUID/历史，以及两个Core正常退出。独立质量核原33条RPC、来源/9路径字节/双退出和全部原件hash，接受此脚本开发证据，明确不冒新Linux运行通过。
+
+下一精确新源任务显式reuse_all_seven，只有整个crewd树等原4c96、七项原run/log锚点一致才跳过旧业务/testkit；默认未来仍7项。新完整ref的默认Release必须真实重建并走修正后的完整smoke，最后才封装canonical包；后续失败则保留一份明确未合格的实际binary/proof归档。由统筹冻结普通推送后单次dispatch，成功才交客户端保全实际包、质量独立核来源与运行证据。Claude待决/设备/安装关口仍独立，不借此扩大权限或称全工程完成。
+
+## 2026-10-20 当前 Linux 候选剩余单元：SQLite 正式恢复与可保全的实际 Release
+
+实际 run39294517568/source946205e3 已终态 failure：第7项恢复业务真绿，连同原六项构成未变完整 Rust tree 的七项既有通过证据；默认 Release 编译及强来源检查也通过。旧 smoke 的 Core-only restore 被知识工作区安全 guard 正确拒绝，尚无恢复重开闭环或 canonical 包。原失败 artifact 与日志已保全，不改生产 guard，也不重做七项已验业务。
+
+后端唯一作者整块适配现成 smoke：用当前正式 snapshot/current ACL/危险确认恢复知识及自由视图，验证 Core-only 覆盖被拒绝且数据不变，正常关停后同库重开并核原 UUID。准确旧 Mac normal 仅供隔离脚本开发预验，不当当前 Linux 交付。下一手动 workflow 在完整 Rust tree/原七日志锚点一致时显式复用全部七项并跳过 testkit 构建；新完整 ref 的 normal 仍须真实重新构建。失败路径须保全实际已生成 binary/witness/sourceproof 的一份明确未通过运行验收 tar，避免再次丢失实际构建产物。作者完成整个脚本预验后独立质量一次复核，再由统筹冻结、整合、单次新源执行；不扩验收平台或重跑稳定模块。
+
 ## 2026-10-20 Linux已知recipe失败修复冻结，复用六绿并补实际Release闭环
 
 首个实际run39292568772/attempt1/sourceffcfb3d0终态failure：六项SQLite用例已真绿，第七项在t11夹具初始化缺fake_claude，未进入恢复业务；normal/tar尚未生成。根因是依赖构建只选择crewd，假执行器实际属于crewd-exec；原失败/六份通过日志已稳定保全，不冒为产品恢复失败或包通过。
