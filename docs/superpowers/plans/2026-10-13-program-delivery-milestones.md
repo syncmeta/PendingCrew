@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前三平台候选准备完整接受，受管 Linux 同版模块继续
+
+准确source66992d59的原远程Mac、iOSSimulator和iPhoneOS全部实际整target构建/封装exit0，独立质量核1761源码、3738SPM和6653保全清单全部相符，Mac签态/代码等价与加载闭包通过。共享normal仅独核一次复用；没有重新实现知识接线、运行旧稳定业务或新CI。产物与完整证明在 ignored `docs/private/preserved-delivery-artifacts/apple-current-66992d59-20261020/`，其来源永远669，本计划后更新不重标。
+
+此单元不等于设备或实际窗口交付：Mac候选ad-hoc，Simulator linker ad-hoc，iPhoneOS unsigned/family1,2；原NativeCandidate memory凭据策略保留，未验持久Keychain。App/模拟器/真机均未启动，不安装发布，不替换日用20746.1。其余真实设备/签名/具体安装继续守对应关口。
+
+后端当前同版受管模块仍有真实缺口可推进：原c8准确包复用，补当前443输入恢复资格和完整freshprefix lease/CAS/Unknown/强杀非空WAL后知识/视图/UUID恢复；Mac开发完整链已由作者执行通过，正在归档/短手动入口收口。须冻结后独立质量，再一次真实Linux原平台tail；不以Mac开发替代Linux、也不重编c8/扩旧迁移/重复七绿。Claude产品取舍仍待人类，互不阻塞这些独立单元。
+
 ## 2026-10-20 两个真实剩余交付单元并行，稳定 Linux 候选不重做
 
 当前源码核对发现，已接受c8 Linux raw候选不等于受管分发：launcher的schema15恢复资格仅含历史402输入，不含当前443/digest673cd2，真实非空WAL会被外壳拒绝。后端唯一作者在独立 `codex/linux-managed-current-20261020` 从66992d59推进完整当前同版单元：准确原c8包、完整proof不重标，补受管资格、freshprefix安装/运行锁/CAS/Unknown、真实SIGKILL后的Core与知识/视图/原UUID恢复及归档；不扩旧11→13/14迁移fixture、不造第二版本、不改Store或权限guard。新controller/fixture源码身份与compiledRef=c8严格分开，既有七绿和当前Release证明复用。

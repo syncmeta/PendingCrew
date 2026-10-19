@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 当前 Core15 三平台完整候选构建与封装接受
+
+准确来源永久为 `66992d592046992385f63c929b58c2869005fd95`，Mac原NativeCandidate完整target及iOSSimulator/iPhoneOS顺序完整target均actual exit0（normal62410、Mac65810、mobile54886）。全程没有源码修复或依赖例外；本节后记录不改产物输入。1761个Git源码逐字匹配，sourceDigest `bc5917018f1fca73f39c1febe5e5a203b83bc0d162d3392258463a7d64058312`；3738个实际SPM输入digest `d6571afdd3de197d52fd5eedbf464f5c8bdce9d11750163df6fee3b639dee9cc`，三平台全部before/after库存一致。准确共享normal的独验复用前条，不重复。
+
+Mac proof SHA256 `d08dd67f6fb4f7e3f25d190e2b47a7ef69e2697440d1e05f6c5dae30d21506dd`，packaged helper `c3046ad7a4a439a3ddfef1425b65a1b809981a9d7a689415745e951f3f6e6588`，native `86d76181f9ad34d7699c7f524badd379b8740d665ff9d4d86445e9076a0c8d32`。独立质量实际运行既有format2只读checker通过，核pre-sign/packaged helper与GUI codeEquivalent；九MachO的raw strict/-L记录对应实际hash，并fresh deep/strict verify exit0。非系统import仅Sparkle和PendingCrew.debug.dylib，均由实际Frameworks及@executable_path rpath在包内解析，没有把仅签seal等同加载闭包。
+
+Simulator proof `79bc0f8b08f120427c63d065c54f2c8a0de4455c18df354b3cd9ec72a1c82683`，executable `4d646346d76988655683a941664207beaacb85dfa364c0f8fd1ba848d5fa2bd4`；iPhoneOS proof `e091ddb82a7d0804beb66e15dbfd6efc6f2c58a84fb1923898554b4fe5540307`，executable `45f8f446ed2185ca036c5cfcec6dc27ca82d5d5458be422865de4d40d4954152`。两者实际BUILD SUCCEEDED、51个product files逐hash、settings/plist绑定精确669、独立bundleID、PENDINGCREW_NATIVE_CANDIDATE、ARM64、family1,2、SDK27及CODE_SIGNING_ALLOWED=NO。质量fresh只读签态核Simulator为linker ad-hoc，iPhoneOS unsigned，均不能声称已具备设备安装签名。
+
+稳定ignored根 `docs/private/preserved-delivery-artifacts/apple-current-66992d59-20261020/` 含原源码/SPM/正常helper/三个实际产品/原日志settings/proof及清单。`module-completion.json` SHA256 `30e6859cefa522dae35b271d1435537023831218a1ba4ae792be7a46bf2f0702`；`preserved-files.json` SHA256 `55ccf8d8aee0580f1447bb2272f9f1260b221c8a06b455690adeb4b21b90f34a`。质量亲核6653项regular bytes/SHA与symlink目标、1761源码与3738依赖和三个产品，最终整块接受，无阻断。
+
+范围限当前Core15准确三平台构建、封装及来源保全：候选memory凭据factory为原目标有意设置，不冒持久Keychain验收；没有App/helper服务/Simulator/真机运行、开发者身份签名、设备安装或发布。旧TLS/知识/Todo/SQLite及normal证据复用，不新模型SDK或全套测试。原Mac日用20746.1来源保持其真实dirty边界，未替换；Core16受管profile不混入。受管Linux当前同版模块继续独立实现，不因A接受宣称整个工程完成。
+
 ## 2026-10-20 当前 Apple 完整候选与 Linux 受管同版恢复：实际剩余范围
 
 最新有界源码delta核对：Linux launcher的CORE15_RECOVERY_INPUTS仍只有旧4c2f/402，当前c8的673cd2/443真实不匹配，非空WAL会failclosed；原raw候选的成功不能外推受管恢复。客户端main相对已验278有13个Swift路径变化，其中共享知识页面、Human组件和Workspace会进入移动target，当前未封完整移动产品；无需重造知识/自由视图实现。两项分别交唯一作者的独立分支，从main66992d59继续；旧Claude268/客户端341引用完整保留。根只协调与整合，生产Rust/Store、旧迁移和已验稳定业务不动。
