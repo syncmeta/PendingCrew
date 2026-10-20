@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前全工程推进：正常远程产品源码与生产归档接缝已整合
+
+已完成新的真实完整单元：5文件 `0b023de1c2b56ec39b3b2196926fcfdf558241ac` 快进main。单一显式远程产品选择接通同原App的真实credentialfactory/UI，普通本地默认、LOCAL_MAC其它旧启动保护不变；现production-sign-only在archive前正确传完整后台输入/SHA、版本/source及远程overlay。Core15远程后端既有实现足够，不依赖16、不改schema或重跑稳定后台。
+
+真实生产factory红-5、五状态compile/runtime绿0，唯一暖unsigned Xcode archive0接受；外层事后清单因合法framework链接1与补原链接清单明确分列，无重build。最终postsign str→bytes小delta独立验证、原archive输入与最终源分层，不冒最终clean候选或真签名。稳定1959项证据 `docs/private/preserved-delivery-artifacts/remote-production-source-168ef472-20261020/`，manifest12c5da8f…9b797，QA整块接受。
+
+正常本地安装仍291/20746.15278，不静默启用remote。下一完整单元是正式远程身份/签名与持久Keychain运行的具体产物/动作；作者先复用既有DeliveryValidation机制准备最小完整scope，真实Keychain/新grant/签私钥/安装/设备仍各核具体许可。历史04/86/09不能从授权当真实持久PASS，固有TLS/Memory/后台证据复用。Claude完成归属产品待决不擅自降级，不为避该决定造adapter/fixture；其它平台与发布同样按实际门，不冒全工程完成。
+
 ## 2026-10-20 当前交付结论：准确291正常本地日用版已安装并通过首开检查
 
 用户具体许可后，正常 `/Applications/PendingCrew.app` 已更新为0.1.44/20746.15278、双source291，whole字节等独验candidate且签态通过。临近替换旧App/helper工作子树空、完整旧ZIP及隐藏whole保全、排他整包替换实际成功；未强退任务、未手工迁移或清理日用数据。安装原件 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-install-20261020/` manifest1097b0c3…aec204。

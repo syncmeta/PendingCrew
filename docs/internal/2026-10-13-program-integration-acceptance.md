@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 正常远程产品入口与生产配方完整源码整合接受
+
+恢复全工程目标后按最新main/远端/原进程核对：main/global168ef472一致、上轮GUI21460/Core21470 absent。发现真实未交付源码接缝：普通Debug/Release的LOCAL_MAC关闭remote UI/refresh及真实凭据factory；production-sign-only仍构本地模式且archive前未传embed必需的后台路径/SHA。后端确认Core15已有remote接口/持久表/身份恢复，不依赖Core16；不新增schema或重做M5/Jev/Linux。
+
+客户端唯一作者从168新分支完成5文件85+/19-整块提交 `0b023de1c2b56ec39b3b2196926fcfdf558241ac`，已快进main。单一显式 `PENDINGCREW_REMOTE_PRODUCT` 仅解耦remote门，正式同原App可达真实Keychain类型及原菜单/list/admin/通知；普通本地默认Refused，Candidate仍Memory、未合格Validation拒绝，保LOCAL_MAC的Entry/legacy/managed-parent等其余保护。现生产配方在archive前绑定准确normal路径/SHA、GUI版本/双source、实际Release ARM64 overlay，并沿现成签态/加载闭包机制收尾。其现有契约接受backend Debug或Release，原669/defaultDebug/full443证可如实复用，不放宽契约也不冒后台Release。
+
+实际生产factory红compile0/runtime-5及原commonarchiveargv缺输入红JSON保留；五状态真实factory类型/原Window.refresh注入readcounter绿compile+runtime均0，无SecItem或GUI。唯一暖unsignedarchive原handle16819的Xcode实际ARCHIVE SUCCEEDED/exit0，source1764及SPM3738前后相同、helper20e753正确前置嵌入；实际Release-O/ARM64/两宏/NOdebug/NOsign、0CodeSign任务。外层wrapper事后误用源码无symlink清单，遇正常Sparkle框架链接退出1；原失败与archive0分列保全，补105regular+6原链接清单不解引用，不重跑/删除产物。QA核原archive排除未用Sparkle后仅GUI/helper两个系统依赖活动映像；未来真实生产配方先核闭包/内链再移未用Sparkle、签名与deep/finalaudit，该真实签名尾部尚未执行。
+
+QA发现post-sign读取entitlements为str而plistlib.loads需bytes，已最小UTF8encode并synthetic XML表达式验证。最终recipe cfa39…0878c较实际archive原fdbda…e818d仅此离线尾部delta，全部Swift/fixture/commonarchive argv相同；保beforefreeze与最终source分层，不冒archive来自最终clean0b。稳定证据 `docs/private/preserved-delivery-artifacts/remote-production-source-168ef472-20261020/`，1959manifest项SHA256 `12c5da8fdd84146be711e6e9ade960fa586fb337b2a8888c8f7bbf2d60c9b797`；独立整块源码/红绿/无签名归档接受。未真实签名、Keychain、GUI/模型/安装或发布；日用安装仍291。
+
+后续完整门为准确正式远程产品身份/签名及持久凭据运行。有限历史核对source04/86仅授权且P1 UNKNOWN启动失败，09方案不证明跨进程KeychainPASS，不能从授权补造完成。Keychain实现本体本轮未改，复用源码/TLS/Memory已过层，下一准确新scope动作沿现有DeliveryValidation服务/账号/lease机制准备；不得以假service验收冒正常service、稳定身份、真机或全工程完成，不再扩通用工具。
+
 ## 2026-10-20 正常本地日用版291已安装，首次无模型打开及正常退出实际接受
 
 用户针对正常包0.1.44/20746.15278、精确source291与方案1af20834明确回答“授权更新及首开，已正常退出”（call_9ddc91e527bd4fc780eb77cfd47166c2）。client唯一安装者先实际核旧20746.1/25e+dirty三hash和App/helper工作子树空、candidate6027/ZIP/方案未变、独有目标及父链安全。preflight43452实际0/chunk44fa4d，backupstage44241实际0/chunk929587；完整旧whole ZIP校验、精确newstage校验，临近替换再核旧全inventory/关键字节及活动空后，两个RENAME_EXCL成功，安装静态核实际0/chunk988389。安装whole逐字等已验candidate、双source291、freshdeepstrict0；安装后首开前工作子树也空，没有kill/抢占。
