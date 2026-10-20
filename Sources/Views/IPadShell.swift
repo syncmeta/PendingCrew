@@ -27,6 +27,7 @@ struct IPadShell: View {
 
     @State private var selectedCrewId: String?
     @State private var showingPairing = false
+    @State private var didReadComputerList = false
     @State private var showingRecovery = false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
@@ -35,7 +36,10 @@ struct IPadShell: View {
 
     var body: some View {
         NavigationSplitView {
-            CrewListView(selection: $selectedCrewId)
+            CrewListView(connectComputer: canChooseComputer ? { showingPairing = true } : nil,
+                         hasPairedComputer: hasPairedComputer,
+                         readingComputers: !didReadComputerList || appModel.connectingAuthority,
+                         selection: $selectedCrewId)
                 .navigationTitle("机组")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -58,7 +62,11 @@ struct IPadShell: View {
         .onChange(of: crewStore.selectedCrewId) { _, id in
             if selectedCrewId != id { selectedCrewId = id; selectedRemoteSessionID = nil }
         }
-        .task { await appModel.connectCrewdAuthority(); await crewStore.refreshList() }
+        .task {
+            await appModel.connectCrewdAuthority()
+            didReadComputerList = true
+            await crewStore.refreshList()
+        }
         .onChange(of: appModel.crewdBackend?.workspace.presentationNamespace) { _, _ in
             crewStore.retireOriginalAuthorityPresentation()
             selectedCrewId = nil; selectedRemoteSessionID = nil
@@ -104,14 +112,59 @@ struct IPadShell: View {
                     IOSRemoteSessionView(crewID: id, sessionID: sessionID)
                 }
         } else {
-            PendingCrewPlaceholderIcon(size: 64)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if canChooseComputer {
+                MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
+                                           connect: { showingPairing = true })
+            } else if !didReadComputerList || crewStore.loadingList || appModel.connectingAuthority {
+                ProgressView("正在读取机组")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = appModel.crewdWindow.error ?? appModel.crewdWindow.workspace?.error ?? crewStore.error {
+                ContentUnavailableView {
+                    Label("连接需要处理", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("连接电脑") { showingPairing = true }
+                    Button("重试") { Task { await crewStore.refreshList() } }
+                }
+            } else {
+                ContentUnavailableView("选择一个机组", systemImage: "bubble.left.and.bubble.right",
+                                       description: Text("从左侧选择机组，继续查看消息、Todo 和资料。"))
+            }
         }
+    }
+
+    // Observe the original startup read before classifying an empty list. This
+    // local view readiness is not a credential flag and never selects a peer.
+    private var hasPairedComputer: Bool { appModel.crewdWindow.computers.contains(where: \.paired) }
+    private var canChooseComputer: Bool {
+        let window = appModel.crewdWindow
+        return didReadComputerList && !appModel.connectingAuthority
+            && window.workspace == nil && window.selected == nil && window.error == nil
+            && window.computers.allSatisfy(\.paired)
+            && window.inputReviewWorkspaces.isEmpty
     }
 
     /// 从 crewStore.crews 中找到对应 crew 的 title，供 CrewChatView 初始化用。
     private func crewTitle(for id: String) -> String? {
         crewStore.crews.first(where: { $0.id == id })?.title
+    }
+}
+
+struct MobileComputerIntroduction: View {
+    let hasPairedComputer: Bool
+    let connect: () -> Void
+    var body: some View {
+        ContentUnavailableView {
+            Label(hasPairedComputer ? "选择你的电脑" : "连接你的电脑", systemImage: "desktopcomputer")
+        } description: {
+            Text(hasPairedComputer
+                 ? "选择一台已配对的电脑，继续查看机组消息、Todo 和资料。"
+                 : "这里是电脑端机组的随身前端。连接你的电脑，查看消息、Todo 和资料。")
+        } actions: {
+            Button("连接电脑", action: connect)
+                .buttonStyle(.borderedProminent).tint(Theme.Palette.accent)
+        }
     }
 }
 #endif

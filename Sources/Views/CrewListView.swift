@@ -9,6 +9,12 @@ import SwiftUI
 /// macOS List(selection:) 统一持有。
 struct CrewListView: View {
     @EnvironmentObject private var crewStore: CrewStore
+    #if os(iOS)
+    @EnvironmentObject private var appModel: AppModel
+    var connectComputer: (() -> Void)? = nil
+    var hasPairedComputer = false
+    var readingComputers = false
+    #endif
     /// 当前选中的 crew id；nil = 无选中。
     @Binding var selection: String?
 
@@ -30,15 +36,42 @@ struct CrewListView: View {
 
     // MARK: - Empty state
 
-    /// 空态文案要诚实。旧文案是「还没有 crew / 新建一个来开始」——在 iPhone
-    /// 上这两句都不成立：iPhone/iPad 上根本没有「新建」入口（`CreateCrewSheet`
-    /// 是 macOS-only），而列表空的真实原因通常不是「没有 crew」，是
-    /// **远端尚未配对或当前不可达**。这两类都必须显示原因与重试，不能冒充“没有 crew”。
     @ViewBuilder
     private var emptyOverlay: some View {
-        if crewStore.loadingList {
+        if awaitingList {
             ProgressView()
-        } else if let error = crewStore.error {
+        } else {
+            #if os(iOS)
+            if let connectComputer {
+                MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
+                                           connect: connectComputer)
+            } else {
+                unavailableOrEmpty
+            }
+            #else
+            unavailableOrEmpty
+            #endif
+        }
+    }
+
+    private var awaitingList: Bool {
+        #if os(iOS)
+        if readingComputers { return true }
+        #endif
+        return crewStore.loadingList
+    }
+
+    private var connectionFailure: String? {
+        #if os(iOS)
+        appModel.crewdWindow.error ?? appModel.crewdWindow.workspace?.error ?? crewStore.error
+        #else
+        crewStore.error
+        #endif
+    }
+
+    @ViewBuilder
+    private var unavailableOrEmpty: some View {
+        if let error = connectionFailure {
             ContentUnavailableView {
                 Label("远端连接不可用", systemImage: "exclamationmark.triangle")
             } description: {
@@ -48,12 +81,21 @@ struct CrewListView: View {
             }
         } else {
             ContentUnavailableView {
+                #if os(iOS)
+                Label("这里还没有机组", systemImage: "person.2.slash")
+                #else
                 Label("这里还没有 crew", systemImage: "person.2.slash")
+                #endif
             } description: {
+                #if os(iOS)
+                Text("这台电脑还没有可显示的机组。")
+                #else
                 Text("远端 Mac 当前没有可显示的 crew。")
+                #endif
             }
         }
     }
+
 }
 
 // MARK: - Row
