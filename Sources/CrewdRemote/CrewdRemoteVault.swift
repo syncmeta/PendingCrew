@@ -44,9 +44,9 @@ final class CrewdRemoteMemoryCredentials: CrewdRemoteCredentialStore {
 enum CrewdRemoteCredentials {
     private static let isolated = CrewdRemoteMemoryCredentials()
     static func application() -> CrewdRemoteCredentialStore {
-        #if PENDINGCREW_LOCAL_MAC
-        // The local product exposes no pairing flow and never opens its vault.
-        // Existing persistent entries and their implementation remain untouched.
+        #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
+        // The default local build never opens its vault. The explicit production
+        // remote overlay uses the existing persistent path below.
         return CrewdRefusedCredentials()
         #elseif PENDINGCREW_KNOWLEDGE_VALIDATION
         return isolated

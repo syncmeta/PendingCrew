@@ -1,4 +1,13 @@
 import Foundation
+#if QA_REMOTE_FACTORY
+final class RemoteFactoryReadProbe: CrewdRemoteCredentialStore {
+    var reads = 0
+    func records() throws -> [UUID] { reads += 1; return [] }
+    func read(_ id: UUID) throws -> CrewdRemoteStoredPair { throw CrewdRemoteError.unavailableCredential }
+    func save(_ record: CrewdRemoteStoredPair) throws { fatalError("not a credential-write test") }
+    func remove(_ id: UUID) throws { fatalError("not a credential-delete test") }
+}
+#endif
 
 @main struct DraftProbe {
     @MainActor static func main() async throws {
@@ -39,6 +48,28 @@ import Foundation
             guard CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical], current: selected).count == 2 else { throw Failure.message("actual disconnect did not expose selected inputs") }
         }
         print("PASS: disconnected selected + historical original-input projection; object dedup; crew/channel drafts; healthy exclusion and actual disconnect when socket supplied")
+        #endif
+        #if QA_REMOTE_FACTORY
+        // Constructing the real persistent factory does not call SecItem APIs.
+        // The window is separately injected with a read counter, never a vault.
+        let factory = CrewdRemoteCredentials.application()
+        #if QA_EXPECT_PERSISTENT
+        guard factory is CrewdRemoteKeychain else { throw Failure.message("explicit normal remote product still refuses persistent credential factory") }
+        #elseif QA_EXPECT_MEMORY
+        guard factory is CrewdRemoteMemoryCredentials else { throw Failure.message("isolated candidate lost memory credential factory") }
+        #else
+        guard factory is CrewdRefusedCredentials else { throw Failure.message("default local/unqualified validation unexpectedly opened credential factory") }
+        #endif
+        let reads = RemoteFactoryReadProbe()
+        let window = CrewdRemoteWindow(pairing: CrewdRemotePairing(credentials: reads))
+        window.refresh()
+        #if QA_EXPECT_REMOTE_FLOW
+        guard reads.reads == 1 else { throw Failure.message("remote product cannot refresh original saved-computer list") }
+        #else
+        guard reads.reads == 0 else { throw Failure.message("default local build read remote credentials") }
+        #endif
+        window.close()
+        print("PASS: actual factory type + original saved-computer refresh gate; no SecItem/credential read/write or GUI")
         #endif
         var drafts = CrewdDrafts()
         let a = CrewdDrafts.Context.message(crew: "a", channel: "one", session: "worker")

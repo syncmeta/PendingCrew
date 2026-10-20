@@ -28,14 +28,14 @@ import Combine
     let pairing: CrewdRemotePairing
     init(pairing: CrewdRemotePairing = CrewdRemotePairing(credentials: CrewdRemoteCredentials.application())) {
         self.pairing = pairing
-        #if !PENDINGCREW_LOCAL_MAC
+        #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
         changes=NotificationCenter.default.publisher(for:CrewdRemotePairing.changed).sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
         #endif
     }
     func refresh() {
-        #if PENDINGCREW_LOCAL_MAC
+        #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
         computers = []
         #else
         do {

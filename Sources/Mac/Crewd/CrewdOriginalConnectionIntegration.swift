@@ -28,7 +28,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             Menu {
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
-                #if PENDINGCREW_KNOWLEDGE_VALIDATION || PENDINGCREW_LOCAL_MAC
+                #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
                 #else
                 ForEach(window.computers) { computer in
@@ -53,7 +53,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Button("原请求核对") { recovering = true }
                 if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
             }
-            #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
+            #if !PENDINGCREW_KNOWLEDGE_VALIDATION && (!PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT)
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
             #endif
             } label: { Label("连接与核对", systemImage: "network") }
@@ -91,7 +91,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")
             }
             .onAppear {
-                #if !PENDINGCREW_LOCAL_MAC
+                #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
                 window.refresh()
                 #endif
                 synchronizeAdministration()
@@ -103,7 +103,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         synchronizeAdministration()
     }
     private func synchronizeAdministration() {
-        #if !PENDINGCREW_LOCAL_MAC
+        #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
         let current = window.workspace
         if admin?.workspace === current { return }
         if let old = admin { old.retire(); previousAdmins.append(old) }
