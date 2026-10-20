@@ -16,7 +16,7 @@ struct CrewdRemotePublicIdentity: Codable, Equatable, Sendable {
 struct CrewdRemoteEndpoint: Codable, Equatable, Sendable {
     let host: String
     let port: UInt16
-    var valid: Bool { port != 0 && !host.isEmpty && host.utf8.count <= 255 && host == host.trimmingCharacters(in: .whitespacesAndNewlines) && !host.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }
+    var valid: Bool { port != 0 && !host.isEmpty && host.utf8.count <= 255 && host == host.trimmingCharacters(in: .whitespacesAndNewlines) && !CrewdRemoteText.containsControlScalar(host) }
 }
 struct CrewdRemoteInvitation: Codable, Equatable, Sendable {
     let invitationId: String
@@ -83,6 +83,16 @@ enum CrewdRemoteText {
         case accepted(String)
         case rejected(DatabaseIDFailure)
     }
+    // Keep this shared check as an explicit loop. The optimized full App has
+    // exhibited different bound-method contains/allSatisfy specialization from
+    // the isolated qualifier; direct membership preserves the same character
+    // set without depending on that higher-order specialization.
+    static func containsControlScalar(_ value: String) -> Bool {
+        for scalar in value.unicodeScalars {
+            if CharacterSet.controlCharacters.contains(scalar) { return true }
+        }
+        return false
+    }
     /// Same opaque identity policy and short-circuit order as databaseID.
     /// The accepted value is the original string, never a normalized identity.
     /// No raw value, length, scalar or error description is logged here.
@@ -90,7 +100,7 @@ enum CrewdRemoteText {
         guard !value.isEmpty else { return .rejected(.empty) }
         guard value.utf8.count <= 256 else { return .rejected(.utf8Bound) }
         guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else { return .rejected(.trimChanged) }
-        guard !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return .rejected(.controlScalar) }
+        guard !containsControlScalar(value) else { return .rejected(.controlScalar) }
         return .accepted(value)
     }
     static func databaseID(_ value: String) -> Bool {
