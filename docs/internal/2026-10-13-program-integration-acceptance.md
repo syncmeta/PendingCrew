@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-21 一次持久验证启动拒绝已保全；共享字符检查规避及准确新包静态接受
+
+用户 call_5cc8f4f024cf41d691d469da590933db 明确授权一次完整持久验证。QA原holder30774/Core30776运行至App准入，App在绑定CUA前正常退出，诊断为databaseIDControlScalar；未获得AppPID，不编造。原exec33577实际exit1/chunk3897da，原App wait0/Core wait0、owner stopped/failed[]、socket消失，最终同bundle为空。尚未invite/accept、Keychain或P2，不把启动拒绝称Keychain失败；按拒绝即停未重试。该次许可已实际使用。持久remote.configure已写enabled=true/revision3、127.0.0.1:49361；当前原进程终态无监听，但未来同data启动可能恢复此监听，不能冒fresh remote-off。48份失败原件单份保全于 `docs/private/preserved-delivery-artifacts/persistent-validation-1ef4ab12-startup-refusal-20261020/`，47项清单SHA256 `5c6ef6fba4edfeb3dca19d7618ef98b8ca6a93bae5ae4e17c82a543bbcbed39b`，runtime-observation SHA256 `83b544cc50756c0d7ab798549991e530fffa69286a2024d8541e4bdc5cdb12b2`；根绑定全清单。
+
+原scope数据库ID与实际Core hello逐字相等，均32位ASCII lowerhex，无控制字符。相同正式源码的优化小程序、五源完整纯qualifyApplication及限定三源组合均接受原值，因此未复现编译器根因。独验原App实际生成的contains(where:)特化与纯probe同名函数行为相反，支持原准入拒绝，但不冒已证明优化/链接根因。唯一作者从当前main ba5453上完成 `f5cd92ca5599f4e4ceac9b004f4fc44fcb8c0bae`（唯一Protocol文件12+/2-），已快进main：db与endpoint共用显式Unicode scalar循环，保Foundation同一controlCharacters字符集、原guard顺序/长度/trim和原opaque身份值，不规范化或绕过。优化组合实际0，涵盖6合法值、21前中后控制字符及endpoint/legacy组合；最终五源纯资格接缝实际0。QA源码与离线范围整块接受，不以绿probe冒实际旧包红复现。
+
+唯一暖构建58088的Xcode与wrapper均actual0/chunka6ce09。准确 `0.0.2177/build2177` 新包及完整输入保于 `docs/private/preserved-delivery-artifacts/mac-persistent-validation-f5cd92ca-20261020/`；6079项清单SHA256 `61d5ad6189b052e804da6d68cfa5eaaabf206a8d39928aee8820557c61e5b1c9`，GUI SHA256 `786bfa87a89ce290a24d23fd2c0a9e98ef30eb32ef0e16f7ea7e489a27167986`。QA核1764份Git f5cd源码/SPM3738前后、DV/-O/ARM64/NOsign、签前后等价/系统加载闭包/deepstrict0；normal仍原compiled669/defaultDebug/20e753，经clone后明确注入，不冒新后台重编。QA对实际新GUI重新反汇编：db/endpoint调用共享loop0x10051e874，直接Foundation scalar membership、匹配退出/不匹配递增，不再调用旧contains(where:)特化；原始generated-code/receipt SHA256 `410faeed7794c91474dfb757b7720d4cd92422fd0a5136f07efd3ef24c0a35e3`。接受仅准确新包静态规避，不代表新App启动、真实Keychain或编译器根治。
+
+新包未启动，原scope/data/lease保持原现场。下一完整动作仅准备沿同1ef私域、同假service/account及原公开身份的新包修订提案，明确sourceRef/包引用原子更新、固定新attempt证据目录（原holder open(x)输出不可覆盖）和持久enabled状态；待完整可审后另核具体许可，不能复用本次旧包许可。日用安装仍291/20746.15278，未动；其他会话React原型未提交改动保留且未混入本模块。此统筹记录晚于构建，不是新包输入。
+
+最终最短提案已独验并稳定保全于 `docs/private/preserved-delivery-artifacts/persistent-retry-proposal-f5cd92ca-20261021/PROPOSAL.md`，SHA256 `e9899facbdc48dd61383c3f79cb942458e24298084b4112c351deff194a5dff8`；4个输入及QA收据共6项清单SHA256 `9a3ec84b7fcc12aac6e3abb1f96de344c6055d896bdcc87c6ea6c592300e2afc`，根绑定全部hash。原scope仍8897旧hash、两个attempt02目录未创建；新完整具体授权已async请求，待答，未执行发布或运行。
+
 ## 2026-10-20 准确0b持久凭据隔离包与两进程完整动作准备接受，待具体许可
 
 客户端按既有PendingCrewDeliveryValidation/DeliveryValidation配置唯一暖构建准确0b023de1，实际Xcode33886 exit0；外层wrapper1仅发现该既有target不嵌入helper（旧专用验证机制在构建后注入），不重建/不改源。从原完整GUI产品克隆后显式注入原normal669/defaultDebug/20e753，封口continuation83696实际0。稳定包 `docs/private/preserved-delivery-artifacts/mac-persistent-validation-0b023de1-20261020/PendingCrew Delivery Validation.app`，GUI `9137b9db1f98ce2541a925f283a57ab1eb04e28e496d6c8cc27d4f91b8a227dc`、0.0.2174/build2174；QA亲核6033manifest SHA256 `f9d0285e8fa80acba82f2ef11f10d208245b3af7d13b8236973dd7d8b6041866`、1764完整Git0b及3738依赖前后、DV/-O/ARM64/NOsign配置、两个系统依赖映像/签态/deepstrict0及helper等价。构建后注入与实际target来源分列，不冒target自动嵌入或正常生产产品。

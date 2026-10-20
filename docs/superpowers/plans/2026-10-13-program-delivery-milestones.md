@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-21 当前停手点更新：持久验证早期拒绝；准确修复新包静态接受
+
+用户已授权的一次1ef持久流程在旧App准入databaseIDControlScalar处终止，尚未配对/Keychain；原App/Core正常0/0并收尾，按约未重试。原数据库ID与Core事实一致，真实旧包机器码行为差异已独核，有限纯probe未复现编译器根因，失败48份原件保全。原data的remote配置已enabled=true/rev3；当前无进程/监听，未来启动可能恢复49361，不能称fresh remote-off。
+
+完整最小规避 `f5cd92ca5599f4e4ceac9b004f4fc44fcb8c0bae` 已基于ba5453快进main，仅Protocol一文件显式scalar循环，保身份值和严格控制字符拒绝；源码及影响范围离线独验接受。唯一准确暖DV构建实际0，新包0.0.2177/build2177、6079清单61d5ad61…5b1c9与实际生成代码均独验：db/endpoint直接共享循环，不含旧异常高阶特化。不是编译器根治、运行/Keychain通过，也未改日用安装291。
+
+下一完整门只准备同1ef私域/同fakeaccount/原身份和lease的最短新包动作，列清sourceRef引用原子更新、新attempt证据目录及既有监听配置；旧原件不覆盖，原scope当前不改，旧一次许可不复投。完整方案可审后核新一次具体授权。已稳定业务/平台不重测、不新建scope或身份/验收平台；其他会话React未提交改动原样保留。正式远程身份/签名/日用交付、Claude完成归属待决及设备/发布等剩余整块边界不变。最短新提案已独验、保全于 `docs/private/preserved-delivery-artifacts/persistent-retry-proposal-f5cd92ca-20261021/PROPOSAL.md`（SHA e9899fac…a5dff8；6项稳定清单9a3ec84b…0e2afc），已发一次具体许可请求，待答。当前没有新运行、原scope改写或attempt02目录创建。
+
 ## 2026-10-20 当前停手点：正常远程源码已整合；持久验证准确包及完整动作待具体许可
 
 新完整5文件正常remote源码0b023de1已独验/整合并随记录6c7c3427普通推main及global。进一步已备准确0b/0.0.2174 DeliveryValidation包：唯一暖target真0、构建后显式normal669注入及封口真0，source1764/deps3738、系统加载闭包/签态及6033清单f9d0285e…41866全经QA。不是Memory包或正常产品发行，不改已安装291日用版。
