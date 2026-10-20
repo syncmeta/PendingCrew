@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前模块进度：原远程窗口主体已实测，断连草稿入口修复已合main
+
+明确具体许可后的JIT原669窗口已实际完成Memory配对、A/B topic草稿隔离与Todo/摘要、四视图/native文档/空作者JS静态两布局和唯一grant撤销断开；原GUI/Core0/0、owner stopped、无新session/重投。但撤权后的当前remote未列入“原连接的输入”，完整GUI单元留一真实缺口，原scope已终态。
+
+完整4文件修复 `29108682b17cfb92cd7fc0dcf3fa7a0798a50dff` 基于实际main3a6c、已独立接受并快进main。当前不可用workspace与historical统一只读projection、对象去重及原标签保留；真实生产红-5/绿0、真实Unix连接→断开组合及唯一暖完整Mac target0均接受。稳定原件分别为 `docs/private/preserved-delivery-artifacts/remote-window-jit-66992d59-draft-gap-20261020/` 和 `remote-retained-inputs-fix-3a6c1679-20261020/`，根已核全manifest。旧m6/Core16保持341；无schema/后台/重连/授信/任务语义改动。
+
+下一完整交付单元是准确修复后Mac候选及“配对→两draft→撤权→当前remote只读原输入可见→正常退出”的针对性窗口复验；复用已过四视图/静态布局，不重跑Rust/Linux/iOS稳定范围。作者唯一准备/封包，复用暖缓存，保持GUI实际全部输入/配置与后台实际compiledRef/完整输入来源分列，不把dirty构建或旧normal证明冒clean新源。当前无新GUI/配对/安装执行；具体新增access动作准备可审后再核人类许可。其余Claude架构/真实模型/设备/签名安装等既定待决未擅自关闭。
+
 ## 2026-10-20 当前停手点：旧实例已退出，实际首轮过期收尾；修正后新配对范围待许可
 
 旧90659经用户正常退出、根实际ps证实缺席。QA已实际完成原669 Core/GUI同parent、owner同fd kernel/DB/runtime绑定、两synthetic crew零session及原观察窗口接入。首轮邀请因holder过早生成、五分钟有效期耗尽而在UI被拒；未accept/revoke/重邀/重投。原GUI/Core正常0/0、owner stopped、socket消失，原scope终态保全并根核35项；未完成整块GUI验收，不扩大通过结论。

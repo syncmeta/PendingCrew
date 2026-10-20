@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 明确许可后 JIT 原窗口实际闭环发现草稿入口缺口，修复已整合
+
+用户对新scope c31f8b1a明确授权“一次完整隔离流程”后，QA唯一owner执行原669候选。实际holder12842/session71625持Core12848及GUI12866同parent，owner同fd kernel/DB/runtime、唯一helper及zero-session门通过；原添加电脑表单ready后才一次invite，Memory回复/一次accept/GUI导入receipt并选synthetic remote完成。A/B topic独立UNSENT草稿回切恢复、各Todo及右摘要、四视图、native shared marker文档，以及空作者JS/写开关disabled的静态A cards/B rows均由原UI实际观察。唯一grant revoke revision2后实际断开；未重连/重投。原GUI/Core均0，owner safePause stopped/failed[]、socket absent，前/撤前/退出后三轮两crew sessions均空，172次持续元数据门通过。
+
+完整运行稳定原件 `docs/private/preserved-delivery-artifacts/remote-window-jit-66992d59-draft-gap-20261020/` 共68files/67manifest项，manifest SHA256 `c772d86429739bf1648f1b126826245beaed4451814a006378594f5e6c5da133`；根亲核全hash/模式/无symlink、invite timing及正常终态。实际发现完整GUI缺口：撤权后“原连接的输入”仅列历史local7F4E5CD7，不列仍当前的断连remote C09B017C。原workspace.messageDrafts保留，不能称数据已删除；故完整GUI验收暂不全通过。原scope已终态，不再使用该次许可。
+
+作者基于干净main3a6c另开 `codex/remote-retained-drafts-20261020`，旧m6/Core16分支341未动。完整4文件51+/5-提交 `29108682b17cfb92cd7fc0dcf3fa7a0798a50dff` 已快进main：只读projection纳入!readyForWork当前workspace、按ObjectIdentifier去重，菜单/列表同projection，保原namespace/crew/channel/session标签；不重连/授信/接管/发送，不改schema/build。真实生产projection红回归exit-5，修复绿覆盖离线/当前/历史/去重、真实Unixhello qualified排除及actual disconnect纳入；原draft隔离/ABA/async同run通过，fixture server0。QA亲核原件、33green inputs及原hello+events.subscribe，无业务写。唯一暖Mac NativeCandidate ARM64完整target实际exit0/BUILD SUCCEEDED，388实际输入逐hash吻合。该构建真实为baseline3a6c+4修改dirtyWIP，不冒clean新封包或已修复GUI实验。
+
+修复原件 `docs/private/preserved-delivery-artifacts/remote-retained-inputs-fix-3a6c1679-20261020/` 共33files/32manifest项，manifest SHA256 `e50193b299a33e621371bb3f2ad9c66f2fe9b270043bfb9be09c3b720c8cad39`，QA与根逐hash核，实际App module `37e1fefabf0a772cda4bcb1f63e337a323fdb14d7e79a5218b4bf6702dcddd05`。整块源码/真实seam/完整target接受；新准确Mac候选与仅受影响撤权后输入窗口动作由作者准备，尚未启动新GUI、邀请、模型或安装。新访问变更具体许可将在准确产物/动作可审查后再核，不重复已稳四视图/布局全套。
+
 ## 2026-10-20 旧实例解除后实际原窗口启动；邀请过期终止，新时序等待具体许可
 
 用户正常退出旧候选后，根实际ps确认90659不存在。QA唯一owner实际启动原669正常后台10398及原GUI10419、共同holder10396/session2799；同owner fd的kernel peer UID501/PID/birth/parent与前后hello DB/runtime一致，synthetic两crew正式seed与零session、唯一helper/no fallback通过，CUA准确绑定原观察窗口。首次“核对电脑”实际显示邀请过期，未生成reply、remote.accept或revoke，也未重邀/重投。App/Core均正常exit0、owner lifecycle stopped/failed[]、socket absent；这些仅前置与正常收尾通过，不能称完整配对/视图/撤权GUI通过。
