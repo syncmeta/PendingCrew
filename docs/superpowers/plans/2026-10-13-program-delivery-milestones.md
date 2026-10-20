@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前停手点：旧实例已退出，实际首轮过期收尾；修正后新配对范围待许可
+
+旧90659经用户正常退出、根实际ps证实缺席。QA已实际完成原669 Core/GUI同parent、owner同fd kernel/DB/runtime绑定、两synthetic crew零session及原观察窗口接入。首轮邀请因holder过早生成、五分钟有效期耗尽而在UI被拒；未accept/revoke/重邀/重投。原GUI/Core正常0/0、owner stopped、socket消失，原scope终态保全并根核35项；未完成整块GUI验收，不扩大通过结论。
+
+后续完整单元仍是原远程Mac配对→A/B草稿/四视图/静态页面→撤销拒绝→正常退出。作者仅修正新scope的invite就绪时序，不改产品/TTL或重建，QA差异核通过。新原执行目录 `/private/tmp/pcw-current-remote-window-jit-66992d59.q2nrk2sa`，scopeID c31f8b1a-4255-4656-808f-8ac630c6f815，ACTIONS SHA256 `48c661428f6dbcfd0ff238abf847d475b04fead339999651a48e2dfb255d0d8d`。启动被自动审批实际拒绝，理由新邀请/配对访问变更需该新资源明确许可；已请求用户此一次具体无模型/Memory/127.0.0.1:37429全流程许可。未启动新后台/App或改日常数据/Keychain/安装/权限；不得绕行，收到明确回答后才能由QA唯一owner继续。不重复稳定来源/业务审查，原失败保持原样。Claude架构、真实模型/设备/安装等其余既定待决保持。
+
 ## 2026-10-20 原远程 Mac 窗口准备已接受，实际运行待旧实例退出
 
 已确认下一完整普通窗口流程可沿当前669原候选、准确normal、provider=false、Memory凭据及全新私域loopback进行，无须一概把隔离GUI算新许可关口。准备覆盖原crew/channel/Todo/文档、两静态HTML/CSS自由布局显示与切换、独立未发草稿、撤synthetic grant拒绝可见和正常owner收尾；不冒GUI编辑/JS写拒/持久配对/真机。质量整块技术复核接受，17文件及来源/动作/收尾稳定保全，完整范围与摘要见验收记录最新节；prepared-only，未启动服务、seed、App或CUA，不能当窗口通过。

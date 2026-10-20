@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 旧实例解除后实际原窗口启动；邀请过期终止，新时序等待具体许可
+
+用户正常退出旧候选后，根实际ps确认90659不存在。QA唯一owner实际启动原669正常后台10398及原GUI10419、共同holder10396/session2799；同owner fd的kernel peer UID501/PID/birth/parent与前后hello DB/runtime一致，synthetic两crew正式seed与零session、唯一helper/no fallback通过，CUA准确绑定原观察窗口。首次“核对电脑”实际显示邀请过期，未生成reply、remote.accept或revoke，也未重邀/重投。App/Core均正常exit0、owner lifecycle stopped/failed[]、socket absent；这些仅前置与正常收尾通过，不能称完整配对/视图/撤权GUI通过。
+
+原invite于02:30:15.701586Z落盘，签名expiresAt02:35:15.697225Z。正式产品5分钟TTL一致；holder在App/CUA准备前发邀，现证据支持准备时序过早，不支持产品clock/TTL缺陷；核对click无独立UTC，不能补造精确逾期秒数。原运行稳定保全 `docs/private/preserved-delivery-artifacts/remote-window-attempt-66992d59-expired-20261020/`，35清单项，manifest SHA256 `827cf56ef71d1a0525fad9a341e721817aa2c1e189efbdaeb56a140f0bcd5b6f`；根亲核全hash/0700/0600/无symlink及实际终态。旧scope只读终态。
+
+客户端作者已备全新scope `/private/tmp/pcw-current-remote-window-jit-66992d59.q2nrk2sa`、scopeID `c31f8b1a-4255-4656-808f-8ac630c6f815`。唯一行为修正是原“添加电脑”表单和现场门ready后，固定scopeID信号才触发原owner一次invite；不改产品TTL/候选、不重建、不加入通用控制或重试。新UUID/路径/AST/输入与该delta独核通过，ACTIONS SHA256 `48c661428f6dbcfd0ff238abf847d475b04fead339999651a48e2dfb255d0d8d`，prepared manifest `c7102aa364ff06ff21a15559de697fb7beaad15e330e3c11a6ae16bfaf32815b`。实际auto-review拒绝了“现场门+holder启动”，理由新远程邀请/配对访问变更缺该新资源/接收端的明确许可；未执行新runtime、未换工具/路径/agent绕行。已向用户请求该次具体完整synthetic loopback/Memory流程许可，等待实际回答。此实际拒绝与此前过度泛化GUI许可的纠正分开；其余已验模块不重做。
+
 ## 2026-10-20 原远程 Mac 窗口整块准备接受；旧同身份实例阻断实际执行
 
 纠正此前将所有GUI一概归为另取许可的过度边界：当前669原候选的provider=false、MemoryCredentials、新业务私域/loopback窗口属于既有源码必要隔离验证，未发现针对该动作的审批拒绝。实际入口独立核为PendingCrewEntry→PendingCrewApp→原RootView，不使用NativeNext替代页；准确包与normal沿已接受669输入。候选专用CFPreferences域可正常读写、系统偏好仅正常只读，HOME不是CFPreferences隔离；日用域、Keychain、真实模型/SDK、设备、安装及系统权限均不在动作范围。
