@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 准确291正常本地日用包完整接受；更新及首次打开待具体许可
+
+正常包为 `0.1.44 / 20746.15278`、正式ID com.pendingname.pendingcrew、准确GUI source29108682b17cfb92cd7fc0dcf3fa7a0798a50dff；client沿既有Release/product配方唯一暖构建exec23696实际exit0/chunka45e78/BUILD SUCCEEDED。QA核1764完整Git291源码、SPM3738前后及实际快照、真实showsettings为Release/-O/ARM64/PENDINGCREW_LOCAL_MAC/NOdebugdylib/hardenedYES，team/entitlements/profile空；两MachO系统only加载、GUI及helper签前后等价、6原签态query和freshdeepstrict均0，没有Sparkle。后台仍真实原normal20e753/defaultDebug/compiled669/full443证明，未冒新Rust构建。正常LOCAL_MAC远程门禁保持，不能以此称Memory候选远程/持久凭据可日用。
+
+稳定目录 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-20261020/`，6027manifest项SHA256 `2df1c3d6965e83d047ec359895cc573a7d8e4fae287f6da93208f2ccd0bdc6e6`；ZIP `PendingCrew-0.1.44-20746.15278-macOS-arm64.zip` SHA256 `07d4c492c1d0404a662f58aaaa9d567b4cfd53993871dbc1d16dc2f1cbcfcf79`，QA亲核CRC/安全路径及全部App字节。原安装20746.1的三关键hash仍等原update-inputs，原13代码输入均等291，保留用户另一session已装改动；不把其25e+dirty来源重标为291。根当前df约51GiB可用，不做清理。
+
+可审 `INSTALLATION-PROPOSAL.txt` SHA256 `1af208349929a8cb4fd2ace0a2e3dfe6e1af1e0c7049933fdd64f15db3532a27` 已独立接受：先用户正常Quit及App/helper工作子树空门；旧wholeZIP完整备份、排他stage/旧whole保留后整包替换、拒绝/Unknown停现场；不用仅公证旧installer，不改/迁移用户数据，不派发或恢复任务；首开无模型只核版本/本机连接/零自动任务后正常退出。准确新包更新+首开已向用户async请求具体许可，尚未执行安装/打开；签私钥/Keychain/公证/发布均未执行。源码和实际窗口修复已接受，当前剩具体交付动作不是继续造补件/重跑稳定验收。
+
 ## 2026-10-20 修复后291针对性原窗口实际接受；正常本地日用封包继续
 
 用户明确授权本次83scope后，QA唯一owner实际运行291/build2169。原holder16833/exec81606持Core16835及GUI16853，同fd/kernel/唯一helper门闭合，原表单ready后一次invite→Memory/一次accept→原GUI配对完成。A/B两份UNSENT原文往返隔离，唯一grant revoke后实际断开，当前remote F2AB88E9出现在只读入口；两sheet的namespace/crew/topic/空session与原文正确，普通拖选全文及Copy菜单enabled。未点击Copy改用户剪贴板；不冒完整实际粘贴验收。60次持续现场门，无fallback/重连/重投；前后两crew sessions空。原GUI/Core均0，owner safePause stopped/failed[]、socket absent，自有3PID absent，exec实际terminal0/chunk822383。

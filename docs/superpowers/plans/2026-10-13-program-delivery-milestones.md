@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前交付检查点：正常日用包已完整接受，等待具体更新许可
+
+准确291正常Mac包 `0.1.44 / 20746.15278` 已沿既有Release/product/LOCAL_MAC唯一暖构建，来源/1764源码/3738依赖/实际配置/两MachO签态及系统加载闭包/ZIP全由QA接受。稳定 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-20261020/`，ZIP SHA256 `07d4c492c1d0404a662f58aaaa9d567b4cfd53993871dbc1d16dc2f1cbcfcf79`。原normal compiled669/full443/defaultDebug真实分列；正常本地包remote仍禁用，不冒Memory远程/持久Keychain交付。
+
+源码修复、完整Mac target、准确隔离候选、真实受影响窗口复验和正常日用封包这整个授权单元已完成，不需继续重复工具/小补件。剩一次具体安装+首开许可已async询问：先用户正常退出，完整保全旧20746.1及排他整包更新，保留现有PendingCrewLocal、不迁移/自动任务/模型，首开核版本连接/零自动任务后正常退。方案SHA256 `1af208349929a8cb4fd2ace0a2e3dfe6e1af1e0c7049933fdd64f15db3532a27`；未授权前不动安装/日常内容/Keychain/系统权限。旧安装准确25e+dirty保留，不误标291；实际可用51GiB无需清理。Claude可靠完成归属、持久远程/真机/平台正式交付与既定方案待决仍分列，未称全工程完成。
+
 ## 2026-10-20 当前进度：远程窗口及草稿修复实际闭合；准备准确正常日用包
 
 准确291/build2169最小83scope经具体授权已实测通过：唯一Memory配对→A/B草稿→撤权→当前remote及两原文只读入口/选择与Copy菜单→正常退出，GUI/Core0/0、owner stopped、零session；75文件稳定原件及根核manifest f60cb00a…be680f。结合669已过四视图/文档/静态布局，原远程窗口单元不再受草稿缺口阻断；不是持久Keychain、真机、模型、安装或全工程完成。
