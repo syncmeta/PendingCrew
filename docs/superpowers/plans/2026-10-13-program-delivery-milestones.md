@@ -1,5 +1,23 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-21 最新：Mac精装候选冻结，iOS首用完整单元已验；窗口与网络阻断分列
+
+原Mac13文件完整精装 `488631b1ae5dba31ff8092d20064746adb81a99b` 已整合本地main；正常Release44727/封口90157及同原UI Native91526均实际0，正常包静态独验接受，版本0.1.44/20746.59180。正常+Native稳定组 `docs/private/preserved-delivery-artifacts/mac-polish-488631b1-20261021/`，12148项清单f9ddcd07…0b59；后台仍原compiled669/defaultDebug证明分列。新本机scope正式API seed/原App启动/peer/零session通过，但首次CUA绑定实际拒绝Mac锁屏；未做任何UI操作或截图。原GUI限定中止-15、Core0，26份锁屏原件及清单4d6723c0…99f5a3保全，不能标四视图/窄窗通过。日用仍291，正常更新方案93f090d3…3c3d9已具体准备，但GUI门未过不替换、不强退用户任务。
+
+同488 iOS Simulator24064/iPhoneOS13396均实际target0；真机目标unsigned，原0.1.43/build1如实保留。现有phone/tablet模拟器实际安装/首次启动显示旧未配对屏后恢复Shutdown，未配对/四视图交互/真机。源和静态包清单545db40e…63044，28份运行清单f5626173…975e3均经QA。root亲看实际图后发现未配置却显示“连接不可用/重试”的首用体验问题，完整两文件修正 `8d0c5f6f5997e4da5f196740edb08cd52e40301f` 已独审并快进本地main：原数据读取完成后才分未配对/未选择友好引导，真实错误/断线/retained/Unknown仍保原错误，复用原连接sheet，无自动选择/连接。新8d Simulator29933与PhoneOS5128均实际0，独立质量已接受完整两平台来源、51项产品及首用影响复验；手机45365/平板45422实际首屏均显示“连接你的电脑/连接电脑”，平板详情引导可读。未点CTA、未配对/四视图交互/真机，两App terminate命令0、原PID消失、两模拟器shutdown0。6087项完整包清单e6b6fd48…8e3a3d，23份运行原件清单9119ab1e…a8fee9均稳定保全。DEBUG launcher保持不变是分离映像结构，真实UI debug.dylib两平台均已变化，两源实际编译和新屏独核；初警已解释，无重复构建。仅两iOS目标，不重编/改标Mac488，Nativebuilder仅准备输入未执行Mac。
+
+VPS两次分时严格SSH均超时、无远端命令/部署/隧道；本夜不再换别名循环。GitHub main488普通推送实际128接收超时，后一次有界只读refs也低速超时，远端新状态未核实；最后确认main/global为b28e35a3，本地提交与完整包保留，不冒推送成功，不改网络/凭据策略。根两份交接在产品构建之后更新，不是上述包输入。
+
+## 2026-10-21 夜间交付主线：原Mac前端精装可用版，VPS与iOS按独立条件推进
+
+用户明确要求“我要睡觉了，不要等我授权了，你就持续推进”，目标是比较完整可用、UI精装的版本；额外尝试VPS后台/本机前端，时间允许测试iOS。后续源码、候选及必要隔离验证不再逐包等待人类；实际拒绝/Unknown仍停止当前作用、不绕过权限/重放。日常数据、既有任务/线上服务及系统安全边界保留；必须人类操作的OS提示只阻断该项。
+
+客户端唯一Swift/构建作者正在独立 `codex/mac-workspace-polish-20261021`（父b28e35a3）改原PendingCrewApp→MacThreePaneView主路径，复用最新React设计的布局/样式、真实动态数据，不拷演示角色/自述/设想功能。完整单元覆盖四视图层级、会话列表、工具栏/错误/空态和窄窗；保聊天实例/草稿/滚动隔离、手动执行/退出语义与自由生成知识view。交付准确普通Release原App本机候选；必要Memory原UI隔离目标只验证共同UI，不冒prodKeychain/稳定publisher。质量线独立按整块用户流程及产物来源验，根统筹冻结/整合/交付；最终Mac源码冻结后复用暖Xcode/SPM测试iOS，区分构建/模拟器/真机。
+
+f5持久attempt02已按新具体授权运行：原scope持锁发布后真实启动/连接通过原数据库准入，单invite后生成回复进入SecItemAdd系统AuthorizationCopyRights等待。未获得回复/accept/P2；添加结果Unknown，不再读删/重试。原GUI限定SIGTERM -15（非正常退出FAIL），Core0/socketgone；GUI已释放供精装线。持久配置true/rev4，当前无listener；73份原件与清单acfc7498…7f577f保全。此人类OS授权阻断不暂停UI/iOS。
+
+VPS一次严格SSH超时，两个配置别名实为同一主机；未取远端平台/资源、未部署，不改网络/现有服务或重复换别名。现成c8 Linux包及相关10份源码/依赖证据确认Linux签名配对/TLS1.3/持久身份与Apple协议兼容，无源码缺口；但既有Linuxsmoke远程关闭，Apple→Linux实际纵向仍待网络可达。后端只准备唯一私域、loopback+受限SSH转发方案并支持真实接口缺陷，不能制造已部署结论。
+
 ## 2026-10-21 当前停手点更新：持久验证早期拒绝；准确修复新包静态接受
 
 用户已授权的一次1ef持久流程在旧App准入databaseIDControlScalar处终止，尚未配对/Keychain；原App/Core正常0/0并收尾，按约未重试。原数据库ID与Core事实一致，真实旧包机器码行为差异已独核，有限纯probe未复现编译器根因，失败48份原件保全。原data的remote配置已enabled=true/rev3；当前无进程/监听，未来启动可能恢复49361，不能称fresh remote-off。
