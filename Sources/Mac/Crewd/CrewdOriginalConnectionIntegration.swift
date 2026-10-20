@@ -57,6 +57,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
             #endif
             } label: { Label("连接与核对", systemImage: "network") }
+                .labelStyle(.iconOnly).help("连接与核对")
         }.sheet(isPresented: $recovering) {
             if let current = window.workspace {
                 ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)
@@ -119,33 +120,53 @@ struct CrewdOriginalConnectionStatus: View {
     @State private var askRecovery = false
     @State private var shownPrompt = ""
     @State private var selected = Set<String>()
+    @State private var showingDetails = false
     var body: some View {
-        HStack {
-            HStack(spacing: 5) {
-                Circle().fill(workspace.client.readyForWork ? Theme.Palette.accent : Theme.Palette.inkMuted).frame(width: 5, height: 5)
-                Text(workspace.status).lineLimit(1).truncationMode(.middle).font(.system(size: 11)).foregroundStyle(Theme.Palette.inkMuted)
-            }
-            if workspace.dataDirectory != nil, !(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false) {
-                Text("下次后台启动未配置可执行的 Codex；资料仍可使用，请在设置中准备后停工重开。").font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Circle().fill(workspace.client.readyForWork ? Theme.Palette.accent : Theme.Palette.inkMuted)
+                    .frame(width: 6, height: 6)
+                Text(workspace.client.readyForWork ? "已连接" : workspace.status)
+                    .lineLimit(1).truncationMode(.tail).font(.system(size: 11, weight: .medium))
+                Text(workspace.dataDirectory == nil ? "远程工作区" : (workspace.managementRole == "owner" ? "本机 · 管理窗口" : "本机 · 观察窗口"))
+                    .font(.system(size: 11)).foregroundStyle(Theme.Palette.inkMuted).lineLimit(1)
+                Spacer(minLength: 4)
+                Button { showingDetails = true } label: { Image(systemName: "info.circle") }
+                    .buttonStyle(.plain).help("连接详情").accessibilityLabel("连接详情")
+                    .popover(isPresented: $showingDetails) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("当前连接").font(.headline)
+                            Text(workspace.status).textSelection(.enabled)
+                            if workspace.dataDirectory != nil, !(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false) {
+                                Text("下次后台启动尚未配置可执行的 Codex。资料仍可使用；可在设置中准备后停工重开。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.padding(16).frame(width: 300)
+                    }
+                Menu {
+                    if workspace.dataDirectory != nil {
+                        Text(workspace.managementRole == "owner" ? "当前为管理窗口" : "当前为观察窗口")
+                        if workspace.managementRole != "owner" {
+                            Button("接管管理…") { Task { await workspace.readManagementStatus(); showingClaim = true } }
+                        }
+                        Divider()
+                    }
+                    Button("手动恢复会话…") { selectingRecovery = true }
+                        .disabled(!workspace.client.connected)
+                } label: { Label("后台管理", systemImage: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).labelStyle(.iconOnly).fixedSize()
+                    .help("后台管理")
             }
             if let error = workspace.error {
                 DisclosureGroup {
-                    Text(error).font(.caption).textSelection(.enabled)
+                    Text(error).font(.system(size: 11)).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 } label: {
-                    Label("当前操作需要核对", systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: 380, alignment: .leading)
+                    Label("当前操作未完成，请核对", systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 11, weight: .medium))
+                }.foregroundStyle(.orange)
             }
-            Spacer()
-            if workspace.dataDirectory != nil {
-                Text(workspace.managementRole == "owner" ? "当前管理窗口" : "观察窗口").font(.caption)
-                if workspace.managementRole != "owner" {
-                    Button("接管管理…") { Task { await workspace.readManagementStatus(); showingClaim = true } }
-                }
-            }
-            Button("恢复会话…") { selectingRecovery = true }
-                .disabled(!workspace.client.connected)
-        }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 5)
+        }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 7)
             .background(Theme.Palette.surfaceMuted.opacity(0.35))
         .task {
             if workspace.previousExit == "unclean", workspace.restartPrompt != .null, shownPrompt.isEmpty {

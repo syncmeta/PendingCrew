@@ -123,6 +123,12 @@ struct CrewCenterView: View {
             if let crewId = crewStore.selectedCrewId,
                crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
+                    Button { showingDetail = true } label: {
+                        Label("机组详情", systemImage: "info.circle")
+                    }.labelStyle(.iconOnly).help("机组详情")
+                        .disabled(crewStore.selectedDetail == nil)
+                }
+                ToolbarItem {
                     Menu {
 
                     Picker("沟通视图", selection: $communicationView) {
@@ -147,12 +153,6 @@ struct CrewCenterView: View {
                               : "只显示 @ 你的消息 + 你自己发的")
 
 
-                    Button { showingDetail = true } label: {
-                        Label("crew 详情", systemImage: "info.circle")
-                    }
-                    .disabled(crewStore.selectedDetail == nil)
-
-
                     // 驾驶舱 = 叠在群聊之上的临时窗口（#542）；群聊这一栏不卸载，
                     // 关掉驾驶舱回来草稿和滚动位置原样在。关闭在驾驶舱左上角圆形叉。
                     //
@@ -171,6 +171,7 @@ struct CrewCenterView: View {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }
                     } label: { Label("机组操作", systemImage: "ellipsis.circle") }
+                        .labelStyle(.iconOnly).help("机组操作")
                 }
                 // 「Session 终端」开关已去掉 —— 右栏(成员/终端)在原生三栏里常驻;
                 // 成员列表 ↔ 终端 的切换由右栏内部(viewingTerminal / 点 session)管。
@@ -265,8 +266,9 @@ struct CrewCenterView: View {
     }
 
     private var placeholder: some View {
-        PendingCrewPlaceholderIcon(size: 64)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        CrewdEmptySurface(title: "一起把事情推进", detail: "选择左侧的机组继续工作，或建立一个机组，从第一条消息开始。",
+                          symbol: "bubble.left.and.bubble.right", actionTitle: "新建机组",
+                          action: { crewStore.beginPendingCrew() })
     }
 }
 

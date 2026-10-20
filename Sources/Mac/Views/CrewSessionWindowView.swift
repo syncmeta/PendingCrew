@@ -357,12 +357,14 @@ struct CrewSessionWindowView: View {
     ///（VSplitView 在 NavigationSplitView 的固定列内做垂直分割，不影响列宽协商）。
     private var memberListMode: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                admissionRecoveryMenu
+            if !appModel.usesCrewdAuthority {
+                HStack {
+                    Spacer()
+                    admissionRecoveryMenu
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
             if !appModel.usesCrewdAuthority && selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
@@ -402,7 +404,7 @@ struct CrewSessionWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlay {
             if crewStore.selectedDetail == nil {
-                Text("先在左侧选一个 crew").foregroundStyle(.secondary)
+                CrewdEmptySurface(title: "机组工作区", detail: "从通讯录或消息列表选择机组，查看本群 Todo 和实际成员。", symbol: "person.3")
             }
         }
     }
@@ -627,7 +629,7 @@ struct CrewSessionWindowView: View {
                     .foregroundStyle(Theme.Palette.accent)
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(Theme.Palette.accentBg))
-                Text("新 session")
+                Text("新成员会话")
                     .font(Theme.Fonts.callout)
                     .foregroundStyle(Theme.Palette.ink)
                     .lineLimit(1)
@@ -639,7 +641,7 @@ struct CrewSessionWindowView: View {
         }
         .buttonStyle(.plain)
         .disabled(starting)
-        .help("起一个新 session（与在跑的并存）")
+        .help("打开新成员会话草稿，发送后才会启动")
     }
 
     /// 成员行的「头像 + 名」基础排版（captain 入口与 human 行共用）。
@@ -874,7 +876,7 @@ struct CrewSessionWindowView: View {
     @ViewBuilder
     private var admissionRecoveryMenu: some View {
         if appModel.usesCrewdAuthority {
-            Text("自动跟进由当前后台维护").font(.caption).foregroundStyle(.secondary)
+            EmptyView()
         } else if let detail = crewStore.selectedDetail {
             Menu {
                 if let run = sessionRunner.runs.first(where: {

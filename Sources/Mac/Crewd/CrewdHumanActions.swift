@@ -55,13 +55,19 @@ struct CrewdEmptySurface: View {
     let title: String
     let detail: String
     let symbol: String
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 27, weight: .light))
                 .foregroundStyle(CrewdChatStyle.accent(scheme))
             Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(CrewdChatStyle.ink(scheme))
             Text(detail).font(.system(size: 12)).foregroundStyle(CrewdChatStyle.muted(scheme))
-                .multilineTextAlignment(.center).frame(maxWidth: 300)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 320)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).buttonStyle(.borderedProminent)
+                    .tint(CrewdChatStyle.accent(scheme)).padding(.top, 4)
+            }
         }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(CrewdChatStyle.canvas(scheme))
     }

@@ -78,11 +78,20 @@ struct CrewdKnowledgeCanvas: View {
     private var sourcePreview: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("源码预览 · 作者代码尚未运行").font(.headline)
+                Label("页面已保存，尚未启用", systemImage: "rectangle.and.hand.point.up.left")
+                    .font(.system(size: 16, weight: .medium))
+                Text("这是 Agent 提供的自由页面。审阅后可从上方启用这个版本；团队数据写入权限仍需另行确认。")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let bundle = runtime.bundle {
-                    Text("HTML").font(.caption); Text(bundle.html).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    Text("CSS").font(.caption); Text(bundle.css).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    Text("JavaScript").font(.caption); Text(bundle.javascript).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    DisclosureGroup("查看页面源码") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("HTML").font(.caption); Text(bundle.html).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            Text("CSS").font(.caption); Text(bundle.css).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            if !bundle.javascript.isEmpty {
+                                Text("JavaScript").font(.caption); Text(bundle.javascript).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            }
+                        }.padding(.top, 8)
+                    }.padding(.top, 8)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding()
         }

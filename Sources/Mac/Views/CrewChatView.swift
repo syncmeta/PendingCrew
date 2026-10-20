@@ -331,7 +331,11 @@ struct CrewChatView: View {
         // 标题栏透明 + fullSizeContentView(WindowSeparatorRemover)会让消息滚进
         // navigationTitle 底下叠字 —— 顶部滚动边缘用 .hard：标题后面是一条不透明底,
         // 消息滚到顶被它挡住,标题始终可读。
-        timelineWithTopEdge
+        VStack(spacing: 0) {
+            conversationHeader
+            Divider()
+            timelineWithTopEdge
+        }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     errorBar
@@ -358,6 +362,41 @@ struct CrewChatView: View {
     }
 
     #if os(macOS)
+    private var conversationTitle: String {
+        if let workspace = appModel.crewdBackend?.workspace,
+           let row = workspace.channels.first(where: { $0["id"].string == crewdChannelID }) {
+            return CrewdConversationProjection.title(row)
+        }
+        return crewTitle
+    }
+    private var conversationHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                Text(conversationTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 4)
+                communicationControls
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(conversationTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                communicationControls
+            }
+        }.padding(.horizontal, 14).padding(.vertical, 8)
+            .background(Theme.Palette.canvas)
+    }
+    private var communicationControls: some View {
+        HStack(spacing: 9) {
+            if let communicationView {
+                Picker("沟通范围", selection: communicationView) {
+                    ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
+                }.pickerStyle(.segmented).labelsHidden().controlSize(.small).frame(width: 168)
+            }
+            if let showOnlyHumanMentions {
+                Toggle("仅@你", isOn: showOnlyHumanMentions).toggleStyle(.button)
+                    .controlSize(.small).tint(Theme.Palette.accent)
+                    .help("只显示 @ 你的消息和你发出的消息")
+            }
+        }
+    }
     @ViewBuilder
     private var timelineWithTopEdge: some View {
         if #available(macOS 26.0, *) {

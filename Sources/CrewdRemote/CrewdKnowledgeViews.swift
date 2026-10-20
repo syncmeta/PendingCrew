@@ -6,13 +6,15 @@ struct CrewdKnowledgeDocumentsEntry: View {
     @ObservedObject var workspace: CrewdWorkspace
     var body: some View {
         CrewdKnowledgeWorkspaceView(store: workspace.knowledge,
-                                    available: workspace.client.capabilities.contains("data"))
+                                    available: workspace.client.capabilities.contains("data"),
+                                    returnToMessages: { workspace.originalSection = "消息" })
     }
 }
 
 struct CrewdKnowledgeWorkspaceView: View {
     @ObservedObject var store: CrewdKnowledgeStore
     let available: Bool
+    var returnToMessages: (() -> Void)? = nil
     @Environment(\.colorScheme) private var scheme
     @State private var selected = ""
     @State private var showSystem = false
@@ -36,9 +38,16 @@ struct CrewdKnowledgeWorkspaceView: View {
             } else if let detail = store.detail {
                 page(detail)
             } else {
-                CrewdEmptySurface(title: "这里显示你的页面", detail: "在聊天中明确告诉 Agent 你需要的界面。页面和数据绑定会保存，打开这里不会启动 Agent。", symbol: "rectangle.on.rectangle")
+                CrewdEmptySurface(title: "让资料成为可用的页面", detail: "在消息中说明你需要的文档或界面。已保存的页面会显示在这里，打开页面不会启动 Agent。",
+                                  symbol: "rectangle.on.rectangle", actionTitle: returnToMessages == nil ? nil : "回到消息", action: returnToMessages)
             }
-            Text(store.status).font(.caption).foregroundStyle(.secondary).padding(6)
+            HStack(spacing: 6) {
+                if store.busy { ProgressView().controlSize(.small) }
+                Text(store.status).font(.system(size: 11)).foregroundStyle(CrewdChatStyle.muted(scheme))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 14).padding(.vertical, 8)
+                .background(CrewdChatStyle.sidebar(scheme).opacity(0.20))
         }
         .task(id: available) { if available { await reload() } }
         .onChange(of: selected) { _, id in
@@ -74,10 +83,12 @@ struct CrewdKnowledgeWorkspaceView: View {
         }.frame(maxWidth: 300)
     }
     private var reloadButton: some View {
-        Button("重新读取") { Task { await reload() } }.disabled(store.busy)
+        Button { Task { await reload() } } label: { Label("刷新页面", systemImage: "arrow.clockwise") }
+            .disabled(store.busy)
     }
     private var systemButton: some View {
-        Button("系统控制…") { showSystem = true }
+        Button { showSystem = true } label: { Label("页面管理", systemImage: "slider.horizontal.3") }
+            .help("页面权限、回收站、原请求与恢复控制")
     }
     private func reload() async {
         await store.refresh()

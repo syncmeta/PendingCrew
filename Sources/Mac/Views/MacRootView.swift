@@ -60,15 +60,15 @@ struct MacThreePaneView: View {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
-                    .navigationSplitViewColumnWidth(min: 210, ideal: 238, max: 310)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 238, max: 310)
             } content: {
                 CrewCenterView()
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 420, ideal: 640)
+                    .navigationSplitViewColumnWidth(min: 340, ideal: 640)
             } detail: {
                 CrewSessionWindowView(presentation: model.usesCrewdAuthority ? .inspector : .automatic)
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 440)
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 254, max: model.usesCrewdAuthority ? 360 : 440)
             }
             .navigationSplitViewStyle(.balanced)
             // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通

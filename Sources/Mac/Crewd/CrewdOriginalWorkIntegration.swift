@@ -23,14 +23,19 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @EnvironmentObject private var crewStore: CrewStore
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder let content: () -> Content
+    @State private var showingChannelTodo = false
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 12) {
             Picker("机组视图", selection: $workspace.originalSection) {
                 ForEach(["消息", "Todo", "文档", "进展"], id: \.self) { Text($0).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 330)
-                .padding(.horizontal, 16).padding(.vertical, 8)
+            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 340)
+                .accessibilityLabel("机组主视图")
+            Spacer(minLength: 0)
+            }
+                .padding(.horizontal, 14).padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(CrewdChatStyle.sidebar(scheme).opacity(0.35))
+                .background(CrewdChatStyle.sidebar(scheme).opacity(0.30))
             Divider().overlay(CrewdChatStyle.line(scheme))
             ZStack {
                 // Keep the original chat instance mounted: drafts, anchors and
@@ -41,12 +46,15 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     .disabled(workspace.originalSection != "消息")
                     .accessibilityHidden(workspace.originalSection != "消息")
                 if workspace.originalSection == "Todo" {
-                    VStack {
+                    VStack(spacing: 0) {
+                        DisclosureGroup("当前会话的 Todo 与关联", isExpanded: $showingChannelTodo) {
                         CrewdChannelTodoView(group: workspace.channelWork, work: workspace.workStore,
                             linkDrafts: $workspace.channelLinkDrafts, requirementDrafts: $workspace.requirementDrafts,
                             planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
                             members: workspace.sessions, crews: workspace.crews,
                             openCrew: { crewStore.selectCrew($0) })
+                                .frame(minHeight: 210, maxHeight: 320).padding(.top, 8)
+                        }.font(.system(size: 12, weight: .medium)).padding(12)
                         Divider()
 
                     CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
@@ -60,7 +68,8 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
                         resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                         planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                        members: workspace.sessions, crews: workspace.crews, progressOnly: true).padding(10)
+                        members: workspace.sessions, crews: workspace.crews, progressOnly: true,
+                        openTodo: { workspace.originalSection = "Todo" }).padding(10)
                 }
             }
         }
@@ -86,11 +95,11 @@ private struct CrewdOriginalTodoSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("本群 Todo").font(.system(size: 11, weight: .semibold))
+                Text("本群 Todo").font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Button("详细", action: showDetails).buttonStyle(.plain).font(.system(size: 11))
+                Button("查看全部", action: showDetails).buttonStyle(.plain).font(.system(size: 11))
+                    .foregroundStyle(CrewdChatStyle.accent(scheme))
             }.foregroundStyle(CrewdChatStyle.muted(scheme))
-            Text("同一账本的相关事项").font(.system(size: 10)).foregroundStyle(CrewdChatStyle.muted(scheme))
             if group.crew != currentCrew || group.loading {
                 ProgressView("正在读取").controlSize(.small).font(.caption)
             } else if let failure = group.failure {
@@ -100,7 +109,11 @@ private struct CrewdOriginalTodoSummary: View {
             } else if !group.loaded {
                 Text("尚未读取当前会话事项").font(.caption).foregroundStyle(CrewdChatStyle.muted(scheme))
             } else if group.items.isEmpty {
-                Text("当前会话暂无关联事项").font(.caption).foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.vertical, 12)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("把要做的事留在这里").font(.system(size: 12, weight: .medium))
+                    Button("添加或关联 Todo", action: showDetails).buttonStyle(.plain)
+                        .font(.system(size: 11)).foregroundStyle(CrewdChatStyle.accent(scheme))
+                }.padding(.vertical, 12)
             } else {
                 ForEach(group.items.indices, id: \.self) { index in
                     let row = group.items[index]
@@ -108,9 +121,13 @@ private struct CrewdOriginalTodoSummary: View {
                         HStack(spacing: 7) {
                             Image(systemName: row["status"].string == "done" ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(CrewdChatStyle.accent(scheme))
-                            Text(row["object"]["id"].string ?? "事项").font(.system(size: 11, weight: .medium))
+                            Text(row["object"]["id"].string ?? "事项").font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(CrewdChatStyle.muted(scheme)).lineLimit(1)
                         }
-                        Text(row["label"].string ?? "关联工作").font(.system(size: 12)).lineLimit(4)
+                        Button(action: showDetails) {
+                            Text(row["label"].string ?? "关联工作").font(.system(size: 13, weight: .medium))
+                                .multilineTextAlignment(.leading).lineLimit(4)
+                        }.buttonStyle(.plain)
                         Text(CrewdWorkStatusLabel.display(row["status"].string ?? ""))
                             .font(.system(size: 10)).foregroundStyle(CrewdChatStyle.muted(scheme))
                     }.padding(11).frame(maxWidth: .infinity, alignment: .leading)

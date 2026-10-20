@@ -70,7 +70,7 @@ struct PendingCrewApp: App {
                 // 同时覆盖 macOS + iOS/iPadOS。对齐 PendingBot #299。
                 .preferredColorScheme((AppearanceMode(rawValue: appearanceRaw) ?? .default).colorScheme)
                 #if os(macOS)
-                .frame(minWidth: 1040, minHeight: 680)
+                .frame(minWidth: 900, minHeight: 600)
                 #endif
         }
         #if os(macOS)

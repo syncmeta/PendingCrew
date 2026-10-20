@@ -159,7 +159,7 @@ struct CrewSidebarCrewRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     CrewTitleRootBadge(
                         title: crew.title,
-                        titleFont: Theme.Fonts.system(size: 14, weight: .semibold),
+                        titleFont: Theme.Fonts.system(size: 13, weight: .semibold),
                         titleColor: Theme.Palette.ink,
                         rootTitles: rootTitles,
                         badgeSize: 11

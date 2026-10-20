@@ -12,6 +12,7 @@ struct CrewdWorkPanels: View {
     var crews:[CrewdValue]=[]
     var progressOnly = false
     var compact = false
+    var openTodo: (() -> Void)? = nil
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
     @State private var failure:String?
@@ -37,20 +38,40 @@ struct CrewdWorkPanels: View {
             if store.loading {ProgressView().controlSize(.small)}
             ScrollView {
                 VStack(alignment:.leading,spacing:10) {
+                    if progressOnly && !compact && !store.progress.isEmpty {
+                        HStack {
+                            Text("工作计划").font(.system(size: 14, weight: .semibold))
+                            Spacer()
+                            Button("全部展开") { collapsed.removeAll() }
+                            Button("收起层级") { collapsed = Set(store.progress.map { $0.id.raw }) }
+                        }.font(.caption).padding(.bottom, 4)
+                    }
+                    if progressOnly && store.progress.isEmpty && !store.loading && store.lastFailure == nil {
+                        CrewdEmptySurface(title: "把工作展开成计划", detail: "从 Todo 中记录的需求开始，计划、负责人和进展会整理在这里。",
+                                          symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 Todo", action: openTodo)
+                            .frame(minHeight: 200)
+                    }
                     if !progressOnly && !compact {
-                        Text("原始需求").font(.headline)
+                        Text("原始需求").font(.system(size: 14, weight: .semibold))
                         requirementComposer
                         ForEach(store.requirementIDs.filter{includes("requirement",$0.raw)},id:\.self) {id in
                             VStack(alignment:.leading,spacing:4) {
                                 Button {
                                     selectedRequirement = selectedRequirement == id ? nil : id
                                     if selectedRequirement != nil {Task {do {_ = try await store.requirementDetail(id)} catch {failure = describe(error)}}}
-                                } label: {Text("\(id.raw)  \(store.requirements[id]?["text"].string ?? "")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(id.raw).font(.system(size: 10, weight: .medium)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                        Text(store.requirements[id]?["text"].string ?? "需求").font(.system(size: 13, weight: .medium)).multilineTextAlignment(.leading)
+                                    }
+                                }.buttonStyle(.plain)
                                 HStack {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("requirement",id.raw));Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
                                 if selectedRequirement == id {requirementDetail(id)}
                                 Text(CrewdWorkStatusLabel.display(store.requirements[id]?["status"].string ?? "")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                 Text(store.plans(from:id).map {$0.id.raw}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                            }.padding(8).frame(maxWidth:.infinity,alignment:.leading).background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:6))
+                            }.padding(12).frame(maxWidth:.infinity,alignment:.leading)
+                                .background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:10))
+                                .overlay(RoundedRectangle(cornerRadius:10).stroke(CrewdChatStyle.line(colorScheme),lineWidth:0.6))
                         }
                         Text("计划").font(.headline)
                     }
@@ -60,7 +81,12 @@ struct CrewdWorkPanels: View {
                                 HStack(alignment:.top) {
                                     if row.expandable {Button {if !collapsed.insert(row.id).inserted {collapsed.remove(row.id)}} label:{Image(systemName:collapsed.contains(row.id) ? "chevron.right":"chevron.down")}.buttonStyle(.plain)}
                                     Image(systemName:plan.status == "done" ? "checkmark.circle.fill":plan.status == "blocked" ? "questionmark.circle":"circle").foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                                    Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label:{Text("\(id.raw)  \(plan.value["title"].string ?? "计划")").multilineTextAlignment(.leading)}.buttonStyle(.plain)
+                                    Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(plan.value["title"].string ?? "计划").font(.system(size: 13, weight: .medium)).multilineTextAlignment(.leading)
+                                            Text(id.raw).font(.system(size: 10)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                        }
+                                    }.buttonStyle(.plain)
                                     Spacer()
                                     Text(CrewdWorkStatusLabel.display(plan.status)).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     if plan.value["pendingTransfer"] != .null {Text("交接中").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
@@ -83,7 +109,10 @@ struct CrewdWorkPanels: View {
                                     } else {Button("读取当前详情") {Task {do {_ = try await store.detail(id)} catch {failure=describe(error)}}}}
 
                                 }
-                            }.padding(.leading,CGFloat(row.depth)*14).padding(.vertical,6)
+                            }.padding(11).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:10))
+                                .overlay(RoundedRectangle(cornerRadius:10).stroke(CrewdChatStyle.line(colorScheme),lineWidth:0.6))
+                                .padding(.leading,CGFloat(min(row.depth,3))*12)
                         }
                     }
                     if compact {

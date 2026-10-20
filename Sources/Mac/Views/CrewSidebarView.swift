@@ -52,6 +52,20 @@ struct CrewSidebarView: View {
                     BackendSidebarConnectionStatus(
                         client: viewer, decision: sessionHost.orchestrationDecision)
                 }
+                if visibleCrews.isEmpty && crewStore.pendingCrew == nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if crewStore.loadingList {
+                            ProgressView("正在读取机组").controlSize(.small)
+                        } else {
+                            Label("从一个机组开始", systemImage: "person.3").font(.headline)
+                            Text("建立机组，把消息、Todo 和资料放在同一个工作空间。")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("新建机组") { crewStore.beginPendingCrew() }
+                                .buttonStyle(.borderedProminent).tint(Theme.Palette.accent)
+                        }
+                    }.padding(.vertical, 14).listRowSeparator(.hidden)
+                }
+                if !visibleCrews.isEmpty {
                 switch viewMode {
                 case .hierarchy:
                     ForEach(machineGroups) { group in
@@ -68,6 +82,7 @@ struct CrewSidebarView: View {
                     CrewChiefListView(
                         crews: visibleCrews, childCrewTarget: $childCrewTarget,
                         arrangement: arrangement)
+                }
                 }
             }
             .listStyle(.sidebar)
@@ -157,29 +172,25 @@ struct CrewSidebarView: View {
     /// 侧栏顶部那条分段控件：一眼看得见、一下能切。放 List **之外**（不随列表
     /// 滚动、也不被 Section 头吃掉），两种视图切换时它自己不动。
     private var viewModePicker: some View {
-        Picker("", selection: Binding(
-            get: { viewMode },
-            set: { viewModeRaw = $0.rawValue }
-        )) {
-            ForEach(CrewSidebarViewMode.allCases) { mode in
-                Label(mode.label, systemImage: mode.systemImage)
-                    .labelStyle(.titleAndIcon)
-                    .tag(mode)
+        HStack(spacing: 6) {
+            Picker("侧栏", selection: Binding(
+                get: { viewMode == .hierarchy ? CrewSidebarViewMode.hierarchy : .timeline },
+                set: { viewModeRaw = $0.rawValue }
+            )) {
+                Label("通讯录", systemImage: "person.2").tag(CrewSidebarViewMode.hierarchy)
+                Label("消息", systemImage: "bubble.left.and.bubble.right").tag(CrewSidebarViewMode.timeline)
             }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            .tint(Theme.Palette.accent)
+            Menu {
+                Button("按最近消息排序") { viewModeRaw = CrewSidebarViewMode.timeline.rawValue }
+                Button("按机长整理排序") { viewModeRaw = CrewSidebarViewMode.chief.rawValue }
+            } label: { Image(systemName: "line.3.horizontal.decrease") }
+                .menuStyle(.borderlessButton).fixedSize().frame(width: 20)
+                .help(viewMode == .chief ? "当前按机长整理排序" : "消息排序")
+                .accessibilityLabel("消息排序")
         }
-        .pickerStyle(.segmented)
-        // 与群聊发送键、仅@你点亮态同一个品牌绿（Todo #79），不继承系统蓝色。
-        .tint(Theme.Palette.accent)
-        .labelsHidden()
-        .controlSize(.small)
-        .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        // ⚠️ 这句是**给用户看的**，改总机长的排法时它必须跟着改。
-        // 2026-09-08：#113 把三段分类整个拿掉了，`CrewChiefListView` 和
-        // `CrewChiefOverview` 的注释都写了「已推翻」，**只有这句漏了**——
-        // 代码注释改了、用户看得到的文案没改，是最容易漏的那一种。
-        .help("层级：按机器 + 从属关系；时间流：拉平，最近有动静的排最上；总机组：展示真实最新消息，顺序由总机长判断并给出理由，它没在跑时退回按最近活动排")
+        .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
     }
 
     private func reloadArrangement() {
