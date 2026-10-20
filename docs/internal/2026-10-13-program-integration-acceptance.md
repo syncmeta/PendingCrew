@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 正常本地日用版291已安装，首次无模型打开及正常退出实际接受
+
+用户针对正常包0.1.44/20746.15278、精确source291与方案1af20834明确回答“授权更新及首开，已正常退出”（call_9ddc91e527bd4fc780eb77cfd47166c2）。client唯一安装者先实际核旧20746.1/25e+dirty三hash和App/helper工作子树空、candidate6027/ZIP/方案未变、独有目标及父链安全。preflight43452实际0/chunk44fa4d，backupstage44241实际0/chunk929587；完整旧whole ZIP校验、精确newstage校验，临近替换再核旧全inventory/关键字节及活动空后，两个RENAME_EXCL成功，安装静态核实际0/chunk988389。安装whole逐字等已验candidate、双source291、freshdeepstrict0；安装后首开前工作子树也空，没有kill/抢占。
+
+旧whole保于 `/Applications/.PendingCrew-previous-0.1.44-20746.1-29108682`，原整包逐字等preflight；旧ZIP `~/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.1.44-20746.1-before-29108682.zip` SHA256 `e262e6df327f12483d83e7ab0d966f0813def61f761ddcc178ae0c3aaa621a57`。安装实际原件 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-install-20261020/` 共26files/25manifest项，manifest SHA256 `1097b0c3e7623d56a908bb30aafb72b9d74d749d84a05f2e5a3dfe57f3aec204`，receipt与全部实际门/操作终态保留。没有手工迁移/清理DB、设置、Keychain或日用内容；安装者没有启动App。
+
+同一具体许可下，独立QA接成功receipt静态核后，唯一正常环境打开实际 `/Applications/PendingCrew.app`，原Popen GUI21460/installedCore21470。实际关于0.1.44(20746.15278)、本机当前管理连接及既有机组/历史内容可见，原机长已退出；未点击恢复/新建/发送。每秒采样自有子树只见原GUI+准确installedhelper，未观察模型CLI或自动任务。本次正常App按许可使用现有PendingCrewLocal，QA不直接读写日用数据库。正常安全暂停Quit后原App wait0（exec47217/chunkefd1d6），原App/Core实际identity均absent、socket absent；Core是GUI子进程，QA没有独立数值wait资格，不冒Core exit0。
+
+首开与正常收尾单份原件 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-first-open-20261020/` 共14files/13manifest项，manifest SHA256 `a17f1e9a6d100600f3213e460a630d68f9fc1725c61e65b3563aa2c13b92d8cc`，真实AX/3截图/原launch/wait/子树/最终ps保全，根亲核清单全部hash/size/mode和原runtime观察。正常本地更新+首次无模型打开/退出完整接受，安装现在为干净291正常包；本机App已退出供用户自行打开。后台compiledRef仍669、LOCAL_MAC远程仍禁用，不扩大为真实模型新验收、持久远程/Keychain、真机、公证公开发布或全工程完成。
+
 ## 2026-10-20 准确291正常本地日用包完整接受；更新及首次打开待具体许可
 
 正常包为 `0.1.44 / 20746.15278`、正式ID com.pendingname.pendingcrew、准确GUI source29108682b17cfb92cd7fc0dcf3fa7a0798a50dff；client沿既有Release/product配方唯一暖构建exec23696实际exit0/chunka45e78/BUILD SUCCEEDED。QA核1764完整Git291源码、SPM3738前后及实际快照、真实showsettings为Release/-O/ARM64/PENDINGCREW_LOCAL_MAC/NOdebugdylib/hardenedYES，team/entitlements/profile空；两MachO系统only加载、GUI及helper签前后等价、6原签态query和freshdeepstrict均0，没有Sparkle。后台仍真实原normal20e753/defaultDebug/compiled669/full443证明，未冒新Rust构建。正常LOCAL_MAC远程门禁保持，不能以此称Memory候选远程/持久凭据可日用。

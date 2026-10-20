@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前交付结论：准确291正常本地日用版已安装并通过首开检查
+
+用户具体许可后，正常 `/Applications/PendingCrew.app` 已更新为0.1.44/20746.15278、双source291，whole字节等独验candidate且签态通过。临近替换旧App/helper工作子树空、完整旧ZIP及隐藏whole保全、排他整包替换实际成功；未强退任务、未手工迁移或清理日用数据。安装原件 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-install-20261020/` manifest1097b0c3…aec204。
+
+独立QA唯一正常首开实际本机连接/版本源码正确、既有内容可见、原机长已退出，每秒自有子树未观察自动恢复/派发或模型CLI；正常安全暂停Quit，App原wait0、原Core身份和socket消失（无Core独立数值wait，不冒0）。14份首开原件 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-first-open-20261020/` manifest a17f1e9a…92d8cc，根已全hash绑定。本次完整Mac本地更新/首开/退出交付接受，App现已退出，用户可自行打开。
+
+此接受与已闭合的NativeCandidate Memory远程窗口/草稿单元分开：正常LOCAL_MAC仍本地模式，持久远程/真机/签名公证发布、Claude可靠完成归属及既定方案待决均未擅自关闭；没有新的真实模型验收或全工程完成声明。当前没有为此Mac交付继续造工具/小补件或重复稳定业务全量验证的必要，保所有源码、数据库、日志、实际二进制、SDK及构建来源。
+
 ## 2026-10-20 当前交付检查点：正常日用包已完整接受，等待具体更新许可
 
 准确291正常Mac包 `0.1.44 / 20746.15278` 已沿既有Release/product/LOCAL_MAC唯一暖构建，来源/1764源码/3738依赖/实际配置/两MachO签态及系统加载闭包/ZIP全由QA接受。稳定 `docs/private/preserved-delivery-artifacts/mac-daily-29108682-20261020/`，ZIP SHA256 `07d4c492c1d0404a662f58aaaa9d567b4cfd53993871dbc1d16dc2f1cbcfcf79`。原normal compiled669/full443/defaultDebug真实分列；正常本地包remote仍禁用，不冒Memory远程/持久Keychain交付。
