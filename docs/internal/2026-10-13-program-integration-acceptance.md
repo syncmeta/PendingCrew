@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 准确0b持久凭据隔离包与两进程完整动作准备接受，待具体许可
+
+客户端按既有PendingCrewDeliveryValidation/DeliveryValidation配置唯一暖构建准确0b023de1，实际Xcode33886 exit0；外层wrapper1仅发现该既有target不嵌入helper（旧专用验证机制在构建后注入），不重建/不改源。从原完整GUI产品克隆后显式注入原normal669/defaultDebug/20e753，封口continuation83696实际0。稳定包 `docs/private/preserved-delivery-artifacts/mac-persistent-validation-0b023de1-20261020/PendingCrew Delivery Validation.app`，GUI `9137b9db1f98ce2541a925f283a57ab1eb04e28e496d6c8cc27d4f91b8a227dc`、0.0.2174/build2174；QA亲核6033manifest SHA256 `f9d0285e8fa80acba82f2ef11f10d208245b3af7d13b8236973dd7d8b6041866`、1764完整Git0b及3738依赖前后、DV/-O/ARM64/NOsign配置、两个系统依赖映像/签态/deepstrict0及helper等价。构建后注入与实际target来源分列，不冒target自动嵌入或正常生产产品。
+
+新私域 `/private/tmp/pcw-delivery-validation.1ef4ab12-df0f-4d8c-b481-5b5a937f64b1`。为精确scope qualifier所需公开事实，backend唯一Core-only准备：attempt01原Popen26277后sandbox ps EPERM、未ready/RPC，原child TERM/wait-15/socketabsent，原失败保留。root同ps require_escalated只读核absent获审批；原data实际仍empty（未重置/另选目录）后，受审attempt02以原20e753一次disabled configure生成真实private identity/configrev2，明确是新私域持久写入而非只读。原authority `2decce5e-9847-4607-92c7-9927164dfaab`、db `c3e1f3e2e92e0917ff1621eb20ca5df6`、SPKI `5f06186b23300238e37cea13baa9272c0c0d9f9de020742af1f2024b5d1fa3e2`；127.0.0.1:49361 enabledfalse/listeningfalse/endpoint缺失/grants及sessions空，未invite/accept/revoke/App/Keychain/模型或读取私钥。原Core27876 safePause stopped/failed[]后wait0/socketgone，原锁inode保留/释放核过，actualterminal0/b659e0。真实原RPC/publicfacts/终态在 `prepared/identity-facts-attempt02/`，首失败未覆盖。
+
+客户端沿现workflow EX→原Core锁EX发布固定scope，lease inode226701923保留；假service严格 `com.pendingname.pendingcrew.delivery-validation.1ef4ab12-df0f-4d8c-b481-5b5a937f64b1`，唯一account `f81b68f8-ad33-4297-b2a0-d26500e81d4b`。QA核真实pairing创建ID/P2恢复同ID、qualified真实Keychain封装非Memory/正式服务、候选CFPrefs正常读写但HOME不封域、同fd/两Popen/SH生命周期/每5秒唯一helper/JIT单invite/Unknown不重投/正常限定收尾。完整未来动作是P1唯一配对真实保存退出，原App终态及锁释放后P2新PID读取恢复/只读选择、移除此唯一记录/撤测试grant、退出；两GUI、新grant及所有Keychain操作都尚未执行。
+
+准确原执行动作是 `prepared/ACTIONS.md`，SHA256 `e19ce702c1ff003be371c7085f5dab108d8a32d9551ad0f2d3321dd6e2a6e904`。根已发一次具体权限请求（精确包/scope/假service+account/两App/Keychain读增改删/49361唯一配对）；初提链接少prepared/已明确更正，内容/hash/授权范围不变，仍同一问题非新增许可。稳定审查副本 `docs/private/preserved-delivery-artifacts/persistent-scope-prepared-0b023de1-20261020/`，31项+manifest SHA256 `2e25837ba0b860877f223a32b8cc9ac205ca144efd4c4db7bb48a91676ab9711`，根核全部hash/owner-private模式及正确原ACTIONS摘要；不含data或identity私钥，review-only不得代原路径/lease执行。完整技术准备接受，实际执行等待人类回答；本地日用291未动，不冒真实Keychain已通过、正式service/稳定发布身份/真机或全工程交付。
+
 ## 2026-10-20 正常远程产品入口与生产配方完整源码整合接受
 
 恢复全工程目标后按最新main/远端/原进程核对：main/global168ef472一致、上轮GUI21460/Core21470 absent。发现真实未交付源码接缝：普通Debug/Release的LOCAL_MAC关闭remote UI/refresh及真实凭据factory；production-sign-only仍构本地模式且archive前未传embed必需的后台路径/SHA。后端确认Core15已有remote接口/持久表/身份恢复，不依赖Core16；不新增schema或重做M5/Jev/Linux。

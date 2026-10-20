@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前停手点：正常远程源码已整合；持久验证准确包及完整动作待具体许可
+
+新完整5文件正常remote源码0b023de1已独验/整合并随记录6c7c3427普通推main及global。进一步已备准确0b/0.0.2174 DeliveryValidation包：唯一暖target真0、构建后显式normal669注入及封口真0，source1764/deps3738、系统加载闭包/签态及6033清单f9d0285e…41866全经QA。不是Memory包或正常产品发行，不改已安装291日用版。
+
+新scope1ef4ab12-df0f-4d8c-b481-5b5a937f64b1的Core-only disabled初始化已真实完成（首sandbox ps失败保留、受审同目录attempt02正常Core0/无监听/grant/App/Keychain），公开authority/db/SPKI已事实封定。其余完整动作已冻：P1配对保存退出→同精确包P2新进程恢复/只读连接/移除唯一假账号→撤本grant及正常收尾。真实Keychain service/account完全限定，CFPrefs边界/原lease及同fd/Popen/JIT/Unknown不重投各门独核。
+
+原动作 `/private/tmp/pcw-delivery-validation.1ef4ab12-df0f-4d8c-b481-5b5a937f64b1/prepared/ACTIONS.md` SHA256 `e19ce702c1ff003be371c7085f5dab108d8a32d9551ad0f2d3321dd6e2a6e904`，完整一次具体执行许可已async请求，原链接缺prepared已更正而范围不变。稳定review副本 `docs/private/preserved-delivery-artifacts/persistent-scope-prepared-0b023de1-20261020/` 31项manifest2e25837b…ab9711；严禁直接执行副本或改原freeze。两GUI/Keychain/新grant未执行，现无技术源码或构建阻断，等待实际人类答复，不重跑稳定模块/造工具。此未来隔离假账号PASS也只能证明持久机制，正常service/稳定签名身份与设备、Claude完成归属和发布等剩余门均保留。
+
 ## 2026-10-20 当前全工程推进：正常远程产品源码与生产归档接缝已整合
 
 已完成新的真实完整单元：5文件 `0b023de1c2b56ec39b3b2196926fcfdf558241ac` 快进main。单一显式远程产品选择接通同原App的真实credentialfactory/UI，普通本地默认、LOCAL_MAC其它旧启动保护不变；现production-sign-only在archive前正确传完整后台输入/SHA、版本/source及远程overlay。Core15远程后端既有实现足够，不依赖16、不改schema或重跑稳定后台。
