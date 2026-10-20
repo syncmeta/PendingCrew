@@ -46,7 +46,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }.disabled(window.computers.isEmpty)
                 #endif
             }
-            if !window.retainedWorkspaces.isEmpty || !previousAdmins.isEmpty {
+            if !window.inputReviewWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
             }
             if let current = window.workspace, current.client.capabilities.contains("command.receipts") {
@@ -66,9 +66,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         }.sheet(isPresented: $reviewing) {
             VStack(alignment:.leading,spacing:12) {
                 HStack {Text("原连接的输入").font(.title2);Spacer();Button("关闭"){reviewing=false}}
-                Text("原连接已停止。以下只供核对，不会向当前电脑重新提交。").foregroundStyle(.secondary)
+                Text("以下保留原作用域的输入，只供核对，不会向当前电脑重新提交。").foregroundStyle(.secondary)
                 ScrollView {
-                    ForEach(Array(window.retainedWorkspaces.enumerated()),id:\.offset) {_, workspace in CrewdRemoteRetainedInputs(workspace:workspace)}
+                    ForEach(Array(window.inputReviewWorkspaces.enumerated()),id:\.offset) {_, workspace in CrewdRemoteRetainedInputs(workspace:workspace)}
                     ForEach(Array(previousAdmins.enumerated()),id:\.offset) {_, old in CrewdRemoteAdminReadback(admin:old)}
                 }
             }.padding(20).frame(minWidth:500,minHeight:360)

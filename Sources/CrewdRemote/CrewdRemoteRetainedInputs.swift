@@ -23,7 +23,10 @@ struct CrewdRemoteRetainedInputs: View {
             rows.append(.init(id: submission.id.uuidString, title: submission.method == "session.start" ? "启动成员 · 结果待确认" : "消息 · 结果待确认", text: submission.snapshot.text))
         }
         for (index, draft) in workspace.messageDrafts.allSnapshots.enumerated() where !workspace.uncertainTextSnapshots.contains(draft) {
-            rows.append(.init(id: "text-\(index)", title: draft.context.kind == .initialTask ? "启动说明草稿" : "消息草稿", text: draft.text))
+            let kind = draft.context.kind == .initialTask ? "启动说明草稿" : "消息草稿"
+            let destination = [draft.context.crew, draft.context.channel, draft.context.session].filter { !$0.isEmpty }.joined(separator: " · ")
+            rows.append(.init(id: "text-\(index)", title: kind + " · " + destination,
+                text: "原作用域：" + workspace.presentationNamespace + "\n原机组：" + draft.context.crew + "\n原群聊：" + draft.context.channel + "\n原会话：" + draft.context.session + "\n\n" + draft.text))
         }
         for (index, draft) in workspace.uncertainSessionStarts.enumerated() {
             rows.append(.init(id: "start-\(index)", title: "启动成员 · 结果待确认", text: draft.text))
@@ -57,6 +60,7 @@ struct CrewdRemoteRetainedInputs: View {
     }
     var body: some View {
         DisclosureGroup("原连接 · \(workspace.authorityRecordID.uuidString.prefix(8))") {
+            Text("原作用域：" + workspace.presentationNamespace).font(.caption).textSelection(.enabled)
             if inputs.isEmpty { Text("没有需要核对的输入。") }
             ForEach(inputs) { input in Button(input.title) { showing = input } }
         }.sheet(item: $showing) { input in

@@ -8,6 +8,18 @@ import Combine
     @Published private(set) var selected: UUID?
     @Published private(set) var retainedWorkspaces: [CrewdWorkspace] = []
     @Published var error: String?
+    /// Read-only review follows the original workspace, never the current writer.
+    var inputReviewWorkspaces: [CrewdWorkspace] {
+        Self.inputReviewWorkspaces(retained: retainedWorkspaces, current: workspace)
+    }
+    static func inputReviewWorkspaces(retained: [CrewdWorkspace], current: CrewdWorkspace?) -> [CrewdWorkspace] {
+        var scopes = retained
+        // A disconnected selection still owns its drafts even though AppModel
+        // has removed its write backend. Do not retire/reconnect it to read them.
+        if let current, !current.client.readyForWork { scopes.append(current) }
+        var seen = Set<ObjectIdentifier>()
+        return scopes.filter { seen.insert(ObjectIdentifier($0)).inserted }
+    }
     private var changes:AnyCancellable?
     private var workspaceChanges:AnyCancellable?
     private var connectionTask:Task<Void,Never>?

@@ -1,7 +1,7 @@
 import Foundation
 
 @main struct DraftProbe {
-    static func main() throws {
+    @MainActor static func main() async throws {
         // A controlled counterexample to the old window-wide @State strings.
         if CommandLine.arguments.contains("--legacy") {
             var windowCompose = ""
@@ -10,6 +10,36 @@ import Foundation
             guard bDraft.isEmpty else { throw Failure.message("legacy window draft appears in B") }
             return
         }
+        #if QA_RETAINED_WORKSPACES
+        // The actual toolbar/sheet projection, using real production workspaces.
+        let historical = CrewdWorkspace(authorityRecordID: UUID(), connect: { _ in })
+        let selected = CrewdWorkspace(authorityRecordID: UUID(), connect: { _ in })
+        defer { historical.retire(); selected.retire() }
+        let ca = CrewdDrafts.Context.message(crew: "crew-a", channel: "topic-a", session: "")
+        let cb = CrewdDrafts.Context.message(crew: "crew-b", channel: "topic-b", session: "")
+        selected.messageDrafts.set("UNSENT A", for: ca)
+        selected.messageDrafts.set("UNSENT B", for: cb)
+        let rows = CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical], current: selected)
+        guard rows.count == 2, rows[0] === historical, rows[1] === selected else {
+            throw Failure.message("disconnected selected authority missing from original-input review; only historical local workspace exposed")
+        }
+        guard rows[1].messageDrafts.text(for: ca) == "UNSENT A", rows[1].messageDrafts.text(for: cb) == "UNSENT B" else {
+            throw Failure.message("original crew/channel drafts missing from selected readback")
+        }
+        let dedup = CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical, selected, historical], current: selected)
+        guard dedup.count == 2, dedup[0] === historical, dedup[1] === selected else { throw Failure.message("same workspace duplicated in review") }
+        guard CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical], current: nil).count == 1 else { throw Failure.message("historical review lost without selection") }
+        if CommandLine.arguments.count > 1 {
+            // Existing disposable Unix fixture provides real production hello qualification.
+            try await selected.client.connect(path: CommandLine.arguments[1])
+            guard selected.client.readyForWork else { throw Failure.message("test connection not qualified") }
+            let connected = CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical], current: selected)
+            guard connected.count == 1, connected[0] === historical else { throw Failure.message("healthy selected connection incorrectly listed as old input") }
+            selected.client.disconnect()
+            guard CrewdRemoteWindow.inputReviewWorkspaces(retained: [historical], current: selected).count == 2 else { throw Failure.message("actual disconnect did not expose selected inputs") }
+        }
+        print("PASS: disconnected selected + historical original-input projection; object dedup; crew/channel drafts; healthy exclusion and actual disconnect when socket supplied")
+        #endif
         var drafts = CrewdDrafts()
         let a = CrewdDrafts.Context.message(crew: "a", channel: "one", session: "worker")
         let otherCrew = CrewdDrafts.Context.message(crew: "b", channel: "one", session: "worker")
