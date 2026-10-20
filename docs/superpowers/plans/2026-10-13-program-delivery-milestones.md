@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-20 当前进度：远程窗口及草稿修复实际闭合；准备准确正常日用包
+
+准确291/build2169最小83scope经具体授权已实测通过：唯一Memory配对→A/B草稿→撤权→当前remote及两原文只读入口/选择与Copy菜单→正常退出，GUI/Core0/0、owner stopped、零session；75文件稳定原件及根核manifest f60cb00a…be680f。结合669已过四视图/文档/静态布局，原远程窗口单元不再受草稿缺口阻断；不是持久Keychain、真机、模型、安装或全工程完成。
+
+正常日用交付正在推进：准确291以原PendingCrew/Release/product/PENDINGCREW_LOCAL_MAC配置唯一暖构建封包，client唯一作者、QA只核差异和实际产物来源。必须正常bundle0.1.44/单主映像/本地adhoc，原后台compiled669证明原样分列，不能NativeCandidate改名。此日用模式remote门禁仍关闭，Memory候选远程能力不冒交付到日用版。当前无源码缺陷待修，不重跑已稳平台/业务；等实际包/更新方案完整接受后再核具体安装与首次无模型打开许可，不自行启动/安装/访问日常内容或Keychain。
+
+## 2026-10-20 当前停手点：291准确Mac候选已备妥，草稿缺口最小复验待明确许可
+
+完整4文件修复291已合main并随统筹记录25d09abc普通推远端，根整合分支同点。准确291 GUI NativeCandidate ARM64已唯一暖构建/封包，版本0.0.2169/build2169；1764源码、SPM3738前后、来源/签态/加载闭包经QA独立接受。后台真实compiledRef仍669/defaultDebug/443输入，原证明如实分列。稳定包 `docs/private/preserved-delivery-artifacts/mac-retained-drafts-29108682-20261020-02/`，6089清单manifest efae974a…ad92；不是旧dirtyWIP或日用安装。
+
+只剩受影响窗口尾门：新私域 `/private/tmp/pcw-remote-draft-review-29108682.b110qyi7`，scopeID83d34267-0549-4860-a4a7-3b0ebda1cc67，ACTIONS SHA256 `2604e5f3f380b9c53dce351ff8bcd8cb4ad295dc9b1954050ee9c911726347a9`。保原JIT/同fd/唯一helper/有限收尾门，仅两crew/topic草稿→撤权→当前remote只读两原文，不重测已过四视图/知识/静态布局。原一次许可已用于旧终态scope；本次准确新包/新访问范围已另async请求一次具体许可，技术准备QA接受但runtime完全未开始。收到实际答复后QA唯一owner执行；拒绝/Unknown/过期即停无重邀，不安装或改日用数据。当前没有其他授权范围内的源码缺陷待修，不制造小补件/全量重审；Claude架构与其余真实设备/签名安装等既定人类待决保持。
+
 ## 2026-10-20 当前模块进度：原远程窗口主体已实测，断连草稿入口修复已合main
 
 明确具体许可后的JIT原669窗口已实际完成Memory配对、A/B topic草稿隔离与Todo/摘要、四视图/native文档/空作者JS静态两布局和唯一grant撤销断开；原GUI/Core0/0、owner stopped、无新session/重投。但撤权后的当前remote未列入“原连接的输入”，完整GUI单元留一真实缺口，原scope已终态。

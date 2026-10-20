@@ -1,5 +1,21 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-20 修复后291针对性原窗口实际接受；正常本地日用封包继续
+
+用户明确授权本次83scope后，QA唯一owner实际运行291/build2169。原holder16833/exec81606持Core16835及GUI16853，同fd/kernel/唯一helper门闭合，原表单ready后一次invite→Memory/一次accept→原GUI配对完成。A/B两份UNSENT原文往返隔离，唯一grant revoke后实际断开，当前remote F2AB88E9出现在只读入口；两sheet的namespace/crew/topic/空session与原文正确，普通拖选全文及Copy菜单enabled。未点击Copy改用户剪贴板；不冒完整实际粘贴验收。60次持续现场门，无fallback/重连/重投；前后两crew sessions空。原GUI/Core均0，owner safePause stopped/failed[]、socket absent，自有3PID absent，exec实际terminal0/chunk822383。
+
+单份实际原件 `docs/private/preserved-delivery-artifacts/remote-draft-review-29108682-20261020/` 共75files/74manifest项，manifest SHA256 `f60cb00a04d0484a4c84fea9c08e6a7d9b8d1c80f7ab6f242739354dfdbe680f`；QA核实际AX及8截图，根逐hash/size/mode/无symlink并读原cleanup/sessions。原scope终态，本次仅接受准确291受影响撤权输入流程，与此前669已过配对/四视图/native文档/静态布局组合闭合远程窗口单元；不冒持久Keychain/真机/真实供应商/安装或全工程通过。
+
+接下来由client唯一作者按既有Release/product配方准备准确291正常本地日用包，复用暖缓存及真实原normal669/443/Debug来源，不把NativeCandidate改名。正常bundle com.pendingname.pendingcrew/0.1.44、PENDINGCREW_LOCAL_MAC、单主映像/hardenedadhoc，无签私钥/公证；远程menu/factory/refresh禁用，不能冒Memory候选远程能力已进日用版。QA已核此配置差异和原finalizer无用Sparkle移除/系统加载闭包要求，等唯一实际Release构建及更新方案原件完成产物核。没有启动/安装/日常数据/Keychain动作，具体新包更新许可仅在完整产物可审查后核。
+
+## 2026-10-20 准确291修复后Mac候选与针对性动作准备接受，待一次具体许可
+
+客户端唯一作者沿原暖Xcode/SPM配方完成准确 `29108682b17cfb92cd7fc0dcf3fa7a0798a50dff` Mac NativeCandidate ARM64封包；唯一实际Xcode handle26712终态0/BUILD SUCCEEDED。此前默认release与原normal Debug不符在任何Xcode前被正确拒绝，原失败目录保留；新exclusive输出显式debug后仅此一次实际GUI构建，无新Rust/Linux/iOS构建或稳定业务重测。GUI版本0.0.2169/build2169，独立bundleID保持candidate；此为隔离候选，不是日用App更新。
+
+准确包稳定于 `docs/private/preserved-delivery-artifacts/mac-retained-drafts-29108682-20261020-02/`。QA亲核6089清单byte/hash/linktarget，manifest SHA256 `efae974a2a64a868dd492303600bbbde4578a55958da774b625e55c1d460ad92`；1764 committed snapshot逐字等Git291、SPM3738实际输入及前后库存相同，配置/SDK27/291 stamp闭合。后台保留原normal SHA25620e753dc…cafaa、compiledRef66992d59、443 Rust实际输入及原defaultDebug/emptyfeatures证明，仅evidenceDirectory重定位；不冒新后台compiledRef。QA现成format2 checker通过，三seal codeEquivalent、九MachO raw strict/-L和fresh deepstrict通过，非系统加载闭包为包内debugdylib/Sparkle。此前dirtyWIP App target仍只作为修复构建证据，不冒本准确新包。
+
+最小新scope `/private/tmp/pcw-remote-draft-review-29108682.b110qyi7`、ID `83d34267-0549-4860-a4a7-3b0ebda1cc67`；原JIT技术门保留，只换准确App/namespace/新UUID及两crew/topic种子，删除Todo/知识/静态页重复范围。动作仅Memory loopback配对→两UNSENT草稿→唯一grant撤销→当前断连remote namespace及两原文只读可见→正常退出/原owner/Core终态。QA核6输入、路径/AST/UUID disjoint、无runtime输出；ACTIONS SHA256 `2604e5f3f380b9c53dce351ff8bcd8cb4ad295dc9b1954050ee9c911726347a9`，稳定审查副本 `docs/private/preserved-delivery-artifacts/remote-draft-review-prepared-29108682-20261020/`，manifest `6ebf4851c1f765d8b10da625f72ed2a11c2fbcaed97f4279bba661a59e2b9637`。技术准备接受，尚未GUI复验。旧call_64f53的一次许可已实际用于终态c31scope，本新83scope已向用户请求一次针对性具体许可；未启动新GUI/server/seed/invite、未模型/Keychain/日常数据/安装/权限变更，等待实际回答，不继承旧一次访问许可。
+
 ## 2026-10-20 明确许可后 JIT 原窗口实际闭环发现草稿入口缺口，修复已整合
 
 用户对新scope c31f8b1a明确授权“一次完整隔离流程”后，QA唯一owner执行原669候选。实际holder12842/session71625持Core12848及GUI12866同parent，owner同fd kernel/DB/runtime、唯一helper及zero-session门通过；原添加电脑表单ready后才一次invite，Memory回复/一次accept/GUI导入receipt并选synthetic remote完成。A/B topic独立UNSENT草稿回切恢复、各Todo及右摘要、四视图、native shared marker文档，以及空作者JS/写开关disabled的静态A cards/B rows均由原UI实际观察。唯一grant revoke revision2后实际断开；未重连/重投。原GUI/Core均0，owner safePause stopped/failed[]、socket absent，前/撤前/退出后三轮两crew sessions均空，172次持续元数据门通过。
