@@ -1,6 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
-## 2026-10-21 当前：精装/退出已实测，891草稿源码与四目标静态接受；草稿窗口受CUA保护中止
+## 2026-10-21 当前：891正常日用包已安装，旧数据完整保存，首开与正常退出接受
+
+用户随后明确“替换日用版。没有数据要保留，除了旧版的数据。旧版数据你备份到一个地方，然后新版这个随便你弄”。本次具体交付指令取代此前草稿实测安装前提；891草稿P1/P2仍未通过，未更改历史结论。实际追加备份73520=0/becb5d，持久根 `/Users/hey/Library/Application Support/PendingCrewDataPreservation/before-891507c7-20261021/`，6609 regular/12 symlink/1,110,399,650B，涵盖旧PendingCrew、新PendingCrewLocal、主偏好/日志；before==after，去inactive socket后regular/link逐项==copy，root e66fed独核。backup-receipt SHA ea5066e23f37b2cbce73149f4e85faf75ff025c6949363519c92a82b0fc12010。旧历史快照原地保留且列说明；原数据未删未迁移，新数据保留。
+
+原安装器preflight a0b72f=0、backup-stage8580/3cd708=0、replace24e38b=0；临近旧291三hash、无日用App/helper/任务与独占目标均通过。实际 `/Applications/PendingCrew.app` 正常0.1.44/20747.06929、source891双stamp、whole清单等于准确候选；旧whole完全等于preflight并保存隐藏previous，完整旧ZIP SHA c9737c3a4429f414fd507c9807810b36b1644c9a31275a079420093696cbec87。installed-receipt SHA 31256e5c2ba7a2620f89c407415a283b0f76449775505fdc2ddd23f9ad7eabae（root cc1cbe实读），28项安装清单16ac3f4beb29ef15432b502276bef5b2581ca4d8e9ee1776302e06a402ddeb07；安装者未open。
+
+QA唯一正常HOME/无override首开exec17641 actual0/chunk56d82c，App77104 wait0。About实际0.1.44(20747.06929)，显示“已连接 本机 · 管理窗口”，原机组可见且未选择；原进程子树仅App及embeddedCore77121，无模型/agent执行进程，不把历史session记录称零。正常CmdQ→安全暂停后原Core PID与crewd.sock消失；Core不是QA的Popen子进程，不伪造数字wait。未发消息/任务/页面代码/Keychain/迁移，9个历史tmp隔离Core未触碰。8份真实原件 `mac-polish-891507c7-installed-first-open-20261021/`，清单bbe1f2bec37be17f0f50bdfae1b4ef1c453fc4e9009906920efcbe6c28b9290b，observation2449b4b0c0a74a53a24321f8708894f6a1454949f71d457f8114cabfccfef75f；首开未出现CUA保护。接受本次正常日用安装/首开/退出，不等于草稿跨进程、真实远程持久性、VPS或全工程交付。
+
+## 本轮安装前记录：精装/退出已实测，891草稿源码与四目标静态接受；草稿窗口受CUA保护中止
 
 退出完整模块f9810141fcd38733b0922c632ba40135a37c3dda已独验：旧未配置Native直接退出无出口为真实失败，限定原自有PID终止不是正常Quit。真实生产红86、设施V1模态timeout99和最终六态AppKit0分列；只新增明确当前App终止许可，不改Core退出coordinator/初始化前缀、不调用后台或自动重连重投。原f981已普通原子推main/global（47186/actual0）。真实完整窗口48974=0/chunk1cae14证明原四view/亮暗/900×600窄窗/菜单/文档/空JS静态cards、同窗口A/B草稿隔离与Core0→未确认进度关闭重显→明确App-only0→同DB新Core/GUI零session→正常GUI0/Core0。root亲看四张实际图；95原件清单25a0e3f103e56d91e868fd5a86f9fea53199b4cf9f8a711af412015a2ecff503，observation673a2026a03f743c556fd1bb8b56cf963e2a3434b37acaf509b1ca8716f8b1a0。已通过业务不重复全验。
 
