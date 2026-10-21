@@ -68,6 +68,10 @@ brew install --cask syncmeta/tap/pendingcrew
 - macOS 14 (Sonoma) 或更新
 - 本机**已经装好并登录** [Claude Code CLI](https://claude.com/claude-code) 或 [Codex CLI](https://developers.openai.com/codex/cli)  至少一个
 
+## 试用
+
+[PendingCrew 交互式 Demo](https://pendingname.com/crewdemo/)
+
 ## 我精心撰写的文档
 
  **<https://docs.pendingname.com/pendingcrew>**
