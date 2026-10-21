@@ -105,14 +105,40 @@ final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess, let attributes = result as? [[String: Any]] else { throw CrewdRemoteError.unavailableCredential }
+        guard status == errSecSuccess else {
+            NSLog("PendingCrew credentials records failed: OSStatus=%d", status)
+            throw CrewdRemoteError.unavailableCredential
+        }
+        guard let attributes = result as? [[String: Any]] else {
+            NSLog("PendingCrew credentials records failed: stage=response-attributes")
+            throw CrewdRemoteError.unavailableCredential
+        }
         return attributes.compactMap { ($0[kSecAttrAccount as String] as? String).flatMap(UUID.init(uuidString:)) }.sorted { $0.uuidString < $1.uuidString }
     }
     func read(_ id: UUID) throws -> CrewdRemoteStoredPair {
         var request = query(id); request[kSecReturnData as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess, let data = result as? Data,
-              data.count <= 524288, let record = try? JSONDecoder().decode(CrewdRemoteStoredPair.self, from: data), record.id == id else { throw CrewdRemoteError.unavailableCredential }
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            NSLog("PendingCrew credentials read failed: OSStatus=%d", status)
+            throw CrewdRemoteError.unavailableCredential
+        }
+        guard let data = result as? Data else {
+            NSLog("PendingCrew credentials read failed: stage=response-data")
+            throw CrewdRemoteError.unavailableCredential
+        }
+        guard data.count <= 524288 else {
+            NSLog("PendingCrew credentials read failed: stage=data-size")
+            throw CrewdRemoteError.unavailableCredential
+        }
+        guard let record = try? JSONDecoder().decode(CrewdRemoteStoredPair.self, from: data) else {
+            NSLog("PendingCrew credentials read failed: stage=record-decode")
+            throw CrewdRemoteError.unavailableCredential
+        }
+        guard record.id == id else {
+            NSLog("PendingCrew credentials read failed: stage=record-identity")
+            throw CrewdRemoteError.unavailableCredential
+        }
         return record
     }
     func save(_ record: CrewdRemoteStoredPair) throws {

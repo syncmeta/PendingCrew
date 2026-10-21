@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-21 当前：普通 iOS Keychain 首屏错误已修复；完整配对仍待输入链诊断和解锁
+
+真实普通025/40c3运行首次捕获records OSStatus=-34018，而非推断旧记录或设备锁定。最小诊断日志仅固定操作/状态码/失败阶段，不记录凭据或标识；普通Simulator Debug增加自身AppID及唯一对应Keychain声明，工程同步，不改变Mac/iPhoneOS/Native配置或改用Memory。冻结源码07d52b760c0fa64e6f62e30ffaeed47fb9f39fc5普通暖构0，实际模拟器声明在Mach-O __TEXT,__entitlements（不是以codesign字典空误判缺失）；QA独立核实际产物后安装启动，正常空配对表单已出现，原-34018不再复现。本次整合保留准确包来源07d，不将该包改标为后续合并提交，未重建/安装Mac或跑CI。
+
+完整持久配对没有通过：0b私域邀请码在系统首次粘贴与输入诊断中自然过期，无respond/record/accept；f79原文件和AX可见输入精确同2006字，原本地“核对电脑”显示“连接码无效”，未生成回应/本机UUID或写记录。源文件编码/字段结构已静核，实际SwiftUI绑定和密码学校验仍不能仅由AX文本相同推断。两次后台均原fd safePause stopped/Core0/socket及端口消失、holder显式abort1如实保留；App terminate/console0、phone恢复Shutdown，不补过期invite或重发未知结果。后续只用既有过期码的本地校验定位输入链，不需要新后台或邀请码。
+
+最后一次正常本地诊断被实际Mac锁屏中止，未执行新pbcopy/pbpaste/本地校验；测试App已退出、phoneShutdown。解锁后先恢复此前临时切换一次的DeviceHub剪贴板菜单，再续本地诊断，原值未知不假称已恢复。准确记录位于 `ios-normal-07d52b76-20261021/` 的独立包审与恢复队列；0b/f79原件保存在对应 `ios-core-fixedowner-07d52b76-*-prepared-20261021/`。没有新增验收框架、Rust构建、模型调用、Mac Keychain访问、真机安装或日用数据变更。VPS完整隔离模块已验，继续复用下段结论。
+
 ## 2026-10-21 最新完整模块：Mac 前端到 VPS 后台的隔离业务流程通过
 
 复用准确c8 Linux候选（不是新main重编）与现成891 Native固定Memory Mac包，在新VPS私有prefix临时运行后台，以同号loopback SSH转发保持签名邀请endpoint不变。独立QA实际完成单次签名配对→远端工作区→消息/Todo/文档/进展四视图→唯一Human消息和Todo写入回显→在线撤权拒绝→原作用域只读入口保留完整未发送草稿→移除Memory配对→正常安全暂停退出。远端DB/authority与初始本地Core明确区分；此结论不包含跨进程Keychain持久信任、不代表公网长驻部署。额外独立observer读请求被lineage权限拒绝后停止，未补claim/改读DB，不称独立后台读回通过。
