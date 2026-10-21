@@ -88,6 +88,15 @@ enum CrewdFrontendConfiguration {
 
 #if os(macOS)
 /// Local file selection only. Never probes a CLI, login state or credentials.
+enum CrewdClaudeConfiguration {
+    static let key = "pendingcrew.crewd.claudeProgram.v1"
+    static func program(environment: [String: String] = ProcessInfo.processInfo.environment,
+                        defaults: UserDefaults = .standard) -> String? {
+        if let explicit = environment["PENDINGCREW_CLAUDE_PROGRAM"], !explicit.isEmpty { return explicit }
+        return defaults.string(forKey: key).flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
 enum CrewdCodexConfiguration {
     static let key = "pendingcrew.crewd.codexProgram.v1"
     static func program(environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -98,8 +107,8 @@ enum CrewdCodexConfiguration {
             (environment["PATH"] ?? "").split(separator: ":").filter { $0.hasPrefix("/") }.map { String($0) + "/codex" }
         return paths.first { executable($0) }
     }
-    static func launchArguments(directory: URL, program: String?) -> [String] {
-        var arguments = ["--data-dir", directory.path, "serve", "--claude", "/usr/bin/false"]
+    static func launchArguments(directory: URL, program: String?, claudeProgram: String? = CrewdClaudeConfiguration.program()) -> [String] {
+        var arguments = ["--data-dir", directory.path, "serve", "--claude", claudeProgram.flatMap { executable($0) ? $0 : nil } ?? "/usr/bin/false"]
         #if PENDINGCREW_LOCAL_MAC
         arguments.append("--managed-parent")
         #endif

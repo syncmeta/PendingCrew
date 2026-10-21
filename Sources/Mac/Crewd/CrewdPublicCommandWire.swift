@@ -267,3 +267,75 @@ private enum CrewdPublicParameters {
         return .object(fields)
     }
 }
+
+
+/// Read-only factory metadata. Availability is not a model launch or a proof of
+/// native turn association. All execution still uses public command receipts.
+struct CrewdExecutorProfile: Identifiable, Equatable, Sendable {
+    let id: String
+    let executor: String
+    let displayName: String
+    let backend: String
+    let available: Bool
+    let initialContext: Bool
+    let manualTerminal: Bool
+    let structuredDecisions: Bool
+    let fullHistoryLoad: Bool
+    let unavailableReason: String?
+    init(_ value: CrewdValue) throws {
+        guard case .object(let fields) = value,
+              Set(fields.keys) == ["id", "executor", "displayName", "backend", "available", "features", "unavailableReason"],
+              case .object(let features) = value["features"],
+              Set(features.keys) == ["initialContext", "manualTerminal", "structuredDecisions", "fullHistoryLoad"] else { throw CrewdPublicWire.invalid() }
+        id = try CrewdPublicWire.token(value["id"])
+        executor = try CrewdPublicWire.token(value["executor"])
+        displayName = try CrewdPublicWire.token(value["displayName"])
+        backend = try CrewdPublicWire.token(value["backend"])
+        guard ["codex", "existingClaudePty", "nativeAcp"].contains(backend) else { throw CrewdPublicWire.invalid() }
+        available = try CrewdPublicWire.boolean(value["available"])
+        initialContext = try CrewdPublicWire.boolean(value["features"]["initialContext"])
+        manualTerminal = try CrewdPublicWire.boolean(value["features"]["manualTerminal"])
+        structuredDecisions = try CrewdPublicWire.boolean(value["features"]["structuredDecisions"])
+        fullHistoryLoad = try CrewdPublicWire.boolean(value["features"]["fullHistoryLoad"])
+        guard value["unavailableReason"] == .null || value["unavailableReason"].string != nil else { throw CrewdPublicWire.invalid() }
+        unavailableReason = value["unavailableReason"].string
+        guard unavailableReason.map({ ["notConfigured", "binaryChanged", "nativeVerificationPending", "sourceHistoryIncomplete", "unsupportedPlatform"].contains($0) }) ?? true else { throw CrewdPublicWire.invalid() }
+        guard !available || unavailableReason == nil else { throw CrewdPublicWire.invalid() }
+    }
+    static func list(_ value: CrewdValue) throws -> [Self] {
+        guard case .object(let fields) = value, Set(fields.keys) == ["profiles"],
+              case .array(let rows) = value["profiles"], rows.count <= 64 else { throw CrewdPublicWire.invalid() }
+        let profiles = try rows.map(Self.init)
+        guard Set(profiles.map(\.id)).count == profiles.count,
+              Set(profiles.map(\.executor)).count == profiles.count else { throw CrewdPublicWire.invalid() }
+        return profiles
+    }
+    var offeredInOriginalUI: Bool {
+        (id == "codex" && executor == "codex" && backend == "codex") ||
+        (id == "claude" && executor == "claude" && backend == "existingClaudePty") ||
+        (id == "claude-managed" && executor == "acp:claude-managed" && backend == "nativeAcp")
+    }
+    var canStart: Bool { offeredInOriginalUI && available && backend != "nativeAcp" }
+    var title: String {
+        switch backend {
+        case "existingClaudePty": return "Claude 交互终端"
+        case "nativeAcp": return "Claude 原生模式（尚未开放）"
+        default: return displayName
+        }
+    }
+    var recoveryDescription: String {
+        backend == "existingClaudePty"
+            ? "尝试接回既有会话；Claude 明确拒绝时可能新建对话，后台会报告，不能保证原历史连续恢复。"
+            : "只在你明确选择后尝试恢复原会话；完整历史加载未开放，不会补发未知输入。"
+    }
+    var unavailableDescription: String {
+        switch unavailableReason {
+        case "notConfigured": return "所连接的后台尚未配置可用程序。"
+        case "binaryChanged": return "后台程序已更新，请先重启并重新核对执行能力。"
+        case "nativeVerificationPending": return "受管 Claude 的运行资格尚未核实，当前不能启动。"
+        case "sourceHistoryIncomplete": return "历史来源不完整，当前能力不可用。"
+        case "unsupportedPlatform": return "所连接后台的平台不支持此能力。"
+        default: return "当前后台未开放此执行器。"
+        }
+    }
+}

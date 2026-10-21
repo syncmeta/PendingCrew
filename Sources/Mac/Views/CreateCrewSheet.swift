@@ -291,6 +291,14 @@ struct CreateCrewSheet: View {
     }
 
     private var captainField: some View {
+        Group {
+            if crewStore.usesCrewdAuthority {
+                Text("此表单只创建机组。进入机组后，按所连接后台的实际执行能力选择并启动机长。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else { legacyCaptainField }
+        }
+    }
+    private var legacyCaptainField: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("机长（captain）")
                 .font(.callout.weight(.medium))

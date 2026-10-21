@@ -3428,13 +3428,27 @@ final class CrewSessionRunner: ObservableObject {
     ) async throws -> Bool {
         if isCrewdPresentation && crewdProjectionWorkspace == nil { throw CrewdClientError(message: "当前后台尚未绑定；请求未提交，不使用旧编排账。", kind: .notSubmitted) }
         if let workspace = crewdProjectionWorkspace {
-            guard userInitiated else { throw CrewdClientError(message: "前端不能自动编排当前后台", kind: .notSubmitted) }
-            if let captain = detail.crew.captainBotId {
-                _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(captain)]))
-            } else {
-                _ = try await workspace.performValue("session.start", .object(["crewId": .string(detail.crew.id), "role": .string("captain"), "executor": .string("codex"), "brief": .string(openingBrief ?? wakeText ?? "维护本机组的工作闭环"), "title": .string(title), "isolation": .bool(false)]))
+            guard userInitiated, workspace.crewID == detail.crew.id else {
+                throw CrewdClientError(message: "请在当前机组明确选择启动或恢复机长。", kind: .notSubmitted)
             }
-            return true // Typed RPC acknowledgement; not a claim that a model ran.
+            let epoch = workspace.observationGeneration, executor = workspace.selectedExecutor
+            await workspace.refreshExecutorProfiles()
+            try await workspace.refreshSessionDirectory(detail.crew.id)
+            guard workspace.acceptsObservation(epoch), workspace.crewID == detail.crew.id else { throw CancellationError() }
+            if let captain = workspace.sessions.first(where: { $0["role"].string == "captain" }), let id = captain["id"].string {
+                let live = try await workspace.readValue("session.live", .object(["sessionId": .string(id)]))
+                guard workspace.acceptsObservation(epoch), workspace.crewID == detail.crew.id else { throw CancellationError() }
+                guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
+                    throw CrewdClientError(message: "原机长状态尚未确认，未提交恢复。", kind: .notSubmitted)
+                }
+                if !running { _ = try await workspace.performValue("session.resume", .object(["sessionId": .string(id)])) }
+            } else {
+                guard await workspace.startCaptainForCreatedCrew(detail.crew.id, executor: executor,
+                    brief: openingBrief ?? wakeText ?? "维护本机组的工作闭环") != nil else {
+                    throw CrewdClientError(message: workspace.error ?? "机长尚未确认启动，请核对原请求。", kind: .notSubmitted)
+                }
+            }
+            return true // Original receipt/live state; never a claim of model delivery.
         }
         if isViewer {
             // viewer 里没有编排：把请求送回 daemon，那边用它自己的 CrewStore
