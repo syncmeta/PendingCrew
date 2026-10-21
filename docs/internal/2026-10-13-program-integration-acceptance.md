@@ -1,5 +1,21 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-21 普通 Mac 远程组合源码冻结，转准确产物与完整持久流程
+
+后端7c8a32b75a77cd37529433e80274d11547a5eda3（Core15执行器发现/真实资格及精确remote-preview签名准入）与客户端c1cf7901fba81c7560d3f0d2428d3ee70f6014b7（普通本地加远程预览及按真实App身份隔离凭据）均已独立源审接受，并以正常merge纳入main；本节所在提交为最终组合R，后续准确normal后台及Release App均从同一R构建。后端最终定向检查与CLI目标编译终态均0；旧schema快照漂移及首轮缓存污染按下文分列，不冒新功能或全表业务验证。其他session的92项设计改动保留，不纳入本次提交。
+
+构建复用原暖Rust/Xcode/SPM缓存，后端唯一Rust编译者先按完整R输入生成准确普通helper及证明，客户端仅快进R、同R封装一个Release普通远程预览包；不改标旧669、891或07d产物来源。质量线只核受影响产物，随后完成正常UI保存唯一电脑→安全暂停退出→新App进程零自动远程选择/任务恢复→手动重连→两草稿原文恢复→在线撤权拒绝→精确移除记录及当前只读原输入保留→正常收尾的整块P1/P2。仅使用新remote-preview服务和新私域，旧1ef Unknown、日用数据与旧备份不触；新包尚未构建或运行，不能称持久交付已验。
+
+Mac本地工作台/SQLite知识、草稿耐久、M5与既有VPS隔离业务继续复用。iOS入口已恢复但长文本输入未验；M4标准ACP完成关联/完整历史、正式签名及剩余平台交付仍未完成，持续目标保持全工程范围。
+
+## 2026-10-21 全工程继续的范围与证据纠正
+
+普通Mac远程组合的源码门：客户端c1cf7901四文件独核接受，已正常合入本地main中间提交55bf903c；后端本批实际原公共socket发现和OS签名准入红→绿成立，最终16123终态0，proto50/50、server+crewd all-targets、关键2/2与committed schema一致1/1通过。生成schema只新增6个Executor defs和executor.list；其余60defs/19methods/1event是有效f435强基线中已有、旧提交快照遗漏，非本批新增产品协议。首次共享缓存污染基线已排除并保留原件；有效基线全own graph强制fresh=false、QA独核语义成立。仅executor补入既有CLI typed-negative表，旧表缺19既有方法的完整执行范围未验，不冒全表通过。当前是源码与准确构建输入整合，不是新包或持久配对已验。
+
+DeviceHub现有Apple内部入口恢复已取得实际证据：旧10768正常退出且缺席；新进程19695与AppKit正PID一致，finishedLaunching、原生发现/实际截图/屏幕键盘可撤回输入均成立。长配对码typeText仍未成功，iOS完整持久流程仍未验；无新邀请、回应或凭据写入。App/console终态0、模拟器关闭、临时键盘状态恢复，正确入口Terminal保留。具体恢复记录与截图位于私有保全目录ios-normal-07d52b76-20261021/。原问题报告为社区来源，不能称Apple或OpenAI官方修复。
+
+局部iOS工具失败不作为整个工程无独立任务的证据。实际main f4354250为Core15，9bc/ef38及重放资产未入main，M4不完整；891普通Mac为LOCAL_MAC，Native Memory→VPS通过不能冒普通Mac远程持久交付。后端继续独立Core15执行器发现/路由资格及M4剩余，客户端继续普通Mac本机+远程/持久配对产品，质量独立按新原始报告核DeviceHub实际PID/AppKit身份恢复，完整冻结后验各模块。各自唯一writer及精确新预览ID准入/Keychain隔离裁决见总计划最新段。已经通过的本机工作台、SQLite知识、草稿及VPS隔离业务证据继续复用；未新跑CI、真实模型、旧1ef Unknown或未定方案。旧“全局无独立工作/锁屏未恢复”等均仅是历史停点，不再沿用为现状。
+
 ## 2026-10-21 当前：普通 iOS 首屏修复已整合；完整配对受自动输入链阻断
 
 用户已手动解锁，原锁屏待办菜单切换1→2恢复，本次诊断临时切换3→4也恢复，原on/off未知。原f79邀请的P-256签名实际OpenSSL Verified OK/0，SPKI pin精确匹配。最后有界诊断中，固定测试device的官方pbcopy0后，立即同device pbpaste0只回21B且hash不符，按边界停止；准确原调用明确以input=code传已核原文，非heredoc占用stdin。未再粘贴、核对、生成回应或发新邀请。App/console0、phoneShutdown，无运行后台或隧道。证据在ios-normal-07d52b76-20261021的qa-expired-local-after-unlock-result.json、qa-expired-device-clipboard-hash.json和original-f79-code-crypto-check/。当前不能判产品协议失败，也不能称完整持久配对通过；不再添加输入工具、循环新scope或重复稳定验收。下述锁屏记录为已收尾历史，恢复队列已清空。

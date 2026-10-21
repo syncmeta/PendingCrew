@@ -1,5 +1,29 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-21 普通 Mac 远程组合源码冻结，转准确产物与完整持久流程
+
+后端7c8a32b75a77cd37529433e80274d11547a5eda3（Core15执行器发现/真实资格及精确remote-preview签名准入）与客户端c1cf7901fba81c7560d3f0d2428d3ee70f6014b7（普通本地加远程预览及按真实App身份隔离凭据）均已独立源审接受，并以正常merge纳入main；本节所在提交为最终组合R，后续准确normal后台及Release App均从同一R构建。后端最终定向检查与CLI目标编译终态均0；旧schema快照漂移及首轮缓存污染按下文分列，不冒新功能或全表业务验证。其他session的92项设计改动保留，不纳入本次提交。
+
+构建复用原暖Rust/Xcode/SPM缓存，后端唯一Rust编译者先按完整R输入生成准确普通helper及证明，客户端仅快进R、同R封装一个Release普通远程预览包；不改标旧669、891或07d产物来源。质量线只核受影响产物，随后完成正常UI保存唯一电脑→安全暂停退出→新App进程零自动远程选择/任务恢复→手动重连→两草稿原文恢复→在线撤权拒绝→精确移除记录及当前只读原输入保留→正常收尾的整块P1/P2。仅使用新remote-preview服务和新私域，旧1ef Unknown、日用数据与旧备份不触；新包尚未构建或运行，不能称持久交付已验。
+
+Mac本地工作台/SQLite知识、草稿耐久、M5与既有VPS隔离业务继续复用。iOS入口已恢复但长文本输入未验；M4标准ACP完成关联/完整历史、正式签名及剩余平台交付仍未完成，持续目标保持全工程范围。
+
+## 2026-10-21 全工程继续：局部验收不暂停独立模块
+
+后续原始资料核对已带来实际恢复：质量线正常退出旧DeviceHub 10768（AppKit PID -1），经Finder打开现有Apple内部DeviceHub可执行文件，新实际PID/AppKit均19695、finishedLaunching为true；原生发现、截图及屏幕键盘1→删除的可撤回输入已实测。Terminal 19680保留，App/console正常终态、模拟器已恢复关闭，临时键盘状态恢复。整串typeText仍未入框，不冒完整iOS配对/持久验收；不重复已证失败的pbcopy路径。证据固定于私有保全目录ios-normal-07d52b76-20261021/qa-devicehub-official-entry-recovery.json。此前“图形应用缺少”及对应停点均为已纠正历史。
+
+用户已明确要求持续推进整个已授权工程，不能因iOS输入工具问题就判全工程无工作。此前“无独立事项”的范围判断撤回；以下三线按实际f4354250基线继续，复用已验模块，不重做旧审查/全量测试。main实际Core15；M4/Core16分支资产尚未整合，不能把源码组件或已有Codex日用版冒完整跨厂商交付。
+
+| 执行线 | 当前完整目标与真实差距 | 冻结/交付判据 |
+| --- | --- | --- |
+| backend_resume | 回接可独立于上游完成关联的Core15执行器发现/真实配置路由资格，继续受管PTY/生命周期/恢复剩余单元；原Core16资产保留 | 原公共socket及ACL/TLS资格真实成立、查询不启动provider、Native缺来源明确不可用；之后继续M4，不把单RPC绿当M4完成；Rust/schema/API唯一写者 |
+| client_resume | 普通Mac本机+远程产品及持久配对；已装891为LOCAL_MAC不开放远程，已过VPS测试仅Native Memory | 普通REMOTE_PRODUCT预览身份、真实Keychain按App身份隔离、完整P1/P2显式重连/草稿/撤销移除；旧1ef Unknown不触；Swift/工程/构建唯一写者 |
+| quality_resume | 独立整块质量；先核原始issue44717的DeviceHub启动身份恢复，再接已冻结Mac/iOS模块 | 本机真实PID与AppKit -1已只读重现；只用现有Apple内部入口作最小恢复，分别验证发现/截图/输入；失败只阻对应流程，不造工具或暂停其他执行线 |
+
+M5按实际代码复用：11505494（耐久确定性跟进/权限/恢复）与280e9884（正常后台物理投递/恢复）均为main祖先，当前生产调度与已验字节未变，本轮不重建M5。M4已有真实PTY、终端lease、stop与公共回执/恢复；managed/完整历史开发资产尚未整合，标准ACP的逐次完成关联及全量transcript来源仍缺证据。先完成当前普通Mac远程可用交付，再按真实资格接回跨厂商完整模块，不把单个executor.list或元数据当M4完成。
+
+公共本机签名准入仅新增精确正常预览ID `com.pendingname.pendingcrew.remote-preview`，不通配/伪签；其Keychain服务随真实bundle隔离，正式prodID保持既有service。后台同批新准确helper是该预览本机连接的真实依赖，客户端其余源码/包准备并行。旧669helper不得冒新ID已验。Rust唯一编译owner后端；指定共享target仅symlink到现有暖cache，不新冷目录；客户端复用aeh Xcode/SPM。VPS隔离业务已验，不代表长驻日用部署/普通Mac持久信任已交付。标准ACP完成关联、完整历史/恢复资格及未定记忆/Solid等仍按真实来源和既有裁决，不猜实现、不抹去未完成项。
+
 ## 2026-10-21 当前：普通 iOS 首屏修复已整合；完整配对受自动输入链阻断
 
 用户已手动解锁，原锁屏待办菜单切换1→2恢复，本次诊断临时切换3→4也恢复，原on/off未知。原f79邀请的P-256签名实际OpenSSL Verified OK/0，SPKI pin精确匹配。最后有界诊断中，固定测试device的官方pbcopy0后，立即同device pbpaste0只回21B且hash不符，按边界停止；准确原调用明确以input=code传已核原文，非heredoc占用stdin。未再粘贴、核对、生成回应或发新邀请。App/console0、phoneShutdown，无运行后台或隧道。证据在ios-normal-07d52b76-20261021的qa-expired-local-after-unlock-result.json、qa-expired-device-clipboard-hash.json和original-f79-code-crypto-check/。当前不能判产品协议失败，也不能称完整持久配对通过；不再添加输入工具、循环新scope或重复稳定验收。下述锁屏记录为已收尾历史，恢复队列已清空。
