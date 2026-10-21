@@ -29,7 +29,7 @@ def main():
     (out/'compile-argv.json').write_text(json.dumps(command,indent=2)+'\n')
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
-    for scenario in ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused']:
+    for scenario in ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']:
         path = out/(scenario+'.sock')
         listener = socket.socket(socket.AF_UNIX); listener.bind(str(path)); listener.listen(1)
         calls = []; problems = []; state = {'running': scenario == 'running', 'captain': False}
@@ -43,7 +43,7 @@ def main():
                             result = {'server':'crewd','apiVersion':3,'minApiVersion':1,'version':'synthetic-route', 'capabilities':['orchestra','session.respondRunnerRequest']+(['command.receipts'] if scenario.startswith('legacy-') else []), 'runtimeIdentity':{'dbId':'synthetic-db','runtimeBindingId':'229e24cf-f1c0-4867-9fdb-3293686f7d55'}}
                         elif method == 'executor.list':
                             assert req['params']['crewId'] in ['crew-a','crew-b']
-                            if scenario in ['profiles-late','profiles-switch'] and req['params']['crewId']=='crew-a': time.sleep(.15)
+                            if scenario in ['profiles-late','profiles-switch','captain-switch-return'] and req['params']['crewId']=='crew-a': time.sleep(.15)
                             def profile(id, executor, backend, features, available=True, reason=None):
                                 return {'id':id,'executor':executor,'displayName':id,'backend':backend,'available':available,'features':dict(zip(['initialContext','manualTerminal','structuredDecisions','fullHistoryLoad'],features)),'unavailableReason':reason}
                             result = {'profiles':[
@@ -64,9 +64,9 @@ def main():
                             result={'requestId':e['requestId'],'dbId':e['dbId'],'runtimeBindingId':e['runtimeBindingId'],'command':cmd,'phase':'unknown','historical':False,'payloadSha256':'a'*64,'createdAt':'2026-10-22T00:00:00Z','updatedAt':'2026-10-22T00:00:00Z','result':{}}
                         elif method == 'crew.list': result = [{'id':'crew-a'}]
                         elif method == 'session.list':
-                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':'claude' if scenario=='legacy-resume' else 'codex'}] if state['captain'] or scenario not in ['captain','captain-refused'] else []
+                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':'claude' if scenario=='legacy-resume' else 'codex'}] if state['captain'] or not scenario.startswith('captain') else []
                         elif method == 'session.live':
-                            if scenario in ['switch','double-click']: time.sleep(.15)
+                            if scenario in ['switch','switch-return','double-click']: time.sleep(.15)
                             result = {} if scenario == 'malformed' else {'sessionId':'session-a','running':state['running']}
                         elif method == 'session.start':
                             assert req['params']['role'] == 'captain' and req['params']['crewId'] == 'crew-a'
@@ -90,7 +90,7 @@ def main():
             methods = [r['method'] for r in calls]
             assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click'] else 0), methods
             assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') else 0), methods
-            assert methods.count('session.start') == (1 if scenario.startswith('captain') else 0), methods
+            assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
             print('PASS '+scenario)
         finally: listener.close()

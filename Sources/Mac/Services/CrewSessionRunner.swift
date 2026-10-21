@@ -3431,13 +3431,13 @@ final class CrewSessionRunner: ObservableObject {
             guard userInitiated, workspace.crewID == detail.crew.id else {
                 throw CrewdClientError(message: "请在当前机组明确选择启动或恢复机长。", kind: .notSubmitted)
             }
-            let epoch = workspace.observationGeneration, executor = workspace.selectedExecutor
+            let epoch = workspace.observationGeneration, route = workspace.observationSelection, connection = workspace.client.connectionEpoch, executor = workspace.selectedExecutor
             await workspace.refreshExecutorProfiles()
             try await workspace.refreshSessionDirectory(detail.crew.id)
-            guard workspace.acceptsObservation(epoch), workspace.crewID == detail.crew.id else { throw CancellationError() }
+            guard workspace.acceptsObservation(epoch), route == workspace.observationSelection, connection == workspace.client.connectionEpoch, workspace.crewID == detail.crew.id else { throw CancellationError() }
             if let captain = workspace.sessions.first(where: { $0["role"].string == "captain" }), let id = captain["id"].string {
                 let live = try await workspace.readValue("session.live", .object(["sessionId": .string(id)]))
-                guard workspace.acceptsObservation(epoch), workspace.crewID == detail.crew.id else { throw CancellationError() }
+                guard workspace.acceptsObservation(epoch), route == workspace.observationSelection, connection == workspace.client.connectionEpoch, workspace.crewID == detail.crew.id else { throw CancellationError() }
                 guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
                     throw CrewdClientError(message: "原机长状态尚未确认，未提交恢复。", kind: .notSubmitted)
                 }

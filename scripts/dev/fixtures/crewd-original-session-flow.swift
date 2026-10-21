@@ -17,6 +17,14 @@ import Foundation
             do { try workspace.requireExecutor("codex", crew: "crew-a"); fatalError("stale profile authorized another scope") } catch {}
             print("PASS actual App profile scope: " + scenario); return
         }
+        if scenario == "captain-switch-return" {
+            let task = Task { await workspace.startCaptainForCreatedCrew("crew-a") }
+            try await Task.sleep(for: .milliseconds(50))
+            workspace.selectCrew("crew-b"); workspace.selectCrew("crew-a")
+            let result = await task.value
+            precondition(result == nil, "old captain click survived crew A-B-A selection")
+            print("PASS actual App captain A-B-A: no start"); return
+        }
         await workspace.refreshExecutorProfiles()
         try await workspace.refreshSessionDirectory("crew-a")
         if scenario == "profiles" {
@@ -56,10 +64,11 @@ import Foundation
         case "captain-refused":
             let result = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(result == nil && workspace.error?.contains("机组及已有消息仍保留") == true)
-        case "switch":
+        case "switch", "switch-return":
             let task = Task { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
             try await Task.sleep(for: .milliseconds(50))
-            workspace.sessionID = "session-b"
+            if scenario == "switch-return" { workspace.selectSession("session-b"); workspace.selectSession("session-a") }
+            else { workspace.sessionID = "session-b" }
             await task.value
         case "double-click":
             let first = Task { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }

@@ -295,6 +295,7 @@ final class CrewdWorkspace: ObservableObject {
     var isRetired: Bool { retired }
     private var generation = UUID()
     var observationGeneration: UUID { generation }
+    var observationSelection: UUID { selection }
     func acceptsObservation(_ epoch: UUID) -> Bool {
         !retired && !sleeping && client.readyForWork && generation == epoch
     }
@@ -679,12 +680,12 @@ final class CrewdWorkspace: ObservableObject {
     /// Only an explicit user click invokes this path. Refresh live state first;
     /// never infer a stopped runner from an uninitialized display projection.
     func restoreOpenedSession(_ id: String, crew: String) async {
-        let epoch = observationGeneration
+        let epoch = observationGeneration, route = selection, connection = client.connectionEpoch
         guard crewID == crew, sessionID == id, !openingSessions.contains(id) else { return }
         openingSessions.insert(id); defer { openingSessions.remove(id) }
         do {
             let live = try await readValue("session.live", .object(["sessionId": .string(id)]))
-            guard acceptsObservation(epoch), crewID == crew, sessionID == id else { return }
+            guard acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id else { return }
             guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
                 throw CrewdClientError(message: "原会话运行状态未能确认，未提交恢复。", kind: .notSubmitted)
             }
@@ -695,7 +696,7 @@ final class CrewdWorkspace: ObservableObject {
                 _ = try await performValue("session.resume", .object(["sessionId": .string(id)]))
             }
         } catch {
-            if acceptsObservation(epoch), crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
+            if acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
         }
     }
 
@@ -708,12 +709,13 @@ final class CrewdWorkspace: ObservableObject {
         openingCaptains.insert(id); defer { openingCaptains.remove(id) }
         let epoch = observationGeneration, connection = client.connectionEpoch
         selectCrew(id)
+        let route = selection
         await refreshExecutorProfiles()
-        guard acceptsObservation(epoch), connection == client.connectionEpoch, crewID == id else { return nil }
+        guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
         do {
             try requireExecutor(executor, crew: id)
             let roster = try await readValue("session.list", .object(["crewId": .string(id)]))
-            guard acceptsObservation(epoch), connection == client.connectionEpoch, crewID == id else { return nil }
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
             guard case .array(let rows) = roster else { throw CrewdClientError(message: "机长名册未能确认。", kind: .notSubmitted) }
             if let captain = rows.first(where: { $0["role"].string == "captain" }) { return captain["id"].string }
             guard !hasOriginalUnknown(method: "session.start", crew: id) else {
@@ -724,7 +726,7 @@ final class CrewdWorkspace: ObservableObject {
                 "brief": .string(brief), "isolation": .bool(false)]))
             return result["id"].string
         } catch {
-            if acceptsObservation(epoch), crewID == id { self.error = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription }
+            if acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id { self.error = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription }
             return nil
         }
     }

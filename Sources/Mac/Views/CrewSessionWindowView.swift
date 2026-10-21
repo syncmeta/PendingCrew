@@ -368,6 +368,12 @@ struct CrewSessionWindowView: View {
             if !appModel.usesCrewdAuthority && selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
+            if appModel.usesCrewdAuthority, !hasRunningCaptain,
+               let workspace = appModel.crewdBackend?.workspace,
+               workspace.crewID == crewStore.selectedDetail?.crew.id {
+                CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+            }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
             // 点击入口（captain 成员行）就在这屏，错误必须在这显，否则点了像没反应。
             if let err = sessionRunner.lastStartError {
