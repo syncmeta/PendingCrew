@@ -2,7 +2,12 @@ import Foundation
 #if QA_REMOTE_FACTORY
 final class RemoteFactoryReadProbe: CrewdRemoteCredentialStore {
     var reads = 0
-    func records() throws -> [UUID] { reads += 1; return [] }
+    var failRead = false
+    func records() throws -> [UUID] {
+        reads += 1
+        if failRead { throw CrewdRemoteError.unavailableCredential }
+        return []
+    }
     func read(_ id: UUID) throws -> CrewdRemoteStoredPair { throw CrewdRemoteError.unavailableCredential }
     func save(_ record: CrewdRemoteStoredPair) throws { fatalError("not a credential-write test") }
     func remove(_ id: UUID) throws { fatalError("not a credential-delete test") }
@@ -73,14 +78,25 @@ final class RemoteFactoryReadProbe: CrewdRemoteCredentialStore {
         #endif
         let reads = RemoteFactoryReadProbe()
         let window = CrewdRemoteWindow(pairing: CrewdRemotePairing(credentials: reads))
+        guard reads.reads == 0, window.computerListState == .notLoaded else { throw Failure.message("creating a window read credentials before an explicit request") }
+        NotificationCenter.default.post(name: CrewdRemotePairing.changed, object: nil)
+        try await Task.sleep(for: .milliseconds(20))
+        guard reads.reads == 0 else { throw Failure.message("notification read credentials before an explicit request") }
         window.refresh()
         #if QA_EXPECT_REMOTE_FLOW
-        guard reads.reads == 1 else { throw Failure.message("remote product cannot refresh original saved-computer list") }
+        guard reads.reads == 1, window.computerListState == .loaded, window.computers.isEmpty else { throw Failure.message("successful empty credential list was not marked loaded") }
+        reads.failRead = true
+        guard !window.refresh(), case .failed = window.computerListState, window.error != nil else { throw Failure.message("credential read failure was hidden as an empty list") }
+        let failedReadCount = reads.reads
+        NotificationCenter.default.post(name: CrewdRemotePairing.changed, object: nil)
+        try await Task.sleep(for: .milliseconds(20))
+        guard reads.reads == failedReadCount else { throw Failure.message("notification retried a failed credential read") }
         #else
         guard reads.reads == 0 else { throw Failure.message("default local build read remote credentials") }
         #endif
         window.close()
-        print("PASS: actual factory type + original saved-computer refresh gate; no SecItem/credential read/write or GUI")
+        print("PASS: actual factory + lazy credential list: zero initialization/notification reads, explicit empty success, failure retained without notification retry; no SecItem or GUI")
+        return
         #endif
         var drafts = CrewdDrafts()
         let a = CrewdDrafts.Context.message(crew: "a", channel: "one", session: "worker")

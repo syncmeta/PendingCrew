@@ -148,12 +148,12 @@ targets:
           "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Config/Simulator.entitlements
           "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
           "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
-          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC"
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT"
           "OTHER_LDFLAGS[sdk=macosx*]": "$(inherited) -Wl,-dead_strip_dylibs"
         Release:
           "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
           "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
-          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) PENDINGCREW_LOCAL_MAC"
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT"
           "OTHER_LDFLAGS[sdk=macosx*]": "$(inherited) -Wl,-dead_strip_dylibs"
         KnowledgeValidation:
           PRODUCT_BUNDLE_IDENTIFIER: com.pendingname.pendingcrew.native-candidate

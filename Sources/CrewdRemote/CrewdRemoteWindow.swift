@@ -3,7 +3,9 @@ import Combine
 
 /// Each window owns its authority selection and all workspace caches/drafts.
 @MainActor final class CrewdRemoteWindow: ObservableObject {
+    enum ComputerListState: Equatable { case notLoaded, loaded, failed(String) }
     @Published private(set) var computers: [CrewdRemotePairSummary] = []
+    @Published private(set) var computerListState: ComputerListState = .notLoaded
     @Published private(set) var workspace: CrewdWorkspace?
     @Published private(set) var selected: UUID?
     @Published private(set) var retainedWorkspaces: [CrewdWorkspace] = []
@@ -30,21 +32,30 @@ import Combine
         self.pairing = pairing
         #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
         changes=NotificationCenter.default.publisher(for:CrewdRemotePairing.changed).sink { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in
+                guard let self, self.computerListState == .loaded else { return }
+                self.refresh()
+            }
         }
         #endif
     }
-    func refresh() {
+    @discardableResult func refresh() -> Bool {
         #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
-        computers = []
+        computers = []; computerListState = .notLoaded
+        return false
         #else
         do {
-            computers = try pairing.summaries(); error = nil
+            computers = try pairing.summaries(); computerListState = .loaded; error = nil
             if let id=selected, (try? pairing.paired(id).2) != selectedReceipt { retireSelected() }
+            return true
         }
         catch {
             self.error = error.localizedDescription
-            if let id=selected, (try? pairing.paired(id).2) != selectedReceipt {retireSelected()}
+            computerListState = .failed(error.localizedDescription)
+            // A failed read cannot authorize a second credential read or keep
+            // the selected connection active. Retire it and retain its drafts.
+            if selected != nil { retireSelected() }
+            return false
         }
         #endif
     }
