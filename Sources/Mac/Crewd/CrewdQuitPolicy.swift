@@ -137,10 +137,10 @@ enum CrewdQuitMode: String { case direct, safePause, background }
 @MainActor final class CrewdStopProgressWindow: NSWindowController, NSWindowDelegate {
     private let explanation = NSTextField(wrappingLabelWithString: "已通知本App管理的工作停止；不会接受新任务。关闭此提示不会取消停工，也不会恢复任务。")
     private let spinner = NSProgressIndicator()
-    private let forceButton = NSButton(title: "强制关闭", target: nil, action: nil)
-    var forceRequested: (() -> Void)?
+    private let forceButton = NSButton(title: "强制关闭 App…", target: nil, action: nil)
+    var appExitRequested: (() -> Void)?
     init() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 180), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 220), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         panel.title = "正在叫他们停工"; panel.isReleasedWhenClosed = false
         super.init(window: panel)
         panel.delegate = self
@@ -154,8 +154,10 @@ enum CrewdQuitMode: String { case direct, safePause, background }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
     func present() { showWindow(nil); window?.makeKeyAndOrderFront(nil) }
-    func update(_ state: CrewdStopCoordinator.State, forceAvailable: Bool) {
-        forceButton.isEnabled = forceAvailable
+    func update(_ state: CrewdStopCoordinator.State) {
+        // An explicit GUI-only exit is always available, even when an
+        // unavailable authority forbids any stronger backend operation.
+        forceButton.isEnabled = state != .stopped
         switch state {
         case .idle, .stopping:
             window?.title = "正在叫他们停工"; spinner.startAnimation(nil)
@@ -165,11 +167,11 @@ enum CrewdQuitMode: String { case direct, safePause, background }
             spinner.startAnimation(nil)
         case .unconfirmed(let message):
             window?.title = "停工尚未确认"; spinner.stopAnimation(nil)
-            explanation.stringValue = message + "\n原结果保留待核对，不会恢复或重发任务。"
+            explanation.stringValue = message + "\n原结果保留待核对，不会恢复或重发任务。可继续等待，或明确选择仅关闭本 App；后台停工结果仍未确认。"
         case .stopped: spinner.stopAnimation(nil); window?.orderOut(nil)
         }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); return false }
-    @objc private func forceClicked() { forceRequested?() }
+    @objc private func forceClicked() { appExitRequested?() }
 }
 #endif

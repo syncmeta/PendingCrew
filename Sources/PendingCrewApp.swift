@@ -149,12 +149,13 @@ struct PendingCrewApp: App {
 @MainActor
 final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var waitingForDaemon = false
-    private var crewdStopConfirmed = false
+    // GUI termination permission is distinct from a confirmed backend stop.
+    private var crewdTerminationAllowed = false
     private var stopCoordinator: CrewdStopCoordinator?
     private var stopProgress: CrewdStopProgressWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if crewdStopConfirmed { return .terminateNow }
+        if crewdTerminationAllowed { return .terminateNow }
         let lifecycle = AppQuitLifecycle.shared
         if let quit = lifecycle.crewdExit {
             if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
@@ -163,14 +164,28 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
             let progress = CrewdStopProgressWindow()
             let coordinator = CrewdStopCoordinator(stop: { try await quit(.safePause) }, force: { try await quit(.direct) }, mayForce: { lifecycle.crewdMayForceStop?() == true })
             stopCoordinator = coordinator; stopProgress = progress
-            progress.forceRequested = { [weak coordinator] in coordinator?.requestForce() }
-            coordinator.changed = { [weak progress, weak coordinator] state in
-                progress?.update(state, forceAvailable: coordinator?.forceAvailable == true)
+            progress.appExitRequested = { [weak self, weak progress] in
+                guard let self, !self.crewdTerminationAllowed else { return }
+                let alert = NSAlert()
+                alert.messageText = "仅强制关闭这个 App？"
+                alert.informativeText = "后台停工尚未确认，后台和正在执行的工作可能仍在运行。这里只关闭当前 App，不代表后台已经停止，也不会重连或重新提交未确认操作。"
+                alert.addButton(withTitle: "强制关闭 App")
+                let cancel = alert.addButton(withTitle: "继续等待")
+                cancel.keyEquivalent = "\u{1b}"
+                guard alert.runModal() == .alertFirstButtonReturn else {
+                    progress?.present(); return
+                }
+                // No RPC, reconnect, backend kill or fabricated stopped state.
+                self.crewdTerminationAllowed = true
+                sender.terminate(nil)
+            }
+            coordinator.changed = { [weak progress] state in
+                progress?.update(state)
             }
             coordinator.completed = { [weak self, weak progress] in
                 guard let self else { return }
                 progress?.window?.orderOut(nil); self.waitingForDaemon = false
-                self.crewdStopConfirmed = true
+                self.crewdTerminationAllowed = true
                 sender.terminate(nil)
             }
             progress.present(); coordinator.begin(forceImmediately: mode == .direct)
