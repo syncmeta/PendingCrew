@@ -1,6 +1,8 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 2026-10-21 当前：普通 iOS Keychain 首屏错误已修复；完整配对仍待输入链诊断和解锁
+## 2026-10-21 当前：普通 iOS 首屏修复已整合；完整配对受自动输入链阻断
+
+用户已手动解锁，原锁屏待办菜单切换1→2恢复，本次诊断临时切换3→4也恢复，原on/off未知。原f79邀请的P-256签名实际OpenSSL Verified OK/0，SPKI pin精确匹配。最后有界诊断中，固定测试device的官方pbcopy0后，立即同device pbpaste0只回21B且hash不符，按边界停止；准确原调用明确以input=code传已核原文，非heredoc占用stdin。未再粘贴、核对、生成回应或发新邀请。App/console0、phoneShutdown，无运行后台或隧道。证据在ios-normal-07d52b76-20261021的qa-expired-local-after-unlock-result.json、qa-expired-device-clipboard-hash.json和original-f79-code-crypto-check/。当前不能判产品协议失败，也不能称完整持久配对通过；不再添加输入工具、循环新scope或重复稳定验收。下述锁屏记录为已收尾历史，恢复队列已清空。
 
 真实普通025/40c3运行首次捕获records OSStatus=-34018，而非推断旧记录或设备锁定。最小诊断日志仅固定操作/状态码/失败阶段，不记录凭据或标识；普通Simulator Debug增加自身AppID及唯一对应Keychain声明，工程同步，不改变Mac/iPhoneOS/Native配置或改用Memory。冻结源码07d52b760c0fa64e6f62e30ffaeed47fb9f39fc5普通暖构0，实际模拟器声明在Mach-O __TEXT,__entitlements（不是以codesign字典空误判缺失）；QA独立核实际产物后安装启动，正常空配对表单已出现，原-34018不再复现。本次整合保留准确包来源07d，不将该包改标为后续合并提交，未重建/安装Mac或跑CI。
 
