@@ -317,6 +317,8 @@ pub struct OrchestraServe {
     pub codex_env: std::collections::BTreeMap<String, String>,
     pub claude: orchestra::exec_claude::ClaudeProgram,
     pub claude_env: std::collections::BTreeMap<String, String>,
+    /// Metadata only: a configured path does not qualify a Native producer.
+    pub managed_claude: Option<PathBuf>,
     pub helper: Option<PathBuf>,
     pub claude_projects_dir: Option<PathBuf>,
     pub runtime_dir: Option<PathBuf>,
@@ -333,6 +335,7 @@ impl Default for OrchestraServe {
             codex_env: Default::default(),
             claude: orchestra::exec_claude::ClaudeProgram::default(),
             claude_env: Default::default(),
+            managed_claude: None,
             helper: None,
             claude_projects_dir: None,
             runtime_dir: None,
@@ -547,6 +550,31 @@ async fn serve_with_hooks_inner(
                 child_path: o.child_path,
             },
         );
+        let managed_reason = if !cfg!(any(target_os = "macos", target_os = "linux")) {
+            crewd_proto::executors::ExecutorUnavailableReason::UnsupportedPlatform
+        } else if !o
+            .managed_claude
+            .as_deref()
+            .is_some_and(orchestra::exec::executable_metadata)
+        {
+            crewd_proto::executors::ExecutorUnavailableReason::NotConfigured
+        } else {
+            crewd_proto::executors::ExecutorUnavailableReason::NativeVerificationPending
+        };
+        let managed_profile = crewd_proto::executors::ExecutorProfile {
+            id: "claude-managed".into(),
+            executor: "acp:claude-managed".into(),
+            display_name: "Claude (managed PTY/ACP)".into(),
+            backend: crewd_proto::executors::ExecutorBackend::NativeAcp,
+            available: false,
+            features: crewd_proto::executors::ExecutorFeatures {
+                initial_context: false,
+                manual_terminal: false,
+                structured_decisions: false,
+                full_history_load: false,
+            },
+            unavailable_reason: Some(managed_reason),
+        };
         match orchestra::spawn(
             Arc::new(orchestra::db::DbPort::new(
                 state.clone(),
@@ -554,7 +582,8 @@ async fn serve_with_hooks_inner(
             )),
             orchestra::exec::Executors::new()
                 .with("claude", Arc::new(executor))
-                .with("codex", Arc::new(codex)),
+                .with("codex", Arc::new(codex))
+                .with_unavailable(managed_profile),
             hooks,
             Arc::new(orchestra::clock::SystemClock),
             orchestra::OrchestraConfig {
@@ -772,6 +801,149 @@ mod tests {
     use super::*;
     use crate::hub::CollabEvent;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn executor_discovery_uses_the_public_scope_without_starting_a_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let program = root.path().join("metadata-only-program");
+        let marker = root.path().join("must-not-execute");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf forbidden > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(serve_with(
+            data.clone(),
+            ServeOptions {
+                orchestra: Some(OrchestraServe {
+                    codex: orchestra::exec_codex::CodexProgram::Path(program.clone()),
+                    claude: orchestra::exec_claude::ClaudeProgram::Disabled,
+                    managed_claude: Some(program.clone()),
+                    child_path: Some("/usr/bin:/bin".into()),
+                    ..Default::default()
+                }),
+                test_ready: Some(Box::new(move |state, _| {
+                    let _ = ready_tx.send(state);
+                })),
+                ..Default::default()
+            },
+            async {
+                let _ = stop_rx.await;
+            },
+        ));
+        let state = tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .db
+            .call_result(|store| {
+                crewd_store::crews::upsert(
+                    store.conn(),
+                    &crewd_proto::Crew {
+                        id: "discovery-crew".into(),
+                        title: "Synthetic discovery".into(),
+                        created_at: "now".into(),
+                        updated_at: "now".into(),
+                        ..Default::default()
+                    },
+                    None,
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let mut client = crate::agent::testkit::RpcClient::connect(&data.join("crewd.sock")).await;
+        let result = client
+            .call(
+                "executor.list",
+                serde_json::json!({"crewId":"discovery-crew"}),
+            )
+            .await;
+        let missing_scope = client
+            .call("executor.list", serde_json::json!({"crewId":"missing"}))
+            .await;
+        let forged_fields = client
+            .call(
+                "executor.list",
+                serde_json::json!({"crewId":"discovery-crew","program":"/bin/sh"}),
+            )
+            .await;
+        std::fs::remove_file(&program).unwrap();
+        let removed_program = client
+            .call(
+                "executor.list",
+                serde_json::json!({"crewId":"discovery-crew"}),
+            )
+            .await;
+        let no_admission = !state.admission.any();
+        drop(client);
+        stop_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            !marker.exists(),
+            "discovery must not execute even a configured program"
+        );
+        assert!(no_admission, "discovery is not session launch authority");
+        let result = result.expect("the public executor discovery route must be available");
+        let profiles = result["profiles"]
+            .as_array()
+            .expect("closed profile result");
+        assert!(
+            profiles
+                .iter()
+                .any(|p| p["executor"] == "codex" && p["available"] == true)
+        );
+        assert!(
+            profiles
+                .iter()
+                .any(|p| p["executor"] == "claude" && p["available"] == false)
+        );
+        let native = profiles
+            .iter()
+            .find(|p| p["executor"] == "acp:claude-managed")
+            .expect("explicit unavailable Native metadata");
+        assert_eq!(native["available"], false);
+        assert_eq!(native["unavailableReason"], "nativeVerificationPending");
+        assert!(
+            native["features"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|value| value == false)
+        );
+        assert!(
+            missing_scope.is_err(),
+            "a configured executor is not crew access"
+        );
+        assert!(
+            forged_fields.is_err(),
+            "discovery cannot accept arbitrary program selectors"
+        );
+        let removed_program = removed_program.unwrap();
+        assert!(
+            removed_program["profiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| p["executor"] == "codex")
+                .all(|p| p["available"] == false && p["unavailableReason"] == "notConfigured")
+        );
+        assert!(
+            !serde_json::to_string(profiles)
+                .unwrap()
+                .contains(root.path().to_str().unwrap()),
+            "program and private paths must stay private"
+        );
+    }
 
     #[tokio::test]
     async fn collab_commits_then_publishes_client_and_internal_events() {

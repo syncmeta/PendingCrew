@@ -1687,6 +1687,2211 @@
       },
       "type": "object"
     },
+    "DataBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": true,
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/DataBindingSource"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataBindingEdit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attributes": true,
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "set",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/DataBindingInputSource"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "source",
+            "attributes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataBindingInputSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "query",
+              "type": "string"
+            },
+            "statement": {
+              "$ref": "#/$defs/DataSql"
+            }
+          },
+          "required": [
+            "kind",
+            "statement"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "atRevision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "object",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/DataInputRef"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "objects",
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "objectType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "objectType",
+            "limit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataBindingSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "query",
+              "type": "string"
+            },
+            "statement": {
+              "$ref": "#/$defs/DataSql"
+            }
+          },
+          "required": [
+            "kind",
+            "statement"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "atRevision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "object",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/DataRefState"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "objects",
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "objectType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "objectType",
+            "limit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataCell": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "integer",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "real",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "blobHex",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataChange": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edits": {
+              "items": {
+                "$ref": "#/$defs/DataEdit"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "apply",
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message",
+            "edits"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreObject",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/DataRef"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "revision",
+            "expectedRevision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataChangeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "afterGeneration": {
+          "type": "string"
+        },
+        "beforeGeneration": {
+          "type": "string"
+        },
+        "changed": {
+          "items": {
+            "$ref": "#/$defs/DataObjectVersion"
+          },
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/DataConflict"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "created": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DataCreated"
+          },
+          "type": "object"
+        },
+        "phase": {
+          "$ref": "#/$defs/DataPhase"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "resolvedByRequest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snapshotId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "requestId",
+        "phase",
+        "context",
+        "beforeGeneration",
+        "afterGeneration",
+        "created",
+        "changed",
+        "conflicts"
+      ],
+      "type": "object"
+    },
+    "DataColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": true,
+        "declaredType": {
+          "type": "string"
+        },
+        "defaultSql": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "notNull": {
+          "type": "boolean"
+        },
+        "primaryKeyPosition": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "declaredType",
+        "notNull",
+        "primaryKeyPosition",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataConfirmParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "context",
+        "token"
+      ],
+      "type": "object"
+    },
+    "DataConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "rowCount": {
+          "type": "string"
+        },
+        "schemaConflict": {
+          "type": "boolean"
+        },
+        "table": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "rowCount",
+        "schemaConflict"
+      ],
+      "type": "object"
+    },
+    "DataContext": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "restoreEpoch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dbId",
+        "authorityId",
+        "restoreEpoch",
+        "crewId",
+        "namespace",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "DataCreated": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "object",
+              "type": "string"
+            },
+            "object": {
+              "$ref": "#/$defs/DataObjectVersion"
+            }
+          },
+          "required": [
+            "kind",
+            "object"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "placement",
+              "type": "string"
+            },
+            "parentView": {
+              "$ref": "#/$defs/DataObjectVersion"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "parentView"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataEdit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "attributes": true,
+            "content": true,
+            "contentType": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "createBlock",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/DataSourceInput"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "alias",
+            "contentType",
+            "content",
+            "sources",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attributes": true,
+            "content": true,
+            "contentType": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "updateBlock",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/DataSourceInput"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision",
+            "contentType",
+            "content",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "atRevision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "attributes": true,
+            "kind": {
+              "const": "forkBlock",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/DataRef"
+            }
+          },
+          "required": [
+            "kind",
+            "alias",
+            "source",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "archiveBlock",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision",
+            "archived"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "attributes": true,
+            "definition": {
+              "$ref": "#/$defs/DataViewDefinitionInput"
+            },
+            "kind": {
+              "const": "createView",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/DataSourceInput"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "alias",
+            "title",
+            "definition",
+            "sources",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attributes": true,
+            "definition": {
+              "$ref": "#/$defs/DataViewDefinitionInput"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "updateView",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/DataSourceInput"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision",
+            "title",
+            "definition",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "archiveView",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision",
+            "archived"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "attributes": true,
+            "kind": {
+              "const": "createRelation",
+              "type": "string"
+            },
+            "object": {
+              "$ref": "#/$defs/DataInputRef"
+            },
+            "predicate": {
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/DataInputRef"
+            }
+          },
+          "required": [
+            "kind",
+            "alias",
+            "subject",
+            "predicate",
+            "object",
+            "attributes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "archiveRelation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision",
+            "archived"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sql",
+              "type": "string"
+            },
+            "statements": {
+              "items": {
+                "$ref": "#/$defs/DataSql"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "statements"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataHistory": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DataObject"
+          },
+          "type": "array"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "items"
+      ],
+      "type": "object"
+    },
+    "DataHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reference": {
+          "$ref": "#/$defs/DataRef"
+        }
+      },
+      "required": [
+        "context",
+        "reference",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "DataInputRef": {
+      "description": "Request-local names never become durable IDs. Existing references are authority-checked.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "existing",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/DataRef"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "alias"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataObject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "content": true,
+            "contentType": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "block",
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/DataProvenance"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "revision",
+            "contentType",
+            "content",
+            "archived",
+            "provenance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "definition": {
+              "$ref": "#/$defs/DataViewDefinition"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "view",
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/DataProvenance"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "revision",
+            "title",
+            "definition",
+            "archived",
+            "provenance"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "attributes": true,
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "relation",
+              "type": "string"
+            },
+            "object": {
+              "$ref": "#/$defs/DataRefState"
+            },
+            "predicate": {
+              "type": "string"
+            },
+            "provenance": {
+              "$ref": "#/$defs/DataProvenance"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/DataRefState"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "revision",
+            "subject",
+            "predicate",
+            "object",
+            "attributes",
+            "archived",
+            "provenance"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataObjectDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedLiveViews": {
+          "items": {
+            "$ref": "#/$defs/DataRef"
+          },
+          "type": "array"
+        },
+        "affectedTruncated": {
+          "type": "boolean"
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/DataObject"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/DataResolvedRef"
+          },
+          "type": "array"
+        },
+        "resolvedContext": {
+          "$ref": "#/$defs/DataContext"
+        }
+      },
+      "required": [
+        "context",
+        "resolvedContext",
+        "generation",
+        "object",
+        "references",
+        "affectedLiveViews",
+        "affectedTruncated"
+      ],
+      "type": "object"
+    },
+    "DataObjectGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "reference": {
+          "$ref": "#/$defs/DataRef"
+        }
+      },
+      "required": [
+        "context",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "DataObjectListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "includeArchived": {
+          "type": "boolean"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "objectType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "objectType",
+        "limit",
+        "includeArchived"
+      ],
+      "type": "object"
+    },
+    "DataObjectPage": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DataObject"
+          },
+          "type": "array"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "generation",
+        "items"
+      ],
+      "type": "object"
+    },
+    "DataObjectVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/DataRef"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "DataPhase": {
+      "enum": [
+        "committed",
+        "rejected",
+        "conflicted",
+        "unknown",
+        "historical"
+      ],
+      "type": "string"
+    },
+    "DataPlacement": {
+      "additionalProperties": false,
+      "properties": {
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "block": {
+          "$ref": "#/$defs/DataRefState"
+        },
+        "id": {
+          "type": "string"
+        },
+        "layout": true
+      },
+      "required": [
+        "id",
+        "block",
+        "layout"
+      ],
+      "type": "object"
+    },
+    "DataPlacementEdit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "description": "Existing placement ID in this same parent view.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "keep",
+              "type": "string"
+            },
+            "layout": true
+          },
+          "required": [
+            "kind",
+            "id",
+            "layout"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Create a new stable placement. alias is its own batch-unique identity, independent of the referenced block alias.",
+          "properties": {
+            "alias": {
+              "description": "Required fresh batch-unique placement alias.",
+              "type": "string"
+            },
+            "atRevision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "block": {
+              "$ref": "#/$defs/DataInputRef"
+            },
+            "id": {
+              "type": "null"
+            },
+            "kind": {
+              "const": "set",
+              "type": "string"
+            },
+            "layout": true
+          },
+          "required": [
+            "kind",
+            "alias",
+            "block",
+            "layout"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Update an existing placement in this same parent view using its exact ID; do not supply a new alias.",
+          "properties": {
+            "alias": {
+              "type": "null"
+            },
+            "atRevision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "block": {
+              "$ref": "#/$defs/DataInputRef"
+            },
+            "id": {
+              "description": "Required exact existing placement ID in this parent view.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "set",
+              "type": "string"
+            },
+            "layout": true
+          },
+          "required": [
+            "kind",
+            "id",
+            "block",
+            "layout"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedRows": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "schemaChanged": {
+          "type": "boolean"
+        },
+        "statements": {
+          "items": {
+            "$ref": "#/$defs/DataSql"
+          },
+          "type": "array"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "token",
+        "statements",
+        "affectedRows",
+        "schemaChanged"
+      ],
+      "type": "object"
+    },
+    "DataPreviewGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "token"
+      ],
+      "type": "object"
+    },
+    "DataPreviewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "statements": {
+          "items": {
+            "$ref": "#/$defs/DataSql"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "context",
+        "statements"
+      ],
+      "type": "object"
+    },
+    "DataProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": true,
+        "createdAt": {
+          "type": "string"
+        },
+        "createdBy": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/DataSource"
+          },
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "updatedBy": {
+          "$ref": "#/$defs/ResourceActor"
+        }
+      },
+      "required": [
+        "createdBy",
+        "updatedBy",
+        "createdAt",
+        "updatedAt",
+        "sources",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataQueryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "statement": {
+          "$ref": "#/$defs/DataSql"
+        }
+      },
+      "required": [
+        "context",
+        "statement",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "DataRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
+    "DataRefState": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "$ref": "#/$defs/DataRef"
+            },
+            "state": {
+              "const": "visible",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataRequestGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "context"
+      ],
+      "type": "object"
+    },
+    "DataRequestGetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "lookup": {
+          "$ref": "#/$defs/DataRequestLookup"
+        },
+        "workspace": {
+          "$ref": "#/$defs/DataWorkspaceInfo"
+        }
+      },
+      "required": [
+        "workspace",
+        "lookup"
+      ],
+      "type": "object"
+    },
+    "DataRequestLookup": {
+      "oneOf": [
+        {
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/DataChangeResult"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/DataChangeResult"
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataResolvedRef": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/DataRefState"
+        }
+      },
+      "required": [
+        "anchor",
+        "target",
+        "live",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "DataRestoreParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "context",
+        "snapshotId"
+      ],
+      "type": "object"
+    },
+    "DataRows": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/DataCell"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "stableOrder": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "columns",
+        "rows",
+        "truncated",
+        "generation",
+        "stableOrder"
+      ],
+      "type": "object"
+    },
+    "DataSchemaObject": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": true,
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/DataColumn"
+          },
+          "type": "array"
+        },
+        "createSql": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "createSql",
+        "columns",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataSchemaParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "context",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "DataSchemaResult": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/$defs/DataSchemaObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "context",
+        "generation",
+        "objects"
+      ],
+      "type": "object"
+    },
+    "DataSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "createdAt",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "DataSnapshots": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DataSnapshot"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "context",
+        "items"
+      ],
+      "type": "object"
+    },
+    "DataSnapshotsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "type": "object"
+    },
+    "DataSource": {
+      "additionalProperties": false,
+      "properties": {
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attributes": true,
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataRefState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataSourceInput": {
+      "additionalProperties": false,
+      "properties": {
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attributes": true,
+        "reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataInputRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "DataSql": {
+      "additionalProperties": false,
+      "properties": {
+        "params": {
+          "items": {
+            "$ref": "#/$defs/DataCell"
+          },
+          "type": "array"
+        },
+        "sql": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql",
+        "params"
+      ],
+      "type": "object"
+    },
+    "DataSubmitParams": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/DataChange"
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "context",
+        "change"
+      ],
+      "type": "object"
+    },
+    "DataTablePage": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "nextKey": {
+          "items": {
+            "$ref": "#/$defs/DataCell"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/DataCell"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "stableOrder": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "context",
+        "generation",
+        "columns",
+        "rows",
+        "truncated",
+        "stableOrder"
+      ],
+      "type": "object"
+    },
+    "DataTableParams": {
+      "additionalProperties": false,
+      "properties": {
+        "afterKey": {
+          "items": {
+            "$ref": "#/$defs/DataCell"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "atRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "table": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "table",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "DataViewDefinition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "document",
+              "type": "string"
+            },
+            "layout": true,
+            "placements": {
+              "items": {
+                "$ref": "#/$defs/DataPlacement"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "placements",
+            "layout"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attributes": true,
+            "bindings": {
+              "items": {
+                "$ref": "#/$defs/DataBinding"
+              },
+              "type": "array"
+            },
+            "css": {
+              "type": "string"
+            },
+            "html": {
+              "type": "string"
+            },
+            "javascript": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "web",
+              "type": "string"
+            },
+            "renderer": {
+              "type": "string"
+            },
+            "rendererVersion": {
+              "type": "string"
+            },
+            "requestedCapabilities": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "renderer",
+            "rendererVersion",
+            "html",
+            "css",
+            "javascript",
+            "bindings",
+            "requestedCapabilities",
+            "attributes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataViewDefinitionInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "document",
+              "type": "string"
+            },
+            "layout": true,
+            "placements": {
+              "items": {
+                "$ref": "#/$defs/DataPlacementEdit"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "placements",
+            "layout"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attributes": true,
+            "bindings": {
+              "items": {
+                "$ref": "#/$defs/DataBindingEdit"
+              },
+              "type": "array"
+            },
+            "css": {
+              "type": "string"
+            },
+            "html": {
+              "type": "string"
+            },
+            "javascript": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "web",
+              "type": "string"
+            },
+            "renderer": {
+              "type": "string"
+            },
+            "rendererVersion": {
+              "type": "string"
+            },
+            "requestedCapabilities": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "renderer",
+            "rendererVersion",
+            "html",
+            "css",
+            "javascript",
+            "bindings",
+            "requestedCapabilities",
+            "attributes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataWorkspaceGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "DataWorkspaceInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DataContext"
+        },
+        "engineVersion": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "state",
+        "engineVersion"
+      ],
+      "type": "object"
+    },
     "DbFaultKindView": {
       "enum": [
         "db_closed",
@@ -2329,6 +4534,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/CrewRef"
+            },
+            "event": {
+              "const": "data.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/DocumentChanged"
             },
             "event": {
@@ -2455,6 +4676,122 @@
           "type": "object"
         }
       ]
+    },
+    "ExecutorBackend": {
+      "enum": [
+        "codex",
+        "existingClaudePty",
+        "nativeAcp"
+      ],
+      "type": "string"
+    },
+    "ExecutorFeatures": {
+      "additionalProperties": false,
+      "properties": {
+        "fullHistoryLoad": {
+          "type": "boolean"
+        },
+        "initialContext": {
+          "type": "boolean"
+        },
+        "manualTerminal": {
+          "type": "boolean"
+        },
+        "structuredDecisions": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "initialContext",
+        "manualTerminal",
+        "structuredDecisions",
+        "fullHistoryLoad"
+      ],
+      "type": "object"
+    },
+    "ExecutorListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "description": "Required crew scope. Local admitted Human or paired Human with current\norchestra-read and this crew visibility may read the configured list.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "ExecutorListResult": {
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "description": "Stable ID sort order. No home/auth/env/program path is disclosed.",
+          "items": {
+            "$ref": "#/$defs/ExecutorProfile"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "profiles"
+      ],
+      "type": "object"
+    },
+    "ExecutorProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "description": "Real factory/producer support. Normal launch authorization and limits\nstill apply at submission. Unverified Native must remain unavailable.",
+          "type": "boolean"
+        },
+        "backend": {
+          "$ref": "#/$defs/ExecutorBackend"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "executor": {
+          "description": "The existing SessionStartParams.executor value, including acp:<id>.",
+          "type": "string"
+        },
+        "features": {
+          "$ref": "#/$defs/ExecutorFeatures"
+        },
+        "id": {
+          "description": "Stable configured ID, not a filesystem path or an authentication token.",
+          "type": "string"
+        },
+        "unavailableReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExecutorUnavailableReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "executor",
+        "displayName",
+        "backend",
+        "available",
+        "features"
+      ],
+      "type": "object"
+    },
+    "ExecutorUnavailableReason": {
+      "enum": [
+        "notConfigured",
+        "binaryChanged",
+        "nativeVerificationPending",
+        "sourceHistoryIncomplete",
+        "unsupportedPlatform"
+      ],
+      "type": "string"
     },
     "FirstMessageParams": {
       "additionalProperties": false,
@@ -3551,6 +5888,87 @@
       ],
       "type": "string"
     },
+    "LifecycleEmpty": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "LifecycleExitParams": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "LifecycleExitResult": {
+      "additionalProperties": false,
+      "properties": {
+        "clean": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "failed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "interrupted": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "mode",
+        "clean",
+        "interrupted",
+        "failed"
+      ],
+      "type": "object"
+    },
+    "LifecycleStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "ownerPresent": {
+          "type": "boolean"
+        },
+        "previousExit": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "ownerPresent",
+        "previousExit"
+      ],
+      "type": "object"
+    },
     "LocalClientTrustMode": {
       "enum": [
         "exactCode",
@@ -3601,6 +6019,32 @@
       "required": [
         "trustId"
       ],
+      "type": "object"
+    },
+    "LocalClientTrustStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrapAllowed": {
+          "type": "boolean"
+        },
+        "trustId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validExactCode": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "validExactCode",
+        "bootstrapAllowed"
+      ],
+      "type": "object"
+    },
+    "LocalClientTrustStatusParams": {
+      "additionalProperties": false,
       "type": "object"
     },
     "LocaleView": {
@@ -5819,7 +8263,8 @@
               "system",
               "work",
               "documents",
-              "viewFolders"
+              "viewFolders",
+              "data"
             ],
             "type": "string"
           },
@@ -7918,6 +10363,9 @@
     "crew.purged": {
       "$ref": "#/$defs/CrewRef"
     },
+    "data.changed": {
+      "$ref": "#/$defs/CrewRef"
+    },
     "document.changed": {
       "$ref": "#/$defs/DocumentChanged"
     },
@@ -8215,6 +10663,118 @@
         "$ref": "#/$defs/HibernateResult"
       }
     },
+    "data.confirm": {
+      "params": {
+        "$ref": "#/$defs/DataConfirmParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataChangeResult"
+      }
+    },
+    "data.history": {
+      "params": {
+        "$ref": "#/$defs/DataHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataHistory"
+      }
+    },
+    "data.object.get": {
+      "params": {
+        "$ref": "#/$defs/DataObjectGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataObjectDetail"
+      }
+    },
+    "data.object.list": {
+      "params": {
+        "$ref": "#/$defs/DataObjectListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataObjectPage"
+      }
+    },
+    "data.preview": {
+      "params": {
+        "$ref": "#/$defs/DataPreviewParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataPreview"
+      }
+    },
+    "data.preview.get": {
+      "params": {
+        "$ref": "#/$defs/DataPreviewGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataPreview"
+      }
+    },
+    "data.query": {
+      "params": {
+        "$ref": "#/$defs/DataQueryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataRows"
+      }
+    },
+    "data.request.get": {
+      "params": {
+        "$ref": "#/$defs/DataRequestGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataRequestGetResult"
+      }
+    },
+    "data.restore": {
+      "params": {
+        "$ref": "#/$defs/DataRestoreParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataChangeResult"
+      }
+    },
+    "data.schema.get": {
+      "params": {
+        "$ref": "#/$defs/DataSchemaParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataSchemaResult"
+      }
+    },
+    "data.snapshots": {
+      "params": {
+        "$ref": "#/$defs/DataSnapshotsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataSnapshots"
+      }
+    },
+    "data.submit": {
+      "params": {
+        "$ref": "#/$defs/DataSubmitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataChangeResult"
+      }
+    },
+    "data.table.get": {
+      "params": {
+        "$ref": "#/$defs/DataTableParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataTablePage"
+      }
+    },
+    "data.workspace.get": {
+      "params": {
+        "$ref": "#/$defs/DataWorkspaceGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DataWorkspaceInfo"
+      }
+    },
     "decision.list": {
       "params": {
         "$ref": "#/$defs/NoParams"
@@ -8285,6 +10845,14 @@
         "$ref": "#/$defs/Subscribed"
       }
     },
+    "executor.list": {
+      "params": {
+        "$ref": "#/$defs/ExecutorListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ExecutorListResult"
+      }
+    },
     "judgment.inspect": {
       "params": {
         "$ref": "#/$defs/JudgmentInspect"
@@ -8314,6 +10882,46 @@
       },
       "result": {
         "$ref": "#/$defs/JudgmentSettingsResult"
+      }
+    },
+    "lifecycle.claim": {
+      "params": {
+        "$ref": "#/$defs/LifecycleEmpty"
+      },
+      "result": {
+        "$ref": "#/$defs/LifecycleStatus"
+      }
+    },
+    "lifecycle.exit": {
+      "params": {
+        "$ref": "#/$defs/LifecycleExitParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LifecycleExitResult"
+      }
+    },
+    "lifecycle.release": {
+      "params": {
+        "$ref": "#/$defs/LifecycleEmpty"
+      },
+      "result": {
+        "$ref": "#/$defs/LifecycleStatus"
+      }
+    },
+    "lifecycle.status": {
+      "params": {
+        "$ref": "#/$defs/LifecycleEmpty"
+      },
+      "result": {
+        "$ref": "#/$defs/LifecycleStatus"
+      }
+    },
+    "local.clientTrust.status": {
+      "params": {
+        "$ref": "#/$defs/LocalClientTrustStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/LocalClientTrustStatus"
       }
     },
     "loop.list": {
@@ -8789,7 +11397,8 @@
     "system",
     "work",
     "documents",
-    "viewFolders"
+    "viewFolders",
+    "data"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

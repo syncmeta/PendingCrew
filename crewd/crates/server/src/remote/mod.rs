@@ -889,6 +889,7 @@ fn allowed_method(method: &str) -> bool {
         method,
         "system.hello"
             | "judgment.inspect"
+            | "executor.list"
             | "data.workspace.get"
             | "data.submit"
             | "data.request.get"

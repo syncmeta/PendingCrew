@@ -81,6 +81,7 @@ impl Fixture {
                 claude: crewd_server::orchestra::exec_claude::ClaudeProgram::Path(artifact(
                     "fake_claude",
                 )),
+                managed_claude: None,
                 claude_env: env,
                 helper: Some(artifact("crewd")),
                 claude_projects_dir: Some(self.config.join("projects")),
