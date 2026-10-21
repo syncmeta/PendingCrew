@@ -72,6 +72,7 @@ mod mac {
         if ![
             "com.pendingname.pendingcrew",
             "com.pendingname.pendingcrew.native-candidate",
+            "com.pendingname.pendingcrew.remote-preview",
         ]
         .contains(&trust.signing_identifier.as_str())
             || ![40, 64].contains(&trust.cd_hash.len())
@@ -165,6 +166,7 @@ mod mac {
         if ![
             "com.pendingname.pendingcrew",
             "com.pendingname.pendingcrew.native-candidate",
+            "com.pendingname.pendingcrew.remote-preview",
         ]
         .contains(&identifier.as_str())
         {
@@ -242,5 +244,118 @@ pub(crate) fn grant(
     {
         let _ = (birth, mode, expected_hash, expected_team, db, at);
         Err(denied())
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+
+    struct OwnedChild(Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn signed_child(identifier: &str) -> (tempfile::TempDir, OwnedChild, ProcessIdentity, String) {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("owned-signing-probe");
+        std::fs::copy("/bin/sleep", &executable).unwrap();
+        let signed = Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-", "--identifier", identifier])
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(signed.status.success(), "private fixture signing failed");
+        let metadata = Command::new("/usr/bin/codesign")
+            .args([
+                "--display",
+                "--verbose=4",
+                "--arch",
+                if cfg!(target_arch = "aarch64") {
+                    "arm64"
+                } else {
+                    "x86_64"
+                },
+            ])
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(metadata.status.success());
+        let metadata = String::from_utf8(metadata.stderr).unwrap();
+        let hash = metadata
+            .lines()
+            .find_map(|line| line.strip_prefix("CDHash="))
+            .unwrap()
+            .to_owned();
+        let child = OwnedChild(
+            Command::new(&executable)
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let birth = match registry::parent(i32::try_from(child.0.id()).unwrap()) {
+            ParentProbe::Found { identity, .. } => identity,
+            other => panic!("owned fixture birth unavailable: {other:?}"),
+        };
+        (root, child, birth, hash)
+    }
+
+    #[test]
+    fn remote_preview_exact_code_keeps_os_identity_and_closed_identifier_guards() {
+        let (_root, _child, birth, hash) =
+            signed_child("com.pendingname.pendingcrew.remote-preview");
+        let trust = grant(&birth, "exactCode", &hash, None, "synthetic-db", "now")
+            .expect("the single remote-preview signing ID must be admitted");
+        verify(&birth, &trust).unwrap();
+        assert!(
+            grant(
+                &birth,
+                "exactCode",
+                &"0".repeat(hash.len()),
+                None,
+                "synthetic-db",
+                "now"
+            )
+            .is_err()
+        );
+        let mut changed = trust.clone();
+        changed.cd_hash = "0".repeat(hash.len());
+        assert!(verify(&birth, &changed).is_err());
+        let mut replaced_birth = birth.clone();
+        replaced_birth.start_time += 1;
+        assert!(verify(&replaced_birth, &trust).is_err());
+        // Adding an exact-code preview ID does not grant publisher authority to
+        // an ad-hoc binary, a made-up Team, or a merely similar identifier.
+        assert!(
+            grant(
+                &birth,
+                "publisher",
+                &hash,
+                Some("M42BKJN82S"),
+                "synthetic-db",
+                "now"
+            )
+            .is_err()
+        );
+        let (_other_root, _other_child, other_birth, other_hash) =
+            signed_child("com.pendingname.pendingcrew.remote-preview.other");
+        assert!(
+            grant(
+                &other_birth,
+                "exactCode",
+                &other_hash,
+                None,
+                "synthetic-db",
+                "now"
+            )
+            .is_err()
+        );
     }
 }

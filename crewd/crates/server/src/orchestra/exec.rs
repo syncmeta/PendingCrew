@@ -63,6 +63,11 @@ impl std::error::Error for LaunchError {}
 pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
 
 pub trait Executor: Send + Sync {
+    /// Pure configuration/filesystem metadata. Never initialize a provider here.
+    fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
+        None
+    }
+
     /// Capability available before launching the first turn.
     fn accepts_initial_context(&self) -> bool {
         false
@@ -248,7 +253,10 @@ impl ExecHandle for SessionHandle {
 
 /// 执行器类型（`sessions.executor`：`claude` / `codex` / `acp:<id>`）→ 实现。
 #[derive(Clone, Default)]
-pub struct Executors(BTreeMap<String, Arc<dyn Executor>>);
+pub struct Executors(
+    BTreeMap<String, Arc<dyn Executor>>,
+    Vec<crewd_proto::executors::ExecutorProfile>,
+);
 
 impl Executors {
     pub fn new() -> Self {
@@ -258,6 +266,25 @@ impl Executors {
     pub fn with(mut self, kind: &str, executor: Arc<dyn Executor>) -> Self {
         self.0.insert(kind.to_string(), executor);
         self
+    }
+
+    /// Metadata-only registration for a configured but unqualified adapter.
+    /// It is deliberately absent from get()/launch until its actual gate closes.
+    pub fn with_unavailable(mut self, profile: crewd_proto::executors::ExecutorProfile) -> Self {
+        assert!(!profile.available);
+        self.1.push(profile);
+        self
+    }
+
+    pub fn profiles(&self) -> Vec<crewd_proto::executors::ExecutorProfile> {
+        let mut profiles: Vec<_> = self
+            .0
+            .values()
+            .filter_map(|executor| executor.profile())
+            .collect();
+        profiles.extend(self.1.iter().cloned());
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+        profiles
     }
 
     pub fn get(&self, kind: &str) -> Result<Arc<dyn Executor>, LaunchError> {
@@ -304,4 +331,20 @@ mod tests {
             );
         }
     }
+}
+
+/// Metadata-only executable readiness; never execute version/login or a shell.
+pub(crate) fn executable_metadata(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    if !std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: owned NUL-terminated path remains live throughout access(2).
+    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }

@@ -621,6 +621,7 @@ fn rpc_drives_every_client_method() {
         // These closed public methods are advertised on both supported hosts.
         // Null must reach their typed parser and fail before any durable effect;
         // production payload/lifecycle coverage lives in the public physical gate.
+        ("executor.list", "null", Code(-32602)),
         ("command.submit", "null", Code(-32602)),
         ("command.lookup", "null", Code(-32602)),
         ("command.listUnknown", "null", Code(-32602)),

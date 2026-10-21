@@ -35,6 +35,7 @@ pub use runner_usage::*;
 pub mod wake_lifecycle;
 
 pub mod agent;
+pub mod executors;
 pub use model::*;
 pub use params::*;
 use schemars::JsonSchema;
@@ -230,6 +231,7 @@ pub mod methods {
             .copied()
             .chain(crate::team_data_api::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
+            .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
     });
 }
@@ -931,6 +933,13 @@ pub fn api_schema() -> Value {
     .chain(orchestra::schema_entries(g).0)
     .chain(team_data_api::schema_entries(g))
     .chain(lifecycle::schema_entries(g))
+    .chain(std::iter::once((
+        executors::EXECUTOR_LIST,
+        m(
+            sub::<executors::ExecutorListParams>(g),
+            sub::<executors::ExecutorListResult>(g),
+        ),
+    )))
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let events: serde_json::Map<String, Value> = event_payloads(g)
@@ -1459,15 +1468,52 @@ mod tests {
         }
     }
 
+    // A nullable method may use a closed top-level object definition wrapped
+    // in exactly one ref/null union. Keep checking the underlying object.
+    fn params_contract_definition<'a>(schema: &'a Value, params: &Value) -> (&'a Value, bool) {
+        let (reference, nullable) = if let Some(reference) = params["$ref"].as_str() {
+            (reference, false)
+        } else {
+            assert_eq!(params.as_object().unwrap().len(), 1);
+            let variants = params["anyOf"].as_array().expect("params ref/null union");
+            assert_eq!(variants.len(), 2);
+            assert_eq!(
+                variants
+                    .iter()
+                    .filter(|v| **v == json!({"type":"null"}))
+                    .count(),
+                1
+            );
+            let reference = variants
+                .iter()
+                .find_map(|v| {
+                    let fields = v.as_object()?;
+                    if fields.len() == 1 {
+                        v["$ref"].as_str()
+                    } else {
+                        None
+                    }
+                })
+                .expect("one closed params reference beside null");
+            (reference, true)
+        };
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .expect("top-level params reference");
+        (
+            schema["$defs"]
+                .get(name)
+                .expect("resolved params definition"),
+            nullable,
+        )
+    }
+
     #[test]
     fn every_params_type_denies_unknown_fields_and_vocabularies_are_enums() {
         let s = api_schema();
         let defs = s["$defs"].as_object().unwrap();
         for (m, spec) in s["methods"].as_object().unwrap() {
-            let r = spec["params"]["$ref"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{m} 的 params 不是 $ref"));
-            let def = &defs[r.trim_start_matches("#/$defs/")];
+            let (def, _) = params_contract_definition(&s, &spec["params"]);
             // 唯一的例外（U1）：握手的参数收未知字段——以后的客户端在这里加字段。
             let want = if m == methods::HELLO {
                 Value::Null
@@ -1542,8 +1588,8 @@ mod tests {
     #[test]
     fn methods_whose_parser_accepts_null_say_so_in_the_contract() {
         let s = api_schema();
-        let defs = s["$defs"].as_object().unwrap();
         let null_ok = [
+            judgments::SETTINGS_GET,
             methods::REMOTE_STATUS,
             methods::REMOTE_GRANTS,
             methods::WORK_PATROL,
@@ -1560,11 +1606,11 @@ mod tests {
             orchestra::methods::HIBERNATE,
         ];
         for (m, spec) in s["methods"].as_object().unwrap() {
-            let r = spec["params"]["$ref"].as_str().unwrap();
-            let def = &defs[r.trim_start_matches("#/$defs/")];
-            let takes_null = def["type"]
-                .as_array()
-                .is_some_and(|t| t.contains(&json!("null")));
+            let (def, nullable) = params_contract_definition(&s, &spec["params"]);
+            let takes_null = nullable
+                || def["type"]
+                    .as_array()
+                    .is_some_and(|t| t.contains(&json!("null")));
             assert_eq!(takes_null, null_ok.contains(&m.as_str()), "{m}: 契约 {def}");
         }
         let pending = &s["methods"][methods::RESTART_PENDING]["result"];
