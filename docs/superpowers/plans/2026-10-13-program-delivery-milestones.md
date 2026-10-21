@@ -1,5 +1,22 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-22 R2 实际交付记录：Mac已安装，iOS首屏与Linux候选已验
+
+所有本批产品实际源码固定5821310a7a9e99daba1a784b8f7b4af0c2af5e45；本节是构建后记录，不是二进制的新源码。后续doc-only HEAD不改标任何旧proof或产物。没有新真实模型/SDK、公共发布、公证、旧数据迁移或重复全量审查。本次仅证明所列普通配置，历史all-features因磁盘中断的额外范围仍未验。
+
+| 完整交付单元 | 当前实际证据与边界 |
+| --- | --- |
+| 正常Mac日用包 | 0.1.44/20747.58118，普通Release/prod ID，准确同源普通helper，完整构建0；已整包替换/Applications/PendingCrew.app，QA逐50项字节/签名独核0。旧891私有备份与可回退副本均完整；个人数据、旧版备份与Keychain未动。Mac锁屏，未首开，不能称新Mac窗口/持久流程已验。 |
+| 远程交互响应性源码 | 唯一后台串行凭据域、原子配对、显式凭据加载、single-flight/epoch/可关闭等待整块独审通过。真实生产内存延迟用例编译/运行0、负向生命周期对照如预期失败；六处异步失效后选择竞态已修。不是184根因诊断或真实Keychain写通过。 |
+| 普通iOS模拟器 | 同源Debug/arm64，完整构建0/实际自有entitlement与BuildStampCommit匹配R2。官方simctl在原私有phone实际启动、首屏截图布局完整无凭据错误页，App/console退出0、恢复Shutdown；无配对/写凭据/模型/剪贴板，非AX完整用户流。 |
+| 普通iPhoneOS设备候选 | 同源arm64/SDK27/iOS17最低目标，完整构建0、有限包核通过；未签名，无个人证书/Team/profile，未安装或运行真机。 |
+| 准确Linux候选 | 唯一manual run39632816190/job119335309377成功，约8分钟，无重复dispatch/复用旧case。8项raw exact各1pass、443Rust+6recipe逐Git匹配、13own fresh=false；普通Release归档/二进制/witness及原UUID备份恢复重开/两正常退出均独核接受。canonical tar SHA2f718caddb4f47bbd132816f9d4bf8b18c5547c38c935ad648bc8de1fdd62c56，ELF SHA f0b5b7ac483c8fec80fe0455782f110b2b01999e22908f76e6db156818b4cffd。 |
+| VPS准确新包平台层 | 单次只读预检及新私有prefix上传/安全解包/哈希/依赖/唯一version实际0；glibc2.41兼容，前后原监听/服务/进程集合不变。没有新Core、DB或常驻服务，不冒新R2业务部署或普通Mac持久远程已通；旧c8完整隔离VPS业务验收保持原来源。 |
+
+对应保全根依次为mac-product-5821310a-20261022、credential-serial-source-20261021及credential-serial-independent-review-20261022.json、ios-normal-5821310a-20261022（含headless-firstscreen.png）、ios-device-unsigned-5821310a-20261022、linux-current-5821310a-20261022（含vps-platform）。安装、平台产物、原始终态和独立核验分层保存；GitHub artifact ZIP原bytes未本地保留，metadata digest与实际解出归档/每项输入hash分别记录，不混为下载ZIP实测hash。
+
+整体工程仍未完成：Mac解锁后的首开与窗口、普通远程完整持久P1/P2、物理设备/正式签名与剩余发布交付尚缺实际证据；184回应/凭据Unknown原件不读不删不自动重发，不改新ID/service绕过。M4标准ACP逐提交完成/完整历史来源仍未取得受支持合同，Native保持不可用；M5、SQLite知识、原本机工作台/草稿及旧VPS业务按既有证据复用。下次继续先核实际锁屏/进程/原件状态与新外部条件，再推进真正可独立模块，不复跑稳定验收或把本批候选当全工程完成。root仍统筹整合，backend唯一Rust/schema/API与该Linux workflow writer，client唯一Swift/工程/Mac交付writer，quality唯一独立GUI/质量；无新候选服务遗留运行。
+
 ## 2026-10-22 正常远程与响应性模块组合冻结 R2，转准确平台候选
 
 正式远程配置cc382122、后台串行凭据/配对及关闭竞态最终4b711233、Linux单手动候选195c5560均独立源审接受并正常merge；本节所在提交为下一准确组合R2。后台串行域沿用macOS14/iOS17/Swift5；真实Production Pairing/Vault/Certificate/Validation/共享SwiftUI表单及原remote-flow内存延迟用例以strict-concurrency complete、warnings-as-errors实际编译0/运行0，移除生产epoch保护的负向对照按预期失败。六处refresh失效后继续select的竞态已在最终增量修正；其调用点是源/parse证据，不冒完整Window运行测试。
