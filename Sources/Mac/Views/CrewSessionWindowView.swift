@@ -371,7 +371,8 @@ struct CrewSessionWindowView: View {
             if appModel.usesCrewdAuthority, !hasRunningCaptain,
                let workspace = appModel.crewdBackend?.workspace,
                workspace.crewID == crewStore.selectedDetail?.crew.id {
-                CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)
+                CrewdExecutorChoiceView(workspace: workspace, executor: Binding(
+                    get: { workspace.selectedExecutor }, set: { workspace.selectedExecutor = $0 }))
                     .padding(.horizontal, 12).padding(.vertical, 6)
             }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
