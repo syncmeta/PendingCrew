@@ -1,6 +1,12 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 2026-10-21 当前：Mac精装日用版已安装，旧数据集中备份，正常首开与退出已验
+## 2026-10-21 当前：日用版草稿正文重开恢复已实测；VPS仍受SSH入口阻断
+
+已安装正常0.1.44/20747.06929、源码891507c7不变，本轮无需源码修改、重新构建或换包。草稿正文完整主流程已实际接受：原4fd私域P1的A/B原文在窗口与0600文件均确认；原测试控制器74562因GUI-only180秒超时而失败（GUI-15/Core0/socket消失），失败记录保留。随后显式用同一App参数/环境、原业务数据和presentation namespace直接重开准确891，产品自行启动并管理新Core，不重新seed、不外置Core、不修改控制器。真正P2 handle78678中A/B原文均恢复，一次Human已知成功发送A只清A，B原文和revision不变；正常安全暂停退出App wait0、Core PID与socket消失，退出后文件仍与发送后逐字相同、A缺B留。只读observer的session.list权限拒绝后即停，不冒零session；本轮未实测reply/@元数据。39项完整清单847c4d60…e2773、observation e1f440ef…829b，保全于 `docs/private/preserved-delivery-artifacts/composer-durability-891507c7-4fd-P1-P2-20261021/`。不再重复原四视图、退出提示窗口或构建审查。
+
+用户要求“再试试”后的本轮唯一严格SSH98476实际255，仍在banner交换阶段超时，尚未认证/执行远端命令，未部署、建转发或改服务/网络；不能冒VPS后台与本机前端已连通。新原件 `vps-private-b28e35a3-20261021/user-retry-20261021T034113Z.json` SHA318c83ce…de019f。已询问既有端口22入口是否变更；下一必要条件是该SSH入口可完成握手与认证，继续复用现成Linux包，不循环换别名或再造验收工具。旧数据及旧应用的完整备份位置和正常安装证据见下段，全部保留。
+
+## 本轮前段：Mac精装日用版已安装，旧数据集中备份，正常首开与退出已验
 
 用户明确要求“替换日用版”，只要求旧数据集中保留，允许新版数据处理；按此具体交付指令完成安装，不再把此前草稿窗口门当安装前提，也不将缺失的草稿P1/P2实测改标通过。旧PendingCrew完整数据、新PendingCrewLocal、偏好及日志共6609个文件、12个符号链接、1,110,399,650字节，已保存至 `/Users/hey/Library/Application Support/PendingCrewDataPreservation/before-891507c7-20261021/`。原件备份前后相同，regular/link与副本逐项一致；inactive socket只记元数据。原数据未删、未迁移，新版数据保留；既有历史快照仍保存在原位置并列入说明。
 

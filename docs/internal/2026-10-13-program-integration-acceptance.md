@@ -1,6 +1,16 @@
 # 后端与客户端组合验收（2026-10-13）
 
-## 2026-10-21 当前：891正常日用包已安装，旧数据完整保存，首开与正常退出接受
+## 2026-10-21 当前：891草稿正文跨进程恢复与成功清理主流程接受；VPS SSH仍超时
+
+本轮source891/已装正常0.1.44-20747.06929未变，无产品修改/新构建/换包。4fd P1原handle74562 actual1/chunk0ffa87为测试控制器GUI-only180秒超时，原GUI79608 -15、Core79589 0/socketgone，无P2/ready/actionreceipt；A/B原文已真实输入并在format1/0600、父0700文件确认（SHA b2ef6735c6add19182ea5fde56d45e6fa6e7144c3821008390109bd88e43565b），reply/mention未应用。QA超时后getApp误开默认GUI81360，准确PID/PPID1/birth/路径/无子树重核后经root只限定SIGTERM并确认absent（aa1a58），不冒正常Quit；原controller失败证据不改写。
+
+为删除无关测试复杂度，root接受唯一作者对实际准入边界的核对：Native891仅DEBUG+NATIVE，原单argv/7env无旧PID/fd/birth/holder绑定，不走DV旧scope准入。显式复用原App参数与环境、原4fd data和namespace，以既有正常first-open Popen方式启动一次真正P2，不新seed/外置server/手动claim/改controller或造框架。产品自行spawn并管理helper：handle78678，GUI82632→Core82634；同一namespace/DB，A/B精确原文均在GUI恢复；一次Human发送A已知成功、消息可见且输入清空，原文件A条目确删，B原文及revision不变。正常Quit安全暂停App Popen0/chunkea9dc0，原App/Core PIDabsent且socketgone（7bf8e4）；Core非直接子进程，不编数字wait。正常退出后原文件SHA42aedaccdda39f451a4d4baf430636f2846ec524c2e7d3a9574ead0f48355db5与发送后逐字相同，仍A缺/B原文和revision留。原P1控制器FAIL与真正P2功能PASS分列，不将基础设施超时算产品保存失败，也不把独立P2冒原controller成功。
+
+39项/40文件单份保全 `composer-durability-891507c7-4fd-P1-P2-20261021/`，清单847c4d60fa08aa363c658d746ab8d4d752744165908584213903d9c54c0e2773，observation e1f440ef7cb965f9e41c5a3c40279769d883daab17cd2b6589a6d78fa5bf829b（root5ca5e5/ca78d2实读）。只读独立observer session.list返回-32003/unqualified_or_changed_lineage后即停，无retry/claim，不据此称零session或产品GUI失联。此次只接受正文跨进程恢复、成功只清对应草稿及正常退出后文件保留；reply/@ GUI、P3、模型、Keychain、VPS和日用私有数据未扩验。此前四视图/构建/日用首开已验范围复用，不新增重复窗口。
+
+用户再次要求尝试VPS后的唯一严格knownhosts/BatchMode SSH98476 actual255/chunkfa00bd，实际错误为banner exchange超时；尚未认证，remoteCommandExecuted/deployed均false，未建forward或改网络/既有服务。原件 `vps-private-b28e35a3-20261021/user-retry-20261021T034113Z.json` SHA318c83ce52435b96027f2eb7d30ebd8c90de302c0cd9c55b4895bfe31bde019f（root403eea绑定）。现成c8 Linux包未重编或部署，Apple→VPS真实连接未通过；必要外部条件为现配置SSH入口完成握手与认证，已询问地址/端口是否变更，不重复换别名尝试。
+
+## 本轮前段：891正常日用包已安装，旧数据完整保存，首开与正常退出接受
 
 用户随后明确“替换日用版。没有数据要保留，除了旧版的数据。旧版数据你备份到一个地方，然后新版这个随便你弄”。本次具体交付指令取代此前草稿实测安装前提；891草稿P1/P2仍未通过，未更改历史结论。实际追加备份73520=0/becb5d，持久根 `/Users/hey/Library/Application Support/PendingCrewDataPreservation/before-891507c7-20261021/`，6609 regular/12 symlink/1,110,399,650B，涵盖旧PendingCrew、新PendingCrewLocal、主偏好/日志；before==after，去inactive socket后regular/link逐项==copy，root e66fed独核。backup-receipt SHA ea5066e23f37b2cbce73149f4e85faf75ff025c6949363519c92a82b0fc12010。旧历史快照原地保留且列说明；原数据未删未迁移，新数据保留。
 
