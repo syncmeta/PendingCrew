@@ -61,6 +61,7 @@ struct CrewdRemoteRetainedInputs: View {
     var body: some View {
         DisclosureGroup("原连接 · \(workspace.authorityRecordID.uuidString.prefix(8))") {
             Text("原作用域：" + workspace.presentationNamespace).font(.caption).textSelection(.enabled)
+            if let failure = workspace.composerDrafts.storageError { Text(failure).foregroundStyle(.red) }
             if inputs.isEmpty { Text("没有需要核对的输入。") }
             ForEach(inputs) { input in Button(input.title) { showing = input } }
         }.sheet(item: $showing) { input in

@@ -32,6 +32,9 @@ final class CrewdPresentationJournal {
         let detail: String?
     }
     let scope: Scope
+    func composerDraftFile(namespace: String) -> URL {
+        directory.appendingPathComponent("composer-drafts-" + Self.hash(Data(namespace.utf8)) + ".json")
+    }
     private let directory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder

@@ -202,6 +202,7 @@ final class CrewdWorkspace: ObservableObject {
     @Published var originalFirstMessages: [OriginalFirstMessage] = []
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
+    private(set) var composerDrafts = CrewComposerDraftStore()
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var composerRequirementDrafts = CrewdRequirementDrafts()
     @Published var planDrafts = CrewdPlanDrafts()
@@ -788,6 +789,14 @@ final class CrewdWorkspace: ObservableObject {
             guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
             originalFirstMessageHistory = history; journalFailureConnection = nil
+            composerDrafts = CrewComposerDraftStore.durable(file: journal.composerDraftFile(namespace: presentationNamespace), namespace: presentationNamespace)
+            for entry in composerDrafts.entries.values {
+                if let crew = entry.crew, let channel = entry.channel {
+                    messageDrafts.set(entry.draft.text, for: .message(crew: crew, channel: channel, session: ""))
+                }
+            }
+            if let failure = composerDrafts.storageError { self.error = failure }
+
         } catch {
             if acceptsObservation(epoch), client.connectionEpoch == connection {
                 journalFailureConnection = connection

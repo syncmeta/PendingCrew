@@ -101,7 +101,7 @@ func crewMentionCandidates(
 /// One staged mention paired with the readable token currently sitting in the
 /// draft. The pairing lets us reconcile: if the user deletes the token text,
 /// the staged mention is dropped (see `reconcile`).
-struct CrewStagedMention: Equatable {
+struct CrewStagedMention: Codable, Equatable {
     let token: String        // e.g. "@小绿" (no trailing space)
     let mention: CrewMention
 }
@@ -277,7 +277,7 @@ enum CrewComposerMentionParser {
 
 /// The mention + quoted-reference a "reply to this message" produces. `mention`
 /// auto-@s the original sender; `quoted*` drive the composer's reply banner.
-struct CrewReplyTarget: Equatable {
+struct CrewReplyTarget: Codable, Equatable {
     /// nil when the original sender can't be turned into a mention target
     /// (e.g. an unknown / relay sender with no resolvable id) — the reply still
     /// carries `replyToId`, it just doesn't auto-@.
