@@ -31,7 +31,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
                 #else
-                Button("管理远程电脑") { window.refresh() }
+                Button("管理远程电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
                 switch window.computerListState {
                 case .notLoaded:
                     Text("已存电脑尚未读取")
@@ -49,8 +49,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }
                 Divider()
                 Button("添加电脑") {
-                    guard window.refresh() else { return }
-                    adding = true
+                    Task { if await window.refresh() { adding = true } }
                 }
                 Menu("移除已存电脑") {
                     ForEach(window.computers) { computer in
@@ -87,19 +86,19 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }
             }.padding(20).frame(minWidth:500,minHeight:360)
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
-            .sheet(isPresented: $adding, onDismiss: { window.refresh() }) {
+            .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; window.refresh(); Task { await window.select(id) }
+                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
-            .sheet(item: $pending, onDismiss: { window.refresh() }) { pair in
+            .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
                 CrewdRemotePairingView(pairing: window.pairing, pending: pair.id) { id in
-                    pending = nil; window.refresh(); Task { await window.select(id) }
+                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
 
             .alert("从本设备移除已存电脑", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { computer in
-                Button("移除配对凭据", role: .destructive) { _ = window.forget(computer); removing = nil }
+                Button("移除配对凭据", role: .destructive) { Task { await window.forget(computer) }; removing = nil }
                 Button("取消", role: .cancel) { removing = nil }
             } message: { computer in
                 Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")

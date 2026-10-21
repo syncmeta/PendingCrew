@@ -68,7 +68,7 @@ final class AppModel: ObservableObject {
         #else
         // Loading saved computers is observation, not permission to select one.
         // The original mobile pairing/list UI explicitly chooses and connects.
-        crewdWindow.refresh()
+        await crewdWindow.refresh()
         #endif
         if let workspace = crewdWindow.workspace {
             workspace.originalJournalRequired = true

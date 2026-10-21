@@ -23,9 +23,9 @@ struct CrewdRemoteMobileRoot: View {
                 }
             }
         }
-        .task { window.refresh() }
+        .task { await window.refresh() }
         .onDisappear {window.close()}
-        .onChange(of: phase) { _, value in if value == .active { window.refresh() } }
+        .onChange(of: phase) { _, value in if value == .active { Task { await window.refresh() } } }
         .sheet(isPresented: $computersSheet) {
             NavigationStack {
                 computerList.navigationTitle("电脑")
@@ -35,14 +35,14 @@ struct CrewdRemoteMobileRoot: View {
                     }
             }
         }
-        .sheet(isPresented: $pairingSheet, onDismiss: { window.refresh() }) {
+        .sheet(isPresented: $pairingSheet, onDismiss: { Task { await window.refresh() } }) {
             CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                pairingSheet = false; window.refresh(); Task { await window.select(id) }
+                pairingSheet = false; Task { guard await window.refresh() else { return }; await window.select(id) }
             }
         }
-        .sheet(item: $pendingPair, onDismiss: { window.refresh() }) { pending in
+        .sheet(item: $pendingPair, onDismiss: { Task { await window.refresh() } }) { pending in
             CrewdRemotePairingView(pairing: window.pairing, pending: pending.id) { id in
-                pendingPair = nil; window.refresh(); Task { await window.select(id) }
+                pendingPair = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
             }
         }
     }
@@ -68,7 +68,7 @@ struct CrewdRemoteMobileRoot: View {
                         Spacer()
                         if computer.id == window.selected { Image(systemName: "checkmark") }
                     }
-                }.contextMenu { Button("仅从本设备移除", role: .destructive) { window.forget(computer.id) } }
+                }.contextMenu { Button("仅从本设备移除", role: .destructive) { Task { await window.forget(computer) } } }
             }
             if !window.retainedWorkspaces.isEmpty {
                 Section("切换前的未确认操作") {
@@ -98,7 +98,8 @@ struct CrewdRemotePairingView: View {
     @State private var envelope: CrewdRemoteEnvelope?
     @State private var pendingID: UUID?
     @State private var responseText = ""
-    @State private var busy = false
+    @StateObject private var operation = CrewdRemoteOperation()
+    private var busy: Bool { operation.busy }
     @State private var error: String?
     var body: some View {
         NavigationStack {
@@ -111,41 +112,41 @@ struct CrewdRemotePairingView: View {
                         Text(responseText).font(.caption.monospaced()).textSelection(.enabled).lineLimit(4)
                     }
                     Section("电脑确认码") {
-                        TextEditor(text: $receiptText).frame(minHeight: 100).crewdRemoteCodeInput()
-                        Button("完成配对") { run { try pairing.confirm(CrewdRemoteText.decode(receiptText), id: id); completed(id) } }
+                        TextEditor(text: $receiptText).frame(minHeight: 100).crewdRemoteCodeInput().disabled(busy)
+                        Button("完成配对") { run { try await pairing.confirmReceipt(CrewdRemoteText.decode(receiptText), id: id) } apply: { _ in completed(id) } }
                             .disabled(busy || receiptText.isEmpty)
                     }
                 } else {
                     Section("电脑邀请连接码") {
-                        TextEditor(text: $inviteText).frame(minHeight: 110).crewdRemoteCodeInput()
+                        TextEditor(text: $inviteText).frame(minHeight: 110).crewdRemoteCodeInput().disabled(busy)
                             .onChange(of: inviteText) { _, _ in preview = nil; envelope = nil; error = nil }
                         Button("核对电脑") { run {
                             let value = try CrewdRemoteText.decode(inviteText)
-                            preview = try pairing.invitation(value); envelope = value
-                        } }.disabled(busy || inviteText.isEmpty)
+                            return (try await pairing.invitation(value), value)
+                        } apply: { value in preview = value.0; envelope = value.1 } }.disabled(busy || inviteText.isEmpty)
                     }
                     if let preview, let envelope {
                         Section("确认这台电脑") {
                             Text(preview.computerLabel)
                             Text("\(preview.endpoint.host):\(preview.endpoint.port)").foregroundStyle(.secondary)
                             Text("电脑身份：\(preview.server.spkiSha256)").font(.caption.monospaced()).textSelection(.enabled)
-                            TextField("设备名称", text: $deviceLabel)
+                            TextField("设备名称", text: $deviceLabel).disabled(busy)
                             Button("确认是这台电脑，生成回复") { run {
-                                let id = try pairing.respond(envelope, deviceLabel: deviceLabel)
-                                pendingID = id; responseText = try pairing.responseText(id)
-                            } }.disabled(busy || deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                try await pairing.respondWithText(envelope, deviceLabel: deviceLabel)
+                            } apply: { result in pendingID = result.id; responseText = result.text } }.disabled(busy || deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
                 }
             }.navigationTitle("添加电脑")
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { dismiss() }.disabled(busy) } }
-                .task { if let pending { run { pendingID = pending; responseText = try pairing.responseText(pending) } } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { operation.invalidate(); dismiss() } } }
+                .task { if let pending { run { try await pairing.responseText(pending) } apply: { text in pendingID = pending; responseText = text } } }
+                .onDisappear { operation.invalidate() }
         }
     }
-    private func run(_ operation: () throws -> Void) {
-        guard !busy else { return }; busy = true; defer { busy = false }
-        do { try operation(); error = nil } catch { self.error = error.localizedDescription }
+    @MainActor private func run<Value: Sendable>(_ action: @escaping @MainActor () async throws -> Value, apply: @escaping @MainActor (Value) -> Void) {
+        operation.run(action, apply: apply, failed: { error in self.error = error.localizedDescription })
     }
+
 }
 
 private extension View {

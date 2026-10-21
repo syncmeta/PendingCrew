@@ -16,7 +16,9 @@ struct IOSRemotePairingView: View {
     @State private var envelope: CrewdRemoteEnvelope?
     @State private var pendingID: UUID?
     @State private var status: String?
-    @State private var busy = false
+    @StateObject private var operation = CrewdRemoteOperation()
+    private var busy: Bool { operation.busy }
+    @State private var epoch = UUID()
     @State private var removing: CrewdRemotePairSummary?
 
     var body: some View {
@@ -25,24 +27,23 @@ struct IOSRemotePairingView: View {
                 if pendingID == nil {
                     Section("电脑的一次性邀请") {
                         TextEditor(text: $invitation).frame(minHeight: 150)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                             .onChange(of: invitation) { _, _ in preview = nil; envelope = nil }
                         Button("核对电脑") { run {
                             let decoded = try CrewdRemoteText.decode(invitation)
-                            preview = try appModel.crewdWindow.pairing.invitation(decoded)
-                            envelope = decoded
-                        } }.disabled(busy || invitation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            return (try await appModel.crewdWindow.pairing.invitation(decoded), decoded)
+                        } apply: { value in preview = value.0; envelope = value.1 } }.disabled(busy || invitation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     if let preview, let envelope {
                         Section("确认电脑身份") {
                             Text(preview.computerLabel)
                             Text("\(preview.endpoint.host):\(preview.endpoint.port)")
                             Text(preview.server.spkiSha256).font(.caption.monospaced()).textSelection(.enabled)
-                            TextField("设备名称", text: $deviceLabel)
+                            TextField("设备名称", text: $deviceLabel).disabled(busy)
                             Button("确认并生成回应") { run {
-                                let id = try appModel.crewdWindow.pairing.respond(envelope, deviceLabel: deviceLabel)
-                                pendingID = id
-                                response = try appModel.crewdWindow.pairing.responseText(id)
+                                try await appModel.crewdWindow.pairing.respondWithText(envelope, deviceLabel: deviceLabel)
+                            } apply: { result in
+                                pendingID = result.id; response = result.text
                                 status = "请将回应交给电脑，等待电脑批准后导入确认码。"
                             } }.disabled(busy || deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
@@ -58,18 +59,23 @@ struct IOSRemotePairingView: View {
                     }
                     Section("电脑的正式确认码") {
                         TextEditor(text: $confirmation).frame(minHeight: 150)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                         Button("确认并连接") {
                             run {
-                                try appModel.crewdWindow.pairing.confirm(CrewdRemoteText.decode(confirmation), id: id)
+                                try await appModel.crewdWindow.pairing.confirmReceipt(CrewdRemoteText.decode(confirmation), id: id)
+                            } apply: { _ in
                                 status = "配对已确认，正在连接。"
-                            }
-                            guard (try? appModel.crewdWindow.pairing.paired(id)) != nil else { return }
-                            Task {
-                                await appModel.crewdWindow.select(id)
-                                await appModel.connectCrewdAuthority()
-                                await crewStore.refreshList()
-                                status = appModel.crewdWindow.workspace?.client.connected == true ? "已安全连接。" : appModel.backendConfigurationError
+                                let token = epoch
+                                Task {
+                                    guard epoch == token else { return }
+                                    await appModel.crewdWindow.select(id)
+                                    guard epoch == token else { return }
+                                    await appModel.connectCrewdAuthority()
+                                    guard epoch == token else { return }
+                                    await crewStore.refreshList()
+                                    guard epoch == token else { return }
+                                    status = appModel.crewdWindow.workspace?.client.connected == true ? "已安全连接。" : appModel.backendConfigurationError
+                                }
                             }
                         }.disabled(busy || confirmation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
@@ -78,11 +84,11 @@ struct IOSRemotePairingView: View {
                     ForEach(appModel.crewdWindow.computers.filter { !$0.paired }) { computer in
                         HStack {
                             Button(computer.name) { run {
-                                pendingID = computer.id
-                                response = try appModel.crewdWindow.pairing.responseText(computer.id)
-                                confirmation = ""
+                                try await appModel.crewdWindow.pairing.responseText(computer.id)
+                            } apply: { text in
+                                pendingID = computer.id; response = text; confirmation = ""
                                 status = "请核对这台电脑的回应和正式确认码。"
-                            } }.buttonStyle(.borderless)
+                            } }.buttonStyle(.borderless).disabled(busy)
                             Spacer()
                             removeButton(computer)
                         }
@@ -95,7 +101,7 @@ struct IOSRemotePairingView: View {
                                 await appModel.crewdWindow.select(computer.id)
                                 await appModel.connectCrewdAuthority()
                                 await crewStore.refreshList()
-                            } }.buttonStyle(.borderless)
+                            } }.buttonStyle(.borderless).disabled(busy)
                             Spacer()
                             removeButton(computer)
                         }
@@ -113,10 +119,14 @@ struct IOSRemotePairingView: View {
                      "\n本机配对记录：" + computer.id.uuidString.lowercased() +
                      "\n只移除本设备保存的配对凭据，不会删除电脑上的机组或数据，也不会撤销电脑端授权。")
             }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { dismiss() } } }
-            .task { appModel.crewdWindow.refresh()
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { epoch = UUID(); operation.invalidate(); dismiss() } } }
+            .onDisappear { epoch = UUID(); operation.invalidate() }
+            .task {
+                let token = epoch
+                await appModel.crewdWindow.refresh()
+                guard epoch == token, !Task.isCancelled else { return }
                 if let pending = appModel.crewdWindow.computers.first(where: { !$0.paired }) {
-                    run { pendingID = pending.id; response = try appModel.crewdWindow.pairing.responseText(pending.id) }
+                    run { try await appModel.crewdWindow.pairing.responseText(pending.id) } apply: { text in pendingID = pending.id; response = text }
                 }
             }
         }
@@ -127,23 +137,20 @@ struct IOSRemotePairingView: View {
             .accessibilityLabel("从本设备移除 " + computer.name)
     }
     private func removeComputer(_ computer: CrewdRemotePairSummary) {
-        guard !busy else { return }
-        busy = true; defer { busy = false; removing = nil }
-        // The original window verifies this exact displayed summary again;
-        // a stale row cannot delete a changed record or redirect to another id.
-        guard appModel.crewdWindow.forget(computer) else {
-            status = appModel.crewdWindow.error ?? "移除结果尚未确认，请保留原记录待核对。"
-            return
+        run { await appModel.crewdWindow.forget(computer) } apply: { removed in
+            removing = nil
+            guard removed else {
+                status = appModel.crewdWindow.error ?? "移除结果尚未确认，请保留原记录待核对。"; return
+            }
+            if pendingID == computer.id {
+                pendingID = nil; response = ""; confirmation = ""
+                preview = nil; envelope = nil; invitation = ""
+            }
+            status = "已从本设备移除这台电脑。电脑端的数据和授权未改变。"
         }
-        if pendingID == computer.id {
-            pendingID = nil; response = ""; confirmation = ""
-            preview = nil; envelope = nil; invitation = ""
-        }
-        status = "已从本设备移除这台电脑。电脑端的数据和授权未改变。"
     }
-    private func run(_ operation: () throws -> Void) {
-        guard !busy else { return }; busy = true; defer { busy = false }
-        do { try operation() } catch { status = error.localizedDescription }
+    @MainActor private func run<Value: Sendable>(_ action: @escaping @MainActor () async throws -> Value, apply: @escaping @MainActor (Value) -> Void) {
+        operation.run(action, apply: apply, failed: { error in status = error.localizedDescription })
     }
 }
 #endif

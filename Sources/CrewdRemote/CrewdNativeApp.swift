@@ -74,17 +74,17 @@ private struct CrewdNativeMacRoot: View {
                 }
             }.padding(20).frame(minWidth:500,minHeight:360)
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
-            .sheet(isPresented: $adding, onDismiss: { window.refresh() }) {
+            .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; window.refresh(); Task { await window.select(id) }
+                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
-            .sheet(item: $pending, onDismiss: { window.refresh() }) { pair in
+            .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
                 CrewdRemotePairingView(pairing: window.pairing, pending: pair.id) { id in
-                    pending = nil; window.refresh(); Task { await window.select(id) }
+                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
-            .task { window.refresh(); await chooseLocal() }
+            .task { await window.refresh(); await chooseLocal() }
             .onChange(of: window.workspace.map {ObjectIdentifier($0)}) {_,_ in synchronizeAdministration()}
             .onDisappear {window.close();synchronizeAdministration()}
     }
