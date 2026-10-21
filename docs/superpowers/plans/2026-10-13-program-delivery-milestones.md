@@ -1,6 +1,14 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 2026-10-21 当前：日用版草稿正文重开恢复已实测；VPS仍受SSH入口阻断
+## 2026-10-21 当前：普通iOS包已备，完整连接验收受宿主GUI缺失及凭据读取错误阻断
+
+Mac日用891与草稿主流程保持已验，本轮不重建或重装Mac。普通iOS原Root→IPadShell配对表单缺少移除电脑入口，最小单文件修正 `025a7b8a52170295ad7f995d78d05f2eb8a0e96c`（49+/11-，复用既有forget(summary)及身份/结果保护）已源码独审、整合并普通推main/global；不是已经过iOS删除UI实测。原临时缓存/准备目录在中断后已不存在，后续复用仍存的aeh暖DerivedData/SwiftPM；缺失3依赖仅从本机bare仓库恢复到锁定revision，不下载、不清理原缓存。唯一普通025模拟器构建63582实际0，Debug/仅DEBUG/arm64/SDK27/普通com.pendingname.pendingcrew/NO signing，原版本0.1.43(1)如实保留，Info BuildStampCommit准确025。完整包及实际输入/依赖/配置/日志/哈希保存在 `docs/private/preserved-delivery-artifacts/ios-normal-025a7b8a-20261021/`，独立有限核接受；没有用旧Native/Memory包冒持久凭据路径。
+
+完整iOS单元未通过：同一现成phone普通App安装/启动0；官方Simulator.app路径和bundle入口均Invalid app，一次有界官方目录/真实路径核对证实当前Xcode27缺宿主Simulator GUI。辅助原生截图还显示“远端连接不可用 / 设备凭据无法读取，请解锁设备或重新配对。”（root亲看原件），原OSStatus和失败发生在枚举/单record读取均未知；不能推断旧record、锁屏或签名根因，不把错误降格为空列表或改用Memory绕过。无GUI交互、邀请码、回应或新配对record，无四视图/重开信任/撤权/移除验收。
+
+后台首次默认工具沙箱在bind前EPERM，Core/RPC均未创建；该首轮原件保留。随后同已审scope经标准require_escalated审核通过，原669私域Core实际READY、合成数据及127.0.0.1:49379监听成立，仍不能算iOS TLS已通。确认GUI缺失后按既有abort正常收尾：App terminate0、phone恢复原Shutdown；原fd safePause stopped/failed[]、Core Popen0/socket及端口消失，holder显式abort退出1不冒成功。全部运行证据已稳定保存，未触日用数据、Mac Keychain旧1efUnknown或真实模型。下一步需恢复官方Simulator GUI并取得凭据失败的底层运行证据，再续同产品普通路径；本轮不下载SDK、不造headless UI工具、不重复已有Mac/草稿验证。VPS仍为既有SSH banner超时，未部署，等待入口信息。
+
+## 上一整块：日用版草稿正文重开恢复已实测；VPS仍受SSH入口阻断
 
 已安装正常0.1.44/20747.06929、源码891507c7不变，本轮无需源码修改、重新构建或换包。草稿正文完整主流程已实际接受：原4fd私域P1的A/B原文在窗口与0600文件均确认；原测试控制器74562因GUI-only180秒超时而失败（GUI-15/Core0/socket消失），失败记录保留。随后显式用同一App参数/环境、原业务数据和presentation namespace直接重开准确891，产品自行启动并管理新Core，不重新seed、不外置Core、不修改控制器。真正P2 handle78678中A/B原文均恢复，一次Human已知成功发送A只清A，B原文和revision不变；正常安全暂停退出App wait0、Core PID与socket消失，退出后文件仍与发送后逐字相同、A缺B留。只读observer的session.list权限拒绝后即停，不冒零session；本轮未实测reply/@元数据。39项完整清单847c4d60…e2773、observation e1f440ef…829b，保全于 `docs/private/preserved-delivery-artifacts/composer-durability-891507c7-4fd-P1-P2-20261021/`。不再重复原四视图、退出提示窗口或构建审查。
 

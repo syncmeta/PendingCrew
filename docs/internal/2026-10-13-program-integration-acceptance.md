@@ -1,6 +1,16 @@
 # 后端与客户端组合验收（2026-10-13）
 
-## 2026-10-21 当前：891草稿正文跨进程恢复与成功清理主流程接受；VPS SSH仍超时
+## 2026-10-21 当前：普通iOS025构建/安装启动通过，完整GUI与持久配对未通过
+
+原iOS主配对表单移除入口最小修正025a7b8a52170295ad7f995d78d05f2eb8a0e96c已独立源码接受/合main-global/普通远端保存，唯一IOSRemotePairingView.swift 49+/11-，SHA d598055e3b69a18085819ce52157653fba9fe91b35c620f17669480458f5126c；正常确认沿forget(summary)及Bool成功门，不切替代Root/CLI删除，不增加后端schema。原73构建和当前025区分，025普通模拟器actual63582/xcode0，DEBUGonly、arm64、iphonesimulator27、bundle com.pendingname.pendingcrew、无Native/Memory、NO signing/team/entitlements；版本0.1.43/build1与实际配置一致，Info BuildStampCommit=025。App59,565,986B，真实UI dylib249845211547ff52b9b91c9869266504c7ee8cdbadfb5aec0c79166b0214cb3f/51,612,232B；完整包产品复制逐文件一致、源/依赖前后一致，completion SHA b13d7582ffe6279f07acb583811b59551ccaee5de630c5c3510607fd900c3082，稳定根 `ios-normal-025a7b8a-20261021/`。旧暖缓存不在后仅补3个本地已存精确pin仓库；原8依赖只有明确无compiler引用的build/生成目录不清理、不作为修改源码放行，相关事实均保原始记录。
+
+最终本机单scope bfa01b28-9e64-4e6f-a068-b15e84522bdb，scopeSHA9fd18a546ce84029818dc0a60c1ddc17b86ff941c2c05aba245fa994aac1b582/actions9aa1fae1fbd0c5acbf4f6ff8bfd7de3eae2da0a902b22280dce8e2cf35b52ecf，复用fixed-marker owner最小裁减，无MacPopen/GUI180秒/60秒P2门。第一次省略sandbox_permissions导致端口bind EPERM，Core未spawn/RPC0；原终态排他归档，不冒自动审批正式拒绝。原脚本/scope/UUID/端口不改，经标准require_escalated实际审核通过启动51890，holder7540/Core7541/fd5，DB1cb208e7229068bee786a7feb66d471f/runtimecc93192a-7531-4e20-b6b2-1e4ceabb54c4；原peer/birth/owner、remoteoff→合成Human seed、sessions[]、49379监听rev2均成立。未发布invite-ready，无invite/accept/revoke；不将后台READY冒Apple→iOS TLS验收。
+
+QA单phone普通包boot/install/launch均0，实际App7905。CUA官方path与com.apple.iphonesimulator均Invalid app；client一次有界实核Xcode27真实路径无symlink，Developer/Applications缺失，其他已知官方位置无Simulator.app。未通过任何GUI操作；辅助 `normal025-headless-firstscreen.png` SHA739b2a0af4eaaffda68ef398262e9fa69f91c91952f537955a09623b4a5cf0a4，root亲看文本“远端连接不可用 / 设备凭据无法读取，请解锁设备或重新配对。”。普通Keychain源码将SecItem失败及record解码/身份问题折叠为unavailableCredential，本次未采原OSStatus，不能确认发生在records还是read、旧record/锁屏/签名根因。封包实际仅linker ad-hoc签名、无team/entitlements是配置事实，不冒已证明因果；未改签/重试/查询外部Keychain或降低错误保护。
+
+App terminate0、phone shutdown0且device.plist state1、原7905 PIDabsent；后台按既有abort原fd safePause stopped、failed[]、Core Popen0/socketgone，独立ps/lsof确认原holder/Core/7905和49379均不再存在。holder实际exit1为显式未完成，不伪造finish/配对成功。QA runtime-progress SHA7a827a8ca372444438350a252a76912c583ba80bed93a8014b02d20bca57a252；后台稳定 `ios-core-fixedowner-025a7b8a-prepared-20261021/attempt02-formal-escalated-runtime/` terminalSHA22c84cc8b55f0578b2bb5c35c745ed6507740081e835d0519dc585b2c1fb572e、manifest8fc28d670d2efaeca08ce33b5ebf755f003b84055ee301b204c65d31279d0afd，held-cleanup SHA39abd90de33ede61fc8ff1215138a733107601e2b022639ba2913187992ff75c（root4a0bcf实读）。未发邀请/回应或生成新record，未验四view/重开信任/撤权/本次新移除UI，未访问Mac旧1efUnknown、日用数据或模型。下一必要条件为官方Simulator GUI可用及凭据底层状态的正常运行证据，不用无GUI注入或Memory替代本单元。
+
+## 上一整块：891草稿正文跨进程恢复与成功清理主流程接受；VPS SSH仍超时
 
 本轮source891/已装正常0.1.44-20747.06929未变，无产品修改/新构建/换包。4fd P1原handle74562 actual1/chunk0ffa87为测试控制器GUI-only180秒超时，原GUI79608 -15、Core79589 0/socketgone，无P2/ready/actionreceipt；A/B原文已真实输入并在format1/0600、父0700文件确认（SHA b2ef6735c6add19182ea5fde56d45e6fa6e7144c3821008390109bd88e43565b），reply/mention未应用。QA超时后getApp误开默认GUI81360，准确PID/PPID1/birth/路径/无子树重核后经root只限定SIGTERM并确认absent（aa1a58），不冒正常Quit；原controller失败证据不改写。
 
