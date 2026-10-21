@@ -229,13 +229,13 @@ enum CrewdDeliveryValidation {
 }
 
 /// Factory failure is a refusal, never a fallback to personal or memory stores.
-final class CrewdRefusedCredentials: CrewdRemoteCredentialStore {
+@CrewdCredentialActor final class CrewdRefusedCredentials: CrewdRemoteCredentialStore {
     func records() throws -> [UUID] { throw CrewdRemoteError.storageFailure }
     func read(_ id: UUID) throws -> CrewdRemoteStoredPair { throw CrewdRemoteError.storageFailure }
     func save(_ record: CrewdRemoteStoredPair) throws { throw CrewdRemoteError.storageFailure }
     func remove(_ id: UUID) throws { throw CrewdRemoteError.storageFailure }
 }
-final class CrewdValidationCredentials: CrewdRemoteCredentialStore {
+@CrewdCredentialActor final class CrewdValidationCredentials: CrewdRemoteCredentialStore {
     private let origin: CrewdDeliveryValidation.Scope
     init(scope: CrewdDeliveryValidation.Scope) { origin = scope }
     private func store(_ action: String, _ id: UUID) throws -> CrewdRemoteKeychain {

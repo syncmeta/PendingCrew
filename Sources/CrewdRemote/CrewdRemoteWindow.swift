@@ -9,6 +9,7 @@ import Combine
     @Published private(set) var workspace: CrewdWorkspace?
     @Published private(set) var selected: UUID?
     @Published private(set) var retainedWorkspaces: [CrewdWorkspace] = []
+    @Published private(set) var credentialBusy = false
     @Published var error: String?
     /// Read-only review follows the original workspace, never the current writer.
     var inputReviewWorkspaces: [CrewdWorkspace] {
@@ -22,34 +23,54 @@ import Combine
         var seen = Set<ObjectIdentifier>()
         return scopes.filter { seen.insert(ObjectIdentifier($0)).inserted }
     }
+    private var refreshTask: Task<Bool, Never>?
     private var changes:AnyCancellable?
     private var workspaceChanges:AnyCancellable?
     private var connectionTask:Task<Void,Never>?
     private var selectionEpoch=UUID()
+    private var credentialEpoch=UUID()
     private var selectedReceipt:CrewdRemoteReceipt?
     let pairing: CrewdRemotePairing
-    init(pairing: CrewdRemotePairing = CrewdRemotePairing(credentials: CrewdRemoteCredentials.application())) {
+    init(pairing: CrewdRemotePairing = CrewdRemotePairing.shared) {
         self.pairing = pairing
         #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
         changes=NotificationCenter.default.publisher(for:CrewdRemotePairing.changed).sink { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.computerListState == .loaded else { return }
-                self.refresh()
+                await self.refresh()
             }
         }
         #endif
     }
-    @discardableResult func refresh() -> Bool {
+    @discardableResult func refresh() async -> Bool {
+        if let task = refreshTask { return await task.value }
+        guard !credentialBusy else { return false }
+        let task = Task { await loadComputers() }
+        refreshTask = task
+        let result = await task.value
+        refreshTask = nil
+        return result
+    }
+    private func loadComputers() async -> Bool {
+        guard !credentialBusy else { return false }
+        credentialBusy = true; defer { credentialBusy = false }
+        let epoch = credentialEpoch
         #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
         computers = []; computerListState = .notLoaded
         return false
         #else
         do {
-            computers = try pairing.summaries(); computerListState = .loaded; error = nil
-            if let id=selected, (try? pairing.paired(id).2) != selectedReceipt { retireSelected() }
+            let id = selected
+            let values = try await pairing.summaries()
+            let receipt: CrewdRemoteReceipt?
+            if let id { receipt = try await pairing.receipt(id) } else { receipt = nil }
+            guard epoch == credentialEpoch else { return false }
+            computers = values; computerListState = .loaded; error = nil
+            if selected != nil, receipt != selectedReceipt { retireSelected() }
             return true
         }
         catch {
+            guard epoch == credentialEpoch else { return false }
             self.error = error.localizedDescription
             computerListState = .failed(error.localizedDescription)
             // A failed read cannot authorize a second credential read or keep
@@ -85,7 +106,7 @@ import Combine
     private func retireSelected() {
         retireCurrent();workspace=nil;selected=nil;selectedReceipt=nil
     }
-    func close() {retireSelected()}
+    func close() {credentialEpoch=UUID();retireSelected()}
     #if os(macOS)
     var canForceManagedStop: Bool {
         (retainedWorkspaces + (workspace.map { [$0] } ?? [])).contains { $0.canForceManagedStop }
@@ -111,9 +132,17 @@ import Combine
     }
     #endif
     func select(_ id: UUID) async {
+        let epoch = credentialEpoch
+        if let task = refreshTask { _ = await task.value }
+        guard epoch == credentialEpoch, !credentialBusy else { return }
+        credentialBusy = true
         let receipt:CrewdRemoteReceipt
-        do {receipt=try pairing.paired(id).2}
-        catch {self.error=error.localizedDescription;return}
+        do {
+            receipt = try await pairing.receipt(id)
+            credentialBusy = false
+            guard credentialEpoch == epoch else { return }
+        }
+        catch {credentialBusy = false; if credentialEpoch == epoch { self.error=error.localizedDescription };return}
         if selected==id,selectedReceipt==receipt,let current=workspace {
             await connectSelected(current);return
         }
@@ -123,6 +152,7 @@ import Combine
     }
     #if os(macOS)
     func selectLocal(directory: URL) async {
+        credentialEpoch=UUID()
         if selected==nil,let current=workspace,current.dataDirectory==directory {
             await connectSelected(current);return
         }
@@ -136,27 +166,24 @@ import Combine
     #endif
     /// Confirmation binds the exact displayed saved computer. A changed record
     /// never silently redirects this local credential deletion to another one.
-    @discardableResult func forget(_ computer: CrewdRemotePairSummary) -> Bool {
-        guard computers.contains(computer) else {
-            error = "已存电脑记录已经改变，请重新读取后确认移除。"; return false
-        }
+    @discardableResult func forget(_ computer: CrewdRemotePairSummary) async -> Bool {
+        let epoch = credentialEpoch
+        if let task = refreshTask { _ = await task.value }
+        guard epoch == credentialEpoch else { return false }
+        guard !credentialBusy, computers.contains(computer) else { return false }
+        credentialBusy = true
         do {
-            let current = try pairing.summaries().first { $0.id == computer.id }
-            guard current == computer else {
-                error = "配对记录已经改变，未移除其它凭据。"; return false
-            }
-            try pairing.forget(computer.id)
+            try await pairing.forget(computer)
+            credentialBusy = false
+            // Closing or selecting another authority does not undo the completed
+            // deletion, and a late result must not retire that new authority.
+            guard epoch == credentialEpoch else { return false }
             if selected == computer.id { retireSelected() }
-            refresh(); return true
-        } catch { self.error = error.localizedDescription; return false }
-    }
-    func forget(_ id: UUID) {
-        do {
-            try pairing.forget(id)
-            if selected == id {
-                retireSelected()
-            }
-            refresh()
-        } catch { self.error = error.localizedDescription }
+            _ = await refresh(); return true
+        } catch {
+            credentialBusy = false
+            if epoch == credentialEpoch { self.error = error.localizedDescription }
+            return false
+        }
     }
 }

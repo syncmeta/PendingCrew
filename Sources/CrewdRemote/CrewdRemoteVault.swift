@@ -1,5 +1,15 @@
 import Foundation
 import Security
+import Dispatch
+
+/// One process-wide, non-main serial executor owns every credential store.
+/// Synchronous Security calls may wait for the user without blocking AppKit/UI.
+@globalActor actor CrewdCredentialActor {
+    static let shared = CrewdCredentialActor()
+    private init() {}
+    nonisolated private let queue = DispatchSerialQueue(label: "pendingcrew.crewd.credentials", qos: .userInitiated)
+    nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
+}
 
 /// No Debug conformance: this envelope includes the device's private credential.
 struct CrewdRemoteStoredPair: Codable {
@@ -10,7 +20,7 @@ struct CrewdRemoteStoredPair: Codable {
     let clientCertificate: Data
     var receipt: CrewdRemoteEnvelope?
 }
-protocol CrewdRemoteCredentialStore {
+@CrewdCredentialActor protocol CrewdRemoteCredentialStore {
     func records() throws -> [UUID]
     func read(_ id: UUID) throws -> CrewdRemoteStoredPair
     func save(_ record: CrewdRemoteStoredPair) throws
@@ -19,29 +29,26 @@ protocol CrewdRemoteCredentialStore {
 /// Candidate credentials remain process-local: no Keychain API or persistent
 /// private key file is consulted, including before a computer has been selected.
 /// Relaunch deliberately requires pairing again; this is not durable recovery.
-final class CrewdRemoteMemoryCredentials: CrewdRemoteCredentialStore {
-    private let lock = NSLock()
+@CrewdCredentialActor final class CrewdRemoteMemoryCredentials: CrewdRemoteCredentialStore {
     private var values: [UUID: CrewdRemoteStoredPair] = [:]
     func records() throws -> [UUID] {
-        lock.lock(); defer { lock.unlock() }
         return values.keys.sorted { $0.uuidString < $1.uuidString }
     }
     func read(_ id: UUID) throws -> CrewdRemoteStoredPair {
-        lock.lock(); defer { lock.unlock() }
         guard let value = values[id] else { throw CrewdRemoteError.unavailableCredential }
         return value
     }
     func save(_ record: CrewdRemoteStoredPair) throws {
         guard try JSONEncoder().encode(record).count <= 524288 else { throw CrewdRemoteError.storageFailure }
-        lock.lock(); defer { lock.unlock() }; values[record.id] = record
+        values[record.id] = record
     }
     func remove(_ id: UUID) throws {
-        lock.lock(); defer { lock.unlock() }; values.removeValue(forKey: id)
+        values.removeValue(forKey: id)
     }
 }
 /// One factory covers original AppModel and the retained migration entry points.
 /// Candidate builds cannot fall back to the user's system Keychain.
-enum CrewdRemoteCredentials {
+@CrewdCredentialActor enum CrewdRemoteCredentials {
     private static let isolated = CrewdRemoteMemoryCredentials()
     static func application() -> CrewdRemoteCredentialStore {
         #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
@@ -66,7 +73,7 @@ enum CrewdRemoteCredentials {
     }
     /// Each actual App identity owns its persistent credentials. Missing or
     /// malformed bundle metadata must never open the production App's vault.
-    static func keychainService(bundleIdentifier: String?) -> String? {
+    nonisolated static func keychainService(bundleIdentifier: String?) -> String? {
         guard let identifier = bundleIdentifier, !identifier.isEmpty,
               identifier.utf8.count <= 255, identifier.contains("."),
               !identifier.hasPrefix("."), !identifier.hasSuffix("."),
@@ -79,7 +86,7 @@ enum CrewdRemoteCredentials {
     }
 }
 /// A new, non-synchronizing Keychain namespace. Legacy PSK entries are never read.
-final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
+@CrewdCredentialActor final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
     private let service: String
     init(service: String? = nil) {
         if let service { self.service = service }
@@ -93,8 +100,8 @@ final class CrewdRemoteKeychain: CrewdRemoteCredentialStore {
             #endif
         }
     }
-    static func canonicalAccount(_ id: UUID) -> String { id.uuidString.lowercased() }
-    static func matchesReturnedAccount(_ result: Any?, id: UUID) -> Bool {
+    nonisolated static func canonicalAccount(_ id: UUID) -> String { id.uuidString.lowercased() }
+    nonisolated static func matchesReturnedAccount(_ result: Any?, id: UUID) -> Bool {
         guard let attributes = result as? [String: Any] else { return false }
         return attributes[kSecAttrAccount as String] as? String == canonicalAccount(id)
     }
