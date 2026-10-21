@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-21 当前：Mac精装与草稿耐久性源码整合，四目标候选已构建；实际草稿窗口与安装待完成
+
+原Mac前端精装、四视图、窄窗、亮暗/菜单/空态及退出重开流程已有真实窗口证据。退出模块 `f9810141fcd38733b0922c632ba40135a37c3dda` 保留三种正常退出方式，补上后台停工未确认时有明确警示的“强制关闭App”；只关闭当前App，不重连/重发/杀后台或冒后台已停。完整窗口exec48974实际0，同DB新Core/GUI、零session及正常退出通过；95份原件冻结于 `docs/private/preserved-delivery-artifacts/mac-polish-f9810141-whole-ui-20261021/`（清单25a0e3f1…ff503）。原P2确实暴露A未发草稿丢失，B跨进程未检查，未将控制脚本0冒整体耐久性通过。
+
+草稿完整客户端单元 `891507c76194aab7e91749d6a8fe65210596c538` 已独验并快进本地main/global：6份共享产品Swift及1既有夹具，扩展原store而非增加Core/schema。复用稳定认证namespace/数据库边界、crew/topic隔离；原子私有存储保存正文/@/回复，损坏或未知版本不覆盖，写失败保内存并提示；仅对应版本的确定成功清空，旧回执/新编辑/Unknown/撤销保留，不自动发送。旧纯probe红86仅同进程第二store，不冒旧跨进程红；实际旧窗口红另列。新独立write/read进程及状态/损坏/链接模式均0，QA发现的成功后幽灵回复元数据已在同一成功门内修正并复验。源码、离线证据保全于 `composer-durability-f9810141-source-20261021/`，最终delta清单c0b5c1d6…bff83。
+
+准确891四目标均实际构建并独立静态接受：正常Mac88183/封口36581、Native2429/封口41752、Simulator48169、iPhoneOS72086全部0。正常0.1.44/20747.06929，Native0.0.2183；1765源码/3738依赖前后相同，完整12347项稳定清单cece1f8680e4710ca0f739820ca4455a7d593f044c11a964e7ba05937e81f736，位于 `docs/private/preserved-delivery-artifacts/mac-polish-891507c7-20261021/`。GUI准确来源891；后台仍原compiled669/defaultDebug，绝不改标新Rust来源。移动分别linker-ad-hoc/unsigned；复用8d真实手机/平板首用引导证据，不冒891新运行、完整配对或真机。原CI仍手动触发，本轮未派发。
+
+唯一新增草稿窗口exec7839实际1：在原9ba私域P1两次收到CUA“用户改变界面，重新读取状态”保护；第一次后按要求只读取状态，第二次后停止全部编辑/发送并限定收尾。未到P2、未取得确定输入或草稿文件，不能认草稿恢复通过，也不能认产品保存失败或断言有人操作。GUI自有子进程-15不是正常退出，Core正式safePause stopped/failed[]后0/socket消失；31份原件 `composer-durability-891507c7-9ba-ui-protection-20261021/`，清单ba82b062…9487c。未换工具/重开scope重试。891准确whole备份/排他替换方案已审且保留在 `mac-polish-891507c7-update-prepared-20261021/`，PROPOSAL585d76d1…502bb、5输入清单46f2ce37…9c582；安装门仍关闭，日用仍291/20746.15278，尚未替换。下次仅完成受影响的草稿P1/P2及一次正常安装首开，不重四视图全验、不再造验收工具；恢复GUI需先确认该保护已解除。
+
+VPS约八小时后唯一分隔SSH69655仍255握手超时，无远端命令/部署，不换别名循环。旧真实Keychain添加结果仍Unknown，不读删重试。Claude完成归属、Solid及其他尚待讨论方案仍待决。本统筹记录晚于四包构建，不是包输入；其他会话React原型未提交改动原样保留、不混入本次提交。远端保存以实际push终态记录为准。
+
 ## 2026-10-21 最新：Mac精装候选冻结，iOS首用完整单元已验；窗口与网络阻断分列
 
 原Mac13文件完整精装 `488631b1ae5dba31ff8092d20064746adb81a99b` 已整合本地main；正常Release44727/封口90157及同原UI Native91526均实际0，正常包静态独验接受，版本0.1.44/20746.59180。正常+Native稳定组 `docs/private/preserved-delivery-artifacts/mac-polish-488631b1-20261021/`，12148项清单f9ddcd07…0b59；后台仍原compiled669/defaultDebug证明分列。新本机scope正式API seed/原App启动/peer/零session通过，但首次CUA绑定实际拒绝Mac锁屏；未做任何UI操作或截图。原GUI限定中止-15、Core0，26份锁屏原件及清单4d6723c0…99f5a3保全，不能标四视图/窄窗通过。日用仍291，正常更新方案93f090d3…3c3d9已具体准备，但GUI门未过不替换、不强退用户任务。
