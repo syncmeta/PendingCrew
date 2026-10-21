@@ -81,7 +81,7 @@ jobs:
         if: ${{ inputs.reuse_all_seven != true }}
         run: |
           cargo build --manifest-path crewd/Cargo.toml --locked --offline -p crewd -p crewd-exec --features testkit --bin crewd --bin fake_codex --bin fake_claude > "$RUNNER_TEMP/linux-current/fake-build.log" 2>&1
-      - name: Exact affected cases (only seventh when six are explicitly reused)
+      - name: Exact affected cases (remaining cases only for explicit historical reuse)
         if: ${{ inputs.reuse_all_seven != true }}
         run: |
           python3 - <<'PY'
@@ -95,6 +95,7 @@ jobs:
             ('crewd-store','--lib','team_data::tests::sqlite_real_authorizer_transaction_rollback_and_dangerous_confirmation'),
             ('crewd-store','--lib','team_data::tests::sqlite_closed_scope_rolls_back_and_foreign_format_is_not_initialized'),
             ('crewd-server','orchestra_fake_codex','codex_runs_through_serve_and_persists_profile_delivery_and_thread_resume'),
+            ('crewd-server','--lib','tests::executor_discovery_uses_the_public_scope_without_starting_a_provider'),
           ]
           reuse=os.environ['REUSE_FIRST_SIX']=='1'
           results=[]
@@ -112,7 +113,7 @@ jobs:
               results.append({'package':package,'target':target,'test':name,'exitCode':code,'exactlyOnePassed':passed,'log':log.name})
               (out/'affected-results.json').write_text(json.dumps(results,indent=2))
               assert passed, f'exact case failed or selected zero tests: {name}'
-          assert len(results)==(1 if reuse else 7)
+          assert len(results)==(2 if reuse else 8)
           PY
       - name: Build default-feature normal Release and canonical tar once
         run: |
@@ -142,7 +143,7 @@ jobs:
           assert len(smoke['shutdowns'])==2 and all(s['exitCode']==0 for s in smoke['shutdowns'])
           reuse=os.environ['REUSE_FIRST_SIX']=='1'
           all_reused=os.environ['REUSE_ALL_SEVEN']=='1'
-          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesQualified':7,'casesExecutedThisRun':0 if all_reused else (1 if reuse else 7),'casesReusedFrom39292568772':6 if (reuse or all_reused) else 0,'casesReusedFrom39294517568':1 if all_reused else 0,'packagedNormalSmoke':smoke,'runtimeScope':'debug SQLite/ACL/restore and actual serve/fake queued-resume cases; separate default Release private serve/backup/restore/reopen original UUID; no model or installation'}
+          summary={'sourceRef':ref,'rustInputs':len(rows),'rustInputDigest':p.digest(rows),'normalConfiguration':cfg,'freshOwnGraphVerified':True,'binarySHA256':w['binarySHA256'],'canonicalTarSHA256':hashlib.sha256(archives[0].read_bytes()).hexdigest(),'affectedCasesQualified':7 if all_reused else 8,'casesExecutedThisRun':0 if all_reused else (2 if reuse else 8),'casesReusedFrom39292568772':6 if (reuse or all_reused) else 0,'casesReusedFrom39294517568':1 if all_reused else 0,'packagedNormalSmoke':smoke,'runtimeScope':'debug SQLite/ACL/restore and actual serve/fake queued-resume cases; separate default Release private serve/backup/restore/reopen original UUID; no model or installation'}
           (out/'linux-current/release-source.json').write_text(json.dumps(summary,indent=2))
           PY
       - name: Preserve one explicitly unqualified failed package and complete proof
