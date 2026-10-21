@@ -144,6 +144,8 @@ targets:
         SUPPORTS_MACCATALYST: NO
       configs:
         Debug:
+          # Simulator Keychain uses only this app's identity, without a team or shared group.
+          "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Config/Simulator.entitlements
           "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
           "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
           "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC"
