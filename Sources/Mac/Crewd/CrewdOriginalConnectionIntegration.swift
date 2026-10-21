@@ -88,12 +88,12 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
             .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; Task { await window.refresh(); await window.select(id) }
+                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
             .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
                 CrewdRemotePairingView(pairing: window.pairing, pending: pair.id) { id in
-                    pending = nil; Task { await window.refresh(); await window.select(id) }
+                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
                 }
             }
 

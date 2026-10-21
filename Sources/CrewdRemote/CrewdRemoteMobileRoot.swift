@@ -37,12 +37,12 @@ struct CrewdRemoteMobileRoot: View {
         }
         .sheet(isPresented: $pairingSheet, onDismiss: { Task { await window.refresh() } }) {
             CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                pairingSheet = false; Task { await window.refresh(); await window.select(id) }
+                pairingSheet = false; Task { guard await window.refresh() else { return }; await window.select(id) }
             }
         }
         .sheet(item: $pendingPair, onDismiss: { Task { await window.refresh() } }) { pending in
             CrewdRemotePairingView(pairing: window.pairing, pending: pending.id) { id in
-                pendingPair = nil; Task { await window.refresh(); await window.select(id) }
+                pendingPair = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
             }
         }
     }
