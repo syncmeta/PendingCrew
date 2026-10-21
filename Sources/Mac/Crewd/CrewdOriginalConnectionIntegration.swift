@@ -31,19 +31,32 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
                 #else
-                ForEach(window.computers) { computer in
-                    Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
-                        if computer.paired { Task { await window.select(computer.id) } }
-                        else { pending = computer }
+                Button("管理远程电脑") { window.refresh() }
+                switch window.computerListState {
+                case .notLoaded:
+                    Text("已存电脑尚未读取")
+                case .loaded:
+                    if window.computers.isEmpty { Text("没有已存的远程电脑") }
+                    ForEach(window.computers) { computer in
+                        Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
+                            if computer.paired { Task { await window.select(computer.id) } }
+                            else { pending = computer }
+                        }
                     }
+                case .failed(let message):
+                    Text("已存电脑读取失败")
+                    Text(message)
                 }
                 Divider()
-                Button("添加电脑") { adding = true }
+                Button("添加电脑") {
+                    guard window.refresh() else { return }
+                    adding = true
+                }
                 Menu("移除已存电脑") {
                     ForEach(window.computers) { computer in
                         Button(computer.name, role: .destructive) { removing = computer }
                     }
-                }.disabled(window.computers.isEmpty)
+                }.disabled(window.computerListState != .loaded || window.computers.isEmpty)
                 #endif
             }
             if !window.inputReviewWorkspaces.isEmpty || !previousAdmins.isEmpty {
@@ -91,12 +104,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             } message: { computer in
                 Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")
             }
-            .onAppear {
-                #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
-                window.refresh()
-                #endif
-                synchronizeAdministration()
-            }
+            .onAppear { synchronizeAdministration() }
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }
     }
     private func chooseLocal() async {
