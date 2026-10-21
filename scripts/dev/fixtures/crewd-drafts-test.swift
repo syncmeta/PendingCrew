@@ -54,7 +54,18 @@ final class RemoteFactoryReadProbe: CrewdRemoteCredentialStore {
         // The window is separately injected with a read counter, never a vault.
         let factory = CrewdRemoteCredentials.application()
         #if QA_EXPECT_PERSISTENT
-        guard factory is CrewdRemoteKeychain else { throw Failure.message("explicit normal remote product still refuses persistent credential factory") }
+        guard CrewdRemoteCredentials.keychainService(bundleIdentifier: "com.pendingname.pendingcrew") == "com.pendingname.pendingcrew.crewd.remote.v1",
+              CrewdRemoteCredentials.keychainService(bundleIdentifier: "com.pendingname.pendingcrew.remote-preview") == "com.pendingname.pendingcrew.remote-preview.crewd.remote.v1",
+              CrewdRemoteCredentials.keychainService(bundleIdentifier: nil) == nil,
+              CrewdRemoteCredentials.keychainService(bundleIdentifier: "com.pendingname..pendingcrew") == nil,
+              CrewdRemoteCredentials.keychainService(bundleIdentifier: " com.pendingname.pendingcrew") == nil else {
+            throw Failure.message("credential namespace must bind the exact valid App identity")
+        }
+        if CrewdRemoteCredentials.keychainService(bundleIdentifier: Bundle.main.bundleIdentifier) != nil {
+            guard factory is CrewdRemoteKeychain else { throw Failure.message("valid normal App identity lost persistent credential factory") }
+        } else {
+            guard factory is CrewdRefusedCredentials else { throw Failure.message("unqualified executable opened production credentials") }
+        }
         #elseif QA_EXPECT_MEMORY
         guard factory is CrewdRemoteMemoryCredentials else { throw Failure.message("isolated candidate lost memory credential factory") }
         #else

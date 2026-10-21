@@ -195,7 +195,10 @@ def main_build_signature(path):
  return {'state':state,'sha256':sha(before),'query':q}
 
 def expected_bundle_identifier(configuration,purpose="product"):
- if purpose not in ['product','ui-preview']:fail('closed packaging purpose')
+ if purpose not in ['product','ui-preview','remote-preview']:fail('closed packaging purpose')
+ if purpose=='remote-preview':
+  if configuration not in ['Debug','Release']:fail('Remote preview requires ordinary configuration')
+  return 'com.pendingname.pendingcrew.remote-preview'
  if purpose=='ui-preview':
   if configuration not in ['Debug','Release']:fail('UI preview requires ordinary local configuration')
   return 'com.pendingname.pendingcrew.ui-preview'
@@ -228,6 +231,7 @@ def qualify_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="
  return {'sourceRef':ref,'purpose':purpose,'bundleIdentifier':expected_id,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
 
 TARGET_PRODUCTS=pathlib.Path('/private/tmp/pcw-codex-first-xcode/Build/Products')
+REVIEWED_TARGET_PRODUCTS=(TARGET_PRODUCTS,pathlib.Path.home()/'Library/Developer/Xcode/DerivedData/PendingCrew-aehzthzfjzjnxdfaqjkozipivxpn/Build/Products')
 
 def reviewed_target_root(value,existing=False):
  # Xcode reports the /tmp spelling even for canonical -derivedDataPath input.
@@ -239,7 +243,7 @@ def reviewed_target_root(value,existing=False):
   if os.path.realpath('/tmp')!='/private/tmp':fail('standard tmp system alias no longer matches')
   raw='/private/tmp/'+raw[len('/tmp/'):]
  root=pathlib.Path(raw)
- if not root.is_relative_to(TARGET_PRODUCTS) or root==TARGET_PRODUCTS:fail('target outside reviewed warm product directory')
+ if not any(root.is_relative_to(parent) and root!=parent for parent in REVIEWED_TARGET_PRODUCTS):fail('target outside reviewed warm product directory')
  if existing and (not root.is_dir() or root.is_symlink() or root.resolve(strict=True)!=root):fail('target directory contains an unreviewed alias')
  return root
 

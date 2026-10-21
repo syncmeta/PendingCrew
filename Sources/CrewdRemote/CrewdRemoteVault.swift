@@ -58,8 +58,24 @@ enum CrewdRemoteCredentials {
         #else
         // Explicit isolated fixture opt-in is separate from HOME or data paths.
         if ProcessInfo.processInfo.environment["PENDINGCREW_ISOLATED_CREDENTIALS"] == "memory" { return isolated }
-        return CrewdRemoteKeychain()
+        guard let service = keychainService(bundleIdentifier: Bundle.main.bundleIdentifier) else {
+            return CrewdRefusedCredentials()
+        }
+        return CrewdRemoteKeychain(service: service)
         #endif
+    }
+    /// Each actual App identity owns its persistent credentials. Missing or
+    /// malformed bundle metadata must never open the production App's vault.
+    static func keychainService(bundleIdentifier: String?) -> String? {
+        guard let identifier = bundleIdentifier, !identifier.isEmpty,
+              identifier.utf8.count <= 255, identifier.contains("."),
+              !identifier.hasPrefix("."), !identifier.hasSuffix("."),
+              !identifier.contains("..") else { return nil }
+        for byte in identifier.utf8 {
+            guard (48...57).contains(byte) || (65...90).contains(byte) ||
+                  (97...122).contains(byte) || byte == 45 || byte == 46 else { return nil }
+        }
+        return identifier + ".crewd.remote.v1"
     }
 }
 /// A new, non-synchronizing Keychain namespace. Legacy PSK entries are never read.

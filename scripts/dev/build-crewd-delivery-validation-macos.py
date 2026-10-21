@@ -5,8 +5,8 @@ it never launches, installs, uses a personal signing identity, or publishes.
 """
 import argparse, hashlib, json, pathlib, plistlib, shutil, subprocess, sys, time
 
-DD = '/private/tmp/pcw-codex-first-xcode'
-SPM = '/private/tmp/pcw-codex-first-spm'
+DD = str(pathlib.Path.home() / 'Library/Developer/Xcode/DerivedData/PendingCrew-aehzthzfjzjnxdfaqjkozipivxpn')
+SPM = str(pathlib.Path(DD) / 'SourcePackages')
 
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--backend', required=True, type=pathlib.Path)
     parser.add_argument('--backend-sha256', required=True)
     parser.add_argument('--configuration', choices=['KnowledgeValidation', 'Debug', 'Release'], default='KnowledgeValidation')
-    parser.add_argument('--purpose', choices=['product', 'ui-preview'], default='product', help='UI preview uses an isolated bundle ID and is not a product delivery')
+    parser.add_argument('--purpose', choices=['product', 'ui-preview', 'remote-preview'], default='product', help='Isolated UI and normal remote previews use fixed distinct bundle identities')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
     repo = pathlib.Path(__file__).resolve().parents[2]
@@ -36,8 +36,8 @@ def main():
     if digest(backend) != args.backend_sha256:
         raise ValueError('Backend differs from the coordinated build hash')
     ordinary = args.configuration in ['Debug', 'Release']
-    if args.purpose == 'ui-preview' and not ordinary:
-        raise ValueError('UI preview requires ordinary Debug or Release')
+    if args.purpose in ['ui-preview', 'remote-preview'] and not ordinary:
+        raise ValueError('Preview requires ordinary Debug or Release')
     epoch = int(time.time())
     build_number = str(epoch // 86400) + '.' + format(epoch % 86400, '05d')
     command = ['/usr/bin/xcodebuild','-project',str(repo/'PendingCrew.xcodeproj'),
@@ -51,6 +51,7 @@ def main():
         'PENDINGCREW_BACKEND_INPUT='+str(backend),'PENDINGCREW_BACKEND_SHA256='+args.backend_sha256,'build']
     if ordinary: command[-1:-1] = ['MARKETING_VERSION=0.1.44', 'CURRENT_PROJECT_VERSION='+build_number]
     if args.purpose == 'ui-preview': command[-1:-1] = ['PRODUCT_BUNDLE_IDENTIFIER=com.pendingname.pendingcrew.ui-preview']
+    if args.purpose == 'remote-preview': command[-1:-1] = ['PRODUCT_BUNDLE_IDENTIFIER=com.pendingname.pendingcrew.remote-preview', 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT']
     if not args.execute:
         print(json.dumps({'purpose':args.purpose,'sourceRef':args.ref,'backendSHA256':args.backend_sha256,'buildCommand':command}, indent=2))
         return
@@ -75,7 +76,7 @@ def main():
     if ordinary and digest(built/'Contents/Helpers/crewd') != args.backend_sha256:
         raise ValueError('Ordinary target did not embed the coordinated normal Core')
     finalization = closure.finalize_unsigned_target(built, args.ref, args.configuration, args.purpose)
-    app = out/('PendingCrew UI Preview.app' if args.purpose == 'ui-preview' else 'PendingCrew.app' if ordinary else 'PendingCrew SQLite Candidate.app')
+    app = out/('PendingCrew Remote Preview.app' if args.purpose == 'remote-preview' else 'PendingCrew UI Preview.app' if args.purpose == 'ui-preview' else 'PendingCrew.app' if ordinary else 'PendingCrew SQLite Candidate.app')
     shutil.copytree(built, app, symlinks=True)
     helpers = app/'Contents/Helpers'
     helpers.mkdir(exist_ok=True)
@@ -99,7 +100,7 @@ def main():
     run(['/usr/bin/codesign','--force','--sign','-','--options','runtime',str(app)], repo, out/'sign.log')
     run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)], repo, out/'signature-check.log')
     loaded = closure.audit(app)
-    facts = {'purpose':args.purpose,'uiPreview':args.purpose == 'ui-preview','artifactRole':'ui-preview-only-not-installable' if args.purpose == 'ui-preview' else 'mac-candidate','bundleIdentifier':info.get('CFBundleIdentifier'),'sourceRef':args.ref,'configuration':args.configuration,'app':str(app),
+    facts = {'purpose':args.purpose,'uiPreview':args.purpose == 'ui-preview','artifactRole':'ui-preview-only-not-installable' if args.purpose == 'ui-preview' else 'normal-remote-preview-isolated-keychain' if args.purpose == 'remote-preview' else 'mac-candidate','bundleIdentifier':info.get('CFBundleIdentifier'),'sourceRef':args.ref,'configuration':args.configuration,'app':str(app),
         'version':info.get('CFBundleShortVersionString'),'buildNumber':info.get('CFBundleVersion'),
         'backendInputSHA256':args.backend_sha256,'backendSHA256':digest(helpers/'crewd'),
         'binaryHashes':{str(path.relative_to(app)):digest(path) for path in code},
