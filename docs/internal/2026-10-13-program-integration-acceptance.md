@@ -1,5 +1,23 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 正常远程与响应性模块组合冻结 R2，转准确平台候选
+
+正式远程配置cc382122、后台串行凭据/配对及关闭竞态最终4b711233、Linux单手动候选195c5560均独立源审接受并正常merge；本节所在提交为下一准确组合R2。后台串行域沿用macOS14/iOS17/Swift5；真实Production Pairing/Vault/Certificate/Validation/共享SwiftUI表单及原remote-flow内存延迟用例以strict-concurrency complete、warnings-as-errors实际编译0/运行0，移除生产epoch保护的负向对照按预期失败。六处refresh失效后继续select的竞态已在最终增量修正；其调用点是源/parse证据，不冒完整Window运行测试。
+
+只从同一R2生成准确普通后台、普通Mac Release product与受影响普通iOS候选，复用原暖Rust/Xcode/SPM；Apple目标整体编译终态确认后，才触发一次必要Linux当前源码候选，reuse false/false、25分钟上限，失败不得自动重复CI。普通Mac默认开放远程，凭据仅显式管理/添加才读，普通开窗仍本机、零自动连接或session恢复。后台单串行持有store/私钥，UI只await快照/有限状态，配对写无await且无写后二次读，关闭不假称取消成功或自动重发。新产物尚未构建，不能改标旧R/891/07d或c8证明。
+
+旧184单元仍未通过：回应/凭据Unknown，无accept/revoke/P2。原remote自然超时holder1、Core0、安全停止/socket及49379监听消失；Appholder1时child仍活，随后实际逐PID及socket均缺席，但App/localCore退出码与原因未观测，不称正常安全退出。原数据与service保留，不复读或移除，不换新ID/service重试。此独立源码风险修复不作为184根因已治证据；准确终态见私有保全mac-remote-preview-eb752f01-184af8f6-20261021/runtime/boundary-terminal.json。
+
+Mac日用替换仍按既有广泛授权及实际无运行任务前提做具体交付，首开不读正式凭据、不调用模型；源码/内存验证不冒真实Keychain持久、iOS窗口或真机通过。M4标准ACP完成关联/完整历史资格仍缺受支持合同，Native不可用；M5/SQLite/已验草稿与隔离VPS业务继续复用，不做旧数据迁移、未定方案或全量重复验收。持续目标保持整个工程，不以本候选源码冻结宣称完成。
+
+## 2026-10-21 普通远程正式配置已整合；持久窗口未知现场与响应性模块并行
+
+实际组合R=eb752f01已普通推origin main/global；准确普通helper与Mac Release远程预览0.1.44/20747.55326构建0、QA产物核接受，仍非持久流程通过。184私域准确连接码和电脑身份已核；随后await填写设备名再点击生成的组合调用超时，连第一await完成或click发出都未证实。回应/凭据Unknown、未复制回应/未accept，不重按、补邀、换UUID或读Keychain；原日志0B，原因未知。原owner/Appholder按原截止观察，后者超时不会signal App，不能假称已清理。
+
+正式远程配置cc382122和Linux单手动候选195c5560均独立源审接受，已合本地main中间343eca17，未新封包/CI。旧Window探针编译失败且未执行，不算行为门通过，不追旧夹具闭包。最终组合待单后台串行凭据域、UI single-flight/epoch/可关闭等待整块源完成，再一次准确构建。Apple明确Security同步调用可阻塞调用线程，此为独立源码风险，不作184事实归因。沿用macOS14/iOS17/Swift5，配对写序列无await/无写后二次读，不新增权限或持久授权，不把取消未知写当成功或重发。
+
+当前Claude2.1.301只读资格核未取得受支持的逐提交完成/完整历史合同，Native保持不可用，不断言新版必不支持；未运行CLI/SDK/模型。M5、Mac日用891、旧数据备份、已验草稿及隔离VPS业务继续保留原实际来源；局部Unknown不暂停独立源码及剩余交付。
+
 ## 2026-10-21 普通 Mac 远程组合源码冻结，转准确产物与完整持久流程
 
 后端7c8a32b75a77cd37529433e80274d11547a5eda3（Core15执行器发现/真实资格及精确remote-preview签名准入）与客户端c1cf7901fba81c7560d3f0d2428d3ee70f6014b7（普通本地加远程预览及按真实App身份隔离凭据）均已独立源审接受，并以正常merge纳入main；本节所在提交为最终组合R，后续准确normal后台及Release App均从同一R构建。后端最终定向检查与CLI目标编译终态均0；旧schema快照漂移及首轮缓存污染按下文分列，不冒新功能或全表业务验证。其他session的92项设计改动保留，不纳入本次提交。
