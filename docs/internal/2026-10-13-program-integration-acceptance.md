@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-21 最新完整模块：Mac 前端到 VPS 后台的隔离业务流程通过
+
+复用准确c8 Linux候选（不是新main重编）与现成891 Native固定Memory Mac包，在新VPS私有prefix临时运行后台，以同号loopback SSH转发保持签名邀请endpoint不变。独立QA实际完成单次签名配对→远端工作区→消息/Todo/文档/进展四视图→唯一Human消息和Todo写入回显→在线撤权拒绝→原作用域只读入口保留完整未发送草稿→移除Memory配对→正常安全暂停退出。远端DB/authority与初始本地Core明确区分；此结论不包含跨进程Keychain持久信任、不代表公网长驻部署。额外独立observer读请求被lineage权限拒绝后停止，未补claim/改读DB，不称独立后台读回通过。
+
+原handles已收尾：App0、本地Core及socket消失；远端ownerSSH0、Core0、safePause stopped/failed[]、socket及端口消失；SSH tunnel原终端CtrlC后255作为连接终止记录，不冒产品失败或正常App退出。VPS既有监听列表不变，未安装systemd服务；新私有prefix保留，未留常驻测试后台。完整结果和失败原件保存在 `vps-private-c8-mac891-30432c0a-20261021/`，最终终态SHA95abae8dd92a2b1214a96c5174e099aa051efd89bf6b0f85167ed7bd1cb6da26。Mac日用/草稿稳定验收未重跑。iOS已通过官方DeviceHub实际定位首错records OSStatus=-34018，最小普通Simulator自身AppID声明修复包07d52b76已构建，仍待独立最终包核及完整普通持久配对；不将构建通过冒运行验收。
+
+## 2026-10-21 最新更正：新 VPS 入口已通；Xcode 27 图形入口为 Device Hub
+
+用户提供的新入口已完成一次严格 known-hosts、BatchMode 的只读 SSH：实际退出0，Linux x86_64，根分区可用约5.24GiB，名为crewd.service的systemd单元未找到。未部署或修改服务器；此前旧入口超时不再构成新地址的连通阻断。私有原件保存在 `vps-new-entry-readonly-20261021/actual-ssh-attempt.json`，不能据此宣称远程后台与本机前端已经连通。
+
+此前“缺少官方模拟器图形应用”的判断撤回：本机 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app` 实际存在（com.apple.dt.Devices，27.0/build255.2.6.6），Apple当前官方文档使用Device Hub显示及操作模拟设备。旧Simulator.app路径不存在不能证明Xcode安装缺损，暂无证据证明误删或瘦身。此次未启动GUI、设备或iOS包；先前普通025包的凭据读取错误、底层原因未知及完整持久配对未验结论仍成立。下一步应使用现有官方Device Hub入口诊断并完成原产品流程，不下载或重装Xcode来填补错误假设。以下旧记录保留为历史，不沿用其GUI缺失与旧地址阻断结论。
+
 ## 2026-10-21 当前：普通iOS025构建/安装启动通过，完整GUI与持久配对未通过
 
 原iOS主配对表单移除入口最小修正025a7b8a52170295ad7f995d78d05f2eb8a0e96c已独立源码接受/合main-global/普通远端保存，唯一IOSRemotePairingView.swift 49+/11-，SHA d598055e3b69a18085819ce52157653fba9fe91b35c620f17669480458f5126c；正常确认沿forget(summary)及Bool成功门，不切替代Root/CLI删除，不增加后端schema。原73构建和当前025区分，025普通模拟器actual63582/xcode0，DEBUGonly、arm64、iphonesimulator27、bundle com.pendingname.pendingcrew、无Native/Memory、NO signing/team/entitlements；版本0.1.43/build1与实际配置一致，Info BuildStampCommit=025。App59,565,986B，真实UI dylib249845211547ff52b9b91c9869266504c7ee8cdbadfb5aec0c79166b0214cb3f/51,612,232B；完整包产品复制逐文件一致、源/依赖前后一致，completion SHA b13d7582ffe6279f07acb583811b59551ccaee5de630c5c3510607fd900c3082，稳定根 `ios-normal-025a7b8a-20261021/`。旧暖缓存不在后仅补3个本地已存精确pin仓库；原8依赖只有明确无compiler引用的build/生成目录不清理、不作为修改源码放行，相关事实均保原始记录。
