@@ -116,6 +116,7 @@ private struct CrewMobileDirectory: View {
     let crews: [CrewSummary]
     @Binding var selection: String?
     @State private var mode = CrewdNavigation.Sidebar.contacts
+    @State private var showingStatus=false
     @State private var collapsed: Set<String> = []
     private var visible: [CrewdValue] {
         let ids = Set(crews.map(\.id))
@@ -146,9 +147,16 @@ private struct CrewMobileDirectory: View {
                         if let crew = crews.first(where: { $0.id == id }) { directoryRow(crew).tag(crew.id) }
                     }
                 }
-            }.listStyle(.sidebar).scrollContentBackground(.hidden)
+            }.listStyle(.sidebar)
             CrewdProviderStatusFooter()
-        }.background(Theme.Palette.surfaceMuted.opacity(0.25))
+            Divider()
+            Button{showingStatus=true}label:{
+                VStack(alignment:.leading,spacing:5){
+                    Label(workspace.client.readyForWork ? "已连接":workspace.status,systemImage:workspace.client.readyForWork ? "checkmark.shield":"wifi.exclamationmark").font(.caption)
+                    if workspace.error != nil{Label("当前操作未完成 · 核对",systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(.orange)}
+                }.frame(maxWidth:.infinity,alignment:.leading).padding(12)
+            }.buttonStyle(.plain).accessibilityLabel("连接状态与原请求核对")
+        }.sheet(isPresented:$showingStatus){CrewMobileConnectionReadback(workspace:workspace)}
     }
     private func directoryRow(_ crew: CrewSummary) -> some View {
         HStack(spacing: 10) {
@@ -164,6 +172,30 @@ private struct CrewMobileDirectory: View {
         }.padding(.vertical, 5)
     }
 }
+/// Read-only status remains reachable from the phone's global menu when its
+/// native sidebar is collapsed. Original receipt lookups stay explicit.
+struct CrewMobileConnectionReadback:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    @Environment(\.dismiss) private var dismiss
+    var body:some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment:.leading,spacing:16){
+                    Text(workspace.status).font(.body).textSelection(.enabled)
+                    if let error=workspace.error {
+                        DisclosureGroup("当前操作未完成 · 原始说明"){
+                            Text(error).font(.callout).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+                        }.foregroundStyle(.orange)
+                    }
+                    Text("未知结果只核对原请求，不会自动重新发送或恢复会话。").font(.caption).foregroundStyle(.secondary)
+                    if workspace.client.capabilities.contains("command.receipts"){CrewdPublicRecoveryView(workspace:workspace)}
+                }.padding(20)
+            }.navigationTitle("连接状态").navigationBarTitleDisplayMode(.inline)
+                .toolbar{ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}}}
+        }
+    }
+}
+
 #endif
 
 // MARK: - Row

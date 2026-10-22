@@ -23,7 +23,6 @@ struct CrewCenterView: View {
     @State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
     @State private var searchQuery = ""
-    @FocusState private var searchFocused:Bool
     @State private var searchTargetMessageId: String?
 
     var body: some View {
@@ -116,25 +115,15 @@ struct CrewCenterView: View {
         // 表现为"切换后 toolbar 闪一下"。用 selectedCrewId（切换瞬间即非 nil）+ 列表里的
         // title 兜底，整条就稳定不抖。
         .navigationTitle(crewStore.pendingCrew?.id == crewStore.selectedCrewId
-                         ? "新 crew"
+                         ? "新机组"
                          : (crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? ""))
 
+        .searchable(text:$searchQuery,placement:.toolbar,prompt:"搜索当前群")
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
         // sidebar 透出自己的侧栏材质、detail 透出白 canvas，两边各自对，互不打架。
         .toolbar {
-            ToolbarItem(placement:.primaryAction) {
-                HStack(spacing:6){
-                    Button{searchFocused=true}label:{Image(systemName:"magnifyingglass")}
-                        .buttonStyle(.plain).keyboardShortcut("f",modifiers:.command).help("搜索当前群")
-                    TextField("搜索当前群",text:$searchQuery).textFieldStyle(.plain).focused($searchFocused)
-                    if !searchQuery.isEmpty{Button{searchQuery=""}label:{Image(systemName:"xmark.circle.fill")}.buttonStyle(.plain).help("清除搜索")}
-                }.font(.system(size:12)).foregroundStyle(Theme.Palette.inkMuted)
-                    .padding(.horizontal,9).padding(.vertical,6).frame(width:190)
-                    .background(Theme.Palette.surfaceMuted.opacity(0.55),in:RoundedRectangle(cornerRadius:7))
-                    .overlay(RoundedRectangle(cornerRadius:7).strokeBorder(Theme.Palette.hairline.opacity(0.65),lineWidth:0.6))
-            }
             if let crewId = crewStore.selectedCrewId,
                crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
@@ -145,28 +134,6 @@ struct CrewCenterView: View {
                 }
                 ToolbarItem {
                     Menu {
-
-                    Picker("沟通视图", selection: $communicationView) {
-                        ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { view in
-                            Text(view.title).tag(view)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .help("人类沟通只显示给人的消息；完整记录显示所有消息")
-
-
-                    // Todo #79 当初把它钉在最右（`.primaryAction`）；#128 人类要它挪到
-                    // 那三个按钮**左侧**，所以改成普通 ToolbarItem 并**声明在最前**
-                    // —— toolbar 的排布跟声明顺序走。点亮色与发送键共用
-                    // Theme.Palette.accent，不继承系统蓝。文字仍是人类钉死的「仅@你」四字。
-                    Toggle(isOn: $onlyMentions) { Text("仅@你") }
-                        .toggleStyle(.button)
-                        .tint(Theme.Palette.accent)
-                        .disabled(crewStore.selectedDetail == nil)
-                        .help(onlyMentions
-                              ? "正在只显示 @ 你的消息 + 你自己发的；点一下显示全部"
-                              : "只显示 @ 你的消息 + 你自己发的")
-
 
                     // 驾驶舱 = 叠在群聊之上的临时窗口（#542）；群聊这一栏不卸载，
                     // 关掉驾驶舱回来草稿和滚动位置原样在。关闭在驾驶舱左上角圆形叉。

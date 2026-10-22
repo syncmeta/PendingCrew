@@ -17,7 +17,13 @@ enum CrewdChatStyle {
     static func accent(_ scheme:ColorScheme)->Color {color(0x044735,0x57B690,scheme)}
     static func line(_ scheme:ColorScheme)->Color {color(0xE2E0D7,0x383530,scheme)}
     static func listSelection(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x33312D,scheme)}
-    static func canvas(_ scheme:ColorScheme)->Color {color(0xFFFFFF,0x161512,scheme)}
+    static func canvas(_ scheme:ColorScheme)->Color {
+        #if os(macOS)
+        Color(nsColor:.textBackgroundColor)
+        #else
+        Color(uiColor:.systemBackground)
+        #endif
+    }
     static func ink(_ scheme:ColorScheme)->Color {color(0x1B1A14,0xECE9E0,scheme)}
     static func muted(_ scheme:ColorScheme)->Color {color(0x6E6A5C,0xA8A294,scheme)}
 }
@@ -142,7 +148,7 @@ struct CrewdHumanActions:View {
             if fields.action == .withdraw {Text("仍阻塞活跃计划的问题不能撤回；请先由负责人调整计划，后台会最终校验。").font(.caption).foregroundStyle(.secondary)}
             if let failure {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             Spacer()
-            HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(humanOrigin || drafts.busy(key) || reading || store.selectedCrew != key.scope || ask["state"] != .string("open") || fields.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!drafts.uncertain(key).isEmpty && !reviewedUnknown))}
+            HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(humanOrigin || drafts.busy(key) || reading || store.selectedCrew != key.scope || ask["state"] != .string("open") || fields.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!drafts.uncertain(key).isEmpty && !reviewedUnknown))}
         }.padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
         .task(id:key){guard let id else{return};do{let value=try await store.humanTodoAttributes(id);humanOrigin=value["origin"] == .string("humanTask")}catch{failure=error.localizedDescription}}
     }
