@@ -52,6 +52,7 @@ private struct CrewPersonalVersionPicker:View {
     let key:AppleDraftKey
     @Binding var payload:CrewComposerDraftStore.Draft
     @Environment(\.dismiss) private var dismiss
+    @State private var expected:CrewPersonalDraftService.Snapshot?
     @State private var selected:UUID?
     @State private var retiring=Set<UUID>()
     @State private var merged=""
@@ -83,16 +84,17 @@ private struct CrewPersonalVersionPicker:View {
             HStack{Button("关闭"){dismiss()};Spacer();Button("确认合并/选用"){confirmation=true}.disabled(busy || selected == nil || !own.isSubset(of:retiring))}
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:620))
         .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-合并草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)}}}
-        .task{merged=payload.text;await service.refresh(key)}
+        .task{merged=payload.text;expected=service.snapshot(key,payload:payload);await service.refresh(key)}
         .confirmationDialog("替换当前输入并结束已勾选的旧分支？",isPresented:$confirmation,titleVisibility:.visible){
             Button("确认保存合并版本"){apply()}
             Button("取消",role:.cancel){}
         }message:{Text("只处理已勾选分支；当前非空输入不会因收到其它设备版本自动改变。")}
     }
     private func apply(){
+        guard let expected else{failure="当前输入已在其它窗口更新，请关闭后重新核对。";return}
         var chosen=keepStructure ?? .init();chosen.text=merged
         busy=true
-        Task{do{try await service.resolve(key,payload:chosen,retiring:retiring);payload=chosen;dismiss()}catch{failure="合并未能完整保存，原输入与未合并分支保留。"};busy=false}
+        Task{do{let applied=try await service.resolve(key,payload:chosen,retiring:retiring,expected:expected);guard service.isCurrent(applied) else{throw AppleSyncFailure.invalid};payload=chosen;dismiss()}catch{failure="合并未能完整保存，原输入与未合并分支保留。"};busy=false}
     }
 }
 

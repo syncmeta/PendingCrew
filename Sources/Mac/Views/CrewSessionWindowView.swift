@@ -1173,13 +1173,14 @@ struct CrewSessionWindowView: View {
                 }
                 workspace.setPersonalInput(originalDraft,context:context)
                 let snapshot = workspace.messageDrafts.snapshot(for: context)
+                let personal=workspace.personalInputSnapshot(snapshot)
                 let result: CrewdValue
                 do {
                     result = try await workspace.performValue("session.start", .object([
                         "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
                         "executor": .string(executor), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
                     guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
-                    workspace.clearPersonalInput(snapshot)
+                    workspace.clearPersonalInput(snapshot,personal:personal)
                     if stillPresentingSubmission() { workspace.selectSession(id) }
                 } catch {
                     workspace.recordUncertainSessionStart(snapshot, error: error)

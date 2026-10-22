@@ -1745,6 +1745,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         sending = true
         defer { sending = false }
         do {
@@ -1785,7 +1786,7 @@ struct CrewChatView: View {
             // 「我要回到现场」的明确意图。
             bottomPin.didSendOwnMessage()
             let cleared = sentStore.clearIfUnchanged(sentDraft)
-            if cleared,let sentPersonalKey{CrewPersonalDraftService.shared.checkpoint(.init(),key:sentPersonalKey)}
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared, draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }
@@ -1822,6 +1823,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         sending = true
         defer { sending = false }
         do {
@@ -1835,7 +1837,7 @@ struct CrewChatView: View {
             // 建 Todo 也会往群里发一条「To do +1: #N」—— 同样是自己说话（Todo #47）。
             bottomPin.didSendOwnMessage()
             let cleared = sentStore.clearIfUnchanged(sentDraft)
-            if cleared,let sentPersonalKey{CrewPersonalDraftService.shared.checkpoint(.init(),key:sentPersonalKey)}
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared, draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }
@@ -1879,6 +1881,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         let epoch = workspace.observationGeneration
         sending = true; defer { sending = false }
         do {
@@ -1889,7 +1892,7 @@ struct CrewChatView: View {
             requirementReceipt = "已创建本群需求 " + (result["requirementId"].string ?? "（请核对 Todo）")
             if result["channelAssociation"]["linked"] == .bool(false) { requirementReceipt = "需求已创建，但原会话关联已解除；不会重新关联。" }
             let cleared=sentDraft.draft.text.trimmingCharacters(in:.whitespacesAndNewlines) == snapshot.text && sentStore.clearIfUnchanged(sentDraft)
-            if cleared,let sentPersonalKey{CrewPersonalDraftService.shared.checkpoint(.init(),key:sentPersonalKey)}
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared,draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }

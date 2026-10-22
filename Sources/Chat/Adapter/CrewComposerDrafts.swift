@@ -24,6 +24,10 @@ final class CrewComposerDraftStore {
         let revision: UUID
         let crew: String?
         let channel: String?
+        let sourceIdentity: Data?
+        init(draft:Draft,revision:UUID,crew:String?,channel:String?,sourceIdentity:Data?=nil){
+            self.draft=draft;self.revision=revision;self.crew=crew;self.channel=channel;self.sourceIdentity=sourceIdentity
+        }
     }
     struct Snapshot {
         let key: String
@@ -64,10 +68,10 @@ final class CrewComposerDraftStore {
     func snapshot(for key: String) -> Snapshot {
         Snapshot(key: key, draft: draft(for: key), revision: drafts[key]?.revision)
     }
-    @discardableResult func save(_ draft: Draft, for key: String, crew: String? = nil, channel: String? = nil, retainEmpty: Bool = false) -> Bool {
-        if let old = drafts[key], old.draft == draft, old.crew == crew, old.channel == channel { return storageError == nil }
+    @discardableResult func save(_ draft: Draft, for key: String, crew: String? = nil, channel: String? = nil, retainEmpty: Bool = false, sourceIdentity: Data? = nil) -> Bool {
+        if let old = drafts[key], old.draft == draft, old.crew == crew, old.channel == channel, old.sourceIdentity == sourceIdentity { return storageError == nil }
         if draft.isEmpty && !retainEmpty { drafts.removeValue(forKey: key) }
-        else { drafts[key] = Entry(draft: draft, revision: UUID(), crew: crew, channel: channel) }
+        else { drafts[key] = Entry(draft: draft, revision: UUID(), crew: crew, channel: channel, sourceIdentity: sourceIdentity) }
         return persist()
     }
     @discardableResult func clear(_ key: String) -> Bool {

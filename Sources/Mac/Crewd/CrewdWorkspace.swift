@@ -1108,9 +1108,12 @@ final class CrewdWorkspace: ObservableObject {
         messageDrafts.set(text,for:context)
         if let key=personalDraftKey(context){personalDrafts.checkpoint(.init(text:text),key:key)}
     }
-    @discardableResult func clearPersonalInput(_ snapshot:CrewdDrafts.Snapshot)->Bool {
+    func personalInputSnapshot(_ snapshot:CrewdDrafts.Snapshot)->CrewPersonalDraftService.Snapshot? {
+        personalDraftKey(snapshot.context).flatMap{personalDrafts.snapshot($0,payload:.init(text:snapshot.text))}
+    }
+    @discardableResult func clearPersonalInput(_ snapshot:CrewdDrafts.Snapshot,personal:CrewPersonalDraftService.Snapshot?)->Bool {
         guard messageDrafts.clearIfUnchanged(snapshot) else{return false}
-        if let key=personalDraftKey(snapshot.context){personalDrafts.checkpoint(.init(),key:key)}
+        if let personal{personalDrafts.clearIfUnchanged(personal)}
         return true
     }
     func restorePersonalInput(_ context:CrewdDrafts.Context)async {
@@ -1269,9 +1272,10 @@ final class CrewdWorkspace: ObservableObject {
         guard !hasOriginalUnknown(method: "message.post", crew: snapshot.context.crew, channel: snapshot.context.channel), !uncertainTextSubmissions.contains(where: { $0.snapshot.context == snapshot.context }) else {
             throw CrewdClientError(message: "原消息结果尚未确认。请核对原连接记录，不会重新发送。", kind: .notSubmitted)
         }
+        let personal=personalInputSnapshot(snapshot)
         do {
             let result = try await performValue("message.post", params)
-            if clearPersonal{clearPersonalInput(snapshot)}else{messageDrafts.clearIfUnchanged(snapshot)}
+            if clearPersonal{clearPersonalInput(snapshot,personal:personal)}else{messageDrafts.clearIfUnchanged(snapshot)}
             return result
         } catch {
             if CrewdClientError.isUncertainSubmission(error) {
@@ -1282,9 +1286,10 @@ final class CrewdWorkspace: ObservableObject {
     }
 
     @discardableResult func performText(_ method:String,_ params:CrewdValue,snapshot:CrewdDrafts.Snapshot) async -> Bool {
+        let personal=personalInputSnapshot(snapshot)
         do {
             _ = try await performValue(method,params)
-            clearPersonalInput(snapshot)
+            clearPersonalInput(snapshot,personal:personal)
             return true
         } catch {
             if CrewdClientError.isUncertainSubmission(error) {

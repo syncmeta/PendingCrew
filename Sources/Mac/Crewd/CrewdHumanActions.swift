@@ -351,11 +351,12 @@ struct CrewdSessionStartView: View {
             }
             Button("启动所选成员") {
                 let snapshot = drafts.snapshot(for: context), owner = workspace
+                let personal=owner.personalInputSnapshot(snapshot)
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
                 let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(owner.selectedExecutor), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
                 failure = nil; readUnknown = false; reviewedUnknown = false
                 Task {
-                    do { _ = try await owner.performValue("session.start", fields); owner.clearPersonalInput(snapshot) }
+                    do { _ = try await owner.performValue("session.start", fields); owner.clearPersonalInput(snapshot,personal:personal) }
                     catch {
                         owner.recordUncertainSessionStart(snapshot, error: error)
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }

@@ -109,7 +109,7 @@ import Darwin
     func checkpoint(_ payload:Payload,key:AppleDraftKey){
         latestMemory[key]=payload
         let revision=UUID();revisions[key]=revision
-        if latest?.save(payload,for:storageKey(key),crew:key.crewID,channel:destinationLabel(key),retainEmpty:true) != true {
+        if latest?.save(payload,for:storageKey(key),crew:key.crewID,channel:destinationLabel(key),retainEmpty:true,sourceIdentity:try? appleSyncEncode(key)) != true {
             unsavedLatest.insert(key);errors[key]=latest?.storageError ?? initializationError ?? "当前原文尚未保存，请导出。"
         }else{unsavedLatest.remove(key)}
         let previous=writers[key];previous?.cancel();saving.insert(key)
@@ -143,20 +143,39 @@ import Darwin
         await refresh(key)
         return localDraft(key) ?? versions[key]?.first(where:{$0.own})?.payload
     }
-    /// Caller explicitly confirms which branches are retired. Never merge on
-    /// arrival or replace a nonempty composer just because another device syncs.
-    func resolve(_ key:AppleDraftKey,payload:Payload?,retiring:Set<UUID>)async throws{
+    struct Snapshot {let key:AppleDraftKey;let revision:UUID;let payload:Payload}
+    func snapshot(_ key:AppleDraftKey,payload:Payload)->Snapshot? {
+        guard (localDraft(key) ?? Payload()) == payload else{return nil}
+        if revisions[key] == nil{revisions[key]=UUID()}
+        return .init(key:key,revision:revisions[key]!,payload:payload)
+    }
+    func isCurrent(_ ticket:Snapshot)->Bool {
+        revisions[ticket.key] == ticket.revision && (localDraft(ticket.key) ?? Payload()) == ticket.payload
+    }
+    @discardableResult func clearIfUnchanged(_ ticket:Snapshot)->Bool {
+        guard isCurrent(ticket) else{return false}
+        checkpoint(.init(),key:ticket.key);return true
+    }
+    /// Confirmation binds both the full original payload and its revision.
+    /// A newer edit in any window invalidates a pending merge across awaits.
+    func resolve(_ key:AppleDraftKey,payload:Payload?,retiring:Set<UUID>,expected:Snapshot)async throws->Snapshot{
+        guard expected.key == key,isCurrent(expected) else{throw AppleSyncFailure.invalid}
         if let previous=writers[key]{await previous.value}
+        guard isCurrent(expected) else{throw AppleSyncFailure.invalid}
         let (store,_)=try await store()
-        let replacement=payload ?? Payload()
-        latestMemory[key]=replacement;revisions[key]=UUID()
-        let latestSaved=latest?.save(replacement,for:storageKey(key),crew:key.crewID,channel:destinationLabel(key),retainEmpty:true) == true
+        guard isCurrent(expected) else{throw AppleSyncFailure.invalid}
+        let replacement=payload ?? Payload(),revision=UUID()
+        latestMemory[key]=replacement;revisions[key]=revision
+        let latestSaved=latest?.save(replacement,for:storageKey(key),crew:key.crewID,channel:destinationLabel(key),retainEmpty:true,sourceIdentity:try? appleSyncEncode(key)) == true
         if !latestSaved{unsavedLatest.insert(key);errors[key]=latest?.storageError ?? "合并原文尚未保存，请导出。"}
         do{_ = try await store.resolve(key:key,payload:payload,retiring:retiring)}
-        catch{errors[key]=latestSaved ? "合并原文已保存在本机；版本保存失败，尚未完成分支合并。":"合并原文尚未保存，请导出后再退出。";throw error}
-        if latestSaved{unsavedLatest.remove(key);errors[key]=nil}
-        else{throw AppleSyncFailure.storage}
+        catch{if revisions[key] == revision{errors[key]=latestSaved ? "合并原文已保存在本机；版本保存失败，尚未完成分支合并。":"合并原文尚未保存，请导出后再退出。"};throw error}
+        guard revisions[key] == revision else{throw AppleSyncFailure.invalid}
+        unsavedLatest.remove(key)
+        errors[key]=latestSaved ? nil:"版本已保存在本机；快捷草稿保存失败，可重试。"
         await refresh(key)
+        guard revisions[key] == revision else{throw AppleSyncFailure.invalid}
+        return .init(key:key,revision:revision,payload:replacement)
     }
     func retry(_ key:AppleDraftKey){if let payload=localDraft(key){checkpoint(payload,key:key)}}
     struct ExportTicket {let key:AppleDraftKey;let revision:UUID;let payload:Payload}
@@ -170,9 +189,14 @@ import Darwin
         errors[ticket.key]="当前原文已导出；本机保存仍须重试。"
     }
     func loadCatalog()async{
+        let latestKeys=Set((latest?.entries ?? [:]).compactMap{entry->AppleDraftKey? in
+            guard let bytes=entry.value.sourceIdentity,let key=try? JSONDecoder().decode(AppleDraftKey.self,from:bytes),storageKey(key) == entry.key else{return nil}
+            return key
+        })
+        catalog=latestKeys.sorted{storageKey($0) < storageKey($1)}
         do{
             let (store,_)=try await store()
-            catalog=await store.keys().sorted{storageKey($0) < storageKey($1)}
+            catalog=await store.keys().union(latestKeys).sorted{storageKey($0) < storageKey($1)}
             recovered=await store.recoveredOriginals()
             if await store.storageError != nil{initializationError="草稿版本文件不可读，原文件已保留；当前输入可另行导出。"}
         }catch{initializationError="本机草稿目录暂不可读；原文件未覆盖。"}

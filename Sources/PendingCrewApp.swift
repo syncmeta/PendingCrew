@@ -156,8 +156,7 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var stopProgress: CrewdStopProgressWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if crewdTerminationAllowed { return .terminateNow }
-        if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
+        if waitingForDaemon && !crewdTerminationAllowed { stopProgress?.present(); return .terminateCancel }
         if let unsavedToken=CrewPersonalDraftService.unsavedExitToken,unsavedToken != unsavedDraftExitConfirmation {
             let alert=NSAlert()
             alert.messageText="当前草稿尚未保存到本机"
@@ -167,6 +166,9 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
             guard alert.runModal() == .alertSecondButtonReturn else{return .terminateCancel}
             unsavedDraftExitConfirmation=unsavedToken
         }
+        // Final stop/force completion can follow more editing in another window.
+        // Execution permission never bypasses the exact current input revision.
+        if crewdTerminationAllowed { return .terminateNow }
         let lifecycle = AppQuitLifecycle.shared
         if let quit = lifecycle.crewdExit {
             if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
