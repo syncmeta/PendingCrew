@@ -9,6 +9,7 @@ import Combine
 /// peer / fly。
 struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
+    @Environment(\.colorScheme) private var scheme
     @State private var showingGlobalSearch = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
@@ -87,16 +88,20 @@ struct CrewSidebarView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .background(Theme.Palette.surfaceMuted.opacity(0.55))
+            .background(Color.clear)
             // 回头路（③）：藏起来的群从这儿找得回来。位置在列表**正下方**、额度行
             // 和身份行之上 —— 它是「这份列表的另一半」，不是页脚信息。
             hiddenCrewsFooter
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             if !crewStore.usesCrewdAuthority { quotaFooterLine }
+            else {CrewdProviderStatusFooter()}
             // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
-        }.background(Theme.Palette.surfaceMuted.opacity(0.55))
+        }.background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16))
+            .overlay(RoundedRectangle(cornerRadius:16).strokeBorder(Color.white.opacity(scheme == .dark ? 0.08:0.65),lineWidth:0.7))
+            .padding(.horizontal,8).padding(.vertical,8)
+            .background(LinearGradient(colors:scheme == .dark ? [Color(red:0.12,green:0.14,blue:0.16),Color(red:0.14,green:0.12,blue:0.16)]:[Color(red:0.91,green:0.95,blue:0.96),Color(red:0.94,green:0.92,blue:0.96)],startPoint:.topLeading,endPoint:.bottomLeading))
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由
@@ -114,9 +119,9 @@ struct CrewSidebarView: View {
                 Button {
                     crewStore.beginPendingCrew()
                 } label: {
-                    Label("新建 crew", systemImage: "plus")
+                    Label("新建机组", systemImage: "plus")
                 }
-                .help("新建 crew")
+                .help("新建机组")
                 Button {
                     Task {
                         await crewStore.refreshList()

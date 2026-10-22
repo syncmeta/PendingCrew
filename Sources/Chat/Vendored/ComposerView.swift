@@ -71,10 +71,12 @@ struct ComposerView: View {
     // 「新建 Todo」，读作「当前发送 = 记一条 Todo」。宿主不传 todoMode → 恒为
     // 静态 placeholder，行为不变。
     private var effectivePlaceholder: String {
-        if let todoMode, todoMode.wrappedValue { return "新建 Todo" }
+        if let todoMode, todoMode.wrappedValue { return "新建待办工作" }
         return placeholder
     }
 
+    // PENDINGCREW SHIM: keep phone actions at the native minimum touch size.
+    private var accessorySize:CGFloat {Platform.isMac ? 38:44}
     @State private var showActions = false
     // Plain Bool, not @FocusState: the actual first responder is the
     // UIKit UITextView inside ComposerTextField, and nothing here is
@@ -114,7 +116,7 @@ struct ComposerView: View {
                     Image(systemName: showActions ? "xmark" : "plus")
                         .font(Theme.Fonts.glyph(size: 18, weight: .medium))
                         .foregroundStyle(Theme.Palette.inkMuted)
-                        .frame(width: 38, height: 38)
+                        .frame(width: accessorySize, height: accessorySize)
                         .floatingComposerSurface(shape: Circle())
                 }
                 .buttonStyle(.plain)
@@ -130,7 +132,7 @@ struct ComposerView: View {
                         Image(systemName: "checklist")
                             .font(Theme.Fonts.glyph(size: 16, weight: .medium))
                             .foregroundStyle(todoMode.wrappedValue ? .white : Theme.Palette.inkMuted)
-                            .frame(width: 38, height: 38)
+                            .frame(width: accessorySize, height: accessorySize)
                             .background {
                                 if todoMode.wrappedValue { Circle().fill(Theme.Palette.accent) }
                             }
@@ -138,7 +140,8 @@ struct ComposerView: View {
                             .animation(.easeInOut(duration: 0.18), value: todoMode.wrappedValue)
                     }
                     .buttonStyle(.plain)
-                    .help("Todo 模式：点亮后发送 = 记一条 Todo")
+                    .help("待办模式：点亮后发送 = 记一条待办工作")
+                    .accessibilityLabel(todoMode.wrappedValue ? "切回发消息":"切换为新建待办工作")
                 }
 
                 if let onTask {
@@ -149,7 +152,7 @@ struct ComposerView: View {
                         Image(systemName: "terminal")
                             .font(Theme.Fonts.glyph(size: 17, weight: .medium))
                             .foregroundStyle(Theme.Palette.inkMuted)
-                            .frame(width: 38, height: 38)
+                            .frame(width: accessorySize, height: accessorySize)
                             .floatingComposerSurface(shape: Circle())
                     }
                     .buttonStyle(.plain)
@@ -209,7 +212,12 @@ struct ComposerView: View {
                             // types the first character.
                             .animation(.easeInOut(duration: 0.18), value: canSend)
                             .animation(.easeInOut(duration: 0.18), value: isStreaming)
+                            // PENDINGCREW SHIM: label owns the expanded hit target,
+                            // while its existing background retains the 30pt glyph.
+                            .frame(minWidth:Platform.isMac ? 30:44,minHeight:Platform.isMac ? 30:44)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel(isStreaming ? "停止输出":"发送")
                     .buttonStyle(.plain)
                     .disabled(!isStreaming && !canSend)
                     .padding(.trailing, 6)

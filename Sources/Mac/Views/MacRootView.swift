@@ -2,19 +2,8 @@
 import SwiftUI
 import AppKit
 
-/// Mac 主视图：**原生三栏 `NavigationSplitView`**（crew 列表 | 群聊 | 成员/终端）。
-///
-/// - 左栏 CrewSidebarView ── crew 列表 + 新建 / 刷新（原生 sidebar：圆角 + 材质 + 折叠开关）
-/// - 中栏 CrewCenterView   ── 选中 crew 的群聊会话页（白板 + 沟通渠道）
-/// - 右栏 CrewSessionWindowView ── 成员列表 / session 终端 + composer + 审批卡片，**常驻**
-///
-/// 用原生三栏（而非「2 栏 + detail 内塞 HSplitView」）的两条理由：① 保留原生 sidebar 质感
-///（圆角 / 半透明材质 / 原生折叠开关）—— 自绘 HSplitView 给不了；② 列宽由系统协商，窗口
-/// 窄了自动收某列，不会像旧 hybrid 那样按 ideal 把窗口撑超屏、把 sidebar 推出屏幕外裁掉
-///（docs/tech-debt.md「inspector 被切」那条回归）。
-///
-/// Sidebar / Center / SessionWindow 都用 @EnvironmentObject 拿 CrewStore + AppModel；
-/// CrewSessionRunner 归 app 级的 `SessionHost` 持有（前后端分离 P0）——这里只观察，不创建。
+/// Daily native shell: crew sidebar, work surface and optional member inspector.
+/// Narrow windows present that same inspector as a sheet, preserving the chat.
 struct MacThreePaneView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
@@ -23,6 +12,8 @@ struct MacThreePaneView: View {
     private var sessionRunner: CrewSessionRunner { sessionHost.runner }
     /// 左 sidebar 可见性 —— 由原生 sidebar 折叠开关控制（默认 `.all`：三栏全开）。
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var inspectorVisible = true
+    @State private var compactInspector = false
     /// 驾驶舱开关位（人类 Todo #96）。**用 `@State` 持有，不是 `@StateObject`** ——
     /// `@State` 只替我们保管这个引用，**不订阅**它的 `objectWillChange`。于是开关
     /// 驾驶舱不会把本视图（连着整棵三栏）作废；只有下面那层 `CockpitLayer` 观察它。
@@ -59,22 +50,45 @@ struct MacThreePaneView: View {
             } else { OrchestrationNoticeBar() }
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
-                    .environmentObject(sessionRunner) // 侧栏头像状态点要看 runs
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 238, max: 310)
-            } content: {
-                CrewCenterView()
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 340, ideal: 640)
+                    .navigationSplitViewColumnWidth(min:200,ideal:238,max:310)
             } detail: {
-                CrewSessionWindowView(presentation: model.usesCrewdAuthority ? .inspector : .automatic)
+                CrewCenterView().environmentObject(sessionRunner)
+                    .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
+                    .toolbar {
+                        ToolbarItem(placement:.primaryAction) {
+                            Button {
+                                if geometry.size.width<1100 {compactInspector=true}
+                                else {inspectorVisible.toggle()}
+                            }label:{Label("待办工作与成员",systemImage:"sidebar.right")}
+                            .disabled(crewStore.selectedDetail == nil)
+                            .help("显示或收起当前群的待办工作与成员")
+                        }
+                    }
+            }
+            .inspector(isPresented:Binding(get:{inspectorVisible && geometry.size.width>=1100 && crewStore.selectedDetail != nil},set:{inspectorVisible=$0})) {
+                CrewSessionWindowView(presentation:model.usesCrewdAuthority ? .inspector:.automatic)
                     .environmentObject(sessionRunner)
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 254, max: model.usesCrewdAuthority ? 360 : 440)
+                    .inspectorColumnWidth(min:220,ideal:254,max:340)
+            }
+            .sheet(isPresented:$compactInspector) {
+                VStack(spacing:0){
+                    HStack{Text("待办工作与成员").font(.headline);Spacer();Button("完成"){compactInspector=false}}
+                        .padding(16)
+                    Divider()
+                    CrewSessionWindowView(presentation:model.usesCrewdAuthority ? .inspector:.automatic)
+                        .environmentObject(sessionRunner)
+                }.frame(minWidth:360,idealWidth:430,minHeight:480)
             }
             .navigationSplitViewStyle(.balanced)
             // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通
             // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，
             // 等于把 #96 刚拆掉的广播接回来一半。
             .environment(\.cockpitPresentation, cockpit)
+            .environment(\.crewdShowInspector, {
+                if geometry.size.width<1100 {compactInspector=true}
+                else {inspectorVisible=true}
+            })
             }
 
             if !model.usesCrewdAuthority {

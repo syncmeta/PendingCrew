@@ -1,0 +1,652 @@
+{
+  "base": "c78c9b6ddb49db999f054e74cd3b248760906cbd",
+  "branch": "codex/mac-demo-polish-20261022",
+  "demoLastCommit": "fdf1209e36a120adac487f625be0a241dbd1ab7a",
+  "primaryActualDemoMatches": true,
+  "files": [
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/.gitignore",
+      "sha256": "bb5a8313c4899257099df736fdd46cd0a950cb3d3ddc599239118608c1d3830e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/PendingCrew-Demo.html",
+      "sha256": "64ee8abfbd814e0e1b1d1a8b558ea283d4ccd242ea9c5d9a36e873f6399c0f6a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+      "sha256": "124cd612df22d8d8387370ef89d833f686b6fb73169e7b69adeaefc3555e9dbc"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/deploy/README.md",
+      "sha256": "2c62d0ef76d758858001868e869a9d07f2b8412498203158aa254fe4ced8fef2"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/deploy/wrangler.json",
+      "sha256": "f92ebc11ac15ba79e9378c8e1eb8fac37502e61011ac8339bbf9fdbd6566e717"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/browser-verification.json",
+      "sha256": "6beae4e285ac29108dde6a67bc9756b135ce0117ed340353d19a3031c7308dfa"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/component-package.json",
+      "sha256": "d27cb8396f399f6b396364c4296feaa50e4e1fc588846c09baa6f1ae107a1476"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/copy-verification.json",
+      "sha256": "d21b665b70fcae7674c3f0fe4023cb48c158a466ba95cd93bc0dc0669e551b0a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/current-progress-copy.json",
+      "sha256": "528b44380e57c7575b1cdfd34c77aecf0ea428fe18c8d440e104e49bca86cb26"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/data-verification.json",
+      "sha256": "b0ddd239842f4123b2fd0e3608c11006afb6777939d3408ce0624bc572cc47bb"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/delivery-manifest.json",
+      "sha256": "2a8faa34e5dfd2aec9e99c0bc6e4ae525f3485c069af57f733565520b25db832"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/deployment.json",
+      "sha256": "e15c2e9d34f2a06af054f59e838cadabc43e66665cb9b7b5ab50204d751695aa"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/desktop-introduction.png",
+      "sha256": "07f778335841574d2f1f704a82fcb63b39526f22f94544db6de94e0ecaf6da23"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/desktop-progress.png",
+      "sha256": "41490d1473525512afc8642fe426d33bfdc298c3453a2affb33483e7efa6198d"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/document-library-list.png",
+      "sha256": "5789c07523d18ae8fda312baf69bcd4414e24539a8221629e49cbbeab149c34b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/document-library-mobile.png",
+      "sha256": "8f37c144de8bb227f5cb284de4c765abaf0f6e5fab4ee0c0308fa18892c418c8"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/document-library-planning.png",
+      "sha256": "d3e44dfafb44762719adc7384cfc544e58b33f75f8fca4ada64f1599eaff56f4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/document-library-reader.png",
+      "sha256": "e9b4c67c60e648d40a6ad4c59024e638806578645911f81e253896bec71a6887"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/documents-data-library.png",
+      "sha256": "5789c07523d18ae8fda312baf69bcd4414e24539a8221629e49cbbeab149c34b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/documents-data-mobile.png",
+      "sha256": "311a174968643555a03bf646202602f4b7e19a0e99b62b9d1251b7668026196c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/feature-verification.json",
+      "sha256": "9358de59410912e22f359b426b8131e4fc841aafd98d77225b7857b75aba8a65"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/group-owned-chat.png",
+      "sha256": "8d7851a1d4a94290033a7151baf88fbee06881561024e6f7de2d395b61ec4984"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/group-owned-mobile.png",
+      "sha256": "ddd140fc4a839aed78ac9c9f72f7afa986f7b21e94cea478e06d56e2d570a625"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/group-owned-progress.png",
+      "sha256": "32aee4a1b2dbb15a0e3c608e72910da49dc9f4fe9c3527333a77dd89162b9e1e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/groups-verification.json",
+      "sha256": "c77a3e87888fee5e54c5544cc7088bfdf0b53386f742390503c28c5358c23a2f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/library-verification.json",
+      "sha256": "a40651c6a8b113ae5d43b2543825685c811cba8142c9ac2c790588e6c46e2d01"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/live-publication-verification.json",
+      "sha256": "f95b60f65a5cac739564085a34bb59ee865a236c8d5aad65bf438f570e1c8711"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/live-published-desktop.png",
+      "sha256": "558af5a1f2fc2092c1989ae8eeb026bb9215d49c5eb28b04d3ff3166f95886f1"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/live-published-mobile.png",
+      "sha256": "d1ead53a4f1e191050a770837c5e8ebb7a755441246268a61f09d9ae94eab68c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/local-publication-verification.json",
+      "sha256": "821a7f8b53d44b269bb29faf8aaf25e3b8a5048b1c708d897455495313c64b00"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/local-published-desktop.png",
+      "sha256": "558af5a1f2fc2092c1989ae8eeb026bb9215d49c5eb28b04d3ff3166f95886f1"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/local-published-mobile.png",
+      "sha256": "bfa99860d473d16a7c831ca3072eb385a7415df53198513622ac87d24024f840"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/mobile-introduction.png",
+      "sha256": "151f5aef5b4da4b86f9684b6b97d70c3151afcbcb7f0ac043ed4f72ab59a810a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/original-baseline.png",
+      "sha256": "4651602cb8ec4824fbb1c7d15004daa4282afff0f7b492b02923b7d7cf51c8e5"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/overview-desktop.png",
+      "sha256": "ced18da38c22e3426772865e7ca156e2afc709773c78759f06938037e2a3eedd"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/overview-mobile.png",
+      "sha256": "0f68c7fa992ea7bf445468f534b7d62a7aa26925c14804d80532176afdeb058c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/overview-verification.json",
+      "sha256": "ca9438a13ddd3c67f027bda93a8ab4d3a2cc2731abbd3252d4f2d4e1ffefd756"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/problems-desktop.png",
+      "sha256": "785b45271c799f35bc50e3ed08b16dd7b3a05cf2f52bb1c9074c56199841b41f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/problems-mobile.png",
+      "sha256": "0ffcf9281fdf80cbdeaf1673a4892aa9474ebfa356c07fa792bc59d0c4e35514"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/problems-verification.json",
+      "sha256": "9dbd3877fb45e777663681786988f5591069e8641f404f1018f89e6f5021a347"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/product-feature-chat.png",
+      "sha256": "181431b52a5c56f78340b63a606efd7956a0be9179aa3b5acfddcea1986c3046"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/product-feature-document.png",
+      "sha256": "619d68a20fbea2d82cf24b7e62ee73a76c5384d72c33495df07effc2e575536f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/product-feature-mobile.png",
+      "sha256": "1ef6a2f4b34f85af9e8335418e7b279bd0299613c6d8e32d3da8c1c6e535e0d1"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/product-feature-progress.png",
+      "sha256": "d0931a0460426dbaca4a60f5e1b34dc6263b9a605d79a4b331607f807bc996b8"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/product-object-data.png",
+      "sha256": "b8ea4610a44c49c655b3b30e546eeae42e60bc21dabf2baed0e0aec4a2ee59d3"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-0c0176b1-desktop.png",
+      "sha256": "e5c0da3f54552f07e0abd039950e7b9c9f3e9e688ad88b2838c6f819bd41c003"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-0c0176b1-mobile.png",
+      "sha256": "bfa99860d473d16a7c831ca3072eb385a7415df53198513622ac87d24024f840"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-0c0176b1.json",
+      "sha256": "539e17d39c233467843cb80d5614afc224fce7d1625c73ce2e9ff6ced88dbd2b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-1ea00c32-desktop.png",
+      "sha256": "c9aa0c3cc2752bc406921d7ead888834fd69b65dc253e631d83bb9f05ac3ba7a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-1ea00c32-mobile.png",
+      "sha256": "6d44e95331cbd1840e7f3aa6cd55e0853a15a340c3972dfcc2f82da40457b93b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-1ea00c32.json",
+      "sha256": "fab63a60ca47d7a3f6ad33c71665a5990b3c1aa5498403fa4720e03078cbdebf"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-7dfb3028-desktop.png",
+      "sha256": "2d518d3bd74a3234ece5d5daa992d48f6f76a3f98dc7a1d6db1567b652b0b111"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-7dfb3028-mobile.png",
+      "sha256": "e3c7592853651c0d6c74a01eec1ab77ac6b5187281b9548a28047f6aa825e598"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-7dfb3028.json",
+      "sha256": "2ef48281cef0f32865f3265d4c602f46ebd87f778a33273e32021cf77d8ee1d4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/react-baseline.png",
+      "sha256": "8d7851a1d4a94290033a7151baf88fbee06881561024e6f7de2d395b61ec4984"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/react-verification.json",
+      "sha256": "07786d56c8208c1e912538eb3a5f252d2be9f2c974552b5e8c5e570ca048dd09"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/self-introduction.png",
+      "sha256": "3b5be657835baf388f6e728bb4294c4ac518c585d50559ef76ef96d359c26cc0"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/semantic-block-data.png",
+      "sha256": "9848d92c1a4dd88c293e98745443c92282e0086247c38175c9d80539910316a7"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/single-html-portability.json",
+      "sha256": "45f656fe4425753fc37b58cc072514234ba3704c4e7d3086e2095c9c64bdd60c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/sqlite-data-schema.png",
+      "sha256": "2d78c519f4800e1536282dd53ca28111515a0f535b6fa683dba6cc5f7b764b83"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/topic-administration.png",
+      "sha256": "c7a24833284b90e9c4132f92106aff731eeddff36d365f0b88b3f13da4e4da2f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/topic-research.png",
+      "sha256": "24ad84a95038d6dce2f94697118bc3c6b9adda28f1b58278964414e8f7489bae"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/topic-trip.png",
+      "sha256": "c034f5eb6a0c30466c10fd4b890dc7336ea4907ca2f7082cc1cb4764fe24a63e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/topics-verification.json",
+      "sha256": "5fd0959c7691fd8bea71ec31fcf4fe3b7519e57b3e9b76393c6bbf2809fbeb41"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/unified-product-copy.png",
+      "sha256": "3bc3feee64c8eeb46cec903abc7bec8ab426a0daf23dc33f582b583661cad4e2"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/website-embedding.png",
+      "sha256": "848b0b7aeab2dc8d9de7c0628286a39b90d06007b2fdc93f5c0f48dee247006b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/examples/host.html",
+      "sha256": "a6496c3a0932c5ac5b554ab705a567541b44d8979dc19b74441cd59122d0b110"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/examples/host.tsx",
+      "sha256": "41595944d0e4337644feceed95d529152efa06be38bef461e5594d98484c80b7"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/index.html",
+      "sha256": "2a0a94028c2e58aadbc7c0a339fb3b354d9a4da136695f787836418452b698d4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/package-lock.json",
+      "sha256": "742733ef16c999aff88213d4dd82ba657501f0fadec2abfdfb93aecb076907c6"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/package.json",
+      "sha256": "d903934c1cb33c512b0204521a8b458f5fe8cbf875d6dbcb500c97c00e20019c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/public/app-icon.png",
+      "sha256": "b87605d31ff4b7ab6f135d81ce6be0cbc02fab87a236d7ca54b398606ba176e9"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/reference/app.js",
+      "sha256": "8b6653494277ca4289ecdde84c7c69a8de3084f19b8d30e5fecc4a068c722465"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/reference/data.js",
+      "sha256": "b2e527ef3b5a054215550a50a12a1d4a29bebeb79125a3bd023195973fb51d4e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/reference/index.html",
+      "sha256": "641aaa5c09b8637eee268fd98adc75de16f08b40af6036a920c1c16c1168a176"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/reference/styles.css",
+      "sha256": "e5c510aebe7f05a5dfc5f9700f5c1322a9859d403f5174a6012e565dfe225d4e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/scripts/browser-tests.mjs",
+      "sha256": "5ff2e5bd8d14034a07d9629763a50cb68f78cc66c7de0300c9260275273bc350"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/scripts/build-portable.mjs",
+      "sha256": "4955a088956d70cb1c903ae94e03c2d1b3f80d5058cfba673133f6149ee800c9"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/scripts/build-single-html.mjs",
+      "sha256": "b5225d581b5890fd7e87abe8e6212907968c4e830817d2f2a72e7c8bac5bd210"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/scripts/prepare-deploy.mjs",
+      "sha256": "8041b29b8dde380a90bec8d15642f03ae4c7751a03bc78db451f977e89d6d1d3"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/PendingCrewTour.tsx",
+      "sha256": "17fd3ea54d44437b9ff8a7392f7211b20652abb0a1095bc8cf25d7dfd36814d5"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/assets/app-icon.png",
+      "sha256": "b87605d31ff4b7ab6f135d81ce6be0cbc02fab87a236d7ca54b398606ba176e9"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/assets/claude.svg",
+      "sha256": "0d3f2a3e1c4e01ffb529c52fd58dbd8f8cbf0d13d9ba38e826b85ac6276a5abb"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/assets/openai.svg",
+      "sha256": "a2cf8fddc1934961481892826c7a9a6c3fda1a8f1059c2550bf7ad36d7aa2772"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/assets.d.ts",
+      "sha256": "f40490b0f71d4e7b41695680bf59f7272ae4dac416840ce7cadc64b30790d1a3"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/Chat.tsx",
+      "sha256": "b5074bbade0498947df21b65014d837c2e7f441ae878fbd8e2767be8a6a3927b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/ConversationList.tsx",
+      "sha256": "aa176cffcf297dfe6461342cccda0735d8eb460f51a733483d550add682af418"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/DataViewPanel.tsx",
+      "sha256": "2952375ded871bc76e731410e6609ad56c456e6af43a6f0a969e05f8bffaa06f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/Dialogs.tsx",
+      "sha256": "9a552b7026f02d5940f77977bcb7fd2c4e845b62d3cc5abade00d387e68db9a4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/DocumentContent.tsx",
+      "sha256": "775d7675f8611af9ac037a330b29cb160df01382d05616ea5f3a9a62dbf055cc"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/FolderControls.tsx",
+      "sha256": "6db50b3b95ec0e4801253f6d64b1ddea0ef11e186b471f90fa061d67196fc390"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/Inspector.tsx",
+      "sha256": "4bcca88a1acd52e9da13661d85d7984ca307b478ee052a5c54b304d431515da6"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/MessageText.tsx",
+      "sha256": "dd5e5be5d63a6e2b42ebac83d9550f3b749bd9d287057fbc090503b707104be1"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/QuotaFooter.tsx",
+      "sha256": "91620cee44541376f5bd25ccb1de11f13996d028b806733bd9db0803eb292f61"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/ResizeHandle.tsx",
+      "sha256": "0231faea3c8765dedf432294d9f4535fd68dd183677d1d1fbea9efa58a41e02b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/Sidebar.tsx",
+      "sha256": "4c412782437f793e65c74c3606c5f5e0bc9c8b8871c99dea14629e2d124708c0"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/TodoOwner.tsx",
+      "sha256": "fc4310b3ab8017f958f1fbe141b69b0872ce08fd967c8cd4dbda0dd0a7ad5c8f"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/TodoTags.tsx",
+      "sha256": "f5af7760dda19199f4ccc2499c35f66be4acdfcad1d348f70c75ea76338b83ef"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/Workspace.tsx",
+      "sha256": "89fc4adf9eb1aa9425ad28007925126d4221ca566edc64aa8096f90b067b2477"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/components/primitives.tsx",
+      "sha256": "937c2ccfd65186932beaf57605b5f19d8e02063258e5ad1f72b4c1cf56b653c4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/content.json",
+      "sha256": "3f1bb8695fcc45cecd98f644713c865eb94ed212d9c50c08ac998fb1bbac69ea"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/documentLibrary.json",
+      "sha256": "834851bdf260efa1bc7ed07ce19740bbb25275663a562ca3d4b94817e7c08927"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/captainHistory.json",
+      "sha256": "bbc6fc94c5fb79e3e47297bc07f9d6e9f0c90d625fb060eca91bbf48877b7206"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/contentCases.json",
+      "sha256": "6fe76f939c07aea00097c41585a5540930dfafd348e04bcd425deaffb2a318fc"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/contentCompletion.test.ts",
+      "sha256": "8039ac8538183d8d7513140f003862900617a46c18e4e4c38713c2aa77b47bf0"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/contentCompletion.ts",
+      "sha256": "f2c7dfdb2283e780bf6004ddbe96ed3ae60333e61f31a097bd586d3c03c2361a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/contentMigration.test.ts",
+      "sha256": "ba18d82a5eef589a589afba2fbb72c94d5495977ae163c162f3049ccdfa7c733"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/contentMigration.ts",
+      "sha256": "d4757814855712a28304d93c3593db91a5e1fb879c8dee8d9f28c624b371fe27"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/dataViews.test.ts",
+      "sha256": "f0b904e482cb259204321335f711ea52df1bdf25f5da084be1ea26437a35d7db"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/dataViews.ts",
+      "sha256": "d8df0ed3d537a2d6c9cf94512a508348fa89b63b5cafa0e4713453354c1de80e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/developmentExamples.json",
+      "sha256": "768ba41eba2183a4afd4d9531968717833db9f29a7ba361bcfc87e656d6e9af0"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/developmentExamples.test.ts",
+      "sha256": "1d75d0e2d6bc092296a889f55dcfd5d85cf7f947921e80a822c9afea25d0dbe6"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/developmentExamples.ts",
+      "sha256": "ddd3bb7bca616a012344bbad038b0737341153fab6bcac7d6ee4fbfda06cab5d"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/displayText.ts",
+      "sha256": "f8a8d5c1ada1297ce7985b23edee75125ff927775410471edf25feeb4fec4476"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/documentLibrary.test.ts",
+      "sha256": "b90db91935d3afa773460c0e22279461aac4615ab385da6b497efcb717e83483"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/documentLibrary.ts",
+      "sha256": "7fa99dcc1a47b14442279d71d3fe584bbf162bb3a8c927701ded138402c01b68"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/groups.test.ts",
+      "sha256": "8af612145532dc8240c9ab9cce11cd295ddfc339641ea322bfcd72002d0c6cad"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/humanContext.ts",
+      "sha256": "3917721c36c3315669492d01e4a39a2406e1e103f201a5b4d015f40ee5a6b10d"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/nativeDemo.test.ts",
+      "sha256": "3a23d9f91e4347b3975659ee70ce83349e2c8e964c54bf9f2e223e772943372e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/nativeDemo.ts",
+      "sha256": "15deda56714a63638b16474a799d5c5238ca65bc70cfe1e6e3c8ab4adfabf784"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/persistence.test.ts",
+      "sha256": "ac6b6214ce3700e2536fcc3c26a0f02777b29b2ddb0d7652ce2bcf7f94a8f562"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/presentationUpdates.ts",
+      "sha256": "aea2bada9f85486bea2586cefd3f6d4355ae3d7298a8192ae3c4dbd1ca6a514e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/problems.test.ts",
+      "sha256": "cba98a1c222f1ce3773064221dd6e3af5e0403a96018cfcd5f946c7e92211b4a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/programSnapshot.json",
+      "sha256": "e6f1e75828d25fb4f66d6e1bb7e2cc0509da3e3220b9cc26c866838448c82608"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/reducer.test.ts",
+      "sha256": "593805fb78575d9f68dcf11f90e63e9c077246f1439724e011dbc267bc6887f2"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/reducer.ts",
+      "sha256": "5163814b4487f05e177e76aa1154825e360cfaa11ed3c2ff7a7ee0f0ad32e6fc"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/seed.ts",
+      "sha256": "259edf14c8348257677c5c9c1c8d4a4a1b8855b3d5db80fbe54254f4dbe573bb"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/selectors.ts",
+      "sha256": "41b3bf2cb278c2b8a877d318affc0a3dd4adb0dc909efca33b05ff77da65823c"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/siteDocuments.json",
+      "sha256": "de9bfd9100411d4a850e270106c89c407b9865c4b5c5e879e53f8fcd1c3ba97b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/todoModel.ts",
+      "sha256": "523b63462ac171bcdf49ab85c0b18fc27f22c7940b955cb32ad3b2fb13f40c51"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/topicCrews.test.ts",
+      "sha256": "3d8c986a331c90f82965341eb210fb6e8bc5ff805c0436b0125a3016956b9bd4"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/topicCrews.ts",
+      "sha256": "1ce0488ad5281332144e165e69b8e4d9de3bb25cca1b079c7fc08dbf26a20757"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/types.ts",
+      "sha256": "84c2be58b52048b6136e4616835ba2553c41f42a7780d63bd162fe8cac012aa6"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/workspaceRefresh.test.ts",
+      "sha256": "80ffacc35d8ea12fa442d19be2882ef388ce1286dcd3a5378d534e8b4e1415b7"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/domain/workspaceRefresh.ts",
+      "sha256": "6b910cdb4a2469bcfe8ade83abf40a667504400f69e39ea5e3aeccaaaa9921a3"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/fixtures.json",
+      "sha256": "c3badedc77a79f4e7709881d5a07c4733af5536a28539a21f09ba191d346179b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/index.ts",
+      "sha256": "4fd94d0879e24eb8dc49d2de85dbb3458d7d9ccecbbb61cf0c9b78fa8b11332a"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/main.tsx",
+      "sha256": "bb449242b22ced9bc0a1f89d1364046859cdfd0c47831092f96b75697cbfe9ac"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/state/TourContext.tsx",
+      "sha256": "9d739f78cdcef5b70cbc3a148cdf455905bbd70a76f0b1be6cc17f856350a692"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/state/persistence.ts",
+      "sha256": "7143c260a424436b686a442b2b4df9bb6f28e69e0d27a90a24326eeb94200f84"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/styles/pendingcrew.css",
+      "sha256": "f16e68c3f4579745676b98842c25108f62325497b1b95cde5f5815b771e8a722"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/src/topicCrews.json",
+      "sha256": "e488e90635b3a3c696017df8712e17761d111d89216712ef106f5b5907cd9084"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/tsconfig.json",
+      "sha256": "10664a6837c5845aff95fab635ff45925eb1c250d45f22cba1262694679e9769"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/tsconfig.lib.json",
+      "sha256": "044789255cff364e27c323372de7bb1f0f7759f1e2c7ba3a5bac51e24ebae24e"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-copy.cjs",
+      "sha256": "98552ff132d1ca2cee4f071751ce2c4fb9e34826d41c5d600730411d1437f7ff"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-data.cjs",
+      "sha256": "561e220cd02b253af278ee3b61aacf1293193804177df79a26cb69ce40743fea"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-features.cjs",
+      "sha256": "16a7fe772f900c7aaa90d9549435e0345bebed1f02b8b3fb4477a27432ae7253"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-groups.cjs",
+      "sha256": "4f71297255ef9a8b0bb2414de6b9b4d2143f62e79852c279ef1881da47c53aac"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-library.cjs",
+      "sha256": "2e870f6faf21390a5523d93999f07df62bbeea0a201807c6f44cc9b391c41f3b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-overview.cjs",
+      "sha256": "0449ca59dd3be2ced8ec089dc84b8a16b0a3bee417696c3fa712732658797f0b"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-problems.cjs",
+      "sha256": "506390068b41bd50bf7289abcb75566981aa734c9ace391c94ac011b98768dfd"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-published.cjs",
+      "sha256": "8e399c9dc5a1c63885f120019efb48cbd8dc7ccd2ca828ae6fd4bb8dee9b02fa"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-react.cjs",
+      "sha256": "10e3eea254d0f04b238ff900586fe2b6749ccf4ac3b1957acd2d1a9bb934a6d2"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify-topics.cjs",
+      "sha256": "eb528a89350b5bf0ba1532b9d254d15c42976356ced592cdedc07e6026635608"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/verify.cjs",
+      "sha256": "3f3a0c8470d590ea8b08f357fb881ee64b5a52473b1e384bfe3a514a8d3ae5da"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/vite.config.ts",
+      "sha256": "4011e9d3a83a81226803fe8a5472444ff1455d2e7c8ad7095eaf624489e056d9"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/vite.library.config.ts",
+      "sha256": "ced0ed58d354b5efb220b80c26784cbc8565d232fccf4ceb9522475ebf42ffa6"
+    }
+  ],
+  "presentationBase": "5d32b32e021e99477e1950581b4320293b892ec7",
+  "publishedDemo": "https://pendingname.com/crewdemo/",
+  "publicationEvidence": [
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167-desktop.png",
+      "sha256": "e9d0fb715c9fd789410b510fac6e242843e376a3620537aa5a7d31a1ffe0a881"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167-mobile.png",
+      "sha256": "1640a2d72feaa4fc6c8e0063ad8ed59a022662eaec66a5bfa849f75e8d194903"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167.json",
+      "sha256": "cb91123063e5fd59301a68eba691b097d5d4f09ec3f09931d760667994ab7a90"
+    }
+  ]
+}

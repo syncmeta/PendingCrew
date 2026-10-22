@@ -398,7 +398,7 @@ struct CrewSessionWindowView: View {
                         if appModel.usesCrewdAuthority {
                             if let workspace = crewStore.crewdWorkspace {
                                 CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)
-                            } else { Text("当前后台未连接，Todo 尚未确认。") }
+                            } else { Text("当前后台未连接，待办工作尚未确认。") }
                         } else {
                             CrewTodoPanel(crewId: crewId, runner: sessionRunner,
                                           crewName: crewStore.selectedDetail?.crew.title)
@@ -420,7 +420,7 @@ struct CrewSessionWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlay {
             if crewStore.selectedDetail == nil {
-                CrewdEmptySurface(title: "机组工作区", detail: "从通讯录或消息列表选择机组，查看本群 Todo 和实际成员。", symbol: "person.3")
+                CrewdEmptySurface(title: "机组工作区", detail: "从通讯录或消息列表选择机组，查看本群待办工作和实际成员。", symbol: "person.3")
             }
         }
     }
@@ -951,24 +951,16 @@ struct CrewSessionWindowView: View {
     }
 
     private var idleState: some View {
-        VStack(spacing: 16) {
-            Group {
-                if selectedKind == .codex {
-                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+        ScrollView {
+            VStack(alignment:.leading,spacing:20) {
+                CrewdPanelHeader(title:"新成员会话",detail:"写下一件具体要完成的事，发送后才会启动。",symbol:"person.badge.plus")
+                if crewStore.selectedDetail == nil {
+                    CrewdInlineNotice(title:"先选择一个机组",detail:"新成员会在所选机组的工作目录中执行任务。")
                 } else {
-                    Image(systemName: "apple.terminal")
+                    sessionKindControls
                 }
-            }
-            .font(.system(size: 40))
-            .foregroundStyle(.tertiary)
-            if crewStore.selectedDetail == nil {
-                Text("先在左侧选一个 crew").foregroundStyle(.secondary)
-            } else {
-                sessionKindControls
-            }
-        }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(20).frame(maxWidth:560,alignment:.leading).frame(maxWidth:.infinity)
+        }.frame(maxWidth:.infinity,maxHeight:.infinity)
     }
 
     /// Codex 续聊输入卡只接结构化 Codex backend；发送仍走统一 send() 注入当前 run。
@@ -1037,7 +1029,7 @@ struct CrewSessionWindowView: View {
                     onSend: { Task { await send() } },
                     isStreaming: false,
                     showsAttachments: false,
-                    placeholder: "下第一条指令开始…"
+                    placeholder: "写下第一件要完成的事…"
                 )
             }
         }
@@ -1049,7 +1041,7 @@ struct CrewSessionWindowView: View {
     /// persona / MCP / role 启动入口。
     private var sessionKindControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Session 类型")
+            Text("执行成员")
                 .font(.caption)
                 .foregroundStyle(Theme.Palette.inkMuted)
             VStack(spacing: 8) {
@@ -1080,7 +1072,7 @@ struct CrewSessionWindowView: View {
                     .foregroundStyle(Theme.Palette.inkMuted)
             }
         }
-        .frame(maxWidth: 300, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .disabled(starting)
     }
 

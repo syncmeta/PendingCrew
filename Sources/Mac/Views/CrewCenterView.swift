@@ -15,6 +15,7 @@ struct CrewCenterView: View {
     /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
     @Environment(\.cockpitPresentation) private var cockpitPresentation
     @State private var showingDetail = false
+    @Environment(\.crewdShowInspector) private var showInspector
     /// 「只看 @ 我的消息」（Todo #61 立、#155 改成默认不点亮）。开关钮在 toolbar 上，
     /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
@@ -22,6 +23,7 @@ struct CrewCenterView: View {
     @State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
     @State private var searchQuery = ""
+    @FocusState private var searchFocused:Bool
     @State private var searchTargetMessageId: String?
 
     var body: some View {
@@ -35,10 +37,12 @@ struct CrewCenterView: View {
                     onOpenSession: { runId in
                         // 右栏常驻；点 session 头像只切到「终端」模式 + 选中该 run。
                         sessionRunner.openSession(runId)
+                        showInspector?()
                     },
                     onNewSession: {
                         sessionRunner.composeNew()
                         sessionRunner.viewingTerminal = true
+                        showInspector?()
                     },
                     showOnlyHumanMentions: $onlyMentions,
                     communicationView: $communicationView,
@@ -62,7 +66,7 @@ struct CrewCenterView: View {
                 .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id)
                 .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace))
             } else if let id = crewStore.selectedCrewId, crewStore.loadingDetailIds.contains(id) {
-                ProgressView("加载 crew 详情…")
+                ProgressView("正在读取机组…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if crewStore.selectedCrewId != nil {
                 empty("详情加载中…")
@@ -114,12 +118,23 @@ struct CrewCenterView: View {
         .navigationTitle(crewStore.pendingCrew?.id == crewStore.selectedCrewId
                          ? "新 crew"
                          : (crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? ""))
-        .searchable(text: $searchQuery, placement: .toolbar, prompt: "搜索当前群")
+
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
         // sidebar 透出自己的侧栏材质、detail 透出白 canvas，两边各自对，互不打架。
         .toolbar {
+            ToolbarItem(placement:.primaryAction) {
+                HStack(spacing:6){
+                    Button{searchFocused=true}label:{Image(systemName:"magnifyingglass")}
+                        .buttonStyle(.plain).keyboardShortcut("f",modifiers:.command).help("搜索当前群")
+                    TextField("搜索当前群",text:$searchQuery).textFieldStyle(.plain).focused($searchFocused)
+                    if !searchQuery.isEmpty{Button{searchQuery=""}label:{Image(systemName:"xmark.circle.fill")}.buttonStyle(.plain).help("清除搜索")}
+                }.font(.system(size:12)).foregroundStyle(Theme.Palette.inkMuted)
+                    .padding(.horizontal,9).padding(.vertical,6).frame(width:190)
+                    .background(Theme.Palette.surfaceMuted.opacity(0.55),in:RoundedRectangle(cornerRadius:7))
+                    .overlay(RoundedRectangle(cornerRadius:7).strokeBorder(Theme.Palette.hairline.opacity(0.65),lineWidth:0.6))
+            }
             if let crewId = crewStore.selectedCrewId,
                crewId != crewStore.pendingCrew?.id {
                 ToolbarItem {
@@ -280,13 +295,10 @@ private struct PendingCrewChatView: View {
     @State private var error: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            Text("新 crew")
-                .font(.title3.weight(.semibold))
-            Text("发送第一条消息后创建")
-                .foregroundStyle(.secondary)
-            Spacer()
+        ScrollView {
+        VStack(alignment:.leading,spacing:20) {
+            CrewdPanelHeader(title:"开始一件具体的事",detail:"机组："+draft.title+" · 发送第一条消息后创建",symbol:"bubble.left.and.bubble.right")
+            Text("工作目录").font(CrewdType.label.weight(.semibold))
             HStack(spacing: 8) {
                 Image(systemName: "folder")
                 Group {
@@ -317,6 +329,8 @@ private struct PendingCrewChatView: View {
                 Text("发送会创建机组并保存首条消息，再按新机组的实际执行能力启动 Codex 机长；不可用时保留机组和消息，机长不会启动。")
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 18)
             }
+            Text("第一条任务").font(CrewdType.label.weight(.semibold))
+            Text("直接写下希望完成的事情，原文将作为新会话的首条任务。").font(CrewdType.caption).foregroundStyle(.secondary)
             TextEditor(text: $message)
                 .disabled(crewStore.pendingCrewDelivery != nil
                           || crewStore.pendingCrewRollbackError != nil)
@@ -376,15 +390,19 @@ private struct PendingCrewChatView: View {
                     else if crewStore.pendingCrewDelivery != nil { Text("等待送达") }
                     else { Text("发送并创建") }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(CrewdPrimaryButtonStyle())
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || crewStore.pendingCrewSending
                           || crewStore.pendingCrewDelivery != nil
                           || crewStore.pendingCrewRollbackError != nil)
             }
             .padding(18)
-        }
-        .navigationTitle("新 crew")
+        }.padding(24).frame(maxWidth:660,alignment:.leading)
+            .background(Theme.Palette.surface,in:RoundedRectangle(cornerRadius:16))
+            .overlay(RoundedRectangle(cornerRadius:16).strokeBorder(Theme.Palette.hairline.opacity(0.65),lineWidth:0.7))
+            .padding(24).frame(maxWidth:.infinity)
+        }.background(Theme.Palette.surfaceMuted.opacity(0.25))
+        .navigationTitle("新机组")
     }
 
     private func chooseDirectory() {

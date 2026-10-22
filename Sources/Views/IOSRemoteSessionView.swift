@@ -16,7 +16,7 @@ struct IOSRemoteSessionView: View {
                 ContentUnavailableView("远端 session 不可用", systemImage: "wifi.exclamationmark",
                     description: Text(appModel.backendConfigurationError ?? "请先连接这台电脑。"))
             }
-        }.navigationTitle("Session").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(appModel.crewdBackend?.workspace.knownSessions[sessionID]?["displayName"].string ?? "成员会话").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -34,7 +34,7 @@ private struct IOSRemoteSessionDetail: View {
     var body: some View {
         List {
             Section("连接") {
-                if loading { Label("正在读取", systemImage: "arrow.triangle.2.circlepath") }
+                if loading { HStack{ProgressView();Text("正在读取会话状态")} }
                 else if workspace.client.connected && scopeIsCurrent { Label("已安全连接", systemImage: "lock.fill").foregroundStyle(.green) }
                 else { Label("连接已断开", systemImage: "wifi.slash").foregroundStyle(.red) }
                 if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
@@ -80,6 +80,11 @@ private struct IOSRemoteSessionDetail: View {
                     }
                 }
             }
+            if workspace.profileForSession(sessionID)?.backend == "codex" {
+                Section("Codex 会话") {
+                    CrewdCodexSessionControls(workspace:workspace,sessionID:sessionID)
+                }
+            }
             Section("会话控制") {
                 Button("中断当前回合") { command("session.interrupt") }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
                 Button("停止成员", role: .destructive) { command("session.stop", fields: ["reason": .string("人类在移动会话页明确停止")]) }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
@@ -91,6 +96,7 @@ private struct IOSRemoteSessionDetail: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .listStyle(.insetGrouped).tint(Theme.Palette.accent)
         .task(id: sessionID) {
             workspace.selectSession(sessionID)
             if workspace.client.capabilities.contains("session.terminal") {

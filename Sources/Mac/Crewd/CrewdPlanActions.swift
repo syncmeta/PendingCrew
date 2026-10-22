@@ -125,7 +125,8 @@ struct CrewdPlanActions:View {
     private func binding<T>(_ path:WritableKeyPath<CrewdPlanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
-            Text(key.object.isEmpty ? "从 \(key.source) 建计划":"\(key.object) · 计划操作").font(.title2)
+            CrewdPanelHeader(title:key.object.isEmpty ? "新建工作计划":"更新工作计划",detail:key.object.isEmpty ? "把待办展开为可跟进的目标、负责人和检查点。":"核对当前状态后，明确提交一次操作。",symbol:"list.bullet.indent")
+            DisclosureGroup("原事项编号"){Text(key.object.isEmpty ? key.source:key.object).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
             Text("机组："+(crews.first(where:{$0["id"] == .string(key.crew)})?["title"].string ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
             if !key.object.isEmpty {
                 #if os(macOS)
@@ -167,8 +168,9 @@ struct CrewdPlanActions:View {
             ScrollView {
                 VStack(alignment:.leading,spacing:12) {
                     if key.object.isEmpty {
-                        TextField("计划标题",text:binding(\.title));TextField("目标",text:binding(\.goal),axis:.vertical).lineLimit(2...5)
-                        TextField("验收描述",text:binding(\.acceptance),axis:.vertical).lineLimit(2...5)
+                        CrewdFormField(title:"计划标题"){TextField("概括这项工作",text:binding(\.title))}
+                        CrewdFormField(title:"目标"){TextField("希望达成什么",text:binding(\.goal),axis:.vertical).lineLimit(2...5)}
+                        CrewdFormField(title:"验收描述"){TextField("如何确认已经完成",text:binding(\.acceptance),axis:.vertical).lineLimit(2...5)}
                         ownerPicker
                         Picker("父计划",selection:binding(\.parent)) {
                             Text("无父计划").tag("")
@@ -205,7 +207,7 @@ struct CrewdPlanActions:View {
                 }.disabled(drafts.busy(key))
             }
             HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:560)).task {if !key.object.isEmpty {await load()}}
+        }.padding(20).textFieldStyle(.roundedBorder).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:560,height:640)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {
         VStack(alignment:.leading,spacing:4) {
@@ -281,12 +283,16 @@ struct CrewdPlanActions:View {
 struct CrewdAdaptiveFormFrame: ViewModifier {
     let width: CGFloat
     var height: CGFloat? = nil
+    var scrolls=true
     func body(content: Content) -> some View {
         #if os(macOS)
-        content.frame(width: width, height: height)
+        content.frame(minWidth:min(width,440),idealWidth:width,maxWidth:width,
+                      minHeight:height.map{min($0,360)},idealHeight:height,maxHeight:height)
         #else
-        ScrollView { content.frame(maxWidth: .infinity, alignment: .topLeading) }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if scrolls {
+            ScrollView { content.frame(maxWidth:.infinity,alignment:.topLeading) }
+                .frame(maxWidth:.infinity,maxHeight:.infinity)
+        }else {content.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)}
         #endif
     }
 }

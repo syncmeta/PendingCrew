@@ -24,6 +24,7 @@ struct IOSRemotePairingView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {CrewdPairingStepHeader(awaitingReceipt:pendingID != nil,hasPreview:preview != nil)}
                 if pendingID == nil {
                     Section("电脑的一次性邀请") {
                         TextEditor(text: $invitation).frame(height: 150)
@@ -37,8 +38,8 @@ struct IOSRemotePairingView: View {
                     }
                     if let preview, let envelope {
                         Section("确认电脑身份") {
-                            Text(preview.computerLabel)
-                            Text("\(preview.endpoint.host):\(preview.endpoint.port)")
+                            Label(preview.computerLabel,systemImage:"desktopcomputer").font(.headline)
+                            Text("\(preview.endpoint.host):\(preview.endpoint.port)").foregroundStyle(.secondary)
                             Text(preview.server.spkiSha256).font(.caption.monospaced()).textSelection(.enabled)
                             TextField("设备名称", text: $deviceLabel).disabled(busy)
                             Button("确认并生成回应") { run {
@@ -112,8 +113,9 @@ struct IOSRemotePairingView: View {
                         }
                     }
                 }
-                if let status { Section { Text(status).foregroundStyle(.secondary) } }
+                if let status { Section {CrewdInlineNotice(title:"当前进度",detail:status)} }
             }
+            .tint(Theme.Palette.accent)
             .navigationTitle("连接电脑")
             .alert("从本设备移除已存电脑", isPresented: Binding(
                 get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { computer in

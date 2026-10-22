@@ -168,7 +168,7 @@ struct IPadShell: View {
                 }
             } else {
                 ContentUnavailableView("选择一个机组", systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("从左侧选择机组，继续查看消息、Todo 和资料。"))
+                                       description: Text("从左侧选择机组，继续查看消息、待办工作和资料。"))
             }
         }
     }
@@ -198,8 +198,8 @@ struct MobileComputerIntroduction: View {
             Label(hasPairedComputer ? "选择你的电脑" : "连接你的电脑", systemImage: "desktopcomputer")
         } description: {
             Text(hasPairedComputer
-                 ? "选择一台已配对的电脑，继续查看机组消息、Todo 和资料。"
-                 : "这里是电脑端机组的随身前端。连接你的电脑，查看消息、Todo 和资料。")
+                 ? "选择一台已配对的电脑，继续查看机组消息、待办工作和资料。"
+                 : "这里是电脑端机组的随身前端。连接你的电脑，查看消息、待办工作和资料。")
         } actions: {
             Button("连接电脑", action: connect)
                 .buttonStyle(.borderedProminent).tint(Theme.Palette.accent)

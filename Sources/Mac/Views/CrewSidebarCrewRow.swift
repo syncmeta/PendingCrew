@@ -134,7 +134,7 @@ struct CrewSidebarCrewRow: View {
                 Color.clear.frame(width: 12, height: 1)
             }
 
-            if showsColorBar {
+            if showsColorBar && !crewStore.usesCrewdAuthority {
                 CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
                     // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
                     // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
@@ -151,7 +151,7 @@ struct CrewSidebarCrewRow: View {
                     }
             } else {
                 // 位置留着、不上色：标题左缘因此仍与其它行对齐（「样式一样」的那一半）。
-                Color.clear.frame(width: CrewColorBar.defaultWidth)
+                Color.clear.frame(width: crewStore.usesCrewdAuthority ? 2:CrewColorBar.defaultWidth)
             }
 
             let last = resolvedLastMessage
