@@ -251,7 +251,18 @@ pub fn revoke_grant(
             "invalid remote revoke parameters".into(),
         ));
     }
-    Ok(conn.execute("UPDATE remote_grants SET revision=revision+1,revoked_at=?1,revoke_note=?2 WHERE id=?3 AND authority_id=?4 AND revision=?5 AND revoked_at IS NULL", params![at, note, id, authority, expected_revision])? == 1)
+    let notifications = conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? >= 19;
+    if notifications && conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        let result = revoke_grant(&tx, id, authority, expected_revision, note, at)?;
+        tx.commit()?;
+        return Ok(result);
+    }
+    let revoked=conn.execute("UPDATE remote_grants SET revision=revision+1,revoked_at=?1,revoke_note=?2 WHERE id=?3 AND authority_id=?4 AND revision=?5 AND revoked_at IS NULL", params![at,note,id,authority,expected_revision])?==1;
+    if revoked && notifications {
+        crate::notifications::grant_revoked(conn, id)?;
+    }
+    Ok(revoked)
 }
 
 pub fn configure(

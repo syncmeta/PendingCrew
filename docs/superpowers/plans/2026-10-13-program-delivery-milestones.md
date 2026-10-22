@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-23 原生 APNs 后端完整源码接受并整合
+
+独立分支完整778bca140a184c5e9e23472105a76f8fbd0bfe51已整块准入，根全文读canonical合同/DELIVERY/最终质量结论becbb46b65585477055c056c5b17370db200c1f20c1bdcae3306be66150767e9并核净源。当前源码整合Store19/API3/schema137，八个notification typed RPC，原129方法/393定义保持原值；Store19仅为新增同事务outbox必要writer barrier，当前18按原受保护升级与备份恢复，Native16仍inactive。默认关闭；无配置/订阅时不读APNs秘密、不建通知观察或网络连接。当前实际安装及已封5553仍Store18/129，不因Git整合变为19。
+
+原生sender复用reqwest/rustls/h2/ES256；WorkBook原组织事件、真实native Codex outcome、sealed managed Claude receipt、结构化Core决策与Human mention按各自权威同事务投递，不用回复就绪冒业务Done。原UUID/CAS、token保护、真实mTLS grant、claim前持久Unknown、24小时固定期限、撤权/恢复/迟回执不重发均由原seam验证。Linux配置只沿原true-rootFD窄类型，Mac只原LocalHuman。点击完整context需已有准确连接、原installation/delivery精确读和当前ACL，不自动授信/连接/启动/恢复。
+
+独验亲核1903源码及127原产物，修订15产物/日志；29唯一原case实跑通过，未变源的old18拒写1/Jev2/installer12复用，44项净影响资格成立。质量发现的两个原h2 fixture未驱动Connection及remote cfg缺失导致0test误计已在同模块最小test-only/证据修订关闭；397原超时/0test全部保留并排除成功计数，三真实mutation红保原件不重造。无产品逻辑因该修订改变、不重跑稳定全量、不造新验收框架。
+
+本次完成源码与本地合成层，未有新组合normal/签包、Swift消费者准入、真实Apple凭据/token/APNs、设备展示点击或Linux/systemd部署。唯一Swift作者继续Mac/iOS通知opt-in/注册与精确导航，唯一后端作者继续剩余Codex完整控制/输入/原生历史模块；质量按整块冻结接手，不兼任实现。Core-native通知不新增Cloudflare付费Container/公开桥；原Worker Unknown保留。下一自然候选统一准确冻结/normal/暖包，旧5553窗口/安装仅等真人正常退出而独立继续；不重标旧normal或为过渡版本耗Linux分钟。尚缺Cloud真实资格/双端、物理设备、Claude完整历史/恢复及正式分发仍明列。
+
 ## 2026-10-23 个人同步 App 完整源码接受，继续并行交付
 
 完整客户端源码 cdf16b5d97e428c681461e4d8f58e8b18ca6c93a 已独立准入，承接5553，净13路径；原 f6 同账号切回后的旧编辑范围覆盖新输入风险已实红、修复并定向复验。实际 App 生命周期、持久 opt-in、账号隔离、完整草稿版本与原文保全、精确合并/导出/退出保护，以及实际外观的可选 KVS 接线已闭合。独验 d005d58b71b21143085251f1520624666aeb9c5a12435be561d80d4f2a34a57c，原 Mac/iOS 全目标0/0、394输入前后及当前一致；仅复验4个受影响原入口，不重建或重跑稳定业务。

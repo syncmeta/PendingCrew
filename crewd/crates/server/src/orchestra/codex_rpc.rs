@@ -128,7 +128,9 @@ pub(crate) async fn read(
     let value = match outcome {
         Out::Observed(v) => v,
         Out::Rejected(e) => {
-            return Err(RpcError::new(RpcError::CONFLICT, e).with_refusal("codex.provider_rejected"));
+            return Err(
+                RpcError::new(RpcError::CONFLICT, e).with_refusal("codex.provider_rejected")
+            );
         }
         Out::Unknown { detail, .. } => {
             return Err(

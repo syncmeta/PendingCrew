@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 原生 APNs 后端整块源码与本地合成验收通过
+
+根亲读原canonical CONTRACT（SHAff28032b74905332772a67d91402e15fcfdbdaf53b1a96d5ec3bf2d844c66e6d）、最终交接与独验becbb46b65585477055c056c5b17370db200c1f20c1bdcae3306be66150767e9，实际核作者树clean、HEAD778bca140a184c5e9e23472105a76f8fbd0bfe51。完整397源的1903输入/127产物和schema/依赖已独核，修后净三路径仅apns.rs/notifications.rs原cfg(test)与DELIVERY，两个生产prefix逐byte同397，DTO/Store/schema137未改。修后source-freeze SHA03e518af70a71ac1b9ee951ef3c2372cbdd3ff2d27875cc9654b4edf87a16c63、verification-artifacts SHAe28f65c65134fc3d3fd4afc85c3fa88761c68ef7fc6a3967e2e6a06850b3abe7；原件保native-apns-20261023及其h2-fixture-fix，不改397原记录。
+
+原先原封h2 fixture有停止poll Connection后await DATA/任务的真实可靠性缺口，独验曾35秒挂等；另一原remote_workflow被cfg(feature=testkit)关闭、实际0tests，却按exit0误计1。两项P2已直交唯一作者：只持续驱动原Connection、加12秒边界/安全阶段诊断，重封正确原testkit binary；无产品sender/DTO/Store逻辑变更。质量在新原bin独立执行native4、Runtime1与真实mTLS原remote1，均核实际running/passed计数。原60/35秒及0test日志原名保留，明确排除通过；不以环境/夹具挂等冒生产8秒超时缺陷。
+
+完整质量结论：独立29个唯一原case真实通过，另外15项按未变blob复用准确old18拒写1、Jev2与installer12，作者44项净影响资格成立。原3条变异确为缺撤权hook、重claim持久Unknown、去掉managed prompt相等检查的断言失败，恢复绿核准，不重造。137方法中原129方法与393定义逐值不变，锁包只新增fnv1.0.7/h2.0.4.20、原版本/checksum无升级。未重编normal/重建全量稳定业务或另造验收平台。
+
+本次源码包含8个API3 typed方法、必要Store19/18→19原升级备份、原事务通知outbox、protected provider/token、原LocalHuman/true-rootFD配置、真实mTLS注册与权限/撤权、固定24小时expiry、HTTP I/O前durable Unknown、无自动重发及原restore信任重置。真实本地TLS+h2/ES256证明协议接缝；WorkBook/原生turn/managed reply/决策/结构化mention各保原语义。HTTP200只acceptedByApns，未称设备显示/read或业务Done。原installationId+deliveryId+完整context点击还须当前准确连接与ACL，不能按restore复用数字ID误开新对象，也不自动连接/执行。
+
+根本次普通整合接已接受CloudCDF，当前源码为Store19/schema137；当前实际Mac9a和精确已封5553包仍18/129。没有创建新normal或签包、读真实Keychain/provider p8、注册真实设备token、接触Apple/Cloud门户/系统权限、派模型或部署Linux/VPS。Swift消费者仍由唯一App作者整块实现，真实Apple/设备/Cloud交换和物理iOS/正式分发仍未验。已有单次Linux控制器的B-only源码证据保持原义；最终付费job须准确组合S/C同Rust树与原witness/packager，不拿旧B输入标APNs。当前UI旧daily正常退出/锁屏等待仍仅阻依赖运行分支，整个工程继续。
+
 ## 2026-10-23 Cloud App 整块源码准入；5553产物准备与实际运行边界
 
 根亲读最终交接、source-freeze和独验报告，实际核作者树clean、HEAD cdf16b5d97e428c681461e4d8f58e8b18ca6c93a；base5553净13路径、对被暂缓f6的5路径修复增量。独验 d005d58b71b21143085251f1520624666aeb9c5a12435be561d80d4f2a34a57c 核42冻结项、13源码副本/当前blob、394全目标输入前后/当前一致，原Mac/iOS全目标0/0不重建。原f6真红SIGTRAP断言 old A scope overwrote reselected A latest 保留不重放；质量亲跑原冻结bin return/returnWrite/returnRead/retained四模式均0，其余8模式、28f原19及并发组和稳定shell/B证据复用。原件保 apple-cloud-app-source-freeze-cdf16b5d-20261023，source-freeze SHA ea284ffb3e8a0e4389968cd252c4513b2992daac74f43e0d01cbfb1d9596440f，MANIFEST SHA 668df10a939701b7257e644e2ddf8628313fbffdfaea3269313589bcffb0c159。

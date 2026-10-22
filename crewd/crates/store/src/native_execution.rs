@@ -419,7 +419,31 @@ pub fn managed_response_waiting(
     {
         return Err(invalid("managed response waiting unbound"));
     }
-    update(tx, &receipt, Phase::Completed, Some(prompt), None, now)
+    let completed = update(tx, &receipt, Phase::Completed, Some(prompt), None, now)?;
+    if tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? >= 19
+        && crate::notifications::settings(tx)?.enabled
+    {
+        let crew: String = tx.query_row(
+            "SELECT crew_id FROM sessions WHERE id=?1",
+            [&seal.runtime.session],
+            |r| r.get(0),
+        )?;
+        crate::notifications::enqueue(
+            tx,
+            &crew,
+            crewd_proto::notifications::NotificationKind::ReplyReady,
+            crewd_proto::notifications::NotificationSource::ManagedResponse {
+                session_id: seal.runtime.session.clone(),
+                runtime_id: seal.runtime.id.clone(),
+                request_id: request.into(),
+                prompt_id: prompt.into(),
+                receipt_revision: completed.revision.to_string(),
+            },
+            Some((&seal.runtime.session, &seal.runtime.generation)),
+            crate::now_ms(),
+        )?;
+    }
+    Ok(completed)
 }
 /// A later genuine same-prompt activity retracts only this managed waiting
 /// observation. It can never rewrite a native turn completion.
@@ -437,6 +461,9 @@ pub fn managed_response_resumed(
     if let Some(request) = request {
         let receipt = get(tx, &request)?.ok_or_else(|| invalid("managed waiting vanished"))?;
         update(tx, &receipt, Phase::Unknown, Some(prompt), None, now)?;
+        if tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? >= 19 {
+            crate::notifications::suppress_session(tx, &seal.runtime.session, "response_resumed")?;
+        }
     }
     Ok(())
 }

@@ -167,7 +167,7 @@ def extract_release(payload, root, expected):
     for directory in unpacked.rglob('*'):
         if directory.is_dir(): directory.chmod(0o755)
     release = json.loads((unpacked / 'release.json').read_bytes())
-    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 18 or release.get('apiVersion') != 3:
+    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 19 or release.get('apiVersion') != 3:
         raise Refused('wrong release source/architecture/schema')
     files = release.get('files', {})
     actual = {str(p.relative_to(unpacked)) for p in unpacked.rglob('*') if p.is_file()}
@@ -387,7 +387,7 @@ def install(args):
             (activation / 'release').symlink_to('../../releases/' + release['sourceCommit'])
             (activation / 'bin').symlink_to('release/bin')
             # Transaction file is public provenance only; all secret operations live in STATE.
-            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 18}).encode(), 0o444)
+            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 19}).encode(), 0o444)
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
@@ -526,7 +526,7 @@ def rollback(args):
         version = stopped_database_version(pathlib.Path(binding['dataDir']))
         # This candidate has exactly one writer qualification. No guessed ranges
         # or downgrade migrations; the old writer must match the stopped format.
-        if release.get('storeVersion') != 18 or version not in (None, 18):
+        if release.get('storeVersion') != 19 or version not in (None, 19):
             raise Refused('rollback target is not qualified for the stopped database')
         new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version})
         pending = PREFIX / ('.current-' + operation)
@@ -536,6 +536,35 @@ def rollback(args):
         replace_root_file(STATE / 'installation.json', json.dumps(binding).encode(), 0o600)
     print(json.dumps({'requestId':operation, 'current':pointer(PREFIX), 'serviceStarted':False}))
 
+
+def notification_configure(args):
+    # Secret material is only bounded stdin or a root-owned0600 regular file.
+    # The durable CLI witness stores digest/UUID only; it can never replay a key.
+    if args.input_file:
+        fd = os.open(args.input_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+                raise Refused('notification input requires root-owned0600 regular file')
+            raw = stream.read(16385)
+    else: raw = sys.stdin.buffer.read(16385)
+    if not raw or len(raw) > 16384: raise Refused('bounded notification configuration input required')
+    params = json.loads(raw)
+    if not isinstance(params, dict) or set(params) - {'requestId','expectedRevision','enabled','provider'}:
+        raise Refused('invalid typed notification configuration')
+    request = canonical_uuid(params.get('requestId'))
+    private_root(STATE, create=True)
+    record = {'format':1,'kind':'notificationConfiguration','requestId':request,'payloadSha256':sha(json.dumps(params,sort_keys=True,separators=(',',':')).encode())}
+    new_record(STATE / ('notification-' + request + '.json'), record)
+    # Response loss is Unknown. This function never retries or replaces its UUID.
+    print(json.dumps(rpc('host.notificationConfigure', params), indent=2))
+
+def notification_lookup(args):
+    request = canonical_uuid(args.request_id)
+    record = read_record(STATE / ('notification-' + request + '.json'))
+    if record.get('format') != 1 or record.get('kind') != 'notificationConfiguration' or record.get('requestId') != request:
+        raise Refused('original notification operation witness required')
+    print(json.dumps(rpc('host.notificationRequestLookup', {'requestId':request}), indent=2))
 
 def parser():
     p = argparse.ArgumentParser(description='PendingCrew one-link host installation/administration; never provider login or inference')
@@ -547,6 +576,8 @@ def parser():
         c = commands.add_parser(name); c.add_argument('--operation-file', required=True)
         if name == 'pair': c.add_argument('--host', required=True); c.add_argument('--port', type=int, required=True); c.add_argument('--label', default=socket.gethostname())
     resume = commands.add_parser('resume-installation'); resume.add_argument('--request-id', required=True)
+    notification = commands.add_parser('notification-configure'); notification.add_argument('--input-file')
+    notification = commands.add_parser('notification-lookup'); notification.add_argument('--request-id', required=True)
     commands.add_parser('status'); commands.add_parser('stop'); commands.add_parser('grants')
     configuration = commands.add_parser('configuration'); configuration.add_argument('--operation-file', required=True)
     revoke = commands.add_parser('revoke'); revoke.add_argument('--grant-id', required=True); revoke.add_argument('--expected-revision', required=True); revoke.add_argument('--note', required=True)
@@ -563,6 +594,8 @@ def main():
     elif args.command == 'status':
         if not active(): print(json.dumps({'service': 'inactive', 'noCoreWasStarted': True}))
         else: print(json.dumps(rpc('host.status', {}), indent=2))
+    elif args.command == 'notification-configure': notification_configure(args)
+    elif args.command == 'notification-lookup': notification_lookup(args)
     elif args.command == 'grants': print(json.dumps(rpc('host.grants', {}), indent=2))
     elif args.command == 'configuration':
         record = read_record(pathlib.Path(args.operation_file))

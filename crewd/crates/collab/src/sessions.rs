@@ -236,6 +236,9 @@ fn update_one(
 
 /// 归档的机组只读：它的 session 不能被拉起来（`Running` 拒）；停照常。
 pub fn set_desired(tx: &mut Tx<'_>, id: &str, d: Desired) -> Result<()> {
+    if d != Desired::Running {
+        crewd_store::notifications::suppress_session(tx.conn(), id, "session_stopped")?;
+    }
     if d == Desired::Running {
         crews::refuse_archived(tx.conn(), &crew_of(tx.conn(), id)?)?;
     }
@@ -251,6 +254,9 @@ pub fn set_desired(tx: &mut Tx<'_>, id: &str, d: Desired) -> Result<()> {
 
 /// 干活 / 空闲边沿（M3c 收到 `SessionEvent::Working` 时调）：记 was_working 与最后活跃时间。
 pub fn set_working(tx: &mut Tx<'_>, id: &str, working: bool) -> Result<()> {
+    if working {
+        crewd_store::notifications::suppress_session(tx.conn(), id, "session_resumed")?;
+    }
     let now = tx.now_ts();
     update_one(
         tx,
