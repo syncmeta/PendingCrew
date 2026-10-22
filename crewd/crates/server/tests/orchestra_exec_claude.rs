@@ -14,6 +14,7 @@ use crewd_server::orchestra::exec_claude::{ClaudeExecutor, ClaudeExecutorConfig,
 fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
     ClaudeExecutor::new(ClaudeExecutorConfig {
         program,
+        managed_factory: None,
         data_dir: data_dir.to_path_buf(),
         helper: PathBuf::from("/nonexistent/crewd-helper"),
         registry: None,

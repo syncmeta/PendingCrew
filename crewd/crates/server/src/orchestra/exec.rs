@@ -72,6 +72,10 @@ pub trait Executor: Send + Sync {
     fn accepts_initial_context(&self) -> bool {
         false
     }
+    /// Full provider resume must be explicitly supported by this adapter.
+    fn accepts_resume(&self) -> bool {
+        true
+    }
     /// Synchronous launch admission; must not enter the actor mailbox.
     fn check_launch(&self) -> Result<(), LaunchError> {
         Ok(())

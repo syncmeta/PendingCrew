@@ -206,6 +206,21 @@ impl LegacyTerminal {
         }
         Ok(result)
     }
+    /// A historical manual floor is not permission to submit a new prompt.
+    /// Only the actual current Human lease may use the native input path.
+    pub(crate) async fn manual_hook_allowed(&self) -> bool {
+        if self.binding().is_err() {
+            return false;
+        }
+        let lease = self.lease.lock().await;
+        if !lease
+            .as_ref()
+            .is_some_and(|l| l.connection.is_live() && Instant::now() < l.deadline)
+        {
+            return false;
+        }
+        self.manual_floor().await && self.binding().is_ok()
+    }
     pub(crate) async fn manual_floor(&self) -> bool {
         let session = self.session.clone();
         let generation = self.generation.clone();

@@ -368,14 +368,14 @@ async fn bad_stdin_or_unknown_event_never_prints_garbage() {
     assert!(!err.is_empty());
     let (out, err, _) = run_hook(
         f.data_dir(),
-        "user-prompt-submit",
+        "future-unknown-hook",
         &[],
         &f.token_file(),
         "{}",
     )
     .await;
     assert_eq!(out, "");
-    assert!(err.contains("user-prompt-submit"));
+    assert!(err.contains("future-unknown-hook"));
 }
 
 #[tokio::test]
@@ -734,4 +734,55 @@ async fn call_lost_after_it_was_sent_says_check_before_retrying() {
     assert!(text.contains("may or may not"), "{text}");
     assert!(text.contains("check"), "{text}");
     assert!(!text.contains("rejected"), "{text}");
+}
+
+#[tokio::test]
+async fn managed_prompt_guard_fails_closed_on_errors_without_changing_observation_hooks() {
+    for mode in [Mode::Normal, Mode::DropOnHook] {
+        let serve = FakeServe::start(mode).await;
+        for (input, extra) in [
+            ("{}", vec![]),
+            ("not-json", vec![]),
+            ("[]", vec![]),
+            ("{}", vec!["--invalid-argument"]),
+        ] {
+            let mut args = vec!["hook", "user-prompt-submit"];
+            args.extend(extra);
+            let mut child = crewd(serve.data_dir(), &args, &serve.token_file())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .await
+                .unwrap();
+            let out = tokio::time::timeout(CEILING, child.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(2));
+            assert!(out.stdout.is_empty());
+        }
+    }
+    let panic_serve = FakeServe::start(Mode::Normal).await;
+    let mut child = crewd(
+        panic_serve.data_dir(),
+        &["hook", "user-prompt-submit"],
+        &panic_serve.token_file(),
+    )
+    .env("CREWD_TEST_HOOK_PANIC", "1")
+    .spawn()
+    .unwrap();
+    child.stdin.take().unwrap().write_all(b"{}").await.unwrap();
+    let panic = tokio::time::timeout(CEILING, child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(panic.status.code(), Some(2));
+    assert!(panic.stdout.is_empty());
+    let serve = FakeServe::start(Mode::Normal).await;
+    let (stdout, _, _) = run_hook(serve.data_dir(), "stop", &[], &serve.token_file(), "{}").await;
+    assert!(stdout.is_empty(), "legacy Stop remains observational");
 }

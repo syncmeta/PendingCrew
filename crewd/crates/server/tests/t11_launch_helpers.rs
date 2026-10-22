@@ -176,6 +176,7 @@ async fn actual_generated_helpers_re_read_role_and_shared_world_after_launch() {
     let world = port.worldview(&fixture.worker).await.unwrap();
     let exec = ClaudeExecutor::new(ClaudeExecutorConfig {
         program: ClaudeProgram::Path(fake),
+        managed_factory: None,
         data_dir: fixture.data_dir().into(),
         helper,
         registry: None,

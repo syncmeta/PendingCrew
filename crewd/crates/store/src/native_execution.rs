@@ -353,6 +353,89 @@ pub fn accept_content(
         now,
     )
 }
+/// Live managed-hook authority, minted only by a fresh Core-owned registration.
+/// No Serde/row constructor: restoring a DB cannot recreate dispatch authority.
+#[derive(Debug)]
+pub struct ManagedRuntime {
+    runtime: Runtime,
+}
+impl ManagedRuntime {
+    pub fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+}
+pub fn register_managed(tx: &Transaction<'_>, runtime: &Runtime) -> Result<ManagedRuntime> {
+    register(tx, runtime)?;
+    Ok(ManagedRuntime {
+        runtime: runtime.clone(),
+    })
+}
+fn managed_current(tx: &Transaction<'_>, seal: &ManagedRuntime) -> Result<()> {
+    if current_runtime(tx, &seal.runtime.session)?.as_ref() != Some(&seal.runtime)
+        || active(tx, &seal.runtime.id)?.0
+    {
+        return Err(invalid("managed live authority unavailable"));
+    }
+    Ok(())
+}
+/// A real prompt UUID may bind only one request in this managed execution.
+pub fn managed_accept_content(
+    tx: &Transaction<'_>,
+    seal: &ManagedRuntime,
+    request: &str,
+    revision: i64,
+    prompt: &str,
+    body: &[u8],
+    now: &str,
+) -> Result<Receipt> {
+    managed_current(tx, seal)?;
+    let duplicate:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_receipts WHERE runtime_id=?1 AND prompt_id=?2)",params![seal.runtime.id,prompt],|r|r.get(0))?;
+    if duplicate {
+        return Err(invalid("managed prompt UUID already bound"));
+    }
+    accept_content(tx, &seal.runtime.id, request, revision, prompt, body, now)
+}
+/// Response waiting is deliberately not a native turn.complete. The only writer
+/// of this Completed/NULL shape owns a fresh managed seal and real prompt UUID.
+/// Native turn_* methods continue requiring their separate genuine turn ID.
+pub fn managed_response_waiting(
+    tx: &Transaction<'_>,
+    seal: &ManagedRuntime,
+    request: &str,
+    revision: i64,
+    prompt: &str,
+    now: &str,
+) -> Result<Receipt> {
+    managed_current(tx, seal)?;
+    let receipt = owned(tx, &seal.runtime.id, request, revision)?;
+    if receipt.phase != Phase::ContentAccepted
+        || receipt.prompt_id.as_deref() != Some(prompt)
+        || receipt.turn_id.is_some()
+        || !uuid(prompt)
+    {
+        return Err(invalid("managed response waiting unbound"));
+    }
+    update(tx, &receipt, Phase::Completed, Some(prompt), None, now)
+}
+/// A later genuine same-prompt activity retracts only this managed waiting
+/// observation. It can never rewrite a native turn completion.
+pub fn managed_response_resumed(
+    tx: &Transaction<'_>,
+    seal: &ManagedRuntime,
+    prompt: &str,
+    now: &str,
+) -> Result<()> {
+    managed_current(tx, seal)?;
+    if !uuid(prompt) {
+        return Err(invalid("managed prompt invalid"));
+    }
+    let request:Option<String>=tx.query_row("SELECT request_id FROM native_execution_receipts WHERE runtime_id=?1 AND prompt_id=?2 AND turn_id IS NULL AND phase='completed'",params![seal.runtime.id,prompt],|r|r.get(0)).optional()?;
+    if let Some(request) = request {
+        let receipt = get(tx, &request)?.ok_or_else(|| invalid("managed waiting vanished"))?;
+        update(tx, &receipt, Phase::Unknown, Some(prompt), None, now)?;
+    }
+    Ok(())
+}
 pub fn turn_started(
     tx: &Transaction<'_>,
     runtime: &str,
@@ -531,6 +614,132 @@ mod tests {
         tx.commit().unwrap();
         (c, runtime)
     }
+    #[test]
+    fn managed_waiting_has_no_native_turn_and_unknown_restore_never_recreates_seal() {
+        let (c, old) = setup();
+        let tx = c.unchecked_transaction().unwrap();
+        assert!(
+            register_managed(&tx, &old).is_err(),
+            "a row cannot be converted into a fresh managed seal"
+        );
+        invalidate_runtime_unknown(&tx, &old.id).unwrap();
+        let mut runtime = old.clone();
+        runtime.id = id();
+        runtime.generation = id();
+        let seal = register_managed(&tx, &runtime).unwrap();
+        let request = id();
+        let prompt = id();
+        let body = b"<managed-id> exact original task ";
+        let (prepared, reused) = prepare(&tx, &runtime.id, &request, body, "now").unwrap();
+        assert!(!reused);
+        assert!(
+            managed_response_waiting(&tx, &seal, &request, prepared.revision, &prompt, "now")
+                .is_err()
+        );
+        let accepted =
+            managed_accept_content(&tx, &seal, &request, 0, &prompt, body, "now").unwrap();
+        assert!(
+            managed_response_waiting(&tx, &seal, &request, accepted.revision, &id(), "now")
+                .is_err()
+        );
+        let waiting =
+            managed_response_waiting(&tx, &seal, &request, accepted.revision, &prompt, "now")
+                .unwrap();
+        assert_eq!(waiting.phase, Phase::Completed);
+        assert_eq!(waiting.turn_id, None);
+        assert!(
+            turn_completed(
+                &tx,
+                &runtime.id,
+                &request,
+                waiting.revision,
+                Completion {
+                    prompt_id: &prompt,
+                    turn_id: "invented",
+                    outcome: Phase::Completed
+                },
+                "now"
+            )
+            .is_err()
+        );
+        let (same, reused) = prepare(&tx, &runtime.id, &request, body, "later").unwrap();
+        assert!(reused);
+        assert_eq!(same, waiting);
+        let next = id();
+        prepare(&tx, &runtime.id, &next, body, "later").unwrap();
+        assert!(
+            managed_accept_content(&tx, &seal, &next, 0, &prompt, body, "later").is_err(),
+            "real prompt UUID cannot be reused by another managed request"
+        );
+        invalidate_unknown(&tx).unwrap();
+        assert_eq!(get(&tx, &next).unwrap().unwrap().phase, Phase::Unknown);
+        assert_eq!(
+            get(&tx, &request).unwrap().unwrap(),
+            waiting,
+            "waiting observation remains historical, never native turn completion"
+        );
+        assert!(current_runtime(&tx, &runtime.session).unwrap().is_none());
+        assert!(managed_response_waiting(&tx, &seal, &next, 1, &prompt, "later").is_err());
+        let (saved, reused) = prepare(&tx, &runtime.id, &next, body, "later").unwrap();
+        assert!(reused);
+        assert_eq!(
+            saved.phase,
+            Phase::Unknown,
+            "same UUID is only original-state lookup, never dispatch authority"
+        );
+        assert!(prepare(&tx, &runtime.id, &id(), body, "later").is_err());
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn managed_late_activity_retracts_waiting_without_changing_native_completion() {
+        let (c, old) = setup();
+        let tx = c.unchecked_transaction().unwrap();
+        invalidate_runtime_unknown(&tx, &old.id).unwrap();
+        let mut runtime = old.clone();
+        runtime.id = id();
+        runtime.generation = id();
+        let seal = register_managed(&tx, &runtime).unwrap();
+        let request = id();
+        let prompt = id();
+        prepare(&tx, &runtime.id, &request, b"task", "now").unwrap();
+        let accepted =
+            managed_accept_content(&tx, &seal, &request, 0, &prompt, b"task", "now").unwrap();
+        managed_response_waiting(&tx, &seal, &request, accepted.revision, &prompt, "now").unwrap();
+        managed_response_resumed(&tx, &seal, &prompt, "later").unwrap();
+        assert_eq!(get(&tx, &request).unwrap().unwrap().phase, Phase::Unknown);
+        assert!(
+            managed_response_waiting(&tx, &seal, &request, accepted.revision, &prompt, "later")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn managed_waiting_cannot_cross_runtime_or_raw_floor() {
+        let (c, old) = setup();
+        let tx = c.unchecked_transaction().unwrap();
+        invalidate_runtime_unknown(&tx, &old.id).unwrap();
+        let mut runtime = old.clone();
+        runtime.id = id();
+        runtime.generation = id();
+        let seal = register_managed(&tx, &runtime).unwrap();
+        let request = id();
+        let prompt = id();
+        prepare(&tx, &runtime.id, &request, b"task", "now").unwrap();
+        let accepted =
+            managed_accept_content(&tx, &seal, &request, 0, &prompt, b"task", "now").unwrap();
+        revoke_before_raw(&tx, &runtime.id, 0, "now").unwrap();
+        assert!(
+            managed_response_waiting(&tx, &seal, &request, accepted.revision + 1, &prompt, "now")
+                .is_err()
+        );
+        assert_eq!(
+            get(&tx, &request).unwrap().unwrap().phase,
+            Phase::RawRevoked
+        );
+        tx.rollback().unwrap();
+    }
+
     #[test]
     fn exact_immutable_content_and_cas_are_transactional_and_metadata_has_no_body() {
         let (c, r) = setup();

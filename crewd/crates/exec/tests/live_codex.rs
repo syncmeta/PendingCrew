@@ -83,6 +83,7 @@ async fn start(
                 session_id: "live".into(),
                 token: "t".into(),
                 hooks: false,
+                managed_hooks: false,
             }),
             ..CodexSpec::default()
         },

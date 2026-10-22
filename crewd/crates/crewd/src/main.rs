@@ -149,7 +149,11 @@ async fn run() -> anyhow::Result<()> {
         Err(e) if !matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
             if hook_cmd::is_hook_argv(&argv) {
                 eprintln!("crewd hook: bad command line: {e}");
-                std::process::exit(0);
+                std::process::exit(if hook_cmd::guarded_hook_argv(&argv) {
+                    2
+                } else {
+                    0
+                });
             }
             e.exit()
         }
@@ -167,6 +171,9 @@ async fn run() -> anyhow::Result<()> {
         (Ok(d), _) => d,
         (Err(e), Cmd::Hook(args)) => {
             eprintln!("crewd hook {}: {e:#}", args.event());
+            if args.event() == "user-prompt-submit" {
+                std::process::exit(2);
+            }
             return Ok(());
         }
         (Err(e), _) => return Err(e),
@@ -331,6 +338,9 @@ async fn run() -> anyhow::Result<()> {
             // `run` 只在 bug 时返回 Err：同样 exit 0、不打 stdout。
             if let Err(e) = hook_cmd::run(&dir, args.clone()).await {
                 eprintln!("crewd hook {}: {e:#}", args.event());
+                if args.event() == "user-prompt-submit" {
+                    std::process::exit(2);
+                }
             }
         }
         Cmd::Schema => {

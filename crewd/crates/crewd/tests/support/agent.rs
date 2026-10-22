@@ -34,6 +34,7 @@ pub fn launch_with_world(
             session_id: session.into(),
             token: f.token(session),
             hooks: true,
+            managed_hooks: false,
         }),
         ..ClaudeSpec::default()
     };

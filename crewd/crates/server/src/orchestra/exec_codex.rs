@@ -180,6 +180,7 @@ impl Executor for CodexExecutor {
                         session_id: req.session_id,
                         token: req.token,
                         hooks: false,
+                        managed_hooks: false,
                     }),
                     additional_env: self.config.extra_env.clone(),
                     ..Default::default()

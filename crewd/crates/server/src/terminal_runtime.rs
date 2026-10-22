@@ -62,6 +62,12 @@ impl TerminalRuntime {
             Self::Legacy(r) => r.claim(a, owner, old).await,
         }
     }
+    pub(crate) async fn manual_hook_allowed(&self) -> bool {
+        match self {
+            Self::Native(r) => r.manual_hook_allowed().await,
+            Self::Legacy(r) => r.manual_hook_allowed().await,
+        }
+    }
     pub(crate) async fn manual_floor(&self) -> bool {
         match self {
             Self::Native(r) => r.manual_floor().await,
