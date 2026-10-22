@@ -10,6 +10,9 @@ import Combine
         let params: CrewdValue
         let label: String
     }
+    @Published private(set) var enrollment:CrewdEnrollment.IssuerSummary?
+    @Published var enrollmentHost=""
+    var mayIssueEnrollment:Bool { !retired && workspace.dataDirectory != nil && workspace.client.readyForWork && workspace.client.capabilities.contains("remote.enrollment") }
     @Published private(set) var status: CrewdRemoteStatus?
     @Published private(set) var grants: [CrewdRemoteGrant] = []
     @Published private(set) var invitation: CrewdRemoteEnvelope?
@@ -37,6 +40,7 @@ import Combine
             let state = try decode(await workspace.client.call("remote.status"), as: CrewdRemoteStatus.self)
             let grants = try decode(await workspace.client.call("remote.grants"), as: [CrewdRemoteGrant].self)
             guard readEpoch == epoch else { return }
+            if self.status?.identity != state.identity { enrollment=nil }
             self.status = state; self.grants = grants; error = nil
             if let old = accepted {
                 if let current = grants.first(where: { $0.id == old.grant.id }) {
@@ -49,6 +53,45 @@ import Combine
     func configure(enabled: Bool) async {
         guard let status, let port = UInt16(port), port != 0 else { error = "请先读取设置并填写有效地址和端口。"; return }
         await submit("remote.configure", .object(["expectedRevision": .string(status.configuration.revision), "enabled": .bool(enabled), "listenHost": .string(listenHost), "port": .integer(Int64(port))]), label: enabled ? "允许设备连接" : "关闭设备连接")
+    }
+    private static func enrollmentCall(_ client:CrewdClient,epoch:UUID,method:String,bytes:Data)async throws->Data {
+        let params=try JSONDecoder().decode(CrewdValue.self,from:bytes)
+        guard client.readyForWork,client.connectionEpoch==epoch else{throw CrewdRemoteError.wrongIdentity}
+        let result=try await client.call(method,params)
+        return try JSONEncoder().encode(result)
+    }
+    func readEnrollment() async {
+        guard mayIssueEnrollment,let identity=status?.identity,!busy else{return}
+        busy=true;defer{busy=false}
+        do {let value=try await CrewdEnrollment.shared.issuerOriginal(server:identity)
+            guard mayIssueEnrollment,status?.identity==identity else{return};enrollment=value
+        }catch{self.error="无法读取原配对链接请求。请解锁设备后再读取，不会生成替代请求。"}
+    }
+    func createEnrollment() async {
+        guard mayIssueEnrollment,let current=status,let identity=current.identity,current.configuration.enabled,current.listening,!busy else{return}
+        let host=enrollmentHost.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !host.isEmpty,host != "0.0.0.0",host != "::",host != "127.0.0.1",host != "localhost",host != "::1" else{error="请填写其他设备可访问的真实局域网或公网地址。";return}
+        busy=true;defer{busy=false}
+        let client=workspace.client,epoch=client.connectionEpoch
+        do {
+            let value=try await CrewdEnrollment.shared.createHostLink(server:identity,endpoint:.init(host:host,port:current.configuration.port),label:computerLabel,send:{method,bytes in
+                try await Self.enrollmentCall(client,epoch:epoch,method:method,bytes:bytes)
+            })
+            guard mayIssueEnrollment,client.connectionEpoch==epoch,status?.identity==current.identity else{return};enrollment=value;error=nil
+        }catch{self.error="链接未生成或结果未确认。请先读取已保存的原请求；如原请求存在，只查询原结果，不要再次生成。"}
+    }
+    func lookupEnrollment(submitPrepared:Bool=false) async {
+        guard mayIssueEnrollment,let current=status,let identity=current.identity,let original=enrollment,!busy else{return}
+        busy=true;defer{busy=false};let client=workspace.client,epoch=client.connectionEpoch
+        do {
+            let send:@Sendable (String,Data)async throws->Data = {method,bytes in
+                try await Self.enrollmentCall(client,epoch:epoch,method:method,bytes:bytes)
+            }
+            let value:CrewdEnrollment.IssuerSummary
+            if submitPrepared {value=try await CrewdEnrollment.shared.submitHostOriginal(original.id,server:identity,send:send)}
+            else {value=try await CrewdEnrollment.shared.lookupHostLink(original.id,server:identity,send:send)}
+            guard mayIssueEnrollment,client.connectionEpoch==epoch,status?.identity==current.identity else{return};enrollment=value;error=nil
+        }catch{self.error="原链接结果仍未确认。已保留原请求，不会重发或生成替代token。"}
     }
     func newInvitation() async {
         // Deliberately retire only the new-invite draft; uncertain older requests

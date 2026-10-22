@@ -60,6 +60,7 @@ struct PendingCrewApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .modifier(CrewdEnrollmentURLEntry{ id in Task{await model.crewdWindow.select(id);await model.connectCrewdAuthority();await crewStore.refreshList()} })
                 .environmentObject(model)
                 .environmentObject(crewStore)
                 .environmentObject(captainTemplates)
