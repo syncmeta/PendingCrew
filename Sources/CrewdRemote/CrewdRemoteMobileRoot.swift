@@ -111,17 +111,17 @@ struct CrewdRemotePairingView: View {
                         Text("请在电脑端核对设备并批准连接，再复制电脑给出的确认码。")
                         ShareLink("分享回复码", item: responseText)
                         CrewdRemoteCodeFileExport(text: responseText, stage: .response, disabled: busy)
-                        Text(responseText).font(.caption.monospaced()).textSelection(.enabled).lineLimit(4)
+                        CrewdRemoteCodeReadback(text: responseText, height: 110)
                     }
                     Section("电脑确认码") {
-                        TextEditor(text: $receiptText).frame(minHeight: 100).crewdRemoteCodeInput().disabled(busy)
+                        TextEditor(text: $receiptText).crewdRemoteCodeInput(height: 100).disabled(busy)
                         CrewdRemoteCodeFileImport(text: $receiptText, stage: .receipt, disabled: busy)
                         Button("完成配对") { run { try await pairing.confirmReceipt(CrewdRemoteText.decode(receiptText), id: id) } apply: { _ in completed(id) } }
                             .disabled(busy || receiptText.isEmpty)
                     }
                 } else {
                     Section("电脑邀请连接码") {
-                        TextEditor(text: $inviteText).frame(minHeight: 110).crewdRemoteCodeInput().disabled(busy)
+                        TextEditor(text: $inviteText).crewdRemoteCodeInput(height: 110).disabled(busy)
                             .onChange(of: inviteText) { _, _ in preview = nil; envelope = nil; error = nil }
                         CrewdRemoteCodeFileImport(text: $inviteText, stage: .invitation, disabled: busy)
                         Button("核对电脑") { run {
@@ -154,11 +154,27 @@ struct CrewdRemotePairingView: View {
 }
 
 private extension View {
-    @ViewBuilder func crewdRemoteCodeInput() -> some View {
+    @ViewBuilder func crewdRemoteCodeInput(height: CGFloat) -> some View {
         #if os(iOS)
-        self.textInputAutocapitalization(.never).autocorrectionDisabled()
+        self.frame(height: height).textInputAutocapitalization(.never).autocorrectionDisabled()
         #else
-        self
+        self.frame(minHeight: height)
+        #endif
+    }
+}
+
+/// Long signed codes keep their full text while leaving the next action reachable.
+struct CrewdRemoteCodeReadback: View {
+    let text: String
+    let height: CGFloat
+    var body: some View {
+        #if os(iOS)
+        ScrollView {
+            Text(text).font(.caption.monospaced()).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(height: height)
+        #else
+        Text(text).font(.caption.monospaced()).textSelection(.enabled).lineLimit(4)
         #endif
     }
 }
