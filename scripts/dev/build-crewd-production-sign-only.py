@@ -38,13 +38,38 @@ def prepare(manifest):
     if own!=pathlib.Path(__file__).read_bytes():raise ValueError('sign-only recipe must match frozen source')
     return scope,v,repo
 
+def distribution_entitlements(template,profile,team,bundle):
+    """Expand only current source claims; a profile is an allowlist, not claims."""
+    if not isinstance(template,dict) or set(template)!={'keychain-access-groups'}:raise ValueError('review current source entitlement keys explicitly')
+    if not isinstance(profile,dict) or not re.fullmatch('[A-Z0-9]{10}',team) or bundle!='com.pendingname.pendingcrew':raise ValueError('explicit normal Team and bundle required')
+    prefixes=profile.get('ApplicationIdentifierPrefix')
+    allowed=profile.get('Entitlements',{})
+    if not isinstance(allowed,dict) or any(allowed.get(k) is True for k in ['get-task-allow','com.apple.security.get-task-allow','com.apple.security.cs.disable-library-validation']):raise ValueError('distribution profile restrictions invalid')
+    if not isinstance(prefixes,list) or len(prefixes)!=1 or not isinstance(prefixes[0],str) or not re.fullmatch('[A-Z0-9]{10}',prefixes[0]):raise ValueError('one actual profile AppIdentifierPrefix required')
+    prefix=prefixes[0]+'.'
+    def permits(value,pattern):
+        return isinstance(pattern,str) and (value==pattern or (pattern.endswith('*') and pattern.count('*')==1 and len(pattern)>1 and value.startswith(pattern[:-1])))
+    application=prefix+bundle
+    if profile.get('TeamIdentifier')!=[team] or allowed.get('com.apple.developer.team-identifier')!=team or not permits(application,allowed.get('com.apple.application-identifier',allowed.get('application-identifier'))):raise ValueError('profile application/team mismatch')
+    groups=template['keychain-access-groups'];allow_groups=allowed.get('keychain-access-groups')
+    if not isinstance(groups,list) or not groups or not isinstance(allow_groups,list):raise ValueError('explicit source/profile keychain groups required')
+    expanded=[]
+    for group in groups:
+        if not isinstance(group,str):raise ValueError('source group must be a string')
+        claim=group.replace('$(AppIdentifierPrefix)',prefix)
+        if not claim or '$' in claim or '*' in claim or any(ord(c)<32 for c in claim) or not any(permits(claim,pattern) for pattern in allow_groups):raise ValueError('unexpanded or unauthorized source entitlement')
+        expanded.append(claim)
+    if len(set(expanded))!=len(expanded):raise ValueError('duplicate source entitlement')
+    return {'com.apple.application-identifier':application,'com.apple.developer.team-identifier':team,'keychain-access-groups':expanded}
+
 def production_archive_argv(v,snapshot,out,normal_sha,build_number):
     """One production overlay over the protected original local-Core Release.
-    Pure command construction also permits a no-certificate compile check using
-    Xcode's ordinary CODE_SIGNING_ALLOWED=NO overrides; it never signs by itself.
+    Xcode always archives unsigned; the exact reviewed profile and expanded
+    source claims are embedded and signed explicitly after archive qualification.
     """
     if not re.fullmatch('[0-9a-f]{64}',normal_sha) or not re.fullmatch(r'[0-9]+\.[0-9]{5}',build_number):raise ValueError('exact backend SHA and ordinary build version required')
     return ['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Release','-destination','platform=macOS,arch=arm64','-derivedDataPath',v['derivedData'],'-clonedSourcePackagesDirPath',v['sourcePackages'],'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','ARCHS=arm64',
+        'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','CODE_SIGN_IDENTITY[sdk=macosx*]=','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=',
         'ENABLE_HARDENED_RUNTIME=YES','ENABLE_DEBUG_DYLIB=NO','ENABLE_PREVIEWS=NO',
         'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT',
         'PENDINGCREW_BACKEND_INPUT='+str(out/'crewd.pre-sign'),'PENDINGCREW_BACKEND_SHA256='+normal_sha,
@@ -85,16 +110,24 @@ def main():
     if not isinstance(expiry,datetime) or expiry.replace(tzinfo=expiry.tzinfo or timezone.utc)<=datetime.now(timezone.utc):raise ValueError('reviewed profile expired or lacks expiry')
     ent=profile.get('Entitlements',{})
     if str(__import__('uuid').UUID(profile.get('UUID','')))!=v['profileUUID'] or profile.get('TeamIdentifier')!=[v['team']] or (ent.get('get-task-allow') is True or ent.get('com.apple.security.get-task-allow') is True) or ent.get('com.apple.developer.team-identifier')!=v['team'] or ent.get('com.apple.application-identifier',ent.get('application-identifier')) not in [v['team']+'.com.pendingname.pendingcrew',v['team']+'.*']:raise ValueError('actual reviewed distribution profile does not qualify')
+    expected_ent=distribution_entitlements(plistlib.loads((snapshot/'Resources/PendingCrew.entitlements').read_bytes()),profile,v['team'],'com.pendingname.pendingcrew')
+    expected_ent_path=out/'expected-distribution-entitlements.plist'
+    expected_ent_path.write_bytes(plistlib.dumps(expected_ent))
     local=snapshot/'Config/Local.xcconfig'
-    local.write_text('CODE_SIGN_STYLE = Manual\nDEVELOPMENT_TEAM = '+v['team']+'\nCODE_SIGN_IDENTITY = '+v['identitySHA1']+'\nCODE_SIGN_IDENTITY[sdk=macosx*] = '+v['identitySHA1']+'\nPROVISIONING_PROFILE_SPECIFIER = '+v['profileUUID']+'\nCODE_SIGN_ENTITLEMENTS = Resources/PendingCrew.entitlements\n')
+    local.write_text('CODE_SIGNING_ALLOWED = NO\nCODE_SIGNING_REQUIRED = NO\nCODE_SIGN_IDENTITY =\nCODE_SIGN_IDENTITY[sdk=macosx*] =\nDEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\nPROVISIONING_PROFILE =\nCODE_SIGN_ENTITLEMENTS =\n')
     epoch=int(time.time());build_number=str(epoch//86400)+'.'+format(epoch%86400,'05d')
     argv=production_archive_argv(v,snapshot,out,witness['binarySHA256'],build_number)
     builder.query(argv+['-showBuildSettings','-json'],snapshot,out/'settings.log',out/'settings.json')
     settings=next(x['buildSettings'] for x in json.loads((out/'settings.json').read_text()) if x.get('target')=='PendingCrew')
-    if settings.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew' or settings.get('DEVELOPMENT_TEAM')!=v['team'] or settings.get('ENABLE_HARDENED_RUNTIME')!='YES' or settings.get('ARCHS')!='arm64' or settings.get('ENABLE_DEBUG_DYLIB')!='NO' or not {'PENDINGCREW_LOCAL_MAC','PENDINGCREW_REMOTE_PRODUCT'}.issubset(settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split()) or any(x in settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() for x in ['DEBUG','PENDINGCREW_NATIVE_CANDIDATE','PENDINGCREW_DELIVERY_VALIDATION','PENDINGCREW_KNOWLEDGE_VALIDATION']):raise ValueError('actual Release production configuration mismatch')
+    if settings.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew' or settings.get('DEVELOPMENT_TEAM','')!='' or settings.get('CODE_SIGNING_ALLOWED')!='NO' or settings.get('CODE_SIGNING_REQUIRED')!='NO' or any(settings.get(k,'') for k in ['CODE_SIGN_IDENTITY','CODE_SIGN_ENTITLEMENTS','PROVISIONING_PROFILE_SPECIFIER','PROVISIONING_PROFILE']) or settings.get('ENABLE_HARDENED_RUNTIME')!='YES' or settings.get('ARCHS')!='arm64' or settings.get('ENABLE_DEBUG_DYLIB')!='NO' or not {'PENDINGCREW_LOCAL_MAC','PENDINGCREW_REMOTE_PRODUCT'}.issubset(settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split()) or any(x in settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() for x in ['DEBUG','PENDINGCREW_NATIVE_CANDIDATE','PENDINGCREW_DELIVERY_VALIDATION','PENDINGCREW_KNOWLEDGE_VALIDATION']):raise ValueError('actual Release production configuration mismatch')
     builder.run(argv+['archive'],snapshot,out/'archive.log')
     app=out/'PendingCrew.xcarchive/Products/Applications/PendingCrew.app'
-    if not (app/'Contents/embedded.provisionprofile').is_file() or sha(app/'Contents/embedded.provisionprofile')!=v['profileSHA256']:raise ValueError('archive did not embed the exact reviewed profile')
+    unsigned_qualification=closure.qualify_unsigned_target(app,v['sourceRef'],'Release','product')
+    embedded=app/'Contents/embedded.provisionprofile'
+    if embedded.exists() or embedded.is_symlink():raise ValueError('unsigned archive unexpectedly embeds a profile')
+    if sha(pathlib.Path(v['profilePath']))!=v['profileSHA256']:raise ValueError('profile changed before explicit embedding')
+    shutil.copy2(v['profilePath'],embedded)
+    if sha(embedded)!=v['profileSHA256']:raise ValueError('explicit embedded reviewed profile differs')
     helper=app/'Contents/Helpers/crewd'
     if sha(helper)!=witness['binarySHA256']:raise ValueError('archive did not embed the exact normal Core input')
     builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none',str(helper)],snapshot,out/'helper-sign.log')
@@ -111,7 +144,7 @@ def main():
             if entry.is_symlink() and not entry.resolve(strict=True).is_relative_to(updater):raise ValueError('archive updater alias escapes')
             if not(entry.is_symlink() or entry.is_file() or entry.is_dir()):raise ValueError('archive updater special file')
         shutil.rmtree(updater)
-    builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none','--preserve-metadata=entitlements,requirements',str(app)],snapshot,out/'app-sign.log')
+    builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none','--entitlements',str(expected_ent_path),str(app)],snapshot,out/'app-sign.log')
     builder.run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
     requirement='anchor apple generic and identifier "com.pendingname.pendingcrew" and certificate leaf[subject.OU] = "'+v['team']+'" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
     builder.run(['codesign','--verify','--strict','--test-requirement','='+requirement,str(app)],snapshot,out/'apple-publisher-requirement.log')
@@ -122,6 +155,7 @@ def main():
     builder.save(out/'actual-signature-queries.json',{'display':display,'entitlements':signed_ent})
     actual_ent=plistlib.loads(signed_ent['stdout'].encode('utf-8'));text=display['stderr']
     if 'Identifier=com.pendingname.pendingcrew' not in text or 'TeamIdentifier='+v['team'] not in text or 'runtime)' not in text or 'Authority=Developer ID Application:' not in text or 'Authority=Developer ID Certification Authority' not in text or (actual_ent.get('get-task-allow') is True or actual_ent.get('com.apple.security.get-task-allow') is True):raise ValueError('actual final publisher package signature mismatch')
+    if actual_ent!=expected_ent:raise ValueError('actual signed entitlements differ from exact expanded source claims')
     if actual_ent.get('com.apple.security.cs.disable-library-validation') is True:raise ValueError('library validation cannot be relaxed')
     final_closure=closure.audit(app)
     equivalence={'GUI':seal.equivalent_files(out/'gui.archive-image',app/'Contents/MacOS'/info_value['CFBundleExecutable']),'backend':seal.equivalent_files(out/'crewd.pre-sign',helper)}
@@ -130,7 +164,7 @@ def main():
     observed=builder.regular_inventory(snapshot);expected=[x for x in inputs if x['path']!='Config/Local.xcconfig'];actual=[x for x in observed if x['path']!='Config/Local.xcconfig']
     if sha(pathlib.Path(a.manifest))!=manifest_hash or sha(pathlib.Path(v['profilePath']))!=v['profileSHA256']:raise ValueError('reviewed signing input changed')
     if expected!=actual or before!=after:raise ValueError('committed inputs or dependencies changed')
-    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'remoteProductOverlay':True,'preservesLocalCoreGuards':True,'version':info_value['CFBundleShortVersionString'],'buildNumber':build_number,'actualArchiveArgv':argv+['archive'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'signingAction':True,'staticAppleRequirement':requirement,'staticAppleRequirementLogSHA256':sha(out/'apple-publisher-requirement.log'),'staticAppleRequirementVerified':True,'loadClosure':final_closure,'archiveLoadClosureBeforeUpdaterExclusion':before_closure,'sealEquivalenceSHA256':sha(out/'seal-equivalence.json'),'publisherRuntimeAcceptance':False,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
+    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'remoteProductOverlay':True,'preservesLocalCoreGuards':True,'version':info_value['CFBundleShortVersionString'],'buildNumber':build_number,'actualArchiveArgv':argv+['archive'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'unsignedArchive':True,'unsignedArchiveQualification':unsigned_qualification,'explicitProfileEmbedding':True,'expectedEntitlements':expected_ent,'expectedEntitlementsSHA256':sha(expected_ent_path),'actualEntitlementsMatchExpected':actual_ent==expected_ent,'signingAction':True,'staticAppleRequirement':requirement,'staticAppleRequirementLogSHA256':sha(out/'apple-publisher-requirement.log'),'staticAppleRequirementVerified':True,'loadClosure':final_closure,'archiveLoadClosureBeforeUpdaterExclusion':before_closure,'sealEquivalenceSHA256':sha(out/'seal-equivalence.json'),'publisherRuntimeAcceptance':False,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
     print('BUILT private sign-only product; no launch/install/notarize/publication')
 if __name__=='__main__':
     try:main()
