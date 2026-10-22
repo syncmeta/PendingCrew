@@ -1423,3 +1423,37 @@ async fn completion_crew_profile_result_cannot_be_laundered_into_tools_shape(){
     let tools=c.call("session.codex.tools",json!({"crewId":crew["id"]})).await.unwrap();assert!(tools["skills"].is_array());assert!(tools.get("items").is_none());assert!(native_calls(&f,"thread/start").is_empty());assert!(native_calls(&f,"turn/start").is_empty());
     stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
 }
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn completion_native_first_inputs_require_nonblank_original_task_before_any_admission(){
+    use base64::{Engine,engine::general_purpose::STANDARD};
+    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();
+    o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion".into())]);
+    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
+    let mut c=Client::connect(&f.data).await;let identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let mut violations=vec![];
+    for (brief,skill_only) in [("",false),(" \n\t",false),("",true),(" \n\t",true)]{
+        let crew=c.call("crew.create",json!({"title":"No orphan first input","workingDirectory":f.work})).await.unwrap();
+        let original=uuid::Uuid::new_v4().to_string();let bytes=b"Unused original input survives refusal";
+        let prepared=c.call("session.codex.inputPrepare",json!({"requestId":original,"crewId":crew["id"],"kind":"text","filename":"original.txt","mimeType":"text/plain","sha256":crewd_store::codex_inputs::hash(bytes),"bytesBase64":STANDARD.encode(bytes)})).await.unwrap();
+        let selection=if skill_only{json!({"skills":[{"name":"synthetic-skill","path":f.work.canonicalize().unwrap().join("SKILL.md")} ]})}else{json!({"inputs":[prepared["input"]]})};
+        let request=uuid::Uuid::new_v4().to_string();
+        let submitted=c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","title":"Input","brief":brief,"isolation":false,"codexInputs":selection}}})).await;
+        let receipt=if submitted.is_ok(){completion_receipt(&mut c,&identity,&request).await}else{c.call("command.lookup",json!({"dbId":identity["dbId"],"requestId":request})).await.unwrap()};
+        let sessions=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();
+        let db=rusqlite::Connection::open_with_flags(f.data.join(crewd_store::DB_FILE),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let state:String=db.query_row("SELECT state FROM codex_native_inputs WHERE id=?1",[prepared["input"]["inputId"].as_str().unwrap()],|r|r.get(0)).unwrap();drop(db);
+        let lookup=c.call("session.codex.inputLookup",json!({"crewId":crew["id"],"requestId":original})).await.unwrap();assert_eq!(lookup["result"],prepared);
+        println!("blank={brief:?} skill_only={skill_only} submit_error={} receipt={receipt} sessions={} ref_state={state} turn_count={}",submitted.is_err(),sessions.as_array().unwrap().len(),native_calls(&f,"turn/start").len());
+        if submitted.is_ok()||!receipt.is_null()||!sessions.as_array().unwrap().is_empty()||state!="prepared"{violations.push(format!("blank={brief:?} skill_only={skill_only} admitted or consumed"));}
+    }
+    if !native_calls(&f,"initialize").is_empty()||!native_calls(&f,"thread/start").is_empty()||!native_calls(&f,"turn/start").is_empty(){violations.push("blank native input physically spawned".into());}
+    // No selection still permits the original intentionally empty session.
+    let crew=c.call("crew.create",json!({"title":"Original empty session","workingDirectory":f.work})).await.unwrap();let request=uuid::Uuid::new_v4().to_string();
+    c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","title":"Empty","brief":"","isolation":false}}})).await.unwrap();
+    assert_eq!(completion_receipt(&mut c,&identity,&request).await["phase"],"launched");
+    assert_eq!(native_calls(&f,"turn/start").len(),0);
+    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+    assert!(violations.is_empty(),"{}",violations.join("; "));
+}

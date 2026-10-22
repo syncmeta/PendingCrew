@@ -43,6 +43,9 @@ impl PublicExecution {
         }
         if let PublicCommand::SessionStart(p)=&request.command {
             if let Some(inputs)=&p.codex_inputs {
+                if p.brief.trim().is_empty() {
+                    return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require a nonblank original task").with_refusal("command.invalid"));
+                }
                 if p.executor!="codex" {return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require Codex"))}
                 inputs.validate().map_err(|e|RpcError::new(RpcError::INVALID_PARAMS,e))?;
             }

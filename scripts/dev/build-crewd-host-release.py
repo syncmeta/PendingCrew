@@ -5,7 +5,7 @@ sys.dont_write_bytecode = True
 
 # This controller admits only the exact frozen Codex/Store20 source tree.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_RUST_TREE = '2c258829cd4fa8b9af4c446bc81124ee18a90ddf'
+QUALIFIED_RUST_TREE = '232239060a0851997f1863e2877b1af2629fab63'
 SOURCE_RECIPES = [
     'scripts/dev/record-crewd-build.py',
     'scripts/dev/write-codex-first-provenance.py',
