@@ -17,7 +17,6 @@ struct CrewdMessageFolderPresentation {
     var filter:CrewTimelineFilter.MessageFolder = .all
     var clear:(()->Void)? = nil
     var classify:((String)->Void)? = nil
-    var controls:AnyView? = nil
 }
 private struct CrewdMessageFolderKey:EnvironmentKey {
     static let defaultValue=CrewdMessageFolderPresentation()
@@ -130,13 +129,10 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
             if value == "none"{filter = .exclude(Set(assignments.compactMap{$0["object"]["id"].string}))}
             else{filter = .include(Set(assignments.filter{$0["folderId"] == .string(value)}.compactMap{$0["object"]["id"].string}))}
         }else{filter = .include([])}
-        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)},controls:AnyView(CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages,compact:true)))
+        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
     }
     var body:some View {
         VStack(spacing:0){
-            #if os(iOS)
-            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages,compact:true).padding(.horizontal,14).padding(.vertical,4)
-            #endif
             content().environment(\.crewdMessageFolders,classification)
         }
         .sheet(item:$target){target in
@@ -449,6 +445,12 @@ private struct CrewdOriginalMessages<Content: View>: View {
         }
         #endif
     }
+    private var messageFolderMenu:some View {
+        CrewdFolderControls(store:workspace.channelResources,drafts:$workspace.resourceDrafts,
+            selection:Binding(get:{workspace.resourceDrafts.selection(workspace.crewID,.messages,channel:workspace.channelID)},
+                              set:{workspace.resourceDrafts.select(workspace.crewID,.messages,$0,channel:workspace.channelID)}),
+            view:.messages,compact:true,iconOnly:true)
+    }
     #if os(iOS)
     private var mobileConversationList: some View {
         ScrollView {
@@ -456,6 +458,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 HStack {
                     Text("会话").font(CrewdType.label.weight(.medium))
                     Spacer()
+                    messageFolderMenu
                     Button{showingNewMember=true}label:{Image(systemName:"plus")}
                         .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("新建成员会话")
                 }.foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal,12).padding(.vertical,4)
@@ -465,7 +468,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                             selected: workspace.channelID == id,
                             action: { workspace.selectConversation(id); mobileChat = true }) {
                                 channelAvatar(row)
-                            }
+                            }.accessibilityHint(CrewdConversationProjection.context(row))
                     }
                 }
                 if !workspace.sessions.isEmpty {
@@ -510,6 +513,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
             HStack {
                 Text("会话").font(.system(size: 11, weight: .medium))
                 Spacer()
+                messageFolderMenu
                 Button{conversationListVisible=false}label:{Image(systemName:"sidebar.left")}
                     .buttonStyle(CrewdToolButtonStyle()).help("收起会话列表").accessibilityLabel("收起会话列表")
                 Button { workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }
@@ -525,7 +529,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                                 CrewdAttentionAvatar(group:workspace.channelWork,crew:workspace.crewID,channel:id){
                                     CrewdGroupAvatar(members: workspace.channelSummaries.first(where: { $0["channel"]["id"].string == id })?["members"].array ?? [], channel: id, name: CrewdConversationProjection.title(row))
                                 }
-                            }
+                            }.help(CrewdConversationProjection.context(row))
                         }
                     }
                     if !workspace.sessions.isEmpty {

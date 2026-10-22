@@ -43,9 +43,7 @@ struct MacThreePaneView: View {
                 CrewCenterView().environmentObject(sessionRunner)
                     .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
                     .toolbar {
-                        if let workspace=model.crewdBackend?.workspace {
-                            ToolbarItem{CrewdOriginalConnectionStatus(workspace:workspace,compact:true)}
-                        }else if model.usesCrewdAuthority {
+                        if model.usesCrewdAuthority,model.crewdBackend?.workspace == nil {
                             ToolbarItem{
                                 Button{showingUnavailableStatus=true}label:{Label("连接状态",systemImage:"wifi.exclamationmark")}
                                     .popover(isPresented:$showingUnavailableStatus){
@@ -230,8 +228,8 @@ private final class SeparatorKillerView: NSView {
 
     static func applyChrome(_ window: NSWindow?) {
         guard let window else { return }
-        window.titlebarSeparatorStyle = .none
-        window.titlebarAppearsTransparent = true
+        if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none }
+        if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
         if !window.styleMask.contains(.fullSizeContentView) {
             window.styleMask.insert(.fullSizeContentView)
         }

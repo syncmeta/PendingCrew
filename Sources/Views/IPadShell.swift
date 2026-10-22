@@ -149,7 +149,7 @@ struct IPadShell: View {
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。
-                .navigationTitle(isCompact ? title : "")
+                .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .searchable(text:$searchQuery,placement:.navigationBarDrawer(displayMode:.automatic),prompt:"搜索当前群")
                 .toolbar {
