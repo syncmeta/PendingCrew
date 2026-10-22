@@ -45,14 +45,18 @@ struct IPadShell: View {
                 .navigationTitle("机组")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("连接电脑", systemImage: "link") { showingPairing = true }
-                        Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
-                        if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
-                            Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
-                        }
-                        if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true {
-                            Button("原请求核对") { showingRecovery = true }
-                        }
+                        Menu {
+                            Button("连接电脑", systemImage: "link") { showingPairing = true }
+                            Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
+                            if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
+                                Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
+                            }
+                            if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true {
+                                Button("原请求核对") { showingRecovery = true }
+                            }
+                        } label: {
+                            Label("电脑与草稿", systemImage: "ellipsis.circle")
+                        }.accessibilityLabel("电脑与草稿")
                     }
                 }
         } detail: {

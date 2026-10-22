@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 P3 实际可达性缺陷与准确修复候选冻结
+
+b76普通Sim包门25531dcbd4899bdeab4b46c29fdc9977c273019e33767a399b6a2363ca34d6b7已接受。真实P1仅连接按钮可见，单ToolbarItem多子按钮未形成可达菜单，故未进入离线页/未P2；一份production-writer测试文件hash/uid501/0600/link1未变，仅删本次文件和新空recorddir，App/console0、208Shutdown。原件ios-normal-b76e56f7-20261022/offline-ui-p3/module-result.json，SHAf3ee46bec894c8ab1d34671f106e52ea42f7d3b071ea27c60a0695a84131bdac。
+
+作者c9a233ab311f1d1b039be9b712e83aa66abc0364仅IPadShell单原生“电脑与草稿”Menu修复，原四动作/条件不变，无新状态或副作用；parse0，独审ios-offline-toolbar-source-20261022/independent-qa-source.json SHAe695f0bb25ef635d187dc4871c6a5c2b613ca8a89ce6e59ed01188a9e37b02c4。本组合冻结后仅准确新Sim全target，再原208/hosttmp02/一个真实writer文件做P1/P2离线读取。原48bb安全reader/seam证据复用，无新配对或VPS动作，不改旧包来源。
+
+b76未签名iPhoneOS原31952实际0，有限产物门c9952486e2be2920a272c9a7d4e8a203e3ef76ac1ead8a9b65a04ced7e0842a4通过，源/依赖/产物与原配置完整，保全ios-device-unsigned-b76e56f7-20261022；不冒新Menu来源、签名或真机运行。Mac已装6f35不变，VPS6c准备仍Unknown，M4/完整远程持久等全工程缺口不以本次修复算完成。
+
 ## 2026-10-22 普通 iOS 离线历史草稿完整源码冻结；VPS 准备未知保全
 
 手机97fb输入/布局已验原包保留，Mac日用仍准确6f35/20748.07553，不改标。此前GitHub故障已恢复，原44480普通atomic push实际0，main/global已保存a0f50dc8；本组合为下一准确普通iOS新包输入。
