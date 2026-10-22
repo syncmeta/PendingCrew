@@ -332,6 +332,8 @@ struct CrewdExecutorChoiceView: View {
 
 struct CrewdSessionStartView: View {
     @State private var isolation = false
+    @ObservedObject private var personalService=CrewPersonalDraftService.shared
+    @State private var personalScope:CrewPersonalDraftService.EditingScope?
     @State private var codexSettings=CrewdCodexSettingsDraft()
     @State private var explicitTitle=""
     @ObservedObject var workspace: CrewdWorkspace
@@ -342,7 +344,7 @@ struct CrewdSessionStartView: View {
     @State private var reading = false
     private var unknown: [CrewdDrafts.Snapshot] { workspace.uncertainSessionStarts.filter { $0.context.crew == workspace.crewID } }
     private var context: CrewdDrafts.Context { .initialTask(crew: workspace.crewID, session: workspace.sessionID) }
-    private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context); reviewedUnknown = false }) }
+    private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context,scope:personalScope); reviewedUnknown = false }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             CrewdPanelHeader(title:"新成员会话",detail:"发送第一件具体任务后才会启动。",symbol:"person.badge.plus")
@@ -383,9 +385,11 @@ struct CrewdSessionStartView: View {
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
                     }
                 }
-            }.disabled(workspace.executorProfile(workspace.selectedExecutor)?.canStart != true || reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
+            }.disabled(personalScope.map{!personalService.isCurrent($0)} == true || workspace.executorProfile(workspace.selectedExecutor)?.canStart != true || reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
             Text(workspace.status).font(CrewdType.caption).foregroundStyle(.secondary).textSelection(.enabled)
-        }.onChange(of: workspace.crewID) { _, _ in
+        }.onAppear{workspace.bindPersonalProjection();personalScope=personalService.editingScope()}
+        .onChange(of:personalService.projectionID){_,_ in personalScope=personalService.editingScope()}
+        .onChange(of: workspace.crewID) { _, _ in
             failure = nil; readUnknown = false; reviewedUnknown = false
         }
     }

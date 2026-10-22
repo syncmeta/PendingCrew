@@ -12,6 +12,11 @@ struct ApplePersonalCloudConfiguration: Equatable, Sendable {
     let environment: AppleSyncEnvironment
     let draftsCollection: String
     let hostsCollection: String
+    /// Only a separately qualified signed overlay may supply the actual KVS entitlement.
+    let keyValueStoreIdentifier:String?
+    init(containerIdentifier:String,environment:AppleSyncEnvironment,draftsCollection:String,hostsCollection:String,keyValueStoreIdentifier:String?=nil){
+        self.containerIdentifier=containerIdentifier;self.environment=environment;self.draftsCollection=draftsCollection;self.hostsCollection=hostsCollection;self.keyValueStoreIdentifier=keyValueStoreIdentifier
+    }
     func accepts(_ account: AppleSyncAccount) -> Bool {
         account.container == containerIdentifier && account.environment == environment && !account.userRecordID.isEmpty
     }

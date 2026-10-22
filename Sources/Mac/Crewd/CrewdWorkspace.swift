@@ -235,6 +235,8 @@ final class CrewdWorkspace: ObservableObject {
     @Published var originalFirstMessages: [OriginalFirstMessage] = []
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
+    private var personalProjectionObserver:AnyCancellable?
+    private var personalEditingScope:CrewPersonalDraftService.EditingScope?
     @Published private(set) var personalDraftContexts:[String:CrewdDataContext]=[:]
     var personalDrafts:CrewPersonalDraftService{.shared}
     private(set) var composerDrafts = CrewComposerDraftStore()
@@ -1113,16 +1115,31 @@ final class CrewdWorkspace: ObservableObject {
         else{kind="channelMessage";destination = .channel(context.channel)}
         return .init(authorityID:source.authorityId,databaseID:source.dbId,crewID:context.crew,destination:destination,kind:kind)
     }
-    func checkpointComposer(_ payload:CrewComposerDraftStore.Draft,crew:String,channel:String){
-        guard let key=personalDraftKey(.message(crew:crew,channel:channel,session:"")) else{return}
-        personalDrafts.checkpoint(payload,key:key)
+    func bindPersonalProjection(){
+        guard personalProjectionObserver == nil else{return}
+        let service=personalDrafts
+        personalEditingScope=service.editingScope()
+        personalProjectionObserver=service.$projectionID.dropFirst().sink{[weak self] projection in
+            guard let self else{return}
+            if let old=self.personalEditingScope {
+                for snapshot in self.messageDrafts.allSnapshots where snapshot.context.kind == .initialTask || !snapshot.context.session.isEmpty {
+                    if let key=self.personalDraftKey(snapshot.context){service.checkpoint(.init(text:snapshot.text),key:key,scope:old)}
+                }
+            }
+            self.messageDrafts = .init()
+            self.personalEditingScope = .init(owner:service.coordinator.current,projection:projection)
+        }
     }
-    func setPersonalInput(_ text:String,context:CrewdDrafts.Context){
-        messageDrafts.set(text,for:context)
-        if let key=personalDraftKey(context){personalDrafts.checkpoint(.init(text:text),key:key)}
+    func checkpointComposer(_ payload:CrewComposerDraftStore.Draft,crew:String,channel:String,scope:CrewPersonalDraftService.EditingScope?=nil){
+        guard let key=personalDraftKey(.message(crew:crew,channel:channel,session:"")) else{return}
+        personalDrafts.checkpoint(payload,key:key,scope:scope)
+    }
+    func setPersonalInput(_ text:String,context:CrewdDrafts.Context,scope:CrewPersonalDraftService.EditingScope?=nil){
+        if scope.map({personalDrafts.isCurrent($0)}) ?? true {messageDrafts.set(text,for:context)}
+        if let key=personalDraftKey(context){personalDrafts.checkpoint(.init(text:text),key:key,scope:scope)}
     }
     func personalInputSnapshot(_ snapshot:CrewdDrafts.Snapshot)->CrewPersonalDraftService.Snapshot? {
-        personalDraftKey(snapshot.context).flatMap{personalDrafts.snapshot($0,payload:.init(text:snapshot.text))}
+        personalDraftKey(snapshot.context).flatMap{personalDrafts.snapshot($0,payload:.init(text:snapshot.text),scope:personalEditingScope)}
     }
     @discardableResult func clearPersonalInput(_ snapshot:CrewdDrafts.Snapshot,personal:CrewPersonalDraftService.Snapshot?)->Bool {
         guard messageDrafts.clearIfUnchanged(snapshot) else{return false}
@@ -1131,8 +1148,8 @@ final class CrewdWorkspace: ObservableObject {
     }
     func restorePersonalInput(_ context:CrewdDrafts.Context)async {
         guard let key=personalDraftKey(context) else{return}
-        let old=messageDrafts.snapshot(for:context)
-        guard old.text.isEmpty,let payload=await personalDrafts.restoreOwn(key),messageDrafts.text(for:context).isEmpty,personalDraftKey(context) == key,messageDrafts.snapshot(for:context) == old else{return}
+        let old=messageDrafts.snapshot(for:context),scope=personalDrafts.editingScope()
+        guard old.text.isEmpty,let payload=await personalDrafts.restoreOwn(key),personalDrafts.isCurrent(scope),messageDrafts.text(for:context).isEmpty,personalDraftKey(context) == key,messageDrafts.snapshot(for:context) == old else{return}
         messageDrafts.set(payload.text,for:context)
     }
     private func qualifyPersonalDraftContext(_ crew:String)async {

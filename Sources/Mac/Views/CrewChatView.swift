@@ -46,6 +46,8 @@ struct CrewChatView: View {
     var onJumpToMessage: ((_ messageId: String, _ from: CrewChatReturnTrail.Stop) -> Void)? = nil
     var onJumpToCrew: ((_ crewId: String, _ from: CrewChatReturnTrail.Stop) -> Void)? = nil
 
+    @ObservedObject private var personalService=CrewPersonalDraftService.shared
+    @State private var personalEditingScope:CrewPersonalDraftService.EditingScope?
     @EnvironmentObject private var appModel: AppModel
     #if os(macOS)
     /// MacThreePaneView 注入（经 CrewCenterView）—— session 发的消息点击可
@@ -224,7 +226,7 @@ struct CrewChatView: View {
         .onPreferenceChange(CrewComposerCoreHeightKey.self) { composerCoreHeight = $0 }
         // 切 crew 视图整个重建（macOS/iPad 都带 `.id(crewId)`），所以未发出的草稿不能只
         // 活在 @State 里 —— 进屏取回、变动存回，切走再切回来原样在。
-        .onAppear { restoreDraft() }
+        .onAppear { personalEditingScope=personalService.editingScope();appModel.crewdBackend?.workspace.bindPersonalProjection();restoreDraft() }
         .task(id: draftStorageKey) { await restorePersonalDraft() }
         .onChange(of: replyTarget) { _, _ in saveDraft() }
         // File importer — .fileImporter is available on iOS 14+ and macOS 11+.
@@ -520,7 +522,7 @@ struct CrewChatView: View {
         appModel.crewdBackend?.workspace.composerDrafts ?? CrewComposerDraftStore.shared
     }
     private var draftStorageKey: String {
-        if let backend = appModel.crewdBackend { return backend.workspace.presentationNamespace + "/" + crewId + "/" + crewdChannelID }
+        if let backend = appModel.crewdBackend { return backend.workspace.presentationNamespace + "/" + crewId + "/" + crewdChannelID + personalService.cacheSuffix }
         return crewId
     }
 
@@ -529,7 +531,7 @@ struct CrewChatView: View {
         var saved = composerDraftStore.draft(for: draftStorageKey)
         // Earlier original-front drafts were crew/lobby scoped. Retain them
         // only for that exact authority/lobby, never another conversation.
-        if saved.isEmpty, crewdChannelID == crewId + "/lobby", let workspace = appModel.crewdBackend?.workspace {
+        if saved.isEmpty, personalService.cacheSuffix.isEmpty, crewdChannelID == crewId + "/lobby", let workspace = appModel.crewdBackend?.workspace {
             saved = composerDraftStore.draft(for: workspace.presentationNamespace + "/" + crewId)
         }
         guard !saved.isEmpty else { return }
@@ -549,13 +551,17 @@ struct CrewChatView: View {
     }
     /// 存回去（草稿一动就存；发送成功后由 `send()` 清）。
     private func saveDraft() {
+        if let scope=personalEditingScope,!personalService.isCurrent(scope) {
+            appModel.crewdBackend?.workspace.checkpointComposer(.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget),crew:crewId,channel:crewdChannelID,scope:scope)
+            return
+        }
         if let workspace = appModel.crewdBackend?.workspace {
             workspace.messageDrafts.set(draft, for: .message(crew: crewId, channel: crewdChannelID, session: ""))
         }
         composerDraftStore.save(
             .init(text: draft, stagedMentions: stagedMentions, replyTarget: replyTarget),
             for: draftStorageKey, crew: crewId, channel: crewdChannelID)
-        appModel.crewdBackend?.workspace.checkpointComposer(.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget),crew:crewId,channel:crewdChannelID)
+        appModel.crewdBackend?.workspace.checkpointComposer(.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget),crew:crewId,channel:crewdChannelID,scope:personalEditingScope)
     }
 
     /// The roster member id that represents "me" (skipped from the candidate
@@ -1748,7 +1754,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
-        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft,scope:personalEditingScope)}
         sending = true
         defer { sending = false }
         do {
@@ -1826,7 +1832,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
-        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft,scope:personalEditingScope)}
         sending = true
         defer { sending = false }
         do {
@@ -1884,7 +1890,7 @@ struct CrewChatView: View {
         let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
-        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft,scope:personalEditingScope)}
         let epoch = workspace.observationGeneration
         sending = true; defer { sending = false }
         do {

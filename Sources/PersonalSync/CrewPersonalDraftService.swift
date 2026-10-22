@@ -10,6 +10,7 @@ import Darwin
     typealias Namespace=ApplePersonalAccountNamespace<Payload>
     typealias Coordinator=ApplePersonalAccountCoordinator<Payload>
     struct Version:Identifiable {let id:UUID;let deviceID:String;let own:Bool;let payload:Payload}
+    struct EditingScope { let owner:Namespace;let projection:UUID }
     struct Snapshot {let owner:Namespace;let value:Namespace.Ticket;var key:AppleDraftKey{value.key}}
     struct ExportTicket {let owner:Namespace;let value:Namespace.Ticket}
     private static var instance:CrewPersonalDraftService?
@@ -67,6 +68,22 @@ import Darwin
     private var syncAgain=false
     private var active=false
     private var projected:ApplePersonalNamespaceID = .local
+    private var preferenceStore:NSUbiquitousKeyValueStore?
+    private var preferenceObserver:NSObjectProtocol?
+    private var defaultsObserver:NSObjectProtocol?
+    private var preferenceScope:EditingScope?
+    private var localAppearance:String?
+    private var lastAppearance="system"
+    private var applyingAppearance=false
+    // Same actual key used by AppearanceMode and the existing Settings picker.
+    private let appearanceKey="pendingcrew_appearance_mode"
+    private var preferenceConsentKey:String{consentKey+".appearance"}
+    var preferencesQualified:Bool{coordinator.configuration?.keyValueStoreIdentifier?.isEmpty == false}
+    var preferencesOptedIn:Bool{defaults.bool(forKey:preferenceConsentKey)}
+    func setPreferenceSync(_ enabled:Bool){
+        defaults.set(enabled,forKey:preferenceConsentKey)
+        updatePreferenceProjection()
+    }
     var cloudConfigured:Bool{coordinator.configuration != nil}
     var cloudOptedIn:Bool{defaults.bool(forKey:consentKey)}
     var retainedNamespaces:[Namespace]{coordinator.retained.values.sorted{$0.id.stableName < $1.id.stableName}}
@@ -79,6 +96,7 @@ import Darwin
         coordinator=Coordinator(local:local,configuration:configuration,namespaceFactory:{[weak self] id in guard let self else{throw AppleSyncFailure.invalid};return self.makeNamespace(id)},transportFactory:transportFactory ?? {try AppleCloudKitTransport(containerIdentifier:$0.containerIdentifier,environment:$0.environment)})
         coordinator.didChange={[weak self] in self?.publishProjection()}
         publishProjection()
+        defaultsObserver=NotificationCenter.default.addObserver(forName:UserDefaults.didChangeNotification,object:defaults,queue:.main){[weak self] _ in Task{@MainActor in self?.appearanceChanged()}}
     }
     private func installationID()async throws->String {
         if let identityTask{return try await identityTask.value}
@@ -117,6 +135,7 @@ import Darwin
         errors=current.errors;unsavedLatest=current.unsavedLatest;saving=current.savingKeys
         catalog=current.catalog.sorted{Self.storageKey($0,namespace:current.id)<Self.storageKey($1,namespace:current.id)}
         recovered=current.recovered;hosts=current.hosts;initializationError=current.initializationError
+        updatePreferenceProjection()
         switch coordinator.status {
         case .localOnly:status="草稿仅本机保存"
         case .notConfigured:status="个人同步暂未启用；草稿仅本机保存"
@@ -127,6 +146,44 @@ import Darwin
         case .accountRefreshRequired:status="iCloud 账号已变化；原文保留，请核对账号"
         case .unavailable:status="个人同步暂不可用；原文仍保留"
         }
+    }
+    /// No KVS object is created without actual qualification + explicit consent
+    /// + the current verified Apple account. No first-account preference seeding.
+    private func updatePreferenceProjection(){
+        let next=editingScope()
+        guard preferencesQualified,preferencesOptedIn,cloudOptedIn,coordinator.optedIn,next.owner.id.account != nil,isCurrent(next) else{
+            preferenceScope=nil
+            if let observer=preferenceObserver{NotificationCenter.default.removeObserver(observer);preferenceObserver=nil}
+            preferenceStore=nil
+            if let original=localAppearance{applyAppearance(original);localAppearance=nil}
+            return
+        }
+        if preferenceScope?.owner !== next.owner || preferenceScope?.projection != next.projection {
+            if localAppearance == nil{localAppearance=defaults.string(forKey:appearanceKey) ?? "system";lastAppearance=localAppearance!}
+            else if let original=localAppearance{applyAppearance(original)}
+            preferenceScope=next
+            if preferenceStore == nil {
+                let store=NSUbiquitousKeyValueStore.default;preferenceStore=store
+                preferenceObserver=NotificationCenter.default.addObserver(forName:NSUbiquitousKeyValueStore.didChangeExternallyNotification,object:store,queue:.main){[weak self] _ in Task{@MainActor in self?.receiveAppearance()}}
+                store.synchronize()
+            }
+            receiveAppearance()
+        }
+    }
+    private func preferenceKey(_ scope:EditingScope)->String{"personal.appearance."+scope.owner.id.stableName}
+    private func receiveAppearance(){
+        guard let scope=preferenceScope,isCurrent(scope),preferencesOptedIn,cloudOptedIn,
+              let value=preferenceStore?.string(forKey:preferenceKey(scope)),["system","light","dark"].contains(value) else{return}
+        applyAppearance(value)
+    }
+    private func applyAppearance(_ value:String){
+        applyingAppearance=true;lastAppearance=value;defaults.set(value,forKey:appearanceKey);applyingAppearance=false
+    }
+    private func appearanceChanged(){
+        let value=defaults.string(forKey:appearanceKey) ?? "system"
+        guard !applyingAppearance,value != lastAppearance else{return};lastAppearance=value
+        guard let scope=preferenceScope,isCurrent(scope),preferencesOptedIn,cloudOptedIn,["system","light","dark"].contains(value) else{return}
+        preferenceStore?.set(value,forKey:preferenceKey(scope))
     }
     private func setActive(_ value:Bool){
         active=value
@@ -141,7 +198,7 @@ import Darwin
         try await coordinator.enable();publishProjection();scheduleSync()
     }
     func disablePersonalSync()async{
-        defaults.set(false,forKey:consentKey);activityTask?.cancel();activityTask=nil;activityID=nil;syncTask?.cancel();syncTask=nil;syncID=nil;syncAgain=false
+        defaults.set(false,forKey:consentKey);activityTask?.cancel();activityTask=nil;activityID=nil;syncTask?.cancel();syncTask=nil;syncID=nil;syncAgain=false;syncBusy=false
         await coordinator.disable();publishProjection()
     }
     private func scheduleSync(){
@@ -153,22 +210,36 @@ import Darwin
         }
     }
     func synchronizePersonal()async throws{try await coordinator.synchronize();publishProjection()}
+    var cacheSuffix:String{coordinator.current.id.account == nil ? "":"/personal-"+coordinator.current.id.stableName}
+    func editingScope()->EditingScope{.init(owner:coordinator.current,projection:projectionID)}
+    func isCurrent(_ scope:EditingScope)->Bool{scope.owner === coordinator.current && scope.projection==projectionID && scope.owner.isSelected}
     func localDraft(_ key:AppleDraftKey)->Payload?{coordinator.current.localDraft(key)}
-    func checkpoint(_ payload:Payload,key:AppleDraftKey){
-        let owner=coordinator.current
+    func checkpoint(_ payload:Payload,key:AppleDraftKey,scope:EditingScope?=nil){
+        let owner=scope?.owner ?? coordinator.current
+        if let scope,!isCurrent(scope){owner.retainUnselected(payload,key:key);publishProjection();return}
         do{_ = try owner.checkpoint(payload,key:key)}catch{owner.retainUnselected(payload,key:key)}
         publishProjection()
     }
     func refresh(_ key:AppleDraftKey)async{do{try await coordinator.current.refresh()}catch{};publishProjection()}
-    func restoreOwn(_ key:AppleDraftKey)async->Payload?{if let v=localDraft(key){return v};await refresh(key);return localDraft(key) ?? versions[key]?.first(where:{$0.own})?.payload}
-    func snapshot(_ key:AppleDraftKey,payload:Payload)->Snapshot?{let owner=coordinator.current;guard let value=owner.snapshot(key:key,payload:payload,empty:.init()) else{return nil};return .init(owner:owner,value:value)}
+    func restoreOwn(_ key:AppleDraftKey)async->Payload?{let scope=editingScope();if let v=scope.owner.localDraft(key){return v};await refresh(key);guard isCurrent(scope) else{return nil};return scope.owner.localDraft(key) ?? versions[key]?.first(where:{$0.own})?.payload}
+    func snapshot(_ key:AppleDraftKey,payload:Payload,scope:EditingScope?=nil)->Snapshot?{if let scope,!isCurrent(scope){return nil};let owner=coordinator.current;guard let value=owner.snapshot(key:key,payload:payload,empty:.init()) else{return nil};return .init(owner:owner,value:value)}
     func isCurrent(_ value:Snapshot)->Bool{coordinator.current === value.owner && value.owner.isCurrent(value.value)}
     @discardableResult func clearIfUnchanged(_ value:Snapshot)->Bool{guard isCurrent(value) else{return false};do{_ = try value.owner.clearIfUnchanged(value.value,empty:.init());publishProjection();return true}catch{return false}}
     func resolve(_ key:AppleDraftKey,payload:Payload?,retiring:Set<UUID>,expected:Snapshot)async throws->Snapshot{
         guard isCurrent(expected) else{throw AppleSyncFailure.accountChanged};let ticket=try await expected.owner.resolve(key:key,payload:payload,empty:.init(),retiring:retiring,expected:expected.value);let result=Snapshot(owner:expected.owner,value:ticket);guard isCurrent(result) else{throw AppleSyncFailure.accountChanged};publishProjection();scheduleSync();return result
     }
     func retry(_ key:AppleDraftKey){if let payload=localDraft(key){checkpoint(payload,key:key)}}
-    func exportTicket(_ key:AppleDraftKey,payload:Payload)->ExportTicket?{let owner=coordinator.current;guard owner.localDraft(key)==payload,let ticket=owner.retainedTicket(key:key) else{return nil};return .init(owner:owner,value:ticket)}
+    func exportTicket(_ key:AppleDraftKey,payload:Payload,scope:EditingScope?=nil)->ExportTicket?{let owner=scope?.owner ?? coordinator.current;guard owner.localDraft(key)==payload,let ticket=owner.retainedTicket(key:key) else{return nil};return .init(owner:owner,value:ticket)}
+    func copyRetained(_ ticket:ExportTicket,replacing target:Snapshot?)throws {
+        var replacing:[AppleDraftKey:Namespace.Ticket]=[:]
+        if let target{guard isCurrent(target) else{throw AppleSyncFailure.invalid};replacing[target.key]=target.value}
+        try coordinator.copySelected([ticket.value],from:ticket.owner,replacing:replacing)
+        publishProjection();scheduleSync()
+    }
+    func retainedExportTicket(_ owner:Namespace,key:AppleDraftKey)->ExportTicket? {
+        guard coordinator.retained[owner.id] === owner,let value=owner.retainedTicket(key:key) else{return nil};return .init(owner:owner,value:value)
+    }
+    func copyHost(_ ticket:Namespace.HostTicket,from source:Namespace)async throws{try await coordinator.copySelectedHosts([ticket],from:source);publishProjection();scheduleSync()}
     func acknowledgeExport(_ value:ExportTicket){try? value.owner.acknowledgeExport(value.value);publishProjection()}
     func loadCatalog()async{do{try await coordinator.current.refresh()}catch{};publishProjection()}
     func loadHosts()async{await loadCatalog()}

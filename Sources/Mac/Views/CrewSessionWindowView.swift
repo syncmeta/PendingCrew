@@ -31,6 +31,8 @@ struct CrewSessionWindowView: View {
     @State private var draftEditRevision = UUID()
     @State private var presentedDraftContext: CrewdDrafts.Context?
     @State private var presentedDraftOwner: CrewdWorkspace?
+    @ObservedObject private var personalService=CrewPersonalDraftService.shared
+    @State private var personalEditingScope:CrewPersonalDraftService.EditingScope?
     @State private var pendingExplicitId: String?
     @State private var starting = false
     @State private var localError: String?
@@ -122,7 +124,7 @@ struct CrewSessionWindowView: View {
         }
         .onChange(of: draft) { old, new in
             if old != new { pendingExplicitId = nil }
-            if presentation == .conversation, let context = presentedDraftContext { presentedDraftOwner?.messageDrafts.set(new, for: context) }
+            if presentation == .conversation, let context = presentedDraftContext,personalEditingScope.map({personalService.isCurrent($0)}) ?? true { presentedDraftOwner?.messageDrafts.set(new, for: context) }
         }
         .onChange(of: presentedRouteKey) { _, _ in synchronizePresentedDraft() }
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
@@ -191,7 +193,7 @@ struct CrewSessionWindowView: View {
             guard value != draft else { return }
             draftEditRevision = UUID(); draft = value
             if presentation == .conversation, let context = presentedDraftContext {
-                presentedDraftOwner?.setPersonalInput(value,context:context)
+                presentedDraftOwner?.setPersonalInput(value,context:context,scope:personalEditingScope)
             }
         })
     }
@@ -199,7 +201,7 @@ struct CrewSessionWindowView: View {
     private var presentedRouteKey: String {
         let workspace = appModel.crewdBackend?.workspace
         return (workspace?.presentationNamespace ?? "") + "/" + (crewStore.selectedDetail?.crew.id ?? "") + "/" +
-            (sessionRunner.isComposingNew ? "new" : sessionRunner.current?.sessionId ?? "new")
+            (sessionRunner.isComposingNew ? "new" : sessionRunner.current?.sessionId ?? "new") + "/" + personalService.projectionID.uuidString
     }
     private func synchronizePresentedDraft() {
         guard presentation == .conversation, appModel.usesCrewdAuthority,
@@ -208,13 +210,13 @@ struct CrewSessionWindowView: View {
         let next: CrewdDrafts.Context = sessionRunner.isComposingNew || current == nil
             ? .initialTask(crew: crew, session: "original-composer")
             : .message(crew: crew, channel: crew + "/lobby", session: current?.sessionId ?? "")
-        guard presentedDraftOwner !== owner || presentedDraftContext != next else { return }
-        if let old = presentedDraftContext { presentedDraftOwner?.setPersonalInput(draft,context:old) }
-        presentedDraftOwner = owner; presentedDraftContext = next
+        guard presentedDraftOwner !== owner || presentedDraftContext != next || personalEditingScope.map({!personalService.isCurrent($0)}) == true else { return }
+        if let old = presentedDraftContext { presentedDraftOwner?.setPersonalInput(draft,context:old,scope:personalEditingScope) }
+        owner.bindPersonalProjection();presentedDraftOwner = owner; presentedDraftContext = next;personalEditingScope=personalService.editingScope()
         draftEditRevision = UUID()
         draft = owner.messageDrafts.text(for: next)
-        let revision=draftEditRevision
-        Task{await owner.restorePersonalInput(next);guard presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision,draft.isEmpty else{return};draft=owner.messageDrafts.text(for:next)}
+        let revision=draftEditRevision,scope=personalService.editingScope()
+        Task{await owner.restorePersonalInput(next);guard personalService.isCurrent(scope),presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision,draft.isEmpty else{return};draft=owner.messageDrafts.text(for:next)}
     }
 
     // MARK: - 终端模式（切换条 + 终端 + composer）
@@ -1158,7 +1160,7 @@ struct CrewSessionWindowView: View {
             if isContinuing, let run = sessionRunner.current {
                 guard run.crewId == detail.crew.id else { throw CrewdClientError(message: "会话已切换，未发送。", kind: .notSubmitted) }
                 let context = CrewdDrafts.Context.message(crew: detail.crew.id, channel: detail.crew.id + "/lobby", session: run.sessionId)
-                workspace.setPersonalInput(originalDraft,context:context)
+                workspace.setPersonalInput(originalDraft,context:context,scope:personalEditingScope)
                 _ = try await workspace.submitOriginalText(.object([
                     "channelId": .string(detail.crew.id + "/lobby"), "text": .string(text),
                     "mentions": .array([.object(["kind": .string("session"), "targetId": .string(run.sessionId)])])]), snapshot: workspace.messageDrafts.snapshot(for: context))
@@ -1169,7 +1171,7 @@ struct CrewSessionWindowView: View {
                 guard !workspace.hasOriginalUnknown(method: "session.start", crew: detail.crew.id), !workspace.uncertainSessionStarts.contains(where: { $0.context == context }) else {
                     throw CrewdClientError(message: "原启动结果未确认；请核对同一机组会话，不会再次启动。", kind: .notSubmitted)
                 }
-                workspace.setPersonalInput(originalDraft,context:context)
+                workspace.setPersonalInput(originalDraft,context:context,scope:personalEditingScope)
                 let snapshot = workspace.messageDrafts.snapshot(for: context)
                 let personal=workspace.personalInputSnapshot(snapshot)
                 let result: CrewdValue
