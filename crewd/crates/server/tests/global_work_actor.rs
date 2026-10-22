@@ -81,6 +81,8 @@ impl Rig {
         let owner = h
             .start(
                 StartSession {
+                    codex_options: None,
+
                     crew_id: f.crew.clone(),
                     captain: false,
                     executor: "claude".into(),

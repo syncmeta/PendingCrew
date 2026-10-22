@@ -14,6 +14,8 @@
 //! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 / 登录态 health。
 //! - **每个请求都有期限**（[`Rpc::expire`]），到期按失败处理，会话不挂。
 use std::collections::{BTreeSet, VecDeque};
+#[path="controls.rs"]
+mod controls;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -103,6 +105,7 @@ pub enum StartFailure {
 /// 交给驱动层按顺序执行的动作。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodexAction {
+    CodexDone { ticket: u64, outcome: super::control::CodexOutcome },
     /// 往 stdin 写一行（不含换行）。
     Write(String),
     /// 把 thread id 落账，结果用 [`CodexCore::on_recorded`] 交回。
@@ -133,6 +136,8 @@ enum Phase {
 
 #[derive(Clone, Debug)]
 enum Tag {
+    Native { ticket: Option<u64>, op: super::control::CodexOperation },
+    NativeToolsSkills { ticket: u64, servers: Value },
     Initialize,
     Resume(String),
     Start,
@@ -159,6 +164,13 @@ struct EchoWait {
 
 pub struct CodexCore {
     config: CodexCoreConfig,
+    native_echo: Option<controls::NativeEcho>,
+    native_settings: Value,
+    native_settings_epoch: u64,
+    native_name: Option<String>,
+    public_input_ids: std::collections::BTreeMap<u64,String>,
+    initial_settings_gate: bool,
+    initial_settings_failed: bool,
     phase: Phase,
     pid: u32,
     cwd: PathBuf,
@@ -197,6 +209,13 @@ impl CodexCore {
         }
         let mut core = Self {
             config,
+            native_echo: None,
+            native_settings: Value::Null,
+            native_settings_epoch: 0,
+            native_name: None,
+            public_input_ids: Default::default(),
+            initial_settings_gate: false,
+            initial_settings_failed: false,
             phase: Phase::Initializing,
             pid: opening.pid,
             cwd: opening.cwd,
@@ -364,6 +383,8 @@ impl CodexCore {
             return false;
         };
         if self.phase != Phase::Ready
+            || self.initial_settings_gate
+            || self.initial_settings_failed
             || self.stopped_by_user
             || params.get("threadId").and_then(Value::as_str) != self.thread_id.as_deref()
             || params
@@ -519,6 +540,7 @@ impl CodexCore {
 
     /// 定时拍：请求到期、fast 回显到期。
     pub fn on_tick(&mut self, now: Instant) {
+        self.native_tick(now);
         for (tag, _, failure) in self.rpc.expire(now) {
             self.on_result(tag, Err(failure), now);
         }
@@ -679,6 +701,7 @@ impl CodexCore {
         }
         self.clear_human(None);
         self.stopped_by_user = true;
+        self.native_cancel("runtime stopped");
         self.abandon("session 被停掉", false, now);
         self.after_input(now);
     }
@@ -689,6 +712,7 @@ impl CodexCore {
             return;
         }
         self.clear_human(None);
+        self.native_cancel("runtime disconnected");
         let ready = self.phase == Phase::Ready;
         for (tag, _method, _) in self.rpc.fail_all() {
             match tag {
@@ -708,6 +732,8 @@ impl CodexCore {
                     ticket,
                     outcome: ControlOutcome::Rejected("codex 进程已退出".into()),
                 }),
+                Tag::Native { ticket, .. } => self.native_done(ticket, super::control::CodexOutcome::Unknown { provider_accepted:false, detail:"runtime disconnected".into() }),
+                Tag::NativeToolsSkills { ticket, .. } => self.native_done(Some(ticket), super::control::CodexOutcome::Unknown { provider_accepted:false,detail:"runtime disconnected".into() }),
                 _ => {}
             }
         }
@@ -782,6 +808,10 @@ impl CodexCore {
 
     fn opened(&mut self, thread: String, resumed: bool, result: &Value, now: Instant) {
         self.opened_profile = proto::profile_of(result);
+        self.native_settings=result.clone();
+        if let Some(settings)=result.get("threadSettings"){self.native_settings=settings.clone();}
+        if let Some(sandbox)=self.native_settings.get("sandbox").cloned(){self.native_settings["sandboxPolicy"]=sandbox;}
+
         self.tracker = TurnTracker::new(thread.clone());
         self.thread_id = Some(thread.clone());
         self.resumed = resumed;
@@ -820,11 +850,14 @@ impl CodexCore {
         let early = std::mem::take(&mut self.early);
         self.actions
             .extend(early.into_iter().map(CodexAction::Event));
+        self.native_opening(now);
         self.after_input(now);
     }
 
     fn on_result(&mut self, tag: Tag, result: Result<Value, RpcFailure>, now: Instant) {
         match tag {
+            Tag::Native { ticket, op } => self.native_result(ticket, op, result, now),
+            Tag::NativeToolsSkills { ticket, servers } => self.native_tools_result(ticket, servers, result),
             Tag::Initialize => match result {
                 Ok(_) => {
                     self.actions
@@ -839,6 +872,7 @@ impl CodexCore {
                     self.opened(thread, true, &v, now);
                 }
                 Err(RpcFailure::Disconnected) => {}
+                Err(f) if self.options.strict_resume => self.handshake_failed("thread/resume refused; no replacement thread created", &f),
                 Err(f) => {
                     self.fallback = Some((id, f.to_string()));
                     self.open_thread(now);
@@ -980,8 +1014,10 @@ impl CodexCore {
             self.set_health(Some(h), now);
         }
         if method == "thread/settings/updated" {
+            self.native_settings_echo(params);
             self.on_settings_echo(params);
         }
+        if method == "thread/name/updated" { self.native_name_echo(params); }
         if self.thread_id.is_none() {
             return;
         }
@@ -1113,6 +1149,8 @@ impl CodexCore {
 
     fn start_next(&mut self, now: Instant) {
         if self.phase != Phase::Ready
+            || self.initial_settings_gate
+            || self.initial_settings_failed
             || self.stopped_by_user
             || !self.human.is_empty()
             || self.in_flight
@@ -1124,7 +1162,8 @@ impl CodexCore {
             return;
         };
         let thread = self.thread_id.clone().unwrap_or_default();
-        let params = proto::turn_start_params(&thread, &next.text, &next.context);
+        let mut params = proto::turn_start_params(&thread, &next.text, &next.context);
+        if let Some(id)=self.public_input_ids.remove(&next.id){params["clientUserMessageId"]=serde_json::json!(id);}
         let timeout = self.config.request_timeout;
         self.request(
             Tag::TurnStart {

@@ -123,6 +123,8 @@ impl Rig {
             ids.push(
                 h.start(
                     StartSession {
+                        codex_options: None,
+
                         crew_id: f.crew.clone(),
                         captain: index == 0,
                         executor: "claude".into(),

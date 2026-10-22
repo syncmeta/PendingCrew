@@ -499,7 +499,8 @@ fn observation(event: SessionEvent) -> Option<NativePtyObservation> {
         | SessionEvent::Item { .. }
         | SessionEvent::TurnEnded { .. }
         | SessionEvent::Profile(_)
-        | SessionEvent::Usage(_) => None,
+        | SessionEvent::Usage(_)
+        | SessionEvent::CodexObservation { .. } => None,
     }
 }
 pub struct NativePtyEvents {

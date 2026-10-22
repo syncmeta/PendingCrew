@@ -432,3 +432,80 @@ async fn mixed_executors_route_mentions_and_reconnect_without_replaying() {
         .unwrap();
     assert!(registry(&fixture.data).is_empty());
 }
+
+
+/// Original serve/Core/real Unix RPC seam. Each absent capability is observed
+/// only after normal fixture cleanup, so an initial RED leaves no owned child.
+async fn codex_control_case(operation: &str) -> (Result<Value, Value>, Vec<Value>) {
+    let fixture = Fixture::new();
+    let mut options = fixture.options("ready");
+    let orchestra = options.orchestra.as_mut().unwrap();
+    orchestra.claude = ClaudeProgram::Disabled;
+    orchestra.codex = CodexProgram::Path(artifact("fake_codex"));
+    orchestra.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), fixture.log.display().to_string()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(fixture.data.clone(), options, async { let _=stop_rx.await; }));
+    let mut client = Client::connect(&fixture.data).await;
+    let crew=client.call("crew.create",json!({"title":"Controls synthetic","workingDirectory":fixture.work})).await.unwrap();
+    let session=client.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"Implement the requested change.\n你是 is user text and stays intact.","title":"Human title wins","isolation":false})).await.unwrap();
+    let sid=session["id"].as_str().unwrap();
+    wait("first task accepted",||turn_count(&fixture,"Implement the requested change.")==1).await;
+    let target=client.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
+    let result = if operation=="initial-title" {
+        client.call("session.codex.inspect",json!({"sessionId":sid})).await
+    } else if operation=="history" {
+        client.call("session.codex.history",json!({"sessionId":sid,"limit":10,"itemsView":"full"})).await
+    } else {
+        let hello=client.call("system.hello",json!({"clientName":"controls-fixture","clientVersion":"1"})).await.unwrap();
+        let params = match operation {
+            "session.codex.configure"=>json!({"target":target,"patch":{"model":"changed-model","effort":"high","fast":true}}),
+            _=>unreachable!(),
+        };
+        let request_id=uuid::Uuid::new_v4().to_string();
+        let mut result=client.call("command.submit",json!({"requestId":request_id,"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":operation,"params":params}})).await;
+        let deadline=tokio::time::Instant::now()+Duration::from_secs(5);
+        while result.as_ref().is_ok_and(|r|r["phase"]=="dispatched")&&tokio::time::Instant::now()<deadline {
+            result=client.call("command.lookup",json!({"requestId":request_id,"dbId":hello["runtimeIdentity"]["dbId"]})).await;
+            tokio::task::yield_now().await;
+        }
+        result
+    };
+    client.call("session.stop",json!({"sessionId":sid,"reason":"synthetic cleanup"})).await.unwrap();
+    client.stopped(sid).await;
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();
+    assert!(registry(&fixture.data).is_empty());
+    let calls=std::fs::read_to_string(&fixture.log).unwrap().lines().map(|l|serde_json::from_str(l).unwrap()).collect();
+    (result,calls)
+}
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn controls_public_settings_reach_provider_with_receipt() {
+    let (result,calls)=codex_control_case("session.codex.configure").await;
+    let receipt=result.expect("the typed public configure command must be callable");
+    assert_eq!(receipt["phase"],"confirmed", "{receipt}");
+    assert!(calls.iter().any(|c|c["method"]=="thread/settings/update"&&c["params"]["model"]=="changed-model"));
+}
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn controls_native_title_is_independent_of_original_task_body() {
+    let (state,calls)=codex_control_case("initial-title").await;
+    let state=state.expect("actual native title state");
+    assert_eq!(state["title"]["status"],"synced","{state}");
+    assert_eq!(state["title"]["native"],"Human title wins");
+    assert!(calls.iter().any(|c|c["method"]=="thread/name/set"&&c["params"]["name"]=="Human title wins"),"desired PCW title alone is not native naming");
+    let turns:Vec<_>=calls.iter().filter(|c|c["method"]=="turn/start").collect();
+    assert_eq!(turns.len(),1);
+    assert_eq!(turns[0]["params"]["input"][0]["text"],"Implement the requested change.\n你是 is user text and stays intact.");
+}
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn controls_history_is_read_only_provider_page() {
+    let (result,calls)=codex_control_case("history").await;
+    let page=result.expect("the scoped native history read must be callable");
+    assert!(page["items"].is_array());
+    assert!(calls.iter().any(|c|c["method"]=="thread/turns/list"));
+    assert_eq!(calls.iter().filter(|c|c["method"]=="turn/start").count(),1,"history must not start another turn");
+}

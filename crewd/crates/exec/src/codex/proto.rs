@@ -42,6 +42,10 @@ pub fn initialize_params(version: &str) -> Value {
 /// （人的原话：「codex 本身的默认模型是什么逻辑就用什么逻辑」），实际值从回包里读。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadOptions {
+    pub title: Option<String>,
+    pub initial_settings: Option<crewd_proto::codex::CodexSettingsPatch>,
+    /// Internal production selection; never populated from provider JSON.
+    pub strict_resume: bool,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// `Some(true)` → `serviceTier: "fast"`，`Some(false)` → `"default"`，`None` 不传。
@@ -475,6 +479,7 @@ mod tests {
                 &PathBuf::from("/opt/crewd"),
                 &["mcp".into(), "--agent".into(), "codex".into()],
             )),
+            ..Default::default()
         }
     }
 

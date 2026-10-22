@@ -332,6 +332,9 @@ mod tests {
 
     fn request(session: &str, workdir: &Path) -> LaunchRequest {
         LaunchRequest {
+            codex_options: None,
+            title: None,
+
             delivery_observer: None,
             session_id: session.into(),
             crew_id: "c1".into(),

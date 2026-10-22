@@ -117,6 +117,8 @@ impl SessionControl for OrchestraControl {
     fn start(&self, req: StartRequest) -> BoxFuture<'_, Result<Session, M3aError>> {
         Box::pin(async move {
             let start = StartSession {
+                codex_options: None,
+
                 crew_id: req.crew_id,
                 captain: req.role == Role::Captain,
                 executor: req.executor,

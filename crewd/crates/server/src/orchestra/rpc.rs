@@ -32,7 +32,7 @@ use crate::dispatch;
 
 /// 这个方法归编排（M3c）：dispatch 在「未知方法」之前问它。
 pub fn handles(method: &str) -> bool {
-    methods::ALL.contains(&method)
+    methods::ALL.contains(&method) || super::codex_rpc::handles(method)
 }
 
 /// 编排的错误 → RPC 错误（T10b 补充 §2.4）。
@@ -363,6 +363,7 @@ pub async fn call(
     method: &str,
     params: Value,
 ) -> Result<Value, RpcError> {
+    if super::codex_rpc::handles(method) {return super::codex_rpc::read(h,state,method,params).await;}
     match method {
         methods::SESSION_INSPECT => {
             let p: crewd_proto::orchestra::SessionInspectParams = parse_params(params)?;
@@ -438,6 +439,7 @@ pub async fn call(
                 executor: p.executor,
                 brief: p.brief,
                 title: p.title,
+                codex_options: p.codex_options,
                 model: p.model,
                 effort: p.effort,
                 isolation: p.isolation,
@@ -953,6 +955,8 @@ mod tests {
         .await
         .unwrap();
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "c-1".into(),
             captain: false,
             executor: "claude".into(),
@@ -1074,6 +1078,8 @@ mod tests {
         let st = state();
         let row = port
             .insert_session(super::super::port::NewSession {
+                codex_options: None,
+
                 crew_id: "c1".into(),
                 captain: false,
                 executor: "claude".into(),
@@ -1212,6 +1218,8 @@ mod tests {
         let st = state();
         let row = port
             .insert_session(super::super::port::NewSession {
+                codex_options: None,
+
                 crew_id: "c1".into(),
                 captain: false,
                 executor: "claude".into(),
@@ -1808,6 +1816,8 @@ mod tests {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "没有这个".into(),
             captain: false,
             executor: "claude".into(),

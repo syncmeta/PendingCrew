@@ -665,6 +665,8 @@ mod tests {
         let hold = rig.worktrees.hold_next();
         let (tx, mut started) = oneshot::channel();
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain: false,
             executor: "claude".into(),
@@ -712,6 +714,8 @@ mod tests {
             .await;
         assert_eq!(r, Err(ControlError::ShuttingDown));
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain: false,
             executor: "claude".into(),
@@ -1032,6 +1036,8 @@ mod tests {
         let r = rig
             .cmd(|reply| Cmd::Start {
                 req: StartSession {
+                    codex_options: None,
+
                     crew_id: "c1".into(),
                     captain: false,
                     executor: "claude".into(),

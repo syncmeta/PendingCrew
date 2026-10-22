@@ -47,6 +47,9 @@ use crate::session::{AnswerOutcome, BRIEF_DELIVERY_ID, ExitStatusKind, SessionEv
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodexSpec {
     pub workdir: PathBuf,
+    pub title: Option<String>,
+    pub initial_settings: Option<crewd_proto::codex::CodexSettingsPatch>,
+    pub strict_resume: bool,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// `Some(true)` → `serviceTier: "fast"`；`None` 不传（用 codex 自己的配置）。
@@ -264,6 +267,7 @@ pub async fn start_codex(
         ev_tx,
         ready: Some(ready_tx),
         controls: HashMap::new(),
+        native_controls: HashMap::new(),
         answers: HashMap::new(),
         next_ticket: 0,
         live,
@@ -282,6 +286,9 @@ pub async fn start_codex(
 /// `mcp` = 通讯配置 + 已写好的 token 文件，两样一起给（没有 token 文件就没有 MCP）。
 pub fn thread_options(spec: &CodexSpec, mcp: Option<(&CommsSpec, &Path)>) -> ThreadOptions {
     ThreadOptions {
+        title: spec.title.clone(),
+        initial_settings: spec.initial_settings.clone(),
+        strict_resume: spec.strict_resume,
         model: spec.model.clone(),
         effort: spec.effort.clone(),
         fast: spec.fast_mode,
@@ -302,6 +309,7 @@ struct Task {
     /// 还没告诉 `start_codex` 结果（`Some`）= 还在启动。
     ready: Option<oneshot::Sender<Result<(), StartError>>>,
     controls: HashMap<u64, oneshot::Sender<ControlOutcome>>,
+    native_controls: HashMap<u64, oneshot::Sender<super::control::CodexOutcome>>,
     answers: HashMap<u64, oneshot::Sender<AnswerOutcome>>,
     next_ticket: u64,
     /// 占着的 thread id（本进程里同一个 thread 只能跑一个）。
@@ -491,6 +499,9 @@ fn execute(
                     }
                 }
             }
+            CodexAction::CodexDone { ticket, outcome } => {
+                if let Some(reply) = t.native_controls.remove(&ticket) { let _ = reply.send(outcome); }
+            }
             CodexAction::ControlDone { ticket, outcome } => {
                 if let Some(reply) = t.controls.remove(&ticket) {
                     let _ = reply.send(outcome);
@@ -593,6 +604,11 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 pid: t.proc.pid,
                 agent_session_id: t.core.thread_id().unwrap_or_default().to_string(),
             });
+        }
+        Command::Codex { op, reply } => {
+            let ticket = t.next_ticket; t.next_ticket += 1;
+            t.native_controls.insert(ticket, reply);
+            t.core.codex_control(ticket, op, now);
         }
         Command::Control { op, reply } => {
             let ticket = t.next_ticket;

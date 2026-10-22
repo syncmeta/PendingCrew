@@ -190,6 +190,9 @@ async fn actual_generated_helpers_re_read_role_and_shared_world_after_launch() {
     });
     let (handle, mut events) = exec
         .launch(LaunchRequest {
+            codex_options: None,
+            title: None,
+
             delivery_observer: None,
             session_id: fixture.worker.clone(),
             crew_id: fixture.crew.clone(),

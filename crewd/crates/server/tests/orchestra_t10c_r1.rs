@@ -358,6 +358,8 @@ impl Rig {
             .h
             .start(
                 StartSession {
+                    codex_options: None,
+
                     crew_id: crew.into(),
                     captain,
                     executor: executor.into(),

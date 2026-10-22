@@ -1133,6 +1133,8 @@ mod tests {
             }
         );
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain: false,
             executor: "claude".into(),

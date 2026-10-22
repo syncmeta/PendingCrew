@@ -415,6 +415,7 @@ impl ManualWritePermit {
 }
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
+    Codex { op: crate::codex::control::CodexOperation, reply: oneshot::Sender<crate::codex::control::CodexOutcome> },
     AnswerChoice {
         expect: String,
         choice: usize,
@@ -671,6 +672,16 @@ impl SessionHandle {
     }
 
     /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
+    pub async fn codex_queue(&self,text:String,request_id:String) -> Result<crate::codex::control::CodexOutcome,Closed> {
+        let id=self.next_id.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|Closed)?;
+        self.codex(crate::codex::control::CodexOperation::Queue{id,text,request_id}).await
+    }
+    pub async fn codex(&self, op: crate::codex::control::CodexOperation) -> Result<crate::codex::control::CodexOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::Codex { op, reply })?;
+        rx.await.map_err(|_| Closed)
+    }
+
     pub async fn control(&self, op: Control) -> Result<ControlOutcome, Closed> {
         let (reply, rx) = oneshot::channel();
         self.cmd(Command::Control { op, reply })?;
@@ -1603,6 +1614,7 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 });
             let _ = reply.send(cut);
         }
+        Command::Codex { reply, .. } => { let _ = reply.send(crate::codex::control::CodexOutcome::unsupported()); }
         Command::Control { op, reply } => {
             let _ = reply.send(ControlOutcome::Unsupported(format!(
                 "claude 会话的 {op:?} 由屏幕驱动（M3 的 /model、/compact），执行器不直接支持"

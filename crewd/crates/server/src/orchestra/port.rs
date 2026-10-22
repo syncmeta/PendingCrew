@@ -73,6 +73,7 @@ pub struct NewSession {
     pub effort: Option<String>,
     /// crewd 为它新建的 git worktree 的绝对路径（`isolation: true`，控制者裁定 C8；`Core::start_new` 建好后填）；None = 共享机组目录。
     pub worktree: Option<PathBuf>,
+    pub codex_options: Option<crewd_proto::codex::CodexSettingsPatch>,
 }
 
 /// 只改给了的列（§18 遗留：`sessions::upsert` 传 None 会抹掉会话号——这里不碰没给的列）。
@@ -422,6 +423,9 @@ pub trait Port: Send + Sync + 'static {
     /// 机组已被移除（归档；M3a `crews::is_archived`）。没有这个机组 = 错误。
     fn crew_removed(&self, crew: &str) -> impl Future<Output = Result<bool>> + Send;
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger>;
+    fn codex_launch_options(&self,_session:&str) -> impl Future<Output=Result<(Option<String>,Option<crewd_proto::codex::CodexSettingsPatch>)>> + Send {async {Ok((None,None))}}
+    fn codex_observe(&self,_session:&str,_settings:Option<serde_json::Value>,_title:Option<crewd_proto::codex::CodexTitleState>,_accepted:Option<crewd_proto::codex::CodexSettingsPatch>) -> impl Future<Output=Result<()>> + Send {async {Ok(())}}
+
     fn worldview(&self, session: &str) -> impl Future<Output = Result<String>> + Send;
     fn mint_token(&self, session: &str) -> String;
     fn causal_fence(&self) -> Option<Arc<crate::causal_fence::CausalFence>> {

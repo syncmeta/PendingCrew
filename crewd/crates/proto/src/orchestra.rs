@@ -167,6 +167,8 @@ pub struct SessionStartParams {
     pub executor: String,
     pub brief: String,
     #[serde(default)]
+    pub codex_options: Option<crate::codex::CodexSettingsPatch>,
+    #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub model: Option<String>,

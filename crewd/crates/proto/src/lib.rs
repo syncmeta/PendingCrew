@@ -148,6 +148,10 @@ pub mod methods {
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
         crate::commands::SESSION_CONTROL_TARGET,
+        crate::codex::INSPECT,
+        crate::codex::HISTORY,
+        crate::codex::MODELS,
+        crate::codex::TOOLS,
         crate::commands::SESSION_TERMINAL_INSPECT,
         crate::commands::SESSION_TERMINAL_WATCH,
         HELLO,
@@ -1783,3 +1787,5 @@ pub mod team_data;
 pub mod team_data_api;
 
 pub mod lifecycle;
+
+pub mod codex;

@@ -111,6 +111,8 @@ impl Rig {
         let (stop_socket, stop) = oneshot::channel();
         let socket = f.spawn_owned_socket(stop).await;
         let start = |captain, title: &str| StartSession {
+            codex_options: None,
+
             crew_id: f.crew.clone(),
             captain,
             executor: "claude".into(),

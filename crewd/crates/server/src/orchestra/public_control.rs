@@ -603,6 +603,7 @@ impl<P: Port> Core<P> {
             executor: params.executor.clone(),
             brief: params.brief.clone(),
             title: params.title.clone(),
+            codex_options: params.codex_options.clone(),
             model: params.model.clone(),
             effort: params.effort.clone(),
             isolation: params.isolation,
@@ -666,6 +667,8 @@ impl<P: Port> Core<P> {
             .port
             .insert_public_session(
                 super::port::NewSession {
+                    codex_options: None,
+
                     crew_id: req.crew_id,
                     captain: req.captain,
                     executor: req.executor,

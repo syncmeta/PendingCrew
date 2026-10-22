@@ -39,6 +39,7 @@ struct Fake {
     next_server_id: i64,
     thread: String,
     active_turn: Option<String>,
+    native_name: Option<String>,
 }
 
 impl Fake {
@@ -340,7 +341,11 @@ impl Fake {
                     }
                 }
                 "thread/settings/update" => {
+                    if self.has("settings_reject") {self.emit(json!({"id":id,"error":{"code":-32602,"message":"synthetic settings rejection"}}));continue;}
+                    if self.has("settings_silent") {continue;}
+                    if self.has("settings_delay") {std::thread::sleep(std::time::Duration::from_millis(500));}
                     self.emit(json!({ "id": id, "result": {} }));
+                    if self.has("settings_ack_only") {continue;}
                     let tier = params
                         .get("serviceTier")
                         .cloned()
@@ -350,6 +355,30 @@ impl Fake {
                         json!({ "threadId": self.thread, "threadSettings": {
                             "serviceTier": tier, "model": params.get("model").cloned().unwrap_or(json!("fake-model")) } }),
                     );
+                }
+                "thread/name/set"=> {
+                    if self.has("name_reject") {self.emit(json!({"id":id,"error":{"code":-32602,"message":"synthetic name rejection"}}));continue;}
+                    if self.has("name_silent") {continue;}
+                    self.native_name=params.get("name").and_then(Value::as_str).map(str::to_string);
+                    self.emit(json!({"id":id,"result":{}}));
+                    self.notify("thread/name/updated",json!({"threadId":params["threadId"],"name":self.native_name}));
+                }
+                "thread/turns/list"=>self.emit(json!({"id":id,"result":{"data":[{"id":"stored-turn","status":"completed","items":[{"type":"agentMessage","text":"stored synthetic history"}]}],"nextCursor":null,"backwardsCursor":"stored-anchor"}})),
+                "thread/fork"=>self.emit(json!({"id":id,"result":{"thread":{"id":format!("fork-{}",std::process::id()),"forkedFromId":params["threadId"]}}})),
+                "model/list"=>self.emit(json!({"id":id,"result":{"data":[{"id":"synthetic-model","model":"synthetic-model","displayName":"Synthetic model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"high","description":"Synthetic high"}],"defaultReasoningEffort":"high","inputModalities":["text"],"supportsPersonality":false}],"nextCursor":null}})),
+                "mcpServerStatus/list"=>self.emit(json!({"id":id,"result":{"data":[{"name":"crew","authStatus":"unsupported","tools":{}}],"nextCursor":null}})),
+                "skills/list"=>self.emit(json!({"id":id,"result":{"data":[{"cwd":"/synthetic","skills":[{"name":"synthetic-skill","description":"synthetic","path":"/synthetic/SKILL.md"}],"errors":[]}]}})),
+                "turn/steer"=> {
+                    let wanted=params.get("expectedTurnId").and_then(Value::as_str);
+                    if wanted==self.active_turn.as_deref()&&wanted.is_some() {self.emit(json!({"id":id,"result":{"turnId":self.active_turn}}));}
+                    else {self.emit(json!({"id":id,"error":{"code":-32602,"message":"exact active turn mismatch"}}));}
+                }
+                "review/start"=> {
+                    self.turns+=1;let turn=format!("review-{}",self.turns);
+                    self.emit(json!({"id":id,"result":{"turn":{"id":turn,"status":"inProgress","items":[]}}}));
+                    self.notify("turn/started",json!({"threadId":self.thread,"turn":{"id":turn,"status":"inProgress","items":[]}}));
+                    self.item(&turn,json!({"id":"review-item","type":"enteredReviewMode","review":"synthetic"}));
+                    self.complete(&turn,"completed",Value::Null);
                 }
                 "thread/compact/start" => {
                     self.emit(json!({ "id": id, "result": {} }));
@@ -724,6 +753,7 @@ fn main() {
         next_server_id: 100,
         thread: String::new(),
         active_turn: None,
+        native_name: None,
     };
     fake.serve();
 }

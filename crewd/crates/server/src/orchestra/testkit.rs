@@ -3101,6 +3101,8 @@ mod self_tests {
         }
         let row = p
             .insert_session(NewSession {
+                codex_options: None,
+
                 crew_id: "c1".into(),
                 captain: false,
                 executor: "claude".into(),
@@ -3451,6 +3453,8 @@ mod self_tests {
     async fn mem_port_human_channel_members_are_deduped() {
         let p = MemPort::new();
         let new = |captain: bool, title: &str| NewSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain,
             executor: "claude".into(),
@@ -3477,6 +3481,9 @@ mod self_tests {
 
     fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            codex_options: None,
+            title: None,
+
             delivery_observer: None,
             session_id: session.into(),
             crew_id: "c1".into(),
@@ -3572,6 +3579,9 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
+                codex_options: None,
+                title: None,
+
                 delivery_observer: None,
                 session_id: "s1".into(),
                 crew_id: "c1".into(),
@@ -3601,6 +3611,8 @@ mod self_tests {
     async fn mem_port_channel_ctx_fills_live_sessions_and_crew_captain() {
         let p = MemPort::new();
         let new = |captain: bool, title: &str| NewSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain,
             executor: "claude".into(),

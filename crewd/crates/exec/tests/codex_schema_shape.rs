@@ -12,6 +12,9 @@ fn outbound_methods_and_fields_match_the_native_experimental_contract() {
     let schema: Value =
         serde_json::from_str(include_str!("fixtures/codex-0.162.1-client-shape.json")).unwrap();
     let options = ThreadOptions {
+        title: None,
+        initial_settings: None,
+        strict_resume: false,
         model: Some("synthetic-model".into()),
         effort: Some("high".into()),
         fast: Some(true),
