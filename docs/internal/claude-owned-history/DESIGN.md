@@ -1,0 +1,49 @@
+# Claude managed PTY: owned history and strict manual resume
+
+Source design based on frozen Codex f0ad9d99. This independent branch is not part of the Codex candidate. No SDK, provider process, personal transcript, account, model, Apple key or public service is read/run. The existing strict version2.1.301, real PTY, fail-closed hooks, original runtime seal, public receipt/CAS, raw lease and OS birth checks are retained. Native16 and provider fullHistoryLoad stay false.
+
+## One complete product unit
+
+Expose the PCW-managed input/receipt timeline across its original runtime births, retain bounded exact response text actually observed through the current sealed Stop hook, and allow only explicit Human resume of the original canonical native UUID. Viewing/reopening never starts a process or sends text. These are PCW observations, not provider complete history, business success, full native load, standard ACP, or a transcript-import engine.
+
+The existing tables native_execution_runtimes/receipts/inputs are the only task ledger. Runtime/request/prompt/public-control UUIDs remain distinct. No helper writes SQLite; all writes remain the existing Core DB FIFO transaction and managed actor queue. No SDK or guessed JSONL reader is added. The optional future owned-snapshot official reader remains a separate, unlicensed/unqualified integration.
+
+## Bounded body retention at the original seal
+
+Add one versioned private metadata value per original managed request, keyed under `claude.managed.observations.v1/<requestUUID>` in the existing meta store. It refers to the original immutable receipt/runtime/prompt; it is not execution authority or a second request ledger. This avoids a new DDL/version solely for observational text. Original Store20 backup/restore already copies metadata and revokes restored runtime authority; a historical snapshot can never reconstruct a live seal. Old20 writers refuse managed resume, so cannot use this optional observation value to bypass the new strict resume gate. Do not invent Store21 without a concrete unsafe writer seam.
+
+At original prepare, retain exact authorized task text separately from the already immutable envelope, within its existing1MiB limit and original preparation transaction. Historical rows without this extra fact expose only exact envelope bytes, explicitly marked as such; no string splitting guesses original task boundaries. Do not invent old missing text or read private files to fill it.
+
+On each valid same runtime/request/prompt Stop, while the original actor owns its serial hook queue and actual automatic/manual/birth authority remains current, store a bounded immutable observation in that same owning transaction. Each observation records monotonically numbered local observation, original promptId, observedAt, source `stopHook`, available/missing body, captured UTF8 bytes, original observed byte count, SHA256 of full observed text when supplied, and truncation/retention reason. Retain at most4 observations/request,256KiB captured/observation,64MiB/session and256MiB/Core. Truncate on UTF8 boundaries; a missing field is missing, not empty successful reply. An empty supplied string remains distinguishable. No logged body, argv, env, export side effect, or private transcript path.
+
+Excess observations update only a bounded omitted-count/latest-observation fact; never overwrite a retained body or attach an old body to a new Stop. When bytes cannot be retained, preserve missing/truncated/retention-limit evidence rather than rejecting a legitimate original task transition or pretending complete content. The already accepted original message/request limits remain unchanged.
+
+Stop remains provisional. Same prompt Stop→real idle_prompt uses the existing managed waiting transition, with the latest original observation identity committed alongside it. Working(false) means waiting only. Further tool/activity/Stop/extra input invalidates the waiting qualification through the original managed_response_resumed/Unknown path, without deleting or rewriting previous body bytes. Reads derive ready only from that exact receipt/prompt/observation plus current live runtime authority; revoked/restored/reopened rows remain historical. No observation claims a native turnId, complete answer, task Done, or APNs delivery.
+
+## Narrow read contract (draft, not yet frozen public DTO)
+
+Propose three typed reads under the existing captured Local Human/live mTLS authority and original crew/session visibility checks. Agents and unverified/expired grants do not gain plaintext reads. The existing remote method allowlist must admit only these exact typed reads; no arbitrary SQL, cwd or provider RPC.
+
+- `session.claude.inspect {sessionId}`: `historyScope:pcwManagedOnly`, `fullHistoryLoad:false`, original native-ID/manual-resume eligibility and exact unavailable reason, current runtime/physical state, available owned-history flag. File existence is not resume qualification. This does not change generic executor features to pretend provider full history.
+- `session.claude.history {sessionId,cursor?,limit?}`: stable bounded cross-runtime receipt metadata, created/updatedAt from original rows, original runtime generation/epoch/revoked facts, phase/prompt/turn semantics, observed body availability/count and historical/ready distinction. No body bytes in list. Limit1..64. Use a source-bound opaque cursor over original receipt rowid with a fixed max-rowid cut, plus DB/session/restore context and exact last receipt identity. Validate the original last row/id; reject changed restore/source rather than interpreting reused numbers. No UUID lexical order masquerading as time. New observations under existing entries require explicit refresh, not mutation of old cursor snapshots.
+- `session.claude.taskGet {sessionId,runtimeId,requestId}`: exact owned receipt, original envelope/task fidelity, bounded retained response observations and omitted/missing/truncated facts. Exact join verifies session/runtime/request and current ACL before returning any plaintext. It cannot reconstruct an execution seal or retry a task.
+
+Actual public shapes/cursor details will be frozen once together before client implementation. Reads do not demand current physical runtime to view historical facts. Live qualification is a separate field; current connection/grant/crew visibility still gates disclosure. All source identities preserve authority/DB/session/runtime/request/prompt boundaries.
+
+## Strict manual resume through existing control
+
+Keep the existing public session.resume command envelope, fresh target CAS and original receipt lookup. Add only an internal launch intent distinguishing explicit Human resume from new launch/automatic wake, not a JSON/provider setting or second command ledger. Managed resume requires a canonical UUID recorded by that PCW session's original DbLedger; missing, whitespace-mutated, noncanonical or foreign IDs reject before spawn and retain the record. Agent/automatic wake is not an explicit manual resume.
+
+The ClaudeExecutor's ordinary managed launch still rejects an already-recorded ID. Only the internal exact-resume intent can read/require that same recorded ID and call the driver. Driver managed policy bypasses legacy decide_resume fallback: expected original UUID must match exactly; no bad-ID→New, resume-refused→fresh, pending-body move, or new UUID record. Legacy independent seams retain their old behavior but cannot be reached from the production managed path. Existing managed no-respawn handling remains in force.
+
+Core explicit managed resume clears held bookkeeping without generating the legacy resume note. No initial brief, interrupted-task text, queued old input, resume-note delivery observer or old Unknown is attached. Runtime registration remains the original native birth probe/retirement transaction and fresh ManagedRuntime seal; alive/unreadable old birth refuses. Raw leases and automatic pending authority are not inherited.
+
+ManagedHandle.create already waits for the actual SessionStart guard before returning a launched handle. Strict resume additionally requires the original expected session_id and `source:resume`, not startup/other source. New startup requires source:startup. The8s guard deadline/owned cleanup remains bounded. Rejected resume, wrong ID/source, timeout or disconnect preserves the original control UUID/receipt and old native UUID; no replacement process/task is spawned. Guard installation/readiness is not full native-history completion or task completion. Original public physical outcome remains distinct from these qualifications.
+
+A provider may perform internal work while restoring its own state; this module promises zero new PCW automatic input and no authority from old Unknown, not interception of every native internal action. Existing current-task guard/manual-floor rules remain intact.
+
+## Affected original seams only
+
+First add actual RED cases at the existing Store/managed actor/Core/driver seams, then smallest product changes: bounded Stop body/empty/missing/truncation/overflow, same-prompt activity invalidation, reopen/restore historical reads, source/ACL/cursor mismatch, strict missing/bad/native UUID, wrong SessionStart source, resume rejection no fresh/no brief, old birth alive/unknown, original resume Unknown lookup and reopening zero automatic task. Use existing fake PTY producer/protocol and current hooks; no new service/test platform, real model, SDK or provider session.
+
+The old managed-resume-refusal Core test is changed only for the new exact explicit qualification branch; its prior source/test proof remains historical. Original stable M4/B/APNs suites are not repeated. Root's forthcoming exact Codex combined normal has priority over this branch's Cargo work; this source must never be mixed into that candidate.
