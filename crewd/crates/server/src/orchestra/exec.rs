@@ -20,6 +20,7 @@ pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type Context = BTreeMap<String, String>;
 
 pub struct LaunchRequest {
+    pub initial_inputs:Option<crewd_exec::codex::input::Submission>,
     pub session_id: String,
     pub crew_id: String,
     pub workdir: PathBuf,
@@ -155,6 +156,9 @@ pub trait ExecHandle: Send + Sync {
         _permit: crewd_exec::driver::ManualWritePermit,
     ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
         Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
+    }
+    fn codex_submit_inputs(&self,_text:String,_request_id:String,_expected_turn_id:Option<String>,_inputs:crewd_exec::codex::input::Submission,_permit:crewd_exec::driver::ManualWritePermit)->BoxFut<'_,Result<crewd_exec::codex::control::CodexOutcome,Closed>>{
+        Box::pin(async{Ok(crewd_exec::codex::control::CodexOutcome::unsupported())})
     }
     fn codex_queue_controlled(
         &self,

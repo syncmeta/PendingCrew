@@ -84,13 +84,18 @@ pub struct CodexSettingsPatch {
     pub collaboration_mode: Option<CodexCollaborationMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<CodexReasoningSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<String>,
 }
 impl CodexSettingsPatch {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self == &Self::default() {
             return Err("empty Codex settings patch");
         }
-        for s in [&self.model, &self.effort].into_iter().flatten() {
+        if self.permissions.is_some() && self.sandbox.is_some() {
+            return Err("native permissions and sandbox are mutually exclusive");
+        }
+        for s in [&self.model, &self.effort, &self.permissions].into_iter().flatten() {
             if s.trim().is_empty() || s.len() > 256 || s.chars().any(char::is_control) {
                 return Err("invalid Codex model/effort");
             }
@@ -129,6 +134,20 @@ pub struct CodexConfigureParams {
 pub struct CodexTextParams {
     pub target: CommandRuntimeTarget,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<crate::codex_inputs::CodexInputSelection>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexDeleteParams {
+    pub target: CommandRuntimeTarget,
+    pub confirm_native_history_delete: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexRevertParams {
+    pub target: CommandRuntimeTarget,
+    pub before_turn_id: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -201,6 +220,19 @@ pub struct CodexHistoryPage {
     pub items: Vec<serde_json::Value>,
     pub next_cursor: Option<String>,
     pub backwards_cursor: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexHistoryAction { Archive, Unarchive, Delete, Revert }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexNativeHistoryStatus { Active, Archived, Deleted, Unknown }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexNativeHistoryState {
+    pub status: CodexNativeHistoryStatus,
+    pub request_id: Option<String>,
+    pub operation: Option<CodexHistoryAction>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -294,6 +326,10 @@ pub struct CodexSessionInspection {
     pub title: CodexTitleState,
     pub capabilities: Vec<CodexCapability>,
     pub pending_request: Option<crate::orchestra::RunnerRequestView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_history: Option<CodexNativeHistoryState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_mode: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -324,4 +360,35 @@ pub struct CodexModels {
 pub struct CodexTools {
     pub mcp_servers: Vec<serde_json::Value>,
     pub skills: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod completion_contract_tests {
+    use super::*;
+    use crate::commands::PublicCommand;
+    use serde_json::json;
+
+    #[test]
+    fn completion_named_permission_selection_is_closed_and_excludes_sandbox() {
+        let selected: CodexSettingsPatch = serde_json::from_value(json!({"permissions":"read-only"})).expect("typed native permission selector must be wired");
+        selected.validate().unwrap();
+        let conflict: CodexSettingsPatch = serde_json::from_value(json!({"permissions":"read-only","sandbox":{"type":"dangerFullAccess"}})).unwrap();
+        assert!(conflict.validate().is_err());
+        assert!(serde_json::from_value::<CodexSettingsPatch>(json!({"config":{"permissions":"anything"}})).is_err());
+    }
+
+    #[test]
+    fn completion_native_history_commands_are_original_typed_human_operations() {
+        let target=json!({"sessionId":"original","generation":"birth","controlRevision":"7","turnId":null});
+        for (operation,extra) in [
+            ("session.codex.archive",json!({})),
+            ("session.codex.unarchive",json!({})),
+            ("session.codex.delete",json!({"confirmNativeHistoryDelete":true})),
+            ("session.codex.revert",json!({"beforeTurnId":"original-turn"})),
+        ] {
+            let mut params=extra;params["target"]=target.clone();
+            let cmd:PublicCommand=serde_json::from_value(json!({"operation":operation,"params":params})).expect("native history operation is a closed public command, never a raw RPC");
+            assert_eq!(cmd.method(),operation);
+        }
+    }
 }

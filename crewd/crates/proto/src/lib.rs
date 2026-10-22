@@ -157,6 +157,10 @@ pub mod methods {
         crate::codex::HISTORY,
         crate::codex::MODELS,
         crate::codex::TOOLS,
+        crate::codex_inputs::INPUT_PREPARE,
+        crate::codex_inputs::INPUT_LOOKUP,
+        crate::codex_inputs::INPUT_DISCARD,
+        crate::codex_inputs::PERMISSION_PROFILES,
         crate::commands::SESSION_TERMINAL_INSPECT,
         crate::commands::SESSION_TERMINAL_WATCH,
         HELLO,
@@ -1055,10 +1059,14 @@ pub fn api_schema() -> Value {
         (
             codex::TOOLS,
             m(
-                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex_inputs::CodexCatalogParams>(g),
                 sub::<codex::CodexTools>(g),
             ),
         ),
+        (codex_inputs::INPUT_PREPARE,m(sub::<codex_inputs::CodexInputPrepareParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
+        (codex_inputs::INPUT_LOOKUP,m(sub::<codex_inputs::CodexInputLookupParams>(g),sub::<codex_inputs::CodexInputLookup>(g))),
+        (codex_inputs::INPUT_DISCARD,m(sub::<codex_inputs::CodexInputDiscardParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
+        (codex_inputs::PERMISSION_PROFILES,m(sub::<codex_inputs::CodexPermissionProfilesParams>(g),sub::<codex_inputs::CodexPermissionProfiles>(g))),
         (
             methods::SESSION_USAGE,
             m(sub::<RunnerUsageParams>(g), sub::<RunnerUsagePage>(g)),
@@ -1914,3 +1922,4 @@ pub mod team_data_api;
 pub mod lifecycle;
 
 pub mod codex;
+pub mod codex_inputs;

@@ -353,6 +353,7 @@ async fn submit(
         | PublicCommand::CodexReview(_)
         | PublicCommand::CodexTitleSet(_)
         | PublicCommand::CodexFork(_)
+        | PublicCommand::CodexArchive(_) | PublicCommand::CodexUnarchive(_) | PublicCommand::CodexDelete(_) | PublicCommand::CodexRevert(_)
         | PublicCommand::SessionAnswer(_)
         | PublicCommand::SessionRespondRunnerRequest(_)
         | PublicCommand::Hibernate(_)

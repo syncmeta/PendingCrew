@@ -38,6 +38,14 @@ impl CodexCore {
         permit: Option<crate::driver::ManualWritePermit>,
         now: Instant,
     ) {
+        // Normalize only inside the owned runtime queue. Prepared guards survive
+        // native ACKs until this physical runtime ends; ACK is not file consumption.
+        let mut steering_inputs=None;
+        let op=match op {
+            Op::PreparedQueue{id,text,request_id,inputs}=>{self.native_queued_inputs.insert(id,inputs);Op::Queue{id,text,request_id}},
+            Op::PreparedSteer{text,expected_turn_id,request_id,inputs}=>{steering_inputs=Some(inputs);Op::Steer{text,expected_turn_id,request_id}},
+            other=>other,
+        };
         let Some(thread) = self.thread_id.clone() else {
             self.native_done(
                 ticket,
@@ -47,8 +55,9 @@ impl CodexCore {
         };
         let idle = !self.tracker.is_busy() && !self.in_flight;
         let (method, params) = match &op {
+            Op::PreparedQueue{..}|Op::PreparedSteer{..}=>unreachable!("normalized native input"),
             Op::Inspect => {
-                self.native_done(ticket,Out::Observed(json!({"settings":if self.native_settings.is_object(){Some(observed_settings(&self.native_settings))}else{None},"nativeName":self.native_name,"queuedInputs":self.queue.len()})));
+                self.native_done(ticket,Out::Observed(json!({"settings":if self.native_settings.is_object(){Some(observed_settings(&self.native_settings))}else{None},"nativeName":self.native_name,"queuedInputs":self.queue.len(),"historyMode":self.native_history_mode})));
                 return;
             }
             Op::Queue {
@@ -94,6 +103,10 @@ impl CodexCore {
                     ticket,
                     baseline: self.native_settings_epoch,
                 });
+                if p.permissions.is_some() {
+                    self.request(Tag::PermissionCheck{ticket,patch:p.clone(),permit:permit.clone(),cursors:BTreeSet::new(),pages:1},"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100}),now,self.config.request_timeout);
+                    return;
+                }
                 ("thread/settings/update", params)
             }
             Op::Name(name) => {
@@ -125,7 +138,8 @@ impl CodexCore {
                 }
                 (
                     "turn/steer",
-                    json!({"threadId":thread,"expectedTurnId":expected_turn_id,"input":[{"type":"text","text":text}],"clientUserMessageId":request_id}),
+                    {let mut params=json!({"threadId":thread,"expectedTurnId":expected_turn_id,"input":[{"type":"text","text":text}],"clientUserMessageId":request_id});
+                    if let Some(inputs)=steering_inputs.take(){inputs.append(&mut params["input"]);self.native_input_files.push(inputs);}params},
                 )
             }
             Op::Interrupt { expected_turn_id } => {
@@ -177,6 +191,19 @@ impl CodexCore {
                 }
                 ("thread/turns/list", v)
             }
+            Op::PermissionProfiles(p) => {
+                if p.limit.is_some_and(|n|n==0||n>100) || p.cursor.as_ref().is_some_and(|c|c.len()>8192) {
+                    self.native_done(ticket,Out::Rejected("invalid original permission profile page".into()));return;
+                }
+                ("permissionProfile/list",json!({"cwd":self.cwd,"cursor":p.cursor,"limit":p.limit.unwrap_or(100)}))
+            }
+            Op::HistoryMutation{action,before_turn_id} => {
+                if *action != crewd_proto::codex::CodexHistoryAction::Revert || !idle || !self.queue.is_empty() || !self.human.is_empty() || self.native_history_mode.as_deref()!=Some("paginated") || before_turn_id.as_ref().is_none_or(|s|s.trim().is_empty()||s.len()>256||s.chars().any(char::is_control)) {
+                    self.native_done(ticket,Out::Rejected("native revert requires an already loaded idle paginated thread, empty queue and no Human decision; stopped history mutations use their own metadata route".into()));return;
+                }
+                self.in_flight=true;
+                ("thread/revert",json!({"threadId":thread,"beforeTurnId":before_turn_id}))
+            }
             Op::Models => ("model/list", json!({"limit":100})),
             Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
             Op::Fork { last_turn_id } => {
@@ -206,6 +233,46 @@ impl CodexCore {
             None => CodexAction::Write(line),
         });
     }
+    pub(super) fn permission_checked(
+        &mut self,ticket:Option<u64>,patch:crewd_proto::codex::CodexSettingsPatch,
+        permit:Option<crate::driver::ManualWritePermit>,mut cursors:BTreeSet<String>,pages:u8,
+        result:Result<Value,RpcFailure>,now:Instant,
+    ) {
+        if self.stopped_by_user || self.phase!=Phase::Ready || self.native_echo.is_none() {
+            self.native_echo=None;self.native_initial_failed(ticket,now);
+            self.native_done(ticket,Out::Unknown{provider_accepted:false,detail:"original runtime changed before permission profile validation; no settings write".into()});return;
+        }
+        let parsed=(||->Result<(bool,Option<String>),String>{
+            let value=result.map_err(|_|"permission catalog unavailable; no settings write".to_string())?;
+            let rows=value.get("data").and_then(Value::as_array).filter(|r|r.len()<=100).ok_or("invalid bounded permission catalog")?;
+            let mut names=BTreeSet::new();let mut allowed=false;
+            for row in rows {
+                let profile:crewd_proto::codex_inputs::CodexPermissionProfile=serde_json::from_value(row.clone()).map_err(|_|"invalid permission profile shape")?;
+                if profile.id.trim().is_empty()||profile.id.len()>256||!names.insert(profile.id.clone()){return Err("ambiguous permission catalog".into())}
+                if Some(&profile.id)==patch.permissions.as_ref() {
+                    if !profile.allowed {return Err("selected permission profile is not currently allowed".into())}
+                    allowed=true;
+                }
+            }
+            let next=value.get("nextCursor").and_then(Value::as_str).map(str::to_owned);
+            Ok((allowed,next))
+        })();
+        match parsed {
+            Ok((true,_))=>{
+                let Some(thread)=self.thread_id.clone() else {self.native_echo=None;self.native_initial_failed(ticket,now);self.native_done(ticket,Out::Rejected("original thread identity unavailable".into()));return};
+                let params=match settings_params(&thread,&patch,&self.native_settings){Ok(p)=>p,Err(e)=>{self.native_echo=None;self.native_initial_failed(ticket,now);self.native_done(ticket,Out::Rejected(e));return}};
+                let line=self.rpc.request(Tag::Native{ticket,op:Op::Configure(patch)},"thread/settings/update",&params,now,self.config.request_timeout);
+                self.actions.push(match permit {Some(permit)=>CodexAction::ControlledWrite{line,permit},None=>CodexAction::Write(line)});
+            },
+            Ok((false,Some(next))) if pages<4 && next.len()<=8192 && cursors.insert(next.clone())=>{
+                self.request(Tag::PermissionCheck{ticket,patch,permit,cursors,pages:pages+1},"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100,"cursor":next}),now,self.config.request_timeout);
+            },
+            other=>{
+                let detail=match other {Err(e)=>e,_=>"selected permission profile is absent from the bounded current catalog".into()};
+                self.native_echo=None;self.native_initial_failed(ticket,now);self.native_done(ticket,Out::Rejected(detail));
+            },
+        }
+    }
     pub(super) fn native_done(&mut self, ticket: Option<u64>, outcome: Out) {
         if let Some(ticket) = ticket {
             self.actions
@@ -232,6 +299,7 @@ impl CodexCore {
                     | Op::Interrupt { .. }
                     | Op::Review(_)
                     | Op::Fork { .. }
+                    | Op::HistoryMutation { .. }
             )
         {
             self.native_done(
@@ -246,7 +314,7 @@ impl CodexCore {
         let value = match result {
             Ok(v) => v,
             Err(f) => {
-                if matches!(op, Op::Review(_)) {
+                if matches!(op, Op::Review(_) | Op::HistoryMutation { .. }) {
                     if matches!(f, RpcFailure::Server(_)) {
                         self.in_flight = false;
                     } else {
@@ -308,6 +376,14 @@ impl CodexCore {
                     .map(|_| observed_settings(&self.native_settings));
                 self.native_done(ticket,Out::Observed(json!({"providerAccepted":true,"application":"followingTurns","observedSettings":observed})));
                 return;
+            }
+            Op::HistoryMutation{..} => {
+                if value.pointer("/thread/id").and_then(Value::as_str)!=self.thread_id.as_deref() {
+                    self.native_done(ticket,Out::Unknown{provider_accepted:true,detail:"native revert ACK has no matching original thread; following input is held".into()});return;
+                }
+                self.in_flight=false;
+                result["application"]=json!("metadata");
+                result["providerResult"]=value;
             }
             Op::Name(name) => {
                 self.native_name = Some(name.clone());

@@ -41,6 +41,15 @@ impl PublicExecution {
                     .with_refusal("command.invalid"),
             );
         }
+        if let PublicCommand::SessionStart(p)=&request.command {
+            if let Some(inputs)=&p.codex_inputs {
+                if p.brief.trim().is_empty() {
+                    return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require a nonblank original task").with_refusal("command.invalid"));
+                }
+                if p.executor!="codex" {return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require Codex"))}
+                inputs.validate().map_err(|e|RpcError::new(RpcError::INVALID_PARAMS,e))?;
+            }
+        }
         let principal = actor.principal(state).await?;
         crate::public_commands::validate_database(state, &request.db_id).await?;
         for operation in request.command.authorized_methods() {
@@ -52,6 +61,27 @@ impl PublicExecution {
             principal,
             request,
         })
+    }
+    fn input_owner(&self)->crewd_store::codex_inputs::Owner {
+        crewd_store::codex_inputs::Owner{db_id:self.request.db_id.clone(),principal:self.principal.clone()}
+    }
+    pub(crate) async fn codex_original_inputs(&self,session:&str)->Result<Option<crewd_exec::codex::input::Submission>,RpcError>{
+        let selection=match &self.request.command {
+            PublicCommand::SessionStart(p)=>p.codex_inputs.clone(),
+            PublicCommand::CodexQueue(p)|PublicCommand::CodexSteer(p)=>p.inputs.clone(),
+            _=>None,
+        };
+        let Some(selection)=selection else{return Ok(None)};
+        let call=self.clone();let session=session.to_owned();let state=self.state()?;let owner=state.clone();
+        state.db.call(move |s|->Result<_,RpcError>{
+            for method in call.request.command.authorized_methods(){call.actor.authorize_tx(&owner,s.conn(),method).map_err(dispatch::collab_err)?;}
+            let row=crewd_collab::sessions::get(s.conn(),&session).map_err(dispatch::collab_err)?;
+            let payloads=crewd_store::codex_inputs::for_original(s.conn(),&call.input_owner(),&row.crew_id,&session,&call.request.request_id,&selection).map_err(dispatch::internal)?;
+            Ok(Some(crewd_exec::codex::input::Submission{
+                payloads:payloads.into_iter().map(|p|crewd_exec::codex::input::Payload{kind:p.reference.kind,filename:p.filename,mime_type:p.mime_type,sha256:p.reference.sha256,body:p.body}).collect(),
+                skills:selection.skills,
+            }))
+        }).await.map_err(dispatch::internal)?
     }
     pub(crate) fn actor(&self) -> &Actor {
         &self.actor
@@ -121,6 +151,11 @@ impl PublicExecution {
         tx: &crewd_collab::Tx<'_>,
         session: &str,
     ) -> crewd_collab::Result<()> {
+        if let PublicCommand::SessionStart(p)=&self.request.command {
+            if let Some(inputs)=&p.codex_inputs {
+                crewd_store::codex_inputs::consume(tx.conn(),&self.input_owner(),&p.crew_id,session,&self.request.request_id,inputs)?;
+            }
+        }
         Ok(receipts::record_registered(
             tx.conn(),
             &self.principal,
@@ -188,6 +223,16 @@ impl PublicExecution {
             .await
             .map_err(dispatch::collab_err)
     }
+    pub(crate) async fn codex_native_ready(&self) -> Result<bool,RpcError> {
+        let Some(target)=self.request.command.codex_target() else {return Ok(false)};
+        let session=target.session_id.clone();
+        let action=self.request.command.native_history_action();
+        let state=self.state()?;let owner=state.clone();let actor=self.actor.clone();let method=self.request.command.method();
+        state.db.call_result(move |s| {
+            actor.authorize_tx(&owner,s.conn(),method)?;
+            Ok::<_,crewd_collab::CollabError>(crewd_store::codex_controls::native_ready(s.conn(),&session,action)?)
+        }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)
+    }
     /// Last durable authorization before dispatch. Lookup/duplicate never calls it.
     pub(crate) async fn dispatch(&self) -> Result<PublicCommandReceipt, RpcError> {
         let state = self.state()?;
@@ -197,6 +242,22 @@ impl PublicExecution {
             .collab(move |tx| {
                 for method in call.request.command.authorized_methods() {
                     call.actor.authorize_tx(&owner, tx.conn(), method)?;
+                }
+                if let Some(target)=call.request.command.codex_target() {
+                    let action=call.request.command.native_history_action();
+                    if !crewd_store::codex_controls::native_ready(tx.conn(),&target.session_id,action)? {
+                        return Err(crewd_collab::resource_invalid("codex.nativeHistoryNotReady"));
+                    }
+                    if let Some(action)=action {
+                        crewd_store::codex_controls::history_intent(tx.conn(),&target.session_id,&call.request.request_id,action)?;
+                        crewd_store::notifications::suppress_session(tx.conn(),&target.session_id,"native_history_changed")?;
+                    }
+                }
+                if let PublicCommand::CodexQueue(p)|PublicCommand::CodexSteer(p)=&call.request.command {
+                    if let Some(inputs)=&p.inputs {
+                        let session=crewd_collab::sessions::get(tx.conn(),&p.target.session_id)?;
+                        crewd_store::codex_inputs::consume(tx.conn(),&call.input_owner(),&session.crew_id,&session.id,&call.request.request_id,inputs)?;
+                    }
                 }
                 if let PublicCommand::CodexConfigure(p)=&call.request.command {
                     crewd_store::codex_controls::configure_intent(tx.conn(),&p.target.session_id,&p.patch,&call.request.request_id)?;
@@ -298,6 +359,10 @@ impl PublicExecution {
                     for (key, value) in previous {
                         next.entry(key).or_insert(value);
                     }
+                }
+                if call.request.command.native_history_action().is_some() {
+                    let target=call.request.command.codex_target().expect("closed history target");
+                    crewd_store::codex_controls::settle_history(tx.conn(),&target.session_id,&call.request.request_id,to)?;
                 }
                 if let PublicCommand::CodexConfigure(p) = &call.request.command {
                     let mut m = crewd_store::codex_controls::get(tx.conn(), &p.target.session_id)?;

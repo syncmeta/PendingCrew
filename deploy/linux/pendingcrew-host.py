@@ -167,7 +167,7 @@ def extract_release(payload, root, expected):
     for directory in unpacked.rglob('*'):
         if directory.is_dir(): directory.chmod(0o755)
     release = json.loads((unpacked / 'release.json').read_bytes())
-    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 19 or release.get('apiVersion') != 3:
+    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 20 or release.get('apiVersion') != 3:
         raise Refused('wrong release source/architecture/schema')
     files = release.get('files', {})
     actual = {str(p.relative_to(unpacked)) for p in unpacked.rglob('*') if p.is_file()}
@@ -387,7 +387,7 @@ def install(args):
             (activation / 'release').symlink_to('../../releases/' + release['sourceCommit'])
             (activation / 'bin').symlink_to('release/bin')
             # Transaction file is public provenance only; all secret operations live in STATE.
-            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 19}).encode(), 0o444)
+            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 20}).encode(), 0o444)
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
@@ -526,7 +526,7 @@ def rollback(args):
         version = stopped_database_version(pathlib.Path(binding['dataDir']))
         # This candidate has exactly one writer qualification. No guessed ranges
         # or downgrade migrations; the old writer must match the stopped format.
-        if release.get('storeVersion') != 19 or version not in (None, 19):
+        if release.get('storeVersion') != 20 or version not in (None, 20):
             raise Refused('rollback target is not qualified for the stopped database')
         new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version})
         pending = PREFIX / ('.current-' + operation)

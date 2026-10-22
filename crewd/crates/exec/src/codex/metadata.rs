@@ -111,6 +111,16 @@ pub async fn run(
             }
             ("thread/fork", v)
         }
+        Op::PermissionProfiles(p) if p.limit.is_none_or(|n|n>0&&n<=100) && p.cursor.as_ref().is_none_or(|s|s.len()<=8192) => (
+            "permissionProfile/list", json!({"cwd":request.workdir,"cursor":p.cursor,"limit":p.limit.unwrap_or(100)})),
+        Op::HistoryMutation {action,before_turn_id:None} => {
+            use crewd_proto::codex::CodexHistoryAction;
+            let method=match action {
+                CodexHistoryAction::Archive=>"thread/archive", CodexHistoryAction::Unarchive=>"thread/unarchive", CodexHistoryAction::Delete=>"thread/delete",
+                CodexHistoryAction::Revert=>return Out::Rejected("revert requires an already loaded idle paginated runtime; no implicit resume".into()),
+            };
+            (method,json!({"threadId":request.thread_id}))
+        },
         Op::Models => ("model/list", json!({"limit":100})),
         Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
         _ => return Out::Rejected("operation is not permitted in metadata-only child".into()),

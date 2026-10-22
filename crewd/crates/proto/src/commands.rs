@@ -140,6 +140,14 @@ pub enum PublicCommand {
     CodexTitleSet(crate::codex::CodexTitleParams),
     #[serde(rename = "session.codex.fork")]
     CodexFork(crate::codex::CodexForkParams),
+    #[serde(rename = "session.codex.archive")]
+    CodexArchive(crate::codex::CodexTargetParams),
+    #[serde(rename = "session.codex.unarchive")]
+    CodexUnarchive(crate::codex::CodexTargetParams),
+    #[serde(rename = "session.codex.delete")]
+    CodexDelete(crate::codex::CodexDeleteParams),
+    #[serde(rename = "session.codex.revert")]
+    CodexRevert(crate::codex::CodexRevertParams),
     #[serde(rename = "session.stop")]
     SessionStop(RuntimeStopParams),
     #[serde(rename = "session.resume")]
@@ -160,6 +168,19 @@ pub enum PublicCommand {
     TerminalResize(TerminalResizeParams),
 }
 impl PublicCommand {
+    pub fn codex_target(&self) -> Option<&CommandRuntimeTarget> {
+        match self {
+            Self::CodexConfigure(p)=>Some(&p.target), Self::CodexCompact(p)=>Some(&p.target),
+            Self::CodexSteer(p)|Self::CodexQueue(p)=>Some(&p.target),Self::CodexReview(p)=>Some(&p.target),
+            Self::CodexTitleSet(p)=>Some(&p.target),Self::CodexFork(p)=>Some(&p.target),
+            Self::CodexArchive(p)|Self::CodexUnarchive(p)=>Some(&p.target),Self::CodexDelete(p)=>Some(&p.target),Self::CodexRevert(p)=>Some(&p.target),
+            Self::SessionInterrupt(p)=>Some(p),_=>None,
+        }
+    }
+    pub fn native_history_action(&self) -> Option<crate::codex::CodexHistoryAction> {
+        use crate::codex::CodexHistoryAction as A;
+        match self { Self::CodexArchive(_)=>Some(A::Archive),Self::CodexUnarchive(_)=>Some(A::Unarchive),Self::CodexDelete(_)=>Some(A::Delete),Self::CodexRevert(_)=>Some(A::Revert),_=>None }
+    }
     pub fn authorized_methods(&self) -> &'static [&'static str] {
         match self {
             Self::LocalClientTrust(_) => &["local.clientTrust"],
@@ -176,6 +197,10 @@ impl PublicCommand {
             Self::CodexReview(_) => &["session.codex.review"],
             Self::CodexTitleSet(_) => &["session.codex.titleSet"],
             Self::CodexFork(_) => &["session.codex.fork"],
+            Self::CodexArchive(_) => &["session.codex.archive"],
+            Self::CodexUnarchive(_) => &["session.codex.unarchive"],
+            Self::CodexDelete(_) => &["session.codex.delete"],
+            Self::CodexRevert(_) => &["session.codex.revert"],
             Self::SessionStop(_) => &["session.stop"],
             Self::SessionResume(_) => &["session.resume"],
             Self::SessionInterrupt(_) => &["session.interrupt"],
@@ -203,6 +228,10 @@ impl PublicCommand {
             Self::CodexReview(_) => "session.codex.review",
             Self::CodexTitleSet(_) => "session.codex.titleSet",
             Self::CodexFork(_) => "session.codex.fork",
+            Self::CodexArchive(_) => "session.codex.archive",
+            Self::CodexUnarchive(_) => "session.codex.unarchive",
+            Self::CodexDelete(_) => "session.codex.delete",
+            Self::CodexRevert(_) => "session.codex.revert",
             Self::SessionStop(_) => "session.stop",
             Self::SessionResume(_) => "session.resume",
             Self::SessionInterrupt(_) => "session.interrupt",

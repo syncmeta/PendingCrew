@@ -3499,6 +3499,7 @@ mod self_tests {
 
     fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            initial_inputs: None,
             codex_options: None,
             title: None,
 
@@ -3597,6 +3598,7 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
+                initial_inputs: None,
                 codex_options: None,
                 title: None,
 

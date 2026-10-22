@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 完整 Codex 后台及 Mac/iOS 消费者源码整合接受
+
+完整后台替代冻结 `2b31504562af0c8a2a718413f8242b5093440cde`（原完整f0ad保留）与消费者 `860f76ef914e30540628d69cdfbb0307259b816a` 均 clean，根全文读取两模块交接/冻结/最终独验并核实际 HEAD，作为一个组合整合。Rust树 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive；Cloud/通知资格仍 nil/off。本节只接受源码及受影响本机合成层，不宣称新 normal、签包、运行、安装或真实 provider/Apple 资格。
+
+消费者独验报告 `93d0eb430f6d5b98973851d7e80140a4111f2a39fb3170b219aa82d0a82b746c`，冻结 `f2372fab405873a3f8d4d9eb36e4dc8e9d6442130255de1b8e33e267578a23ae`，manifest `d9a925777a550ac97991b21bc9f9b873630fe9a1fa9a76b6298ed35e7b29b0ee`。独核164封存/16净源/400构建输入，复用原 round5 Mac0/iOS0，亲跑11个原风险模式并读实际次数、bytes、状态断言。原6dfa上传成功却丢本机 bytes 的实红-5保留；最终先耐久后 upload、退出重开、离线导出、完整scope与lane CAS、原UUID Unknown、已用引用不复用、首目录/profile、四历史 metadata 结果及显式 delete/精确 steer 均闭合。旧5553 helper 仅原编译型验输入，不冒本次141运行或候选来源。
+
+后台最终整块报告 `af42cc128e47008a50ea050e2dce1d680a2ddcd84997ad7b36e5951f36aa3105`；替代交接 `157c3053e99281cf520e5eadc55be686399d8fd848ba939d371a935914e028d7`，冻结 `2ece0040ff3914e84dca989a51ecd52303c997251f3cf93323e2e5cd6581ccfb`，canonical合同 `068556563ab519b98aae98b427b9ee2812c6a703c14ca62609463488bf72441e`。原f0ad整块源门/1910全输入/471Rust/31artifact/63历史、11个实际1pass的风险case完整复用；替代净6路径、24artifact及19修复证据独核，新增原case与原非空fullentry实际各1pass。合计13次独立执行、12不同case，不把0test或复跑当新增；原36作者case仅复用，新增一个真正回归。无稳定全量重跑或新验收框架。
+
+源码覆盖原 authority/grant/DB/crew 绑定、同事务注册/一次消费/原receipt、私有媒体与精确 Skill、queue/steer/Stop、实际cwd允许profile及设置ACK、物理退出后的原生历史操作和恢复。准确旧19成功恢复后可重复消费的原红证明20必要；旧19现对20 source/target在spawn前拒绝、原件保持，20恢复失效所有ref却保原字节/不可变结果，全部Codex绑定恢复未确认且不捏造request UUID。restore-hook mutation101与恢复原字节0保留。Unknown不重发，新连接notFound不代表旧handler终结；只有原持续连接串行完成或原Core物理birth结束及同DB新binding的准确边界可终局，现消费者保守保原项且其他本机输入不锁。
+
+质量发现的空首任务+file/Skill缺陷先经正式Core四组合实红：launched、file consumed、0turn；最终capture三行准入前拒绝，四组合 receipt null/session0/ref prepared/native0，无inputs空named仍launched，原非空完整入口仍绿。两次title前置条件误用的fixture失败分列，未冒产品红。新作者CLI `570c885bbff93857536e13c8edcb5345807e1c30abdc0c00eaa73274ddce7c52` 纯schema141逐字等checked、hash前后同，embedded2b/dirtyfalse/12own features=[]；它仍不是最终组合的fresh生产witness。旧f0ad/99c/全部封存原件不改标。包/安装/rollback格式仅必要20，控制器准确pin最终Rust/141/20，五原recipe守卫、手动30分钟及source/witness全链保持，未dispatch。
+
+下一门为本次完整组合S的一次真实production normal及普通Mac/iOS成套产物，复用aeh/SPM缓存，旧5553/旧normal和日用9a均不改来源。Mac锁屏/日用正常退出等待、原post-quit AX实际拒绝只约束该GUI支路；未重试、强退、安装、Apple/Keychain/模型、VPS或旧184/1ef/c4 Unknown。Claude A与个人Core草稿transport继续独立模块，不混该候选；完整供应商历史、真实Cloud/APNs、真机与正式分发仍未交付。
+
 ## 2026-10-23 原生 APNs Mac/iOS 客户端整块源码接受
 
 完整0800ee5448b451f86f3ac06ac1b54a87bb2d72e2以04ee2af2为base，净9路径；根亲读APP-INTEGRATION-HANDOFF、最终source-freeze（SHA891b1648aa1c57538afd8108d0dcd4022580fd1adb1cffce31ad14b0b2489a96）及独验b4b93969baa36851dd4b13f0586db2c9a3fb6e54ea69f25cf33df89a96a9eada并核实际clean/HEAD/净路径。最终32材料manifest SHAde1cc35b2f92d054984f968399b64fe122a3be3daa57c679e8a7548b558c45ff，原38c的84材料、9源与398全目标输入均经独核；原Mac/iOS0/0只属于38c，不改标为0800。

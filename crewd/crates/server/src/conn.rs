@@ -597,6 +597,13 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crate::codex_inputs::is_method(&req.method) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot stage Human native inputs")))
+            } else {
+                ServerFrame::Response(crate::codex_inputs::handle(state,&peer.command_actor(),req).await)
+            }
+        }
         Ok(req) if crate::notifications::is_method(&req.method) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

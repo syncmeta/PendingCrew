@@ -21,6 +21,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var personalDirectory=false
     @State private var statusDetails=false
     @State private var reviewing = false
+    @State private var localCodexInputs=false
     @State private var recovering = false
     @State private var trusting = false
     @State private var pending: CrewdRemotePairSummary?
@@ -63,6 +64,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 }.disabled(window.computerListState != .loaded || window.computers.isEmpty)
                 #endif
             }
+            Button("本机Codex原输入"){localCodexInputs=true}
             if !window.inputReviewWorkspaces.isEmpty || !previousAdmins.isEmpty {
                 Button("原连接的输入") { reviewing = true }
             }
@@ -75,7 +77,8 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             #endif
             } label: { Label("电脑与连接", systemImage: "desktopcomputer") }
                 .labelStyle(.iconOnly).help("电脑选择、添加与原请求核对").accessibilityLabel("电脑与连接")
-        }.sheet(isPresented:$statusDetails){
+        }.sheet(isPresented:$localCodexInputs){CrewdCodexLocalInputs(directory:directory)}
+        .sheet(isPresented:$statusDetails){
             if let current=window.workspace {
                 VStack(spacing:0){
                     HStack{Text("当前电脑").font(.headline);Spacer();Button("关闭"){statusDetails=false}}.padding(16)

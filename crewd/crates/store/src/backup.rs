@@ -226,6 +226,8 @@ fn snapshot_steps(
             crate::local_clients::restored(&tx)?;
             crate::judgment_state::restored(&tx)?;
             crate::notifications::restored(&tx)?;
+            crate::codex_inputs::restored(&tx)?;
+            crate::codex_controls::restored(&tx)?;
             tx.commit()?;
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。

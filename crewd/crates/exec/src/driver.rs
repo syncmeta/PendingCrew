@@ -737,6 +737,13 @@ impl SessionHandle {
     }
 
     /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
+    pub async fn codex_prepared_controlled(&self,text:String,request_id:String,expected_turn_id:Option<String>,inputs:crate::codex::input::Prepared,permit:ManualWritePermit)->Result<crate::codex::control::CodexOutcome,Closed>{
+        let op=match expected_turn_id {
+            Some(expected_turn_id)=>crate::codex::control::CodexOperation::PreparedSteer{text,request_id,expected_turn_id,inputs},
+            None=>{let id=self.next_id.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|Closed)?;
+            crate::codex::control::CodexOperation::PreparedQueue{id,text,request_id,inputs}},
+        };self.codex_controlled(op,permit).await
+    }
     pub async fn codex_queue_controlled(
         &self,
         text: String,

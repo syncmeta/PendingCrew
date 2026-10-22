@@ -71,21 +71,28 @@ import Combine
     }
     /// The explicit control retains its inspected CAS target. A stale target is
     /// rejected by Core; it is never silently refreshed and replayed.
-    func submit(_ operation:CrewdPublicOperation,fields:[String:CrewdValue]=[:],target:CrewdCommandTarget?=nil)async {
-        guard !busy,let inspection,supported else{return}
+    @discardableResult func submit(_ operation:CrewdPublicOperation,fields:[String:CrewdValue]=[:],target:CrewdCommandTarget?=nil)async -> Bool {
+        guard !busy,let inspection,supported else{return false}
         let id=operation == .codexTitle ? "title":String(operation.rawValue.dropFirst("session.codex.".count))
-        guard inspection.capability(id)?.available == true else{return}
+        guard inspection.capability(id)?.available == true else{return false}
         busy=true;defer{busy=false}
         let scope=sourceScope()
         let exact=target ?? inspection.target
-        guard exact.sessionID == sessionID else{return}
+        guard exact.sessionID == sessionID else{return false}
         var params=fields;params["target"]=exact.value
         do{
+            let raw=try await readValue("session.controlTarget",.object(["sessionId":.string(sessionID)]))
+            let fresh=try CrewdCommandTarget(raw)
+            guard current(scope),fresh.sessionID==sessionID else{return false}
+            // Confirmation preserves its exact target; steer never redirects to a new turn.
+            guard target==nil || fresh==exact else{throw CrewdClientError(message:"确认期间原会话代际变化；请重新核对，不会自动重发。",kind:.notSubmitted)}
+            if operation == .codexSteer{guard fresh.generation==exact.generation,fresh.turnID==exact.turnID,fresh.turnID != nil else{throw CrewdPublicWire.invalid()}}
+            params["target"]=fresh.value
             let value=try await performValue(operation.rawValue,.object(params))
-            guard current(scope) else{return}
+            guard current(scope) else{return false}
             lastResult=value;error=nil
-            await refresh()
-        }catch{if current(scope){self.error=error.localizedDescription}}
+            await refresh();return true
+        }catch{if current(scope){self.error=error.localizedDescription};return false}
     }
     func retire(){invalidated=true;subscription?.cancel();subscription=nil;inspection=nil;history=[];models=[];tools = .null;usage=[]}
 }

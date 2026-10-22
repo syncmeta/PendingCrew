@@ -15,6 +15,7 @@ pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;
 pub mod native_receipts;
+mod codex_inputs;
 mod notifications;
 pub mod orchestra;
 pub(crate) mod peer;

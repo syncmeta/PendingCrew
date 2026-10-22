@@ -317,7 +317,7 @@ impl Fake {
                     }
                     self.thread = format!("thr-{}", std::process::id());
                     self.emit(json!({ "id": id, "result": {
-                        "thread": { "id": self.thread }, "model": "fake-model",
+                        "thread": if self.has("completion"){json!({"id":self.thread,"historyMode":"paginated"})}else{json!({"id":self.thread})}, "model": "fake-model",
                         "reasoningEffort": "medium",
                         "serviceTier": params.get("serviceTier").cloned().unwrap_or(Value::Null),
                     } }));
@@ -349,6 +349,15 @@ impl Fake {
                         self.complete(&turn, "interrupted", Value::Null);
                     }
                 }
+                "permissionProfile/list"=>{
+                    if self.has("profile_wrong_shape"){self.emit(json!({"id":id,"result":{"mcpServers":{"data":[]},"skills":{"data":[]}}}));}
+                    else{self.emit(json!({"id":id,"result":{"data":[{"id":"synthetic-profile","allowed":!self.has("profile_disabled"),"description":"Synthetic qualified profile"}],"nextCursor":null}}));}
+                },
+                "thread/archive"|"thread/unarchive"|"thread/delete"|"thread/revert"=>{
+                    if self.has("history_exit"){std::process::exit(9);}
+                    if self.has("history_reject"){self.emit(json!({"id":id,"error":{"code":-32602,"message":"synthetic history rejection"}}));continue;}
+                    self.emit(json!({"id":id,"result":{"thread":{"id":params["threadId"],"historyMode":"paginated"}}}));
+                }
                 "thread/settings/update" => {
                     if self.has("settings_exit"){std::process::exit(9);}
                     if self.has("settings_reject") {self.emit(json!({"id":id,"error":{"code":-32602,"message":"synthetic settings rejection"}}));continue;}
@@ -377,7 +386,12 @@ impl Fake {
                 "thread/fork"=>{if self.has("fork_exit"){std::process::exit(9);}self.emit(json!({"id":id,"result":{"thread":{"id":format!("fork-{}",std::process::id()),"forkedFromId":params["threadId"]}}}));},
                 "model/list"=>self.emit(json!({"id":id,"result":{"data":[{"id":"synthetic-model","model":"synthetic-model","displayName":"Synthetic model","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"high","description":"Synthetic high"}],"defaultReasoningEffort":"high","inputModalities":["text"],"supportsPersonality":false}],"nextCursor":null}})),
                 "mcpServerStatus/list"=>self.emit(json!({"id":id,"result":{"data":[{"name":"crew","authStatus":"unsupported","tools":{}}],"nextCursor":null}})),
-                "skills/list"=>self.emit(json!({"id":id,"result":{"data":[{"cwd":"/synthetic","skills":[{"name":"synthetic-skill","description":"synthetic","path":"/synthetic/SKILL.md"}],"errors":[]}]}})),
+                "skills/list"=>{
+                    if self.has("completion") {
+                        let cwd=params.pointer("/cwds/0").and_then(Value::as_str).unwrap_or("/synthetic");
+                        self.emit(json!({"id":id,"result":{"data":[{"cwd":cwd,"skills":[{"name":"synthetic-skill","description":"synthetic","path":format!("{cwd}/SKILL.md"),"enabled":!self.has("skill_disabled")}],"errors":[]}]}}));
+                    }else{self.emit(json!({"id":id,"result":{"data":[{"cwd":"/synthetic","skills":[{"name":"synthetic-skill","description":"synthetic","path":"/synthetic/SKILL.md"}],"errors":[]}]}}));}
+                },
                 "turn/steer"=> {
                     let wanted=params.get("expectedTurnId").and_then(Value::as_str);
                     if wanted==self.active_turn.as_deref()&&wanted.is_some() {self.emit(json!({"id":id,"result":{"turnId":self.active_turn}}));}
