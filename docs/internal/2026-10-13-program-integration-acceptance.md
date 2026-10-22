@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 草稿版本与 Codex 有界控制接受，进入准确双端组合
+
+原App草稿3841acf3独验SHA c12030f3b8b029b8a531363e3682600fc5557e7cc47f76a61380bebf1f7f617c，共享Codex UI b38cbfdc独验SHA a1283ace5cd6eca1509672501de5fbb69b6081d15e79bd3d92885062aa160042，根亲读原报告核同后普通整合bd6fca07/b6cb4090。原ecc三项真实持久缺陷保留红证：发送/merge原revision CAS、最新原文和sourceIdentity共同持久可发现、异步Stop/force最终退出重新核新输入。六影响模式与实际delegate前缀含展示stub亲跑0；production安装身份Keychain尚未实证，fixture注入不冒真实机制通过。C界面沿原UUID/Unknown只查与结构化人工答复，actual wire/Store红绿通过，完整SwiftUI目标尚待首次实编。
+
+Codex后端6a7ff642独验通过，59路径/1842输入，普通整合b1563490。主仓私域codex-session-control-20261022主证据：DELIVERY SHA c058c7ca870773bbdd5edf0bcdb32fded42f78a741fe9135005351fe94055c8d；source-freeze SHA 9fa9abecdfa53889088c6759ed12d37bd53960cd66a5901bf0a4b606ca5244d9；verification-artifacts SHA 17fec938a352a17ce86e1be22dcafba931070c2f973d9fa01b9b2c4dbfa831be；最终QA SHA 34ff617cc28ab1fd6e9cdc48f66426284d02af3f5b04af1a3b5f0b2231dae294。根亲读并核同。61b被扣留的原生metadata并发写序/Stop许可缺陷先在原Core/fake seam红复现，再以原RuntimeFence单pending mutation和共享原撤销permit修复；读并发保留。QA亲跑准确normal Core11/11=0，helper前后SHA 00a4db39a04852757ecac4ccca0b23d326115ee718491c7ee42c84fc9987c3b9。Stop后下一显式新Human请求可用为源审，未冒新实跑；原actor101/proto52/Store18及A/M4复用。
+
+Store18/API3仅必要writer barrier，无新表；当前17受保护version事务，支持15同事务资源17+18，实验16先拒写、Native16 inactive。旧16120普通Store17 writer拒18保DB/id字节，允许原空lease。七mutation与四read/usage沿原生产actor/child/receipt；queue接受不冒provider交付，Unknown fork重启不可自动恢复，原生标题与任务结果分列。附件/skill输入、原生archive/unarchive/delete/revert与命名/全局profile仍未完成，真实provider未验。
+
+Apple纠正报告SHA ea161b61b6362499e5a337d662d41a0c03e21348e0ae0502ec705f325e7ecb3f：CN后缀4L非Team，OU及全部profile均M42，导入日期/方式未知，无私钥读取或证书/Apple服务变更。人类确认有效付费个人会员和M42团队。CloudKit提案0219e181仅文档合4e3d9a03，文件SHA 09e7e54ac61349d88966c4036449b0c4cab042fc7ea149b5117115ce79cabefd；未创建容器/profile/schema或读写真实云。App默认本机账号nil，不能宣称iCloud已可用。
+
+本节是完整源码接受和冻结准备。下一唯一backend从干净完整组合HEAD构建准确normal，client同输入/准确helper/既有aeh缓存完成Mac+iOS全目标及候选，QA核产物与必要同Core实际流程。旧6a helper不改标组合，日用6f35、iOS111b、Linux582保原证明；无新CI/模型/安装/常驻VPS，旧184/1ef Unknown不触，持续工程目标未完。
+
 ## 2026-10-22 共享 Mac/iOS demo 前端完整源码接受并整合；同步独立源接受
 
 完整 frontend bf0f2fcec8ce785015e4a4a3a01d6dd92656f2d5、base b8760a52、净28路径，作者干净且 Git blob/文件 hash 与冻结一致。原 ad25 独验三处真实耐久性缺陷在原 KnowledgeStore/PresentationJournal/Workspace 修复：保存阶段原 input/request/context/result/source 跨重开采用/查询，不重建知识正文；六项资源写在 Unknown 原 UUID 结清前拒新提交；完整 receipt 校验后才 replyObserved，畸形结果保 Unknown，recovery 仅追加原 outcome 的 acknowledgement。三红为真实可运行 seam 失败，不是编译缺符号；质量亲跑当前 ffe5110e…33d6 七模式均0，原红与未变 channel/resources/prompt 证据复用。独验文件 group-content-store17-20261022/independent-qa-frontend-bf0f-final.json SHA de91241a0cf4094a1d3e83c7c459e7eedc06fd32e1e6bf8a1a4cd92f1a9ec447，根亲读/核 hash 后普通 no-ff 整合 e9321a9fc6501ba30988f40301e456f2bff6baaa。

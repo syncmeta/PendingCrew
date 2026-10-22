@@ -2,6 +2,12 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+最新组合：群内容 A、原 App 草稿版本3841acf3、共享 Codex 界面b38cbfdc及后端最终6a7ff642均已独立接受，普通合入 main；后两次合并分别b6cb4090/b1563490。CloudKit 提案0219e181仅文档，已合4e3d9a03。下一关口是一份干净完整HEAD的准确默认normal helper、原aeh暖缓存完整Mac+iOS目标与不可变候选，再验证新影响范围的双端同Core实际流程。主代理只统筹/整合/冻结；后端唯一Rust/schema/API/部署作者及编译者，客户端唯一Swift/工程/Xcode作者，质量线独立复验。冻结后helper和App构建之间不加入B/Cloud产品源，编译真实缺陷交原作者整块修复，不重造验收框架或全量重跑。
+
+当前Store18/API3是Unknown fork防旧writer误启动的必要保护，无新增表或旧产品导入；Native16仍inactive。Codex附件/skill输入、原生archive/delete/revert、命名/全局profile仍未完，不以七项控制及四read完成冒全部Codex要求。日用Mac仍6f35，既有iOS111b/Linux582不改来源，当前完整组合尚无全目标/窗口/真实provider/安装通过。
+
+Apple付费个人会员与M42BKJN82S由人类确认。4L5JZ6K424仅为证书CN显示名后缀，实际OU和33份profile全为M42；误称另一Team的结论已撤回，导入来源未知。当前App同步仍仅本机，CloudKit提案为独立开发容器、privateDB与显式账号分区，实际云服务未访问。先交当前完整候选，账号接线、签名与实际云同步作为下一完整模块；模拟transport不冒真实跨端同步。
+
 群内容后端16120a7c和共享Mac/iOS前端bf0f2fce均已独立源码验收，分别普通整合main 1978b602/e9321a9f；完整双端组合仍待准确构建和实际验收。111b8a03已普通推送main/global；另一“PendingCrew 前端设计”会话已完成的新demo由根在fdf1209e完整保存（仅21个design路径，原作者41项及离线检查复用，未重测）。前端一致快照65项SHA2165a5f75f1037b6cc203e6eae51e28d3e730e49df48071b7ff969214644d12b与提交前实际源逐项同，以当前TSX而非旧README/标题为准；本记录保存后的远端状态须读实际refs。真实已装Mac仍6f35/0.1.44/20748.07553，普通iOS当前准确候选111b8a03/0.1.43/1，Linux实际编译来源5821310a；a08原配对/P1P2证据与111b资源修复影响分别保留，不能互相改标。
 
 | 完整交付单元 | 当前状态 | 尚待闭合的范围 |
