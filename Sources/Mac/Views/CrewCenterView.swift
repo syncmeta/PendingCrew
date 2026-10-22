@@ -313,6 +313,10 @@ private struct PendingCrewChatView: View {
             }
             .font(.callout)
             .padding(.horizontal, 18)
+            if crewStore.usesCrewdAuthority {
+                Text("发送会创建机组并保存首条消息，再按新机组的实际执行能力启动 Codex 机长；不可用时保留机组和消息，机长不会启动。")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 18)
+            }
             TextEditor(text: $message)
                 .disabled(crewStore.pendingCrewDelivery != nil
                           || crewStore.pendingCrewRollbackError != nil)

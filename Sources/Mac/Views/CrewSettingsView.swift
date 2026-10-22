@@ -455,6 +455,7 @@ private struct CrewdLocalSettingsTab: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(CrewdCodexConfiguration.key) private var selectedProgram = ""
     @State private var selectionError: String?
+    @AppStorage(CrewdClaudeConfiguration.key) private var claudeProgram = ""
     private var program: String? { CrewdCodexConfiguration.program() }
     var body: some View {
         Form {
@@ -483,9 +484,27 @@ private struct CrewdLocalSettingsTab: View {
                 Text("请先在终端安装并登录 Codex。这里不读取登录凭据，也不代你登录。路径变更在下次本机后台启动时生效；请先停工退出，再重新打开应用。显式环境配置优先于此设置。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("下次后台启动使用的 Claude 交互终端") {
+                Text(CrewdClaudeConfiguration.program() ?? "尚未配置 Claude。请选择已安装的 Claude 可执行文件。")
+                    .textSelection(.enabled)
+                HStack {
+                    Button("选择 Claude…") {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let path = panel.url?.path {
+                            if CrewdCodexConfiguration.executable(path) { claudeProgram = path; selectionError = nil }
+                            else { selectionError = "请选择可执行的 Claude 文件。" }
+                        }
+                    }
+                    Button("清除选择") { claudeProgram = ""; selectionError = nil }
+                }
+                Text("这里只检查本地文件，不运行程序或检查登录。设置在下次受管后台启动时生效；程序存在仍不代表运行资格已核实，请以当前后台的能力列表为准。环境中的显式配置优先。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("支持普通文本和交互终端；额外任务上下文、结构化审批及完整历史加载尚未开放。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("当前版本") {
                 Text(AppBuildStamp.current).textSelection(.enabled)
-                Text("当前本机版本不连接旧版自动更新渠道；远程电脑连接暂不提供。")
+                Text("当前版本可连接本机或明确选择的远程电脑；不会自动选择远程电脑或恢复任务。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding()

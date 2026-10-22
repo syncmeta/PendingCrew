@@ -326,7 +326,8 @@ final class CrewStore: ObservableObject {
 
     /// Public14 uses its atomic SQL crew/first-message receipt; protocol13
     /// compatibility truthfully keeps split create/post with unknown snapshots.
-    /// Neither route replays, rolls back or implicitly starts a member.
+    /// Neither route replays or rolls back. This explicit Human creation may
+    /// start its captain only after qualifying the actual confirmed new crew.
     private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
         guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
               let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
@@ -363,7 +364,8 @@ final class CrewStore: ObservableObject {
                     throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
                 }
                 update(.accepted, crew: actual)
-                await workspace.startCaptainForCreatedCrew(actual)
+                guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
+                await workspace.startCaptainForCreatedCrew(actual, executor: "codex")
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 pendingCrew = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
                 await refreshList(); await refreshDetail(actual)
@@ -380,7 +382,8 @@ final class CrewStore: ObservableObject {
             update(.posting)
             _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
             update(.accepted)
-            await workspace.startCaptainForCreatedCrew(crewID)
+            guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
+            await workspace.startCaptainForCreatedCrew(crewID, executor: "codex")
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
             pendingCrew = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
             await refreshList(); await refreshDetail(crewID)

@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 执行入口整块接受并组合冻结，转准确普通 Mac 候选
+
+复用旧 ef38 客户端资产，按现有 Core15 真实 executor.list 合同完成创建机组、新成员、手动机长、恢复及终端能力的一致接线。生产源码最终 abb36419，测试冻结 e4144a534f639297329b2c69729594d4a9572b74，共14文件；后端 Rust/schema/API 没有改动。保留“发送并创建”后按真实新机组资格启动，启动拒绝不重建已成功机组、不重复首消息；当前连接/选择令牌覆盖跨 await 的 A→B→A，Unknown 只核对不重发。Claude 交互终端仅承诺现有文本与手动终端能力，恢复拒绝/fresh fallback 明确显示，不冒结构化 extras、标准 ACP 或完整历史；Native 仍不可用。
+
+独立整块验收接受：最终普通 Mac Debug 完整 target 实际0，实际 App module 与既有 Unix 合成接收端 seam 16/16 通过，两项选择 ABA 零启动/恢复/提交及原 Unknown 保留有原日志。首轮完整编译0、中间 SwiftUI Binding 编译65、修正后完整增量0均保留；首次 seam 因合成私域 journal 前置缺失退出1，测试补齐后原18734实际0。后两测试文件修正未改变或改标已编译 App。独审 executor-user-flow-independent-review-20261022.json SHA20a1c6aca54a9521cded66c57098780faa0b48f03586bd8dd1aef2518511f3ba；详细保全 executor-entry-abb36419-20261022。此为真实 App 方法/合成接收端证据，不冒 GUI、真实供应商/模型或完整M4交付。
+
+本节所在整合提交为下一候选准确来源：唯一后端 owner 先生成同源普通 normal 及新证明，客户端再封普通 Mac Release 和一次受影响普通 iOS Simulator 编译，均复用现有暖缓存；不重跑 Linux CI、M5 或已验稳定业务，不改标 R2 旧证明。当前已安装 R2 首开实际显示本机连接与既有列表，provider 禁用；原 handle55386/App32323 的 CmdQ 已由只读 sample 证明在原退出询问 NSAlert.runModal 等待，但现有原生读取没有定位弹窗，尚无正常退出终态。保持原进程，不强退、重开或替换。Device Hub 单应用键盘偏好正规只读报 domain 不存在，本轮未写偏好、boot 或输入，不能称 iOS 输入已解决。原184/1ef Unknown、真实模型/SDK、持久远程、物理设备/签名发布及标准ACP/完整历史缺口继续按原边界保留；持续目标未完成。
+
 ## 2026-10-22 R2 实际交付记录：Mac已安装，iOS首屏与Linux候选已验
 
 所有本批产品实际源码固定5821310a7a9e99daba1a784b8f7b4af0c2af5e45；本节是构建后记录，不是二进制的新源码。后续doc-only HEAD不改标任何旧proof或产物。没有新真实模型/SDK、公共发布、公证、旧数据迁移或重复全量审查。本次仅证明所列普通配置，历史all-features因磁盘中断的额外范围仍未验。

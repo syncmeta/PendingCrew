@@ -212,6 +212,66 @@ final class CrewdWorkspace: ObservableObject {
     @Published var restartPrompt: CrewdValue = .null
     @Published var messages: [CrewdValue] = []
     @Published private(set) var controlTargets: [String: CrewdCommandTarget] = [:]
+    @Published private(set) var executorProfiles: [CrewdExecutorProfile] = []
+    @Published private(set) var executorProfilesFailure: String?
+    @Published var selectedExecutor = "codex"
+    private var executorProfilesQuery = UUID()
+    private var executorProfilesRead: (crew: String, generation: UUID, connection: UUID, query: UUID, task: Task<Void, Never>)?
+    private var executorProfilesBinding: (generation: UUID, connection: UUID, crew: String)?
+    func executorProfile(_ executor: String) -> CrewdExecutorProfile? {
+        guard let binding = executorProfilesBinding, acceptsObservation(binding.generation),
+              binding.connection == client.connectionEpoch, binding.crew == crewID else { return nil }
+        return executorProfiles.first { $0.executor == executor && $0.offeredInOriginalUI }
+    }
+    func requireExecutor(_ executor: String, crew: String) throws {
+        guard !stopping, crew == crewID, let profile = executorProfile(executor), profile.canStart else {
+            throw CrewdClientError(message: executorProfile(executor)?.unavailableDescription ?? "当前执行能力尚未核对，未发送启动请求。", kind: .notSubmitted)
+        }
+    }
+    func profileForSession(_ id: String) -> CrewdExecutorProfile? {
+        guard let row = sessions.first(where: { $0["id"].string == id }) ?? knownSessions[id],
+              row["crewId"].string == crewID, let executor = row["executor"].string else { return nil }
+        return executorProfile(executor)
+    }
+    private func requireSessionExecutor(_ id: String) throws {
+        guard let profile = profileForSession(id) else {
+            throw CrewdClientError(message: "原会话的执行能力尚未在当前机组核对；未提交恢复。", kind: .notSubmitted)
+        }
+        try requireExecutor(profile.executor, crew: crewID)
+    }
+    private func clearExecutorProfiles() {
+        executorProfilesQuery = UUID()
+        executorProfiles = []; executorProfilesFailure = nil; executorProfilesBinding = nil; executorProfilesRead = nil
+    }
+    func refreshExecutorProfiles() async {
+        let epoch = generation, connection = client.connectionEpoch, crew = crewID
+        guard acceptsObservation(epoch), !crew.isEmpty else { clearExecutorProfiles(); return }
+        // The explicit create/start path and ordinary read-only sync can ask at
+        // the same time. Share one read instead of invalidating each other.
+        if let read = executorProfilesRead, read.crew == crew, read.generation == epoch, read.connection == connection {
+            await read.task.value; return
+        }
+        let query = UUID(); executorProfilesQuery = query
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.loadExecutorProfiles(crew: crew, epoch: epoch, connection: connection, query: query)
+        }
+        executorProfilesRead = (crew, epoch, connection, query, task)
+        await task.value
+        if executorProfilesRead?.query == query { executorProfilesRead = nil }
+    }
+    private func loadExecutorProfiles(crew: String, epoch: UUID, connection: UUID, query: UUID) async {
+        do {
+            let response = try await client.call("executor.list", .object(["crewId": .string(crew)]))
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, crew == crewID, query == executorProfilesQuery else { return }
+            let profiles = try CrewdExecutorProfile.list(response)
+            executorProfiles = profiles; executorProfilesFailure = nil
+            executorProfilesBinding = (epoch, connection, crew)
+        } catch {
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, crew == crewID, query == executorProfilesQuery else { return }
+            clearExecutorProfiles(); executorProfilesFailure = "无法读取当前后台的执行能力：" + error.localizedDescription
+        }
+    }
     @Published var crewID = ""
     @Published var sessionID = ""
     @Published var channelID = ""
@@ -235,6 +295,7 @@ final class CrewdWorkspace: ObservableObject {
     var isRetired: Bool { retired }
     private var generation = UUID()
     var observationGeneration: UUID { generation }
+    var observationSelection: UUID { selection }
     func acceptsObservation(_ epoch: UUID) -> Bool {
         !retired && !sleeping && client.readyForWork && generation == epoch
     }
@@ -317,6 +378,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onDisconnect = { [weak self] in
             self?.closeTerminalDisplays()
+            self?.clearExecutorProfiles()
             guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
@@ -353,6 +415,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         #endif
         closeTerminalDisplays()
+        clearExecutorProfiles()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
@@ -547,6 +610,7 @@ final class CrewdWorkspace: ObservableObject {
     #endif
     private func connectOnly() async throws {
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
+        clearExecutorProfiles()
         knowledge.invalidate(); resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
@@ -601,6 +665,7 @@ final class CrewdWorkspace: ObservableObject {
         guard crewID != id else { return }
         knowledge.invalidate(); workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
         channelWork.selectChannel(crew:id,channel:"")
+        clearExecutorProfiles(); selectedExecutor = "codex"
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
@@ -615,12 +680,12 @@ final class CrewdWorkspace: ObservableObject {
     /// Only an explicit user click invokes this path. Refresh live state first;
     /// never infer a stopped runner from an uninitialized display projection.
     func restoreOpenedSession(_ id: String, crew: String) async {
-        let epoch = observationGeneration
+        let epoch = observationGeneration, route = selection, connection = client.connectionEpoch
         guard crewID == crew, sessionID == id, !openingSessions.contains(id) else { return }
         openingSessions.insert(id); defer { openingSessions.remove(id) }
         do {
             let live = try await readValue("session.live", .object(["sessionId": .string(id)]))
-            guard acceptsObservation(epoch), crewID == crew, sessionID == id else { return }
+            guard acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id else { return }
             guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
                 throw CrewdClientError(message: "原会话运行状态未能确认，未提交恢复。", kind: .notSubmitted)
             }
@@ -631,29 +696,37 @@ final class CrewdWorkspace: ObservableObject {
                 _ = try await performValue("session.resume", .object(["sessionId": .string(id)]))
             }
         } catch {
-            if acceptsObservation(epoch), crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
+            if acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
         }
     }
 
     /// Called once after an explicitly created crew has a confirmed identity.
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.
-    @discardableResult func startCaptainForCreatedCrew(_ id: String, brief: String = "你是这个新机组的机长。请读取群聊与 Todo，回应人类需求；没有任务时待命。") async -> String? {
-        let epoch = observationGeneration
+    private var openingCaptains = Set<String>()
+    @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "你是这个新机组的机长。请读取群聊与 Todo，回应人类需求；没有任务时待命。") async -> String? {
+        guard !openingCaptains.contains(id), !isRetired else { return nil }
+        openingCaptains.insert(id); defer { openingCaptains.remove(id) }
+        let epoch = observationGeneration, connection = client.connectionEpoch
+        selectCrew(id)
+        let route = selection
+        await refreshExecutorProfiles()
+        guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
         do {
+            try requireExecutor(executor, crew: id)
             let roster = try await readValue("session.list", .object(["crewId": .string(id)]))
-            guard acceptsObservation(epoch) else { return nil }
+            guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
             guard case .array(let rows) = roster else { throw CrewdClientError(message: "机长名册未能确认。", kind: .notSubmitted) }
             if let captain = rows.first(where: { $0["role"].string == "captain" }) { return captain["id"].string }
             guard !hasOriginalUnknown(method: "session.start", crew: id) else {
                 throw CrewdClientError(message: "机长原启动结果尚未确认，请核对原请求。", kind: .notSubmitted)
             }
             let result = try await performValue("session.start", .object([
-                "crewId": .string(id), "role": .string("captain"), "executor": .string("codex"),
+                "crewId": .string(id), "role": .string("captain"), "executor": .string(executor),
                 "brief": .string(brief), "isolation": .bool(false)]))
             return result["id"].string
         } catch {
-            if acceptsObservation(epoch) { self.error = "机组已创建，机长启动未完成：" + error.localizedDescription }
+            if acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id { self.error = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription }
             return nil
         }
     }
@@ -726,7 +799,9 @@ final class CrewdWorkspace: ObservableObject {
             do { try await workStore.refresh() } catch { /* WorkStore retains typed failures; first-edition messaging stays usable. */ }
             guard current == generation, selected == selection, !sleeping, !Task.isCancelled else { return }
         }
-        guard !crew.isEmpty else { return }
+        guard !crew.isEmpty else { clearExecutorProfiles(); return }
+        await refreshExecutorProfiles()
+        guard current == generation, selected == selection, crew == crewID, !sleeping, !Task.isCancelled else { return }
         let sessionQuery = UUID()
         sessionDirectoryQuery = sessionQuery
         let newSessions = try await client.call("session.list", .object(["crewId": .string(crew)]))
@@ -812,6 +887,11 @@ final class CrewdWorkspace: ObservableObject {
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) { return try await client.call(method, params) }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
+        if method == "session.start" { try requireExecutor(params["executor"].string ?? "", crew: params["crewId"].string ?? crewID) }
+        if method == "session.resume" {
+            guard !hasOriginalUnknown(method: method, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            try requireSessionExecutor(params["sessionId"].string ?? params["target"]["sessionId"].string ?? "")
+        }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let commandParams = try await explicitControlParameters(operation, params)
             var receipt = try await submitPublicCommand(operation, params: commandParams, crew: params["crewId"].string ?? crewID)
@@ -907,6 +987,11 @@ final class CrewdWorkspace: ObservableObject {
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
+        if operation == .sessionStart { try requireExecutor(params["executor"].string ?? "", crew: crew) }
+        if operation == .sessionResume {
+            guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            try requireSessionExecutor(params["sessionId"].string ?? "")
+        }
         _ = try publicCommandBinding(for: client)
         let envelope: CrewdPublicCommandEnvelope
         do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }

@@ -28,9 +28,9 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, crewID: String, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind; observedCrew = crewID
-        terminalView = kind == .codex ? nil : TerminalMirrorView(frame: .zero)
+        terminalView = kind != .codex && workspace.profileForSession(sessionID)?.manualTerminal == true ? TerminalMirrorView(frame: .zero) : nil
         transcript = kind == .codex ? CodexTranscript() : nil
-        publicTerminal = kind != .codex && workspace.client.capabilities.contains("session.terminal")
+        publicTerminal = kind != .codex && workspace.profileForSession(sessionID)?.manualTerminal == true && workspace.client.capabilities.contains("session.terminal")
             ? CrewdPublicTerminal(workspace: workspace, sessionID: sessionID) : nil
         terminalView?.onSendBytes = { [weak publicTerminal] bytes in publicTerminal?.enqueueInput(Data(bytes)) }
         terminalView?.onResize = { [weak self] cols, rows in
