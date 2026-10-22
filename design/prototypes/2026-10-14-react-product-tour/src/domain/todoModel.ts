@@ -18,3 +18,12 @@ export function todoCounts(scene: SceneState) {
   return {red: [...requests.values()].filter(({db,item}) => !["done", "dropped"].includes(requestStatus(db,item))).length,
     yellow: [...asks.values()].filter((item) => ["open", "later"].includes(item.status)).length};
 }
+
+/** Count only this conversation's open work, whether its ledger is active or parked. */
+export function conversationTodoCounts(scene: SceneState, id: string) {
+  const work = scene.ui.conv === id ? scene.db : scene.groups?.[id];
+  if (!work) return {red: 0, yellow: 0};
+  const db = {...scene.db, ...work};
+  return {red: work.requests.filter((item)=>!["done","dropped"].includes(requestStatus(db,item))).length,
+    yellow: work.asks.filter((item)=>["open","later"].includes(item.status)).length};
+}

@@ -142,7 +142,7 @@ export function reducer(previous: TourState, command: Command): TourState {
         message("你", command.text, ask.id);
         message(
           scene.agent,
-          ask.item ? "收到。" + ask.item + " 的等待已解除，其他计划和进展也已同步。" : "收到，真人 Todo 已更新。",
+          ask.item ? "收到。" + ask.item + " 的等待已解除，其他计划和进展也已同步。" : "收到，人待办 已更新。",
           ask.item,
         );
         record("你回答了 " + ask.id + "；关联计划恢复推进。");
@@ -201,7 +201,7 @@ export function reducer(previous: TourState, command: Command): TourState {
         if (p.status === "done")
           p.evidence = db.docs.find((d) => d.title === scene.docTitle)?.id;
         record(p.code + " 更新为" + statusLabels[p.status] + "，备注已保存。");
-        showNotice(state, "已更新：Todo 和进展使用同一份计划。");
+        showNotice(state, "已更新：待办 和进展使用同一份计划。");
         break;
       }
       case "saveFolder": {
@@ -248,13 +248,13 @@ export function reducer(previous: TourState, command: Command): TourState {
       case "tagTodo": {
         const item = [...db.requests, ...db.asks].find((item) => item.id === command.id);
         const tag = command.tag.trim();
-        if (!item || !tag) throw Error("Todo 或标签不存在。");
+        if (!item || !tag) throw Error("待办 或标签不存在。");
         item.tags = item.tags?.includes(tag) ? item.tags.filter((t) => t !== tag) : [...(item.tags ?? []), tag];
         break;
       }
       case "completeTodo": {
         const item = db.requests.find((item) => item.id === command.id);
-        if (!item) throw Error("Todo 不存在。");
+        if (!item) throw Error("待办 不存在。");
         item.status = requestStatus(db, item) === "done" ? "open" : "done";
         break;
       }

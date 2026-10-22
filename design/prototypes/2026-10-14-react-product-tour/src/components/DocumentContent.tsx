@@ -1,10 +1,11 @@
+import { productText } from "../domain/displayText";
 import { MessageText } from "./MessageText";
 const segment=(value:string)=>value.replace(/\s/g,"-").replace(/&/g,"-and-").replace(/%/g,"-percent").replace(/[?#<>:"|*]/g,"").toLowerCase();
 function Inline({text}:{text:string}) {
  return <>{text.split(/(\[\[[^\]]+\]\]|\[[^\]]+\]\(https?:\/\/[^)]+\))/g).map((part,i)=>{
-  if(part.startsWith("[[")){const [path,label]=part.slice(2,-2).split("|");return <a key={i} href={"https://docs.pendingname.com/"+path.split("/").map(segment).join("/")} target="_blank" rel="noopener noreferrer">{label??path.split("/").at(-1)}</a>;}
+  if(part.startsWith("[[")){const [path,label]=part.slice(2,-2).split("|");return <a key={i} href={"https://docs.pendingname.com/"+path.split("/").map(segment).join("/")} target="_blank" rel="noopener noreferrer">{productText(label??path.split("/").at(-1)??"")}</a>;}
   const match=part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-  if(match)return <a key={i} href={match[2]} target="_blank" rel="noopener noreferrer">{match[1]}</a>;
+  if(match)return <a key={i} href={match[2]} target="_blank" rel="noopener noreferrer">{productText(match[1])}</a>;
   return <MessageText key={i} text={part}/>;
  })}</>;
 }

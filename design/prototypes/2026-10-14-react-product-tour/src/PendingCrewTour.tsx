@@ -1,3 +1,4 @@
+import { productText } from "./domain/displayText";
 import type { CSSProperties } from "react";
 import { TourProvider, useTour } from "./state/TourContext";
 import { type Scope } from "./domain/types";
@@ -46,9 +47,9 @@ function MacWindow() {
       <section className="detail">
         <div className="titlebar">
           <Button
-            action="toggle-sidebar"
-            className="icon-button sidebar-toggle"
-            aria-label={state.navigation?.sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            action="open-sidebar"
+            className="icon-button sidebar-reopen"
+            aria-label="展开侧栏"
             onClick={() => window.innerWidth <= 760 ? setSidebarOpen(!sidebarOpen) : dispatch({type:"toggleSidebar"})}
           >
             <Icon name="panel" />
@@ -80,7 +81,7 @@ function MacWindow() {
             <Button
               action="folder-manager"
               className="icon-button"
-              aria-label={ui.tab === "todo" ? "Todo 标签" : "管理分组"}
+              aria-label={ui.tab === "todo" ? "待办 标签" : "管理分组"}
               onClick={() => ui.tab === "todo" ? setUi({ tab: "todo", todoTag: "all" }) : setModal({ kind: "folders", scope: ui.tab })}
             >
               <Icon name="more" />
@@ -92,7 +93,7 @@ function MacWindow() {
           <div className="group-detail">
             <nav className="view-tabs" aria-label="当前群内容">
               {([
-                ["message","消息"],["human-todo","真人Todo"],["ai-todo","AI Todo"],["document","文档/数据"],["progress","计划/进展"]
+                ["message","消息"],["human-todo","人待办"],["ai-todo","AI待办"],["document","文档/数据"],["progress","计划/进展"]
               ] as const).map(([key,label]) => {
                 const todo=key==="human-todo"||key==="ai-todo";
                 const kind=key==="human-todo"?"asks":"requests";
@@ -151,7 +152,7 @@ function TourView({
       <Dialogs />
       {state.notice && (
         <div className="toast" id="toast" role="status" aria-live="polite">
-          {state.notice.text}
+          {productText(state.notice.text)}
         </div>
       )}
     </div>

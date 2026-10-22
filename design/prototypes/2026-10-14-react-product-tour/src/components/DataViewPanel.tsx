@@ -1,3 +1,4 @@
+import { productText } from "../domain/displayText";
 import { useState } from "react";
 import { useTour } from "../state/TourContext";
 import { crewLedgers } from "../domain/selectors";
@@ -59,7 +60,7 @@ function TableView({ value }: { value: TableDataView }) {
           {schema ? "返回数据" : "表结构 / SQLite"}
         </Button>
       </header>
-      <p>{value.description}</p>
+      <p>{productText(value.description)}</p>
       <label className="data-search">
         筛选
         <input
@@ -102,9 +103,9 @@ function TableView({ value }: { value: TableDataView }) {
                         setSort(c.key);
                         setDescending(c.key === sort ? !descending : false);
                       }}
-                      aria-label={"按" + c.label + "排序"}
+                      aria-label={"按" + productText(c.label) + "排序"}
                     >
-                      {c.label}
+                      {productText(c.label)}
                       {sort === c.key ? (descending ? " ↓" : " ↑") : ""}
                     </Button>
                   </th>
@@ -126,12 +127,12 @@ function TableView({ value }: { value: TableDataView }) {
                           className="data-row-select"
                           onClick={() => setSelected(cell(r, value.primaryKey))}
                         >
-                          {cell(r, c.key)}
+                          {productText(cell(r, c.key))}
                         </Button>
                       ) : r[c.key] === null ? (
                         <code className="data-null">NULL</code>
                       ) : (
-                        cell(r, c.key)
+                        productText(cell(r, c.key))
                       )}
                     </td>
                   ))}
@@ -181,7 +182,7 @@ function CompositionView({
         <strong>内容块与文档组合</strong>
         <small>本地交互示例</small>
       </header>
-      <p>{value.description}</p>
+      <p>{productText(value.description)}</p>
       <div className="segmented composition-tabs">
         {value.views.map((v) => (
           <Button
@@ -194,7 +195,7 @@ function CompositionView({
               if (v.placements[0]) select(v.placements[0].blockId);
             }}
           >
-            {v.title}
+            {productText(v.title)}
           </Button>
         ))}
       </div>
@@ -212,19 +213,19 @@ function CompositionView({
               onClick={() => select(b.id)}
             >
               <span>
-                {b.title}
+                {productText(b.title)}
                 <small>
                   {b.id} · {placement.id}
                 </small>
               </span>
-              <p>{b.body}</p>
+              <p>{productText(b.body)}</p>
             </Button>
           );
         })}
       </div>
       {block && (
         <div className="block-editor">
-          <strong>{block.title}</strong>
+          <strong>{productText(block.title)}</strong>
           <small>
             内容 ID：{block.id} · 来源：{block.source}
           </small>

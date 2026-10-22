@@ -123,6 +123,7 @@ export interface Ledger {
   history: { text: string; time: string }[];
 }
 export interface UiState {
+  inspectorKind?: "asks" | "requests";
   todoFilters?: Partial<Record<"requests" | "asks", {tag:string;query:string}>>;
   todoTag?: string;
   tab: Scope;
@@ -223,7 +224,7 @@ export type Command =
   | { type: "notice"; text: string };
 export const scopeNames: Record<Scope, string> = {
   message: "消息",
-  todo: "Todo",
+  todo: "待办",
   document: "文档/数据",
   progress: "计划/进展",
 };

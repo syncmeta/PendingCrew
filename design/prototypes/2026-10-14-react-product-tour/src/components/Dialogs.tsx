@@ -1,3 +1,4 @@
+import { productText } from "../domain/displayText";
 import { TodoOwner } from "./TodoOwner";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTour } from "../state/TourContext";
@@ -47,7 +48,7 @@ function Dialog({
     >
       <div id="modal-content">
         <div className="dialog-head">
-          <h3>{title}</h3>
+          <h3>{productText(title)}</h3>
           <Button
             action="close"
             className="icon-button"
@@ -62,7 +63,7 @@ function Dialog({
           {children}
           {state.notice && (
             <p role="status" className="quiet" style={{ marginTop: 12 }}>
-              {state.notice.text}
+              {productText(state.notice.text)}
             </p>
           )}
         </div>
@@ -243,7 +244,7 @@ function SearchDialog() {
       kind: "待人类处理",
     })),
     ...db.docs.map((d) => ({ id: d.id, title: d.title, kind: "文档" })),
-    ...db.requests.map((r) => ({ id: r.id, title: r.text, kind: "Todo" })),
+    ...db.requests.map((r) => ({ id: r.id, title: r.text, kind: "待办" })),
   ];
   return (
     <Dialog title="搜索当前机组">
@@ -267,7 +268,7 @@ function SearchDialog() {
               className="search-result"
               onClick={() => reference(x.id)}
             >
-              {x.title}
+              {productText(x.title)}
               <small>
                 {x.kind} · {x.id}
               </small>
@@ -303,7 +304,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
         kind === "newCrew"
           ? "新建机组"
           : kind === "newRequest"
-            ? humanTodo ? "新建真人 Todo" : "新建 AI Todo"
+            ? humanTodo ? "新建人待办" : "新建 AI待办"
             : "新建文档"
       }
       actions={
@@ -321,7 +322,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
           {kind === "newCrew"
             ? "创建机组"
             : kind === "newRequest"
-              ? "保存Todo"
+              ? "保存待办"
               : "保存文档"}
         </Button>
       }
@@ -353,7 +354,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
           <p className="quiet">保留你交代的原文，计划通过引用关联到这里。</p>
           <textarea
             id="request-text"
-            aria-label="Todo内容"
+            aria-label="待办内容"
             placeholder="你想让团队做什么？"
             value={body}
             onChange={(e) => setBody(e.target.value)}
@@ -396,13 +397,13 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
     case "request": {
       const ref = findReference(state, modal.id);
       return ref?.kind === "request" ? (
-        <Dialog title={ref.record.code + " · Todo详情"}>
-          <h4>给 AI 的 Todo</h4>
-          <p>{ref.record.text}</p>
+        <Dialog title={ref.record.code + " · 待办详情"}>
+          <h4>给 AI 的 待办</h4>
+          <p>{productText(ref.record.text)}</p>
           <TodoOwner item={ref.record}/><TodoTags item={ref.record} edit/>
           <p className="quiet">
             这里保留需求原文。你可以持续添加
-            Todo，相关计划和回复仍引用同一条记录。
+            待办，相关计划和回复仍引用同一条记录。
           </p>
           <h4>相关计划</h4>
           {db.plans.filter((p) => p.sources.includes(ref.record.id)).length ? (
@@ -536,7 +537,7 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
             .map((h, i) => (
               <div key={i} className="timeline-entry">
                 <time>{h.time}</time>
-                <span>{h.text}</span>
+                <span>{productText(h.text)}</span>
               </div>
             ))}
         </Dialog>
@@ -589,8 +590,8 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
           <p className="quiet">{scene.brief}</p>
           {[
             [
-              "Todo",
-              "群里的 Todo 持续承接任务流，原文保留下来，工作随时可以追溯。",
+              "待办",
+              "群里的 待办 持续承接任务流，原文保留下来，工作随时可以追溯。",
             ],
             [
               "计划结构",
@@ -602,7 +603,7 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
             ],
             [
               "进展与成果",
-              "进展与 Todo 引用同一份计划，文档沉淀说明和工作产物。",
+              "进展与 待办 引用同一份计划，文档沉淀说明和工作产物。",
             ],
           ].map(([title, text], i) => (
             <div key={title} className="guide-step">
@@ -614,7 +615,7 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
             </div>
           ))}
           <p className="quiet" style={{ marginTop: 16 }}>
-            Todo 用多标签分类；消息、文档和计划/进展可以独立分组。操作保存在这个浏览器里，可以随时重置。
+            待办 用多标签分类；消息、文档和计划/进展可以独立分组。操作保存在这个浏览器里，可以随时重置。
           </p>
         </Dialog>
       );

@@ -1,3 +1,4 @@
+import { productText } from "../domain/displayText";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 import { useTour } from "../state/TourContext";
 import { referenceLabel } from "../domain/selectors";
@@ -82,7 +83,7 @@ export function Reference({
       className={className}
       onClick={() => reference(id)}
     >
-      {referenceLabel(state, id)}
+      {productText(referenceLabel(state, id))}
     </Button>
   );
 }

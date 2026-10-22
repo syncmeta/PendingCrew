@@ -1,3 +1,4 @@
+import { productText } from "../domain/displayText";
 import siteDocuments from "../domain/siteDocuments.json";
 import { programWork } from "../domain/nativeDemo";
 import { TodoOwner } from "./TodoOwner";
@@ -54,7 +55,7 @@ export function PlanTable({
                 className="plan-open"
                 onClick={() => reference(p.id)}
               >
-                {p.title}
+                {productText(p.title)}
                 <span className="plan-code">
                   {p.code} · {p.id}
                 </span>
@@ -64,14 +65,14 @@ export function PlanTable({
           <td>
             <StatusBadge status={p.status} />
           </td>
-          <td>{p.owner || "待认领"}</td>
+          <td>{productText(p.owner || "待认领")}</td>
           {progress ? (
             <>
-              <td className="plan-note">{p.note || "—"}</td>
+              <td className="plan-note">{productText(p.note || "—")}</td>
               <td>
                 {p.blockedOn.length
                   ? p.blockedOn.map((id) => <Reference key={id} id={id} />)
-                  : p.nextCheck || "—"}
+                  : productText(p.nextCheck || "—")}
               </td>
             </>
           ) : (
@@ -181,17 +182,17 @@ export function AskCard({ ask, origin }: { ask: HumanAsk; origin?: string }) {
               ? "已答复"
               : "已撤回"}
       </span>
-      <h4>{ask.question}</h4>
+      <h4>{productText(ask.question)}</h4>
       <TodoOwner item={ask} human/>
-      <p>{ask.context}</p>
+      <p>{productText(ask.context)}</p>
       {ask.item && <Reference id={ask.item} />}
       {["open", "later"].includes(ask.status) ? (
         <>
-          <p style={{ marginTop: 12 }}>推荐：{ask.recommendation}</p>
+          <p style={{ marginTop: 12 }}>推荐：{productText(ask.recommendation)}</p>
           <div className="ask-actions">
             {ask.options.map((o, i) => (
               <Button
-                key={o}
+                key={productText(o)}
                 action="answer"
                 data-id={ask.id}
                 data-scene={sceneId}
@@ -199,7 +200,7 @@ export function AskCard({ ask, origin }: { ask: HumanAsk; origin?: string }) {
                 className={i === 0 ? "recommended" : ""}
                 onClick={() => finish("answer", o)}
               >
-                {o}
+                {productText(o)}
               </Button>
             ))}
             <Button
@@ -222,7 +223,7 @@ export function AskCard({ ask, origin }: { ask: HumanAsk; origin?: string }) {
         </>
       ) : (
         <p style={{ marginTop: 12 }}>
-          {ask.answer || "已经撤回，不再等待答复。"}
+          {productText(ask.answer || "已经撤回，不再等待答复。")}
         </p>
       )}
     </section>
@@ -241,12 +242,12 @@ function Todos() {
         const status=requestStatus(db,request);
         return <section key={request.id} className={"request-card stream-todo "+status} data-todo={request.id}>
           <div className="stream-todo-top"><Button className={"state-ring "+status} aria-label={(status==="done"?"重新打开":"完成")+request.code} onClick={()=>dispatch({type:"completeTodo",id:request.id})}>{status==="done"?"✓":""}</Button><span>{request.code}</span><StatusBadge status={status}/></div>
-          <Button className="request-open original-text" action="reference" data-id={request.id} onClick={()=>reference(request.id)}>{request.text}</Button>
+          <Button className="request-open original-text" action="reference" data-id={request.id} onClick={()=>reference(request.id)}>{productText(request.text)}</Button>
           <TodoOwner item={request}/><TodoTags item={request} edit/>
           {request.source && <span className="todo-provenance">{request.sourceLabel??"PendingCrew 历史任务 · 状态为演示"}</span>}
           {db.plans.some((p)=>p.sources.includes(request.id)) && <details><summary>关联计划/进展</summary>{db.plans.filter((p)=>p.sources.includes(request.id)&&!p.parent).map((p)=><Reference key={p.id} id={p.id}/>)}</details>}
         </section>;
-      }) : <p className="empty">暂时没有给 AI 的 Todo。</p>}
+      }) : <p className="empty">暂时没有给 AI 的 待办。</p>}
     </section>}
   </div>;
 }
@@ -259,7 +260,7 @@ function Documents() {
       <Button action="back-documents" onClick={() => setUi({ doc: null })}>
         ← 返回文档
       </Button>
-      <h3>{d.title}</h3>
+      <h3>{productText(d.title)}</h3>
       <div className="byline">
         {d.author} ·{" "}
         {d.dataView
@@ -269,7 +270,7 @@ function Documents() {
           : (d.kind ?? "产品说明")}{" "}
         · {folderOf(data.db, d, "document")}
       </div>
-      {d.summary && <p className="document-summary">{d.summary}</p>}
+      {d.summary && <p className="document-summary">{productText(d.summary)}</p>}
       {d.kind === "已敲定设计" && (
         <p className="document-status">
           设计约定，不代表所有安装版本均已交付。
@@ -371,11 +372,11 @@ function Documents() {
             <Icon name="file" />
           </span>
           <span>
-            {d.title}
+            {productText(d.title)}
             <small>
               {d.kind ?? "产品说明"} · {folderOf(data.db, d, "document")}
               {d.summary && (
-                <span className="document-row-summary">{d.summary}</span>
+                <span className="document-row-summary">{productText(d.summary)}</span>
               )}
             </small>
           </span>
@@ -400,7 +401,7 @@ export function Workspace() {
                 action="new-request"
                 onClick={() => setModal({ kind: "newRequest" })}
               >
-                {ui.kind === "asks" ? "＋ 真人 Todo" : "＋ AI Todo"}
+                {ui.kind === "asks" ? "＋ 人待办" : "＋ AI待办"}
               </Button>
             ) : ui.tab === "progress" ? (
               <Button

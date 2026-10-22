@@ -2493,3 +2493,23 @@
 .pc-tour .document-content figcaption { font-size: 11px; color: #92958a; margin-top: 7px; }
 .pc-tour .document-content a { color: var(--accent); }
 .pc-tour .document-content pre { overflow-x: auto; background: #f5f5f2; padding: 12px; border-radius: 6px; }
+
+/* Conversation-specific pending work, shown like unread badges. */
+.pc-tour .conversation-avatar { position: relative; flex-shrink: 0; display: inline-flex; width: 36px; height: 36px; margin-right: 3px; }
+.pc-tour .conversation-avatar > .avatar { margin: auto; }
+.pc-tour .conversation-badge { position: absolute; right: -6px; z-index: 1; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 4px; border: 1.5px solid #fff; border-radius: 10px; display: grid; place-items: center; font-size: 9px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.pc-tour .conversation-badge.red { top: -5px; background: #e8544f; color: #fff; }
+.pc-tour .conversation-badge.yellow { bottom: -5px; background: #e9bb39; color: #5f4700; }
+.pc-tour .inspector-kind { margin: 0 10px 9px; flex-shrink: 0; display: flex; }
+.pc-tour .inspector-kind > button { flex: 1; display: flex; justify-content: center; gap: 7px; padding: 4px 7px; }
+.pc-tour .inspector-kind > button > span { color: #8b8a84; font-variant-numeric: tabular-nums; font-size: 10px; }
+.pc-tour .todo-panel.closed > .inspector-kind { display: none; }
+.pc-tour .side-toolbar .tools { gap: 2px; }
+.pc-tour .side-toolbar .icon-button { width: 25px; height: 28px; }
+.pc-tour .sidebar-reopen { display: none; }
+@media (min-width: 761px) {
+  .pc-tour .sidebar-collapsed .sidebar-reopen { display: inline-grid; }
+}
+@media (max-width: 760px) {
+  .pc-tour .sidebar-reopen { display: inline-grid; }
+}

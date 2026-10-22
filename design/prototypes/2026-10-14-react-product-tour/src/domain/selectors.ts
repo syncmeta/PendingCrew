@@ -73,7 +73,7 @@ export function referenceLabel(state: TourState, id: string): string {
     case "document":
       return ref.record.title;
     case "request":
-      return ref.record.code + " · Todo";
+      return ref.record.code + " · 待办";
   }
 }
 

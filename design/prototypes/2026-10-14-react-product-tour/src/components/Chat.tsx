@@ -1,3 +1,4 @@
+import { productText } from "../domain/displayText";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTour } from "../state/TourContext";
 import { folderOf } from "../domain/selectors";
@@ -62,7 +63,7 @@ export function Chat() {
             >
               <Icon name="arrow" />
             </Button>
-            <h3 title={conv.title}>{conv.title}</h3>
+            <h3 title={productText(conv.title)}>{productText(conv.title)}</h3>
           </div>
           <div className="chat-toolbar">
             <div className="chat-options">
@@ -102,8 +103,8 @@ export function Chat() {
             <Button
               action="inspector"
               className="icon-button"
-              aria-label={(ui.inspector ? "收起" : "展开") + " Todo 和成员"}
-              title={(ui.inspector ? "收起" : "展开") + " Todo 和成员"}
+              aria-label={(ui.inspector ? "收起" : "展开") + " 待办 和成员"}
+              title={(ui.inspector ? "收起" : "展开") + " 待办 和成员"}
               onClick={() => setUi({ inspector: !ui.inspector })}
             >
               <Icon name="panel" />
@@ -148,7 +149,7 @@ export function Chat() {
               <div className="message-body">
                 {!(
                   index > 0 && visibleMessages[index - 1].sender === m.sender
-                ) && <div className="sender">{m.sender}</div>}
+                ) && <div className="sender">{productText(m.sender)}</div>}
                 <div className="bubble">
                   <MessageText text={m.text} />
                   {m.link && (
@@ -249,7 +250,7 @@ export function Chat() {
                   setShowActions(false);
                 }}
               >
-                新建 Todo
+                新建 待办
               </Button>
             </div>
           )}
@@ -266,9 +267,9 @@ export function Chat() {
             <Button
               action="todo-mode"
               className={"composer-circle " + (todoMode ? "active" : "")}
-              aria-label="Todo 模式"
+              aria-label="待办 模式"
               aria-pressed={todoMode}
-              title="Todo 模式：点亮后发送 = 记一条 Todo"
+              title="待办 模式：点亮后发送 = 记一条 待办"
               onClick={() => setTodoMode(!todoMode)}
             >
               <Icon name="checklist" />
@@ -278,7 +279,7 @@ export function Chat() {
                 id="draft"
                 ref={textarea}
                 aria-label="输入消息"
-                placeholder={todoMode ? "记一条 Todo…" : "输入消息…"}
+                placeholder={todoMode ? "记一条 待办…" : "输入消息…"}
                 value={draft}
                 onChange={(e) =>
                   setUi({ drafts: { ...ui.drafts, [conv.id]: e.target.value } })
@@ -297,7 +298,7 @@ export function Chat() {
               <button
                 type="submit"
                 className="composer-send"
-                aria-label={todoMode ? "发送 Todo" : "发送"}
+                aria-label={todoMode ? "发送 待办" : "发送"}
                 disabled={!draft.trim()}
               >
                 <Icon name="send" />

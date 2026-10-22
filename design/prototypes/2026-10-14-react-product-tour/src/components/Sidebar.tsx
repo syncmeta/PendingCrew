@@ -17,7 +17,7 @@ function CrewRow({scene,indent=0,children}:{scene:Scene;indent?:number;children?
       {children && <Disclosure open={open} label={scene.crew} onClick={()=>dispatch({type:"toggleCrew",id:scene.id})}/>}
       <Button action="scene" data-id={scene.id} className={"crew-row "+(scene.id===state.sceneId?"selected":"")} onClick={()=>selectScene(scene.id)}>
         <span className="crew-text"><span className="crew-top"><span>{scene.crew}</span><small title={"最近更新："+updated.full}><time dateTime={updatedAt}>{updated.short}</time></small></span>
-          <span className="crew-todo-counts"><span className="todo-count" title="AI Todo 未完成" aria-label={counts.red+" 个 AI Todo 未完成"}><i className="attention-dot red"/>{counts.red}</span><span className="todo-count" title="真人 Todo 待处理" aria-label={counts.yellow+" 个真人 Todo 待处理"}><i className="attention-dot yellow"/>{counts.yellow}</span></span>
+          <span className="crew-todo-counts"><span className="todo-count" title="AI待办 未完成" aria-label={counts.red+" 个 AI待办 未完成"}><i className="attention-dot red"/>{counts.red}</span><span className="todo-count" title="人待办 待处理" aria-label={counts.yellow+" 个人待办 待处理"}><i className="attention-dot yellow"/>{counts.yellow}</span></span>
         </span>
       </Button>
     </div>
@@ -27,7 +27,7 @@ function CrewRow({scene,indent=0,children}:{scene:Scene;indent?:number;children?
   </>;
 }
 export function Sidebar() {
-  const {state,data:{ui},setUi,setModal,dispatch}=useTour();
+  const {state,data:{ui},setUi,setModal,dispatch,setSidebarOpen}=useTour();
   const closed=state.navigation?.collapsedCrews??[];
   const order=["website","captain","problems","knowledge","current-progress","future-five-days","trip","research","administration"];
   const scenes=state.scenes.slice().sort((a,b)=>(order.includes(a.id)?order.indexOf(a.id):order.length)-(order.includes(b.id)?order.indexOf(b.id):order.length));
@@ -37,6 +37,7 @@ export function Sidebar() {
       <Button action="search" className="icon-button" aria-label="搜索介绍内容" title="搜索介绍内容" onClick={()=>setModal({kind:"search"})}><Icon name="search"/></Button>
       <Button action="new-crew" className="icon-button" aria-label="新建机组" title="新建机组" onClick={()=>setModal({kind:"newCrew"})}><Icon name="plus"/></Button>
       <Button action="refresh" className="icon-button" aria-label="刷新" title="刷新" onClick={()=>dispatch({type:"notice",text:"当前机组状态已刷新。"})}><Icon name="refresh"/></Button>
+      <Button action="toggle-sidebar" className="icon-button sidebar-toggle" aria-label="收起侧栏" title="收起侧栏" onClick={()=>window.innerWidth<=760?setSidebarOpen(false):dispatch({type:"toggleSidebar"})}><Icon name="panel"/></Button>
     </div></div>
     <div className="segmented side-mode">{(["hierarchy","timeline"] as const).map((mode)=><Button key={mode} action="sidebar" data-mode={mode} className={ui.sidebar===mode?"active":""} onClick={()=>setUi({sidebar:mode})}>{mode==="hierarchy"?"通讯录":"消息"}</Button>)}</div>
     <div className="side-list">
