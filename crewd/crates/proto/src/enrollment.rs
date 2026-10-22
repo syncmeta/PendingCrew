@@ -91,3 +91,37 @@ pub struct EnrollmentLookupResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_state: Option<RemoteGrantSummary>,
 }
+
+/// Local root management only, never accepted by the anonymous enrollment router.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostEnrollmentCreateParams {
+    pub request_id: String,
+    pub enrollment_id: String,
+    pub token_hash: String,
+    pub computer_label: String,
+    pub endpoint: RemoteEndpoint,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostEnrollmentCreated {
+    pub request_id: String,
+    pub enrollment_id: String,
+    pub server: RemotePublicIdentity,
+    pub endpoint: RemoteEndpoint,
+    pub expires_at: String,
+    pub computer_label: String,
+}
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostEnrollmentLookupParams {
+    pub request_id: String,
+    pub enrollment_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
+pub enum HostEnrollmentLookupResult {
+    Created { created: HostEnrollmentCreated },
+    NotFound,
+}

@@ -179,6 +179,25 @@ pub(crate) async fn begin_exit(
     })
 }
 
+pub(crate) fn begin_admin_exit(
+    state: &Arc<AppState>,
+    permit: &crate::peer::RootAdminPermit,
+) -> Result<PendingExit, RpcError> {
+    permit.check()?;
+    let handle = state
+        .orchestra
+        .get()
+        .ok_or_else(|| refused("orchestra unavailable"))?;
+    state.admission.close();
+    let response = handle
+        .enqueue_hibernate(Some(std::time::Duration::from_millis(120000)))
+        .map_err(crate::orchestra::rpc::rpc_err)?;
+    Ok(PendingExit {
+        mode: "safePause".into(),
+        response,
+    })
+}
+
 pub(crate) async fn finish_exit(
     state: &Arc<AppState>,
     pending: PendingExit,

@@ -42,12 +42,17 @@ pub fn enrollment_token_matches(token: &str, expected_hash: &str) -> bool {
     use subtle::ConstantTimeEq;
     bool::from(actual.as_bytes().ct_eq(expected_hash.as_bytes()))
 }
+// Store generates lower(hex(randomblob(16))) and preserves existing opaque IDs.
+// Validate the original bytes; never normalize or reinterpret the database identity.
+fn valid_database_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 256 && id.trim() == id && !id.chars().any(char::is_control)
+}
 fn validate_link(link: &EnrollmentLink) -> Result<()> {
     ensure!(
         link.version == ENROLLMENT_FORMAT
             && valid_remote_uuid(&link.enrollment_id)
             && valid_remote_uuid(&link.server.authority_id)
-            && valid_remote_uuid(&link.server.db_id)
+            && valid_database_id(&link.server.db_id)
             && link.endpoint.is_valid()
             && valid_spki_pin(&link.server.spki_sha256),
         "invalid enrollment identity"
@@ -111,7 +116,7 @@ mod tests {
             enrollment_id: "11111111-1111-4111-8111-111111111111".into(),
             server: RemotePublicIdentity {
                 authority_id: "b0150000-0000-4000-8000-000000000001".into(),
-                db_id: "5ad89300-0000-4000-8000-000000000001".into(),
+                db_id: "5ad89300000040008000000000000001".into(),
                 certificate_der_base64: certificate.certificate_base64(),
                 spki_sha256: certificate.pin().into(),
             },
@@ -160,6 +165,24 @@ mod tests {
                 URL_SAFE_NO_PAD.encode(text)
             ))
             .is_err()
+        );
+        for invalid_db in [
+            "".to_string(),
+            " x".into(),
+            "x\n".into(),
+            "x\u{0}".into(),
+            "x".repeat(257),
+        ] {
+            let mut wrong = original.clone();
+            wrong.server.db_id = invalid_db;
+            assert!(encode_enrollment_link(&wrong).is_err());
+        }
+        let mut opaque = original.clone();
+        opaque.server.db_id = "preserved:opaque-database".into();
+        let encoded = encode_enrollment_link(&opaque).unwrap();
+        assert_eq!(
+            decode_enrollment_link(&encoded).unwrap().server.db_id,
+            opaque.server.db_id
         );
         let mut wrong = original.clone();
         wrong.server.spki_sha256 = "0".repeat(64);

@@ -44,6 +44,28 @@ impl RemoteRpc {
             events: Vec::new(),
         }
     }
+    async fn connect_enrollment(port: u16, pin: &str) -> Self {
+        let config = crewd_remote::enrollment_client_configuration(pin).unwrap();
+        let socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let stream = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(
+                rustls::pki_types::ServerName::try_from("pendingcrew.invalid").unwrap(),
+                socket,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.get_ref().1.alpn_protocol(),
+            Some(crewd_proto::ENROLLMENT_ALPN)
+        );
+        Self {
+            io: BufReader::new(stream),
+            next: 1,
+            events: Vec::new(),
+        }
+    }
     async fn frame(&mut self, method: &str, params: Value) -> std::io::Result<Value> {
         let id = self.next;
         self.next += 1;
@@ -213,14 +235,26 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
         );
     }
     remote
-        .call("events.subscribe", json!({"topics":["documents"]}))
+        .call("events.subscribe", json!({"topics":["work"]}))
         .await;
-    let visible_doc = local(&mut owner,"document.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew,"title":"Before revoke visible","body":"synthetic"})).await;
+    // Transport event coverage uses the active work API. Legacy document.create
+    // is intentionally guarded in normal serve; knowledge is a separate source.
+    let visible_work = local(
+        &mut owner,
+        "work.create",
+        json!({"crewId":crew,"title":"Before revoke visible"}),
+    )
+    .await;
     let event = remote.event().await;
-    assert_eq!(event["event"], "document.changed");
-    assert_eq!(event["data"]["id"], visible_doc["document"]["id"]);
+    assert_eq!(event["event"], "work.changed");
+    assert_eq!(event["data"]["id"], visible_work["id"]);
     local(&mut owner,"remote.revoke",json!({"grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"Online revoke"})).await;
-    let hidden_doc = local(&mut owner,"document.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew,"title":"After revoke must not leak","body":"synthetic"})).await;
+    let hidden_work = local(
+        &mut owner,
+        "work.create",
+        json!({"crewId":crew,"title":"After revoke must not leak"}),
+    )
+    .await;
     let next = tokio::time::timeout(
         LIMIT,
         remote.frame("todo.get", json!({"id":requirement["requirementId"]})),
@@ -235,8 +269,8 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
         !remote
             .events
             .iter()
-            .any(|event| event["event"] == "document.changed"
-                && event["data"]["id"] == hidden_doc["document"]["id"]),
+            .any(|event| event["event"] == "work.changed"
+                && event["data"]["id"] == hidden_work["id"]),
         "revoked connection leaked a new authoritative event"
     );
     stop.send(()).unwrap();
@@ -1289,4 +1323,515 @@ async fn remote_global_shutdown_retires_a_still_authorized_kernel_blocked_writer
         .unwrap()
         .unwrap();
     drop(remote);
+}
+
+#[tokio::test]
+async fn enrollment_alpn_isolated_real_tls_denies_work_and_duplicate_fields() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut running = service(&directory.path().join("core")).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    async fn connect(
+        port: u16,
+        config: rustls::ClientConfig,
+    ) -> std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+        let socket = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(
+                rustls::pki_types::ServerName::try_from("pendingcrew.invalid").unwrap(),
+                socket,
+            )
+            .await
+    }
+    let config = crewd_remote::enrollment_client_configuration(&identity.spki_sha256).unwrap();
+    let stream = tokio::time::timeout(LIMIT, connect(port, config))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stream.get_ref().1.alpn_protocol(),
+        Some(crewd_proto::ENROLLMENT_ALPN)
+    );
+    assert_eq!(
+        stream.get_ref().1.protocol_version(),
+        Some(rustls::ProtocolVersion::TLSv1_3)
+    );
+    let mut anonymous = RemoteRpc {
+        io: BufReader::new(stream),
+        next: 1,
+        events: Vec::new(),
+    };
+    // Anonymous registration can never enter hello, work or local administration.
+    for method in ["system.hello", "crew.create", "remote.configure"] {
+        let frame = anonymous.frame(method, json!({})).await.unwrap();
+        assert_eq!(frame["error"]["code"], crewd_proto::RpcError::FORBIDDEN);
+    }
+    let config = crewd_remote::enrollment_client_configuration(&identity.spki_sha256).unwrap();
+    let mut duplicate = connect(port, config).await.unwrap();
+    duplicate.write_all(b"{\"id\":1,\"method\":\"enrollment.begin\",\"params\":{\"enrollmentId\":\"11111111-1111-4111-8111-111111111111\",\"enrollmentId\":\"22222222-2222-4222-8222-222222222222\",\"requestId\":\"33333333-3333-4333-8333-333333333333\",\"token\":\"x\",\"clientCertificateDerBase64\":\"x\",\"clientSpkiSha256\":\"x\",\"deviceLabel\":\"x\"}}\n").await.unwrap();
+    let mut line = String::new();
+    BufReader::new(duplicate)
+        .read_line(&mut line)
+        .await
+        .unwrap();
+    let error: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        error["error"]["code"],
+        crewd_proto::RpcError::INVALID_PARAMS
+    );
+    for protocols in [
+        vec![b"unknown/1".to_vec()],
+        vec![crewd_proto::ENROLLMENT_ALPN.to_vec(), b"other/1".to_vec()],
+    ] {
+        let mut config =
+            crewd_remote::enrollment_client_configuration(&identity.spki_sha256).unwrap();
+        config.alpn_protocols = protocols;
+        assert!(
+            tokio::time::timeout(LIMIT, connect(port, config))
+                .await
+                .unwrap()
+                .is_err()
+        );
+    }
+    // Omitting ALPN restores mandatory client auth, never anonymous fallback.
+    let mut config = crewd_remote::enrollment_client_configuration(&identity.spki_sha256).unwrap();
+    config.alpn_protocols.clear();
+    let rejected = async {
+        use tokio::io::AsyncReadExt;
+        match connect(port, config).await {
+            Err(_) => true,
+            Ok(mut stream) => {
+                let _ = stream
+                    .write_all(b"{\"id\":1,\"method\":\"system.hello\",\"params\":{}}\n")
+                    .await;
+                let mut bytes = [0u8; 1];
+                !matches!(stream.read(&mut bytes).await,Ok(n) if n>0)
+            }
+        }
+    };
+    assert!(tokio::time::timeout(LIMIT, rejected).await.unwrap());
+    assert_eq!(
+        local(&mut running.owner, "remote.grants", json!({})).await,
+        json!([])
+    );
+    stopped(running).await;
+}
+
+/// This is an exact retained ordinary binary check, never a model/provider probe.
+#[tokio::test]
+#[ignore = "requires approved immutable old18 normal Core path and SHA256"]
+async fn enrollment_pending_challenge_isolated_from_old18_then_original_commit_recovers() {
+    let binary = std::path::PathBuf::from(
+        std::env::var("PCW_B_OLD18_CORE").expect("exact retained old18 normal Core"),
+    );
+    let expected = std::env::var("PCW_B_OLD18_SHA256").expect("exact old18 SHA256");
+    fn digest(bytes: &[u8]) -> String {
+        ring::digest::digest(&ring::digest::SHA256, bytes)
+            .as_ref()
+            .iter()
+            .map(|v| format!("{v:02x}"))
+            .collect()
+    }
+    assert_eq!(digest(&std::fs::read(&binary).unwrap()), expected);
+    let directory = tempfile::tempdir().unwrap();
+    let data = directory.path().join("data");
+    let mut current = service(&data).await;
+    let (port, identity) = enabled(&mut current.owner).await;
+    let token = crewd_remote::enrollment_token().unwrap();
+    let issue = uuid::Uuid::new_v4().to_string();
+    let enrollment = uuid::Uuid::new_v4().to_string();
+    let issued=local(&mut current.owner,"remote.enrollmentCreate",json!({"requestId":issue,"enrollmentId":enrollment,"tokenHash":crewd_remote::enrollment_token_hash(&token).unwrap(),"computerLabel":"Writer barrier host","endpoint":{"host":"127.0.0.1","port":port}})).await;
+    assert_eq!(issued["server"]["authorityId"], identity.authority_id);
+    let client = CertificateIdentity::generate().unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    let mut anonymous = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let begun=anonymous.call("enrollment.begin",json!({"enrollmentId":enrollment,"requestId":request,"token":token,"clientCertificateDerBase64":client.certificate_base64(),"clientSpkiSha256":client.pin(),"deviceLabel":"Barrier device"})).await;
+    let invitation: RemoteInvitation = verify_envelope(
+        &serde_json::from_value::<RemoteSignedEnvelope>(begun["invitation"].clone()).unwrap(),
+        &decode_certificate(&identity.certificate_der_base64).unwrap(),
+        CertificateRole::Server,
+        &identity.spki_sha256,
+    )
+    .unwrap();
+    let response = client
+        .sign(&RemotePairingResponse {
+            invitation_id: enrollment.clone(),
+            authority_id: identity.authority_id.clone(),
+            db_id: identity.db_id.clone(),
+            challenge: invitation.challenge,
+            client_certificate_der_base64: client.certificate_base64(),
+            client_spki_sha256: client.pin().into(),
+            device_label: "Barrier device".into(),
+        })
+        .unwrap();
+    drop(anonymous);
+    stopped(current).await;
+    let initial_read = rusqlite::Connection::open_with_flags(
+        data.join("crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let before_record =
+        crewd_store::meta_get(&initial_read, &format!("remote.enrollment.v1.{enrollment}"))
+            .unwrap()
+            .unwrap();
+    let legacy_rows: i64 = initial_read
+        .query_row(
+            "SELECT count(*) FROM remote_invitations WHERE id=?1",
+            [&enrollment],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy_rows, 0, "B pending must have no legacy approval row");
+    drop(initial_read);
+    struct OwnedOld(std::process::Child);
+    impl Drop for OwnedOld {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                unsafe {
+                    libc::kill(self.0.id() as i32, libc::SIGTERM);
+                }
+                let _ = self.0.wait();
+            }
+        }
+    }
+    let log_path = directory.path().join("old18.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut old = OwnedOld(
+        std::process::Command::new(&binary)
+            .args(["--data-dir"])
+            .arg(&data)
+            .arg("serve")
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap(),
+    );
+    let socket = data.join("crewd.sock");
+    let mut ready = false;
+    let mut exited = None;
+    for _ in 0..400 {
+        if let Some(status) = old.0.try_wait().unwrap() {
+            exited = Some(status);
+            break;
+        }
+        if socket.exists() && tokio::net::UnixStream::connect(&socket).await.is_ok() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        exited.is_none(),
+        "old18 must remain readable without a schema bump: {}",
+        std::fs::read_to_string(&log_path).unwrap()
+    );
+    assert!(ready, "old18 startup unresolved");
+    let mut owner = RpcClient::connect(&socket).await;
+    let accepted = owner
+        .call(
+            "remote.accept",
+            json!({"requestId":request,"responseEnvelope":response}),
+        )
+        .await;
+    let unsafe_accept = accepted.is_ok();
+    let grants = local(&mut owner, "remote.grants", json!({})).await;
+    local(&mut owner, "lifecycle.claim", json!({})).await;
+    let closed = local(
+        &mut owner,
+        "lifecycle.exit",
+        json!({"mode":"safePause","timeoutMs":1000}),
+    )
+    .await;
+    assert_eq!(closed["status"], "stopped");
+    drop(owner);
+    for _ in 0..400 {
+        if old.0.try_wait().unwrap().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(old.0.try_wait().unwrap().is_some());
+    let read = rusqlite::Connection::open_with_flags(
+        data.join("crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let record = crewd_store::enrollment::get(&read, &identity.authority_id, &enrollment)
+        .unwrap()
+        .unwrap();
+    println!(
+        "oldBinarySHA={expected} oldAcceptSucceeded={unsafe_accept} grants={} durableEnrollmentCommitted={} originalRequest={request}",
+        grants.as_array().unwrap().len(),
+        record.committed.is_some()
+    );
+    assert_eq!(digest(&std::fs::read(&binary).unwrap()), expected);
+    assert!(
+        !unsafe_accept,
+        "old18 must reject unknown legacy invitation"
+    );
+    assert_eq!(grants, json!([]));
+    assert!(record.committed.is_none());
+    assert_eq!(
+        crewd_store::meta_get(&read, &format!("remote.enrollment.v1.{enrollment}"))
+            .unwrap()
+            .unwrap(),
+        before_record
+    );
+    assert_eq!(
+        crewd_store::meta_get(&read, "dbId").unwrap().unwrap(),
+        identity.db_id
+    );
+    assert_eq!(
+        crewd_store::remote::identity(&read).unwrap().unwrap(),
+        identity
+    );
+    drop(read);
+    drop(old);
+    // A normal B Core restart keeps the same authority/data and original proof.
+    let mut resumed = service(&data).await;
+    let status = local(&mut resumed.owner, "remote.status", json!({})).await;
+    assert_eq!(status["identity"], serde_json::to_value(&identity).unwrap());
+    assert_eq!(status["listening"], true);
+    use base64::Engine;
+    let invitation_envelope: RemoteSignedEnvelope =
+        serde_json::from_value(begun["invitation"].clone()).unwrap();
+    let proof = client
+        .sign(&crewd_proto::EnrollmentLookupProof {
+            format: 1,
+            domain: crewd_proto::ENROLLMENT_LOOKUP_DOMAIN.into(),
+            enrollment_id: enrollment.clone(),
+            request_id: request.clone(),
+            authority_id: identity.authority_id.clone(),
+            db_id: identity.db_id.clone(),
+            client_certificate_der_base64: client.certificate_base64(),
+            client_spki_sha256: client.pin().into(),
+            begin_digest: Some(digest(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(&invitation_envelope.payload)
+                    .unwrap(),
+            )),
+        })
+        .unwrap();
+    let lookup = json!({"enrollmentId":enrollment,"requestId":request,"proof":proof});
+    let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let pending = receiver.call("enrollment.lookup", lookup.clone()).await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["pendingInvitation"], begun["invitation"]);
+    drop(receiver);
+    // First explicit commit only. Deliberately do not consume its wire response.
+    let mut committing = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let mut bytes=serde_json::to_vec(&json!({"id":1,"method":"enrollment.commit","params":{"enrollmentId":enrollment,"requestId":request,"responseEnvelope":response}})).unwrap();
+    bytes.push(b'\n');
+    committing.io.get_mut().write_all(&bytes).await.unwrap();
+    committing.io.get_mut().flush().await.unwrap();
+    drop(committing);
+    let mut confirmed = None;
+    for _ in 0..50 {
+        let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+        let value = receiver.call("enrollment.lookup", lookup.clone()).await;
+        if value["state"] == "accepted" {
+            confirmed = Some(value);
+            break;
+        }
+        assert_eq!(value["state"], "pending");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let confirmed =
+        confirmed.expect("original proof must recover lost commit receipt without resubmission");
+    let accepted: RemoteAcceptResult =
+        serde_json::from_value(confirmed["accepted"].clone()).unwrap();
+    assert_eq!(accepted.request_id, request);
+    let receipt: crewd_proto::RemoteGrantReceipt = verify_envelope(
+        &accepted.receipt,
+        &decode_certificate(&identity.certificate_der_base64).unwrap(),
+        CertificateRole::Server,
+        &identity.spki_sha256,
+    )
+    .unwrap();
+    assert_eq!(receipt.client_spki_sha256, client.pin());
+    assert_eq!(receipt.invitation_id, enrollment);
+    assert_eq!(
+        local(&mut resumed.owner, "remote.grants", json!({}))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    local(&mut resumed.owner,"remote.revoke",json!({"grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"Owned enrollment protocol proof complete"})).await;
+    let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let revoked = receiver.call("enrollment.lookup", lookup).await;
+    assert_eq!(revoked["state"], "revoked");
+    assert!(revoked["grantState"]["revokedAt"].is_string());
+    drop(receiver);
+    stopped(resumed).await;
+    assert_eq!(digest(&std::fs::read(&binary).unwrap()), expected);
+    println!(
+        "PASS exact old18 denied pending response; no grant/legacy row/meta loss; B restart original proof+one explicit commit/lost receipt lookup/revoke"
+    );
+}
+
+#[tokio::test]
+async fn enrollment_real_tls_original_key_rejects_changed_request_and_atomic_bad_commit() {
+    use crewd_proto::{ENROLLMENT_LOOKUP_DOMAIN, EnrollmentLookupProof};
+    let directory = tempfile::tempdir().unwrap();
+    let mut running = service(&directory.path().join("data")).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let token = crewd_remote::enrollment_token().unwrap();
+    let enrollment = uuid::Uuid::new_v4().to_string();
+    let create = json!({"requestId":uuid::Uuid::new_v4().to_string(),"enrollmentId":enrollment,"tokenHash":crewd_remote::enrollment_token_hash(&token).unwrap(),"computerLabel":"Fault controls","endpoint":{"host":"127.0.0.1","port":port}});
+    let issued = local(
+        &mut running.owner,
+        "remote.enrollmentCreate",
+        create.clone(),
+    )
+    .await;
+    let creation = local(
+        &mut running.owner,
+        "remote.enrollmentLookup",
+        json!({"requestId":create["requestId"],"enrollmentId":enrollment}),
+    )
+    .await;
+    assert_eq!(creation["state"], "created");
+    assert_eq!(creation["created"], issued);
+    let mut altered = create.clone();
+    altered["computerLabel"] = json!("Changed original creation");
+    assert!(
+        running
+            .owner
+            .call("remote.enrollmentCreate", altered)
+            .await
+            .is_err()
+    );
+    let client = CertificateIdentity::generate().unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
+    let begin = json!({"enrollmentId":enrollment,"requestId":request,"token":token,"clientCertificateDerBase64":client.certificate_base64(),"clientSpkiSha256":client.pin(),"deviceLabel":"Original device"});
+    let mut wrong = begin.clone();
+    wrong["token"] = json!(crewd_remote::enrollment_token().unwrap());
+    let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    assert!(
+        receiver
+            .frame("enrollment.begin", wrong)
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    let begun = receiver.call("enrollment.begin", begin.clone()).await;
+    drop(receiver);
+    for field in ["requestId", "deviceLabel", "clientCertificateDerBase64"] {
+        let mut changed = begin.clone();
+        changed[field] = if field == "requestId" {
+            json!(uuid::Uuid::new_v4().to_string())
+        } else if field == "deviceLabel" {
+            json!("Extra input")
+        } else {
+            json!(
+                CertificateIdentity::generate()
+                    .unwrap()
+                    .certificate_base64()
+            )
+        };
+        let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+        assert!(
+            receiver
+                .frame("enrollment.begin", changed)
+                .await
+                .unwrap()
+                .get("error")
+                .is_some(),
+            "changed {field} accepted"
+        );
+    }
+    // The original begin response may be lost: original key + UUID with no
+    // digest recovers its challenge, never another key's reservation.
+    let lookup_proof = EnrollmentLookupProof {
+        format: 1,
+        domain: ENROLLMENT_LOOKUP_DOMAIN.into(),
+        enrollment_id: enrollment.clone(),
+        request_id: request.clone(),
+        authority_id: identity.authority_id.clone(),
+        db_id: identity.db_id.clone(),
+        client_certificate_der_base64: client.certificate_base64(),
+        client_spki_sha256: client.pin().into(),
+        begin_digest: None,
+    };
+    let lookup = json!({"enrollmentId":enrollment,"requestId":request,"proof":client.sign(&lookup_proof).unwrap()});
+    let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let recovered = receiver.call("enrollment.lookup", lookup.clone()).await;
+    assert_eq!(recovered["pendingInvitation"], begun["invitation"]);
+    let other = CertificateIdentity::generate().unwrap();
+    let mut other_proof = lookup_proof.clone();
+    other_proof.client_certificate_der_base64 = other.certificate_base64();
+    other_proof.client_spki_sha256 = other.pin().into();
+    assert!(receiver.frame("enrollment.lookup",json!({"enrollmentId":enrollment,"requestId":request,"proof":other.sign(&other_proof).unwrap()})).await.unwrap().get("error").is_some());
+    let invitation: RemoteInvitation = verify_envelope(
+        &serde_json::from_value(begun["invitation"].clone()).unwrap(),
+        &decode_certificate(&identity.certificate_der_base64).unwrap(),
+        CertificateRole::Server,
+        &identity.spki_sha256,
+    )
+    .unwrap();
+    let mut response = RemotePairingResponse {
+        invitation_id: enrollment.clone(),
+        authority_id: identity.authority_id.clone(),
+        db_id: identity.db_id.clone(),
+        challenge: "wrong signed challenge".into(),
+        client_certificate_der_base64: client.certificate_base64(),
+        client_spki_sha256: client.pin().into(),
+        device_label: "Original device".into(),
+    };
+    let failed = receiver.frame("enrollment.commit",json!({"enrollmentId":enrollment,"requestId":request,"responseEnvelope":client.sign(&response).unwrap()})).await.unwrap();
+    assert!(failed.get("error").is_some());
+    drop(receiver);
+    assert_eq!(
+        local(&mut running.owner, "remote.grants", json!({})).await,
+        json!([])
+    );
+    // The failed signed response must not leave a legacy approval row or consume
+    // the token; the first correct commit is still the same original request.
+    let conn = rusqlite::Connection::open_with_flags(
+        directory.path().join("data/crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM remote_invitations WHERE id=?1",
+            [&enrollment],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    drop(conn);
+    response.challenge = invitation.challenge;
+    let mut receiver = RemoteRpc::connect_enrollment(port, &identity.spki_sha256).await;
+    let accepted = receiver.call("enrollment.commit",json!({"enrollmentId":enrollment,"requestId":request,"responseEnvelope":client.sign(&response).unwrap()})).await;
+    assert_eq!(accepted["requestId"], request);
+    let recovered = receiver.call("enrollment.lookup", lookup).await;
+    assert_eq!(recovered["state"], "accepted");
+    assert_eq!(
+        recovered["accepted"]["grant"]["id"],
+        accepted["grant"]["id"]
+    );
+    let mut changed = begin;
+    changed["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    assert!(
+        receiver
+            .frame("enrollment.begin", changed)
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    drop(receiver);
+    assert_eq!(
+        local(&mut running.owner, "remote.grants", json!({}))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    stopped(running).await;
 }

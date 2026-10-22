@@ -59,6 +59,8 @@ pub mod methods {
     pub const HELLO: &str = "system.hello";
     pub const REMOTE_STATUS: &str = "remote.status";
     pub const REMOTE_CONFIGURE: &str = "remote.configure";
+    pub const REMOTE_ENROLLMENT_CREATE: &str = "remote.enrollmentCreate";
+    pub const REMOTE_ENROLLMENT_LOOKUP: &str = "remote.enrollmentLookup";
     pub const REMOTE_INVITE: &str = "remote.invite";
     pub const REMOTE_ACCEPT: &str = "remote.accept";
     pub const REMOTE_GRANTS: &str = "remote.grants";
@@ -159,6 +161,8 @@ pub mod methods {
         HELLO,
         REMOTE_STATUS,
         REMOTE_CONFIGURE,
+        REMOTE_ENROLLMENT_CREATE,
+        REMOTE_ENROLLMENT_LOOKUP,
         REMOTE_INVITE,
         REMOTE_ACCEPT,
         REMOTE_GRANTS,
@@ -697,6 +701,20 @@ pub fn api_schema() -> Value {
             m(
                 sub::<RemoteConfigureParams>(g),
                 sub::<RemoteConfiguration>(g),
+            ),
+        ),
+        (
+            methods::REMOTE_ENROLLMENT_CREATE,
+            m(
+                sub::<HostEnrollmentCreateParams>(g),
+                sub::<HostEnrollmentCreated>(g),
+            ),
+        ),
+        (
+            methods::REMOTE_ENROLLMENT_LOOKUP,
+            m(
+                sub::<HostEnrollmentLookupParams>(g),
+                sub::<HostEnrollmentLookupResult>(g),
             ),
         ),
         (

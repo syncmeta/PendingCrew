@@ -110,7 +110,7 @@ async fn run_enrollment(
     struct Wire {
         id: u64,
         method: String,
-        params: serde_json::Value,
+        params: Box<serde_json::value::RawValue>,
     }
     let (rd, mut wr) = tokio::io::split(stream);
     let mut rd = BufReader::new(rd);
@@ -138,7 +138,7 @@ async fn run_enrollment(
             return Ok(());
         }
         let outcome = owner
-            .enrollment_route(&wire.method, wire.params, &revision, epoch)
+            .enrollment_route(&wire.method, wire.params.get(), &revision, epoch)
             .await;
         let response = match outcome {
             Ok(value) => Response::ok(wire.id, value),

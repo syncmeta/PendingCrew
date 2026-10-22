@@ -343,6 +343,16 @@ impl Manager {
         self: &Arc<Self>,
         p: RemoteConfigureParams,
     ) -> std::result::Result<Value, RpcError> {
+        self.configure_with_admin(p, None).await
+    }
+    pub(crate) async fn configure_with_admin(
+        self: &Arc<Self>,
+        p: RemoteConfigureParams,
+        admin: Option<crate::peer::RootAdminPermit>,
+    ) -> std::result::Result<Value, RpcError> {
+        if let Some(p) = &admin {
+            p.check()?
+        }
         request_id(&p.request_id)?;
         let expected = revision(&p.expected_revision)?;
         let endpoint = RemoteEndpoint {
@@ -404,6 +414,11 @@ impl Manager {
             .db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(p) = &admin {
+                        p.check().map_err(|_| {
+                            crewd_store::StoreError::Invalid("root admin authority changed".into())
+                        })?
+                    }
                     if !facts::configure(
                         tx,
                         expected,
@@ -449,6 +464,36 @@ impl Manager {
             self.stop().await;
         }
         serde_json::to_value(configuration).map_err(dispatch::internal)
+    }
+    pub(crate) async fn admin_configuration_lookup(
+        &self,
+        permit: crate::peer::RootAdminPermit,
+        p: RemoteConfigureParams,
+    ) -> std::result::Result<Value, RpcError> {
+        permit.check()?;
+        request_id(&p.request_id)?;
+        let input = serde_json::to_string(&p).map_err(dispatch::internal)?;
+        let result = self
+            .db
+            .call(move |s| -> crewd_store::Result<_> {
+                let Some(identity) = facts::identity(s.conn())? else {
+                    return Ok(None);
+                };
+                facts::request_witness(s.conn(), &p.request_id, &identity.authority_id)
+            })
+            .await
+            .map_err(store_error)?
+            .map_err(store_error)?;
+        permit.check()?;
+        match result {
+            None => Ok(serde_json::json!({"state":"notFound"})),
+            Some(w) if w.method == "remote.configure" && w.input_json == input => {
+                let original: RemoteConfiguration =
+                    serde_json::from_str(&w.result_json).map_err(dispatch::internal)?;
+                Ok(serde_json::json!({"state":"recorded", "configuration":original}))
+            }
+            Some(_) => Err(conflict()),
+        }
     }
     async fn witness(
         &self,
@@ -727,6 +772,16 @@ impl Manager {
         Ok(value)
     }
     async fn revoke(&self, p: RemoteRevokeParams) -> std::result::Result<Value, RpcError> {
+        self.revoke_with_admin(p, None).await
+    }
+    pub(crate) async fn revoke_with_admin(
+        &self,
+        p: RemoteRevokeParams,
+        admin: Option<crate::peer::RootAdminPermit>,
+    ) -> std::result::Result<Value, RpcError> {
+        if let Some(p) = &admin {
+            p.check()?
+        }
         let expected = revision(&p.expected_revision)?;
         if p.note.trim().is_empty() || p.note.len() > 4096 {
             return Err(bad("请填写撤销理由"));
@@ -740,6 +795,11 @@ impl Manager {
             .db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(p) = &admin {
+                        p.check().map_err(|_| {
+                            crewd_store::StoreError::Invalid("root admin authority changed".into())
+                        })?
+                    }
                     if !facts::revoke_grant(
                         tx,
                         &id,

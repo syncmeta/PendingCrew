@@ -159,13 +159,48 @@ pub fn reserve(
     {
         return Err(invalid());
     }
-    let invitation = crate::remote::invitation(conn, id, authority)?.ok_or_else(invalid)?;
-    if invitation.expires_unix != record.expires_unix || invitation.consumed_at.is_some() {
-        return Err(invalid());
-    }
+    reservation_invitation(conn, &record, &next)?;
     record.reservation = Some(next);
     save(conn, &record)?;
     Ok(record)
+}
+/// Validate the one B pending authority; no legacy approval row exists yet.
+/// Server additionally verifies the original signature before creating the legacy
+/// invitation inside the same grant/consume/witness/committed transaction.
+pub fn reservation_invitation(
+    conn: &Connection,
+    record: &EnrollmentRecord,
+    reserved: &Reservation,
+) -> Result<RemoteInvitation> {
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(&reserved.invitation.payload)
+        .map_err(|_| invalid())?;
+    let hash: String = ring::digest::digest(&ring::digest::SHA256, &payload)
+        .as_ref()
+        .iter()
+        .map(|v| format!("{v:02x}"))
+        .collect();
+    if hash != reserved.invitation_digest || !reserved.invitation.is_bounded() {
+        return Err(invalid());
+    }
+    let invitation: RemoteInvitation = serde_json::from_slice(&payload).map_err(|_| invalid())?;
+    let server = crate::remote::identity(conn)?.ok_or_else(invalid)?;
+    let expiry =
+        chrono::DateTime::parse_from_rfc3339(&invitation.expires_at).map_err(|_| invalid())?;
+    if invitation.invitation_id != record.enrollment_id
+        || invitation.server != server
+        || server.authority_id != record.authority_id
+        || server.db_id != record.db_id
+        || invitation.endpoint != record.endpoint
+        || invitation.computer_label != record.computer_label
+        || expiry.timestamp() != record.expires_unix
+        || invitation.challenge.is_empty()
+        || invitation.challenge.len() > 128
+    {
+        return Err(invalid());
+    }
+    Ok(invitation)
 }
 pub fn commit(
     conn: &Connection,
@@ -293,6 +328,54 @@ mod tests {
                 .create_digest,
             record.create_digest
         );
+    }
+    #[test]
+    fn enrollment_expiry_and_pending_budget_preserve_original_records() {
+        let mut store = Store::open_in_memory().unwrap();
+        let base = fixture(&store);
+        let mut too_long = base.clone();
+        too_long.expires_unix = 1301;
+        assert!(store.with_tx(|tx| create(tx, &too_long, 1000)).is_err());
+        let mut expired = base.clone();
+        expired.expires_unix = 1000;
+        assert!(store.with_tx(|tx| create(tx, &expired, 1000)).is_err());
+        for n in 0..MAX_REMOTE_PENDING_INVITATIONS {
+            let mut record = base.clone();
+            record.enrollment_id = format!("22222222-2222-4222-8222-{n:012x}");
+            record.create_request_id = format!("33333333-3333-4333-8333-{n:012x}");
+            store.with_tx(|tx| create(tx, &record, 1000)).unwrap();
+        }
+        let mut overflow = base.clone();
+        overflow.enrollment_id = "44444444-4444-4444-8444-444444444444".into();
+        overflow.create_request_id = "55555555-5555-4555-8555-555555555555".into();
+        assert!(store.with_tx(|tx| create(tx, &overflow, 1000)).is_err());
+        let first = "22222222-2222-4222-8222-000000000000";
+        let before = meta_get(store.conn(), &key(first).unwrap())
+            .unwrap()
+            .unwrap();
+        // Expiry frees pending capacity without erasing the prior result/key.
+        overflow.expires_unix = 1600;
+        store.with_tx(|tx| create(tx, &overflow, 1300)).unwrap();
+        assert_eq!(
+            meta_get(store.conn(), &key(first).unwrap())
+                .unwrap()
+                .unwrap(),
+            before
+        );
+        let old = get(store.conn(), &base.authority_id, first)
+            .unwrap()
+            .unwrap();
+        assert!(old.reservation.is_none());
+        assert_eq!(old.expires_unix, 1300);
+        let rows: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM meta WHERE key GLOB 'remote.enrollment.v1.*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 33);
     }
     #[test]
     fn enrollment_commit_cannot_invent_grant_without_original_phase_and_facts() {
