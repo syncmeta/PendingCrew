@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 Claude 受管真实 PTY 整模块独验通过并整合
+
+02e3fe13 完整模块一次独验发现三个真实跨等待竞态：最终身份状态复核、等待 DB 后连接/期限资格、Human 原始输入撤销后同 lease 最终门。作者保留原 seam 三项实际 RED，9cb4c57d 修复后，质量线亲跑竞态3/Core8/store3及此前 guard2/helper1均通过；5源码/18哈希、干净状态及二进制前后相同。独立最终报告 m4-managed-hooks-20261022/independent-qa-final-result.json SHA cb35fff6edd49f62ca5eb1775cf70338a5e9fa10fd1efb241d6f88956495601b，根核原文件 hash；普通 no-ff 整合 main 为99f593afc9ae3c5fc0e03d8a30ddddd5160e0873，无冲突。其后根文档保存及远端状态另读实际 refs，不能改标产物来源。
+
+正式新受管入口要求已支持精确 Claude2.1.301 与当前 session 新账，复用原生产真实交互 PTY/factory；Core prepare 在正文前，唯一正文 envelope 与实际 prompt_id 绑定，Stop 仅暂态、同 session/prompt 真实 idle 才进入等待态；额外活动/错序/断连 Unknown 不重发，资格不足正文前拒绝，无静默 legacy 回退。新 session 不被同库另一已结束 session 阻挡。它不是正式 ACP、完整历史或 Native16 激活；没有新增真实供应商/CLI/SDK/模型调用。之前元数据测试二进制有逐文件对应证据，不能称9cb正式包；已装 Mac 仍6f35、普通 Sim111b、Linux 编译582，未为本模块单独重出包。
+
+下一整块为共享群内容 Store17 与 Mac/iOS 最新 demo、再接简便安装/单链接；唯一作者与冻结 DTO 按总计划执行。用户新增草稿跨端保留各设备版本、同账号配对电脑同步及 iCloud/VPS离线/Mac主机讨论，研究中，不冒已完成或已取得真实 iCloud 资格。稳定 iOS→VPS、SQLite 及 M4 既有证据复用；组合候选在所需完整模块冻结后准确构建，不因每个小项重包或重复全量验证。
+
 ## 2026-10-22 普通 iOS→VPS 持久工作与草稿整块闭合；接续 demo 前端与 Claude
 
 同a9原DB/authority/grant跨有界窗口续用，原a08三阶段文件交换、真实配对保存及A业务读写证据复用；人工解锁后，普通新进程首页不自动选中/连接，原A草稿220124离线全文恢复。原record d56d6dde…显式连接，A消息220123/Todo7=220122及原草稿恢复；真实B输入未发草稿220224，P1 App78646/console23001正常0，P2 App81277/console83381不自动选连。原p1-exited/p2-before-select三crew session均空；仅手动同record连接，A/B原topic草稿逐文恢复，没有发送草稿或调用模型。
