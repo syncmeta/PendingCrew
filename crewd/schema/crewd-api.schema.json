@@ -9550,8 +9550,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "crewId": {
           "type": "string"
