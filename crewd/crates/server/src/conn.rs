@@ -597,6 +597,10 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crate::claude_history::is_method(&req.method) => {
+            if agent.is_attached(){ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot read Human managed task bodies")))}
+            else{ServerFrame::Response(crate::claude_history::handle(state,&peer.command_actor(),req).await)}
+        }
         Ok(req) if crate::codex_inputs::is_method(&req.method) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot stage Human native inputs")))

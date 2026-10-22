@@ -57,6 +57,8 @@ pub struct DriverConfig {
     /// Core-owned managed hook producer: an old request may never move to a
     /// replacement Claude birth after resume refusal. Not a provider/JSON flag.
     pub managed_hook_producer: bool,
+    /// Explicit Core-owned Human intent; never supplied by provider JSON.
+    pub managed_resume_id: Option<String>,
     /// Bounded terminal byte enqueue, separate from structured ACP control.
     pub terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
@@ -94,6 +96,7 @@ impl DriverConfig {
             delivery_observer: None,
             native_birth_gate: None,
             managed_hook_producer: false,
+            managed_resume_id: None,
             terminal_observer: None,
         }
     }
@@ -937,6 +940,11 @@ impl SessionHandle {
     }
 }
 
+/// Canonical non-nil UUID: no trimming, aliases, fresh fallback or filesystem guess.
+pub fn exact_managed_id(id:&str)->bool {
+    uuid::Uuid::parse_str(id).is_ok_and(|v| !v.is_nil() && v.to_string()==id)
+}
+
 /// 起一个 claude 会话。账本：记过就 `--resume`，否则新号且**起进程前**落账。
 /// 返回句柄和事件流（第一条是 `Spawned`）。
 pub async fn start_claude(
@@ -948,9 +956,32 @@ pub async fn start_claude(
         .await
         .map_err(|e| StartError::Ledger(io::Error::other(e)))?
         .map_err(StartError::Ledger)?;
-    let decision = decide_resume(recorded.as_deref());
+    let decision = if config.managed_hook_producer {
+        match (recorded.as_deref(), config.managed_resume_id.as_deref()) {
+            (None, None) => decide_resume(None),
+            (Some(recorded), Some(expected)) if exact_managed_id(recorded) && recorded == expected => crate::resume::ResumeDecision {arg:AgentSessionArg::Resume(recorded.into()),ignored:None},
+            _ => return Err(StartError::Ledger(io::Error::new(io::ErrorKind::InvalidInput,"managed resume requires the exact recorded UUID and explicit Human intent"))),
+        }
+    } else {
+        if config.managed_resume_id.is_some() {return Err(StartError::Ledger(io::Error::new(io::ErrorKind::InvalidInput,"managed resume intent cannot enter legacy driver")))}
+        decide_resume(recorded.as_deref())
+    };
     if let Some(why) = &decision.ignored {
         eprintln!("crewd: session {}: {why}", start.session_id);
+    }
+    if config.managed_hook_producer {
+        if let Some(registry)=&config.registry {
+            let mut births=registry.try_entries().map_err(StartError::Ledger)?;
+            births.extend(registry.authority_snapshot().map_err(StartError::Ledger)?.spawned);
+            for (_,birth) in births.into_iter().filter(|(session,_)|session==&start.session_id) {
+                let gone=match crate::registry::probe(birth.pid) {
+                    crate::registry::ProbeResult::Missing=>true,
+                    crate::registry::ProbeResult::Found(actual)=>actual.start_time!=birth.start_time||actual.boot_id!=birth.boot_id,
+                    crate::registry::ProbeResult::Unreadable(_)=>false,
+                };
+                if !gone {return Err(StartError::Ledger(io::Error::new(io::ErrorKind::PermissionDenied,"previous managed birth live or unknown")))}
+            }
+        }
     }
     let (auth_tx, auth_rx) = mpsc::unbounded_channel();
     let running = launch(&start, &config, decision.arg, &auth_tx).await?;
@@ -4703,4 +4734,53 @@ mod output_drain_tests {
             Err(mpsc::error::TryRecvError::Empty)
         ));
     }
+}
+
+#[cfg(test)]
+mod managed_resume_policy_tests {
+    use super::*;
+    use crate::{launch::ClaudeSpec, resume::MemoryLedger};
+
+    #[tokio::test]
+    async fn owned_managed_launch_without_explicit_resume_never_replaces_a_recorded_id() {
+        let mut violations = vec![];
+        for recorded in ["../invalid-owned-id", "71bd51cf-3df2-4638-9a3f-d0d58d630174"] {
+            let root = tempfile::tempdir().unwrap();
+            let ledger = Arc::new(MemoryLedger::with(Some(recorded)));
+            let runtime = root.path().join("runtime");
+            let mut config = DriverConfig::new(runtime.clone());
+            config.managed_hook_producer = true;
+            // Missing synthetic program is intentional: strict ID rejection must
+            // precede launch-file creation and program I/O, not be hidden by it.
+            let result = start_claude(ClaudeStart {
+                session_id:"owned-managed-source".into(),
+                program:root.path().join("nonexistent-synthetic-claude"),
+                child_path:"/usr/bin:/bin".into(),
+                spec:ClaudeSpec { workdir:root.path().into(), ..Default::default() },
+                ledger:ledger.clone(),
+            }, config).await;
+            eprintln!("managed recorded={recorded:?} after={:?} runtime_files={} outcome={}",ledger.current(),runtime.exists(),match &result{Ok(_)=>"spawned".into(),Err(e)=>e.to_string()});
+            if !matches!(result, Err(StartError::Ledger(_))) || ledger.current().as_deref()!=Some(recorded) || runtime.exists() {
+                violations.push(recorded.to_owned());
+            }
+        }
+        assert!(violations.is_empty(), "managed existing IDs require an explicit exact resume before program/filesystem I/O and must never be replaced: {violations:?}");
+    }
+    #[tokio::test]
+    async fn owned_managed_explicit_resume_rejects_missing_noncanonical_and_foreign_ids(){
+        let original="71bd51cf-3df2-4638-9a3f-d0d58d630174";
+        for(recorded,expected,managed)in[
+            (None,Some(original),true),
+            (Some(" 71bd51cf-3df2-4638-9a3f-d0d58d630174 "),Some(original),true),
+            (Some(original),Some("81bd51cf-3df2-4638-9a3f-d0d58d630174"),true),
+            (Some("00000000-0000-0000-0000-000000000000"),Some("00000000-0000-0000-0000-000000000000"),true),
+            (Some("71BD51CF-3DF2-4638-9A3F-D0D58D630174"),Some("71BD51CF-3DF2-4638-9A3F-D0D58D630174"),true),
+            (Some(original),Some(original),false),
+        ]{
+            let root=tempfile::tempdir().unwrap();let ledger=Arc::new(MemoryLedger::with(recorded));let runtime=root.path().join("runtime");let mut config=DriverConfig::new(runtime.clone());config.managed_hook_producer=managed;config.managed_resume_id=expected.map(str::to_owned);
+            let result=start_claude(ClaudeStart{session_id:"owned-invalid".into(),program:root.path().join("never-run"),child_path:"/usr/bin:/bin".into(),spec:ClaudeSpec{workdir:root.path().into(),..Default::default()},ledger:ledger.clone()},config).await;
+            assert!(matches!(result,Err(StartError::Ledger(_))));assert_eq!(ledger.current().as_deref(),recorded);assert!(!runtime.exists());
+        }
+    }
+
 }

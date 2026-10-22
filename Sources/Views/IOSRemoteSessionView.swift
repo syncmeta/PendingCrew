@@ -85,10 +85,11 @@ private struct IOSRemoteSessionDetail: View {
                     CrewdCodexSessionControls(workspace:workspace,sessionID:sessionID)
                 }
             }
+            if workspace.profileForSession(sessionID)?.backend == "existingClaudePty"{Section("Claude 受管记录"){CrewdClaudeSessionControls(workspace:workspace,sessionID:sessionID,legacyResume:(controlEnabled && inspection["live"] != .null && inspection["live"]["running"] != .bool(true) && workspace.controlTargets[sessionID] != nil) ? {command("session.resume")}:nil)}}
             Section("会话控制") {
                 Button("中断当前回合") { command("session.interrupt") }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
                 Button("停止成员", role: .destructive) { command("session.stop", fields: ["reason": .string("人类在移动会话页明确停止")]) }.disabled(!controlEnabled || inspection["live"]["running"] != .bool(true))
-                if inspection["live"] != .null, inspection["live"]["running"] != .bool(true) {
+                if inspection["live"] != .null, inspection["live"]["running"] != .bool(true),workspace.profileForSession(sessionID)?.backend != "existingClaudePty" {
                     Button("恢复这个原会话") { command("session.resume") }
                         .disabled(!controlEnabled || workspace.controlTargets[sessionID] == nil)
                 }

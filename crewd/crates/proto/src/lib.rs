@@ -153,6 +153,9 @@ pub mod methods {
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
         crate::commands::SESSION_CONTROL_TARGET,
+        crate::claude::INSPECT,
+        crate::claude::HISTORY,
+        crate::claude::TASK_GET,
         crate::codex::INSPECT,
         crate::codex::HISTORY,
         crate::codex::MODELS,
@@ -1063,6 +1066,9 @@ pub fn api_schema() -> Value {
                 sub::<codex::CodexTools>(g),
             ),
         ),
+        (claude::INSPECT,m(sub::<claude::ClaudeSessionParams>(g),sub::<claude::ClaudeInspect>(g))),
+        (claude::HISTORY,m(sub::<claude::ClaudeHistoryParams>(g),sub::<claude::ClaudeHistoryPage>(g))),
+        (claude::TASK_GET,m(sub::<claude::ClaudeTaskGetParams>(g),sub::<claude::ClaudeTaskDetail>(g))),
         (codex_inputs::INPUT_PREPARE,m(sub::<codex_inputs::CodexInputPrepareParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
         (codex_inputs::INPUT_LOOKUP,m(sub::<codex_inputs::CodexInputLookupParams>(g),sub::<codex_inputs::CodexInputLookup>(g))),
         (codex_inputs::INPUT_DISCARD,m(sub::<codex_inputs::CodexInputDiscardParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
@@ -1923,3 +1929,5 @@ pub mod lifecycle;
 
 pub mod codex;
 pub mod codex_inputs;
+
+pub mod claude;

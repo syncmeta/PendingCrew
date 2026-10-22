@@ -959,7 +959,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
-        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup"].contains(method)
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {
@@ -974,7 +974,9 @@ final class CrewdWorkspace: ObservableObject {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if method == "session.start" { try requireExecutor(params["executor"].string ?? "", crew: params["crewId"].string ?? crewID) }
         if method == "session.resume" {
-            guard !hasOriginalUnknown(method: method, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            let id=params["sessionId"].string ?? params["target"]["sessionId"].string
+            let exactClaudeSession=id.flatMap{profileForSession($0)?.backend == "existingClaudePty" ? $0:nil}
+            guard !hasOriginalUnknown(method: method, crew: crewID, session:exactClaudeSession) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
             try requireSessionExecutor(params["sessionId"].string ?? params["target"]["sessionId"].string ?? "")
         }
         if CrewdPublicOperation(rawValue:method)?.isCodex == true,!client.capabilities.contains("command.receipts") {
@@ -1092,7 +1094,9 @@ final class CrewdWorkspace: ObservableObject {
         }
         if operation == .sessionStart { try requireExecutor(params["executor"].string ?? "", crew: crew) }
         if operation == .sessionResume {
-            guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            let id=params["sessionId"].string ?? params["target"]["sessionId"].string
+            let exactClaudeSession=id.flatMap{profileForSession($0)?.backend == "existingClaudePty" ? $0:nil}
+            guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID, session:exactClaudeSession) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
             try requireSessionExecutor(params["sessionId"].string ?? "")
         }
         _ = try publicCommandBinding(for: client)
@@ -1268,7 +1272,7 @@ final class CrewdWorkspace: ObservableObject {
     func isCurrentOriginalObservation(_ record: CrewdPresentationJournal.Prepared) -> Bool {
         record.scope == presentationScope
     }
-    func hasOriginalUnknown(method: String, crew: String, channel: String? = nil) -> Bool {
+    func hasOriginalUnknown(method: String, crew: String, channel: String? = nil, session:String? = nil) -> Bool {
         durableUnknown.contains { record in
             guard isCurrentOriginalObservation(record) else { return false }
             let operation = record.method == "command.submit" ? record.params["command"]["operation"].string : record.method
@@ -1276,7 +1280,9 @@ final class CrewdWorkspace: ObservableObject {
             guard operation == method || (method == "crew.create" && operation == "crew.createFirstMessage") else { return false }
             if method == "crew.create" { return true }
             if let channel { return params["channelId"].string == channel }
-            return params["crewId"].string == crew || record.crew == crew
+            guard params["crewId"].string == crew || record.crew == crew else{return false}
+            if method == "session.resume",let session,let originalSession=params["target"]["sessionId"].string ?? params["sessionId"].string{return originalSession==session}
+            return true // Legacy without an exact binding retains its original safe scope.
         }
     }
 

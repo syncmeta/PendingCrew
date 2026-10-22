@@ -15,15 +15,16 @@ struct CrewdOriginalSessionControls: View {
             if let failure = backend.failure { Text(failure).font(.caption).foregroundStyle(.orange) }
             if let profile {
                 Text(profile.title).font(.caption).foregroundStyle(.secondary)
-                if !profile.fullHistoryLoad { Text(profile.backend == "codex" && workspace.client.capabilities.contains("session.codex") ? "原历史可在会话控制页只读读取；手动恢复被拒绝时不会创建替代 thread。":profile.recoveryDescription).font(.caption).foregroundStyle(.secondary) }
+                if !profile.fullHistoryLoad { Text(profile.backend == "codex" && workspace.client.capabilities.contains("session.codex") ? "原历史可在会话控制页只读读取；手动恢复被拒绝时不会创建替代 thread。":(profile.backend == "existingClaudePty" ? "PCW受管记录与原会话恢复请在详情核对；完整厂商历史未开放。":profile.recoveryDescription)).font(.caption).foregroundStyle(.secondary) }
                 if !profile.canStart { Text(profile.unavailableDescription).font(.caption).foregroundStyle(.orange) }
             }
             if workspace.sessions.first(where: { $0["id"].string == backend.sessionID })?["resumeFailedAt"] != nil,
                workspace.sessions.first(where: { $0["id"].string == backend.sessionID })?["resumeFailedAt"] != .null {
-                Text(profile?.backend == "codex" ? "此前恢复被拒绝；保留原 thread，不会改为新对话或重发首条任务。":"此前恢复曾被供应商拒绝；后台可能已改为新对话，请核对原记录和系统公告。").font(.caption).foregroundStyle(.orange)
+                Text(profile?.backend == "codex" ? "此前恢复被拒绝；保留原 thread，不会改为新对话或重发首条任务。":"此前恢复未确认或被拒绝；请在原会话详情核对本Core的恢复语义与原请求。").font(.caption).foregroundStyle(.orange)
             }
             CrewdCodexSessionControls(workspace:workspace,sessionID:backend.sessionID)
-            if backend.status != .running {
+            CrewdClaudeSessionControls(workspace:workspace,sessionID:backend.sessionID,legacyResume:(backend.status != .running && active && workspace.controlTargets[backend.sessionID] != nil) ? {backend.resume()}:nil)
+            if backend.status != .running,profile?.backend != "existingClaudePty" {
                 Button("尝试恢复这个会话") { backend.resume() }
                     .disabled(!active || workspace.busy || profile?.canStart != true || workspace.hasOriginalUnknown(method: "session.resume", crew: workspace.crewID) || workspace.controlTargets[backend.sessionID] == nil)
             }

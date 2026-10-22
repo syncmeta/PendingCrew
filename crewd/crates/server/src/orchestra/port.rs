@@ -418,6 +418,8 @@ pub fn wake_changed<'a>(
 /// 它是给人看的近况（`wake.list`），**不能**拿来找「某几行」——要哪几行，让写它们的那个调用把它们带回来。
 pub const WAKE_LIST_LIMIT: usize = 200;
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub struct ManagedResumeCut {pub wake_id:i64,pub message_seq:i64}
 pub trait Port: Send + Sync + 'static {
     // —— sessions 行
     fn session(&self, id: &str) -> impl Future<Output = Result<Option<SessionRow>>> + Send;
@@ -482,6 +484,7 @@ pub trait Port: Send + Sync + 'static {
     /// 插入成功 = 新行的 id；`UNIQUE(session, kind, source)` 撞了 = None；目标的机组已被移除（M3a `Enqueued::Skipped`）= None。
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<Option<i64>>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
+    fn managed_resume_cut(&self,_session:&str)->impl Future<Output=Result<ManagedResumeCut>>+Send{async {anyhow::bail!("strict managed resume cut unavailable")}}
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     /// 人停：停止状态、全部旧行的持久化取消意图、pending 作废一个事务提交。inflight 保留，允许迟到真实送达；
     /// 之后旧行退回/失败/boot 必须作废，即使新工作已改 desired=Running。Err = 没提交，不能假装停成功。
@@ -619,6 +622,9 @@ pub trait Port: Send + Sync + 'static {
     /// 唤醒正文（`collab::render::{build_batch, wake_text}`）。渲染不出来的行（消息已删、问已撤回）由实现记 dropped，
     /// 不出现在正文里，并在 `Rendered::dropped` 里报回（调用方把它们从这一批里拿掉）；窗口外的消息行报在
     /// `Rendered::deferred`（调用方把它们从正文里拿掉、作为随批行一起 claim）；游标推进点在 `Rendered::cursor_targets`。
+    fn render_wake_after(&self,session:&str,batch:&[QueuedWake],after:Option<i64>)->impl Future<Output=Result<Rendered>>+Send{async move{if after.is_some(){anyhow::bail!("managed context floor unavailable")}self.render_wake(session,batch).await}}
+    fn prepare_causal_admission_after(&self,session:&str,now:Ms,after:Option<i64>)->impl Future<Output=Result<()>>+Send{async move{if after.is_some(){anyhow::bail!("managed causal floor unavailable")}self.prepare_causal_admission(session,now).await}}
+    fn causal_diagnostics_after(&self,session:&str,now:Ms,after:Option<i64>)->impl Future<Output=Result<Vec<(String,crewd_wake::explain::CausalBlockage)>>>+Send{async move{if after.is_some(){anyhow::bail!("managed causal floor unavailable")}self.causal_diagnostics(session,now).await}}
     fn render_wake(
         &self,
         session: &str,

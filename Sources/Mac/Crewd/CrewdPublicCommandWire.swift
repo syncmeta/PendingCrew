@@ -358,7 +358,7 @@ struct CrewdExecutorProfile: Identifiable, Equatable, Sendable {
     }
     var recoveryDescription: String {
         backend == "existingClaudePty"
-            ? "尝试接回既有会话；Claude 明确拒绝时可能新建对话，后台会报告，不能保证原历史连续恢复。"
+            ? "完整厂商历史未开放；请在原会话详情核对当前Core的恢复资格与限制。"
             : "只在你明确选择后尝试恢复原会话；完整历史加载未开放，不会补发未知输入。"
     }
     var unavailableDescription: String {

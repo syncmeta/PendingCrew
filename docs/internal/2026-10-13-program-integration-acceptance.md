@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 完整 Claude A 后台与三端客户端源码接受并整合
+
+后台完整冻源 `cbe438e2bba8d1f1fe177e337c6f6003064bd3d9` 与客户端 `81f67414fffe8f6dc4fb7e9d39815b36b03db60b` 均经独立整块准入；根全文读两边交接/冻结/最终质量并核实际HEAD/clean。统一整合保持后台Rust树 `06db10108e69b0dff17399072c6d21a81648a6ba`、API3/schema144/Store20，原141方法及原定义逐值同，Native16 inactive/fullHistoryLoad=false/nativeAcp=false。staged Rust逐字同cbe，Sources/project逐字同81f，完整1933输入；现有C b4d0控制器修正、先前全部用户/主线来源保留。没有把A或Core草稿WIP混进已封S6c5候选。
+
+后台独验 `9b5eb99c5b585ed235bed197484ea9d900a322afe557f8c8880f3cab6d2ea69a` 接受完整33路径、1929全输入/475Rust before/after/current/Git逐字同与44封存产物。DELIVERY `bf12b46b283fb23e99b5daf14eab13940981f0160d9e49a5e3c8e36f0bb8d34c`，HANDOFF `b60b480d7c48d56706e4c4f3dda51fb361b3f6a93a12d7be9578e6960884d3b1`，freeze `d80ec17c4c24d002e2047bfd04bc40d2dbfe74a660832582a3474619ef2d86d7`，manifest `fb57287c3be781c7888e07a94842ab51d85470a3a82ecb903f84819aa7dc65e5`。三bare只读DTO与d335完全相同，最终合同 `b1c802236e55ca855e0ac225582bf8fef2c04793a23ee16b5afcbd5d64a8f499` 仅厘清已裁定quota/cut/正常ACK，无另造hello能力。
+
+独立实际执行12个原函数：exec2、store4、原DbPort context/backlog/stale CAS1、真实OS birth1、Core/PTY历史/恢复/拒绝/错source/Agent3及准确旧20 restore1，均核实际passed计数；作者13函数中的Stop同源原1pass按影响范围复用，不冒0test或重复计数。原strict-ID/Stop-body红、首次Core自动旧正文101与旧wake仍pending/attempt0控制全部原件保留。实际资格涵盖原LocalHuman/live grant及Agent拒绝、跨runtime只读与分页cut、原任务fidelity、同seal/request/prompt事务正文、四次/256KiB/64MiB/256MiB有界捕获、waiting撤回、物理旧birth拒绝和严格原ID无fresh fallback。
+
+恢复在原DB顺序同时固定wake/message两cut，只给本次新birth私有Snapshot传消息floor，统一取样/causal重采/render/原CAS；旧pending行/UUID/attempt0和旧历史保留，大backlog下新Human及显式引用均可达，普通None语义和真实cursor bases保持。resume不假推进cursor，只有新任务实际Delivered后正常ACK推进new end。原Core重开实证零birth/零input，拒绝或错source仅原UUID查回、不自动再起。准确S6c5旧Store20 helper实际restore0，保新可选正文/ID/备份与helper字节、撤runtime/seal且旧执行拒绝；本A无21/新持久协议理由。
+
+客户端独验 `7d5ad74c6710609687db614fef2deb5b812f311bc657a637a7d5bb884ef028e7` 接受9净路径/72产物/402构建输入与Git/前后同；freeze `6a9cf9ed9a656c1c73a390fc9233063adedf83f05a3f7b2dafc126f42ad31acb`、manifest `841da3f69796b93ec5996579727ba0f1950a59597eeb85e2022cad114b62a109`、HANDOFF `38a3566e6fcfd559decdea27e7ee363955ef3865b82993c5750d59bedbddf701`。真实Mac/iPhone/iPad原详情→共享只读sheet，7eligibility、三bare结果、原UUID/CAS/lookup和fresh source/target/nativeID重核已接。独立15原production slice模式实际PASS/空stderr；原crew-wideUnknown红133保留，精确session门只锁同依赖，独立成员可读/显式恢复，无绑定legacy仍保守。仅实际-32601开放旧Corecallback并明确旧语义警示，拒绝/transport/malformed不当fallback；不把canStart叫新恢复资格。fidelity、missing/empty/truncated/omitted/current/historical/observedAt诚实，无复制历史自动发入模型。原Mac0/iOS0目标复用、不重编；旧S helper只型验元数据不冒A运行。
+
+作者CLI `240c1abf7f28255db432d42bf6f811cfe33453e20df0575edb8d81923d69d7d2` 为准确clean cbe/default Debug/features[]/纯schema144工具，所有helper/fake/bin兄弟已不可变封存；它明确不是fresh生产normal或组合候选。源码整合不代表真实Claude/SDK/模型、供应商完整历史、ACP、GUI/设备/安装、Cloud/APNs/Keychain、Linux/VPS已验。已封Codex S6c5 normal与Mac0.1.44/20748.73718及iOS0.1.43/1仍原来源/schema141，日用仍9a；原两次Linux失败保留，不为A过渡输入再开CI。后台随后在独立树推进Core个人草稿，唯一Swift作者待稳定typed合同并行，A冻源和证据保持；当前S候选不等该后续模块。
+
 ## 2026-10-23 完整 Codex 准确 normal 与 Mac/iOS 成套产物接受
 
 产品完整输入 S=`6c5fdb30fadba68deac90dc3de733325047d8b68`；后台2b315045与客户端860f76ef的源码资格见下节。根已全文读取 normal 的交接、身份/schema证明及独验 `53d4d8e0acc252d13fb4eb6f57bc177e1bbb3bf60274faf65bd19908650af9d0`，接受其不可变来源链：1923完整 tracked/471 Rust 前后相同，原 recorder prepare0/build0，默认 Debug/features=[]、offline/locked、非testkit，12个实际 fresh owning production packages（13 raw 包含 build script）。原 verify_witness(require_fresh=True)0，纯 schema 完整逐值等141、stderr空、helper hash不变。helper SHA `5ef3cace9432a8f32e1cfc626a1a96893e9bd053eb1d9373e88bd5b94081e5d8`，原 witness `7380de542aadce11c3eac21bf6b8e4bffade7496c9b39220ce12be729aaa916e`，493项 manifest `1d29aefc657812f3e663f910b44f0a5719fea9ff1b847b6ed3b89cc3d0217c8c`；全部原 sidecars/snapshot/preflight/graph/raw compiler 及二进制已封存，不依赖可变 target。
