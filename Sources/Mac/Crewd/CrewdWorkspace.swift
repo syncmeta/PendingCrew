@@ -982,6 +982,11 @@ final class CrewdWorkspace: ObservableObject {
         }
         guard !originalJournalRequired || originalJournalReady else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
+        if Self.resourceMutationMethods.contains(method) {
+            guard let journal=originalJournal else{throw CrewdClientError(message:"原资源提交历史尚未可靠读取，本次尚未发送。",kind:.notSubmitted)}
+            do{return try await journal.performResourceMutation(method,params:params,crew:params["crewId"].string ?? crewID,call:{try await self.client.call($0,$1)})}
+            catch{durableUnknown=(try? journal.unknownRecords()) ?? durableUnknown;throw error}
+        }
         let prepared: CrewdPresentationJournal.Prepared?
         do { prepared = try originalJournal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }
         catch { throw CrewdClientError(message: "本次提交快照未能耐久保存，尚未发送后台操作：" + error.localizedDescription, kind: .notSubmitted) }
@@ -1082,7 +1087,7 @@ final class CrewdWorkspace: ObservableObject {
         guard target.sessionID == id else { throw CrewdClientError(message: "控制目标返回其它会话，未接受。") }
         controlTargets[id] = target; return target
     }
-    static let resourceMutationMethods:Set<String>=["todo.assign","todo.setState","humanTask.create","channel.workTagsSet","channel.knowledgeLink","channel.knowledgeUnlink"]
+    static let resourceMutationMethods=CrewdPresentationJournal.resourceMutationMethods
     func lookupOriginalResource(_ record:CrewdPresentationJournal.Prepared)async throws->CrewdValue {
         guard record.scope == presentationScope,Self.resourceMutationMethods.contains(record.method),
               let id=record.params["requestId"].string.flatMap(UUID.init(uuidString:)) else{throw CrewdClientError(message:"原资源请求作用域或身份不符。",kind:.notSubmitted)}
@@ -1097,22 +1102,12 @@ final class CrewdWorkspace: ObservableObject {
             guard value["operation"] == .null,value["result"] == .null else{throw CrewdClientError(message:"未找到结果却附带操作内容。")};return
         }
         guard value["status"] == .string("committed"),value["operation"] == .string(record.method),value["result"] != .null else{throw CrewdClientError(message:"原资源结果操作或状态不符。")}
-        let result=value["result"]
-        if ["channel.knowledgeLink","channel.knowledgeUnlink"].contains(record.method) {
-            guard result["channelId"] == record.params["channelId"],result["source"] == record.params["source"],result["linked"] == .bool(record.method == "channel.knowledgeLink") else{throw CrewdClientError(message:"原知识引用结果与原输入不符。")}
-        } else if record.method == "humanTask.create" {
-            guard result["requestId"] == record.params["requestId"],result["channelAssociation"]["channelId"] == record.params["channelId"],result["ask"]["question"] == record.params["text"] else{throw CrewdClientError(message:"原人待办创建结果与原输入不符。")}
-        } else {
-            guard result["object"] == record.params["object"] else{throw CrewdClientError(message:"原待办对象不符。")}
-            if record.method == "channel.workTagsSet" {guard result["channelId"] == record.params["channelId"],result["tags"] == record.params["tags"] else{throw CrewdClientError(message:"原标签结果不符。")}}
-            if record.method == "todo.assign" {guard result["owner"] == record.params["owner"] else{throw CrewdClientError(message:"原负责人结果不符。")}}
-            if record.method == "todo.setState" {guard result["manualState"] == record.params["state"] else{throw CrewdClientError(message:"原人工状态结果不符。")}}
-        }
+        try CrewdPresentationJournal.validateResourceResult(value["result"],method:record.method,params:record.params)
     }
     func acknowledgeOriginalResource(_ record:CrewdPresentationJournal.Prepared,receipt:CrewdValue)throws {
         guard record.scope == presentationScope,Self.resourceMutationMethods.contains(record.method),receipt["status"] == .string("committed"),let journal=originalJournal else{throw CrewdClientError(message:"只能核对当前原作用域的已提交回执。",kind:.notSubmitted)}
         try validateOriginalResource(receipt,record:record)
-        try journal.finish(record,state:"replyObserved")
+        try journal.acknowledge(record,detail:"Verified original resource receipt; no replay")
         durableUnknown=try journal.unknownRecords()
         if let id=record.params["requestId"].string.flatMap(UUID.init(uuidString:)){todoMutationDrafts.acknowledge(id);knowledgeLinkDrafts.acknowledge(id)}
     }

@@ -53,6 +53,7 @@ final class CrewdPresentationJournal {
         try Self.privateDirectory(directory.appendingPathComponent("prepared"))
         try Self.privateDirectory(directory.appendingPathComponent("outcomes"))
         try Self.privateDirectory(directory.appendingPathComponent("reconciled"))
+        for name in ["document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
     }
     static func localNamespace(directory: URL) throws -> UUID {
         let canonical = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -160,6 +161,133 @@ final class CrewdPresentationJournal {
         }
         let result = Outcome(format: 1, observationID: record.id, preparedSHA256: hash, state: "replyObserved", observedAt: Date(), detail: detail)
         try Self.immutableWrite(encoder.encode(result), to: destination)
+    }
+    struct DocumentStage:Codable,Equatable,Identifiable {
+        let id:UUID
+        let scope:Scope
+        let crew:String
+        let channel:String
+        let title:String
+        let body:String
+        let context:CrewdValue
+    }
+    private func stageFile(_ area:String,_ id:UUID)->URL{directory.appendingPathComponent("document-stage-"+area).appendingPathComponent(id.uuidString.lowercased()+".json")}
+    private func checkStage(_ stage:DocumentStage)throws {
+        guard stage.scope == scope else{throw StorageError.refused("文档保存阶段的来源身份不符。")}
+        let file=stageFile("inputs",stage.id);try Self.privateFile(file)
+        guard try decoder.decode(DocumentStage.self,from:Data(contentsOf:file)) == stage else{throw StorageError.refused("原文档保存阶段不符。")}
+    }
+    func currentDocumentStage(crew:String,channel:String)throws->DocumentStage? {
+        var stages:[DocumentStage]=[]
+        for file in try FileManager.default.contentsOfDirectory(at:directory.appendingPathComponent("document-stage-inputs"),includingPropertiesForKeys:nil){
+            try Self.privateFile(file)
+            let stage=try decoder.decode(DocumentStage.self,from:Data(contentsOf:file));guard stage.scope == scope else{continue};try checkStage(stage)
+            if stage.crew == crew,stage.channel == channel {
+                let finished=stageFile("finished",stage.id)
+                if FileManager.default.fileExists(atPath:finished.path){try Self.privateFile(finished);guard String(decoding:try Data(contentsOf:finished),as:UTF8.self) == stage.id.uuidString else{throw StorageError.refused("文档阶段结束记录不符。")}}
+                else{stages.append(stage)}
+            }
+        }
+        guard stages.count <= 1 else{throw StorageError.refused("本群有多份未结束文档保存记录，请保留并核对。")}
+        return stages.first
+    }
+    func prepareDocumentStage(crew:String,channel:String,title:String,body:String,context:CrewdValue)throws->DocumentStage {
+        if let original=try currentDocumentStage(crew:crew,channel:channel){return original}
+        let stage=DocumentStage(id:UUID(),scope:scope,crew:crew,channel:channel,title:title,body:body,context:context)
+        try Self.immutableWrite(encoder.encode(stage),to:stageFile("inputs",stage.id));return stage
+    }
+    func documentStageAttempted(_ stage:DocumentStage)throws->Bool {
+        try checkStage(stage);let file=stageFile("attempts",stage.id)
+        guard FileManager.default.fileExists(atPath:file.path) else{return false}
+        try Self.privateFile(file)
+        guard String(decoding:try Data(contentsOf:file),as:UTF8.self) == stage.id.uuidString else{throw StorageError.refused("文档原保存请求身份不符。")}
+        return true
+    }
+    func markDocumentStageAttempted(_ stage:DocumentStage)throws {
+        try checkStage(stage)
+        guard try !documentStageAttempted(stage) else{throw StorageError.refused("原保存请求已送交或未知，只能查询原UUID。")}
+        try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:stageFile("attempts",stage.id))
+    }
+    func documentStageResult(_ stage:DocumentStage)throws->CrewdValue? {
+        try checkStage(stage);let file=stageFile("results",stage.id)
+        guard FileManager.default.fileExists(atPath:file.path) else{return nil}
+        try Self.privateFile(file);let result=try decoder.decode(CrewdValue.self,from:Data(contentsOf:file))
+        try Self.validateDocumentStageResult(result,stage:stage);return result
+    }
+    private static func validateDocumentStageResult(_ result:CrewdValue,stage:DocumentStage)throws {
+        let c=result["context"],original=stage.context,reference=result["created"]["document"]["object"]["reference"]
+        guard result["requestId"].string.flatMap(UUID.init(uuidString:)) == stage.id,["committed","rejected","conflicted"].contains(result["phase"].string ?? ""),
+              ["authorityId","dbId","restoreEpoch","crewId","namespace"].allSatisfy({c[$0] == original[$0]}) else{throw StorageError.refused("文档原保存回执身份不完整；保留原阶段和UUID。")}
+        if result["phase"] == .string("committed") {
+            guard result["beforeGeneration"] == original["generation"],result["afterGeneration"] == c["generation"],result["created"]["document"]["kind"] == .string("object"),reference["kind"] == .string("view"),reference["namespace"] == c["namespace"],reference["id"].string?.isEmpty == false else{throw StorageError.refused("文档原保存回执缺少正式View身份；只可核对原请求。")}
+        }
+    }
+    func recordDocumentStageResult(_ result:CrewdValue,stage:DocumentStage)throws {
+        try checkStage(stage);try Self.validateDocumentStageResult(result,stage:stage)
+        if let old=try documentStageResult(stage){guard old == result else{throw StorageError.refused("原文档已有不同保存回执。")};return}
+        try Self.immutableWrite(encoder.encode(result),to:stageFile("results",stage.id))
+    }
+    func finishDocumentStage(_ stage:DocumentStage)throws {
+        try checkStage(stage);guard try documentStageResult(stage) != nil else{throw StorageError.refused("原文档保存结果尚未确认。")}
+        let file=stageFile("finished",stage.id)
+        if FileManager.default.fileExists(atPath:file.path){try Self.privateFile(file);return}
+        try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:file)
+    }
+    static let resourceMutationMethods:Set<String>=["todo.assign","todo.setState","humanTask.create","channel.workTagsSet","channel.knowledgeLink","channel.knowledgeUnlink"]
+    private static func resourceObject(_ params:CrewdValue)->String? {
+        if params["source"] != .null {
+            let c=params["source"]["context"],r=params["source"]["reference"]
+            let parts=[c["authorityId"],c["dbId"],c["restoreEpoch"],c["crewId"],c["namespace"],r["namespace"],r["kind"],r["id"]].compactMap(\.string)
+            guard parts.count == 8,parts.allSatisfy({!$0.isEmpty}) else{return nil}
+            return parts.map{"\($0.utf8.count):\($0)"}.joined()
+        }
+        if params["object"] != .null{return params["object"]["kind"].string.flatMap{kind in params["object"]["id"].string.map{kind+":"+$0}}}
+        return nil
+    }
+    static func validateResourceResult(_ value:CrewdValue,method:String,params:CrewdValue)throws {
+        func require(_ valid:Bool)throws{if !valid{throw CrewdClientError(message:"原资源回执结构或身份与原输入不符；保留原请求核对。")}}
+        func revision(_ value:CrewdValue)->Bool{guard let s=value.string,!s.isEmpty,s.allSatisfy({$0.isASCII && $0.isNumber}) else{return false};return s == "0" || s.first != "0"}
+        try require(resourceMutationMethods.contains(method))
+        if method.hasPrefix("channel.knowledge") {
+            try require(value["channelId"] == params["channelId"] && value["source"] == params["source"] && value["linked"] == .bool(method == "channel.knowledgeLink") && revision(value["linkRevision"]))
+        }else if method == "channel.workTagsSet" {
+            try require(value["channelId"] == params["channelId"] && value["object"] == params["object"] && value["tags"] == params["tags"] && revision(value["linkRevision"]))
+            guard case .array(let tags)=value["tags"],tags.allSatisfy({$0.string != nil}) else{throw CrewdClientError(message:"标签回执不完整；保留原请求核对。")}
+        }else{
+            let todo=method == "humanTask.create" ? value["todo"]:value
+            let object=method == "humanTask.create" ? todo["object"]:params["object"]
+            try require(todo["object"] == object && ["requirement","humanTask"].contains(object["kind"].string ?? "") && object["id"].string?.isEmpty == false && todo["crewId"].string?.isEmpty == false && revision(todo["revision"]) && ["requirement","agentAsk","humanTask"].contains(todo["origin"].string ?? ""))
+            let owner=todo["owner"]
+            try require(owner == .null || owner["kind"] == .string("human") || (owner["kind"] == .string("session") && owner["id"].string?.isEmpty == false))
+            try require(todo["manualState"] == .null || ["open","done"].contains(todo["manualState"].string ?? ""))
+            if method == "todo.assign"{try require(todo["owner"] == params["owner"])}
+            if method == "todo.setState"{try require(todo["manualState"] == params["state"] && todo["origin"] != .string("agentAsk"))}
+            if method == "humanTask.create" {
+                let id=value["ask"]["ask"].string ?? value["ask"]["id"].string ?? ""
+                try require(value["requestId"] == params["requestId"] && value["channelAssociation"]["channelId"] == params["channelId"] && value["ask"]["question"] == params["text"] && value["ask"]["crewId"] == params["crewId"] && todo["crewId"] == params["crewId"] && todo["origin"] == .string("humanTask") && object["kind"] == .string("humanTask") && object["id"] == .string(id) && id.hasPrefix("H") && !id.dropFirst().isEmpty && id.dropFirst().allSatisfy({$0.isASCII && $0.isNumber}))
+                guard case .bool = value["reused"],case .bool = value["channelAssociation"]["linked"] else{throw CrewdClientError(message:"人待办回执不完整；保留原请求核对。")}
+            }
+        }
+    }
+    /// Durable original-resource boundary shared by normal submit and recovery.
+    func performResourceMutation(_ method:String,params:CrewdValue,crew:String,call:(String,CrewdValue)async throws->CrewdValue)async throws->CrewdValue {
+        guard Self.resourceMutationMethods.contains(method),params["requestId"].string.flatMap(UUID.init(uuidString:)) != nil,params["channelId"].string?.isEmpty == false else{throw CrewdClientError(message:"原资源请求身份不完整，尚未提交。",kind:.notSubmitted)}
+        let object=Self.resourceObject(params)
+        let unresolved=try unknownRecords().contains{old in
+            let sameMethod=old.method == method || (old.method.hasPrefix("channel.knowledge") && method.hasPrefix("channel.knowledge"))
+            return old.scope == scope && sameMethod && old.params["channelId"] == params["channelId"] && Self.resourceObject(old.params) == object
+        }
+        guard !unresolved else{throw CrewdClientError(message:"原资源请求结果未确认，请查询原请求；当前输入保留，尚未发送新操作。",kind:.notSubmitted)}
+        let prepared=try prepare(method:method,params:params,crew:crew)
+        do {
+            let result=try await call(method,params)
+            try Self.validateResourceResult(result,method:method,params:params)
+            try finish(prepared,state:"replyObserved")
+            return result
+        }catch{
+            try? finish(prepared,state:CrewdClientError.isUncertainSubmission(error) ? "unknown":"refused",detail:error.localizedDescription)
+            throw error
+        }
     }
     func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
     /// Original successful-observation snapshots remain available for lookup;

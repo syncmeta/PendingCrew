@@ -296,14 +296,14 @@ import CryptoKit
         status = response.phase == .unknown ? (response.resolvedByRequest == nil ? "写入结果未知；请仅查询原请求，或在原生版本控制面明确处理。" : "原执行结果仍未知，已有明确人工处置记录；未重放。") : "已观察到后台结果；请重新读取当前 数据代次。"
     }
     /// Only native controls call this with an explicitly confirmed change. The JS path below allows Apply only.
-    @discardableResult func submitFromNativeHost(_ change: CrewdDataChange) async -> CrewdDataChangeResult? {
+    @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
         let o: Origin, token: UUID
         do { (o, token) = try begin() } catch { return nil }
         defer { finish(o, token) }
         do {
             guard let info = workspace else { throw Failure.unavailable }
             guard !hasBlockingPending else { throw Failure.unresolved }
-            let (intent, record) = try stage(change, id: UUID(), context: info.context)
+            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context)
             let ledger = try journal()
             let response: CrewdDataChangeResult = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
             try observe(response, intent:intent, record:record, ledger:ledger)
@@ -312,6 +312,54 @@ import CryptoKit
             return response
         } catch { if current(o,token) { renderer.revoke(); status = "未获得完整提交结果；保留原 UUID，不自动重试。" } }
         return nil
+    }
+    func nativeDocumentStage(channel:String)throws->CrewdPresentationJournal.DocumentStage? {
+        guard let o=active,origin() == o else{throw Failure.stale}
+        return try journal().currentDocumentStage(crew:o.crew,channel:channel)
+    }
+    func nativeDocumentResult(_ stage:CrewdPresentationJournal.DocumentStage)throws->CrewdDataChangeResult? {
+        guard let o=active,o.scope == stage.scope,o.crew == stage.crew,origin() == o else{throw Failure.stale}
+        guard let value=try journal().documentStageResult(stage) else{return nil}
+        return try Self.decode(value,CrewdDataChangeResult.self)
+    }
+    func finishNativeDocument(_ stage:CrewdPresentationJournal.DocumentStage)throws {
+        guard let o=active,o.scope == stage.scope,o.crew == stage.crew,origin() == o else{throw Failure.stale}
+        try journal().finishDocumentStage(stage)
+    }
+    /// The original two-stage input lives in the existing journal, beyond a sheet
+    /// or process lifetime. Reopening can only adopt/lookup the same save UUID.
+    func submitNativeDocument(title:String,body:String,channel:String)async->CrewdDataChangeResult? {
+        do {
+            guard let o=active,origin() == o,let context=workspace?.context else{throw Failure.stale}
+            let ledger=try journal()
+            let stage=try ledger.prepareDocumentStage(crew:o.crew,channel:channel,title:title,body:body,context:Self.encode(context))
+            if try ledger.documentStageAttempted(stage){status="原文档已送交保存；仅核对原请求或加入已保存原文。";return try nativeDocumentResult(stage)}
+            guard try Self.decode(stage.context,CrewdDataContext.self) == context else{throw Failure.stale}
+            try ledger.markDocumentStageAttempted(stage)
+            let change=CrewdDataChange.apply(message:"创建文档",edits:[
+                .createBlock(alias:"body",contentType:"text/plain",content:.string(stage.body),sources:[],attributes:.object([:])),
+                .createView(alias:"document",title:stage.title,definition:.document(placements:[.set(id:nil,alias:nil,block:.created(alias:"body"),atRevision:nil,layout:.object([:]))],layout:.object([:])),sources:[],attributes:.object([:]))])
+            let response=await submitFromNativeHost(change,requestID:stage.id)
+            if let response,[.committed,.rejected,.conflicted].contains(response.phase){try ledger.recordDocumentStageResult(Self.encode(response),stage:stage)}
+            return response
+        }catch{status="文档保存阶段尚未确认，原输入保留："+error.localizedDescription;return nil}
+    }
+    func lookupNativeDocument(_ stage:CrewdPresentationJournal.DocumentStage)async->CrewdDataChangeResult? {
+        let o:Origin,token:UUID
+        do{(o,token)=try begin()}catch{return nil}
+        defer{finish(o,token)}
+        do {
+            guard o.scope == stage.scope,o.crew == stage.crew else{throw Failure.stale}
+            if let saved=try nativeDocumentResult(stage){return saved}
+            let context=try Self.decode(stage.context,CrewdDataContext.self)
+            let response:CrewdDataRequestGetResult=try await call("data.request.get",CrewdDataRequestGetParams(requestId:stage.id.uuidString.lowercased(),context:context))
+            try checked(response.workspace.context,o)
+            guard origin() == o else{throw Failure.stale}
+            guard case .known(let result)=response.lookup,[.committed,.rejected,.conflicted].contains(result.phase) else{status="原保存请求尚无已确认结果；保留原文与UUID，不会重发。";return nil}
+            let ledger=try journal();try ledger.recordDocumentStageResult(Self.encode(result),stage:stage)
+            if let intent=pending.first(where:{$0.id == stage.id}),let record=records[stage.id]{try observe(result,intent:intent,record:record,ledger:ledger);applyObservation(result,intent:intent)}
+            return result
+        }catch{status="原文档结果未确认；仅保留原UUID核对。";return nil}
     }
     func lookup(_ id: UUID) async {
         let o: Origin, token: UUID

@@ -376,43 +376,69 @@ private struct CrewdNativeDocumentCreation:View {
     @State private var channel=""
     @State private var saved:CrewdChannelKnowledgeReference?
     @State private var submission:UUID?
+    @State private var stage:CrewdPresentationJournal.DocumentStage?
     @State private var failure:String?
+    @State private var refused=false
     init(workspace:CrewdWorkspace){self.workspace=workspace;self.store=workspace.knowledge;self.group=workspace.channelKnowledge}
     private var key:CrewdResourceDrafts.Key{.init(crew:crew,view:.documents,object:"",operation:"knowledge.create",domain:.document,channel:channel)}
     private var fields:CrewdResourceDrafts.Fields{workspace.resourceDrafts.fields(key)}
     private var current:Bool{workspace.crewID == crew && workspace.channelID == channel && !workspace.isRetired}
-    private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{Binding(get:{fields[keyPath:path]},set:{value in var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f)})}
+    private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{Binding(get:{if let stage{return path == \CrewdResourceDrafts.Fields.title ? stage.title:stage.body};return fields[keyPath:path]},set:{value in var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:14){
             Text("新建文档").font(.headline)
-            TextField("标题",text:field(\.title)).disabled(saved != nil || store.busy || submission != nil)
-            TextEditor(text:field(\.body)).frame(minHeight:180).disabled(saved != nil || store.busy || submission != nil)
+            TextField("标题",text:field(\.title)).disabled(stage != nil || store.busy || submission != nil)
+            TextEditor(text:field(\.body)).frame(minHeight:180).disabled(stage != nil || store.busy || submission != nil)
             Text(saved == nil ? "先保存SQLite知识原文，再单独加入本群。":"原文已保存；尚未加入本群。加入失败会保留原文，不重新创建。").font(.caption).foregroundStyle(.secondary)
             Text(store.status).font(.caption).foregroundStyle(.secondary)
             if saved != nil{Button("重新核对已保存原文"){Task{await store.refresh();guard current,let original=saved,let context=store.workspace?.context else{return};let refreshed=CrewdChannelKnowledgeReference(context:context,reference:original.reference);guard refreshed.identity == original.identity else{failure="知识来源已换代，原文引用保留，不自动重新绑定。";return};await store.open(original.reference);if store.detail?.object.identity == original.reference.id{saved=refreshed;failure=nil}}}.disabled(store.busy)}
             if let failure{Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
-            if let submission,store.pending.contains(where:{$0.id == submission}){Button("查询原保存结果"){Task{await store.lookup(submission);adopt(store.result)}}.disabled(store.busy)}
+            if let stage,saved == nil{Button("查询原保存结果"){Task{_ = await store.lookupNativeDocument(stage);restoreStage()}}.disabled(store.busy)}
             ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == channel && $0.source.identity == saved?.identity}){snapshot in
-                Button("查询原加入请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);dismiss()}else{failure="原加入请求当前未找到已提交回执；已保存原文保留。"}}catch{failure=error.localizedDescription}}}
+                Button("查询原加入请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);finishDraft()}else{failure="原加入请求当前未找到已提交回执；已保存原文保留。"}}catch{failure=error.localizedDescription}}}
             }
+            if refused{Button("原保存已明确拒绝，修改后另存"){reviseRefusedDraft()}}
+            if saved != nil{Button("仅保留已保存原文，结束本次新建"){finishDraft()}}
             HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button("保存原文"){save()}.disabled(!current || store.busy || store.hasBlockingPending || store.workspace?.state != "ready" || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button("加入本群"){join()}.disabled(!current || group.writing || store.busy)}}
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:600,height:560))
-        .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();try? await group.refresh()}
+        .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();restoreStage();try? await group.refresh()}
+    }
+    private func restoreStage(){
+        guard current else{return}
+        do {
+            stage=try store.nativeDocumentStage(channel:channel)
+            submission=stage?.id
+            if let stage,let result=try store.nativeDocumentResult(stage) {
+                refused=[.rejected,.conflicted].contains(result.phase)
+                if result.phase == .committed,case .object(let view)?=result.created["document"]{saved = .init(context:result.context,reference:view.reference);failure=nil}
+                else if refused{failure="原保存已明确拒绝："+(result.reason ?? "数据或权限已变化；原文保留，未自动重发。")}
+            }
+        }catch{failure="原文档保存阶段尚未可靠读取，不能再创建正文："+error.localizedDescription;submission=UUID()}
     }
     private func save(){
-        let title=fields.title,body=fields.body,old=Set(store.pending.map(\.id))
-        let change=CrewdDataChange.apply(message:"创建文档",edits:[
-            .createBlock(alias:"body",contentType:"text/plain",content:.string(body),sources:[],attributes:.object([:])),
-            .createView(alias:"document",title:title,definition:.document(placements:[.set(id:nil,alias:nil,block:.created(alias:"body"),atRevision:nil,layout:.object([:]))],layout:.object([:])),sources:[],attributes:.object([:]))])
-        Task{let result=await store.submitFromNativeHost(change);guard current else{return};submission=result.flatMap{UUID(uuidString:$0.requestId)} ?? store.pending.first(where:{!old.contains($0.id)})?.id;adopt(result)}
+        let title=fields.title,body=fields.body
+        Task{_ = await store.submitNativeDocument(title:title,body:body,channel:channel);restoreStage()}
     }
-    private func adopt(_ result:CrewdDataChangeResult?){
-        guard current,let result,result.phase == .committed,submission == UUID(uuidString:result.requestId),case .object(let view)?=result.created["document"],view.reference.kind == "view" else{return}
-        saved = .init(context:result.context,reference:view.reference);failure=nil
+    private func reviseRefusedDraft(){
+        guard current,refused,let stage else{return}
+        do{
+            try store.finishNativeDocument(stage)
+            if !workspace.resourceDrafts.exists(key){var original=CrewdResourceDrafts.Fields();original.title=stage.title;original.body=stage.body;workspace.resourceDrafts.edit(key,original)}
+            self.stage=nil;submission=nil;saved=nil;refused=false;failure=nil
+            Task{await store.refresh()}
+        }catch{failure=error.localizedDescription}
+    }
+    private func finishDraft(){
+        guard current,let stage else{return}
+        do {
+            try store.finishNativeDocument(stage)
+            if fields.title == stage.title,fields.body == stage.body{workspace.resourceDrafts.edit(key,.init())}
+            dismiss()
+        }catch{failure=error.localizedDescription}
     }
     private func join(){
         guard current,let saved,let revision=group.linkRevision,
               let snapshot=workspace.knowledgeLinkDrafts.begin(crew:crew,channel:channel,source:saved,revision:revision,linked:true) else{return}
-        Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{workspace.resourceDrafts.edit(key,.init());dismiss()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure="原文已保存，未加入本群："+error.localizedDescription}}
+        Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{finishDraft()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure="原文已保存，未加入本群："+error.localizedDescription}}
     }
 }
