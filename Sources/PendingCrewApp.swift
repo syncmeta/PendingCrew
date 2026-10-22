@@ -13,6 +13,8 @@ enum PendingCrewLinks {
 struct PendingCrewApp: App {
     #if os(macOS)
     @NSApplicationDelegateAdaptor(PendingCrewApplicationDelegate.self) private var applicationDelegate
+    #elseif os(iOS)
+    @UIApplicationDelegateAdaptor(PendingCrewMobileNotificationDelegate.self) private var notificationDelegate
     #endif
     @StateObject private var model: AppModel
     @StateObject private var crewStore: CrewStore
@@ -61,6 +63,7 @@ struct PendingCrewApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .modifier(CrewNotificationEntry())
                 .task { CrewPersonalDraftService.setApplicationActive(personalScenePhase == .active) }
                 .onChange(of:personalScenePhase){_,phase in CrewPersonalDraftService.setApplicationActive(phase == .active)}
                 .modifier(CrewdEnrollmentURLEntry{ id in Task{await model.connectCrewdAuthority(computerID:id);if model.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()}} })
@@ -161,6 +164,10 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var unsavedDraftExitConfirmation:String?
     private var stopCoordinator: CrewdStopCoordinator?
     private var stopProgress: CrewdStopProgressWindow?
+
+    func applicationDidFinishLaunching(_ notification:Notification){CrewNativeNotifications.prepareForApp()}
+    func application(_ application:NSApplication,didRegisterForRemoteNotificationsWithDeviceToken deviceToken:Data){CrewNativeNotifications.shared.registered(deviceToken)}
+    func application(_ application:NSApplication,didFailToRegisterForRemoteNotificationsWithError error:Error){CrewNativeNotifications.shared.failed()}
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if waitingForDaemon && !crewdTerminationAllowed { stopProgress?.present(); return .terminateCancel }

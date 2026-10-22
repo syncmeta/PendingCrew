@@ -289,6 +289,9 @@ final class CrewdPresentationJournal {
             throw error
         }
     }
+    /// Redacted notification attempts retain only a token digest, never the
+    /// APNs token or provider key. Reading history does not confirm a mutation.
+    func notificationHistory()throws->[Prepared]{try records(includeObservedFirstMessages:false,includeNotifications:true).filter{["notification.installationRegister","notification.installationRevoke"].contains($0.method)}.sorted{$0.preparedAt < $1.preparedAt}}
     func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
     /// Original successful-observation snapshots remain available for lookup;
     /// their existence is not a durable server success or a replay permission.
@@ -297,7 +300,7 @@ final class CrewdPresentationJournal {
             .filter { $0.method == "command.submit" && $0.params["command"]["operation"].string == "crew.createFirstMessage" }
             .sorted { $0.preparedAt > $1.preparedAt }.prefix(64))
     }
-    private func records(includeObservedFirstMessages: Bool) throws -> [Prepared] {
+    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -322,7 +325,8 @@ final class CrewdPresentationJournal {
                 observed = observation
             }
             guard let outcome = observed else { rows.append(record); continue }
-            if outcome.state == "unknown" { rows.append(record) }
+            if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
+            else if outcome.state == "unknown" { rows.append(record) }
             else if includeObservedFirstMessages, outcome.state == "replyObserved",
                     record.method == "command.submit", record.params["command"]["operation"].string == "crew.createFirstMessage" { rows.append(record) }
             else if !["replyObserved", "refused"].contains(outcome.state) { throw StorageError.refused("原前端历史出现未知状态。") }

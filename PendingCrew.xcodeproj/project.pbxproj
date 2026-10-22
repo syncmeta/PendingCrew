@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9D200000000000000000101 /* CrewdNotificationWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000001 /* CrewdNotificationWire.swift */; };
+		A9D200000000000000000102 /* CrewdNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000002 /* CrewdNotificationStore.swift */; };
+		A9D200000000000000000103 /* CrewNativeNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000003 /* CrewNativeNotifications.swift */; };
+		A9D200000000000000000104 /* CrewNotificationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000004 /* CrewNotificationViews.swift */; };
+		A9D200000000000000000201 /* CrewdNotificationWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000001 /* CrewdNotificationWire.swift */; };
+		A9D200000000000000000202 /* CrewdNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000002 /* CrewdNotificationStore.swift */; };
+		A9D200000000000000000203 /* CrewNativeNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000003 /* CrewNativeNotifications.swift */; };
+		A9D200000000000000000204 /* CrewNotificationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000004 /* CrewNotificationViews.swift */; };
 		A9C100000000000000000002 /* ApplePersonalAccountCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */; };
 		A9C100000000000000000003 /* ApplePersonalAccountCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */; };
 		002013C931534BC908DE4B5E /* TodoEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */; };
@@ -947,6 +955,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A9D200000000000000000001 /* CrewdNotificationWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNotificationWire.swift; sourceTree = "<group>"; };
+		A9D200000000000000000002 /* CrewdNotificationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNotificationStore.swift; sourceTree = "<group>"; };
+		A9D200000000000000000003 /* CrewNativeNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewNativeNotifications.swift; sourceTree = "<group>"; };
+		A9D200000000000000000004 /* CrewNotificationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewNotificationViews.swift; sourceTree = "<group>"; };
 		A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePersonalAccountCoordinator.swift; sourceTree = "<group>"; };
 		00067E85D453D3D64937B60B /* CrewdRemoteAdmin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdRemoteAdmin.swift; sourceTree = "<group>"; };
 		00782B87D49EDF8E53E40F70 /* CrewPersonalDraftService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPersonalDraftService.swift; sourceTree = "<group>"; };
@@ -1625,6 +1637,12 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A9D200000000000000000030 /* Notifications */ = {isa = PBXGroup; children = (
+			A9D200000000000000000001 /* CrewdNotificationWire.swift */,
+			A9D200000000000000000002 /* CrewdNotificationStore.swift */,
+			A9D200000000000000000003 /* CrewNativeNotifications.swift */,
+			A9D200000000000000000004 /* CrewNotificationViews.swift */,
+		); path = Notifications; sourceTree = "<group>"; };
 		032862B7FC1B7EEB64723C28 /* LocalRunner */ = {
 			isa = PBXGroup;
 			children = (
@@ -2108,6 +2126,7 @@
 				CE08DF9ED40FF190A7D3E74B /* Mcp */,
 				D5952B3B33F1CC3DA2AE5947 /* Models */,
 				EEFD678B1AC0CD10D4E77F47 /* PersonalSync */,
+				A9D200000000000000000030 /* Notifications */,
 				DF4C9B7E7A3BF697EE060AC9 /* Presentation */,
 				74CD4A35459628AAE9D32D6E /* Services */,
 				637122F2C07AD865E63CE20E /* Shared */,
@@ -2860,6 +2879,10 @@
 				41C712793A452AB633AC4DC1 /* CrewPersonalDraftControls.swift in Sources */,
 				F12F3640F385E497A60DA022 /* CrewPersonalDraftService.swift in Sources */,
 				A9C100000000000000000002 /* ApplePersonalAccountCoordinator.swift in Sources */,
+				A9D200000000000000000101 /* CrewdNotificationWire.swift in Sources */,
+				A9D200000000000000000102 /* CrewdNotificationStore.swift in Sources */,
+				A9D200000000000000000103 /* CrewNativeNotifications.swift in Sources */,
+				A9D200000000000000000104 /* CrewNotificationViews.swift in Sources */,
 				6D63FEFFD255E981B7CCBDA7 /* CrewRPC.swift in Sources */,
 				24CDCE5F04BE62E9B9D73194 /* CrewRecentContextRender.swift in Sources */,
 				C9EBEEED2D0091CCCF27C554 /* CrewReportingParent.swift in Sources */,
@@ -3314,6 +3337,10 @@
 				7E887077E30CF540CC8C1041 /* CrewPersonalDraftControls.swift in Sources */,
 				CDCC32C3C7959FF08EA2BAE8 /* CrewPersonalDraftService.swift in Sources */,
 				A9C100000000000000000003 /* ApplePersonalAccountCoordinator.swift in Sources */,
+				A9D200000000000000000201 /* CrewdNotificationWire.swift in Sources */,
+				A9D200000000000000000202 /* CrewdNotificationStore.swift in Sources */,
+				A9D200000000000000000203 /* CrewNativeNotifications.swift in Sources */,
+				A9D200000000000000000204 /* CrewNotificationViews.swift in Sources */,
 				57205E927075ED4A9F5E985F /* CrewRPC.swift in Sources */,
 				671D45A9D765AF34281D3993 /* CrewRecentContextRender.swift in Sources */,
 				8C463DCAD53729C43CFFC249 /* CrewRecentContextRenderTests.swift in Sources */,

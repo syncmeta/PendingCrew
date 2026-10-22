@@ -129,6 +129,16 @@ final class CrewdWorkspace: ObservableObject {
         guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.submitRPC(method, params)
     }
+    lazy var notifications=CrewdNotificationStore(origin:{[weak self] in
+        guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains("notification.nativeApns"),self.originalJournalBound,let scope=self.presentationScope else{return nil}
+        let remote=self.dataDirectory==nil && scope.grantID?.isEmpty==false && scope.grantRevision?.isEmpty==false && !self.stopping
+        return .init(scope:scope,observation:self.generation,connection:self.client.connectionEpoch,remoteRecipient:remote)
+    },rpc:{[weak self] method,params in
+        guard let self,!self.retired,self.client.readyForWork else{throw CrewdClientError(message:"原通知连接已关闭。",kind:.notSubmitted)}
+        return try await self.client.call(method,params)
+    },journal:{[weak self] in
+        guard let self,self.originalJournalBound,let journal=self.originalJournal else{throw CrewdClientError(message:"原通知历史尚未就绪，未发送。",kind:.notSubmitted)};return journal
+    })
     lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
         guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
               self.acceptsObservation(self.observationGeneration), let scope = self.presentationScope else { return nil }
