@@ -4,7 +4,7 @@ import UIKit
 
 /// The original pairing form uses the signed crewd invitation/response/receipt
 /// exchange. Trust is established only after the computer's final confirmation.
-struct IOSRemotePairingView: View {
+struct IOSLegacyRemotePairingView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @Environment(\.dismiss) private var dismiss
@@ -156,6 +156,20 @@ struct IOSRemotePairingView: View {
     }
     @MainActor private func run<Value: Sendable>(_ action: @escaping @MainActor () async throws -> Value, apply: @escaping @MainActor (Value) -> Void) {
         operation.run(action, apply: apply, failed: { error in status = error.localizedDescription })
+    }
+}
+#endif
+
+#if os(iOS)
+struct IOSRemotePairingView:View {
+    @EnvironmentObject private var appModel:AppModel
+    @EnvironmentObject private var crewStore:CrewStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var computers=false
+    var body:some View {
+        CrewdEnrollmentView {id in Task{await appModel.crewdWindow.select(id);await appModel.connectCrewdAuthority();await crewStore.refreshList();dismiss()}}
+            .safeAreaInset(edge:.bottom){Button("已存电脑与旧文件配对"){computers=true}.padding(8)}
+            .sheet(isPresented:$computers){IOSLegacyRemotePairingView()}
     }
 }
 #endif

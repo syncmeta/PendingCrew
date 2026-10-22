@@ -46,6 +46,26 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         }
         return receipt
     }
+    /// Adopt only the already persisted enrollment identity; never generate a
+    /// second response/key when the final receipt or UI acknowledgement is lost.
+    func adoptEnrollment(_ pair: CrewdRemoteStoredPair, grantId:String, grantRevision:String) throws -> CrewdRemoteReceipt {
+        let receipt=try verifyEnrollmentReceipt(pair,grantId:grantId,grantRevision:grantRevision)
+        if try credentials.records().contains(pair.id) {
+            let old=try credentials.read(pair.id)
+            guard old.invitation==pair.invitation,old.response==pair.response,
+                  old.privateKey==pair.privateKey,old.clientCertificate==pair.clientCertificate,
+                  old.receipt==nil || old.receipt==pair.receipt else{throw CrewdRemoteError.wrongIdentity}
+        }
+        try credentials.save(pair)
+        NotificationCenter.default.post(name:Self.changed,object:nil)
+        return receipt
+    }
+    func verifyEnrollmentReceipt(_ pair:CrewdRemoteStoredPair,grantId:String,grantRevision:String)throws->CrewdRemoteReceipt {
+        guard let envelope=pair.receipt else{throw CrewdRemoteError.invalidExchange}
+        let receipt=try validatedReceipt(envelope,pair:pair)
+        guard receipt.grantId==grantId,receipt.grantRevision==grantRevision else{throw CrewdRemoteError.wrongIdentity}
+        return receipt
+    }
     func receipt(_ id: UUID) throws -> CrewdRemoteReceipt { try paired(id).2 }
     func forget(_ summary: CrewdRemotePairSummary) throws {
         let pair = try credentials.read(summary.id)
@@ -111,6 +131,8 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         return (pair, try invitation(pair.invitation, requireFresh: false), try validatedReceipt(receipt, pair: pair))
     }
     private func forget(_ id: UUID) throws {
+        let pair=try credentials.read(id)
+        if let enrollmentId=pair.enrollmentId {try CrewdEnrollment.shared.removePairAttempt(pair,enrollmentId:enrollmentId)}
         try credentials.remove(id)
         responses = responses.filter { $0.value.0 != id }
         NotificationCenter.default.post(name:Self.changed,object:nil)

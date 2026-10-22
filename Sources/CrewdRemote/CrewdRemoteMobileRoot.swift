@@ -24,6 +24,7 @@ struct CrewdRemoteMobileRoot: View {
                 }
             }
         }
+        .modifier(CrewdEnrollmentURLEntry{ id in Task{guard await window.refresh() else{return};await window.select(id)} })
         .task { await window.refresh() }
         .onDisappear {window.close()}
         .onChange(of: phase) { _, value in if value == .active { Task { await window.refresh() } } }
@@ -89,7 +90,7 @@ struct CrewdRemoteMobileRoot: View {
 
 #endif
 
-struct CrewdRemotePairingView: View {
+struct CrewdLegacyRemotePairingView: View {
     let pairing: CrewdRemotePairing
     let pending: UUID?
     let completed: (UUID) -> Void
@@ -155,7 +156,7 @@ struct CrewdRemotePairingView: View {
 
 }
 
-private extension View {
+extension View {
     @ViewBuilder func crewdRemoteCodeInput(height: CGFloat) -> some View {
         #if os(iOS)
         self.frame(height: height).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -277,5 +278,17 @@ struct CrewdRemoteCodeFileExport: View {
         .fileExporter(isPresented: $saving, document: document, contentType: .plainText, defaultFilename: stage.filename) { result in
             if case .failure(let error) = result, (error as NSError).code != NSUserCancelledError { message = "无法保存连接码文件，请重新选择保存位置。" }
         }
+    }
+}
+
+/// Ordinary entry is a single link; retained old exchanges keep their original
+/// receipt import path without changing their identities or recovery evidence.
+struct CrewdRemotePairingView: View {
+    let pairing:CrewdRemotePairing
+    let pending:UUID?
+    let completed:(UUID)->Void
+    var body:some View {
+        if let pending {CrewdLegacyRemotePairingView(pairing:pairing,pending:pending,completed:completed)}
+        else {CrewdEnrollmentView(completed:completed)}
     }
 }

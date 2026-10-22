@@ -28,6 +28,28 @@ struct CrewdRemoteManagementView: View {
                                 }.disabled(admin.busy)
                             }.padding(8)
                         }
+                        GroupBox("单链接添加设备") {
+                            VStack(alignment:.leading,spacing:10) {
+                                TextField("本电脑显示名称",text:$admin.computerLabel)
+                                TextField("其他设备可访问的主机地址",text:$admin.enrollmentHost)
+                                Text("使用已启用的连接端口；每台设备确认后获得独立授权。链接五分钟有效，请只交给你的设备。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if admin.mayIssueEnrollment {
+                                    HStack {
+                                        Button("生成配对链接"){Task{await admin.createEnrollment()}}
+                                        Button("读取原链接请求"){Task{await admin.readEnrollment()}}
+                                    }
+                                    if let original=admin.enrollment {
+                                        Text("原请求："+original.requestId).font(.caption.monospaced()).textSelection(.enabled)
+                                        if let link=original.link {ShareLink("分享此配对链接",item:link)}
+                                        if original.prepared {Button("提交已保存的原链接请求"){Task{await admin.lookupEnrollment(submitPrepared:true)}}}
+                                        if original.unknown {Text("结果未确认，只查询原请求；不会重新生成token。")}
+                                        Button("查询原链接结果"){Task{await admin.lookupEnrollment()}}
+                                    }
+                                }else{Text("当前连接未开放本机生成配对链接。需要本机 Human 管理连接与后台 enrollment 能力。")}
+                            }.padding(8).disabled(admin.busy)
+                        }
+                        DisclosureGroup("保留的旧文件配对") {
                         GroupBox("添加手机或另一台电脑") {
                             VStack(alignment: .leading, spacing: 10) {
                                 TextField("本电脑显示名称", text: $admin.computerLabel).disabled(admin.busy)
@@ -66,6 +88,7 @@ struct CrewdRemoteManagementView: View {
                                     }
                                 }
                             }.padding(8)
+                        }
                         }
                     } else { Button("读取连接设置") { Task { await admin.refresh() } }.disabled(admin.busy) }
                     if !admin.unknown.isEmpty {
