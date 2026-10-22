@@ -142,16 +142,35 @@ pub enum HookKind {
     PostToolUse,
     Stop,
     SessionStart,
+    UserPromptSubmit,
+    StopFailure,
+    SessionEnd,
+    Notification,
+    ManagedActivity,
 }
 
 impl HookKind {
-    pub const ALL: [HookKind; 3] = [Self::PostToolUse, Self::Stop, Self::SessionStart];
+    pub const ALL: [HookKind; 8] = [
+        Self::PostToolUse,
+        Self::Stop,
+        Self::SessionStart,
+        Self::UserPromptSubmit,
+        Self::StopFailure,
+        Self::SessionEnd,
+        Self::Notification,
+        Self::ManagedActivity,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::PostToolUse => "post-tool-use",
             Self::Stop => "stop",
             Self::SessionStart => "session-start",
+            Self::UserPromptSubmit => "user-prompt-submit",
+            Self::StopFailure => "stop-failure",
+            Self::SessionEnd => "session-end",
+            Self::Notification => "notification",
+            Self::ManagedActivity => "managed-activity",
         }
     }
 
@@ -212,6 +231,22 @@ pub(crate) fn schema(g: &mut schemars::SchemaGenerator) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn managed_hook_names_are_callable_without_becoming_tool_approval_hooks() {
+        for name in [
+            "user-prompt-submit",
+            "stop-failure",
+            "session-end",
+            "notification",
+        ] {
+            assert!(
+                HookKind::parse(name).is_some(),
+                "missing managed lifecycle hook: {name}"
+            );
+        }
+        assert!(HookKind::parse("pre-tool-use").is_none());
+    }
 
     #[test]
     fn attach_params_are_camel_case_and_strict() {
@@ -288,7 +323,10 @@ mod tests {
             assert_eq!(k.as_str(), s);
             assert_eq!(HookKind::parse(s), Some(k));
         }
-        assert_eq!(HookKind::parse("user-prompt-submit"), None, "M4b 才加");
+        assert_eq!(
+            HookKind::parse("user-prompt-submit"),
+            Some(HookKind::UserPromptSubmit)
+        );
         // B16: no approvals, so no PreToolUse hook; an old settings file's event is simply unknown.
         assert_eq!(HookKind::parse("pre-tool-use"), None);
     }

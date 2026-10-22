@@ -241,7 +241,20 @@ async fn route(
 }
 
 async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
+    let managed = if let Some(factory) = state.native_helpers.get() {
+        crate::orchestra::exec_claude_managed::route(
+            factory,
+            &me.session_id,
+            event,
+            payload.clone(),
+        )
+        .await
+    } else {
+        None
+    };
     match event {
+        HookKind::UserPromptSubmit => managed.unwrap_or(HookResult {stdout:None}),
+        HookKind::StopFailure | HookKind::SessionEnd | HookKind::Notification | HookKind::ManagedActivity => HookResult {stdout:None},
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
         HookKind::Stop => crate::agent::turn::stop(state, me, &payload).await,
         HookKind::SessionStart => match port::live_world(state, &me.session_id).await {

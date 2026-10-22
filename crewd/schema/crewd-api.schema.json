@@ -5288,7 +5288,12 @@
       "enum": [
         "post-tool-use",
         "stop",
-        "session-start"
+        "session-start",
+        "user-prompt-submit",
+        "stop-failure",
+        "session-end",
+        "notification",
+        "managed-activity"
       ],
       "type": "string"
     },

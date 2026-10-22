@@ -111,6 +111,10 @@ pub struct NativeFactory {
     pub(crate) db: Db,
     pub(crate) registry: Arc<ProcessRegistry>,
     helper: PathBuf,
+    pub(crate) managed_expected: Mutex<BTreeSet<String>>,
+    pub(crate) managed: Mutex<
+        BTreeMap<String, std::sync::Weak<crate::orchestra::exec_claude_managed::ManagedHandle>>,
+    >,
     helper_identity: Option<crate::build_info::ExeIdentity>,
     runtimes: Mutex<BTreeMap<String, Arc<Runtime>>>,
     launching: Mutex<BTreeSet<String>>,
@@ -124,6 +128,8 @@ impl NativeFactory {
             registry,
             helper_identity: crate::build_info::ExeIdentity::capture(&helper).ok(),
             helper,
+            managed: Mutex::new(BTreeMap::new()),
+            managed_expected: Mutex::new(BTreeSet::new()),
             runtimes: Mutex::new(BTreeMap::new()),
             launching: Mutex::new(BTreeSet::new()),
             legacy: Mutex::new(BTreeMap::new()),
@@ -700,6 +706,23 @@ impl Runtime {
             return Err(error());
         }
         Ok(current)
+    }
+    pub(crate) async fn manual_hook_allowed(&self) -> bool {
+        let lease = self.lease.lock().await;
+        if !lease.as_ref().is_some_and(|l| {
+            l.connection.is_live()
+                && Instant::now() < l.deadline
+                && self.binding().is_ok_and(|b| same(&b.native, &l.native))
+        }) {
+            return false;
+        }
+        let floor = self.manual_floor().await;
+        floor
+            && lease.as_ref().is_some_and(|l| {
+                l.connection.is_live()
+                    && Instant::now() < l.deadline
+                    && self.binding().is_ok_and(|b| same(&b.native, &l.native))
+            })
     }
     pub(crate) async fn manual_floor(&self) -> bool {
         let session = self.session.clone();

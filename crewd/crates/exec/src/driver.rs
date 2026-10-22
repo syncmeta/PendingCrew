@@ -54,6 +54,9 @@ pub struct DriverConfig {
     pub delivery_observer: Option<Arc<dyn DeliverySuccessObserver>>,
     /// Private ACP native-child barrier; the helper never writes the core registry.
     pub native_birth_gate: Option<crate::acp::birth::BirthGate>,
+    /// Core-owned managed hook producer: an old request may never move to a
+    /// replacement Claude birth after resume refusal. Not a provider/JSON flag.
+    pub managed_hook_producer: bool,
     /// Bounded terminal byte enqueue, separate from structured ACP control.
     pub terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
@@ -90,6 +93,7 @@ impl DriverConfig {
             registry: None,
             delivery_observer: None,
             native_birth_gate: None,
+            managed_hook_producer: false,
             terminal_observer: None,
         }
     }
@@ -1404,6 +1408,15 @@ async fn run(mut t: Task) {
         let actions = t.core.take_actions();
         let from_writer = std::mem::take(&mut t.write_refused);
         let refused = dispatch(&mut t, actions) || from_writer;
+        if refused && t.config.managed_hook_producer && !retried {
+            retried = true;
+            t.core.hold_automatic();
+            t.writes.clear();
+            let _ = t.ev_tx.send(SessionEvent::Health(Some(Health::new(
+                HealthKind::PromptUndelivered,
+                "Managed Claude resume refused; original request is Unknown and is never moved to a new native session",
+            ))));
+        }
         if refused && !retried && !stopping {
             retried = true;
             // 被拒的那个进程：已经自己退了就用它的退出状态，还活着就杀掉收尸（边读边等）。

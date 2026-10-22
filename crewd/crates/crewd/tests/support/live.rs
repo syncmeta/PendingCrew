@@ -258,6 +258,7 @@ impl Claude {
                 session_id: f.worker.clone(),
                 token: f.token(&f.worker),
                 hooks: true,
+                managed_hooks: false,
             }),
             ..ClaudeSpec::default()
         };

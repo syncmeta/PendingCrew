@@ -51,6 +51,7 @@ struct Fake {
     log: Option<String>,
     submits: usize,
     pasting: bool,
+    managed_settings: Option<serde_json::Value>,
 }
 
 /// C13-only controller. A generation is a fixture identity, not a Claude conversation id.
@@ -277,8 +278,76 @@ impl Fake {
         .as_bytes());
     }
 
+    // Existing fake consumer: executes the exact generated hook commands, not a
+    // mock Core handler. Emitted provider fields are explicitly synthetic.
+    fn managed_hook(&self, event: &str, mut payload: serde_json::Value) -> bool {
+        use std::process::{Command, Stdio};
+        payload["session_id"] = self.session.clone().into();
+        payload["hook_event_name"] = event.into();
+        let settings = self
+            .managed_settings
+            .as_ref()
+            .expect("managed generated settings");
+        let Some(entries) = settings["hooks"][event].as_array() else {
+            return false;
+        };
+        let mut allowed = true;
+        for entry in entries {
+            for hook in entry["hooks"].as_array().unwrap() {
+                let mut child = Command::new("/bin/sh")
+                    .args(["-c", hook["command"].as_str().unwrap()])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(payload.to_string().as_bytes())
+                    .unwrap();
+                let output = child.wait_with_output().unwrap();
+                let value = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+                allowed &= output.status.success()
+                    && (event != "UserPromptSubmit"
+                        || value == Some(serde_json::json!({"continue":true})));
+                if let Some(path) = &self.log {
+                    let path = std::path::Path::new(path).with_extension("hooks.jsonl");
+                    let mut out = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(out,"{}",serde_json::json!({"event":event,"prompt_id":payload.get("prompt_id"),"exit":output.status.code(),"allowed":allowed,"stdout":value})).unwrap();
+                }
+            }
+        }
+        allowed
+    }
+
+    fn managed(&self) -> bool {
+        self.managed_settings
+            .as_ref()
+            .is_some_and(|s| s["hooks"]["UserPromptSubmit"].is_array())
+    }
     fn submit(&mut self) {
         let text = std::mem::take(&mut self.input);
+        let prompt = uuid::Uuid::new_v4().to_string();
+        let case = std::env::var("FAKE_CLAUDE_MANAGED_CASE").unwrap_or_default();
+        if self.managed() {
+            let mut payload = serde_json::json!({"prompt_id":prompt,"prompt":text});
+            if case == "missing-prompt" {
+                payload.as_object_mut().unwrap().remove("prompt_id");
+            }
+            if case == "subagent" {
+                payload["agent_id"] = "synthetic-subagent".into();
+            }
+            if !self.managed_hook("UserPromptSubmit", payload) {
+                self.last = "Managed input blocked".into();
+                return;
+            }
+        }
         self.submits += 1;
         if let Some(c) = C13_FIXTURE.get() {
             c.record(serde_json::json!({"event":"submit", "submission":self.submits,"body":text}));
@@ -290,6 +359,53 @@ impl Fake {
                 .open(path)
                 .expect("打不开 FAKE_CLAUDE_LOG");
             let _ = writeln!(f, "{}", text.replace('\n', "\\n"));
+        }
+        if self.managed() {
+            if case == "extra-submit" {
+                self.managed_hook(
+                    "UserPromptSubmit",
+                    serde_json::json!({"prompt_id":uuid::Uuid::new_v4().to_string(),"prompt":text}),
+                );
+            } else if case == "stop-failure" {
+                self.managed_hook(
+                    "StopFailure",
+                    serde_json::json!({"prompt_id":prompt,"error":"synthetic_failure"}),
+                );
+            } else if case == "session-end" {
+                self.managed_hook(
+                    "SessionEnd",
+                    serde_json::json!({"prompt_id":prompt,"reason":"other"}),
+                );
+            } else {
+                self.managed_hook(
+                    "PostToolUse",
+                    serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}}),
+                );
+                self.managed_hook("Stop",serde_json::json!({"prompt_id":prompt,"stop_hook_active":false,"last_assistant_message":"Synthetic response only"}));
+                if case == "activity-after-stop" {
+                    self.managed_hook("PreToolUse",serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}}));
+                }
+                if case == "multiple-stop" {
+                    self.managed_hook("Stop",serde_json::json!({"prompt_id":prompt,"stop_hook_active":true,"last_assistant_message":"Synthetic later response"}));
+                }
+                if case != "stop-only" {
+                    let idle = if case == "foreign-idle" {
+                        uuid::Uuid::new_v4().to_string()
+                    } else {
+                        prompt
+                    };
+                    self.managed_hook("Notification",serde_json::json!({"prompt_id":idle,"notification_type":"idle_prompt","message":"Synthetic actual callback, no inferred timer"}));
+                    if case == "failure-after-idle" {
+                        self.managed_hook(
+                            "StopFailure",
+                            serde_json::json!({"prompt_id":idle,"error":"synthetic later failure"}),
+                        );
+                    }
+                    if case == "activity-after-idle" {
+                        self.managed_hook("PreToolUse",serde_json::json!({"prompt_id":idle,"tool_name":"Synthetic","tool_input":{}}));
+                    }
+                }
+            }
         }
         let first: String = text.lines().next().unwrap_or("").chars().take(30).collect();
         self.last = format!("\u{23fa} GOT: {first}");
@@ -573,6 +689,14 @@ mod s1_wire_client;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && args[1] == "--version" {
+        println!(
+            "{}",
+            std::env::var("FAKE_CLAUDE_VERSION")
+                .unwrap_or_else(|_| "0.0.0 (synthetic fixture)".into())
+        );
+        return;
+    }
     // Opt-in owned S5 kernel-enrolled Agent; no default provider/fake path is affected.
     if std::env::var("FAKE_CLAUDE_MODE").as_deref() == Ok("s5-agent") {
         let dir = std::env::var("S5_AGENT_FIXTURE_DIR").expect("owned S5 fixture directory");
@@ -650,6 +774,8 @@ fn main() {
         log: std::env::var("FAKE_CLAUDE_LOG").ok(),
         submits: 0,
         pasting: false,
+        managed_settings: value_of("--settings")
+            .map(|p| serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()),
     };
 
     c13_init(&fake, &args);
@@ -667,6 +793,15 @@ fn main() {
     if let Ok(mut t) = rustix::termios::tcgetattr(stdin) {
         t.make_raw();
         let _ = rustix::termios::tcsetattr(stdin, rustix::termios::OptionalActions::Now, &t);
+    }
+    if fake.managed() {
+        fake.draw_box();
+        if std::env::var("FAKE_CLAUDE_MANAGED_CASE").as_deref() != Ok("skip-start") {
+            fake.managed_hook(
+                "SessionStart",
+                serde_json::json!({"source":if fake.resumed {"resume"} else {"startup"}}),
+            );
+        }
     }
     if fake.mode == "noread" {
         fake.draw_box();

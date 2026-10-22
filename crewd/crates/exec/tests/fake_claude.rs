@@ -1075,3 +1075,53 @@ async fn brief_carries_over_to_the_fresh_session_after_a_refused_resume() {
     );
     r.stop().await;
 }
+
+/// The managed producer keeps the original birth: a refused resume cannot
+/// silently transfer an authorized request to a different native session.
+#[tokio::test]
+async fn managed_refused_resume_never_respawns_or_moves_the_initial_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("submitted.log");
+    let mut config = DriverConfig::new(dir.path().join("run"));
+    config.managed_hook_producer = true;
+    config.stop_grace = Duration::from_millis(500);
+    let start = ClaudeStart {
+        session_id: next_session_id(),
+        program: PathBuf::from(FAKE),
+        child_path: "/usr/bin:/bin".into(),
+        spec: ClaudeSpec {
+            workdir: dir.path().to_owned(),
+            initial_prompt: Some("SYNTHETIC_NEVER_TRANSFER".into()),
+            additional_env: BTreeMap::from([
+                ("FAKE_CLAUDE_MODE".into(), "refuse".into()),
+                ("FAKE_CLAUDE_LOG".into(), log.display().to_string()),
+            ]),
+            ..Default::default()
+        },
+        ledger: Arc::new(MemoryLedger::with(Some("gone-managed-id"))),
+    };
+    let (h, rx) = start_claude(start, config).await.unwrap();
+    let mut r = Run {
+        h,
+        rx,
+        log,
+        _dir: dir,
+    };
+    let seen = r.until(|e| matches!(e, SessionEvent::Exited(_))).await;
+    assert_eq!(
+        seen.iter()
+            .filter(|e| matches!(e, SessionEvent::Spawned { .. }))
+            .count(),
+        1,
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|e| matches!(e, SessionEvent::ResumeRefused { .. })),
+        "{seen:?}"
+    );
+    assert!(
+        r.submitted().is_empty(),
+        "managed body must never move to a fresh birth"
+    );
+}

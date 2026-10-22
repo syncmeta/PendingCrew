@@ -541,6 +541,7 @@ async fn serve_with_hooks_inner(
         let executor = orchestra::exec_claude::ClaudeExecutor::new(
             orchestra::exec_claude::ClaudeExecutorConfig {
                 program: o.claude,
+                managed_factory: state.native_helpers.get().cloned(),
                 data_dir: data_dir.clone(),
                 helper: o.helper.expect("captured helper"),
                 registry: Some(registry.clone()),

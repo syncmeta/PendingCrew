@@ -23,6 +23,7 @@ pub enum ClaudeProgram {
 
 pub struct ClaudeExecutorConfig {
     pub program: ClaudeProgram,
+    pub managed_factory: Option<Arc<crate::native_helpers::NativeFactory>>,
     pub data_dir: PathBuf,
     /// MCP / hook helper（生产 = crewd 自己的可执行文件）。
     pub helper: PathBuf,
@@ -39,6 +40,7 @@ pub struct ClaudeExecutorConfig {
 
 pub struct ClaudeExecutor {
     program: ClaudeProgram,
+    managed_factory: Option<Arc<crate::native_helpers::NativeFactory>>,
     data_dir: PathBuf,
     helper: PathBuf,
     registry: Option<Arc<ProcessRegistry>>,
@@ -56,6 +58,7 @@ impl ClaudeExecutor {
             #[cfg(test)]
             identity_override: None,
             program: c.program,
+            managed_factory: c.managed_factory,
             data_dir: c.data_dir.clone(),
             helper: c.helper,
             registry: c.registry,
@@ -96,6 +99,9 @@ impl ClaudeExecutor {
 }
 
 impl Executor for ClaudeExecutor {
+    fn accepts_resume(&self) -> bool {
+        self.managed_factory.is_none()
+    }
     fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
         use crewd_proto::executors::{
             ExecutorBackend, ExecutorFeatures, ExecutorProfile, ExecutorUnavailableReason,
@@ -126,7 +132,12 @@ impl Executor for ClaudeExecutor {
         Some(ExecutorProfile {
             id: "claude".into(),
             executor: "claude".into(),
-            display_name: "Claude (existing PTY)".into(),
+            display_name: if self.managed_factory.is_some() {
+                "Claude (managed PTY; 2.1.301 required)"
+            } else {
+                "Claude (existing PTY)"
+            }
+            .into(),
             backend: ExecutorBackend::ExistingClaudePty,
             available: reason.is_none(),
             features: ExecutorFeatures {
@@ -155,28 +166,75 @@ impl Executor for ClaudeExecutor {
             let (program, child_path) = self.program().await?;
             // Discovery can await a login shell; recheck immediately before creating launch files.
             self.check_launch()?;
+            let program_identity = crate::build_info::ExeIdentity::capture(&program).ok();
+            let managed = self.managed_factory.is_some();
+            if managed {
+                if req
+                    .ledger
+                    .recorded()
+                    .map_err(|e| LaunchError::Failed(e.to_string()))?
+                    .is_some()
+                {
+                    return Err(LaunchError::NotConfigured("Claude managed history/resume unavailable; no native process or old input was started".into()));
+                }
+                if !super::exec_claude_managed::supported_program(
+                    &program,
+                    &child_path,
+                    &self.extra_env,
+                )
+                .await
+                {
+                    return Err(LaunchError::NotConfigured("Claude managed PTY requires exactly 2.1.301 (Claude Code) with the supported fail-closed hook contract; no task input was sent".into()));
+                }
+                if !program_identity
+                    .as_ref()
+                    .is_some_and(crate::build_info::ExeIdentity::still_on_disk)
+                {
+                    return Err(LaunchError::BinaryReplaced);
+                }
+            }
+            self.check_launch()?;
+            let _managed_launch = if managed {
+                Some(
+                    super::exec_claude_managed::LaunchGuard::new(
+                        self.managed_factory.as_ref().unwrap(),
+                        &req.session_id,
+                    )
+                    .map_err(LaunchError::Failed)?,
+                )
+            } else {
+                None
+            };
             let mut config = DriverConfig::new(self.runtime_dir.clone());
+            config.managed_hook_producer = managed;
             config.registry = self.registry.clone();
             config.terminal_observer = Some(Arc::new(
                 crewd_exec::acp::terminal::TerminalTap::new(1, 64)
                     .map_err(|_| LaunchError::Failed("terminal observer unavailable".into()))?,
             ));
-            config.delivery_observer = req.delivery_observer.clone();
+            config.delivery_observer = if managed {
+                None
+            } else {
+                req.delivery_observer.clone()
+            };
             config.claude_projects_dir = self.projects_dir.clone();
-            let comms = comms_for(
+            let mut comms = comms_for(
                 &self.helper,
                 &self.data_dir,
                 &req.session_id,
                 &req.crew_id,
                 &req.token,
             );
+            comms.managed_hooks = managed;
+            let initial = req.initial_prompt.clone();
+            let managed_session = req.session_id.clone();
             let spec = ClaudeSpec {
                 workdir: req.workdir,
                 model: req.model,
                 effort: req.effort,
                 fast_mode: None,
                 system_prompt: req.system_prompt,
-                initial_prompt: req.initial_prompt,
+                initial_prompt: if managed { None } else { req.initial_prompt },
                 comms: Some(comms),
                 additional_env: self.extra_env.clone(),
             };
@@ -190,6 +248,33 @@ impl Executor for ClaudeExecutor {
             let (handle, events) = start_claude(start, config)
                 .await
                 .map_err(LaunchError::Start)?;
+            if managed {
+                if !program_identity
+                    .as_ref()
+                    .is_some_and(crate::build_info::ExeIdentity::still_on_disk)
+                {
+                    let _ = handle.stop();
+                    return Err(LaunchError::BinaryReplaced);
+                }
+                let result = super::exec_claude_managed::ManagedHandle::create(
+                    self.managed_factory
+                        .as_ref()
+                        .expect("managed factory qualified"),
+                    managed_session,
+                    handle.clone(),
+                    events,
+                    initial,
+                    req.delivery_observer,
+                )
+                .await;
+                return match result {
+                    Ok((managed, events)) => Ok((managed as Arc<dyn ExecHandle>, events)),
+                    Err(error) => {
+                        let _ = handle.stop();
+                        Err(LaunchError::Failed(error))
+                    }
+                };
+            }
             Ok((Arc::new(handle) as Arc<dyn ExecHandle>, events))
         })
     }
@@ -222,6 +307,7 @@ pub fn comms_for(
         session_id: session_id.to_string(),
         token: token.to_string(),
         hooks: true,
+        managed_hooks: false,
     }
 }
 
@@ -233,6 +319,7 @@ mod tests {
     fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
         ClaudeExecutor::new(ClaudeExecutorConfig {
             program,
+            managed_factory: None,
             data_dir: data_dir.to_path_buf(),
             helper: PathBuf::from("/nonexistent/crewd-helper"),
             registry: None,

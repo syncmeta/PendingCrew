@@ -1436,6 +1436,12 @@ impl<P: Port> Core<P> {
             .execs
             .get(&row.executor)
             .map_err(|_| ControlError::Unsupported(row.executor.clone()))?;
+        if !exec.accepts_resume() {
+            return Err(ControlError::Unsupported(format!(
+                "{} managed history/resume unavailable",
+                row.executor
+            )));
+        }
         self.check_launch(&exec, &row.crew_id, &row.executor)?;
         if row.workdir.is_none() {
             return Err(ControlError::NoWorkdir(row.id));

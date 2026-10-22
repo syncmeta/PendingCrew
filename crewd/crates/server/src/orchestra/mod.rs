@@ -8,6 +8,7 @@ pub mod db;
 pub mod deliver;
 pub mod exec;
 pub mod exec_claude;
+pub(crate) mod exec_claude_managed;
 pub mod exec_codex;
 pub mod hibernate;
 pub mod hooks;

@@ -32,6 +32,7 @@ async fn generated_launch_files_and_token_use_the_external_private_runtime() {
     let helper = fixture.path().join("synthetic-helper-not-executed");
     let exec = ClaudeExecutor::new(ClaudeExecutorConfig {
         program: ClaudeProgram::Path(fake),
+        managed_factory: None,
         data_dir: data.clone(),
         helper: helper.clone(),
         registry: None,

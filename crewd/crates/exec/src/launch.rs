@@ -120,6 +120,8 @@ pub struct CommsSpec {
     pub token: String,
     /// false = 只挂 MCP，不注册任何 hook。
     pub hooks: bool,
+    /// Trusted managed producer only; never inferred from provider JSON.
+    pub managed_hooks: bool,
 }
 
 /// `Debug` 不打印 token（它会进日志 / panic 信息）。
@@ -183,6 +185,11 @@ pub enum HookEvent {
     PostToolUseFailure,
     Stop,
     SessionStart,
+    UserPromptSubmit,
+    StopFailure,
+    SessionEnd,
+    Notification,
+    ManagedActivity,
 }
 
 impl HookEvent {
@@ -200,6 +207,11 @@ impl HookEvent {
             Self::PostToolUseFailure => "PostToolUseFailure",
             Self::Stop => "Stop",
             Self::SessionStart => "SessionStart",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::StopFailure => "StopFailure",
+            Self::SessionEnd => "SessionEnd",
+            Self::Notification => "Notification",
+            Self::ManagedActivity => "PreToolUse",
         }
     }
 
@@ -210,6 +222,11 @@ impl HookEvent {
             Self::PostToolUse | Self::PostToolUseFailure => "post-tool-use",
             Self::Stop => "stop",
             Self::SessionStart => "session-start",
+            Self::UserPromptSubmit => "user-prompt-submit",
+            Self::StopFailure => "stop-failure",
+            Self::SessionEnd => "session-end",
+            Self::Notification => "notification",
+            Self::ManagedActivity => "managed-activity",
         }
     }
 
@@ -340,10 +357,27 @@ pub fn prepare_claude(
         args.mcp_config_file = Some(write_json(files.dir(), "mcp.json", &mcp)?);
         if comms.hooks {
             let mut hooks = serde_json::Map::new();
-            for e in HookEvent::ALL {
+            let mut events = HookEvent::ALL.to_vec();
+            if comms.managed_hooks {
+                events.extend([
+                    HookEvent::UserPromptSubmit,
+                    HookEvent::StopFailure,
+                    HookEvent::SessionEnd,
+                    HookEvent::Notification,
+                    HookEvent::ManagedActivity,
+                ]);
+            }
+            for e in events {
                 let mut entry = serde_json::Map::new();
                 if e == HookEvent::SessionStart {
-                    entry.insert("matcher".into(), json!("resume|compact|clear|fork"));
+                    entry.insert(
+                        "matcher".into(),
+                        if comms.managed_hooks {
+                            json!("startup|resume|compact|clear|fork")
+                        } else {
+                            json!("resume|compact|clear|fork")
+                        },
+                    );
                 }
                 entry.insert(
                     "hooks".to_string(),
@@ -353,6 +387,26 @@ pub fn prepare_claude(
                         "timeout": e.timeout_secs(),
                     }]),
                 );
+                if e == HookEvent::UserPromptSubmit {
+                    entry["hooks"][0]["onFailure"] = json!("block");
+                    // A legacy/replaced helper may silently exit0. Validate its
+                    // exact affirmative output outside that helper as well.
+                    let command = helper.hook_command(e, &token_file);
+                    let wrapper = format!(
+                        "#!/bin/sh\nresult=$({command}) || exit 2\n[ \"$result\" = '{{\"continue\":true}}' ] || exit 2\nprintf '%s\\n' \"$result\"\n"
+                    );
+                    let wrapper =
+                        write_private(files.dir(), "managed-submit-guard.sh", wrapper.as_bytes())?;
+                    entry["hooks"][0]["command"] = json!(format!(
+                        "/bin/sh {}",
+                        shell_quote(wrapper.to_str().ok_or_else(|| std::io::Error::other(
+                            "non-UTF8 managed wrapper path"
+                        ))?)
+                    ));
+                }
+                if e == HookEvent::Notification {
+                    entry.insert("matcher".into(), json!("idle_prompt"));
+                }
                 hooks.insert(
                     e.settings_key().to_string(),
                     Value::Array(vec![Value::Object(entry)]),
@@ -404,11 +458,98 @@ mod tests {
             session_id: "worker-1".to_string(),
             token: "tok-SECRET".to_string(),
             hooks: true,
+            managed_hooks: false,
         }
     }
 
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn managed_guard_adds_only_launch_local_hooks_and_fails_closed_before_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let mut comms = comms();
+        comms.managed_hooks = true;
+        let spec = ClaudeSpec {
+            comms: Some(comms),
+            ..Default::default()
+        };
+        let (args, _files) = prepare_claude(
+            &spec,
+            AgentSessionArg::New("managed-hook-test".into()),
+            root.path(),
+        )
+        .unwrap();
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap()).unwrap();
+        let guard = &settings["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+        assert_eq!(guard["onFailure"], "block");
+        assert!(
+            guard["command"]
+                .as_str()
+                .unwrap()
+                .contains("managed-submit-guard.sh")
+        );
+        let wrapper =
+            std::fs::read_to_string(_files.dir().join("managed-submit-guard.sh")).unwrap();
+        assert!(wrapper.contains("user-prompt-submit") && wrapper.contains("|| exit 2"));
+        assert!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("managed-activity")
+        );
+        assert!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]
+                .get("onFailure")
+                .is_none(),
+            "passive activity does not approve/deny tools"
+        );
+        assert!(
+            settings["hooks"]["Stop"][0]["hooks"][0]
+                .get("onFailure")
+                .is_none()
+        );
+        assert_eq!(
+            settings["hooks"]["Notification"][0]["matcher"],
+            "idle_prompt"
+        );
+        assert!(spec.initial_prompt.is_none());
+    }
+
+    #[test]
+    fn managed_guard_rejects_silent_old_helper_and_malformed_allow_output() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("synthetic helper");
+        let mut comms = comms();
+        comms.managed_hooks = true;
+        comms.helper = helper.clone();
+        let spec = ClaudeSpec {
+            comms: Some(comms),
+            ..Default::default()
+        };
+        let (_, files) = prepare_claude(
+            &spec,
+            AgentSessionArg::New("synthetic-managed".into()),
+            root.path(),
+        )
+        .unwrap();
+        for (body, expected) in [
+            ("exit 0", 2),
+            ("printf 'null'", 2),
+            ("printf '{\"continue\":false}'", 2),
+            ("printf '{\"continue\":true}'; exit 1", 2),
+            ("printf '{\"continue\":true}'", 0),
+        ] {
+            std::fs::write(&helper, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let output = std::process::Command::new("/bin/sh")
+                .arg(files.dir().join("managed-submit-guard.sh"))
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(expected), "{body}");
+        }
     }
 
     #[test]
