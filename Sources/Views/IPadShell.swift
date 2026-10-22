@@ -69,6 +69,7 @@ struct IPadShell: View {
         } detail: {
             detail
         }
+        .modifier(CrewdWindowMaterial())
         .onChange(of: selectedCrewId) { _, id in
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
             communicationView = .human

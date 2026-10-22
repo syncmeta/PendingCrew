@@ -112,6 +112,7 @@ struct CrewListView: View {
 
 #if os(iOS)
 private struct CrewMobileDirectory: View {
+    @EnvironmentObject private var appModel:AppModel
     @ObservedObject var workspace: CrewdWorkspace
     let crews: [CrewSummary]
     @Binding var selection: String?
@@ -128,6 +129,10 @@ private struct CrewMobileDirectory: View {
                 ForEach(CrewdNavigation.Sidebar.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal, 12).padding(.vertical, 10)
             List(selection: $selection) {
+                Button{showingStatus=true}label:{
+                    CrewdHostConnectionLabel(client:workspace.client,name:activeHostName,connecting:appModel.connectingAuthority || workspace.status == "正在连接",hasUnfinishedOperation:workspace.error != nil || !workspace.durableUnknown.isEmpty)
+                        .frame(minHeight:44,alignment:.leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
                 if mode == .contacts {
                     ForEach(CrewdNavigation.directory(visible, collapsed: collapsed)) { row in
                         if let crew = crews.first(where: { $0.id == row.object }) {
@@ -147,16 +152,14 @@ private struct CrewMobileDirectory: View {
                         if let crew = crews.first(where: { $0.id == id }) { directoryRow(crew).tag(crew.id) }
                     }
                 }
-            }.listStyle(.sidebar)
-            CrewdProviderStatusFooter()
-            Divider()
-            Button{showingStatus=true}label:{
-                VStack(alignment:.leading,spacing:5){
-                    Label(workspace.client.readyForWork ? "已连接":workspace.status,systemImage:workspace.client.readyForWork ? "checkmark.shield":"wifi.exclamationmark").font(.caption)
-                    if workspace.error != nil{Label("当前操作未完成 · 核对",systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(.orange)}
-                }.frame(maxWidth:.infinity,alignment:.leading).padding(12)
-            }.buttonStyle(.plain).accessibilityLabel("连接状态与原请求核对")
+            }.listStyle(.sidebar).scrollContentBackground(.hidden)
+
         }.sheet(isPresented:$showingStatus){CrewMobileConnectionReadback(workspace:workspace)}
+    }
+    private var activeHostName:String {
+        let window=appModel.crewdWindow
+        if let selected=window.selected,selected == workspace.authorityRecordID,let computer=window.computers.first(where:{$0.id == selected}){return computer.name}
+        return "当前电脑"
     }
     private func directoryRow(_ crew: CrewSummary) -> some View {
         HStack(spacing: 10) {

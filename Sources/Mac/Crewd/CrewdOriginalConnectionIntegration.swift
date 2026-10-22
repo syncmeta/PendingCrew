@@ -127,6 +127,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 struct CrewdOriginalConnectionStatus: View {
     @ObservedObject var workspace: CrewdWorkspace
     var compact=false
+    var machineName:String?=nil
     @State private var checkingOriginal=false
     @State private var selectingRecovery = false
     @State private var askRecovery = false
@@ -135,7 +136,12 @@ struct CrewdOriginalConnectionStatus: View {
     @State private var showingDetails = false
     var body:some View {
         VStack(alignment:.leading,spacing:6){
-            if compact {
+            if let machineName {
+                Button{showingDetails=true}label:{
+                    CrewdHostConnectionLabel(client:workspace.client,name:machineName,connecting:workspace.status == "正在连接",hasUnfinishedOperation:workspace.error != nil || !workspace.durableUnknown.isEmpty)
+                        .frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).help("电脑连接详情与原请求核对")
+            }else if compact {
                 Button{showingDetails=true}label:{
                     Label(workspace.error == nil ? "连接状态":"当前操作未完成",systemImage:workspace.error == nil ? "network":"exclamationmark.triangle")
                 }.labelStyle(.iconOnly).foregroundStyle(workspace.error == nil ? Theme.Palette.inkMuted:Theme.Palette.amber).help("连接状态与原请求核对").accessibilityLabel(workspace.error == nil ? "查看连接状态":"查看当前未完成操作与原请求")
@@ -163,6 +169,9 @@ struct CrewdOriginalConnectionStatus: View {
                             Text(error).font(CrewdType.label).textSelection(.enabled).fixedSize(horizontal:false,vertical:true).padding(.top,6)
                         }.foregroundStyle(.orange)
                         Text("结果未知时只核对原请求，不会自动重新提交。").font(CrewdType.caption).foregroundStyle(.secondary)
+                    }
+                    if workspace.error == nil,!workspace.durableUnknown.isEmpty {
+                        Label("有原请求结果待核对",systemImage:"exclamationmark.triangle").font(CrewdType.caption).foregroundStyle(.orange)
                     }
                     if workspace.client.capabilities.contains("command.receipts") {
                         Button("核对原请求"){showingDetails=false;checkingOriginal=true}

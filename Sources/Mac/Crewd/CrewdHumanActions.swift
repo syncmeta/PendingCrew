@@ -18,11 +18,8 @@ enum CrewdChatStyle {
     static func line(_ scheme:ColorScheme)->Color {color(0xE2E0D7,0x383530,scheme)}
     static func listSelection(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x33312D,scheme)}
     static func canvas(_ scheme:ColorScheme)->Color {
-        #if os(macOS)
-        Color(nsColor:.textBackgroundColor)
-        #else
-        Color(uiColor:.systemBackground)
-        #endif
+        // Inherit the shared window material; never add a chat-only plate.
+        Color.clear
     }
     static func ink(_ scheme:ColorScheme)->Color {color(0x1B1A14,0xECE9E0,scheme)}
     static func muted(_ scheme:ColorScheme)->Color {color(0x6E6A5C,0xA8A294,scheme)}

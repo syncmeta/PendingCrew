@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 enum CrewdType {
     #if os(macOS)
@@ -176,5 +179,98 @@ struct CrewdPairingStepHeader:View {
         CrewdPanelHeader(title:awaitingReceipt ? "等待电脑确认":hasPreview ? "核对这台电脑":"连接你的电脑",
             detail:awaitingReceipt ? "把回应交给电脑，批准后导入正式确认码。":hasPreview ? "确认名称、地址和身份指纹，再授权这台设备。":"导入电脑生成的邀请，先查看身份，再由你确认。",
             symbol:awaitingReceipt ? "hourglass":"desktopcomputer")
+    }
+}
+
+/// One material at the window root; panes remain transparent rather than
+/// stacking glass sheets behind the conversation or individual sidebar rows.
+struct CrewdWindowMaterial:ViewModifier {
+    @ViewBuilder func body(content:Content)->some View {
+        #if os(macOS)
+        if #available(macOS 15.0,*) {
+            content.containerBackground(.ultraThinMaterial,for:.window)
+        }else {
+            content.background(CrewdWindowVisualEffect().ignoresSafeArea())
+        }
+        #else
+        if #available(iOS 18.0,*) {
+            content.containerBackground(.ultraThinMaterial,for:.navigationSplitView)
+        }else {content.background(.ultraThinMaterial)}
+        #endif
+    }
+}
+#if os(macOS)
+private struct CrewdWindowVisualEffect:NSViewRepresentable {
+    func makeNSView(context:Context)->NSVisualEffectView {
+        let view=CrewdBehindWindowMaterialView()
+        view.material = .underWindowBackground
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+    func updateNSView(_ view:NSVisualEffectView,context:Context){}
+}
+private final class CrewdBehindWindowMaterialView:NSVisualEffectView {
+    override func viewDidMoveToWindow(){
+        super.viewDidMoveToWindow()
+        window?.isOpaque=false
+        window?.backgroundColor = .clear
+    }
+}
+#endif
+/// Native SwiftUI buttons retain the original five-domain binding. Only this
+/// navigation capsule uses Liquid Glass; long content and messages do not.
+struct CrewdGlassWorkspaceTabs:View {
+    @Binding var selection:String
+    #if os(macOS)
+    @ScaledMetric(relativeTo:.caption) private var tabHeight:CGFloat=28
+    #else
+    @ScaledMetric(relativeTo:.subheadline) private var tabHeight:CGFloat=44
+    #endif
+    private let items=[("消息","消息"),("人待办","真人Todo"),("AI待办","Todo"),("文档/数据","文档"),("计划/进展","进展")]
+    var body:some View {
+        ScrollViewReader {proxy in
+            ScrollView(.horizontal,showsIndicators:false){capsule.padding(1)}
+                .onChange(of:selection){_,value in proxy.scrollTo(value,anchor:.center)}
+                .onAppear{proxy.scrollTo(selection,anchor:.center)}
+        }.frame(height:max(CrewdType.target,tabHeight)+10)
+            .accessibilityElement(children:.contain).accessibilityLabel("工作区内容")
+    }
+    @ViewBuilder private var capsule:some View {
+        if #available(macOS 26.0,iOS 26.0,*) {
+            buttons.glassEffect(.regular,in:Capsule())
+        }else {buttons.background(.regularMaterial,in:Capsule())}
+    }
+    private var buttons:some View {
+        HStack(spacing:2){
+            ForEach(items,id:\.1){item in
+                Button {selection=item.1}label:{
+                    Text(item.0).font(CrewdType.label.weight(selection == item.1 ? .semibold:.regular))
+                        .foregroundStyle(selection == item.1 ? Theme.Palette.accent:Theme.Palette.inkMuted)
+                        .lineLimit(1).padding(.horizontal,13).frame(minHeight:max(CrewdType.target,tabHeight))
+                        .background(selection == item.1 ? Theme.Palette.accent.opacity(0.13):Color.clear,in:Capsule())
+                        .contentShape(Capsule())
+                }.buttonStyle(.plain).id(item.1)
+                    .accessibilityAddTraits(selection == item.1 ? .isSelected:[])
+            }
+        }.padding(4).fixedSize(horizontal:true,vertical:false)
+    }
+}
+/// Green means the current hello/subscription/authority-qualified connection,
+/// never an entry in the paired-computer catalogue or an existing socket file.
+struct CrewdHostConnectionLabel:View {
+    @ObservedObject var client:CrewdClient
+    let name:String
+    var connecting=false
+    var hasUnfinishedOperation=false
+    private var state:String {client.readyForWork ? "已连接":client.connected ? "正在验证连接":connecting ? "正在连接":"未连接"}
+    var body:some View {
+        HStack(spacing:7){
+            Circle().fill(client.readyForWork ? Color.green:client.connected || connecting ? Color.orange:Color.secondary.opacity(0.5)).frame(width:7,height:7)
+            Text(name).lineLimit(1)
+            if !client.readyForWork {Text(state).font(CrewdType.caption).foregroundStyle(.secondary).lineLimit(1)}
+            if hasUnfinishedOperation {Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange)}
+        }.accessibilityElement(children:.ignore)
+            .accessibilityLabel(name + "，" + state + (hasUnfinishedOperation ? "，当前操作未完成，可核对原请求":""))
     }
 }
