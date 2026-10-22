@@ -486,6 +486,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "subtle",
  "x509-parser",
 ]
 

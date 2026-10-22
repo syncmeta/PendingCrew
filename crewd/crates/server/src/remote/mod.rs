@@ -1,4 +1,5 @@
 //! Qualified remote Human transport. Unix process authority is never reused here.
+mod enrollment;
 mod identity;
 mod transport;
 use crate::{AppState, dispatch};
@@ -246,6 +247,8 @@ impl Manager {
         let address = socket.local_addr().map_err(dispatch::internal)?;
         let tls = crewd_remote::server_configuration(&identity.certificate, self.pins.clone())
             .map_err(dispatch::internal)?;
+        let enrollment_tls = crewd_remote::enrollment_server_configuration(&identity.certificate)
+            .map_err(dispatch::internal)?;
         let epoch = self.listener_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.changed
             .send_modify(|change| *change = change.wrapping_add(1));
@@ -265,6 +268,7 @@ impl Manager {
             weak,
             socket,
             Arc::new(tls),
+            Arc::new(enrollment_tls),
             revision,
             epoch,
         )));
@@ -548,12 +552,22 @@ impl Manager {
             .map_err(write_error)?;
         Ok(result)
     }
-    async fn accept(&self, p: RemoteAcceptParams) -> std::result::Result<Value, RpcError> {
+    async fn accept(
+        self: &Arc<Self>,
+        p: RemoteAcceptParams,
+    ) -> std::result::Result<Value, RpcError> {
+        let _guard = self.mutation.lock().await;
+        self.accept_locked(p, None).await
+    }
+    async fn accept_locked(
+        self: &Arc<Self>,
+        p: RemoteAcceptParams,
+        enrollment: Option<enrollment::CommitGuard>,
+    ) -> std::result::Result<Value, RpcError> {
         request_id(&p.request_id)?;
         if !p.response_envelope.is_bounded() {
             return Err(bad("配对回复格式无效"));
         }
-        let _guard = self.mutation.lock().await;
         let identity = self.ensure_identity().await?;
         let authority = identity.public.authority_id.clone();
         let input = serde_json::to_string(&p).map_err(dispatch::internal)?;
@@ -561,6 +575,9 @@ impl Manager {
             .witness(&authority, &p.request_id, "remote.accept", &input)
             .await?
         {
+            if enrollment.is_some() {
+                return Err(conflict());
+            }
             let mut result: RemoteAcceptResult =
                 serde_json::from_value(witness).map_err(dispatch::internal)?;
             let id = result.grant.id.clone();
@@ -635,9 +652,13 @@ impl Manager {
         };
         let value = serde_json::to_value(&result).map_err(dispatch::internal)?;
         let saved = value.clone();
+        let enrollment_owner = self.clone();
         self.db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(guard) = &enrollment {
+                        guard.check_tx(&enrollment_owner, tx, &response, &p.request_id)?;
+                    }
                     let invitation = facts::invitation(tx, &response.invitation_id, &authority)?
                         .ok_or_else(|| {
                             crewd_store::StoreError::Invalid("unknown pairing invitation".into())
@@ -676,6 +697,17 @@ impl Manager {
                         &saved.to_string(),
                         &crewd_store::now_ts(),
                     )?;
+                    if let Some(guard) = &enrollment {
+                        crewd_store::enrollment::commit(
+                            tx,
+                            &authority,
+                            &guard.enrollment_id,
+                            crewd_store::enrollment::Committed {
+                                input_digest: guard.digest.clone(),
+                                result: result.clone(),
+                            },
+                        )?;
+                    }
                     facts::audit(
                         tx,
                         &authority,

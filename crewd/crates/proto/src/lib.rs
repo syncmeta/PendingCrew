@@ -21,6 +21,8 @@ pub mod work;
 pub use work::*;
 pub mod remote;
 pub use remote::*;
+pub mod enrollment;
+pub use enrollment::*;
 pub mod resources;
 pub use resources::*;
 pub mod knowledge_channels;
