@@ -156,6 +156,11 @@ final class CrewdWorkspace: ObservableObject {
         guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}
         return try await self.submitRPC(method,params)
     }
+    lazy var channelResources=CrewdResources { [weak self] method,params in
+        guard let self,!self.retired else{throw CrewdClientError(message:"连接已切换，旧作用域不能提交。",kind:.notSubmitted)}
+        return try await self.submitRPC(method,params)
+    }
+    @Published var todoMutationDrafts = CrewdTodoMutationDrafts()
     lazy var channelWork=CrewdChannelWorkStore { [weak self] method,params in
         guard let self, !self.retired else{throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)};return try await self.submitRPC(method,params)
     }
@@ -357,6 +362,7 @@ final class CrewdWorkspace: ObservableObject {
             self.knowledge.handleEvent(name, data)
             self.authorityEvents.send((name, data))
             self.resources.handleEvent(name,data)
+            self.channelResources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
             if name == "document.changed" || name == "viewFolder.changed" || name == "channel.workChanged" { return }
             if name.hasPrefix("message.") {
@@ -365,14 +371,14 @@ final class CrewdWorkspace: ObservableObject {
                 } else {self.activityAffected.removeAll()}
                 self.activityDirty=true
             } else if name.hasPrefix("crew.") || name == "events.lagged" {self.activityDirty=true;self.activityAffected.removeAll()}
-            if name.hasPrefix("work.") || name.hasPrefix("ask.") || name.hasPrefix("crew.") || name == "events.lagged" { self.workDirty = true }
+            if name.hasPrefix("work.") || name.hasPrefix("ask.") || name == "todo.attributesChanged" || name.hasPrefix("crew.") || name == "events.lagged" { self.workDirty = true }
             if name == "session.runnerItem", data["sessionId"].string == self.sessionID {
                 let item = data["item"]
                 if let id = item["id"].string, let index = self.runnerItems.firstIndex(where: {$0["id"].string == id}) { self.runnerItems[index] = item }
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
                 self.closeTerminalDisplays()
-                self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
+                self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
@@ -380,7 +386,7 @@ final class CrewdWorkspace: ObservableObject {
             self?.closeTerminalDisplays()
             self?.clearExecutorProfiles()
             guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
-            self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
+            self.knowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
             self.reconnect?.cancel()
             let attempt = UUID(); self.reconnectID = attempt
@@ -419,7 +425,7 @@ final class CrewdWorkspace: ObservableObject {
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
-        knowledge.invalidate(); resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
+        knowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
         client.retire(); status = "已切换连接"
     }
     func connect() async {
@@ -611,7 +617,7 @@ final class CrewdWorkspace: ObservableObject {
     private func connectOnly() async throws {
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         clearExecutorProfiles()
-        knowledge.invalidate(); resources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        knowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         #if os(macOS)
@@ -624,6 +630,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         workStore.configureCapabilities(client.capabilities)
         resources.configureCapabilities(client.capabilities)
+        channelResources.configureCapabilities(client.capabilities)
         channelWork.configureCapabilities(client.capabilities)
         guard generation == current, !Task.isCancelled, !sleeping else { throw CancellationError() }
         error = nil
@@ -663,7 +670,7 @@ final class CrewdWorkspace: ObservableObject {
 
     func selectCrew(_ id: String) {
         guard crewID != id else { return }
-        knowledge.invalidate(); workStore.selectCrew(id); resources.selectCrew(id); workDirty = true
+        knowledge.invalidate(); workStore.selectCrew(id); resources.selectCrew(id); channelResources.selectScope(crew:id,channel:""); workDirty = true
         channelWork.selectChannel(crew:id,channel:"")
         clearExecutorProfiles(); selectedExecutor = "codex"
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
@@ -704,7 +711,7 @@ final class CrewdWorkspace: ObservableObject {
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.
     private var openingCaptains = Set<String>()
-    @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "你是这个新机组的机长。请读取群聊与 Todo，回应人类需求；没有任务时待命。") async -> String? {
+    @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "读取本机组群聊与待办，回应人类需求；没有任务时待命。") async -> String? {
         guard !openingCaptains.contains(id), !isRetired else { return nil }
         openingCaptains.insert(id); defer { openingCaptains.remove(id) }
         let epoch = observationGeneration, connection = client.connectionEpoch
@@ -731,7 +738,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    func selectChannel(_ id: String) { selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id); messages = []; scheduleSync() }
+    func selectChannel(_ id: String) { selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id);channelResources.selectScope(crew:crewID,channel:id); messages = []; scheduleSync() }
 
     func scheduleSync(recoverHistory: Bool = false) {
         guard !sleeping, client.connected else { return }
@@ -815,7 +822,7 @@ final class CrewdWorkspace: ObservableObject {
         let dmPeer = selectedMembers.contains(where: {$0["kind"].string == "session" && $0["id"].string == sessionID}) && channels.first(where: {$0["id"].string == channelID})?["kind"].string == "dm"
         if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = CrewdConversationProjection.selected(channels, requested: channelID) }
-        channelWork.selectChannel(crew:crew,channel:channelID)
+        channelWork.selectChannel(crew:crew,channel:channelID);channelResources.selectScope(crew:crew,channel:channelID)
         let session = sessionID, channel = channelID
         if !session.isEmpty {
             let view = try await client.call("session.inspect", .object(["sessionId": .string(session), "maxLines": .number(200)]))
@@ -882,7 +889,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
-        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe"].contains(method)
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {
@@ -1027,6 +1034,38 @@ final class CrewdWorkspace: ObservableObject {
         let target = try CrewdCommandTarget(value)
         guard target.sessionID == id else { throw CrewdClientError(message: "控制目标返回其它会话，未接受。") }
         controlTargets[id] = target; return target
+    }
+    static let resourceMutationMethods:Set<String>=["todo.assign","todo.setState","humanTask.create","channel.workTagsSet"]
+    func lookupOriginalResource(_ record:CrewdPresentationJournal.Prepared)async throws->CrewdValue {
+        guard record.scope == presentationScope,Self.resourceMutationMethods.contains(record.method),
+              let id=record.params["requestId"].string.flatMap(UUID.init(uuidString:)) else{throw CrewdClientError(message:"原资源请求作用域或身份不符。",kind:.notSubmitted)}
+        let epoch=observationGeneration
+        let value=try await readValue("resource.requestLookup",.object(["requestId":.string(id.uuidString.lowercased())]))
+        guard acceptsObservation(epoch),record.scope == presentationScope else{throw CancellationError()}
+        try validateOriginalResource(value,record:record);return value
+    }
+    private func validateOriginalResource(_ value:CrewdValue,record:CrewdPresentationJournal.Prepared)throws {
+        guard value["requestId"] == record.params["requestId"] else{throw CrewdClientError(message:"原资源结果请求身份不符。")}
+        if value["status"] == .string("notFound") {
+            guard value["operation"] == .null,value["result"] == .null else{throw CrewdClientError(message:"未找到结果却附带操作内容。")};return
+        }
+        guard value["status"] == .string("committed"),value["operation"] == .string(record.method),value["result"] != .null else{throw CrewdClientError(message:"原资源结果操作或状态不符。")}
+        let result=value["result"]
+        if record.method == "humanTask.create" {
+            guard result["requestId"] == record.params["requestId"],result["channelAssociation"]["channelId"] == record.params["channelId"],result["ask"]["question"] == record.params["text"] else{throw CrewdClientError(message:"原人待办创建结果与原输入不符。")}
+        } else {
+            guard result["object"] == record.params["object"] else{throw CrewdClientError(message:"原待办对象不符。")}
+            if record.method == "channel.workTagsSet" {guard result["channelId"] == record.params["channelId"],result["tags"] == record.params["tags"] else{throw CrewdClientError(message:"原标签结果不符。")}}
+            if record.method == "todo.assign" {guard result["owner"] == record.params["owner"] else{throw CrewdClientError(message:"原负责人结果不符。")}}
+            if record.method == "todo.setState" {guard result["manualState"] == record.params["state"] else{throw CrewdClientError(message:"原人工状态结果不符。")}}
+        }
+    }
+    func acknowledgeOriginalResource(_ record:CrewdPresentationJournal.Prepared,receipt:CrewdValue)throws {
+        guard record.scope == presentationScope,Self.resourceMutationMethods.contains(record.method),receipt["status"] == .string("committed"),let journal=originalJournal else{throw CrewdClientError(message:"只能核对当前原作用域的已提交回执。",kind:.notSubmitted)}
+        try validateOriginalResource(receipt,record:record)
+        try journal.finish(record,state:"replyObserved")
+        durableUnknown=try journal.unknownRecords()
+        if let id=record.params["requestId"].string.flatMap(UUID.init(uuidString:)){todoMutationDrafts.acknowledge(id)}
     }
     func lookupOriginalCommand(_ record: CrewdPresentationJournal.Prepared) async throws -> CrewdPublicReceipt? {
         _ = try publicCommandBinding(for: client)

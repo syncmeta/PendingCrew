@@ -4,33 +4,32 @@ import SwiftUI
 /// Reading/reopening this surface never sends a prompt or resumes an Agent.
 struct CrewdKnowledgeDocumentsEntry: View {
     @ObservedObject var workspace: CrewdWorkspace
-    #if os(macOS)
     @State private var source = Library.documents
+    @State private var linkingDocument = false
     private enum Library: String, CaseIterable { case documents = "文档", slices = "知识切片", pages = "Agent 页面" }
-    #endif
     var body: some View {
-        #if os(macOS)
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text("机组资料库").font(.system(size: 12, weight: .medium))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(source == .documents ? "本群文档":"机组知识资料").font(.system(size: 12, weight: .medium))
                 Picker("资料类型", selection: $source) {
                     ForEach(Library.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).frame(maxWidth: 300)
-                Spacer(minLength: 0)
-            }.padding(.horizontal, 14).padding(.vertical, 10)
+                }.pickerStyle(.segmented).frame(maxWidth: 360)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 10)
             Divider()
             switch source {
             case .documents:
-                CrewdDocumentsView(store: workspace.resources, drafts: $workspace.resourceDrafts)
+                VStack(spacing: 0) {
+                    HStack { Spacer(); Button("引用已有文档",systemImage:"link") { linkingDocument = true } }.font(.caption).padding(.horizontal, 14).padding(.top, 8)
+                    CrewdDocumentsView(store: workspace.channelResources, drafts: $workspace.resourceDrafts)
+                }
             case .slices:
                 knowledge(.documents).id(Library.slices)
             case .pages:
                 knowledge(.agentPages).id(Library.pages)
             }
         }
-        #else
-        knowledge(.all)
-        #endif
+        .sheet(isPresented: $linkingDocument) { CrewdDocumentLinkView(workspace: workspace) }
+        .onChange(of: workspace.crewID+workspace.channelID) { _, _ in linkingDocument = false }
     }
     private func knowledge(_ collection: CrewdKnowledgeCollection) -> some View {
         CrewdKnowledgeWorkspaceView(store: workspace.knowledge,

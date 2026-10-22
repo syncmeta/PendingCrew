@@ -3,13 +3,14 @@ import Foundation
 /// Mutable window input, including immutable uncertain submission snapshots.
 struct CrewdResourceDrafts {
     enum Domain:String,Hashable {case document,folder}
-    struct Key:Hashable {let crew:String;let view:CrewdResourceView;let object:String;let operation:String;var domain:Domain = .document}
+    struct Key:Hashable {let crew:String;let view:CrewdResourceView;let object:String;let operation:String;var domain:Domain = .document;var channel:String=""}
     struct Fields:Equatable {var title="",body="",parent="",position=0,folder="",revision=""}
     struct Snapshot:Equatable {let key:Key;let fields:Fields;let request:UUID;let version:UUID}
     private var entries:[Key:Snapshot]=[:]
     private var selections:[String:[CrewdResourceView:String]]=[:]
-    func selection(_ crew:String,_ view:CrewdResourceView)->String {selections[crew]?[view] ?? "all"}
-    mutating func select(_ crew:String,_ view:CrewdResourceView,_ value:String){selections[crew,default:[:]][view]=value}
+    func selection(_ crew:String,_ view:CrewdResourceView,channel:String="")->String {selections[scope(crew,channel)]?[view] ?? "all"}
+    mutating func select(_ crew:String,_ view:CrewdResourceView,_ value:String,channel:String=""){selections[scope(crew,channel),default:[:]][view]=value}
+    private func scope(_ crew:String,_ channel:String)->String { channel.isEmpty ? crew:"\(crew.utf8.count):\(crew)\(channel.utf8.count):\(channel)" }
     private var pending:[Key:UUID]=[:]
     private var unknown:[Key:[Snapshot]]=[:]
     func exists(_ key:Key)->Bool {entries[key] != nil}

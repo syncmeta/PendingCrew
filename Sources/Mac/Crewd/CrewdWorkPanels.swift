@@ -30,7 +30,7 @@ struct CrewdWorkPanels: View {
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
     private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
-    private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView)},set:{resourceDrafts.select(resources.crew,folderView,$0)})}
+    private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView,channel:resources.channel)},set:{resourceDrafts.select(resources.crew,folderView,$0,channel:resources.channel)})}
     private func includes(_ kind:String,_ id:String)->Bool {compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
     var body: some View {
         VStack(alignment:.leading,spacing:12) {

@@ -21,10 +21,15 @@ struct CrewListView: View {
     var body: some View {
         // 根 crew 标注一次算完再分发给行（`rootTitlesByCrew` 的注释说明了为什么不
         // 在行里各算各的）。喂全量 `crewStore.crews`：父边可以跨机器。
-        let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
-        List(crewStore.crews, selection: $selection) { crew in
-            CrewListRow(crew: crew, rootTitles: rootTitles[crew.id] ?? [])
-                .tag(crew.id)
+        Group {
+            #if os(iOS)
+            if let workspace = crewStore.crewdWorkspace {
+                CrewMobileDirectory(workspace: workspace, crews: crewStore.crews, selection: $selection)
+                    .id(workspace.presentationNamespace)
+            } else { flatList }
+            #else
+            flatList
+            #endif
         }
         .overlay {
             if crewStore.crews.isEmpty {
@@ -32,6 +37,13 @@ struct CrewListView: View {
             }
         }
         .task { await crewStore.refreshList() }
+    }
+
+    private var flatList: some View {
+        let rootTitles = CrewRootLineage.rootTitlesByCrew(in: crewStore.crews)
+        return List(crewStore.crews, selection: $selection) { crew in
+            CrewListRow(crew: crew, rootTitles: rootTitles[crew.id] ?? []).tag(crew.id)
+        }
     }
 
     // MARK: - Empty state
@@ -97,6 +109,61 @@ struct CrewListView: View {
     }
 
 }
+
+#if os(iOS)
+private struct CrewMobileDirectory: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crews: [CrewSummary]
+    @Binding var selection: String?
+    @State private var mode = CrewdNavigation.Sidebar.contacts
+    @State private var collapsed: Set<String> = []
+    private var visible: [CrewdValue] {
+        let ids = Set(crews.map(\.id))
+        return workspace.crews.filter { ids.contains($0["id"].string ?? "") }
+    }
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("侧栏", selection: $mode) {
+                ForEach(CrewdNavigation.Sidebar.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).padding(.horizontal, 12).padding(.vertical, 10)
+            List(selection: $selection) {
+                if mode == .contacts {
+                    ForEach(CrewdNavigation.directory(visible, collapsed: collapsed)) { row in
+                        if let crew = crews.first(where: { $0.id == row.object }) {
+                            HStack(spacing: 6) {
+                                if row.expandable {
+                                    Button {
+                                        if !collapsed.insert(row.id).inserted { collapsed.remove(row.id) }
+                                    } label: { Image(systemName: collapsed.contains(row.id) ? "chevron.right" : "chevron.down") }
+                                        .buttonStyle(.plain).font(.caption).accessibilityLabel("展开或折叠" + crew.title)
+                                }
+                                directoryRow(crew)
+                            }.padding(.leading, CGFloat(row.depth) * 14).tag(crew.id)
+                        }
+                    }
+                } else {
+                    ForEach(CrewdNavigation.timeline(visible, activity: workspace.crewActivity).compactMap { $0["id"].string }, id: \.self) { id in
+                        if let crew = crews.first(where: { $0.id == id }) { directoryRow(crew).tag(crew.id) }
+                    }
+                }
+            }.listStyle(.sidebar)
+        }
+    }
+    private func directoryRow(_ crew: CrewSummary) -> some View {
+        HStack(spacing: 10) {
+            CrewdGroupAvatar(members: workspace.crewAvatarMembers[crew.id] ?? [], channel: crew.id, name: crew.title)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(crew.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
+                if mode == .messages {
+                    Text(workspace.crewActivity[crew.id]?["text"].string ?? (workspace.activityRead.contains(crew.id) ? "暂无消息" : "消息尚未读取"))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }.padding(.vertical, 5)
+    }
+}
+#endif
 
 // MARK: - Row
 

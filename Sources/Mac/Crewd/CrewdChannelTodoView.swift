@@ -13,6 +13,23 @@ struct CrewdChannelTodoView:View {
     var showTodoKinds = false
     var humanOnly: Bool? = nil
     var externalQuery: Binding<String>? = nil
+    var externalTag: Binding<String>? = nil
+    var mutationDrafts: Binding<CrewdTodoMutationDrafts>? = nil
+    @State private var selectedTags: [String:String] = [:]
+    @State private var metadataTarget: CrewdTodoMetadataTarget?
+    @State private var creatingHuman = false
+    private var tag: Binding<String> {
+        externalTag ?? Binding(get:{selectedTags[queryKey] ?? ""},set:{selectedTags[queryKey]=$0})
+    }
+    private var kindItems: [CrewdValue] {
+        group.items.filter { row in
+            guard let id=CrewdChannelWorkStore.workID(row["object"]) else{return false}
+            return !showTodoKinds || (selectedKind == .human ? id.kind == .human:id.kind == .requirement)
+        }
+    }
+    private var tags: [String] {
+        Array(Set(["紧急","小工程","大工程","前端","后端"] + kindItems.flatMap{$0["tags"].array.compactMap(\.string)})).sorted()
+    }
     private enum TodoKind: String, CaseIterable { case ai = "AI Todo", human = "真人 Todo" }
     @State private var todoKind = TodoKind.ai
     @State private var queries: [String: String] = [:]
@@ -22,13 +39,11 @@ struct CrewdChannelTodoView:View {
         externalQuery ?? Binding(get: { queries[queryKey] ?? "" }, set: { queries[queryKey] = $0 })
     }
     private var visibleItems: [CrewdValue] {
-        guard showTodoKinds else { return group.items }
-        let needle = query.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return group.items.filter { row in
-            guard let id = CrewdChannelWorkStore.workID(row["object"]),
-                  (selectedKind == .human ? id.kind == .human : id.kind != .human) else { return false }
-            return needle.isEmpty || id.raw.localizedCaseInsensitiveContains(needle)
-                || (row["label"].string ?? "").localizedCaseInsensitiveContains(needle)
+        let needle=query.wrappedValue.trimmingCharacters(in:.whitespacesAndNewlines)
+        return kindItems.filter { row in
+            (tag.wrappedValue.isEmpty || row["tags"].array.contains(.string(tag.wrappedValue))) &&
+            (needle.isEmpty || (row["object"]["id"].string ?? "").localizedCaseInsensitiveContains(needle)
+                || (row["label"].string ?? "").localizedCaseInsensitiveContains(needle))
         }
     }
     @State private var activeOwner=UUID()
@@ -53,6 +68,12 @@ struct CrewdChannelTodoView:View {
                         VStack(alignment: .leading, spacing: 8) { kindPicker; searchField }
                     }.padding(.bottom, 10)
                 } else { searchField.padding(.bottom, 10) }
+                ScrollView(.horizontal,showsIndicators:false) {
+                    HStack(spacing:8) {
+                        tagButton("",count:kindItems.count)
+                        ForEach(tags,id:\.self){value in tagButton(value,count:kindItems.filter{$0["tags"].array.contains(.string(value))}.count)}
+                    }
+                }.padding(.bottom,8)
             }
             if !group.capabilities.contains("channelWork") {Text("群工作引用 · 配套后台待开放").font(.caption).foregroundStyle(.secondary)}
             else if channel.isEmpty {Text("请选择会话").font(.caption).foregroundStyle(.secondary)}
@@ -66,6 +87,7 @@ struct CrewdChannelTodoView:View {
                     Button("核对当前关联"){selected = .object(["object":old.object]);association=true}.font(.caption)
                 }
                 if !showTodoKinds || selectedKind == .ai { composer }
+                else if mutationDrafts != nil { Button("＋ 人待办") { creatingHuman=true }.buttonStyle(.bordered) }
                 ScrollView {
                     VStack(alignment:.leading,spacing:8) {
                         if group.loaded,visibleItems.isEmpty {
@@ -76,9 +98,17 @@ struct CrewdChannelTodoView:View {
                             if let id=CrewdChannelWorkStore.workID(row["object"]) {
                                 VStack(alignment:.leading,spacing:4){
                                     Button{select(row)}label:{Text(id.raw+"  "+(row["label"].string ?? "")+(row["labelTruncated"] == .bool(true) ? "…":"")).font(.caption).multilineTextAlignment(.leading)}.buttonStyle(.plain)
-                                    Text(id.kind == .human && row["status"] == .string("open") ? "待答复":CrewdWorkStatusLabel.display(row["status"].string ?? "")).font(.caption2).foregroundStyle(.secondary)
+                                    Text(statusLabel(row)).font(.caption2).foregroundStyle(.secondary)
+                                    if id.kind != .plan {
+                                        let source=group.todoAttributes[id.raw] ?? row["todo"]
+                                        Text("负责人："+ownerLabel(source["owner"])).font(.caption).foregroundStyle(.secondary)
+                                        if !row["tags"].array.isEmpty {
+                                            ScrollView(.horizontal,showsIndicators:false){HStack{ForEach(row["tags"].array.compactMap(\.string),id:\.self){name in Button(name){tag.wrappedValue=name}.font(.caption)}}}
+                                        }
+                                        if mutationDrafts != nil {Button("负责人、状态与标签"){metadataTarget = .init(row:row)}.font(.caption)}
+                                    }
                                     if selected?["object"] == row["object"] {selectedDetails(row,id)}
-                                }.padding(6).frame(maxWidth:.infinity,alignment:.leading).background(.quaternary.opacity(0.3),in:RoundedRectangle(cornerRadius:5))
+                                }.padding(12).frame(maxWidth:.infinity,alignment:.leading).background(Theme.Palette.canvas,in:RoundedRectangle(cornerRadius:10))
                             }
                         }
                     }.frame(maxWidth:.infinity,alignment:.leading)
@@ -96,6 +126,27 @@ struct CrewdChannelTodoView:View {
         .sheet(isPresented:$association){CrewdChannelAssociation(group:group,work:work,drafts:$linkDrafts,initial:selected?["object"])}
         .sheet(item:$planTarget){target in CrewdPlanActions(store:work,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:work,drafts:$humanDrafts,target:target)}
+        .sheet(item:$metadataTarget){target in
+            if let mutationDrafts {CrewdTodoMetadataEditor(group:group,drafts:mutationDrafts,target:target,members:members)}
+        }
+        .sheet(isPresented:$creatingHuman){
+            if let mutationDrafts {CrewdHumanTodoCreation(group:group,drafts:mutationDrafts)}
+        }
+    }
+    private func tagButton(_ value:String,count:Int)->some View {
+        Button {tag.wrappedValue=value} label:{Text((value.isEmpty ? "所有待办":value)+" \(count)").font(.caption).padding(.horizontal,9).padding(.vertical,5)
+                .background(tag.wrappedValue == value ? Theme.Palette.surfaceMuted:Color.clear,in:Capsule())}.buttonStyle(.plain)
+    }
+    private func ownerLabel(_ value:CrewdValue)->String {
+        if value["kind"] == .string("human"){return "你"}
+        guard let id=value["id"].string else{return "未分配"}
+        return members.first(where:{$0["id"] == .string(id)})?["displayName"].string ?? id
+    }
+    private func statusLabel(_ row:CrewdValue)->String {
+        let source=group.todoAttributes[row["object"]["id"].string ?? ""] ?? row["todo"]
+        if source["manualState"] == .string("done"){return "人工完成"}
+        if source["manualState"] == .string("open"){return "待处理"}
+        return row["object"]["kind"] == .string("humanTask") && row["status"] == .string("open") ? "待答复":CrewdWorkStatusLabel.display(row["status"].string ?? "")
     }
     private var kindPicker: some View {
         Picker("Todo 类型", selection: $todoKind) {
@@ -162,7 +213,7 @@ struct CrewdChannelTodoView:View {
                 ForEach(detail["blockedOn"].array.compactMap{$0.string.flatMap{CrewdWorkID($0,kind:.human)}},id:\.self){wait in
                     Button("答复卡点 "+wait.raw){openBlocker(wait)}.font(.caption).disabled(busy)
                 }
-            }else if id.kind == .human,detail["state"] == .string("open"),let owner=row["crewId"].string {
+            }else if id.kind == .human,(group.todoAttributes[id.raw] ?? row["todo"])["origin"] != .string("humanTask"),detail["state"] == .string("open"),let owner=row["crewId"].string {
                 Button("答复 / 撤回"){humanTarget=CrewdHumanTarget(key:.init(scope:work.selectedCrew,crew:owner,ask:id.raw),crewTitle:crews.first(where:{$0["id"] == .string(owner)})?["title"].string)}.font(.caption)
             }
         }
@@ -225,5 +276,127 @@ private struct CrewdChannelAssociation:View {
             drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
             if group.channel == snapshot.key.channel,group.crew == snapshot.key.crew{failure=error.localizedDescription;self.revision=nil}
         }}
+    }
+}
+
+struct CrewdTodoMetadataTarget:Identifiable {
+    let row:CrewdValue
+    var id:String{row["object"]["id"].string ?? ""}
+}
+
+/// Global owner/state and channel-local tags have different CAS tokens. The
+/// editor keeps those operations distinct and never converts one into another.
+private struct CrewdTodoMetadataEditor:View {
+    @ObservedObject var group:CrewdChannelWorkStore
+    @Binding var drafts:CrewdTodoMutationDrafts
+    let target:CrewdTodoMetadataTarget
+    let members:[CrewdValue]
+    @Environment(\.dismiss) private var dismiss
+    @State private var source:CrewdValue = .null
+    @State private var tagInput=""
+    @State private var failure:String?
+    @State private var reading=false
+    @State private var originalCrew=""
+    @State private var originalChannel=""
+    private var current:Bool{group.crew == originalCrew && group.channel == originalChannel}
+    private func key(_ op:String)->CrewdTodoMutationDrafts.Key{.init(crew:originalCrew,channel:originalChannel,object:target.id,operation:op)}
+    private func fields(_ op:String)->CrewdTodoMutationDrafts.Fields{drafts.fields(key(op))}
+    private func edit(_ op:String,_ mutate:(inout CrewdTodoMutationDrafts.Fields)->Void){var value=fields(op);mutate(&value);drafts.edit(key(op),value)}
+    private var owner:String {let owner=fields("todo.assign").owner;return owner["kind"] == .string("human") ? "human":owner["id"].string ?? ""}
+    private var operations:[String]{["todo.assign","todo.setState","channel.workTagsSet"]}
+    var body:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:14) {
+                Text(target.row["label"].string ?? "待办").font(.headline).textSelection(.enabled)
+                Text(target.id).font(.caption).foregroundStyle(.secondary)
+                if reading{ProgressView()}
+                if let failure{Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
+                Text("负责人和人工状态属于共享原事项；标签只属于本群引用。").font(.caption).foregroundStyle(.secondary)
+                Picker("负责人",selection:Binding(get:{owner},set:{value in edit("todo.assign"){$0.owner=value.isEmpty ? .null:.object(value == "human" ? ["kind":.string("human")]:["kind":.string("session"),"id":.string(value)])}})) {
+                    Text("未分配").tag("");Text("你").tag("human")
+                    ForEach(members.compactMap{$0["id"].string},id:\.self){id in Text(members.first(where:{$0["id"] == .string(id)})?["displayName"].string ?? id).tag(id)}
+                    if !owner.isEmpty,owner != "human",!members.contains(where:{$0["id"] == .string(owner)}){Text("原负责人（已不在本群）").tag(owner)}
+                }
+                revisionControl("todo.assign")
+                submitButton("保存负责人","todo.assign")
+                if source["origin"] != .string("agentAsk"),source != .null {
+                    Picker("人工状态",selection:Binding(get:{fields("todo.setState").state},set:{value in edit("todo.setState"){$0.state=value}})) {Text("待处理").tag("open");Text("已完成").tag("done")}.pickerStyle(.segmented)
+                    Text("人工完成不停止或结算既有计划；重新打开不会启动会话。").font(.caption).foregroundStyle(.secondary)
+                    revisionControl("todo.setState")
+                    submitButton("保存人工状态","todo.setState")
+                } else {Text("这是 Agent 提问，请通过原来的答复或撤回入口处理。人工完成不会替代回答。").font(.caption).foregroundStyle(.secondary)}
+                Text("本群标签").font(.subheadline)
+                ForEach(fields("channel.workTagsSet").tags,id:\.self){tag in
+                    HStack{Text(tag);Spacer();Button("移除"){edit("channel.workTagsSet"){$0.tags.removeAll{$0 == tag}}}.font(.caption)}
+                }
+                HStack{TextField("新标签",text:$tagInput);Button("添加"){let value=tagInput.trimmingCharacters(in:.whitespacesAndNewlines);if !value.isEmpty,!fields("channel.workTagsSet").tags.contains(value){edit("channel.workTagsSet"){$0.tags.append(value)}};tagInput=""}}
+                revisionControl("channel.workTagsSet")
+                submitButton("保存本群标签","channel.workTagsSet")
+                ForEach(operations,id:\.self){op in
+                    ForEach(drafts.uncertain(key(op)),id:\.requestID){snapshot in
+                        Text("原提交结果未确认，输入保留；不会重新发送。").font(.caption).foregroundStyle(.orange)
+                        Button("查询原请求结果"){lookup(snapshot)}.font(.caption).disabled(reading || !current)
+                    }
+                }
+                Button("重新读取源版本与本群引用"){Task{await read()}}.disabled(reading || group.writing || !current)
+                Text("源版本："+(source["revision"].string ?? "未读取")+"；本群引用版本："+(group.linkRevision ?? "未读取")).font(.caption).foregroundStyle(.secondary)
+                Button("关闭"){dismiss()}
+            }.padding(20)
+        }.modifier(CrewdAdaptiveFormFrame(width:560,height:620))
+        .task{originalCrew=group.crew;originalChannel=group.channel;await read()}
+    }
+    @ViewBuilder private func revisionControl(_ operation:String)->some View {
+        let revision=operation == "channel.workTagsSet" ? group.linkRevision:source["revision"].string
+        if let revision,fields(operation).revision != revision {
+            Text("后台版本已变化，请比较当前负责人、状态或标签后再决定。").font(.caption).foregroundStyle(.orange)
+            Button("我已比较，保留编辑并采用当前版本") {edit(operation){$0.revision=revision}}.font(.caption)
+        }
+    }
+    private func submitButton(_ label:String,_ operation:String)->some View {
+        Button(label){guard let snapshot=drafts.begin(key(operation)) else{return};Task{
+            do{_ = try await group.submit(snapshot);drafts.finish(snapshot,accepted:true);await read()}
+            catch{drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));if current{failure=error.localizedDescription}}
+        }}.disabled(reading || !current || group.writing || source == .null || !drafts.uncertain(key(operation)).isEmpty)
+    }
+    private func read()async {
+        guard current else{return};reading=true;defer{reading=false}
+        do {
+            let value=try await group.attributes(target.row["object"]);try await group.refresh();guard current else{return};source=value;failure=nil
+            for op in operations where !drafts.exists(key(op)) {
+                var f=CrewdTodoMutationDrafts.Fields();f.revision=op == "channel.workTagsSet" ? group.linkRevision ?? "":value["revision"].string ?? ""
+                f.owner=value["owner"];f.state=value["manualState"].string ?? "open"
+                f.tags=group.items.first(where:{$0["object"] == target.row["object"]})?["tags"].array.compactMap(\.string) ?? []
+                drafts.edit(key(op),f)
+            }
+        }catch{if current{failure=error.localizedDescription}}
+    }
+    private func lookup(_ snapshot:CrewdTodoMutationDrafts.Snapshot){reading=true;Task{defer{reading=false};do{
+        if try await group.lookup(snapshot) != nil{drafts.finish(snapshot,accepted:true);failure=nil}
+        else{failure="原请求当前没有已提交回执；原输入保留，不会自动重发。"}
+    }catch{if current{failure=error.localizedDescription}}}}
+}
+
+private struct CrewdHumanTodoCreation:View {
+    @ObservedObject var group:CrewdChannelWorkStore
+    @Binding var drafts:CrewdTodoMutationDrafts
+    @Environment(\.dismiss) private var dismiss
+    @State private var crew=""
+    @State private var channel=""
+    @State private var failure:String?
+    private var key:CrewdTodoMutationDrafts.Key{.init(crew:crew,channel:channel,object:"",operation:"humanTask.create")}
+    private var current:Bool{group.crew == crew && group.channel == channel}
+    var body:some View {
+        VStack(alignment:.leading,spacing:14){
+            Text("新建人待办").font(.headline)
+            TextField("需要人处理的事项",text:Binding(get:{drafts.fields(key).text},set:{value in var f=drafts.fields(key);f.text=value;drafts.edit(key,f)}),axis:.vertical).lineLimit(3...8)
+            Text("保存到当前群，不发送给 Agent，也不启动会话。").font(.caption).foregroundStyle(.secondary)
+            if let failure{Text(failure).foregroundStyle(.orange).font(.caption)}
+            ForEach(drafts.uncertain(key),id:\.requestID){snapshot in
+                Text(snapshot.fields.text).textSelection(.enabled)
+                Button("查询原创建结果"){Task{do{if try await group.lookup(snapshot) != nil{drafts.finish(snapshot,accepted:true);dismiss()}else{failure="原请求当前没有已提交回执；输入保留，不会重发。"}}catch{failure=error.localizedDescription}}}
+            }
+            HStack{Button("关闭"){dismiss()};Spacer();Button("保存"){guard let snapshot=drafts.begin(key) else{return};Task{do{_ = try await group.submit(snapshot);drafts.finish(snapshot,accepted:true);if current{dismiss()}}catch{drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));if current{failure=error.localizedDescription}}}}.disabled(!current || group.writing || drafts.fields(key).text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !drafts.uncertain(key).isEmpty)}
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:520,height:360))
+        .onAppear{crew=group.crew;channel=group.channel}
     }
 }

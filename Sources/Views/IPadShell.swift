@@ -27,6 +27,7 @@ struct IPadShell: View {
 
     @State private var selectedCrewId: String?
     @State private var showingPairing = false
+    @State private var showingNewCrew = false
     @State private var didReadComputerList = false
     @State private var showingRecovery = false
     @State private var showingRetainedInputs = false
@@ -46,6 +47,9 @@ struct IPadShell: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
+                            if appModel.crewdBackend?.workspace != nil {
+                                Button("新建机组", systemImage: "plus") { showingNewCrew = true }
+                            }
                             Button("连接电脑", systemImage: "link") { showingPairing = true }
                             Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
                             if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
@@ -81,6 +85,11 @@ struct IPadShell: View {
             crewStore.retireOriginalAuthorityPresentation()
             selectedCrewId = nil; selectedRemoteSessionID = nil
             Task { await crewStore.refreshList() }
+        }
+        .sheet(isPresented: $showingNewCrew, onDismiss: { Task { await crewStore.refreshList() } }) {
+            if let workspace = appModel.crewdBackend?.workspace {
+                CrewdCrewCreationView(workspace: workspace).id(workspace.presentationNamespace)
+            }
         }
         .sheet(isPresented: $showingOfflineDrafts) {
             IOSOfflineComposerDrafts(dataDirectory: appModel.crewdDirectory)
@@ -120,7 +129,8 @@ struct IPadShell: View {
                 crewId: id, crewTitle: title,
                 onOpenRemoteSession: { selectedRemoteSessionID = $0 },
                 communicationView: $communicationView)
-                .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace))
+                .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace,
+                    openSession: { selectedRemoteSessionID = $0 }))
                 .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id)
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——

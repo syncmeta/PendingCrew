@@ -1,6 +1,8 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 private struct CrewdOriginalChannelKey: EnvironmentKey { static let defaultValue = "" }
@@ -11,27 +13,40 @@ extension EnvironmentValues {
     }
 }
 
+struct CrewdMessageFolderPresentation {
+    var filter:CrewTimelineFilter.MessageFolder = .all
+    var clear:(()->Void)? = nil
+    var classify:((String)->Void)? = nil
+}
+private struct CrewdMessageFolderKey:EnvironmentKey {
+    static let defaultValue=CrewdMessageFolderPresentation()
+}
+extension EnvironmentValues {
+    var crewdMessageFolders:CrewdMessageFolderPresentation {
+        get{self[CrewdMessageFolderKey.self]}
+        set{self[CrewdMessageFolderKey.self]=newValue}
+    }
+}
+
 struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
+    var openSession: ((String) -> Void)? = nil
     func body(content: Content) -> some View {
-        if let workspace { CrewdOriginalCrewContent(workspace: workspace) { content } }
+        if let workspace { CrewdOriginalCrewContent(workspace: workspace, openSession: openSession) { content } }
         else { content }
     }
 }
-#if os(macOS)
 private struct CrewdOriginalCrewContent<Content: View>: View {
     @ObservedObject var workspace: CrewdWorkspace
     @EnvironmentObject private var crewStore: CrewStore
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder let content: () -> Content
+    var openSession: ((String) -> Void)? = nil
     @State private var showingCrewLedger = false
     @State private var todoQueries: [String: String] = [:]
+    @State private var todoTags: [String: String] = [:]
     var body: some View {
-        #if os(macOS)
-        CrewdOriginalMessages(workspace: workspace, header: AnyView(sectionHeader)) { sectionContent }
-        #else
-        sectionContent
-        #endif
+        CrewdOriginalMessages(workspace: workspace, header: AnyView(sectionHeader), openSession: openSession) { sectionContent }
     }
     private var sectionHeader: some View {
         VStack(spacing: 0) {
@@ -50,7 +65,10 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             Menu {
                 Button("机组工作总账") { showingCrewLedger = true }
             } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton).fixedSize().help("机组共享工作与全组织收件箱")
+                #if os(macOS)
+                .menuStyle(.borderlessButton)
+                #endif
+                .fixedSize().help("机组共享工作与全组织收件箱")
             }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -63,7 +81,8 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             ZStack {
                 // Keep the original chat instance mounted: drafts, anchors and
                 // its existing pagination/identity adapter survive other panels.
-                content().environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
+                CrewdOriginalMessageSurface(workspace:workspace){content()}
+                    .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
                     .opacity(workspace.originalSection == "消息" ? 1 : 0)
                     .allowsHitTesting(workspace.originalSection == "消息")
                     .disabled(workspace.originalSection != "消息")
@@ -86,7 +105,10 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                     planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
                     members: workspace.sessions, crews: workspace.crews)
-            }.frame(minWidth: 540, minHeight: 480)
+            }
+            #if os(macOS)
+            .frame(minWidth: 540, minHeight: 480)
+            #endif
         }
     }
     private func channelTodo(human: Bool) -> some View {
@@ -96,7 +118,44 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
             members: workspace.sessions, crews: workspace.crews,
             openCrew: { crewStore.selectCrew($0) }, showTodoKinds: true, humanOnly: human,
-            externalQuery: Binding(get: { todoQueries[key] ?? "" }, set: { todoQueries[key] = $0 }))
+            externalQuery: Binding(get: { todoQueries[key] ?? "" }, set: { todoQueries[key] = $0 }),
+            externalTag: Binding(get: { todoTags[key] ?? "" }, set: { todoTags[key] = $0 }),
+            mutationDrafts: $workspace.todoMutationDrafts)
+    }
+}
+
+/// Message folders classify actual source message IDs inside this channel.
+/// The original timeline cache includes the classification in its cache key.
+private struct CrewdOriginalMessageSurface<Content:View>:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject var resources:CrewdResources
+    let content:()->Content
+    private struct Target:Identifiable {let id:String;let crew:String;let channel:String}
+    @State private var target:Target?
+    init(workspace:CrewdWorkspace,@ViewBuilder content:@escaping ()->Content){self.workspace=workspace;self.resources=workspace.channelResources;self.content=content}
+    private var selection:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.messages,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.messages,$0,channel:resources.channel)})}
+    private var classification:CrewdMessageFolderPresentation {
+        let value=selection.wrappedValue
+        let filter:CrewTimelineFilter.MessageFolder
+        if value == "all"{filter = .all}
+        else if let snapshot=resources.folders[.messages] {
+            let assignments=snapshot.assignments.filter{$0["object"]["kind"] == .string("message")}
+            if value == "none"{filter = .exclude(Set(assignments.compactMap{$0["object"]["id"].string}))}
+            else{filter = .include(Set(assignments.filter{$0["folderId"] == .string(value)}.compactMap{$0["object"]["id"].string}))}
+        }else{filter = .include([])}
+        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
+    }
+    var body:some View {
+        VStack(spacing:0){
+            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages).padding(.horizontal,10).padding(.vertical,5)
+            content().environment(\.crewdMessageFolders,classification)
+        }
+        .sheet(item:$target){target in
+            if resources.crew == target.crew,resources.channel == target.channel {
+                CrewdFolderEditor(store:resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("message",target.id))
+            }
+        }
+        .onChange(of:resources.crew+resources.channel){_,_ in target=nil}
     }
 }
 
@@ -139,7 +198,7 @@ private struct CrewdOriginalChannelProgress: View {
             } else if group.channel.isEmpty || !group.loaded || group.loading {
                 ProgressView("正在读取本群计划").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
+                CrewdWorkPanels(store: workspace.workStore, resources: workspace.channelResources,
                     resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                     planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
                     members: workspace.sessions, crews: workspace.crews, progressOnly: true,
@@ -166,67 +225,6 @@ private struct CrewdOriginalChannelProgress: View {
         }
     }
 }
-#else
-private struct CrewdOriginalCrewContent<Content: View>: View {
-    @ObservedObject var workspace: CrewdWorkspace
-    @EnvironmentObject private var crewStore: CrewStore
-    @Environment(\.colorScheme) private var scheme
-    @ViewBuilder let content: () -> Content
-    @State private var showingChannelTodo = false
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-            Picker("机组视图", selection: $workspace.originalSection) {
-                ForEach(["消息", "Todo", "文档", "进展"], id: \.self) { Text($0).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 340)
-                .accessibilityLabel("机组主视图")
-            Spacer(minLength: 0)
-            }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(CrewdChatStyle.sidebar(scheme).opacity(0.30))
-            Divider().overlay(CrewdChatStyle.line(scheme))
-            ZStack {
-                // Keep the original chat instance mounted: drafts, anchors and
-                // its existing pagination/identity adapter survive other panels.
-                CrewdOriginalMessages(workspace: workspace) { content() }
-                    .opacity(workspace.originalSection == "消息" ? 1 : 0)
-                    .allowsHitTesting(workspace.originalSection == "消息")
-                    .disabled(workspace.originalSection != "消息")
-                    .accessibilityHidden(workspace.originalSection != "消息")
-                if workspace.originalSection == "Todo" {
-                    VStack(spacing: 0) {
-                        DisclosureGroup("当前会话的 Todo 与关联", isExpanded: $showingChannelTodo) {
-                        CrewdChannelTodoView(group: workspace.channelWork, work: workspace.workStore,
-                            linkDrafts: $workspace.channelLinkDrafts, requirementDrafts: $workspace.requirementDrafts,
-                            planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                            members: workspace.sessions, crews: workspace.crews,
-                            openCrew: { crewStore.selectCrew($0) })
-                                .frame(minHeight: 210, maxHeight: 320).padding(.top, 8)
-                        }.font(.system(size: 12, weight: .medium)).padding(12)
-                        Divider()
-
-                    CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
-                        resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
-                        planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                        members: workspace.sessions, crews: workspace.crews).padding(10)
-                    }
-                } else if workspace.originalSection == "文档" {
-                    CrewdKnowledgeDocumentsEntry(workspace: workspace)
-                } else if workspace.originalSection == "进展" {
-                    CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
-                        resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
-                        planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                        members: workspace.sessions, crews: workspace.crews, progressOnly: true,
-                        openTodo: { workspace.originalSection = "Todo" }).padding(10)
-                }
-            }
-        }
-    }
-}
-
-#endif
-
 /// Original right-hand Todo area presents the same authority-owned group
 /// requirements and human rulings as the center. No legacy ledger instance.
 struct CrewdOriginalTodoOverview: View {
@@ -235,11 +233,7 @@ struct CrewdOriginalTodoOverview: View {
     var body: some View {
         CrewdOriginalTodoSummary(group: workspace.channelWork, currentCrew: crewID,
             showDetails: { human in
-                #if os(macOS)
                 workspace.originalSection = human ? "真人Todo" : "Todo"
-                #else
-                workspace.originalSection = "Todo"
-                #endif
             })
     }
 }
@@ -249,6 +243,7 @@ private struct CrewdOriginalTodoSummary: View {
     let currentCrew: String
     let showDetails: (Bool) -> Void
     @State private var owner = UUID()
+    private var todoItems:[CrewdValue]{group.items.filter{let kind=$0["object"]["kind"].string;return kind == "requirement" || kind == "humanTask"}}
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -265,15 +260,15 @@ private struct CrewdOriginalTodoSummary: View {
                 Text("当前后台尚未开放群工作引用。").font(.caption).foregroundStyle(CrewdChatStyle.muted(scheme))
             } else if !group.loaded {
                 Text("尚未读取当前会话事项").font(.caption).foregroundStyle(CrewdChatStyle.muted(scheme))
-            } else if group.items.isEmpty {
+            } else if todoItems.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("把要做的事留在这里").font(.system(size: 12, weight: .medium))
                     Button("添加或关联待办") { showDetails(false) }.buttonStyle(.plain)
                         .font(.system(size: 11)).foregroundStyle(CrewdChatStyle.accent(scheme))
                 }.padding(.vertical, 12)
             } else {
-                ForEach(group.items.indices, id: \.self) { index in
-                    let row = group.items[index]
+                ForEach(todoItems.indices, id: \.self) { index in
+                    let row = todoItems[index]
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(spacing: 7) {
                             Image(systemName: row["status"].string == "done" ? "checkmark.circle.fill" : "circle")
@@ -301,30 +296,25 @@ private struct CrewdOriginalTodoSummary: View {
     }
 }
 
-/// Permanent conversation rail around the group's four surfaces. Message
-/// folders remain a separate backend capability on the mobile presentation.
+/// One group presentation shared by both clients. Phone navigation changes
+/// only the visible column; business data and commands stay in the workspace.
 private struct CrewdOriginalMessages<Content: View>: View {
     @ObservedObject var workspace: CrewdWorkspace
     @ObservedObject var resources: CrewdResources
     @ViewBuilder let content: () -> Content
     let header: AnyView?
-    init(workspace: CrewdWorkspace, header: AnyView? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.workspace = workspace; self.resources = workspace.resources; self.content = content; self.header = header
+    let openSession: ((String) -> Void)?
+    init(workspace: CrewdWorkspace, header: AnyView? = nil, openSession: ((String) -> Void)? = nil,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.workspace = workspace; self.resources = workspace.resources; self.content = content
+        self.header = header; self.openSession = openSession
     }
-    private var folder: Binding<String> {
-        Binding(get: { workspace.resourceDrafts.selection(workspace.crewID, .messages) },
-                set: { workspace.resourceDrafts.select(workspace.crewID, .messages, $0) })
-    }
-    private var visibleChannels: [CrewdValue] {
-        workspace.channels.filter { row in
-            guard let id = row["id"].string else { return false }
-            return CrewdFolderFilter.includes(CrewdFolderFilter.object("channel", id),
-                selection: folder.wrappedValue, snapshot: resources.folders[.messages])
-        }
-    }
+    @Environment(\.colorScheme) private var scheme
+    #if os(iOS)
+    @State private var mobileChat = false
+    #endif
     #if os(macOS)
     @EnvironmentObject private var runner: CrewSessionRunner
-    @Environment(\.colorScheme) private var scheme
     @State private var openedSession = false
     @State private var showConversationPopover = false
     private var showingSession: Bool { runner.viewingTerminal }
@@ -395,38 +385,82 @@ private struct CrewdOriginalMessages<Content: View>: View {
             if workspace.originalSection == "消息" { await resources.activate(.messages, force: true) }
         }
         #else
-        VStack(spacing: 0) {
-            if workspace.originalSection == "消息" {
-                CrewdFolderControls(store: resources, drafts: $workspace.resourceDrafts,
-                    selection: folder, view: .messages,
-                    object: workspace.channelID.isEmpty ? nil : CrewdFolderFilter.object("channel", workspace.channelID)).padding(8)
-                ScrollView(.horizontal) {
-                    HStack {
-                        ForEach(visibleChannels.compactMap { $0["id"].string }, id: \.self) { id in
-                            if let row = visibleChannels.first(where: { $0["id"].string == id }) {
-                                Button { workspace.selectConversation(id) } label: {
-                                    Text(CrewdConversationProjection.title(row))
-                                        .fontWeight(id == workspace.channelID ? .semibold : .regular)
-                                }.buttonStyle(.bordered)
-                            }
-                        }
-                    }.padding(.horizontal, 8)
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= 650
+            HStack(spacing: 0) {
+                if wide { mobileConversationList.frame(width: 210); Divider() }
+                VStack(spacing: 0) {
+                    if !wide {
+                        HStack {
+                            Button { mobileChat = false } label: { Label("会话", systemImage: "chevron.left") }
+                            Spacer()
+                        }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 8)
+                    }
+                    if let header { header }
+                    content()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .opacity(wide || mobileChat ? 1 : 0)
+                .allowsHitTesting(wide || mobileChat).disabled(!wide && !mobileChat)
+                .accessibilityHidden(!wide && !mobileChat)
             }
-            ZStack {
-                content().environment(\.crewdOriginalChannelID, workspace.channelID)
-                    .id(workspace.channelID)
-                    .opacity(visibleChannels.contains(where: { $0["id"].string == workspace.channelID }) ? 1 : 0)
-                    .allowsHitTesting(visibleChannels.contains(where: { $0["id"].string == workspace.channelID }))
-                if workspace.originalSection == "消息", !visibleChannels.contains(where: { $0["id"].string == workspace.channelID }) {
-                    Text("当前文件夹没有选中的会话；请选择上方会话，或切换到全部。")
-                        .font(.caption).foregroundStyle(.secondary).padding()
-                }
+            .overlay {
+                if !wide && !mobileChat { mobileConversationList }
             }
-        }.task(id: workspace.originalSection + resources.activationEpoch.uuidString) {
-            if workspace.originalSection == "消息" { await resources.activate(.messages, force: true) }
+        }
+        .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (mobileChat ? "detail" : "list")))
+        .onChange(of: workspace.crewID) { _, _ in mobileChat = false }
+        .onChange(of: workspace.knowledgeNavigation) { _, _ in
+            workspace.originalSection = "消息"; mobileChat = true
         }
         #endif
+    }
+    #if os(iOS)
+    private var mobileConversationList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 3) {
+                Text("会话").font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(12)
+                ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in
+                    if let row = workspace.channels.first(where: { $0["id"].string == id }) {
+                        CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: conversationSubtitle(row),
+                            selected: workspace.channelID == id,
+                            action: { workspace.selectConversation(id); mobileChat = true }) {
+                                channelAvatar(row)
+                            }
+                    }
+                }
+                if !workspace.sessions.isEmpty {
+                    Text("Agent 会话").font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(12)
+                }
+                ForEach(workspace.sessions.compactMap { $0["id"].string }, id: \.self) { id in
+                    if let row = workspace.sessions.first(where: { $0["id"].string == id }) {
+                        CrewdConversationRow(title: row["displayName"].string ?? row["role"].string ?? "成员",
+                            subtitle: (row["executor"].string ?? "") + " · 成员会话", selected: false,
+                            action: { workspace.selectSession(id); openSession?(id) }) {
+                                CrewdMemberAvatar(seed: id, colorSeed: workspace.crewID)
+                            }.disabled(openSession == nil)
+                    }
+                }
+            }.padding(.horizontal, 5).frame(maxWidth: .infinity, alignment: .leading)
+        }.background(CrewdChatStyle.canvas(scheme))
+    }
+    @ViewBuilder private func channelAvatar(_ channel: CrewdValue) -> some View {
+        let id = channel["id"].string ?? ""
+        let members = workspace.channelSummaries.first { $0["channel"]["id"].string == id }?["members"].array ?? []
+        if channel["kind"].string == "dm", let peer = members.compactMap(CrewdAvatarIdentity.seed).first(where: { $0 != "human" }) {
+            CrewdMemberAvatar(seed: peer, colorSeed: id)
+        } else { CrewdGroupAvatar(members: members, channel: id, name: CrewdConversationProjection.title(channel)) }
+    }
+    #endif
+    private func conversationSubtitle(_ channel: CrewdValue) -> String {
+        let summary = workspace.channelSummaries.first { $0["channel"]["id"] == channel["id"] }
+        let mentions = summary?["humanMentions"].int ?? 0
+        let unread = summary?["unreadForHuman"].int ?? 0
+        if mentions > 0 { return "\(mentions) 条消息 @你" }
+        if unread > 0 { return "\(unread) 条未读消息" }
+        return channel["purpose"].string ?? (channel["kind"].string == "dm" ? "群内单聊" : "机组群聊")
     }
     #if os(macOS)
     private var conversationList: some View {
@@ -468,14 +502,6 @@ private struct CrewdOriginalMessages<Content: View>: View {
             }
         }.background(CrewdChatStyle.canvas(scheme))
     }
-    private func conversationSubtitle(_ channel: CrewdValue) -> String {
-        let summary = workspace.channelSummaries.first { $0["channel"]["id"] == channel["id"] }
-        let mentions = summary?["humanMentions"].int ?? 0
-        let unread = summary?["unreadForHuman"].int ?? 0
-        if mentions > 0 { return "\(mentions) 条消息 @你" }
-        if unread > 0 { return "\(unread) 条未读消息" }
-        return channel["purpose"].string ?? (channel["kind"].string == "dm" ? "群内单聊" : "机组群聊")
-    }
     #endif
 }
 #if os(macOS)
@@ -489,6 +515,18 @@ private struct CrewdConversationFocusReset: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) {
         defer { context.coordinator.key = key }
         if let old = context.coordinator.key, old != key { view.window?.makeFirstResponder(nil) }
+    }
+}
+#endif
+#if os(iOS)
+private struct CrewdConversationFocusReset: UIViewRepresentable {
+    let key: String
+    final class Coordinator { var key: String? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
+    func updateUIView(_ view: UIView, context: Context) {
+        defer { context.coordinator.key = key }
+        if let old = context.coordinator.key, old != key { view.window?.endEditing(true) }
     }
 }
 #endif
