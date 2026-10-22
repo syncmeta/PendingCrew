@@ -1,6 +1,14 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
-## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
+## 当前交付总览（2026-10-23）
+
+玻璃前端完整模块已交付日用Mac：`/Applications/PendingCrew.app`，0.1.44/build20748.58461，准确完整构建输入9a0ebdada9acb89eaf4296960f821f19d9448ae5。整窗原生系统材质、workspace顶部五域胶囊、整高sidebar/原生搜索、旧头像人footer及对应机器前真实认证连接绿点均已接线；没有新增连接footer或假额度。GLASS-CONTRAST-01经整块材质/前景修复后，在真实暗色900及一次原生缩放1512画面关闭，根亲看、独立视觉115c96e0通过。原Unknown/原UUID不清除、不重放，稳定业务证据复用。
+
+本批准确normal独验cf33be19、preview产物22aaa9f5及后两包增量779e521c通过，1871源码/3878依赖/11pins前后同，三包来源分列；先实际preview确认材质，再补同源product/iOS，没有重normal或重复preview业务。标准包全50项/签封核同，原d486正常安全暂停后完整备份到 `/Applications/.PendingCrew-d4866cb7-before-9a0ebdad.app` 再整包更新；全部旧包、旧0.1.43数据保全目录和当前数据保持，无迁移或删除。标准入口无私域env首开，本机连接、新UI及原Qincheng消息可见，App89600/Core89604留给用户；首开及最终快照无provider子进程、未操作start/resume或模型，不冒全session账本零任务。最终交付4d1d1ac6与实际首开图b09f7c80保frontend-glass-9a0ebdad-candidates-20261023。此后统筹记录提交不改变包来源。
+
+本轮iOS为准确9a普通Debug/arm64 Simulator产物通过，Info实际仍0.1.43/1；未新boot、安装、配对或真机验收。移动实窗与同Core双端流程并入接下来的B正常单链接完整模块，避免为外观重复旧三文件配对。唯一客户端已从b841保存点承接9a继续完整B，后端20c与Linux控制器bb033源码已独验；唯一Linux构建仍等待完整B客户端/后端/最新UI组合。Cloud28f尚未接App/真实CloudKit，APNs传输及真实设备链、Claude正式ACP/完整历史和真实provider生命周期、稳定签名公证与剩余平台仍待交付。当前安装不含B/Cloud/APNs，不把这一Mac外观交付算整个工程完成。
+
+## 前序冻结与交付总览（截至2026-10-22；以下保留历史原义）
 
 最新玻璃模块正在冻结准确修复输入：2feb三候选来源/配置/签封独验后，真实1440与900窗口发现材质变亮而旧浅色前景低对比，GLASS-CONTRAST-01使该包未安装。900消息换行、inspector折叠和原UUID可达已有实际证据；一次恢复观测仍900，不冒恢复通过。唯一作者保全B checkpoint b8413bf9，另从2feb完成d8dad890整块修复：统一Mac公开windowBackground/behindWindow与SwiftUI scheme，iOS regularMaterial，阅读改真正primary/secondary；原气泡、selection、旧footer和对应机器绿点保持。独立净源f1b25a5d通过，作者Mac/iOS全目标均0、388输入前后同；仍须新准确normal与候选宽窄实图关闭视觉阻点后，再沿既有授权更新。当前日用仍d486。Linux控制器bb033独立源门269b通过，唯一Linux构建仍等完整B客户端、后端及最新UI输入，不先跑中间版。
 
