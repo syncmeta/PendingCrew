@@ -6515,6 +6515,117 @@
       },
       "type": "object"
     },
+    "HostEnrollmentCreateParams": {
+      "additionalProperties": false,
+      "description": "Local root management only, never accepted by the anonymous enrollment router.",
+      "properties": {
+        "computerLabel": {
+          "type": "string"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/RemoteEndpoint"
+        },
+        "enrollmentId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "tokenHash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "enrollmentId",
+        "tokenHash",
+        "computerLabel",
+        "endpoint"
+      ],
+      "type": "object"
+    },
+    "HostEnrollmentCreated": {
+      "additionalProperties": false,
+      "properties": {
+        "computerLabel": {
+          "type": "string"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/RemoteEndpoint"
+        },
+        "enrollmentId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "server": {
+          "$ref": "#/$defs/RemotePublicIdentity"
+        }
+      },
+      "required": [
+        "requestId",
+        "enrollmentId",
+        "server",
+        "endpoint",
+        "expiresAt",
+        "computerLabel"
+      ],
+      "type": "object"
+    },
+    "HostEnrollmentLookupParams": {
+      "additionalProperties": false,
+      "properties": {
+        "enrollmentId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "enrollmentId"
+      ],
+      "type": "object"
+    },
+    "HostEnrollmentLookupResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "created": {
+              "$ref": "#/$defs/HostEnrollmentCreated"
+            },
+            "state": {
+              "const": "created",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "created"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "HumanTaskCreateParams": {
       "additionalProperties": false,
       "properties": {
@@ -12646,6 +12757,22 @@
       },
       "result": {
         "$ref": "#/$defs/RemoteConfiguration"
+      }
+    },
+    "remote.enrollmentCreate": {
+      "params": {
+        "$ref": "#/$defs/HostEnrollmentCreateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostEnrollmentCreated"
+      }
+    },
+    "remote.enrollmentLookup": {
+      "params": {
+        "$ref": "#/$defs/HostEnrollmentLookupParams"
+      },
+      "result": {
+        "$ref": "#/$defs/HostEnrollmentLookupResult"
       }
     },
     "remote.grants": {
