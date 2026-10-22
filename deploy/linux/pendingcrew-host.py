@@ -106,7 +106,7 @@ def recover(args):
 def transient(uid, gid, argv, timeout=20, runner=subprocess.run):
     # systemd itself supplies the real User login environment. No Environment=,
     # HOME/PATH/SHELL/CODEX_HOME override or credential copy is permitted here.
-    command = ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec', '--uid=' + str(uid), '--gid=' + str(gid), '--', *argv]
+    command = ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec', '--uid=' + str(uid), '--gid=' + str(gid), '--', *argv]
     return runner(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
 def service_user(name):
     if name is None:
@@ -252,7 +252,7 @@ def replace_root_file(path, content, mode=0o644):
     os.replace(temporary, path); syncdir(path.parent)
 
 def active():
-    return subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', SERVICE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 def create_user_data(data, account):
     home = pathlib.Path(account.pw_dir)
@@ -402,7 +402,7 @@ def install(args):
 def finish_installation(original):
     # Separate durable records precede each first mutation. On recovery an
     # existing record authorizes lookup only, never a second send.
-    for command in [['systemctl', 'daemon-reload'], ['systemctl', 'enable', '--now', SOCKET_UNIT], ['systemctl', 'enable', '--now', SERVICE]]:
+    for command in [['/usr/bin/systemctl', 'daemon-reload'], ['/usr/bin/systemctl', 'enable', '--now', SOCKET_UNIT], ['/usr/bin/systemctl', 'enable', '--now', SERVICE]]:
         subprocess.run(command, check=True, timeout=30, stdout=subprocess.DEVNULL)
     deadline = time.monotonic() + 15
     status = None
@@ -501,7 +501,7 @@ def rollback(args):
     if original.get('format') != 1 or original.get('kind') != 'installation' or original.get('uid') != binding.get('uid') or original.get('dataDir') != binding.get('dataDir'):
         raise Refused('original installation/user/data binding mismatch')
     if active(): raise Refused('stop the service safely before rollback')
-    if subprocess.run(['systemctl', 'is-active', '--quiet', SOCKET_UNIT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    if subprocess.run(['/usr/bin/systemctl', 'is-active', '--quiet', SOCKET_UNIT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         raise Refused('stop the activation socket before rollback')
     with contextlib.ExitStack() as leases:
         for name in ['.install.lock', '.runtime.lock']:
@@ -571,7 +571,7 @@ def main():
     elif args.command == 'stop':
         result = rpc('host.stop', {}, timeout=150)
         if result.get('status') != 'stopped': raise Refused('original safe stop not confirmed; no forced termination')
-        subprocess.run(['systemctl', 'stop', SOCKET_UNIT], check=True, timeout=30, stdout=subprocess.DEVNULL)
+        subprocess.run(['/usr/bin/systemctl', 'stop', SOCKET_UNIT], check=True, timeout=30, stdout=subprocess.DEVNULL)
         print(json.dumps(result, indent=2))
     elif args.command == 'rollback': rollback(args)
     elif args.command == 'revoke': print(json.dumps(rpc('host.revoke', {'grantId': args.grant_id, 'expectedRevision': args.expected_revision, 'note': checked_text(args.note)}), indent=2))

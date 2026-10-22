@@ -18,7 +18,7 @@ class InstallerControls(unittest.TestCase):
                 def run(argv, **kwargs):
                     calls.append(argv)
                     self.assertNotIn('env', kwargs)
-                    self.assertTrue(argv[:2] == ['systemd-run', '--quiet'])
+                    self.assertTrue(argv[:2] == ['/usr/bin/systemd-run', '--quiet'])
                     command = argv[argv.index('--') + 1:]
                     if command[0] == '/bin/sh':
                         self.assertEqual(command[1:], ['-c', 'command -v "$1"', 'sh', 'codex'])
