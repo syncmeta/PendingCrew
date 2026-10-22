@@ -18,10 +18,33 @@ fn env(v:PushEnvironment)->crate::apns::Environment{match v{PushEnvironment::San
 fn now()->i64{crewd_store::now_ms()}
 fn request_id(id:&str)->Result<()>{if crewd_proto::valid_remote_uuid(id){Ok(())}else{Err(bad())}}
 fn status(s:&facts::Settings,available:bool,reason:Option<&str>)->NotificationStatus{NotificationStatus{enabled:s.enabled,available,reason:reason.map(str::to_string),revision:s.revision.to_string(),environment:s.binding.as_ref().map(|b|b.environment),topic:s.binding.as_ref().map(|b|b.topic.clone())}}
+#[derive(Clone)]
+enum ConfigurationAuthority {Local(Actor),Root(crate::peer::RootAdminPermit)}
+impl ConfigurationAuthority {
+    fn authorize_tx(&self,state:&Arc<AppState>,c:&rusqlite::Connection,method:&str)->crewd_collab::Result<()> {
+        match self {Self::Local(actor)=>actor.authorize_tx(state,c,method),Self::Root(permit)=>permit.check().map_err(|_|crewd_collab::CollabError::Forbidden(crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden)))}
+    }
+    async fn read<T:Send+'static>(&self,runtime:&Runtime,method:&str,f:impl FnOnce(&rusqlite::Connection)->crewd_store::Result<T>+Send+'static)->Result<T>{
+        match self {
+            Self::Local(actor)=>runtime.read(actor,method,f).await,
+            Self::Root(permit)=>{
+                permit.check()?;let p=permit.clone();
+                let result=runtime.db.call(move|store|{p.check()?;f(store.conn()).map_err(store_error)}).await.map_err(|_|unavailable())??;
+                permit.check()?;Ok(result)
+            }
+        }
+    }
+}
 struct Ready {revision:i64,sender:Arc<crate::apns::Sender>,seal:Arc<Vec<u8>>}
 enum Cache {Ready(Ready),Unavailable(i64)}
 pub(crate) struct Runtime {state:Weak<AppState>,db:Db,directory:PathBuf,cache:Mutex<Option<Cache>>,mutation:Mutex<()>,task:Mutex<Option<tokio::task::JoinHandle<()>>>,drain:watch::Receiver<bool>,#[cfg(test)]file_keys:bool}
 impl Runtime {
+    #[cfg(test)]
+    pub(crate) fn file_test_runtime(state:&Arc<AppState>,directory:PathBuf)->Arc<Self>{
+        let (_,drain)=watch::channel(false);
+        Arc::new(Self{state:Arc::downgrade(state),db:state.db.clone(),directory,cache:Mutex::new(None),mutation:Mutex::new(()),task:Mutex::new(None),drain,file_keys:true})
+    }
+
     pub(crate) async fn start(state:&Arc<AppState>,directory:PathBuf,mut drain:watch::Receiver<bool>)->Arc<Self>{
         let runtime=Arc::new(Self{state:Arc::downgrade(state),db:state.db.clone(),directory,cache:Mutex::new(None),mutation:Mutex::new(()),task:Mutex::new(None),drain:drain.clone(),#[cfg(test)]file_keys:false});
         let _=runtime.db.call(|s|s.with_tx(|c|facts::restart(c))).await;
@@ -133,11 +156,22 @@ impl Runtime {
         }
     }
     async fn configure(&self,actor:&Actor,p:NotificationConfigureParams)->Result<Value>{
-        if !matches!(actor,Actor::Local(_)){return Err(denied())}request_id(&p.request_id)?;let expected=facts::number(&p.expected_revision,true).map_err(store_error)?;
+        if !matches!(actor,Actor::Local(_)){return Err(denied())}
+        self.configure_as(&ConfigurationAuthority::Local(actor.clone()),p).await
+    }
+    pub(crate) async fn admin_configure(&self,permit:crate::peer::RootAdminPermit,p:NotificationConfigureParams)->Result<Value>{
+        permit.check()?;self.configure_as(&ConfigurationAuthority::Root(permit),p).await
+    }
+    pub(crate) async fn admin_lookup(&self,permit:crate::peer::RootAdminPermit,p:NotificationLookupParams)->Result<Value>{
+        request_id(&p.request_id)?;let authority=ConfigurationAuthority::Root(permit);let key=authority.read(self,"notification.requestLookup",|c|Ok(format!("local:{}",crewd_store::meta_get(c,"dbId")?.unwrap_or_default()))).await?;
+        value(authority.read(self,"notification.requestLookup",move|c|facts::request_lookup(c,&key,&p.request_id)).await?)
+    }
+    async fn configure_as(&self,authority:&ConfigurationAuthority,p:NotificationConfigureParams)->Result<Value>{
+        request_id(&p.request_id)?;let expected=facts::number(&p.expected_revision,true).map_err(store_error)?;
         let _guard=self.mutation.lock().await;let hash=facts::hash(&serde_json::to_vec(&p).map_err(|_|bad())?);let id=p.request_id.clone();let operation="notification.configure";
-        let identity=self.read(actor,operation,|c|crate_identity(c)).await?;let owner=format!("local:{}",identity.db_id);let key=owner.clone();let request=id.clone();let digest=hash.clone();
-        let old=self.read(actor,operation,move|c|facts::existing_request(c,&key,&request,operation,&digest)).await?;if let Some(old)=old{return value(old)}
-        let old=self.read(actor,operation,facts::settings).await?;if old.revision!=expected{return Err(bad())}
+        let identity=authority.read(self,operation,|c|crate_identity(c)).await?;let owner=format!("local:{}",identity.db_id);let key=owner.clone();let request=id.clone();let digest=hash.clone();
+        let old=authority.read(self,operation,move|c|facts::existing_request(c,&key,&request,operation,&digest)).await?;if let Some(old)=old{return value(old)}
+        let old=authority.read(self,operation,facts::settings).await?;if old.revision!=expected{return Err(bad())}
         let mut binding=old.binding.clone();let mut provider_key=None;let mut new_seal=None;
         if let Some(input)=p.provider {
             let bytes=STANDARD.decode(input.private_key_pkcs8_base64).map_err(|_|bad())?;
@@ -146,12 +180,12 @@ impl Runtime {
             binding=Some(facts::ProviderBinding{authority_id:identity.authority_id,db_id:identity.db_id.clone(),team_id:input.team_id,key_id:input.key_id,environment:input.environment,topic:input.topic,key_slot:uuid::Uuid::new_v4().to_string(),seal_slot});provider_key=Some(bytes);
         }
         if p.enabled&&binding.is_none(){return Err(unavailable())}
-        let state=self.state()?;let actor_owned=actor.clone();let op=operation.to_string();let key=owner.clone();let request=id.clone();let digest=hash.clone();
+        let state=self.state()?;let actor_owned=authority.clone();let op=operation.to_string();let key=owner.clone();let request=id.clone();let digest=hash.clone();
         let reserved=self.db.call(move|store|store.with_tx(|c|{actor_owned.authorize_tx(&state,c,&op).map_err(|_|crewd_store::StoreError::Invalid("notification permission denied".into()))?;facts::reserve(c,&key,&request,&op,&digest)})).await.map_err(|_|unavailable())?.map_err(store_error)?;
-        if !reserved{return value(self.read(actor,operation,move|c|facts::request_lookup(c,&owner,&id)).await?)}
+        if !reserved{return value(authority.read(self,operation,move|c|facts::request_lookup(c,&owner,&id)).await?)}
         // Protected writes happen only after a durable original-UUID reservation.
         if let (Some(bytes),Some(b))=(provider_key.as_ref(),binding.as_ref()){self.save(&b.db_id,&b.key_slot,bytes).await.map_err(|_|unavailable())?;if let Some(seal)=new_seal{self.save(&b.db_id,&b.seal_slot,&seal).await.map_err(|_|unavailable())?}}
-        let state=self.state()?;let actor=actor.clone();let request=id.clone();let key=owner.clone();let enabled=p.enabled;
+        let state=self.state()?;let actor=authority.clone();let request=id.clone();let key=owner.clone();let enabled=p.enabled;
         let result=self.db.call(move|store|store.with_tx(|c|{actor.authorize_tx(&state,c,operation).map_err(|_|crewd_store::StoreError::Invalid("notification permission denied".into()))?;let settings=facts::configure(c,expected,enabled,binding.as_ref())?;let result=json!(status(&settings,false,if enabled{Some("credentialsNotLoaded")}else{Some("notConfigured")}));facts::result(c,&key,&request,&result)?;Ok(result)})).await.map_err(|_|unavailable())?.map_err(store_error)?;
         self.cache.lock().await.take();value(NotificationRequestLookup::Known{operation:operation.into(),result})
     }

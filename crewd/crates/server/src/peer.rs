@@ -1806,6 +1806,43 @@ mod host_admin_controls {
         })
     }
     #[tokio::test]
+    async fn notification_rootfd_typed_configuration_and_original_lookup_keep_floor_and_secret_boundary() {
+        use base64::Engine;
+        let directory=tempfile::tempdir().unwrap();let path=directory.path().canonicalize().unwrap();
+        let store=crewd_store::Store::open(&path.join("core.db")).unwrap();
+        let db_id=crewd_store::meta_get(store.conn(),"dbId").unwrap().unwrap();
+        crewd_store::remote::bind_identity(store.conn(),&crewd_proto::RemotePublicIdentity{authority_id:uuid::Uuid::new_v4().to_string(),db_id,certificate_der_base64:"synthetic".into(),spki_sha256:"a".repeat(64)},"t").unwrap();
+        let db=crewd_store::Db::spawn(store).unwrap();let state=Arc::new(crate::AppState::new(db.clone()));
+        let (_drain,rx)=tokio::sync::watch::channel(false);
+        let manager=crate::remote::Manager::new(&state,path.clone(),rx).await.unwrap();assert!(state.remote.set(manager).is_ok());
+        let runtime=crate::notifications::Runtime::file_test_runtime(&state,path.clone());assert!(state.notifications.set(runtime).is_ok());
+        let permit=synthetic_permit(Arc::new(PeerPolicy::new(None).unwrap()),0);
+        let id=uuid::Uuid::new_v4().to_string();let lookup=serde_json::json!({"requestId":id}).to_string();
+        assert_eq!(crate::host_admin::route(&state,&permit,"host.notificationRequestLookup",&lookup).await.unwrap(),serde_json::json!({"kind":"notFound"}));
+        assert!(!path.join("notification-keys").exists());
+        let key=ring::signature::EcdsaKeyPair::generate_pkcs8(&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,&ring::rand::SystemRandom::new()).unwrap();
+        let encoded=base64::engine::general_purpose::STANDARD.encode(key.as_ref());
+        let params=serde_json::json!({"requestId":id,"expectedRevision":"0","enabled":true,"provider":{"teamId":"ABCDEFGHIJ","keyId":"KLMNOPQRST","environment":"sandbox","topic":"com.example.app","privateKeyPkcs8Base64":encoded}}).to_string();
+        // A known not-written protected-key failure leaves durable original Unknown.
+        std::os::unix::fs::symlink(&path,path.join("notification-keys")).unwrap();
+        assert!(crate::host_admin::route(&state,&permit,"host.notificationConfigure",&params).await.is_err());
+        let unknown=crate::host_admin::route(&state,&permit,"host.notificationRequestLookup",&lookup).await.unwrap();assert_eq!(unknown["kind"],"unknown");
+        std::fs::remove_file(path.join("notification-keys")).unwrap();
+        assert_eq!(crate::host_admin::route(&state,&permit,"host.notificationConfigure",&params).await.unwrap(),unknown);
+        assert!(!path.join("notification-keys").exists(),"original Unknown must not retry a protected write");
+        let mut fresh:serde_json::Value=serde_json::from_str(&params).unwrap();let fresh_id=uuid::Uuid::new_v4().to_string();fresh["requestId"]=serde_json::json!(fresh_id);
+        let known=crate::host_admin::route(&state,&permit,"host.notificationConfigure",&fresh.to_string()).await.unwrap();assert_eq!(known["kind"],"known");assert!(!known.to_string().contains(&encoded));
+        let count=std::fs::read_dir(path.join("notification-keys")).unwrap().count();assert_eq!(count,2);
+        assert_eq!(crate::host_admin::route(&state,&permit,"host.notificationConfigure",&fresh.to_string()).await.unwrap(),known);
+        assert_eq!(std::fs::read_dir(path.join("notification-keys")).unwrap().count(),count);
+        let raw=db.call(|s|s.conn().query_row("SELECT group_concat(result,';') FROM notification_requests",[],|r|r.get::<_,String>(0))).await.unwrap().unwrap();assert!(!raw.contains(&encoded));
+        let ordinary=synthetic_permit(Arc::new(PeerPolicy::new(None).unwrap()),unsafe{libc::geteuid()});
+        assert!(crate::host_admin::route(&state,&ordinary,"host.notificationConfigure",&fresh.to_string()).await.is_err());
+        permit.close();assert!(crate::host_admin::route(&state,&permit,"host.notificationRequestLookup",&lookup).await.is_err());
+        drop(state);db.shutdown();
+    }
+
+    #[tokio::test]
     async fn host_admin_real_ordinary_socket_peer_never_becomes_root() {
         assert_ne!(
             unsafe { libc::geteuid() },
