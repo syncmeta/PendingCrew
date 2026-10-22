@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 已安装 Mac 6f35：普通首开与退出完整流程通过
+
+准确已装6f35ebc0b84b8a36e8c285f05e070b2baa794a67、0.1.44/20748.07553，经普通LaunchServices前台打开；仅本次两个provider程序设为/usr/bin/false，不改全局环境或偏好。原open-W59451、App56890/Core56892实际身份与helper两个false参数确认，普通本机管理窗口正常显示且未选crew，QA未发任务或打开凭据管理。原App菜单Quit一次，真实四选项询问可见，选择安全暂停后CUA报App退出；原等待09ee0b实际0，da4512证原两个PID均不存在。单独App/Core退出码与RPC session census未观测，不据此扩称0或独立零session证明。
+
+完整原件mac-product-6f35ebc0-20261022/daily-firstopen-launchservices-01/module-result.json，SHA128df069c55c7742e4a3ea3bed6a1527edae511f81c7810a21e9790d780486df。此前R2 directexec弹窗不可见原因仍未知，本次正常上下文成功不倒改旧记录或证明源码修复。现有Mac安装、旧数据备份和模型边界不变，无新构建。
+
+VPS6c新增单次有界纯只读24277实际0/2.9s，准确root当前exists=false，未取得原prepare提交记录；不能据此断言旧11667从未执行。普通私有文件prepare的源码副作用与exclusive mkdir恢复边界另行裁决，未重发原写入、未换请求UUID、未启动Core/隧道/邀请。当前网络已可查询，不再把历史连接失败当作整项停工。iOS完整远端持久链仍待，已验本机离线草稿和旧VPS业务不重复。
+
 ## 2026-10-22 完整 P3 离线历史输入：实际双进程验收闭合
 
 候选实际来源a08094f62dee835e0176b1f50f3d2f8169ef0583，普通Sim原20542完整0，1766源码/3878依赖前后同、76产物和自身entitlement/strict签名独核通过，包门SHAe504ac783fbab245fe02efdf727421e48545ad5b52223b1ea14446f0d7dc618e。实际版本仍0.1.43/1，不改标为Mac版本或后续文档HEAD。
