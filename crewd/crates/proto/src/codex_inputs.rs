@@ -131,14 +131,46 @@ impl CodexInputSelection {
         Ok(())
     }
 }
+/// An exclusive original source, never an arbitrary workspace path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexCatalogParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_id: Option<String>,
+}
+impl CodexCatalogParams {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match (&self.session_id, &self.crew_id) {
+            (Some(s), None) | (None, Some(s))
+                if !s.trim().is_empty() && s.len() <= 256 && !s.chars().any(char::is_control) =>
+            {
+                Ok(())
+            }
+            _ => Err("exactly one original sessionId or crewId is required"),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexPermissionProfilesParams {
-    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_id: Option<String>,
     #[serde(default)]
     pub cursor: Option<String>,
     #[serde(default)]
     pub limit: Option<u16>,
+}
+impl CodexPermissionProfilesParams {
+    pub fn source(&self) -> CodexCatalogParams {
+        CodexCatalogParams {
+            session_id: self.session_id.clone(),
+            crew_id: self.crew_id.clone(),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -152,4 +184,28 @@ pub struct CodexPermissionProfile {
 pub struct CodexPermissionProfiles {
     pub items: Vec<CodexPermissionProfile>,
     pub next_cursor: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn completion_catalog_source_is_exclusive_original_crew_or_session() {
+        for (value, valid) in [
+            (serde_json::json!({"crewId":"crew"}), true),
+            (serde_json::json!({"sessionId":"session"}), true),
+            (serde_json::json!({}), false),
+            (
+                serde_json::json!({"crewId":"crew","sessionId":"session"}),
+                false,
+            ),
+        ] {
+            let source: CodexCatalogParams = serde_json::from_value(value).unwrap();
+            assert_eq!(source.validate().is_ok(), valid);
+        }
+        assert!(
+            serde_json::from_value::<CodexCatalogParams>(serde_json::json!({"cwd":"/arbitrary"}))
+                .is_err()
+        );
+    }
 }

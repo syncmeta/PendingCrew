@@ -15,7 +15,12 @@ pub(crate) async fn read(
     params: Value,
 ) -> Result<Value, RpcError> {
     let profiles=if method==crewd_proto::codex_inputs::PERMISSION_PROFILES {Some(parse_params::<crewd_proto::codex_inputs::CodexPermissionProfilesParams>(params.clone())?)} else {None};
-    let (sid, history) = if let Some(p)=&profiles {(p.session_id.clone(),None)} else if method == HISTORY {
+    let catalog=if method==TOOLS {Some(parse_params::<crewd_proto::codex_inputs::CodexCatalogParams>(params.clone())?)}else{profiles.as_ref().map(|p|p.source())};
+    if let Some(source)=&catalog {
+        source.validate().map_err(|e|RpcError::new(RpcError::INVALID_PARAMS,e))?;
+        if let Some(crew)=&source.crew_id {return read_crew_catalog(h,state,crew.clone(),profiles).await}
+    }
+    let (sid, history) = if let Some(source)=&catalog {(source.session_id.clone().expect("validated exclusive source"),None)} else if method == HISTORY {
         let p: CodexHistoryParams = parse_params(params)?;
         (p.session_id.clone(), Some(p))
     } else {
@@ -257,4 +262,31 @@ pub(crate) async fn read(
         _ => unreachable!(),
     };
     Ok(result)
+}
+
+/// First-session menus are read-only reference snapshots of the original crew.
+/// Registration/worktree isolation never occurs to obtain a catalog.
+async fn read_crew_catalog(h:&Handle,state:&AppState,crew_id:String,profiles:Option<crewd_proto::codex_inputs::CodexPermissionProfilesParams>)->Result<Value,RpcError>{
+    let source=crew_id.clone();
+    let work=state.db.call_result(move |store|{
+        let crew=crewd_collab::crews::get(store.conn(),&source)?;
+        if crewd_collab::crews::is_archived(store.conn(),&source)?{return Err(crewd_collab::resource_invalid("codex.catalogCrewArchived"))}
+        crew.working_directory.ok_or_else(||crewd_collab::resource_invalid("codex.catalogWorkspaceMissing"))
+    }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+    let workdir=tokio::task::spawn_blocking(move||std::fs::canonicalize(work)).await.map_err(dispatch::internal)?.map_err(|_|RpcError::new(RpcError::CONFLICT,"original crew workspace unavailable"))?;
+    if !workdir.is_dir(){return Err(RpcError::new(RpcError::CONFLICT,"original crew workspace is not a directory"))}
+    let operation=match profiles {Some(p)=>Op::PermissionProfiles(p),None=>Op::Tools};
+    let outcome=h.codex_metadata(crewd_exec::codex::metadata::MetadataRequest{session_id:format!("crew-catalog/{crew_id}"),thread_id:String::new(),workdir,operation,permit:None}).await;
+    let native=match outcome{Out::Observed(v)=>v,Out::Rejected(e)=>return Err(RpcError::new(RpcError::CONFLICT,e).with_refusal("codex.provider_rejected")),Out::Unknown{detail,..}=>return Err(RpcError::new(RpcError::CONFLICT,detail).with_refusal("codex.read_unconfirmed"))};
+    if serde_json::to_vec(&native).map_err(dispatch::internal)?.len()>4*1024*1024{return Err(RpcError::new(RpcError::CONFLICT,"native catalog exceeds bounded response"))}
+    let native=native.get("providerResult").unwrap_or(&native);
+    if native.get("skills").is_some(){
+        let servers=native.pointer("/mcpServers/data").and_then(Value::as_array).ok_or_else(||RpcError::new(RpcError::CONFLICT,"native MCP catalog shape differs"))?;
+        let skills=native.pointer("/skills/data").and_then(Value::as_array).ok_or_else(||RpcError::new(RpcError::CONFLICT,"native skill catalog shape differs"))?;
+        Ok(json!({"mcpServers":servers,"skills":skills}))
+    }else{
+        let rows=native.get("data").and_then(Value::as_array).filter(|v|v.len()<=100).ok_or_else(||RpcError::new(RpcError::CONFLICT,"native profile page shape differs"))?;
+        let items=rows.iter().cloned().map(serde_json::from_value).collect::<Result<Vec<crewd_proto::codex_inputs::CodexPermissionProfile>,_>>().map_err(|_|RpcError::new(RpcError::CONFLICT,"native profile shape differs"))?;
+        serde_json::to_value(crewd_proto::codex_inputs::CodexPermissionProfiles{items,next_cursor:native.get("nextCursor").and_then(Value::as_str).map(str::to_owned)}).map_err(dispatch::internal)
+    }
 }

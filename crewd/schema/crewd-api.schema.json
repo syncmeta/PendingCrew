@@ -1437,6 +1437,25 @@
       ],
       "type": "string"
     },
+    "CodexCatalogParams": {
+      "additionalProperties": false,
+      "description": "An exclusive original source, never an arbitrary workspace path.",
+      "properties": {
+        "crewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "CodexCollaborationMode": {
       "enum": [
         "default",
@@ -2077,6 +2096,12 @@
     "CodexPermissionProfilesParams": {
       "additionalProperties": false,
       "properties": {
+        "crewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cursor": {
           "default": null,
           "type": [
@@ -2095,12 +2120,12 @@
           ]
         },
         "sessionId": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "required": [
-        "sessionId"
-      ],
       "type": "object"
     },
     "CodexProtocol": {
@@ -14079,7 +14104,7 @@
     },
     "session.codex.tools": {
       "params": {
-        "$ref": "#/$defs/SessionIdParams"
+        "$ref": "#/$defs/CodexCatalogParams"
       },
       "result": {
         "$ref": "#/$defs/CodexTools"

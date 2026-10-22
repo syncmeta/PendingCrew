@@ -1281,3 +1281,70 @@ async fn metadata_pending_stop_revokes_before_native_write() {
 async fn metadata_pending_public_stop_revokes_before_native_write() {
     metadata_pending_case(true, true).await;
 }
+
+// The existing full serve/fake protocol seam; no provider account or project.
+async fn completion_receipt(c:&mut Client,identity:&Value,request:&str)->Value {
+    let until=tokio::time::Instant::now()+Duration::from_secs(8);
+    loop {
+        let receipt=c.call("command.lookup",json!({"dbId":identity["dbId"],"requestId":request})).await.unwrap();
+        if !matches!(receipt["phase"].as_str(),Some("admitted"|"dispatched")){return receipt}
+        assert!(tokio::time::Instant::now()<until,"original command did not settle: {receipt}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+async fn completion_command(c:&mut Client,identity:&Value,sid:&str,operation:&str,mut params:Value)->Value {
+    let request=uuid::Uuid::new_v4().to_string();
+    params["target"]=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
+    c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":operation,"params":params}})).await.unwrap();
+    completion_receipt(c,identity,&request).await
+}
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn completion_public_native_input_profile_and_history_have_one_real_callable_entry(){
+    use base64::{Engine,engine::general_purpose::STANDARD};
+    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();
+    o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion".into())]);
+    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
+    let mut c=Client::connect(&f.data).await;
+    let identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let crew=c.call("crew.create",json!({"title":"Native inputs history","workingDirectory":f.work})).await.unwrap();
+    let catalog=c.call("session.codex.tools",json!({"crewId":crew["id"]})).await.unwrap();
+    let selected_skill=json!({"name":catalog["skills"][0]["skills"][0]["name"],"path":catalog["skills"][0]["skills"][0]["path"]});
+    let first_profiles=c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.unwrap();assert_eq!(first_profiles["items"][0]["allowed"],true);
+    let sessions_before=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();assert!(sessions_before.as_array().unwrap().is_empty());
+    assert!(c.call("session.codex.tools",json!({"crewId":crew["id"],"sessionId":"foreign"})).await.is_err());
+    assert!(c.call("session.codex.permissionProfiles",json!({})).await.is_err());
+    let bytes=b"Original separate attached text";let prepared_request=uuid::Uuid::new_v4().to_string();
+    let prepared=c.call("session.codex.inputPrepare",json!({"requestId":prepared_request,"crewId":crew["id"],"kind":"text","filename":"notes.txt","mimeType":"text/plain","sha256":crewd_store::codex_inputs::hash(bytes),"bytesBase64":STANDARD.encode(bytes)})).await.unwrap();
+    assert_eq!(prepared["operation"],"prepared");assert_eq!(native_calls(&f,"thread/start").len(),0,"prepare/catalog never opens native thread");assert_eq!(native_calls(&f,"turn/start").len(),0);
+    assert_eq!(c.call("session.codex.inputLookup",json!({"crewId":crew["id"],"requestId":prepared_request})).await.unwrap()["result"],prepared);
+    assert!(c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"Not dispatched legacy input","isolation":false,"codexInputs":{"inputs":[prepared["input"]]}})).await.is_err());
+    let request=uuid::Uuid::new_v4().to_string();
+    let task="Implement this exact task.\n你是 remains Human text.";
+    c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"captain","executor":"codex","title":"Native first input","brief":task,"isolation":false,"codexOptions":{"permissions":"synthetic-profile"},"codexInputs":{"inputs":[prepared["input"]],"skills":[selected_skill]}}}})).await.unwrap();
+    let receipt=completion_receipt(&mut c,&identity,&request).await;assert_eq!(receipt["phase"],"launched","{receipt}");
+    let sessions=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();
+    let sid=sessions.as_array().unwrap()[0]["id"].as_str().unwrap().to_owned();
+    wait("original native first input",||native_calls(&f,"turn/start").len()==1).await;
+    let sent=native_calls(&f,"turn/start")[0].clone();assert_eq!(sent["params"]["input"][0]["text"],task);assert_eq!(sent["params"]["input"].as_array().unwrap().len(),3);
+    assert_eq!(native_calls(&f,"permissionProfile/list").len(),2);
+    assert_eq!(native_calls(&f,"thread/settings/update")[0]["params"]["permissions"],"synthetic-profile");
+    let profile=c.call("session.codex.permissionProfiles",json!({"sessionId":sid})).await.unwrap();assert_eq!(profile["items"][0]["id"],"synthetic-profile");
+    let before=std::fs::read_to_string(&f.log).unwrap();let methods:Vec<_>=before.lines().filter_map(|s|serde_json::from_str::<Value>(s).ok()).filter_map(|v|v["method"].as_str().map(str::to_owned)).collect();
+    assert!(methods.iter().position(|s|s=="thread/settings/update").unwrap()<methods.iter().position(|s|s=="turn/start").unwrap());
+    assert!(c.call("session.codex.inputDiscard",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew["id"],"input":prepared["input"]})).await.is_err());
+    // Wait native completion before capturing the existing exact idle target.
+    let until=tokio::time::Instant::now()+Duration::from_secs(5);loop{if c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap()["working"]==false{break}assert!(tokio::time::Instant::now()<until);tokio::task::yield_now().await;}
+    let reverted=completion_command(&mut c,&identity,&sid,"session.codex.revert",json!({"beforeTurnId":"original-turn"})).await;assert_eq!(reverted["phase"],"confirmed","{reverted}");
+    let refused=completion_command(&mut c,&identity,&sid,"session.codex.archive",json!({})).await;assert_eq!(refused["phase"],"suppressed");assert_eq!(native_calls(&f,"thread/archive").len(),0);
+    c.call("session.stop",json!({"sessionId":sid,"reason":"explicit history management"})).await.unwrap();c.stopped(&sid).await;
+    for(operation,status)in[("session.codex.archive","archived"),("session.codex.unarchive","active"),("session.codex.delete","deleted")]{
+        let before=native_calls(&f,"thread/resume").len();
+        let receipt=completion_command(&mut c,&identity,&sid,operation,if operation=="session.codex.delete"{json!({"confirmNativeHistoryDelete":true})}else{json!({})}).await;
+        assert_eq!(receipt["phase"],"confirmed","{receipt}");assert_eq!(c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap()["nativeHistory"]["status"],status);
+        assert_eq!(native_calls(&f,"thread/resume").len(),before,"history operation cannot resume");
+        if status=="archived"||status=="deleted"{assert!(c.call("session.resume",json!({"sessionId":sid})).await.is_err());}
+    }
+    assert!(c.call("session.get",json!({"sessionId":sid})).await.is_ok(),"PCW session survives native delete");
+    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+}

@@ -62,6 +62,7 @@ pub fn qualify_skills(
     if selected.is_empty() {
         return Ok(());
     }
+    let catalog=catalog.get("providerResult").unwrap_or(catalog);
     let rows = catalog
         .pointer("/skills/data")
         .and_then(Value::as_array)

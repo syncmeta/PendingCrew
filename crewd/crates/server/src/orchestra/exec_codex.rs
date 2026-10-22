@@ -179,11 +179,12 @@ impl Executor for CodexExecutor {
         }
         Ok(())
     }
-    fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
+    fn launch(&self, mut req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
             self.check_launch()?;
             let (program, child_path) = self.program().await?;
             self.check_launch()?;
+            req.workdir=std::fs::canonicalize(&req.workdir).map_err(|_|LaunchError::Failed("original native workspace unavailable".into()))?;
             let initial_inputs=if let Some(inputs)=req.initial_inputs {
                 if !inputs.skills.is_empty(){
                     let result=self.codex_metadata(crewd_exec::codex::metadata::MetadataRequest{session_id:req.session_id.clone(),thread_id:String::new(),workdir:req.workdir.clone(),operation:crewd_exec::codex::control::CodexOperation::Tools,permit:None}).await;

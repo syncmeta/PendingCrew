@@ -1059,7 +1059,7 @@ pub fn api_schema() -> Value {
         (
             codex::TOOLS,
             m(
-                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex_inputs::CodexCatalogParams>(g),
                 sub::<codex::CodexTools>(g),
             ),
         ),
