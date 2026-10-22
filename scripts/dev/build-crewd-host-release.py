@@ -3,8 +3,9 @@
 import hashlib, importlib.util, json, os, pathlib, re, subprocess, sys
 sys.dont_write_bytecode = True
 
-# This controller is qualified only for the independently accepted B20c Rust tree.
-B_RUST_TREE = '2186d0092e2f149c9f6c6201f69b1d1049269423'
+# This controller admits only the exact frozen Codex/Store20 source tree.
+# Independent source acceptance and dispatch authorization remain separate gates.
+QUALIFIED_RUST_TREE = '2c258829cd4fa8b9af4c446bc81124ee18a90ddf'
 SOURCE_RECIPES = [
     'scripts/dev/record-crewd-build.py',
     'scripts/dev/write-codex-first-provenance.py',
@@ -44,14 +45,14 @@ def binding(controller, source, controller_sha, source_sha):
     before = {'controllerSha': controller_sha, 'sourceSha': source_sha,
               'controllerInputs': inventory(controller, controller_sha),
               'sourceInputs': inventory(source, source_sha)}
-    assert git(source, 'rev-parse', source_sha + ':crewd').decode().strip() == B_RUST_TREE, 'B Rust tree changed; review a new controller before dispatch'
-    assert git(controller, 'rev-parse', controller_sha + ':crewd').decode().strip() == B_RUST_TREE
+    assert git(source, 'rev-parse', source_sha + ':crewd').decode().strip() == QUALIFIED_RUST_TREE, 'qualified Rust tree changed; review a new controller before dispatch'
+    assert git(controller, 'rev-parse', controller_sha + ':crewd').decode().strip() == QUALIFIED_RUST_TREE
     for path in SOURCE_RECIPES:
         assert (source / path).read_bytes() == (controller / path).read_bytes(), 'reviewed source recipe changed: ' + path
     for key in ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
                 'CARGO_BUILD_TARGET', 'CREWD_GIT_SHA', 'CREWD_GIT_DIRTY']:
         assert not os.environ.get(key), 'undeclared compiler override: ' + key
-    before.update(rustTree=B_RUST_TREE,
+    before.update(rustTree=QUALIFIED_RUST_TREE,
                   controllerRecipeHashes={p: sha(controller/p) for p in CONTROLLER_RECIPES},
                   sourceRecipeHashes={p: sha(source/p) for p in SOURCE_RECIPES},
                   runId=os.environ['GITHUB_RUN_ID'], runAttempt=os.environ['GITHUB_RUN_ATTEMPT'])
@@ -118,7 +119,10 @@ def main():
     checked = source/'crewd/schema/crewd-api.schema.json'
     schema = json.loads((out/'schema.json').read_bytes())
     assert code == 0 and not (out/'schema.stderr').read_bytes() and schema == json.loads(checked.read_bytes())
-    assert len(schema['methods']) == 129 and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup'])
+    assert len(schema['methods']) == 141 and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup',
+        'notification.deliveryGet', 'session.codex.inputPrepare', 'session.codex.inputLookup',
+        'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'session.codex.archive',
+        'session.codex.unarchive', 'session.codex.delete', 'session.codex.revert'])
     assert sha(binary) == digest
     # Project only after original graph/fresh-source verification; keep original witness.
     save(out/'build-proof.json', {'sourceCommit':s, 'sourceClean':True, 'defaultFeatures':True,
@@ -132,9 +136,9 @@ def main():
     after = binding(controller, source, c, s)
     assert current == after
     save(out/'source-after.json', after)
-    save(out/'result.json', {'controllerSha':c, 'sourceSha':s, 'rustTree':B_RUST_TREE,
+    save(out/'result.json', {'controllerSha':c, 'sourceSha':s, 'rustTree':QUALIFIED_RUST_TREE,
                             'binarySha256':digest, 'originalWitnessSha256':sha(witness),
-                            'schemaExitCode':code, 'schemaEqualsChecked':True, 'methodCount':129,
+                            'schemaExitCode':code, 'schemaEqualsChecked':True, 'methodCount':141,
                             'sourceBeforeAfterEqual':True, 'published':False, 'installed':False,
                             'providerExecuted':False, 'runtimeQualified':False,
                             'plannedReleaseBase':base,

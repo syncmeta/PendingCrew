@@ -26,7 +26,7 @@ def package(args):
     here = pathlib.Path(__file__).resolve().parent
     installer = (here / 'pendingcrew-host.py').read_bytes()
     files = {'bin/crewd':core, 'bin/pendingcrew-host.py':installer, 'bin/managed-host.py':(here/'managed-host.py').read_bytes(), 'build-proof.json':proof_bytes}
-    release = {'format':1,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':19,'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
+    release = {'format':1,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':20,'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
     files['release.json'] = canonical(release)
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive,mode='w:gz',format=tarfile.USTAR_FORMAT) as bundle:
