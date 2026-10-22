@@ -10,6 +10,27 @@ struct CrewdChannelTodoView:View {
     let members:[CrewdValue]
     let crews:[CrewdValue]
     let openCrew:(String)->Void
+    var showTodoKinds = false
+    var humanOnly: Bool? = nil
+    var externalQuery: Binding<String>? = nil
+    private enum TodoKind: String, CaseIterable { case ai = "AI Todo", human = "真人 Todo" }
+    @State private var todoKind = TodoKind.ai
+    @State private var queries: [String: String] = [:]
+    private var selectedKind: TodoKind { humanOnly.map { $0 ? .human : .ai } ?? todoKind }
+    private var queryKey: String { crew + "/" + channel + "/" + selectedKind.rawValue }
+    private var query: Binding<String> {
+        externalQuery ?? Binding(get: { queries[queryKey] ?? "" }, set: { queries[queryKey] = $0 })
+    }
+    private var visibleItems: [CrewdValue] {
+        guard showTodoKinds else { return group.items }
+        let needle = query.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return group.items.filter { row in
+            guard let id = CrewdChannelWorkStore.workID(row["object"]),
+                  (selectedKind == .human ? id.kind == .human : id.kind != .human) else { return false }
+            return needle.isEmpty || id.raw.localizedCaseInsensitiveContains(needle)
+                || (row["label"].string ?? "").localizedCaseInsensitiveContains(needle)
+        }
+    }
     @State private var activeOwner=UUID()
     @State private var selected:CrewdValue?
     @State private var detail:CrewdValue = .null
@@ -25,6 +46,14 @@ struct CrewdChannelTodoView:View {
     private var busy:Bool{linkDrafts.busy(linkKey) || group.writing || requirementDrafts.busy(crew,channel:channel)}
     var body:some View {
         VStack(alignment:.leading,spacing:6) {
+            if showTodoKinds {
+                if humanOnly == nil {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { kindPicker; searchField }
+                        VStack(alignment: .leading, spacing: 8) { kindPicker; searchField }
+                    }.padding(.bottom, 10)
+                } else { searchField.padding(.bottom, 10) }
+            }
             if !group.capabilities.contains("channelWork") {Text("群工作引用 · 配套后台待开放").font(.caption).foregroundStyle(.secondary)}
             else if channel.isEmpty {Text("请选择会话").font(.caption).foregroundStyle(.secondary)}
             else {
@@ -36,12 +65,14 @@ struct CrewdChannelTodoView:View {
                     Text("此前"+(old.linked ? "关联":"解除关联")+(old.object["id"].string ?? "")+"的结果未确认，不会自动重发。").font(.caption2).foregroundStyle(.orange)
                     Button("核对当前关联"){selected = .object(["object":old.object]);association=true}.font(.caption)
                 }
-                composer
+                if !showTodoKinds || selectedKind == .ai { composer }
                 ScrollView {
                     VStack(alignment:.leading,spacing:8) {
-                        if group.loaded,group.items.isEmpty {Text("本会话尚无关联工作").font(.caption).foregroundStyle(.secondary)}
-                        ForEach(group.items.indices,id:\.self){i in
-                            let row=group.items[i]
+                        if group.loaded,visibleItems.isEmpty {
+                            Text(group.items.isEmpty ? "本会话尚无关联工作" : "没有符合筛选的事项").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(visibleItems.indices,id:\.self){i in
+                            let row=visibleItems[i]
                             if let id=CrewdChannelWorkStore.workID(row["object"]) {
                                 VStack(alignment:.leading,spacing:4){
                                     Button{select(row)}label:{Text(id.raw+"  "+(row["label"].string ?? "")+(row["labelTruncated"] == .bool(true) ? "…":"")).font(.caption).multilineTextAlignment(.leading)}.buttonStyle(.plain)
@@ -65,6 +96,14 @@ struct CrewdChannelTodoView:View {
         .sheet(isPresented:$association){CrewdChannelAssociation(group:group,work:work,drafts:$linkDrafts,initial:selected?["object"])}
         .sheet(item:$planTarget){target in CrewdPlanActions(store:work,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:work,drafts:$humanDrafts,target:target)}
+    }
+    private var kindPicker: some View {
+        Picker("Todo 类型", selection: $todoKind) {
+            ForEach(TodoKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.segmented).frame(maxWidth: 260)
+    }
+    private var searchField: some View {
+        TextField("搜索编号或标题", text: query).textFieldStyle(.roundedBorder)
     }
     private var composer:some View {
         VStack(alignment:.leading,spacing:4) {

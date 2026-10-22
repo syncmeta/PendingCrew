@@ -4,10 +4,51 @@ import SwiftUI
 /// Reading/reopening this surface never sends a prompt or resumes an Agent.
 struct CrewdKnowledgeDocumentsEntry: View {
     @ObservedObject var workspace: CrewdWorkspace
+    #if os(macOS)
+    @State private var source = Library.documents
+    private enum Library: String, CaseIterable { case documents = "文档", slices = "知识切片", pages = "Agent 页面" }
+    #endif
     var body: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("机组资料库").font(.system(size: 12, weight: .medium))
+                Picker("资料类型", selection: $source) {
+                    ForEach(Library.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).frame(maxWidth: 300)
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 14).padding(.vertical, 10)
+            Divider()
+            switch source {
+            case .documents:
+                CrewdDocumentsView(store: workspace.resources, drafts: $workspace.resourceDrafts)
+            case .slices:
+                knowledge(.documents).id(Library.slices)
+            case .pages:
+                knowledge(.agentPages).id(Library.pages)
+            }
+        }
+        #else
+        knowledge(.all)
+        #endif
+    }
+    private func knowledge(_ collection: CrewdKnowledgeCollection) -> some View {
         CrewdKnowledgeWorkspaceView(store: workspace.knowledge,
                                     available: workspace.client.capabilities.contains("data"),
-                                    returnToMessages: { workspace.originalSection = "消息" })
+                                    returnToMessages: { workspace.originalSection = "消息" }, collection: collection)
+    }
+}
+
+/// Native placements and free Agent-authored pages share stored blocks, while
+/// their navigation stays separate. The selector never executes page code.
+enum CrewdKnowledgeCollection: String {
+    case all, documents, agentPages
+    func includes(_ object: CrewdDataObject) -> Bool {
+        guard case let .view(_, _, _, definition, _, _) = object else { return false }
+        switch (self, definition) {
+        case (.all, _), (.documents, .document), (.agentPages, .web): return true
+        default: return false
+        }
     }
 }
 
@@ -15,6 +56,8 @@ struct CrewdKnowledgeWorkspaceView: View {
     @ObservedObject var store: CrewdKnowledgeStore
     let available: Bool
     var returnToMessages: (() -> Void)? = nil
+    var collection: CrewdKnowledgeCollection = .all
+    private var visibleObjects: [CrewdDataObject] { store.objects.filter(collection.includes) }
     @Environment(\.colorScheme) private var scheme
     @State private var selected = ""
     @State private var showSystem = false
@@ -35,7 +78,7 @@ struct CrewdKnowledgeWorkspaceView: View {
             Divider().overlay(CrewdChatStyle.line(scheme))
             if !available {
                 CrewdEmptySurface(title: "知识数据尚不可用", detail: "连接具备知识权限的后台后，可读取已保存的页面。", symbol: "externaldrive.badge.questionmark")
-            } else if let detail = store.detail {
+            } else if let detail = store.detail, collection.includes(detail.object) {
                 page(detail)
             } else {
                 CrewdEmptySurface(title: "让资料成为可用的页面", detail: "在消息中说明你需要的文档或界面。已保存的页面会显示在这里，打开页面不会启动 Agent。",
@@ -50,6 +93,7 @@ struct CrewdKnowledgeWorkspaceView: View {
                 .background(CrewdChatStyle.sidebar(scheme).opacity(0.20))
         }
         .task(id: available) { if available { await reload() } }
+        .onDisappear { store.renderer.revoke() }
         .onChange(of: selected) { _, id in
             guard !id.isEmpty, let context = store.workspace?.context else { return }
             UserDefaults.standard.set(id, forKey: pagePreference(context))
@@ -77,7 +121,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     private var pagePicker: some View {
         Picker("页面", selection: $selected) {
             Text("选择页面").tag("")
-            ForEach(store.objects.filter { $0.objectKind == "view" }, id: \.identity) {
+            ForEach(visibleObjects, id: \.identity) {
                 Text($0.displayTitle).tag($0.identity)
             }
         }.frame(maxWidth: 300)
@@ -96,12 +140,12 @@ struct CrewdKnowledgeWorkspaceView: View {
         // Reopen a persisted page without executing its author code or calling an Agent.
         if let context = store.workspace?.context {
             let preferred = selected.isEmpty ? UserDefaults.standard.string(forKey: pagePreference(context)) ?? "" : selected
-            let id = store.objects.contains(where: { $0.identity == preferred }) ? preferred : store.objects.first?.identity
+            let id = visibleObjects.contains(where: { $0.identity == preferred }) ? preferred : visibleObjects.first?.identity
             if let id { selected = id; await store.open(.init(namespace: context.namespace, kind: "view", id: id)) }
         }
     }
     private func pagePreference(_ context: CrewdDataContext) -> String {
-        "pendingcrew.page." + context.authorityId + "." + context.crewId + "." + context.namespace
+        "pendingcrew.page." + context.authorityId + "." + context.crewId + "." + context.namespace + (collection == .all ? "" : "." + collection.rawValue)
     }
     @ViewBuilder private func page(_ detail: CrewdDataObjectDetail) -> some View {
         switch detail.object {
