@@ -26,7 +26,7 @@ struct IOSRemotePairingView: View {
             Form {
                 if pendingID == nil {
                     Section("电脑的一次性邀请") {
-                        TextEditor(text: $invitation).frame(minHeight: 150)
+                        TextEditor(text: $invitation).frame(height: 150)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                             .onChange(of: invitation) { _, _ in preview = nil; envelope = nil; status = nil }
                         CrewdRemoteCodeFileImport(text: $invitation, stage: .invitation, disabled: busy)
@@ -52,7 +52,7 @@ struct IOSRemotePairingView: View {
                 }
                 if let id = pendingID {
                     Section("发回电脑的回应") {
-                        TextEditor(text: $response).frame(minHeight: 150).disabled(true)
+                        CrewdRemoteCodeReadback(text: response, height: 150)
                         CrewdRemoteCodeFileExport(text: response, stage: .response, disabled: busy)
                         Button("复制回应") {
                             UIPasteboard.general.string = response
@@ -60,7 +60,7 @@ struct IOSRemotePairingView: View {
                         }
                     }
                     Section("电脑的正式确认码") {
-                        TextEditor(text: $confirmation).frame(minHeight: 150)
+                        TextEditor(text: $confirmation).frame(height: 150)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
                         CrewdRemoteCodeFileImport(text: $confirmation, stage: .receipt, disabled: busy)
                         Button("确认并连接") {

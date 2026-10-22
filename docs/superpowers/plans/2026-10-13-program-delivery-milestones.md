@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-22 Linux 受管恢复与 iOS 长码表单组合冻结
+
+Linux受管恢复完整源码13bde107677332be2aef276ed6b112d9be626da0已独审：仅补已验证R2/9490/6f共用443输入精确digest资格，保原平台/配置/完整proof/ELF及lease门，不放宽schema15；46个Store/恢复/生命周期生产文件与原c8逐字节相同。既有preflight真实RED1→GREEN03=0、8项no-touch负向通过；原consumer显式r2精确来源/ELF，默认c8不变，自然普通用户环境不覆盖HOME/PATH。独审managed-r2-recovery-20261022/independent-qa-source-action.json SHA6b5df3a002fa39d973fdda77080d192d64fd92399c91c1fb693943b40695f364。
+
+随后既有VPS唯一新私有目录、debian UID1000、R2原ELF一次实际受管完整生命周期7.39s成功，SSH43585/归档/回传80942均0；四Core实际wait为0/-9/0/0，真实非空WAL恢复、原Todo/知识/视图/请求UUID重开、CAS/Unknown/坏WAL及未来版不改写、零自动session原证据完整，旧服务/监听/进程与原tar/ELF不变。原归档3793cbaa8127c059c6011321a87d4c732f80ee87ae5f2508e9f5b3a74b296e55/38342725B、521项manifest回核均保存，独立runtime复核待结；不冒新编译来源或常驻部署，无CI/模型/新用户/系统服务。
+
+6f普通iOS真实系统picker已接受无效文件拒绝保输入，以及原过期邀请2007字节完整填文；旧pbcopy假成功已由真实文件链替代。App/console实际0、两准确新测试文件清理、原208回Shutdown，无Core/邀请/响应/key/Keychain，expired本地核对尚未执行。实际发现长TextEditor撑高使核对按钮难达。客户端376d5be45711f9a999ec1b55eadfdcb9d21f63ae两Swift文件已独审：仅iOS邀请/回应/确认区域限高且内部滚动，完整原绑定/复制/导出和外Form滚动保留，无新状态，Mac分支行为不变。源parse0，几何复验待准确包，独审SHA61c840dd081cb5f4e80f86ebe4072f9fb1dd08ed94e26af1858f96fff8860a12。
+
+本组合提交作为唯一下一普通iOS完整target准确来源，复用暖缓存，仅复验真实picker导入原过期邀请→可达本地核对→拒过期→有界退出；不重Mac/Rust/Linux CI或已验稳定业务。已安装Mac仍准确6f35/20748.07553，不随本组合改标、不再安装。M4正式ACP/完整历史、完整持久远程/移动配对、物理设备与正式发布仍未完成；184/1ef Unknown原件继续冻结。
+
 ## 2026-10-22 文件交换完整候选已安装，转真实 iOS 系统文件选择流程
 
 准确完整来源6f35ebc0b84b8a36e8c285f05e070b2baa794a67的新normal原35545实际0，443输入/13自有实际重编及新证明独核接受；普通Mac Release原98004与普通iOS Simulator原2026完整构建均实际0，1766源码/3878依赖前后相等，Mac50与iOS76产物、严格签名和实际配置分别独验通过。Mac版本0.1.44/20748.07553；iOS实际仍0.1.43/1，BuildStampCommit精确6f35、自身AppID和唯一Keychain group，未新安装运行。normal、Mac与iOS保全根为各自*-6f35ebc0-20261022，产品源不随本节后文档提交改标。

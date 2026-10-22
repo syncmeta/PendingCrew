@@ -5,20 +5,22 @@ sys.dont_write_bytecode=True
 COMPILED_REF='c8d70482e42b0e9f777df11f9db720a910a91115'
 INPUT_DIGEST='673cd2bff312b747ca71bff29aa0d3abe2ba04872ed68108f8966827f4f99d50'
 ELF_SHA='72fdab4aeaf1ad256ea488d4aece836f0e2c220de417d49a4113bf75ff597f1a'
+CANDIDATES={'c8':(COMPILED_REF,INPUT_DIGEST,ELF_SHA),'r2':('5821310a7a9e99daba1a784b8f7b4af0c2af5e45','6d16f90874edd4a577f27748ef9647148591fe72380412badadd6cf964e7e708','f0b5b7ac483c8fec80fe0455782f110b2b01999e22908f76e6db156818b4cffd')}
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def require(value,message):
  if not value:raise ValueError(message)
 def main():
- a=argparse.ArgumentParser();a.add_argument('package');a.add_argument('output');a.add_argument('--development-macos',action='store_true');args=a.parse_args()
+ a=argparse.ArgumentParser();a.add_argument('package');a.add_argument('output');a.add_argument('--development-macos',action='store_true');a.add_argument('--candidate-family',choices=sorted(CANDIDATES),default='c8');args=a.parse_args()
+ compiled_ref,input_digest,elf_sha=CANDIDATES[args.candidate_family]
  dev=args.development_macos;package=pathlib.Path(args.package).resolve();out=pathlib.Path(args.output).resolve();scripts=pathlib.Path(__file__).resolve().parent
  require(sys.platform==('darwin' if dev else 'linux') and os.geteuid()!=0 and os.getuid()==os.geteuid(),'actual nonroot target host required')
  require(not out.exists(),'new private evidence root required');out.mkdir(mode=0o700)
  controller_files=['smoke-crewd-linux-managed-current.py','install-crewd-linux-candidate.py','crewd_managed_launch.py','check-crewd-linux-candidate.py','write-codex-first-provenance.py','archive-crewd-linux-lifecycle.py'];recipe={name:sha(scripts/name) for name in controller_files}
  manifest=json.loads((package/'candidate.json').read_text());w=json.loads((package/'normal-build-witness.json').read_text())
- require(w['rustInputDigest']==INPUT_DIGEST and len(w['files'])==443,'exact current Rust family required')
+ require(w['rustInputDigest']==input_digest and len(w['files'])==443,'exact current Rust family required')
  require(w['sourceRef']==manifest['sourceRef'] and sha(package/'bin/crewd')==manifest['binarySHA256']==w['binarySHA256'] and sha(package/'normal-build-witness.json')==manifest['witnessSHA256'],'original compiled source/binary/proof pairing required')
- if not dev:require(manifest['sourceRef']==COMPILED_REF and manifest['binarySHA256']==ELF_SHA,'only the accepted c8 actual Linux package is supported')
- (out/'source-action.json').write_text(json.dumps({'compiledRef':manifest['sourceRef'],'binarySHA256':manifest['binarySHA256'],'rustInputDigest':INPUT_DIGEST,'developmentMacOnly':dev,'controllerFiles':recipe},indent=2)+'\n')
+ if not dev:require(manifest['sourceRef']==compiled_ref and manifest['binarySHA256']==elf_sha,'only the selected exact accepted Linux package is supported')
+ (out/'source-action.json').write_text(json.dumps({'compiledRef':manifest['sourceRef'],'binarySHA256':manifest['binarySHA256'],'rustInputDigest':input_digest,'candidateFamily':args.candidate_family,'developmentMacOnly':dev,'controllerFiles':recipe},indent=2)+'\n')
  installer=scripts/'install-crewd-linux-candidate.py';installer_command=[sys.executable,str(installer)]
  if dev:
   # Private development consumer only: retain real Mac proof and real flock/CAS;
@@ -42,11 +44,11 @@ def inactive(prefix):
 m.verify=verify;m.inactive=inactive;m.platform.system=lambda:'Linux'
 try:m.main()
 except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise SystemExit('REFUSED/UNKNOWN: '+str(e))
-''');installer_command=[sys.executable,str(adapter),str(scripts)]
- prefix=out/'prefix';data=out/'data';home=out/'home';work=out/'work'
- for p in [data,home,work]:p.mkdir(mode=0o700)
+''');adapter.write_text(adapter.read_text().replace(repr(INPUT_DIGEST),repr(input_digest)));installer_command=[sys.executable,str(adapter),str(scripts)]
+ prefix=out/'prefix';data=out/'data';cache=out/'cache';work=out/'work'
+ for p in [data,cache,work]:p.mkdir(mode=0o700)
  require(len(str(data/'crewd.sock').encode())<=103,'short private path required')
- env={'PATH':'/usr/bin:/bin','HOME':str(home),'XDG_CACHE_HOME':str(home/'cache'),'SHELL':'/usr/bin/false','PYTHONDONTWRITEBYTECODE':'1'};records=[];terminals=[]
+ env=dict(os.environ);env.update(XDG_CACHE_HOME=str(cache),PYTHONDONTWRITEBYTECODE='1');records=[];terminals=[]
  def run(label,argv,success=True):
   r=subprocess.run(argv,env=env,capture_output=True,text=True,timeout=60);(out/(label+'.log')).write_text(r.stdout+r.stderr);records.append({'phase':label,'argv':argv,'exitCode':r.returncode});require((r.returncode==0)==success,'command outcome differs: '+label);return r
  def install(label,rid,expected,success=True):
@@ -63,7 +65,7 @@ except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise Syste
   finally:os.close(fd)
  @contextlib.contextmanager
  def serve(label,crash=False):
-  log=(out/(label+'.log')).open('w');cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false','--codex-env','HOME='+str(home),'--claude-env','HOME='+str(home)];child=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None
+  log=(out/(label+'.log')).open('w');cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false'];child=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None
   try:
    for _ in range(200):
     require(child.poll() is None,'managed daemon exited before readiness: '+label);s=socket.socket(socket.AF_UNIX);s.settimeout(10)
