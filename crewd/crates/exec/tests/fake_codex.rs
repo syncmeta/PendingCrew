@@ -722,7 +722,12 @@ async fn a_registry_that_cannot_be_written_kills_the_process() {
     assert!(matches!(err, StartError::Registry(_)), "{err:?}");
     // 不杀的话 5s 收尸上限到点才回来，说明里带着「没能收尸」。
     assert!(!err.to_string().contains("没能收尸"), "{err}");
-    assert!(registry.entries().is_empty());
+    // Existing restrictive registry semantics retain the original birth if its
+    // removal cannot persist. A failed file write cannot erase that obligation.
+    let retained = registry.entries();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].0, "worker-1");
+    gone(retained[0].1.pid).await;
     // 进程可能在写下 pid 文件之前就被杀了；写下了就必须已经不在。
     if env.path("pid").exists() {
         gone(env.pid_in("pid")).await;

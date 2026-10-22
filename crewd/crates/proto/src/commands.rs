@@ -126,19 +126,19 @@ pub enum PublicCommand {
     MessagePost(MessagePostParams),
     #[serde(rename = "session.start")]
     SessionStart(orchestra::SessionStartParams),
-    #[serde(rename="session.codex.configure")]
+    #[serde(rename = "session.codex.configure")]
     CodexConfigure(crate::codex::CodexConfigureParams),
-    #[serde(rename="session.codex.compact")]
-    CodexCompact(CommandRuntimeTarget),
-    #[serde(rename="session.codex.steer")]
+    #[serde(rename = "session.codex.compact")]
+    CodexCompact(crate::codex::CodexTargetParams),
+    #[serde(rename = "session.codex.steer")]
     CodexSteer(crate::codex::CodexTextParams),
-    #[serde(rename="session.codex.queue")]
+    #[serde(rename = "session.codex.queue")]
     CodexQueue(crate::codex::CodexTextParams),
-    #[serde(rename="session.codex.review")]
+    #[serde(rename = "session.codex.review")]
     CodexReview(crate::codex::CodexReviewParams),
-    #[serde(rename="session.codex.titleSet")]
+    #[serde(rename = "session.codex.titleSet")]
     CodexTitleSet(crate::codex::CodexTitleParams),
-    #[serde(rename="session.codex.fork")]
+    #[serde(rename = "session.codex.fork")]
     CodexFork(crate::codex::CodexForkParams),
     #[serde(rename = "session.stop")]
     SessionStop(RuntimeStopParams),

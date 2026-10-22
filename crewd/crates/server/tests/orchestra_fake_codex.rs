@@ -433,7 +433,6 @@ async fn mixed_executors_route_mentions_and_reconnect_without_replaying() {
     assert!(registry(&fixture.data).is_empty());
 }
 
-
 /// Original serve/Core/real Unix RPC seam. Each absent capability is observed
 /// only after normal fixture cleanup, so an initial RED leaves no owned child.
 async fn codex_control_case(operation: &str) -> (Result<Value, Value>, Vec<Value>) {
@@ -442,70 +441,666 @@ async fn codex_control_case(operation: &str) -> (Result<Value, Value>, Vec<Value
     let orchestra = options.orchestra.as_mut().unwrap();
     orchestra.claude = ClaudeProgram::Disabled;
     orchestra.codex = CodexProgram::Path(artifact("fake_codex"));
-    orchestra.codex_env = BTreeMap::from([
-        ("FAKE_CODEX_LOG".into(), fixture.log.display().to_string()),
-    ]);
+    orchestra.codex_env =
+        BTreeMap::from([("FAKE_CODEX_LOG".into(), fixture.log.display().to_string())]);
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let server = tokio::spawn(crewd_server::serve_with(fixture.data.clone(), options, async { let _=stop_rx.await; }));
+    let server = tokio::spawn(crewd_server::serve_with(
+        fixture.data.clone(),
+        options,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
     let mut client = Client::connect(&fixture.data).await;
-    let crew=client.call("crew.create",json!({"title":"Controls synthetic","workingDirectory":fixture.work})).await.unwrap();
+    let crew = client
+        .call(
+            "crew.create",
+            json!({"title":"Controls synthetic","workingDirectory":fixture.work}),
+        )
+        .await
+        .unwrap();
     let session=client.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"Implement the requested change.\n你是 is user text and stays intact.","title":"Human title wins","isolation":false})).await.unwrap();
-    let sid=session["id"].as_str().unwrap();
-    wait("first task accepted",||turn_count(&fixture,"Implement the requested change.")==1).await;
-    let target=client.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
-    let result = if operation=="initial-title" {
-        client.call("session.codex.inspect",json!({"sessionId":sid})).await
-    } else if operation=="history" {
-        client.call("session.codex.history",json!({"sessionId":sid,"limit":10,"itemsView":"full"})).await
+    let sid = session["id"].as_str().unwrap();
+    wait("first task accepted", || {
+        turn_count(&fixture, "Implement the requested change.") == 1
+    })
+    .await;
+    // A turn/start log precedes its ACK/completion. Wait for the existing durable usage
+    // event emitted after fake completion before capturing a command CAS target.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let usage = client
+            .call("session.usage", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        if !usage["items"].as_array().unwrap().is_empty() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    }
+
+    let target = client
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let result = if operation == "initial-title" {
+        client
+            .call("session.codex.inspect", json!({"sessionId":sid}))
+            .await
+    } else if operation == "history" {
+        client
+            .call(
+                "session.codex.history",
+                json!({"sessionId":sid,"limit":10,"itemsView":"full"}),
+            )
+            .await
     } else {
-        let hello=client.call("system.hello",json!({"clientName":"controls-fixture","clientVersion":"1"})).await.unwrap();
+        let hello = client
+            .call(
+                "system.hello",
+                json!({"clientName":"controls-fixture","clientVersion":"1"}),
+            )
+            .await
+            .unwrap();
         let params = match operation {
-            "session.codex.configure"=>json!({"target":target,"patch":{"model":"changed-model","effort":"high","fast":true}}),
-            _=>unreachable!(),
+            "session.codex.configure" => {
+                json!({"target":target,"patch":{"model":"changed-model","effort":"high","fast":true}})
+            }
+            _ => unreachable!(),
         };
-        let request_id=uuid::Uuid::new_v4().to_string();
+        let request_id = uuid::Uuid::new_v4().to_string();
         let mut result=client.call("command.submit",json!({"requestId":request_id,"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":operation,"params":params}})).await;
-        let deadline=tokio::time::Instant::now()+Duration::from_secs(5);
-        while result.as_ref().is_ok_and(|r|r["phase"]=="dispatched")&&tokio::time::Instant::now()<deadline {
-            result=client.call("command.lookup",json!({"requestId":request_id,"dbId":hello["runtimeIdentity"]["dbId"]})).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while result.as_ref().is_ok_and(|r| r["phase"] == "dispatched")
+            && tokio::time::Instant::now() < deadline
+        {
+            result = client
+                .call(
+                    "command.lookup",
+                    json!({"requestId":request_id,"dbId":hello["runtimeIdentity"]["dbId"]}),
+                )
+                .await;
             tokio::task::yield_now().await;
         }
         result
     };
-    client.call("session.stop",json!({"sessionId":sid,"reason":"synthetic cleanup"})).await.unwrap();
+    client
+        .call(
+            "session.stop",
+            json!({"sessionId":sid,"reason":"synthetic cleanup"}),
+        )
+        .await
+        .unwrap();
     client.stopped(sid).await;
     stop_tx.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     assert!(registry(&fixture.data).is_empty());
-    let calls=std::fs::read_to_string(&fixture.log).unwrap().lines().map(|l|serde_json::from_str(l).unwrap()).collect();
-    (result,calls)
+    let calls = std::fs::read_to_string(&fixture.log)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    (result, calls)
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controls_public_settings_reach_provider_with_receipt() {
-    let (result,calls)=codex_control_case("session.codex.configure").await;
-    let receipt=result.expect("the typed public configure command must be callable");
-    assert_eq!(receipt["phase"],"confirmed", "{receipt}");
-    assert!(calls.iter().any(|c|c["method"]=="thread/settings/update"&&c["params"]["model"]=="changed-model"));
+    let (result, calls) = codex_control_case("session.codex.configure").await;
+    let receipt = result.expect("the typed public configure command must be callable");
+    assert_eq!(receipt["phase"], "confirmed", "{receipt}");
+    assert!(calls.iter().any(
+        |c| c["method"] == "thread/settings/update" && c["params"]["model"] == "changed-model"
+    ));
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controls_native_title_is_independent_of_original_task_body() {
-    let (state,calls)=codex_control_case("initial-title").await;
-    let state=state.expect("actual native title state");
-    assert_eq!(state["title"]["status"],"synced","{state}");
-    assert_eq!(state["title"]["native"],"Human title wins");
-    assert!(calls.iter().any(|c|c["method"]=="thread/name/set"&&c["params"]["name"]=="Human title wins"),"desired PCW title alone is not native naming");
-    let turns:Vec<_>=calls.iter().filter(|c|c["method"]=="turn/start").collect();
-    assert_eq!(turns.len(),1);
-    assert_eq!(turns[0]["params"]["input"][0]["text"],"Implement the requested change.\n你是 is user text and stays intact.");
+    let (state, calls) = codex_control_case("initial-title").await;
+    let state = state.expect("actual native title state");
+    assert_eq!(state["title"]["status"], "synced", "{state}");
+    assert_eq!(state["title"]["native"], "Human title wins");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["method"] == "thread/name/set" && c["params"]["name"] == "Human title wins"),
+        "desired PCW title alone is not native naming"
+    );
+    let turns: Vec<_> = calls
+        .iter()
+        .filter(|c| c["method"] == "turn/start")
+        .collect();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0]["params"]["input"][0]["text"],
+        "Implement the requested change.\n你是 is user text and stays intact."
+    );
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn controls_history_is_read_only_provider_page() {
-    let (result,calls)=codex_control_case("history").await;
-    let page=result.expect("the scoped native history read must be callable");
+    let (result, calls) = codex_control_case("history").await;
+    let page = result.expect("the scoped native history read must be callable");
     assert!(page["items"].is_array());
-    assert!(calls.iter().any(|c|c["method"]=="thread/turns/list"));
-    assert_eq!(calls.iter().filter(|c|c["method"]=="turn/start").count(),1,"history must not start another turn");
+    assert!(calls.iter().any(|c| c["method"] == "thread/turns/list"));
+    assert_eq!(
+        calls.iter().filter(|c| c["method"] == "turn/start").count(),
+        1,
+        "history must not start another turn"
+    );
+}
+
+async fn control_receipt(
+    client: &mut Client,
+    identity: &Value,
+    id: &str,
+    operation: &str,
+    params: Value,
+) -> Value {
+    let mut result=client.call("command.submit",json!({"requestId":id,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":operation,"params":params}})).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while result["phase"] == "dispatched" && tokio::time::Instant::now() < deadline {
+        result = client
+            .call(
+                "command.lookup",
+                json!({"requestId":id,"dbId":identity["dbId"]}),
+            )
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+    }
+    result
+}
+fn native_calls(fixture: &Fixture, method: &str) -> Vec<Value> {
+    std::fs::read_to_string(&fixture.log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["method"] == method)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controls_full_public_lifecycle_preserves_identity_receipts_and_read_only_metadata() {
+    let fixture = Fixture::new();
+    let mut options = fixture.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), fixture.log.display().to_string()),
+        ("FAKE_CODEX_MODE".into(), "slow_turn".into()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(
+        fixture.data.clone(),
+        options,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
+    let mut c = Client::connect(&fixture.data).await;
+    let hello = c.call("system.hello", json!({})).await.unwrap();
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session.codex"))
+    );
+    let identity = hello["runtimeIdentity"].clone();
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Codex controls","workingDirectory":fixture.work}),
+        )
+        .await
+        .unwrap();
+    let row=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"","title":"Control source","isolation":false})).await.unwrap();
+    let sid = row["id"].as_str().unwrap();
+    wait("source native name", || {
+        native_calls(&fixture, "thread/name/set").len() == 1
+    })
+    .await;
+    let original = c
+        .call("session.get", json!({"sessionId":sid}))
+        .await
+        .unwrap()["agentSessionId"]
+        .clone();
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let params = json!({"target":target,"patch":{"model":"changed-model","fast":true,"approvalPolicy":"onRequest","approvalsReviewer":"user","sandbox":{"type":"readOnly","networkAccess":false},"collaborationMode":"plan","summary":"concise"}});
+    let receipt = control_receipt(
+        &mut c,
+        &identity,
+        &id,
+        "session.codex.configure",
+        params.clone(),
+    )
+    .await;
+    assert_eq!(receipt["phase"], "confirmed", "{receipt}");
+    assert_eq!(receipt["result"]["application"], "followingTurns");
+    let repeated = control_receipt(
+        &mut c,
+        &identity,
+        &id,
+        "session.codex.configure",
+        params.clone(),
+    )
+    .await;
+    assert_eq!(receipt, repeated);
+    assert_eq!(native_calls(&fixture, "thread/settings/update").len(), 1);
+    let mut changed = params.clone();
+    changed["patch"]["model"] = json!("another-model");
+    assert!(c.call("command.submit",json!({"requestId":id,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.codex.configure","params":changed}})).await.is_err());
+    let inspect = c
+        .call("session.codex.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(inspect["settingsStatus"], "accepted");
+    assert_eq!(inspect["desiredSettings"]["collaborationMode"], "plan");
+    assert!(
+        inspect["settings"]["collaborationMode"].is_null(),
+        "absent effective mode must not be invented from desired settings"
+    );
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let queue_id = uuid::Uuid::new_v4().to_string();
+    let queued = control_receipt(
+        &mut c,
+        &identity,
+        &queue_id,
+        "session.codex.queue",
+        json!({"target":target,"text":"Exact queued original task"}),
+    )
+    .await;
+    assert_eq!(queued["phase"], "confirmed");
+    assert_eq!(queued["result"]["application"], "queued");
+    assert_eq!(queued["result"]["providerAccepted"], false);
+    wait("one queued turn", || {
+        native_calls(&fixture, "turn/start").len() == 1
+    })
+    .await;
+    assert_eq!(
+        native_calls(&fixture, "turn/start")[0]["params"]["clientUserMessageId"],
+        queue_id
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let target = loop {
+        let t = c
+            .call("session.controlTarget", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        if t["turnId"].is_string() {
+            break t;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::task::yield_now().await;
+    };
+    let steered = control_receipt(
+        &mut c,
+        &identity,
+        &uuid::Uuid::new_v4().to_string(),
+        "session.codex.steer",
+        json!({"target":target,"text":"Exact same-turn correction"}),
+    )
+    .await;
+    assert_eq!(steered["phase"], "confirmed", "{steered}");
+    assert_eq!(steered["result"]["application"], "currentTurn");
+    assert_eq!(native_calls(&fixture, "turn/start").len(), 1);
+    assert_eq!(native_calls(&fixture, "turn/steer").len(), 1);
+    let stale = control_receipt(
+        &mut c,
+        &identity,
+        &uuid::Uuid::new_v4().to_string(),
+        "session.codex.steer",
+        json!({"target":target,"text":"Never deliver stale input"}),
+    )
+    .await;
+    assert_eq!(stale["phase"], "suppressed");
+    assert_eq!(native_calls(&fixture, "turn/steer").len(), 1);
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let interrupted = control_receipt(
+        &mut c,
+        &identity,
+        &uuid::Uuid::new_v4().to_string(),
+        "session.interrupt",
+        target,
+    )
+    .await;
+    assert_eq!(interrupted["phase"], "confirmed", "{interrupted}");
+    assert_eq!(interrupted["result"]["application"], "started");
+    for operation in ["session.codex.compact", "session.codex.review"] {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let live = c
+                .call("session.live", json!({"sessionId":sid}))
+                .await
+                .unwrap();
+            if live["working"] == false {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::task::yield_now().await;
+        }
+        let target = c
+            .call("session.controlTarget", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        let p = if operation.ends_with("review") {
+            json!({"target":target,"reviewTarget":{"type":"uncommittedChanges"}})
+        } else {
+            json!({"target":target})
+        };
+        let receipt = control_receipt(
+            &mut c,
+            &identity,
+            &uuid::Uuid::new_v4().to_string(),
+            operation,
+            p,
+        )
+        .await;
+        assert_eq!(receipt["phase"], "confirmed", "{receipt}");
+        assert_eq!(receipt["result"]["application"], "started");
+    }
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"metadata-only phase"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    let turns = native_calls(&fixture, "turn/start").len();
+    let starts = native_calls(&fixture, "thread/start").len();
+    let resumes = native_calls(&fixture, "thread/resume").len();
+    for method in [
+        "session.codex.history",
+        "session.codex.models",
+        "session.codex.tools",
+    ] {
+        let value = c.call(method, json!({"sessionId":sid})).await.unwrap();
+        assert!(value.is_object(), "{method}: {value}");
+    }
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let named = control_receipt(
+        &mut c,
+        &identity,
+        &uuid::Uuid::new_v4().to_string(),
+        "session.codex.titleSet",
+        json!({"target":target,"title":"Renamed source"}),
+    )
+    .await;
+    assert_eq!(named["phase"], "confirmed", "{named}");
+    let state = c
+        .call("session.codex.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(state["running"], false);
+    assert_eq!(state["title"]["native"], "Renamed source");
+    assert_eq!(state["title"]["status"], "synced");
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let fork_id = uuid::Uuid::new_v4().to_string();
+    let p = json!({"target":target,"title":"Fork source"});
+    let fork = control_receipt(&mut c, &identity, &fork_id, "session.codex.fork", p.clone()).await;
+    assert_eq!(fork["phase"], "confirmed", "{fork}");
+    let fork_sid = fork["result"]["newSessionId"].as_str().unwrap();
+    assert_eq!(
+        control_receipt(&mut c, &identity, &fork_id, "session.codex.fork", p).await,
+        fork
+    );
+    let branched = c
+        .call("session.get", json!({"sessionId":fork_sid}))
+        .await
+        .unwrap();
+    assert_eq!(branched["desired"], "stopped");
+    assert_eq!(branched["agentSessionId"], fork["result"]["nativeThreadId"]);
+    assert_eq!(
+        c.call("session.get", json!({"sessionId":sid}))
+            .await
+            .unwrap()["agentSessionId"],
+        original
+    );
+    assert_eq!(native_calls(&fixture, "turn/start").len(), turns);
+    assert_eq!(native_calls(&fixture, "thread/start").len(), starts);
+    assert_eq!(native_calls(&fixture, "thread/resume").len(), resumes);
+    assert_eq!(native_calls(&fixture, "thread/fork").len(), 1);
+    assert!(
+        registry(&fixture.data).is_empty(),
+        "every metadata child registered and reaped"
+    );
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controls_unknown_settings_and_fork_never_retry_on_manual_reopen() {
+    let fixture = Fixture::new();
+    let mut options = fixture.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), fixture.log.display().to_string()),
+        ("FAKE_CODEX_MODE".into(), "settings_exit,fork_exit".into()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(
+        fixture.data.clone(),
+        options,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
+    let mut c = Client::connect(&fixture.data).await;
+    let hello = c.call("system.hello", json!({})).await.unwrap();
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session.codex"))
+    );
+    let identity = hello["runtimeIdentity"].clone();
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Unknown controls","workingDirectory":fixture.work}),
+        )
+        .await
+        .unwrap();
+    let row=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","title":"Unknown source","brief":"Original task only once","isolation":false})).await.unwrap();
+    let sid = row["id"].as_str().unwrap();
+    wait("original task", || {
+        turn_count(&fixture, "Original task only once") == 1
+    })
+    .await;
+    let original = c
+        .call("session.get", json!({"sessionId":sid}))
+        .await
+        .unwrap()["agentSessionId"]
+        .clone();
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let params = json!({"target":target,"patch":{"fast":true}});
+    let result = control_receipt(
+        &mut c,
+        &identity,
+        &id,
+        "session.codex.configure",
+        params.clone(),
+    )
+    .await;
+    assert_eq!(result["phase"], "unknown", "{result}");
+    c.stopped(sid).await;
+    let frozen = control_receipt(&mut c, &identity, &id, "session.codex.configure", params).await;
+    assert_eq!(frozen, result);
+    assert_eq!(native_calls(&fixture, "thread/settings/update").len(), 1);
+    c.call("session.resume", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    wait("explicit native resume", || {
+        native_calls(&fixture, "thread/resume").len() == 1
+    })
+    .await;
+    assert_eq!(
+        native_calls(&fixture, "thread/settings/update").len(),
+        1,
+        "manual reopen must not retry an Unknown configure"
+    );
+    assert_eq!(
+        native_calls(&fixture, "thread/start").len(),
+        1,
+        "strict resume never substitutes a new thread"
+    );
+    assert_eq!(
+        turn_count(&fixture, "Original task only once"),
+        1,
+        "manual reopen must not replay original body"
+    );
+    let observed = c
+        .call("session.codex.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(observed["settingsStatus"], "unknown");
+    assert_eq!(
+        c.call("session.get", json!({"sessionId":sid}))
+            .await
+            .unwrap()["agentSessionId"],
+        original
+    );
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"fork unknown phase"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let fork_id = uuid::Uuid::new_v4().to_string();
+    let p = json!({"target":target,"title":"Unknown fork"});
+    let result =
+        control_receipt(&mut c, &identity, &fork_id, "session.codex.fork", p.clone()).await;
+    assert_eq!(result["phase"], "unknown", "{result}");
+    let fork_sid = result["result"]["newSessionId"].as_str().unwrap();
+    assert_eq!(
+        control_receipt(&mut c, &identity, &fork_id, "session.codex.fork", p).await,
+        result
+    );
+    let before = native_calls(&fixture, "initialize").len();
+    assert!(
+        c.call("session.resume", json!({"sessionId":fork_sid}))
+            .await
+            .is_err(),
+        "unknown fork must refuse before any spawn"
+    );
+    assert_eq!(native_calls(&fixture, "initialize").len(), before);
+    assert_eq!(native_calls(&fixture, "thread/fork").len(), 1);
+    assert_eq!(
+        c.call("session.get", json!({"sessionId":fork_sid}))
+            .await
+            .unwrap()["desired"],
+        "stopped"
+    );
+    assert!(registry(&fixture.data).is_empty());
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // A fresh Core must preserve the original uncertain fork without replacement thread/start.
+    let mut options = fixture.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), fixture.log.display().to_string()),
+        ("FAKE_CODEX_MODE".into(), "settings_exit,fork_exit".into()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(
+        fixture.data.clone(),
+        options,
+        async {
+            let _ = stop_rx.await;
+        },
+    ));
+    let mut c = Client::connect(&fixture.data).await;
+    let reloaded = c
+        .call(
+            "command.lookup",
+            json!({"requestId":fork_id,"dbId":identity["dbId"]}),
+        )
+        .await
+        .unwrap();
+    let mut historical = result.clone();
+    historical["historical"] = json!(true);
+    assert_eq!(
+        reloaded, historical,
+        "original fork UUID/result survives actual Core restart; only original receipt historical projection changes"
+    );
+    assert!(
+        c.call("session.resume", json!({"sessionId":fork_sid}))
+            .await
+            .is_err()
+    );
+    let unknown_target = c
+        .call("session.controlTarget", json!({"sessionId":fork_sid}))
+        .await
+        .unwrap();
+    let new_identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let title_request = uuid::Uuid::new_v4().to_string();
+    let denied = control_receipt(
+        &mut c,
+        &new_identity,
+        &title_request,
+        "session.codex.titleSet",
+        json!({"target":unknown_target,"title":"No native identity"}),
+    )
+    .await;
+    assert_eq!(
+        denied["phase"], "suppressed",
+        "a missing native source must settle before any provider write"
+    );
+
+    assert_eq!(
+        native_calls(&fixture, "initialize").len(),
+        before,
+        "restart/unknown resume cannot create a replacement child"
+    );
+    assert_eq!(native_calls(&fixture, "thread/fork").len(), 1);
+    assert_eq!(native_calls(&fixture, "thread/start").len(), 1);
+    assert!(registry(&fixture.data).is_empty());
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }

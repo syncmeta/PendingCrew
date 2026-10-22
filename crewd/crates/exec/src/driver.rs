@@ -290,16 +290,70 @@ pub enum RawWriteOutcome {
 pub struct ManualWritePermit {
     active: Arc<Mutex<bool>>,
     deadline: Instant,
+    lifetime_only: bool,
     expected_native: Option<crate::registry::ProcessIdentity>,
     connection: Option<Arc<Mutex<bool>>>,
     shared_fence: Option<crate::acp::manual_fence::ManualFence>,
     helper_core: Option<crate::registry::ProcessIdentity>,
 }
+impl std::fmt::Debug for ManualWritePermit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OwnedWritePermit")
+    }
+}
+impl PartialEq for ManualWritePermit {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.active, &other.active)
+    }
+}
+impl Eq for ManualWritePermit {}
 impl ManualWritePermit {
+    pub fn for_connection_lifetime(connection: Arc<Mutex<bool>>) -> Self {
+        let mut permit = Self::for_connection(Instant::now(), connection);
+        permit.lifetime_only = true;
+        permit
+    }
+    pub fn for_native_connection_lifetime(
+        native: crate::registry::ProcessIdentity,
+        connection: Arc<Mutex<bool>>,
+    ) -> Self {
+        let mut permit = Self::for_connection_lifetime(connection);
+        permit.expected_native = Some(native);
+        permit
+    }
+    pub fn for_connection(deadline: Instant, connection: Arc<Mutex<bool>>) -> Self {
+        let mut permit = Self::new(deadline);
+        permit.connection = Some(connection);
+        permit
+    }
+    /// Each poll can perform at most one nonblocking kernel write. Locks are
+    /// released on Pending, never held across an await. Revoke/EOF then fences
+    /// every later chunk, including a line already waiting in the writer queue.
+    pub(crate) fn poll_controlled<T>(
+        &self,
+        poll: impl FnOnce() -> std::task::Poll<io::Result<T>>,
+    ) -> std::task::Poll<io::Result<T>> {
+        let connection = self.connection.as_ref().map(|c| c.lock());
+        let active = self.active.lock();
+        if !matches!(active,Ok(ref a) if **a && (self.lifetime_only || Instant::now()<self.deadline))
+            || connection
+                .as_ref()
+                .is_some_and(|c| !matches!(c,Ok(live) if **live))
+            || !self.current_native(None)
+        {
+            return std::task::Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "original input authority closed",
+            )));
+        }
+        poll()
+    }
+
     pub fn new(deadline: Instant) -> Self {
         Self {
             active: Arc::new(Mutex::new(true)),
             deadline,
+            lifetime_only: false,
             expected_native: None,
             connection: None,
             shared_fence: None,
@@ -312,6 +366,7 @@ impl ManualWritePermit {
         Self {
             active: Arc::new(Mutex::new(true)),
             deadline,
+            lifetime_only: false,
             expected_native: Some(native),
             connection: None,
             shared_fence: None,
@@ -328,6 +383,7 @@ impl ManualWritePermit {
         Self {
             active: Arc::new(Mutex::new(true)),
             deadline,
+            lifetime_only: false,
             expected_native: Some(native),
             connection: Some(connection),
             shared_fence: None,
@@ -345,6 +401,7 @@ impl ManualWritePermit {
         Self {
             active: Arc::new(Mutex::new(true)),
             deadline,
+            lifetime_only: false,
             expected_native: Some(native),
             connection: None,
             shared_fence: Some(fence),
@@ -360,6 +417,7 @@ impl ManualWritePermit {
         Self {
             active: Arc::new(Mutex::new(true)),
             deadline,
+            lifetime_only: false,
             expected_native: Some(native),
             connection: Some(connection),
             shared_fence: Some(fence),
@@ -410,12 +468,16 @@ impl ManualWritePermit {
         }
         self.active
             .lock()
-            .is_ok_and(|active| *active && Instant::now() < self.deadline)
+            .is_ok_and(|active| *active && (self.lifetime_only || Instant::now() < self.deadline))
     }
 }
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
-    Codex { op: crate::codex::control::CodexOperation, reply: oneshot::Sender<crate::codex::control::CodexOutcome> },
+    Codex {
+        op: crate::codex::control::CodexOperation,
+        permit: Option<ManualWritePermit>,
+        reply: oneshot::Sender<crate::codex::control::CodexOutcome>,
+    },
     AnswerChoice {
         expect: String,
         choice: usize,
@@ -471,6 +533,7 @@ pub(crate) enum Command {
     },
     Control {
         op: Control,
+        permit: Option<ManualWritePermit>,
         reply: oneshot::Sender<ControlOutcome>,
     },
     /// 回答屏上的待决策框（T10d，[`SessionHandle::answer`]）。
@@ -490,6 +553,7 @@ pub struct SessionHandle {
     /// claude 的 raw 入队与实际 PTY syscall 共用这道锁：raw 一入队就撤销旧正文的写权限。
     /// codex 无 PTY，不装这道闸。
     raw_fence: Option<Arc<Mutex<u64>>>,
+    provider_fence: Option<Arc<Mutex<bool>>>,
     terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
 }
 
@@ -500,6 +564,7 @@ impl SessionHandle {
             tx,
             next_id: Arc::new(AtomicU64::new(BRIEF_DELIVERY_ID + 1)),
             raw_fence: None,
+            provider_fence: None,
             terminal_observer: None,
         }
     }
@@ -672,19 +737,99 @@ impl SessionHandle {
     }
 
     /// 会话控制（换模型 / 推理强度 / fast、压缩）。不支持的执行器回 `Unsupported`。
-    pub async fn codex_queue(&self,text:String,request_id:String) -> Result<crate::codex::control::CodexOutcome,Closed> {
-        let id=self.next_id.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|Closed)?;
-        self.codex(crate::codex::control::CodexOperation::Queue{id,text,request_id}).await
+    pub async fn codex_queue_controlled(
+        &self,
+        text: String,
+        request_id: String,
+        permit: ManualWritePermit,
+    ) -> Result<crate::codex::control::CodexOutcome, Closed> {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .map_err(|_| Closed)?;
+        self.codex_controlled(
+            crate::codex::control::CodexOperation::Queue {
+                id,
+                text,
+                request_id,
+            },
+            permit,
+        )
+        .await
     }
-    pub async fn codex(&self, op: crate::codex::control::CodexOperation) -> Result<crate::codex::control::CodexOutcome, Closed> {
+    pub async fn codex_queue(
+        &self,
+        text: String,
+        request_id: String,
+    ) -> Result<crate::codex::control::CodexOutcome, Closed> {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .map_err(|_| Closed)?;
+        self.codex(crate::codex::control::CodexOperation::Queue {
+            id,
+            text,
+            request_id,
+        })
+        .await
+    }
+    pub fn fence_provider_input(&self) {
+        if let Some(f) = &self.provider_fence {
+            if let Ok(mut live) = f.lock() {
+                *live = false;
+            }
+        }
+    }
+    pub(crate) fn with_provider_fence(mut self, fence: Arc<Mutex<bool>>) -> Self {
+        self.provider_fence = Some(fence);
+        self
+    }
+    pub async fn codex_controlled(
+        &self,
+        op: crate::codex::control::CodexOperation,
+        permit: ManualWritePermit,
+    ) -> Result<crate::codex::control::CodexOutcome, Closed> {
         let (reply, rx) = oneshot::channel();
-        self.cmd(Command::Codex { op, reply })?;
+        self.cmd(Command::Codex {
+            op,
+            permit: Some(permit),
+            reply,
+        })?;
+        rx.await.map_err(|_| Closed)
+    }
+    pub async fn codex(
+        &self,
+        op: crate::codex::control::CodexOperation,
+    ) -> Result<crate::codex::control::CodexOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::Codex {
+            op,
+            permit: None,
+            reply,
+        })?;
         rx.await.map_err(|_| Closed)
     }
 
+    pub async fn control_controlled(
+        &self,
+        op: Control,
+        permit: ManualWritePermit,
+    ) -> Result<ControlOutcome, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::Control {
+            op,
+            permit: Some(permit),
+            reply,
+        })?;
+        rx.await.map_err(|_| Closed)
+    }
     pub async fn control(&self, op: Control) -> Result<ControlOutcome, Closed> {
         let (reply, rx) = oneshot::channel();
-        self.cmd(Command::Control { op, reply })?;
+        self.cmd(Command::Control {
+            op,
+            permit: None,
+            reply,
+        })?;
         rx.await.map_err(|_| Closed)
     }
 
@@ -722,6 +867,7 @@ impl SessionHandle {
 
     /// SIGTERM，`stop_grace` 后 `killpg(SIGKILL)`。退出后发 `Exited { stopped_by_user: true }`。
     pub fn stop(&self) -> Result<(), Closed> {
+        self.fence_provider_input();
         self.cmd(Command::Stop)
     }
 
@@ -1614,8 +1760,10 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 });
             let _ = reply.send(cut);
         }
-        Command::Codex { reply, .. } => { let _ = reply.send(crate::codex::control::CodexOutcome::unsupported()); }
-        Command::Control { op, reply } => {
+        Command::Codex { reply, .. } => {
+            let _ = reply.send(crate::codex::control::CodexOutcome::unsupported());
+        }
+        Command::Control { op, reply, .. } => {
             let _ = reply.send(ControlOutcome::Unsupported(format!(
                 "claude 会话的 {op:?} 由屏幕驱动（M3 的 /model、/compact），执行器不直接支持"
             )));

@@ -180,7 +180,11 @@ pub struct ExitInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// Genuine Codex protocol observation, never a task completion claim.
-    CodexObservation { settings: Option<serde_json::Value>, title: Option<crewd_proto::codex::CodexTitleState>, accepted: Option<crewd_proto::codex::CodexSettingsPatch> },
+    CodexObservation {
+        settings: Option<serde_json::Value>,
+        title: Option<crewd_proto::codex::CodexTitleState>,
+        accepted: Option<crewd_proto::codex::CodexSettingsPatch>,
+    },
 
     /// 进程起来了（驱动层发；续跑被拒重起后会再发一次）。`resumed` = 这次是去接一个记过的号
     /// （claude `--resume`、codex `thread/resume`），接没接上看后面有没有 `ResumeRefused`。

@@ -2,9 +2,9 @@
 //! 一个 actor（`core::Core`）独占会话句柄与内存状态；数据只经 `port::Port`；执行器只经 `exec::Executor`。
 pub mod boot;
 pub mod clock;
-pub mod control;
 mod codex_control;
 mod codex_rpc;
+pub mod control;
 pub mod core;
 pub mod db;
 pub mod deliver;
@@ -389,11 +389,27 @@ impl Handle {
             .map_err(|_| stopped())?
             .and_then(|handle| handle.terminal_driver()))
     }
-    pub(crate) async fn codex_handle(&self,session:&str)->Result<Option<Arc<dyn exec::ExecHandle>>,ControlError> {
-        let (reply,rx)=oneshot::channel();self.tx.send(Input::Cmd(Cmd::Handle{session:session.into(),reply})).map_err(|_|stopped())?;rx.await.map_err(|_|stopped())
+    pub(crate) async fn codex_handle(
+        &self,
+        session: &str,
+    ) -> Result<Option<Arc<dyn exec::ExecHandle>>, ControlError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Input::Cmd(Cmd::Handle {
+                session: session.into(),
+                reply,
+            }))
+            .map_err(|_| stopped())?;
+        rx.await.map_err(|_| stopped())
     }
-    pub(crate) async fn codex_metadata(&self,req:crewd_exec::codex::metadata::MetadataRequest)->crewd_exec::codex::control::CodexOutcome {
-        match self.execs.get("codex"){Ok(e)=>e.codex_metadata(req).await,Err(_)=>crewd_exec::codex::control::CodexOutcome::unsupported()}
+    pub(crate) async fn codex_metadata(
+        &self,
+        req: crewd_exec::codex::metadata::MetadataRequest,
+    ) -> crewd_exec::codex::control::CodexOutcome {
+        match self.execs.get("codex") {
+            Ok(e) => e.codex_metadata(req).await,
+            Err(_) => crewd_exec::codex::control::CodexOutcome::unsupported(),
+        }
     }
     pub async fn runner_request(
         &self,

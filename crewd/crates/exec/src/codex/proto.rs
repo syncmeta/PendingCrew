@@ -94,6 +94,23 @@ pub fn thread_start_params(cwd: &Path, o: &ThreadOptions) -> Value {
 /// （不带历史回合：长 thread 的整段历史是一行几 MB 的 JSON，Swift 吃过超时的亏）。
 pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> Value {
     let mut p = thread_start_params(cwd, o);
+    if o.strict_resume {
+        // Native resume loads the stored thread. Reopening is not a request to
+        // reset its permissions or retry a previously uncertain settings patch.
+        let object = p.as_object_mut().expect("thread params object");
+        for key in [
+            "model",
+            "serviceTier",
+            "approvalPolicy",
+            "approvalsReviewer",
+            "sandbox",
+        ] {
+            object.remove(key);
+        }
+        if let Some(config) = object.get_mut("config").and_then(Value::as_object_mut) {
+            config.remove("model_reasoning_effort");
+        }
+    }
     p["threadId"] = json!(thread_id);
     p["excludeTurns"] = json!(true);
     p

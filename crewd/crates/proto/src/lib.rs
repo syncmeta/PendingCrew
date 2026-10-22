@@ -957,6 +957,34 @@ pub fn api_schema() -> Value {
             m(sub::<WorkHistoryParams>(g), sub::<WorkHistoryPage>(g)),
         ),
         (
+            codex::INSPECT,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexSessionInspection>(g),
+            ),
+        ),
+        (
+            codex::HISTORY,
+            m(
+                sub::<codex::CodexHistoryParams>(g),
+                sub::<codex::CodexHistoryPage>(g),
+            ),
+        ),
+        (
+            codex::MODELS,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexModels>(g),
+            ),
+        ),
+        (
+            codex::TOOLS,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexTools>(g),
+            ),
+        ),
+        (
             methods::SESSION_USAGE,
             m(sub::<RunnerUsageParams>(g), sub::<RunnerUsagePage>(g)),
         ),
@@ -1528,14 +1556,17 @@ mod tests {
         assert_eq!(s["apiVersion"], 3);
     }
 
-    /// 不做审批了（人 2026-10-07）：契约里不剩任何审批方法 / 事件 / 主题 / 类型（不分大小写，`$defs` 的类型名也算）。
+    /// Legacy PCW approval workflow stays removed. Native Codex policy/structured
+    /// decisions are the explicitly requested session surface, not that workflow.
     #[test]
-    fn there_is_no_approval_surface_left() {
-        let schema = serde_json::to_string(&api_schema()).unwrap().to_lowercase();
-        assert!(
-            !schema.contains("approval"),
-            "契约里不能再有任何审批方法 / 事件 / 类型"
-        );
+    fn there_is_no_legacy_approval_workflow() {
+        let schema = api_schema();
+        for method in schema["methods"].as_object().unwrap().keys() {
+            assert!(
+                !method.starts_with("approval."),
+                "legacy approval RPC must stay absent"
+            );
+        }
         assert_eq!(API_VERSION, 3);
     }
 

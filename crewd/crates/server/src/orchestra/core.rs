@@ -267,7 +267,12 @@ pub enum Input {
         reply: Reply<SessionRow>,
         result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     },
-    PublicCodexDone {call:crate::public_execution::PublicExecution,target:crewd_proto::commands::CommandRuntimeTarget,thread:String,outcome:crewd_exec::codex::control::CodexOutcome},
+    PublicCodexDone {
+        call: crate::public_execution::PublicExecution,
+        target: crewd_proto::commands::CommandRuntimeTarget,
+        thread: String,
+        outcome: crewd_exec::codex::control::CodexOutcome,
+    },
     PublicAnswerDone {
         call: crate::public_execution::PublicExecution,
         outcome: Result<AnswerReport, ControlError>,
@@ -955,7 +960,16 @@ impl<P: Port> Core<P> {
                 self.on_worktree_ready(req, reply, result).await;
                 Ok(())
             }
-            Input::PublicCodexDone {call,target,thread,outcome}=> {self.finish_public_codex(call,target,thread,outcome).await;Ok(())}
+            Input::PublicCodexDone {
+                call,
+                target,
+                thread,
+                outcome,
+            } => {
+                self.finish_public_codex(call, target, thread, outcome)
+                    .await;
+                Ok(())
+            }
             Input::PublicAnswerDone { call, outcome } => {
                 self.settle_public_answer(call, outcome).await;
                 Ok(())
@@ -1054,7 +1068,8 @@ impl<P: Port> Core<P> {
                 ) {
                     self.execute_public_hibernate(call, reply).await;
                 } else if super::codex_control::is_command(&call.request.command) {
-                    let result=self.execute_public_codex(call).await;let _=reply.send(result);
+                    let result = self.execute_public_codex(call).await;
+                    let _ = reply.send(result);
                 } else {
                     let result = self.execute_public_control(call).await;
                     let _ = reply.send(result);
@@ -1293,10 +1308,23 @@ impl<P: Port> Core<P> {
         if origin == Origin::Agent && self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Err(ControlError::ShuttingDown);
         }
-        if let Some(patch)=&req.codex_options {
-            if req.executor!="codex" {return Err(ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field","codexOptions.executor")));}
-            patch.validate().map_err(|e|ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field",e)))?;
-            if (req.model.is_some()&&patch.model.is_some())||(req.effort.is_some()&&patch.effort.is_some()) {return Err(ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field","codexOptions.duplicateProfile")));}
+        if let Some(patch) = &req.codex_options {
+            if req.executor != "codex" {
+                return Err(ControlError::Invalid(
+                    Refusal::new(Code::ResourceInvalid).arg("field", "codexOptions.executor"),
+                ));
+            }
+            patch.validate().map_err(|e| {
+                ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field", e))
+            })?;
+            if (req.model.is_some() && patch.model.is_some())
+                || (req.effort.is_some() && patch.effort.is_some())
+            {
+                return Err(ControlError::Invalid(
+                    Refusal::new(Code::ResourceInvalid)
+                        .arg("field", "codexOptions.duplicateProfile"),
+                ));
+            }
         }
         let exec = self
             .execs
@@ -1443,6 +1471,17 @@ impl<P: Port> Core<P> {
         if row.crew_removed {
             return Err(ControlError::CrewRemoved(row.crew_id));
         }
+        if row.executor == "codex"
+            && !self
+                .port
+                .codex_resume_ready(session)
+                .await
+                .map_err(ControlError::from_port)?
+        {
+            return Err(ControlError::Invalid(
+                Refusal::new(Code::ResourceInvalid).arg("field", "codex.forkUnconfirmed"),
+            ));
+        }
         let exec = self
             .execs
             .get(&row.executor)
@@ -1496,6 +1535,9 @@ impl<P: Port> Core<P> {
         }
         if let Some(a) = &self.cfg.admission {
             a.revoke(session);
+        }
+        if let Some(l) = self.live.get(session) {
+            l.handle.fence_inputs();
         }
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
@@ -1955,7 +1997,7 @@ impl<P: Port> Core<P> {
             self.settle_terminal(batch, Settle::Requeue).await?;
             return Err(error);
         }
-        let (title,codex_options)=self.port.codex_launch_options(&row.id).await?;
+        let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
         let req = LaunchRequest {
             title,
             codex_options,
@@ -2475,8 +2517,14 @@ impl<P: Port> Core<P> {
             .get_mut(session)
             .expect("validated current generation");
         match event {
-            SessionEvent::CodexObservation { settings, title, accepted } => {
-                self.port.codex_observe(session,settings,title,accepted).await?;
+            SessionEvent::CodexObservation {
+                settings,
+                title,
+                accepted,
+            } => {
+                self.port
+                    .codex_observe(session, settings, title, accepted)
+                    .await?;
             }
             SessionEvent::Spawned {
                 agent_session_id, ..

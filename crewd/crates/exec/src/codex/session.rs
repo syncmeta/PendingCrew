@@ -2,19 +2,17 @@
 //! 喂一行 stdout / 一次定时拍 / 一条命令 / 账本结果 / 进程退出，吐出按顺序执行的
 //! [`CodexAction`]。时间由调用方传入。
 //!
-//! - **握手**：`initialize` → `initialized` → 记过 thread 就 `thread/resume`（`excludeTurns`），
-//!   失败退回 `thread/start`；拿到 thread id 先落账（[`CodexAction::Record`]），落账成功才发
-//!   `Spawned`、才放第一个回合。落账失败 = 启动失败。就绪之前产生的事件先攒着，保证第一条事件
-//!   是 `Spawned`。续跑被拒时的事件与 claude 同序：`Spawned { 旧号, resumed: true }` →
-//!   `ResumeRefused` → `Spawned { 新号, resumed: false }`（同一个 pid）——每条 `ResumeRefused`
-//!   后面都跟一条 `Spawned`。三条在就绪那一刻一起发，叫停只可能发生在就绪之后，所以「叫停之后
-//!   不再报 `ResumeRefused`」在结构上成立。
+//! - **握手**：`initialize` → `initialized` → 已记录 thread 则 `thread/resume`。
+//!   生产 `strict_resume` 被拒时直接失败，绝不替换 thread 或重发首正文；独立旧底座 seam
+//!   仍可显式测试历史 fallback。拿到 thread id 后先 [`CodexAction::Record`] 耐久落账，
+//!   成功后才发 `Spawned`、独立原生标题请求及初始设置；初始设置 ACK 前扣住首正文。
+//!   标题失败不重发正文，初始设置失败/不确定则拒绝正文且不自动重试。
 //! - 人工请求保留原始身份与表单，等待精确答复；其他请求由 [`proto::answer_server_request`] 回复。
 //! - **回合**：一次只开一个；有回合在跑、正在压缩、或上一个 `turn/start` 还没回，正文就排队。
 //! - **健康**：只认协议字段（[`proto::health_from`]）；正常完成的回合清掉过时的额度 / 失败 / 版本 / 登录态 health。
 //! - **每个请求都有期限**（[`Rpc::expire`]），到期按失败处理，会话不挂。
 use std::collections::{BTreeSet, VecDeque};
-#[path="controls.rs"]
+#[path = "controls.rs"]
 mod controls;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -105,7 +103,14 @@ pub enum StartFailure {
 /// 交给驱动层按顺序执行的动作。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodexAction {
-    CodexDone { ticket: u64, outcome: super::control::CodexOutcome },
+    ControlledWrite {
+        line: String,
+        permit: crate::driver::ManualWritePermit,
+    },
+    CodexDone {
+        ticket: u64,
+        outcome: super::control::CodexOutcome,
+    },
     /// 往 stdin 写一行（不含换行）。
     Write(String),
     /// 把 thread id 落账，结果用 [`CodexCore::on_recorded`] 交回。
@@ -136,8 +141,14 @@ enum Phase {
 
 #[derive(Clone, Debug)]
 enum Tag {
-    Native { ticket: Option<u64>, op: super::control::CodexOperation },
-    NativeToolsSkills { ticket: u64, servers: Value },
+    Native {
+        ticket: Option<u64>,
+        op: super::control::CodexOperation,
+    },
+    NativeToolsSkills {
+        ticket: u64,
+        servers: Value,
+    },
     Initialize,
     Resume(String),
     Start,
@@ -168,7 +179,8 @@ pub struct CodexCore {
     native_settings: Value,
     native_settings_epoch: u64,
     native_name: Option<String>,
-    public_input_ids: std::collections::BTreeMap<u64,String>,
+    public_input_ids:
+        std::collections::BTreeMap<u64, (String, Option<crate::driver::ManualWritePermit>)>,
     initial_settings_gate: bool,
     initial_settings_failed: bool,
     phase: Phase,
@@ -540,7 +552,6 @@ impl CodexCore {
 
     /// 定时拍：请求到期、fast 回显到期。
     pub fn on_tick(&mut self, now: Instant) {
-        self.native_tick(now);
         for (tag, _, failure) in self.rpc.expire(now) {
             self.on_result(tag, Err(failure), now);
         }
@@ -627,6 +638,25 @@ impl CodexCore {
     }
 
     /// 会话控制。结果经 [`CodexAction::ControlDone`] 交回（`ticket` 原样）。
+    pub fn control_controlled(
+        &mut self,
+        ticket: u64,
+        op: Control,
+        permit: crate::driver::ManualWritePermit,
+        now: Instant,
+    ) {
+        let before = self.actions.len();
+        self.control(ticket, op, now);
+        for action in &mut self.actions[before..] {
+            if let CodexAction::Write(line) = action {
+                let line = std::mem::take(line);
+                *action = CodexAction::ControlledWrite {
+                    line,
+                    permit: permit.clone(),
+                };
+            }
+        }
+    }
     pub fn control(&mut self, ticket: u64, op: Control, now: Instant) {
         let reject = |why: &str| CodexAction::ControlDone {
             ticket,
@@ -732,8 +762,20 @@ impl CodexCore {
                     ticket,
                     outcome: ControlOutcome::Rejected("codex 进程已退出".into()),
                 }),
-                Tag::Native { ticket, .. } => self.native_done(ticket, super::control::CodexOutcome::Unknown { provider_accepted:false, detail:"runtime disconnected".into() }),
-                Tag::NativeToolsSkills { ticket, .. } => self.native_done(Some(ticket), super::control::CodexOutcome::Unknown { provider_accepted:false,detail:"runtime disconnected".into() }),
+                Tag::Native { ticket, .. } => self.native_done(
+                    ticket,
+                    super::control::CodexOutcome::Unknown {
+                        provider_accepted: false,
+                        detail: "runtime disconnected".into(),
+                    },
+                ),
+                Tag::NativeToolsSkills { ticket, .. } => self.native_done(
+                    Some(ticket),
+                    super::control::CodexOutcome::Unknown {
+                        provider_accepted: false,
+                        detail: "runtime disconnected".into(),
+                    },
+                ),
                 _ => {}
             }
         }
@@ -808,9 +850,13 @@ impl CodexCore {
 
     fn opened(&mut self, thread: String, resumed: bool, result: &Value, now: Instant) {
         self.opened_profile = proto::profile_of(result);
-        self.native_settings=result.clone();
-        if let Some(settings)=result.get("threadSettings"){self.native_settings=settings.clone();}
-        if let Some(sandbox)=self.native_settings.get("sandbox").cloned(){self.native_settings["sandboxPolicy"]=sandbox;}
+        self.native_settings = result.clone();
+        if let Some(settings) = result.get("threadSettings") {
+            self.native_settings = settings.clone();
+        }
+        if let Some(sandbox) = self.native_settings.get("sandbox").cloned() {
+            self.native_settings["sandboxPolicy"] = sandbox;
+        }
 
         self.tracker = TurnTracker::new(thread.clone());
         self.thread_id = Some(thread.clone());
@@ -857,7 +903,9 @@ impl CodexCore {
     fn on_result(&mut self, tag: Tag, result: Result<Value, RpcFailure>, now: Instant) {
         match tag {
             Tag::Native { ticket, op } => self.native_result(ticket, op, result, now),
-            Tag::NativeToolsSkills { ticket, servers } => self.native_tools_result(ticket, servers, result),
+            Tag::NativeToolsSkills { ticket, servers } => {
+                self.native_tools_result(ticket, servers, result)
+            }
             Tag::Initialize => match result {
                 Ok(_) => {
                     self.actions
@@ -872,7 +920,8 @@ impl CodexCore {
                     self.opened(thread, true, &v, now);
                 }
                 Err(RpcFailure::Disconnected) => {}
-                Err(f) if self.options.strict_resume => self.handshake_failed("thread/resume refused; no replacement thread created", &f),
+                Err(f) if self.options.strict_resume => self
+                    .handshake_failed("thread/resume refused; no replacement thread created", &f),
                 Err(f) => {
                     self.fallback = Some((id, f.to_string()));
                     self.open_thread(now);
@@ -1017,7 +1066,9 @@ impl CodexCore {
             self.native_settings_echo(params);
             self.on_settings_echo(params);
         }
-        if method == "thread/name/updated" { self.native_name_echo(params); }
+        if method == "thread/name/updated" {
+            self.native_name_echo(params);
+        }
         if self.thread_id.is_none() {
             return;
         }
@@ -1163,7 +1214,10 @@ impl CodexCore {
         };
         let thread = self.thread_id.clone().unwrap_or_default();
         let mut params = proto::turn_start_params(&thread, &next.text, &next.context);
-        if let Some(id)=self.public_input_ids.remove(&next.id){params["clientUserMessageId"]=serde_json::json!(id);}
+        let public = self.public_input_ids.remove(&next.id);
+        if let Some((id, _)) = &public {
+            params["clientUserMessageId"] = serde_json::json!(id);
+        }
         let timeout = self.config.request_timeout;
         self.request(
             Tag::TurnStart {
@@ -1176,6 +1230,12 @@ impl CodexCore {
             now,
             timeout,
         );
+        if let Some((_, Some(permit))) = public {
+            if let Some(CodexAction::Write(line)) = self.actions.pop() {
+                self.actions
+                    .push(CodexAction::ControlledWrite { line, permit });
+            }
+        }
         self.in_flight = true;
     }
 
@@ -2853,5 +2913,264 @@ mod tests {
                 outcome: ControlOutcome::NoConfirmation(_)
             }]
         ));
+    }
+    #[test]
+    fn controls_initial_options_wait_for_record_and_ack_without_requiring_echo() {
+        use crate::codex::control::{CodexOperation as Op, CodexOutcome as Out};
+        let mut t = T::new(
+            None,
+            Some("Implement the exact task.\n你是 remains original user text."),
+        );
+        t.core.options.title = Some("Human task title".into());
+        t.core.options.initial_settings = Some(crewd_proto::codex::CodexSettingsPatch {
+            fast: Some(true),
+            ..Default::default()
+        });
+        t.reply("initialize", json!({}));
+        t.reply(
+            "thread/start",
+            json!({"thread":{"id":"thr-1"},"model":"synthetic-model"}),
+        );
+        assert_eq!(t.count("thread/name/set"), 0);
+        assert_eq!(t.count("thread/settings/update"), 0);
+        assert_eq!(t.count("turn/start"), 0);
+        t.core.on_recorded(Ok(()), t.at(0.2));
+        t.pump();
+        assert_eq!(t.count("thread/name/set"), 1);
+        assert_eq!(t.count("thread/settings/update"), 1);
+        assert_eq!(
+            t.count("turn/start"),
+            0,
+            "initial options must precede body"
+        );
+        t.reply_err("thread/name/set", "name rejected");
+        assert_eq!(t.count("turn/start"), 0);
+        t.reply("thread/settings/update", json!({}));
+        assert_eq!(
+            t.count("turn/start"),
+            1,
+            "documented settings ACK suffices; no invented echo requirement"
+        );
+        assert_eq!(
+            t.last("turn/start")["params"]["input"][0]["text"],
+            "Implement the exact task.\n你是 remains original user text."
+        );
+        assert!(t.events.iter().any(|e| matches!(
+            e,
+            SessionEvent::CodexObservation {
+                accepted: Some(_),
+                ..
+            }
+        )));
+        t.core.codex_control(99, Op::Inspect, t.at(1.0));
+        t.pump();
+        assert!(t.other.iter().any(|a| matches!(
+            a,
+            CodexAction::CodexDone {
+                ticket: 99,
+                outcome: Out::Observed(_)
+            }
+        )));
+    }
+    #[test]
+    fn controls_initial_rejection_and_unknown_never_deliver_body() {
+        for timeout in [false, true] {
+            let mut t = T::new(None, Some("Never send before qualified options"));
+            t.core.options.initial_settings = Some(crewd_proto::codex::CodexSettingsPatch {
+                fast: Some(true),
+                ..Default::default()
+            });
+            t.reply("initialize", json!({}));
+            t.reply(
+                "thread/start",
+                json!({"thread":{"id":"thr-1"},"model":"synthetic-model"}),
+            );
+            t.core.on_recorded(Ok(()), t.at(0.2));
+            t.pump();
+            if timeout {
+                t.tick(31.0);
+            } else {
+                t.reply_err("thread/settings/update", "settings rejected");
+            }
+            assert_eq!(t.count("turn/start"), 0);
+            t.tick(60.0);
+            assert_eq!(t.count("turn/start"), 0, "no timer retry of body");
+        }
+    }
+    #[test]
+    fn controls_ack_is_next_turn_desired_not_effective_and_stop_cuts_late_ack() {
+        use crate::codex::control::{CodexOperation as Op, CodexOutcome as Out};
+        let mut t = T::ready(None);
+        let patch = crewd_proto::codex::CodexSettingsPatch {
+            model: Some("new-model".into()),
+            ..Default::default()
+        };
+        t.core
+            .codex_control(41, Op::Configure(patch.clone()), t.at(1.0));
+        t.pump();
+        t.reply("thread/settings/update", json!({}));
+        assert!(t.other.iter().any(|a|matches!(a,CodexAction::CodexDone{ticket:41,outcome:Out::Observed(v)} if v["application"]=="followingTurns"&&v["observedSettings"].is_null())));
+        t.core.codex_control(42, Op::Configure(patch), t.at(2.0));
+        t.pump();
+        t.core.stop(t.at(2.1));
+        t.pump();
+        t.reply_at("thread/settings/update", json!({}), 2.2);
+        assert!(!t.other.iter().any(|a| matches!(
+            a,
+            CodexAction::CodexDone {
+                ticket: 42,
+                outcome: Out::Observed(_)
+            }
+        )));
+        assert!(t.other.iter().any(|a| matches!(
+            a,
+            CodexAction::CodexDone {
+                ticket: 42,
+                outcome: Out::Unknown { .. }
+            }
+        )));
+    }
+    #[test]
+    fn controls_exact_steer_and_next_turn_queue_are_distinct() {
+        use crate::codex::control::{CodexOperation as Op, CodexOutcome as Out};
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"active"}}),
+        );
+        let request = "acebe9bb-b002-42f7-b7f2-0a54c2e0bff6".to_string();
+        t.core.codex_control(
+            1,
+            Op::Steer {
+                text: "Wrong turn".into(),
+                expected_turn_id: "old".into(),
+                request_id: request.clone(),
+            },
+            t.at(1.0),
+        );
+        t.pump();
+        assert_eq!(t.count("turn/steer"), 0);
+        assert_eq!(t.count("turn/start"), 0);
+        t.core.codex_control(
+            2,
+            Op::Steer {
+                text: "Exact original text".into(),
+                expected_turn_id: "active".into(),
+                request_id: request.clone(),
+            },
+            t.at(1.1),
+        );
+        t.pump();
+        assert_eq!(t.last("turn/steer")["params"]["expectedTurnId"], "active");
+        t.reply("turn/steer", json!({"turnId":"different"}));
+        assert!(t.other.iter().any(|a| matches!(
+            a,
+            CodexAction::CodexDone {
+                ticket: 2,
+                outcome: Out::Unknown { .. }
+            }
+        )));
+        t.core.codex_control(
+            3,
+            Op::Queue {
+                id: 101,
+                text: "Only the next turn".into(),
+                request_id: request.clone(),
+            },
+            t.at(1.2),
+        );
+        t.pump();
+        assert_eq!(t.count("turn/start"), 0);
+        t.notify(
+            "turn/completed",
+            json!({"threadId":"thr-1","turn":{"id":"active","status":"completed"}}),
+        );
+        assert_eq!(t.count("turn/start"), 1);
+        assert_eq!(
+            t.last("turn/start")["params"]["clientUserMessageId"],
+            request
+        );
+        assert_eq!(
+            t.last("turn/start")["params"]["input"][0]["text"],
+            "Only the next turn"
+        );
+    }
+    #[test]
+    fn controls_review_start_owns_the_next_turn_boundary_until_native_resolution() {
+        use crate::codex::control::CodexOperation as Op;
+        use crewd_proto::codex::CodexReviewTarget;
+        for outcome in ["accepted", "rejected", "unknown"] {
+            let mut t = T::ready(None);
+            t.core.codex_control(
+                70,
+                Op::Review(CodexReviewTarget::UncommittedChanges),
+                t.at(1.0),
+            );
+            t.pump();
+            t.core.codex_control(
+                71,
+                Op::Queue {
+                    id: 101,
+                    text: "queued after review".into(),
+                    request_id: "acebe9bb-b002-42f7-b7f2-0a54c2e0bff6".into(),
+                },
+                t.at(1.1),
+            );
+            t.pump();
+            assert_eq!(
+                t.count("turn/start"),
+                0,
+                "review/start pending must hold the following turn"
+            );
+            match outcome {
+                "accepted" => {
+                    t.reply(
+                        "review/start",
+                        json!({"turn":{"id":"review-turn","status":"inProgress"}}),
+                    );
+                    assert_eq!(
+                        t.count("turn/start"),
+                        0,
+                        "native review ACK owns its active turn before notification"
+                    );
+                    t.notify("turn/completed",json!({"threadId":"thr-1","turn":{"id":"review-turn","status":"completed"}}));
+                    assert_eq!(t.count("turn/start"), 1);
+                }
+                "rejected" => {
+                    t.reply_err("review/start", "review refused");
+                    assert_eq!(t.count("turn/start"), 1);
+                }
+                _ => {
+                    t.tick(31.0);
+                    t.tick(60.0);
+                    assert_eq!(
+                        t.count("turn/start"),
+                        0,
+                        "unconfirmed review cannot open/retry a following turn"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn controls_strict_resume_never_falls_back_to_new_thread() {
+        let mut t = T::new(Some("native-stored"), None);
+        t.core.options.strict_resume = true;
+        t.reply("initialize", json!({}));
+        let p = t.last("thread/resume")["params"].clone();
+        for key in [
+            "model",
+            "serviceTier",
+            "approvalPolicy",
+            "approvalsReviewer",
+            "sandbox",
+        ] {
+            assert!(p.get(key).is_none(), "resume must not silently reset {key}");
+        }
+        t.reply_err("thread/resume", "native source unavailable");
+        assert_eq!(t.count("thread/start"), 0);
+        assert_eq!(t.count("turn/start"), 0);
+        assert!(t.other.iter().any(|a| matches!(a, CodexAction::Failed(_))));
     }
 }

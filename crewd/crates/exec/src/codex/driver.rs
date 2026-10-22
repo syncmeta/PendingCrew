@@ -213,7 +213,8 @@ pub async fn start_codex(
                 other => Err(io::Error::other(format!("读不到刚起的进程身份：{other:?}"))),
             };
             if r.is_err() {
-                // `record` 落盘失败时内存里已经记上了：抹掉，免得下次落盘把一个死 pid 带进去。
+                // Attempt durable removal; if persistence still fails, the registry retains
+                // the restrictive original-birth obligation. Never erase it in memory alone.
                 let _ = registry.forget(&session_id);
             }
             r
@@ -228,6 +229,7 @@ pub async fn start_codex(
             return Err(StartError::Registry(e));
         }
     }
+    let provider_fence = proc.write_fence.clone();
     let unix_now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -274,7 +276,10 @@ pub async fn start_codex(
         files,
     }));
     match ready_rx.await {
-        Ok(Ok(())) => Ok((SessionHandle::new(tx), ev_rx)),
+        Ok(Ok(())) => Ok((
+            SessionHandle::new(tx).with_provider_fence(provider_fence),
+            ev_rx,
+        )),
         Ok(Err(e)) => Err(e),
         Err(_) => Err(StartError::Handshake {
             health: launch_health(LaunchVerdict::DiedSilently, "会话任务提前结束"),
@@ -461,6 +466,12 @@ fn execute(
 ) -> Option<StartError> {
     for action in actions {
         match action {
+            CodexAction::ControlledWrite { line, permit } => {
+                let _ = t
+                    .proc
+                    .writer
+                    .send(super::transport::WriterMessage::ControlledLine { line, permit });
+            }
             CodexAction::Write(line) => {
                 let _ = t.proc.writer.send(line.into());
             }
@@ -500,7 +511,9 @@ fn execute(
                 }
             }
             CodexAction::CodexDone { ticket, outcome } => {
-                if let Some(reply) = t.native_controls.remove(&ticket) { let _ = reply.send(outcome); }
+                if let Some(reply) = t.native_controls.remove(&ticket) {
+                    let _ = reply.send(outcome);
+                }
             }
             CodexAction::ControlDone { ticket, outcome } => {
                 if let Some(reply) = t.controls.remove(&ticket) {
@@ -605,16 +618,20 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 agent_session_id: t.core.thread_id().unwrap_or_default().to_string(),
             });
         }
-        Command::Codex { op, reply } => {
-            let ticket = t.next_ticket; t.next_ticket += 1;
+        Command::Codex { op, permit, reply } => {
+            let ticket = t.next_ticket;
+            t.next_ticket += 1;
             t.native_controls.insert(ticket, reply);
-            t.core.codex_control(ticket, op, now);
+            t.core.codex_controlled(ticket, op, permit, now);
         }
-        Command::Control { op, reply } => {
+        Command::Control { op, permit, reply } => {
             let ticket = t.next_ticket;
             t.next_ticket += 1;
             t.controls.insert(ticket, reply);
-            t.core.control(ticket, op, now);
+            match permit {
+                Some(p) => t.core.control_controlled(ticket, op, p, now),
+                None => t.core.control(ticket, op, now),
+            }
         }
         // codex 没有终端可按：M3d 改为回复挂起的服务端请求（T10c §2.6）。
         Command::Answer { reply, .. } => {

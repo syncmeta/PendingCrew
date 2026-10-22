@@ -363,7 +363,9 @@ pub async fn call(
     method: &str,
     params: Value,
 ) -> Result<Value, RpcError> {
-    if super::codex_rpc::handles(method) {return super::codex_rpc::read(h,state,method,params).await;}
+    if super::codex_rpc::handles(method) {
+        return super::codex_rpc::read(h, state, method, params).await;
+    }
     match method {
         methods::SESSION_INSPECT => {
             let p: crewd_proto::orchestra::SessionInspectParams = parse_params(params)?;

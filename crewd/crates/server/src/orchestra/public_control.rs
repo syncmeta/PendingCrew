@@ -321,6 +321,17 @@ impl<P: Port> Core<P> {
     ) -> Result<serde_json::Value, crewd_proto::RpcError> {
         use crate::public_execution::Admission;
         use crewd_proto::commands::{CommandPhase, PublicCommand};
+        if let PublicCommand::SessionInterrupt(target) = &call.request.command {
+            if self
+                .port
+                .session(&target.session_id)
+                .await
+                .map_err(crate::dispatch::internal)?
+                .is_some_and(|row| row.executor == "codex")
+            {
+                return self.execute_public_codex(call).await;
+            }
+        }
         if matches!(
             &call.request.command,
             PublicCommand::TerminalClaim(_)
@@ -381,6 +392,11 @@ impl<P: Port> Core<P> {
             return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
         }
         let dispatched = call.dispatch().await?;
+        if matches!(call.request.command, PublicCommand::SessionStop(_)) {
+            if let Some(l) = self.live.get(&target.session_id) {
+                l.handle.fence_inputs();
+            }
+        }
         let previous_generator = self.live.get(&target.session_id).map(|l| l.generator);
         let previous_birth = self
             .public_fences

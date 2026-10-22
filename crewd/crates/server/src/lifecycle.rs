@@ -263,7 +263,7 @@ mod tests {
         port.lock().now = T0;
         let row = port
             .insert_session(NewSession {
-                codex_options:None,
+                codex_options: None,
                 crew_id: "c1".into(),
                 captain: true,
                 executor: "claude".into(),

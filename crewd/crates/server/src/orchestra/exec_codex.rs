@@ -94,14 +94,31 @@ impl CodexExecutor {
     }
 }
 impl Executor for CodexExecutor {
-    fn codex_metadata(&self,req:crewd_exec::codex::metadata::MetadataRequest)->BoxFut<'_,crewd_exec::codex::control::CodexOutcome> {
+    fn codex_metadata(
+        &self,
+        req: crewd_exec::codex::metadata::MetadataRequest,
+    ) -> BoxFut<'_, crewd_exec::codex::control::CodexOutcome> {
         Box::pin(async move {
-            use crewd_exec::codex::{control::CodexOutcome,transport::{CodexProcessSpec,strip_billing_keys}};
-            if let Err(e)=self.check_launch(){return CodexOutcome::Rejected(e.to_string());}
-            let (program,path)=match self.program().await{Ok(v)=>v,Err(e)=>return CodexOutcome::Rejected(e.to_string())};
-            let mut env=crewd_exec::env::build_env_from_process(&path,&self.config.extra_env);strip_billing_keys(&mut env);
-            let spec=CodexProcessSpec{program,args:vec!["app-server".into()],env,cwd:req.workdir.clone()};
-            crewd_exec::codex::metadata::run(spec,self.config.registry.clone(),req).await
+            use crewd_exec::codex::{
+                control::CodexOutcome,
+                transport::{CodexProcessSpec, strip_billing_keys},
+            };
+            if let Err(e) = self.check_launch() {
+                return CodexOutcome::Rejected(e.to_string());
+            }
+            let (program, path) = match self.program().await {
+                Ok(v) => v,
+                Err(e) => return CodexOutcome::Rejected(e.to_string()),
+            };
+            let mut env = crewd_exec::env::build_env_from_process(&path, &self.config.extra_env);
+            strip_billing_keys(&mut env);
+            let spec = CodexProcessSpec {
+                program,
+                args: vec!["app-server".into()],
+                env,
+                cwd: req.workdir.clone(),
+            };
+            crewd_exec::codex::metadata::run(spec, self.config.registry.clone(), req).await
         })
     }
 
@@ -211,12 +228,50 @@ impl Executor for CodexExecutor {
 /// Codex 接收结构化 additionalContext；不改变 Claude 的句柄能力。
 struct CodexHandle(SessionHandle);
 impl ExecHandle for CodexHandle {
-    fn codex_queue(&self,text:String,request_id:String)->BoxFut<'_,Result<crewd_exec::codex::control::CodexOutcome,Closed>> {Box::pin(self.0.codex_queue(text,request_id))}
+    fn control_controlled(
+        &self,
+        op: crewd_exec::driver::Control,
+        permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::driver::ControlOutcome, Closed>> {
+        Box::pin(self.0.control_controlled(op, permit))
+    }
+    fn fence_inputs(&self) {
+        self.0.fence_provider_input();
+    }
+    fn codex_controlled(
+        &self,
+        op: crewd_exec::codex::control::CodexOperation,
+        permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(self.0.codex_controlled(op, permit))
+    }
+    fn codex_queue_controlled(
+        &self,
+        text: String,
+        request_id: String,
+        permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(self.0.codex_queue_controlled(text, request_id, permit))
+    }
 
-    fn codex(&self, op: crewd_exec::codex::control::CodexOperation) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+    fn codex_queue(
+        &self,
+        text: String,
+        request_id: String,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(self.0.codex_queue(text, request_id))
+    }
+
+    fn codex(
+        &self,
+        op: crewd_exec::codex::control::CodexOperation,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
         Box::pin(self.0.codex(op))
     }
-    fn control(&self, op: crewd_exec::driver::Control) -> BoxFut<'_, Result<crewd_exec::driver::ControlOutcome, Closed>> {
+    fn control(
+        &self,
+        op: crewd_exec::driver::Control,
+    ) -> BoxFut<'_, Result<crewd_exec::driver::ControlOutcome, Closed>> {
         Box::pin(self.0.control(op))
     }
 

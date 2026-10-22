@@ -59,6 +59,7 @@ pub const CAPABILITIES: &[&str] = &[
     "orchestra",
     "session.answer",
     "session.respondRunnerRequest",
+    "session.codex",
     "crewd.hibernate",
     "wake.explain",
     "message.receipts",

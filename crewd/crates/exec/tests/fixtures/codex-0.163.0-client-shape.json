@@ -1,0 +1,847 @@
+{
+  "codexVersion": "0.163.0",
+  "experimental": true,
+  "methodParams": {
+    "initialize": [
+      "capabilities",
+      "clientInfo"
+    ],
+    "server/diagnostics": [],
+    "userVerification/status": [],
+    "userVerification/enroll": [],
+    "userVerification/delete": [],
+    "userVerification/verify": [
+      "challenge",
+      "description",
+      "title"
+    ],
+    "userVerification/cancel": [
+      "requestId"
+    ],
+    "thread/start": [
+      "allowProviderModelFallback",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "daybreakEnabled",
+      "developerInstructions",
+      "dynamicTools",
+      "environments",
+      "ephemeral",
+      "experimentalRawEvents",
+      "historyMode",
+      "mockExperimentalField",
+      "model",
+      "modelProvider",
+      "multiAgentMode",
+      "permissions",
+      "personality",
+      "projectId",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "selectedCapabilityRoots",
+      "serviceName",
+      "serviceTier",
+      "sessionStartSource",
+      "threadSource"
+    ],
+    "thread/resume": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "excludeTurns",
+      "history",
+      "initialTurnsPage",
+      "model",
+      "modelProvider",
+      "path",
+      "permissions",
+      "personality",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "serviceTier",
+      "threadId"
+    ],
+    "thread/fork": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "beforeTurnId",
+      "config",
+      "cwd",
+      "deferGoalContinuation",
+      "developerInstructions",
+      "ephemeral",
+      "excludeTurns",
+      "experimentalPredictionMode",
+      "lastTurnId",
+      "model",
+      "modelProvider",
+      "path",
+      "permissions",
+      "runtimeWorkspaceRoots",
+      "sandbox",
+      "serviceTier",
+      "threadId",
+      "threadSource"
+    ],
+    "thread/archive": [
+      "threadId"
+    ],
+    "thread/delete": [
+      "threadId"
+    ],
+    "thread/unsubscribe": [
+      "threadId"
+    ],
+    "thread/increment_elicitation": [
+      "threadId"
+    ],
+    "thread/decrement_elicitation": [
+      "threadId"
+    ],
+    "thread/name/set": [
+      "name",
+      "threadId"
+    ],
+    "thread/prediction/request": [
+      "sourceTurnId",
+      "threadId"
+    ],
+    "thread/goal/set": [
+      "objective",
+      "origin",
+      "status",
+      "threadId",
+      "tokenBudget"
+    ],
+    "thread/goal/get": [
+      "threadId"
+    ],
+    "thread/goal/clear": [
+      "origin",
+      "threadId"
+    ],
+    "thread/queue/add": [
+      "clientUserMessageId",
+      "input",
+      "threadId"
+    ],
+    "thread/queue/list": [
+      "cursor",
+      "limit",
+      "threadId"
+    ],
+    "thread/queue/update": [
+      "input",
+      "queuedSubmissionId",
+      "threadId"
+    ],
+    "thread/queue/delete": [
+      "queuedSubmissionId",
+      "threadId"
+    ],
+    "thread/queue/reorder": [
+      "queuedSubmissionIds",
+      "threadId"
+    ],
+    "thread/queue/start": [
+      "queuedSubmissionId",
+      "threadId"
+    ],
+    "thread/metadata/update": [
+      "daybreakEnabled",
+      "gitInfo",
+      "projectId",
+      "threadId"
+    ],
+    "thread/attachment/add": [
+      "attachmentType",
+      "identityKey",
+      "payload",
+      "threadId"
+    ],
+    "thread/attachment/list": [
+      "cursor",
+      "limit",
+      "threadId"
+    ],
+    "thread/attachmentOwner/list": [
+      "archived",
+      "attachmentType",
+      "cursor",
+      "identityKey",
+      "limit"
+    ],
+    "thread/attachment/remove": [
+      "attachmentType",
+      "identityKey",
+      "threadId"
+    ],
+    "thread/section/move": [
+      "beforeThreadId",
+      "sectionId",
+      "threadId"
+    ],
+    "thread/settings/update": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "collaborationMode",
+      "cwd",
+      "disabledPluginIds",
+      "effort",
+      "model",
+      "multiAgentMode",
+      "permissions",
+      "personality",
+      "sandboxPolicy",
+      "serviceTier",
+      "summary",
+      "threadId"
+    ],
+    "thread/memoryMode/set": [
+      "mode",
+      "threadId"
+    ],
+    "memory/status": [
+      "minConsolidatedThreads"
+    ],
+    "thread/unarchive": [
+      "threadId"
+    ],
+    "thread/compact/start": [
+      "threadId"
+    ],
+    "thread/shellCommand": [
+      "command",
+      "threadId",
+      "timeoutMs"
+    ],
+    "thread/approveGuardianDeniedAction": [
+      "event",
+      "threadId"
+    ],
+    "thread/backgroundTerminals/clean": [
+      "threadId"
+    ],
+    "thread/backgroundTerminals/list": [
+      "cursor",
+      "limit",
+      "threadId"
+    ],
+    "thread/backgroundTerminals/terminate": [
+      "processId",
+      "threadId"
+    ],
+    "thread/revert": [
+      "beforeTurnId",
+      "threadId"
+    ],
+    "thread/list": [
+      "ancestorThreadId",
+      "archived",
+      "cursor",
+      "cwd",
+      "excludedThreadIds",
+      "limit",
+      "modelProviders",
+      "originators",
+      "parentThreadId",
+      "projectId",
+      "searchTerm",
+      "sectionId",
+      "sortDirection",
+      "sortKey",
+      "sourceKinds",
+      "useStateDbOnly"
+    ],
+    "project/list": [
+      "cursor",
+      "limit",
+      "sortDirection",
+      "sortKey"
+    ],
+    "project/read": [
+      "projectId"
+    ],
+    "project/create": [
+      "idempotencyKey",
+      "metadata",
+      "name",
+      "roots"
+    ],
+    "project/import": [
+      "idempotencyKey",
+      "metadata",
+      "name",
+      "roots",
+      "threads"
+    ],
+    "project/update": [
+      "metadata",
+      "name",
+      "projectId",
+      "roots"
+    ],
+    "project/move": [
+      "beforeProjectId",
+      "projectId"
+    ],
+    "project/delete": [
+      "projectId"
+    ],
+    "threadSection/list": [
+      "cursor",
+      "limit"
+    ],
+    "threadSection/create": [
+      "appearance",
+      "name"
+    ],
+    "threadSection/update": [
+      "appearance",
+      "name",
+      "sectionId"
+    ],
+    "threadSection/delete": [
+      "sectionId"
+    ],
+    "thread/search": [
+      "archived",
+      "cursor",
+      "limit",
+      "searchTerm",
+      "sortDirection",
+      "sortKey",
+      "sourceKinds"
+    ],
+    "thread/searchOccurrences": [
+      "cursor",
+      "limit",
+      "searchTerm",
+      "threadId"
+    ],
+    "thread/loaded/list": [
+      "cursor",
+      "limit"
+    ],
+    "thread/read": [
+      "includeTurns",
+      "threadId"
+    ],
+    "thread/readState/update": [
+      "expectedRevision",
+      "operation",
+      "threadId"
+    ],
+    "thread/turns/list": [
+      "cursor",
+      "itemsView",
+      "limit",
+      "sortDirection",
+      "threadId"
+    ],
+    "thread/items/list": [
+      "cursor",
+      "limit",
+      "sortDirection",
+      "threadId",
+      "turnId"
+    ],
+    "thread/items/read": [
+      "itemIds",
+      "threadId",
+      "turnId"
+    ],
+    "thread/inject_items": [
+      "items",
+      "threadId"
+    ],
+    "skills/list": [
+      "cwds",
+      "forceReload"
+    ],
+    "skills/extraRoots/set": [
+      "extraRoots"
+    ],
+    "hooks/list": [
+      "cwds"
+    ],
+    "marketplace/add": [
+      "refName",
+      "source",
+      "sparsePaths"
+    ],
+    "marketplace/remove": [
+      "marketplaceName"
+    ],
+    "marketplace/upgrade": [
+      "marketplaceName"
+    ],
+    "plugin/list": [
+      "cwds",
+      "forceRefetch",
+      "marketplaceKinds"
+    ],
+    "plugin/search": [
+      "cursor",
+      "cwds",
+      "limit",
+      "scope",
+      "searchTerm"
+    ],
+    "plugin/installed": [
+      "cwds",
+      "installSuggestionPluginNames"
+    ],
+    "plugin/reconcile": [
+      "reason"
+    ],
+    "plugin/read": [
+      "marketplacePath",
+      "pluginName",
+      "remoteMarketplaceName"
+    ],
+    "plugin/skill/read": [
+      "remoteMarketplaceName",
+      "remotePluginId",
+      "skillName"
+    ],
+    "plugin/share/save": [
+      "discoverability",
+      "pluginPath",
+      "remotePluginId",
+      "shareTargets"
+    ],
+    "plugin/share/updateTargets": [
+      "discoverability",
+      "remotePluginId",
+      "shareTargets"
+    ],
+    "plugin/share/list": [],
+    "plugin/share/checkout": [
+      "remotePluginId"
+    ],
+    "plugin/share/delete": [
+      "remotePluginId"
+    ],
+    "app/read": [
+      "appIds",
+      "includeTools",
+      "threadId"
+    ],
+    "app/list": [
+      "cursor",
+      "forceRefetch",
+      "limit",
+      "threadId"
+    ],
+    "app/installed": [
+      "forceRefresh",
+      "threadId"
+    ],
+    "fs/readFile": [
+      "path"
+    ],
+    "fs/writeFile": [
+      "dataBase64",
+      "path"
+    ],
+    "fs/createDirectory": [
+      "path",
+      "recursive"
+    ],
+    "fs/getMetadata": [
+      "path"
+    ],
+    "fs/readDirectory": [
+      "path"
+    ],
+    "fs/remove": [
+      "force",
+      "path",
+      "recursive"
+    ],
+    "fs/copy": [
+      "destinationPath",
+      "recursive",
+      "sourcePath"
+    ],
+    "fs/watch": [
+      "path",
+      "watchId"
+    ],
+    "fs/unwatch": [
+      "watchId"
+    ],
+    "skills/config/write": [
+      "enabled",
+      "name",
+      "path"
+    ],
+    "plugin/install": [
+      "installAttemptId",
+      "marketplacePath",
+      "pluginName",
+      "remoteMarketplaceName"
+    ],
+    "plugin/uninstall": [
+      "pluginId"
+    ],
+    "turn/start": [
+      "additionalContext",
+      "approvalPolicy",
+      "approvalsReviewer",
+      "clientUserMessageId",
+      "collaborationMode",
+      "cwd",
+      "cyberAccessProgram",
+      "disabledPluginIds",
+      "effort",
+      "environments",
+      "input",
+      "model",
+      "multiAgentMode",
+      "outputSchema",
+      "parentTurnId",
+      "permissions",
+      "personality",
+      "responsesapiClientMetadata",
+      "rootTurnId",
+      "runtimeWorkspaceRoots",
+      "sandboxPolicy",
+      "serviceTier",
+      "serviceTierForTurn",
+      "summary",
+      "threadId",
+      "toolOutput",
+      "turnTrigger"
+    ],
+    "turn/settings/update": [
+      "approvalsReviewer",
+      "effort",
+      "model",
+      "serviceTier",
+      "summary",
+      "threadId",
+      "turnId"
+    ],
+    "turn/steer": [
+      "additionalContext",
+      "clientUserMessageId",
+      "expectedTurnId",
+      "input",
+      "responsesapiClientMetadata",
+      "threadId"
+    ],
+    "turn/interrupt": [
+      "threadId",
+      "turnId"
+    ],
+    "thread/realtime/start": [
+      "backendReasoningStatus",
+      "clientManagedHandoffs",
+      "codexResponseHandoffChannelPrefixes",
+      "codexResponseHandoffMode",
+      "codexResponseItemPrefix",
+      "codexResponsesAsItems",
+      "delegationAckFiller",
+      "flushTranscriptTailOnSessionEnd",
+      "includeStartupContext",
+      "initialItems",
+      "model",
+      "outputModality",
+      "prompt",
+      "realtimeEndInstructions",
+      "realtimeSessionId",
+      "realtimeStartInstructions",
+      "threadId",
+      "transport",
+      "version",
+      "voice"
+    ],
+    "thread/realtime/appendAudio": [
+      "audio",
+      "threadId"
+    ],
+    "thread/realtime/appendText": [
+      "role",
+      "text",
+      "threadId"
+    ],
+    "thread/realtime/appendSpeech": [
+      "text",
+      "threadId"
+    ],
+    "thread/realtime/stop": [
+      "threadId"
+    ],
+    "thread/timeline/list": [
+      "cursor",
+      "limit",
+      "threadId"
+    ],
+    "thread/realtime/listVoices": [],
+    "review/start": [
+      "delivery",
+      "target",
+      "threadId"
+    ],
+    "model/list": [
+      "cursor",
+      "includeHidden",
+      "limit"
+    ],
+    "modelProvider/capabilities/read": [],
+    "experimentalFeature/list": [
+      "cursor",
+      "limit",
+      "threadId"
+    ],
+    "permissionProfile/list": [
+      "cursor",
+      "cwd",
+      "limit"
+    ],
+    "experimentalFeature/enablement/set": [
+      "enablement"
+    ],
+    "remoteControl/enable": [
+      "ephemeral"
+    ],
+    "remoteControl/disable": [
+      "ephemeral"
+    ],
+    "remoteControl/pairing/start": [
+      "manualCode"
+    ],
+    "remoteControl/pairing/status": [
+      "manualPairingCode",
+      "pairingCode"
+    ],
+    "remoteControl/client/list": [
+      "cursor",
+      "environmentId",
+      "limit",
+      "order"
+    ],
+    "remoteControl/client/revoke": [
+      "clientId",
+      "environmentId"
+    ],
+    "collaborationMode/list": [],
+    "mock/experimentalMethod": [
+      "value"
+    ],
+    "environment/add": [
+      "authBearerToken",
+      "connectTimeoutMs",
+      "environmentId",
+      "execServerUrl",
+      "skills",
+      "websocketRequestId"
+    ],
+    "environment/info": [
+      "environmentId"
+    ],
+    "environment/status": [
+      "environmentId"
+    ],
+    "mcpServer/oauth/login": [
+      "clientRegistration",
+      "name",
+      "scopes",
+      "threadId",
+      "timeoutSecs"
+    ],
+    "mcpServerStatus/list": [
+      "cursor",
+      "detail",
+      "limit",
+      "serverName",
+      "threadId"
+    ],
+    "mcpServer/resource/read": [
+      "connectorId",
+      "originCallId",
+      "server",
+      "target",
+      "threadId",
+      "uri"
+    ],
+    "mcpServer/event/stream/start": [
+      "_meta",
+      "arguments",
+      "name",
+      "server",
+      "subscriptionId",
+      "threadId"
+    ],
+    "mcpServer/event/stream/stop": [
+      "subscriptionId"
+    ],
+    "mcpServer/tool/call": [
+      "_meta",
+      "arguments",
+      "server",
+      "threadId",
+      "tool"
+    ],
+    "windowsSandbox/setupStart": [
+      "cwd",
+      "mode"
+    ],
+    "account/login/start": [],
+    "account/bedrock/discover": [],
+    "account/bedrock/setup": [],
+    "account/bedrock/checkGovCloudRequirements": [],
+    "account/login/cancel": [
+      "loginId"
+    ],
+    "account/rateLimits/read": [
+      "excludeResetCreditDetails",
+      "supportsLunaReserve"
+    ],
+    "account/rateLimitResetCredit/consume": [
+      "creditId",
+      "idempotencyKey"
+    ],
+    "account/usage/read": [
+      "threadId"
+    ],
+    "account/sendAddCreditsNudgeEmail": [
+      "creditType"
+    ],
+    "feedback/upload": [
+      "classification",
+      "extraLogFiles",
+      "includeLogs",
+      "reason",
+      "tags",
+      "threadId"
+    ],
+    "command/exec": [
+      "command",
+      "cwd",
+      "disableOutputCap",
+      "disableTimeout",
+      "env",
+      "outputBytesCap",
+      "permissionProfile",
+      "processId",
+      "sandboxPolicy",
+      "size",
+      "streamStdin",
+      "streamStdoutStderr",
+      "timeoutMs",
+      "tty"
+    ],
+    "command/exec/write": [
+      "closeStdin",
+      "deltaBase64",
+      "processId"
+    ],
+    "command/exec/terminate": [
+      "processId"
+    ],
+    "command/exec/resize": [
+      "processId",
+      "size"
+    ],
+    "process/spawn": [
+      "command",
+      "cwd",
+      "env",
+      "outputBytesCap",
+      "processHandle",
+      "size",
+      "streamStdin",
+      "streamStdoutStderr",
+      "timeoutMs",
+      "tty"
+    ],
+    "process/writeStdin": [
+      "closeStdin",
+      "deltaBase64",
+      "processHandle"
+    ],
+    "process/kill": [
+      "processHandle"
+    ],
+    "process/resizePty": [
+      "processHandle",
+      "size"
+    ],
+    "config/read": [
+      "cwd",
+      "includeLayers"
+    ],
+    "externalAgentConfig/detect": [
+      "cwds",
+      "includeHome",
+      "maxSessionAgeDays",
+      "maxSessions",
+      "migrationSource",
+      "source"
+    ],
+    "externalAgentConfig/import": [
+      "migrationItems",
+      "migrationSource",
+      "providerId",
+      "source"
+    ],
+    "externalAgentConfig/import/recordHistory": [
+      "itemTypeResults",
+      "providerId"
+    ],
+    "config/value/write": [
+      "expectedVersion",
+      "filePath",
+      "keyPath",
+      "mergeStrategy",
+      "value"
+    ],
+    "config/batchWrite": [
+      "edits",
+      "expectedVersion",
+      "filePath",
+      "reloadUserConfig"
+    ],
+    "account/read": [
+      "refreshToken"
+    ],
+    "fuzzyFileSearch": [
+      "cancellationToken",
+      "query",
+      "roots"
+    ],
+    "fuzzyFileSearch/sessionStart": [
+      "roots",
+      "sessionId"
+    ],
+    "fuzzyFileSearch/sessionUpdate": [
+      "query",
+      "sessionId"
+    ],
+    "fuzzyFileSearch/sessionStop": [
+      "sessionId"
+    ]
+  },
+  "initializeCapabilities": [
+    "experimentalApi",
+    "explicitGatewayOauth",
+    "extensions",
+    "mcpServerOpenaiFormElicitation",
+    "optOutNotificationMethods",
+    "requestAttestation"
+  ],
+  "additionalContextEntry": [
+    "kind",
+    "value"
+  ]
+}

@@ -423,8 +423,29 @@ pub trait Port: Send + Sync + 'static {
     /// 机组已被移除（归档；M3a `crews::is_archived`）。没有这个机组 = 错误。
     fn crew_removed(&self, crew: &str) -> impl Future<Output = Result<bool>> + Send;
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger>;
-    fn codex_launch_options(&self,_session:&str) -> impl Future<Output=Result<(Option<String>,Option<crewd_proto::codex::CodexSettingsPatch>)>> + Send {async {Ok((None,None))}}
-    fn codex_observe(&self,_session:&str,_settings:Option<serde_json::Value>,_title:Option<crewd_proto::codex::CodexTitleState>,_accepted:Option<crewd_proto::codex::CodexSettingsPatch>) -> impl Future<Output=Result<()>> + Send {async {Ok(())}}
+    fn codex_resume_ready(&self, _session: &str) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(true) }
+    }
+    fn codex_launch_options(
+        &self,
+        _session: &str,
+    ) -> impl Future<
+        Output = Result<(
+            Option<String>,
+            Option<crewd_proto::codex::CodexSettingsPatch>,
+        )>,
+    > + Send {
+        async { Ok((None, None)) }
+    }
+    fn codex_observe(
+        &self,
+        _session: &str,
+        _settings: Option<serde_json::Value>,
+        _title: Option<crewd_proto::codex::CodexTitleState>,
+        _accepted: Option<crewd_proto::codex::CodexSettingsPatch>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
 
     fn worldview(&self, session: &str) -> impl Future<Output = Result<String>> + Send;
     fn mint_token(&self, session: &str) -> String;
