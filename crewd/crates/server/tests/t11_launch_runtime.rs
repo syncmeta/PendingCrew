@@ -46,6 +46,7 @@ async fn generated_launch_files_and_token_use_the_external_private_runtime() {
     });
     let (handle, mut events) = exec
         .launch(LaunchRequest {
+            managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,
             title: None,

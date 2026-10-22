@@ -100,8 +100,9 @@ impl ClaudeExecutor {
 
 impl Executor for ClaudeExecutor {
     fn accepts_resume(&self) -> bool {
-        self.managed_factory.is_none()
+        true
     }
+    fn requires_exact_managed_resume(&self)->bool {self.managed_factory.is_some()}
     fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
         use crewd_proto::executors::{
             ExecutorBackend, ExecutorFeatures, ExecutorProfile, ExecutorUnavailableReason,
@@ -163,20 +164,33 @@ impl Executor for ClaudeExecutor {
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
             self.check_launch()?;
+            let managed=self.managed_factory.is_some();
+            if managed {
+                let ledger=req.ledger.clone();
+                let recorded=tokio::task::spawn_blocking(move||ledger.recorded()).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
+                match(recorded.as_deref(),req.managed_resume_id.as_deref()) {
+                    (None,None)=>{},
+                    (Some(id),Some(expected)) if crewd_exec::driver::exact_managed_id(id)&&id==expected&&req.initial_prompt.is_none()=>{},
+                    _=>return Err(LaunchError::Failed("Claude requires exact original UUID and explicit managed resume intent; no input or native launch".into())),
+                }
+                let session=req.session_id.clone();
+                self.managed_factory.as_ref().unwrap().db.call_result(move|store| {
+                    let mut q=store.conn().prepare("SELECT native_pid,native_start,native_boot FROM native_execution_runtimes WHERE session_id=?1")?;
+                    let births=q.query_map([session],|r|Ok((r.get::<_,i32>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?)))?;
+                    for birth in births {let(pid,start,boot)=birth?;let gone=match crewd_exec::registry::probe(pid) {
+                        crewd_exec::registry::ProbeResult::Missing=>true,
+                        crewd_exec::registry::ProbeResult::Found(actual)=>actual.start_time!=start as u64||actual.boot_id!=boot,
+                        crewd_exec::registry::ProbeResult::Unreadable(_)=>false,
+                    };if !gone {return Err(crewd_store::StoreError::Invalid("previous managed birth live or unknown".into()))}}
+                    Ok(())
+                }).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
+            } else if req.managed_resume_id.is_some() {return Err(LaunchError::Failed("managed intent cannot enter legacy launch".into()))}
             let (program, child_path) = self.program().await?;
             // Discovery can await a login shell; recheck immediately before creating launch files.
             self.check_launch()?;
             let program_identity = crate::build_info::ExeIdentity::capture(&program).ok();
             let managed = self.managed_factory.is_some();
             if managed {
-                if req
-                    .ledger
-                    .recorded()
-                    .map_err(|e| LaunchError::Failed(e.to_string()))?
-                    .is_some()
-                {
-                    return Err(LaunchError::NotConfigured("Claude managed history/resume unavailable; no native process or old input was started".into()));
-                }
                 if !super::exec_claude_managed::supported_program(
                     &program,
                     &child_path,
@@ -207,6 +221,7 @@ impl Executor for ClaudeExecutor {
             };
             let mut config = DriverConfig::new(self.runtime_dir.clone());
             config.managed_hook_producer = managed;
+            config.managed_resume_id=req.managed_resume_id.clone();
             config.registry = self.registry.clone();
             config.terminal_observer = Some(Arc::new(
                 crewd_exec::acp::terminal::TerminalTap::new(1, 64)
@@ -261,6 +276,7 @@ impl Executor for ClaudeExecutor {
                         .as_ref()
                         .expect("managed factory qualified"),
                     managed_session,
+                    req.managed_resume_id.is_some(),
                     handle.clone(),
                     events,
                     initial,
@@ -332,6 +348,7 @@ mod tests {
 
     fn request(session: &str, workdir: &Path) -> LaunchRequest {
         LaunchRequest {
+            managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,
             title: None,

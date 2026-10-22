@@ -656,6 +656,8 @@ pub struct Inflight {
 }
 
 pub struct Live {
+    /// This physical managed resume excludes old pending wakes without settling them.
+    pub managed_resume_wake_cut: Option<i64>,
     /// 这次拉起的代号：旧进程迟到的事件按它丢掉（裁定 6）。
     pub generator: u64,
     pub handle: Arc<dyn ExecHandle>,
@@ -751,6 +753,7 @@ pub enum Write {
 }
 
 pub struct Starting {
+    pub managed_resume_wake_cut: Option<i64>,
     pub generator: u64,
     pub row: SessionRow,
     /// 随开场正文一起送的那批（已 claim；有要投的东西时一定有正文），同 `Inflight::batch`。
@@ -1505,6 +1508,16 @@ impl<P: Port> Core<P> {
             return Err(ControlError::NoWorkdir(row.id));
         }
         self.check_cap(origin)?;
+        if exec.requires_exact_managed_resume() {
+            if origin != Origin::Human || !row.agent_session_id.as_deref().is_some_and(crewd_exec::driver::exact_managed_id) {
+                return Err(ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field", "claude.exactManagedResumeRequired")));
+            }
+            let expected = row.agent_session_id.clone();
+            self.held.remove(session);
+            if let Some(a)=&self.cfg.admission {a.allow(session);}
+            let batch=Batch {session:row.id.clone(),..Default::default()};
+            return self.launch_carrying_inner(row,exec,None,batch,None,expected).await.map(|_|()).map_err(ControlError::from_port);
+        }
         // 单个恢复一个等人答复的 session（§22.7 Q1）：上次停在干活中途的，开场补一句「被打断」；被休眠停下的换成
         // 休眠附言（C26，只给一次）。
         let text = if self.held.remove(session) {
@@ -1930,9 +1943,10 @@ impl<P: Port> Core<P> {
         row: SessionRow,
         exec: Arc<dyn Executor>,
         text: Option<String>,
-        mut batch: Batch,
+        batch: Batch,
         initial_inputs:Option<crewd_exec::codex::input::Submission>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<bool> {self.launch_carrying_inner(row,exec,text,batch,initial_inputs,None).await}
+    async fn launch_carrying_inner(&mut self,row:SessionRow,exec:Arc<dyn Executor>,text:Option<String>,mut batch:Batch,initial_inputs:Option<crewd_exec::codex::input::Submission>,managed_resume_id:Option<String>)->anyhow::Result<bool>{
         if self
             .cfg
             .admission
@@ -1947,6 +1961,7 @@ impl<P: Port> Core<P> {
         if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
             return Err(ControlError::AlreadyRunning(row.id).into());
         }
+        let managed_resume_wake_cut=if managed_resume_id.is_some(){Some(self.port.pending(&row.id).await?.iter().map(|w|w.id).max().unwrap_or(0))}else{None};
         self.retry_terminal(&row.id).await?;
         self.check_launch(&exec, &row.crew_id, &row.executor)?;
         let now = self.now();
@@ -2012,6 +2027,7 @@ impl<P: Port> Core<P> {
         }
         let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
         let req = LaunchRequest {
+            managed_resume_id,
             initial_inputs,
             title,
             codex_options,
@@ -2030,6 +2046,7 @@ impl<P: Port> Core<P> {
         self.starting.insert(
             session.clone(),
             Starting {
+                managed_resume_wake_cut,
                 generator,
                 row,
                 batch,
@@ -2161,6 +2178,7 @@ impl<P: Port> Core<P> {
                 self.live.insert(
                     session.to_string(),
                     Live {
+                        managed_resume_wake_cut: st.managed_resume_wake_cut,
                         generator,
                         handle,
                         crew: st.row.crew_id.clone(),
@@ -4550,6 +4568,7 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,
             title: None,

@@ -83,17 +83,10 @@ pub(crate) async fn supported_program(
     qualified
 }
 fn envelope(request: &str, text: &str) -> Result<String, SendError> {
-    if text.trim().is_empty() {
-        return Err(SendError::EmptyText);
-    }
-    let value = format!(
-        "<pendingcrew-managed-request id=\"{request}\">\n{text}\n</pendingcrew-managed-request id=\"{request}\">"
-    );
-    if value.len() > 1_048_576 {
-        return Err(refused());
-    }
-    Ok(value)
+    if text.trim().is_empty(){return Err(SendError::EmptyText)}
+    n::managed_observations::envelope(request,text).map_err(|_|refused())
 }
+
 struct Submission {
     request: String,
     external: u64,
@@ -103,7 +96,7 @@ struct Submission {
     receipt: Option<n::Receipt>,
     prompt: Option<String>,
     stopped: bool,
-    last_response: String,
+    original_task: Option<String>,
     delivered: bool,
     unobserved_delivery: Option<std::time::Instant>,
 }
@@ -125,10 +118,14 @@ pub(crate) struct ManagedHandle {
     working: Arc<AtomicBool>,
     manual: Arc<AtomicBool>,
 }
+pub(crate) fn observation_live(factory:&NativeFactory,session:&str)->bool{
+ factory.managed.lock().ok().and_then(|m|m.get(session).and_then(|w|w.upgrade())).is_some_and(|h|!h.blocked.load(Ordering::Acquire)&&!h.stopping.load(Ordering::Acquire)&&!h.manual.load(Ordering::Acquire)&&!h.driver.is_closed())
+}
 impl ManagedHandle {
     pub(crate) async fn create(
         factory: &Arc<NativeFactory>,
         session: String,
+        resumed: bool,
         driver: SessionHandle,
         mut original: mpsc::UnboundedReceiver<SessionEvent>,
         initial: Option<String>,
@@ -207,6 +204,7 @@ impl ManagedHandle {
             terminal,
             db: factory.db.clone(),
             seal: Arc::new(seal),
+            expected_start_source: if resumed {"resume"} else {"startup"},
             agent_session: status.agent_session_id,
             pending: None,
             last_waiting: None,
@@ -275,7 +273,7 @@ impl ManagedHandle {
                 receipt: None,
                 prompt: None,
                 stopped: false,
-                last_response: String::new(),
+                original_task: Some(text),
                 delivered: false,
                 unobserved_delivery: None,
             }))
@@ -322,6 +320,7 @@ struct Actor {
     terminal: TerminalRuntime,
     db: Db,
     seal: Arc<n::ManagedRuntime>,
+    expected_start_source: &'static str,
     agent_session: String,
     pending: Option<Submission>,
     last_waiting: Option<String>,
@@ -411,11 +410,16 @@ impl Actor {
         let runtime = self.seal.runtime().id.clone();
         let request = input.request.clone();
         let body = input.body.as_bytes().to_vec();
+        let original_task=input.original_task.clone();
+        let seal=self.seal.clone();
         let prepared = self
             .db
             .call_result(move |store| {
-                store
-                    .with_tx(|tx| n::prepare(tx, &runtime, &request, &body, &crewd_store::now_ts()))
+                store.with_tx(|tx| {
+                    let prepared=n::prepare(tx,&runtime,&request,&body,&crewd_store::now_ts())?;
+                    if !prepared.1 {n::managed_observations::record_task(tx,&seal,&request,original_task.as_deref())?;}
+                    Ok(prepared)
+                })
             })
             .await;
         match prepared {
@@ -501,7 +505,7 @@ impl Actor {
         }
         if kind == HookKind::SessionStart
             && self.ready.is_some()
-            && matches!(payload["source"].as_str(), Some("startup" | "resume"))
+            && payload["source"].as_str()==Some(self.expected_start_source)
         {
             let _ = self.ready.take().unwrap().send(());
             return HookResult { stdout: None };
@@ -635,7 +639,17 @@ impl Actor {
                     HookKind::PostToolUse | HookKind::ManagedActivity | HookKind::Stop
                 )
             {
-                self.retract_waiting().await;
+                if kind==HookKind::Stop {
+                    let seal=self.seal.clone();let prompt=prompt.clone().unwrap();
+                    let text=payload["last_assistant_message"].as_str().map(str::to_owned);
+                    let _=self.db.call_result(move|s|s.with_tx(|tx| {
+                        use rusqlite::OptionalExtension;
+                        let request:Option<String>=tx.query_row("SELECT request_id FROM native_execution_receipts WHERE runtime_id=?1 AND prompt_id=?2 AND turn_id IS NULL",rusqlite::params![seal.runtime().id,prompt],|r|r.get(0)).optional()?;
+                        if let Some(request)=request {n::managed_observations::observe_stop(tx,&seal,&request,&prompt,text.as_deref(),&crewd_store::now_ts())?;}
+                        n::managed_response_resumed(tx,&seal,&prompt,&crewd_store::now_ts())?;
+                        Ok(())
+                    })).await;
+                } else {self.retract_waiting().await;}
                 self.invalidate().await;
             }
             return HookResult { stdout: None };
@@ -665,12 +679,13 @@ impl Actor {
                 self.pending.as_mut().unwrap().stopped = false;
             }
             HookKind::Stop => {
-                let input = self.pending.as_mut().unwrap();
-                input.stopped = true;
-                input.last_response = payload["last_assistant_message"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_owned();
+                let request=self.pending.as_ref().unwrap().request.clone();
+                let prompt=prompt.as_ref().unwrap().clone();
+                let text=payload["last_assistant_message"].as_str().map(str::to_owned);
+                let seal=self.seal.clone();
+                let saved=self.db.call_result(move |s|s.with_tx(|tx|n::managed_observations::observe_stop(tx,&seal,&request,&prompt,text.as_deref(),&crewd_store::now_ts()))).await;
+                if !matches!(saved,Ok(Ok(())))||!self.current().await {self.invalidate().await;return HookResult{stdout:None}}
+                self.pending.as_mut().unwrap().stopped=true;
             }
             HookKind::Notification if payload["notification_type"] == "idle_prompt" => {
                 let input = self.pending.as_ref().unwrap();
@@ -688,14 +703,9 @@ impl Actor {
                     .db
                     .call_result(move |store| {
                         store.with_tx(|tx| {
-                            n::managed_response_waiting(
-                                tx,
-                                &seal,
-                                &request,
-                                revision,
-                                &witness,
-                                &crewd_store::now_ts(),
-                            )
+                            let receipt=n::managed_response_waiting(tx,&seal,&request,revision,&witness,&crewd_store::now_ts())?;
+                            n::managed_observations::mark_waiting(tx,&seal,&request,&witness)?;
+                            Ok(receipt)
                         })
                     })
                     .await;
@@ -1084,6 +1094,7 @@ mod tests {
             terminal: TerminalRuntime::Legacy(terminal.clone()),
             db: fixture.state.db.clone(),
             seal: Arc::new(seal),
+            expected_start_source: "startup",
             agent_session: status.agent_session_id,
             pending: None,
             last_waiting: None,
@@ -1148,7 +1159,7 @@ mod tests {
                 receipt: Some(receipt),
                 prompt: Some(prompt.clone()),
                 stopped: false,
-                last_response: String::new(),
+                original_task: None,
                 delivered: false,
                 unobserved_delivery: None,
             });
@@ -1208,11 +1219,13 @@ mod tests {
         run.actor.pending = Some(Submission {
             request:request.clone(), external:1, subject:Subject::Brief, body,
             local:None, receipt:Some(receipt), prompt:Some(prompt.clone()), stopped:false,
-            last_response:String::new(), delivered:false, unobserved_delivery:None,
+            original_task:None, delivered:false, unobserved_delivery:None,
         });
         let text = "  Exactly observed reply\n世界\nnot business Done  ";
+        assert!(run.actor.current().await, "original sealed runtime must be current before Stop");
         run.actor.hook(HookKind::Stop, json!({"session_id":run.actor.agent_session,
             "hook_event_name":"Stop","prompt_id":prompt,"last_assistant_message":text})).await;
+        assert!(run.actor.pending.as_ref().unwrap().stopped, "actual matched Stop must have been accepted by the original actor");
         let key = format!("claude.managed.observations.v1/{request}");
         let observed = run.actor.db.call_result(move |s| crewd_store::meta_get(s.conn(), &key)).await.unwrap().unwrap();
         let value:Value = serde_json::from_str(&observed.expect("same-seal Stop text must survive actor drop before idle")).unwrap();
@@ -1277,7 +1290,7 @@ mod tests {
             receipt: Some(receipt),
             prompt: None,
             stopped: false,
-            last_response: String::new(),
+            original_task: None,
             delivered: false,
             unobserved_delivery: None,
         });

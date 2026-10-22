@@ -1354,6 +1354,369 @@
       ],
       "type": "object"
     },
+    "ClaudeHistoryPage": {
+      "additionalProperties": false,
+      "properties": {
+        "membershipCut": {
+          "type": "string"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/ClaudeTaskSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessionId",
+        "tasks",
+        "membershipCut",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "ClaudeHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 32,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "ClaudeInspect": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "currentRuntimeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executorProfileId": {
+          "type": "string"
+        },
+        "fullHistoryLoad": {
+          "type": "boolean"
+        },
+        "historyScope": {
+          "type": "string"
+        },
+        "manualResume": {
+          "$ref": "#/$defs/ClaudeManualResume"
+        },
+        "nativeAcp": {
+          "type": "boolean"
+        },
+        "responseObservationLimitBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retainedObservationsPerTask": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "taskTextLimitBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionId",
+        "crewId",
+        "executorProfileId",
+        "backend",
+        "historyScope",
+        "fullHistoryLoad",
+        "nativeAcp",
+        "manualResume",
+        "taskTextLimitBytes",
+        "responseObservationLimitBytes",
+        "retainedObservationsPerTask"
+      ],
+      "type": "object"
+    },
+    "ClaudeManualResume": {
+      "additionalProperties": false,
+      "properties": {
+        "eligibility": {
+          "$ref": "#/$defs/ClaudeResumeEligibility"
+        },
+        "originalAgentSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rechecksProgramAndSourceOnLaunch": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "eligibility",
+        "rechecksProgramAndSourceOnLaunch"
+      ],
+      "type": "object"
+    },
+    "ClaudeResponseObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "type": "string"
+        },
+        "capturedBytes": {
+          "type": "string"
+        },
+        "observationNo": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "promptId": {
+          "type": "string"
+        },
+        "sourceBytes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "observationNo",
+        "promptId",
+        "observedAt",
+        "capturedBytes",
+        "availability"
+      ],
+      "type": "object"
+    },
+    "ClaudeResumeEligibility": {
+      "enum": [
+        "eligible",
+        "running",
+        "notConfigured",
+        "missingOriginalId",
+        "previousBirthLiveOrUnknown",
+        "removedCrew",
+        "missingWorkdir"
+      ],
+      "type": "string"
+    },
+    "ClaudeSessionParams": {
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "ClaudeTaskDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "latestObservation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClaudeResponseObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/ClaudeResponseObservation"
+          },
+          "type": "array"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "originalTask": {
+          "$ref": "#/$defs/ClaudeTaskText"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/ClaudeTaskSummary"
+        },
+        "waitingObservationNo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessionId",
+        "task",
+        "originalTask",
+        "observations",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "ClaudeTaskGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "ClaudeTaskSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "currentRuntime": {
+          "type": "boolean"
+        },
+        "latestObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observationCount": {
+          "type": "string"
+        },
+        "omittedObservations": {
+          "type": "string"
+        },
+        "phase": {
+          "description": "Original receipt phase; completed means observed managed waiting only.",
+          "type": "string"
+        },
+        "promptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receiptRevision": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "runtimeId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "waitingObserved": {
+          "description": "Current runtime/birth + current receipt + latest matched waiting observation.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "requestId",
+        "runtimeId",
+        "createdAt",
+        "updatedAt",
+        "phase",
+        "receiptRevision",
+        "observationCount",
+        "omittedObservations",
+        "waitingObserved",
+        "currentRuntime"
+      ],
+      "type": "object"
+    },
+    "ClaudeTaskText": {
+      "additionalProperties": false,
+      "properties": {
+        "fidelity": {
+          "type": "string"
+        },
+        "managedEnvelope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "fidelity"
+      ],
+      "type": "object"
+    },
     "ClientInfo": {
       "description": "客户端是谁（crewd 每次 hello 记一行日志）。同样不拒未知字段。",
       "properties": {
@@ -14044,6 +14407,30 @@
       },
       "result": {
         "$ref": "#/$defs/SessionAnswerResult"
+      }
+    },
+    "session.claude.history": {
+      "params": {
+        "$ref": "#/$defs/ClaudeHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ClaudeHistoryPage"
+      }
+    },
+    "session.claude.inspect": {
+      "params": {
+        "$ref": "#/$defs/ClaudeSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ClaudeInspect"
+      }
+    },
+    "session.claude.taskGet": {
+      "params": {
+        "$ref": "#/$defs/ClaudeTaskGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ClaudeTaskDetail"
       }
     },
     "session.codex.history": {

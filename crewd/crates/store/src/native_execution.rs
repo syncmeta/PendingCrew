@@ -1,6 +1,7 @@
 //! Internal Core execution receipts, not a provider/team work ledger. Only the
 //! owning DB FIFO transaction writes these tables. Helpers never receive a writer.
 //! Formal version12 follows the remote version11 migration; provider capability remains independently gated.
+pub mod managed_observations;
 use crate::{Result, StoreError};
 use ring::digest::{SHA256, digest};
 use rusqlite::{OptionalExtension, Transaction, params};

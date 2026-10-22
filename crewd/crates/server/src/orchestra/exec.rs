@@ -20,6 +20,7 @@ pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type Context = BTreeMap<String, String>;
 
 pub struct LaunchRequest {
+    pub managed_resume_id: Option<String>,
     pub initial_inputs:Option<crewd_exec::codex::input::Submission>,
     pub session_id: String,
     pub crew_id: String,
@@ -82,6 +83,7 @@ pub trait Executor: Send + Sync {
     fn accepts_initial_context(&self) -> bool {
         false
     }
+    fn requires_exact_managed_resume(&self) -> bool {false}
     /// Full provider resume must be explicitly supported by this adapter.
     fn accepts_resume(&self) -> bool {
         true

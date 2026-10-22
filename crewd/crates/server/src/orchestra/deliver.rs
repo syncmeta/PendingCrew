@@ -281,6 +281,8 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
             let mut pending = self.port.pending(session).await?;
+            if let Some(cut)=self.live.get(session).and_then(|l|l.managed_resume_wake_cut){pending.retain(|w|w.id>cut);}
+
             if self.cfg.admission.is_some() {
                 pending.retain(|w| w.id > self.held_watermark);
             }

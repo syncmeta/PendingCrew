@@ -16,6 +16,7 @@ mod legacy_terminal;
 pub mod native_helpers;
 pub mod native_receipts;
 mod codex_inputs;
+mod claude_history;
 mod notifications;
 pub mod orchestra;
 pub(crate) mod peer;
