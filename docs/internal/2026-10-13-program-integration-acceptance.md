@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 iOS 原配对回应中断恢复通过；远端完整流程未完成
+
+6c按原scope/安装UUID及exclusive mkdir安全恢复准备：27858实际0，committed-current与所有输入/activation核同。准确a08普通phone新App58874/console60365就绪后，原owner64887/Core3937091实际samefd4/UID1000/parent+birth、同端口隧道59789就绪；原邀请2015B经真实Files导入，endpoint/SPKI核对通过，唯一respond成功并保存本机pending。原Save面板最后一步遭工具noWindowsAvailable、未取得回应文件硬门，随后SSH/隧道均255；未publish/accept，不能称协议或凭据产品失败。
+
+原身份有界收尾48416实际0：先确认同holder/Core kernelbirth，发既定abort，原owner经原fd safePause stopped、Core wait0、socket不存在。原SSH255不倒改，holder自身exit未观测不冒0。后取原RPC日志212行/SHA d747cfc8d7d36d876f8a224133d83a46bb9c7de25eaf772b00744f969081bf6e，独核invite1/1、accept0/0、revoke0/0；报告independent-qa-original-rpc-cleanup.json SHA9c5de118fc2741452060976ca8137a5513176490af27179f48fb00be79b42e46。因此该远端交易不再笼统记Unknown，但完整配对、P1/P2业务和撤权仍未验。
+
+同a08无重装的新进程61167/console63045，正常菜单重新进入即取回已存原pending；没有generate/key/网络/accept动作。原exporter一次Save成功，真实回应1726B、SHA9deebd0d3dcd92fe9912c0c7953c61c6b65f95a78cea9252cc6f44aab1485761，原invite/challenge/authority/DB匹配、签名payload离线Verified OK0、证书SPKI匹配。首只读解析前缀长度错误原失败保留，仅修纯读解析，不重Save；没有首生成完整payload快照，不冒前后整串字节同（外层JSON重编码也不是身份）。现有source本就保存原envelope/key/cert，未因工具错误改产品。
+
+手机两轮App/console/shutdown均实际0，固定208最终Shutdown/booted空，原pending/invitation/response及证据全保。报告pending-recovery-export-01/module-result.json SHAee996d380eb784f2edbdcf14298bc717ce601a8187cb80d9c0d09aa98d2efed5，手机首轮module-boundary-result.json SHA9103df8ebe203adcf20c434289d0b2e7f11736deec24866352f793ecc1392e23，均位于ios-vps-r2-6c1d9e42-20261022。下一实际完整流程仅在原known未接受交易已终态后，通过原UI明确取消该准确旧pending（非猜UUID或直接Keychain删），复用现有R2 prefix/脚本和a08包，不再构建/installer/新验收框架；旧184/1ef Unknown不触碰，旧6c原件保全。
+
 ## 2026-10-22 已安装 Mac 6f35：普通首开与退出完整流程通过
 
 准确已装6f35ebc0b84b8a36e8c285f05e070b2baa794a67、0.1.44/20748.07553，经普通LaunchServices前台打开；仅本次两个provider程序设为/usr/bin/false，不改全局环境或偏好。原open-W59451、App56890/Core56892实际身份与helper两个false参数确认，普通本机管理窗口正常显示且未选crew，QA未发任务或打开凭据管理。原App菜单Quit一次，真实四选项询问可见，选择安全暂停后CUA报App退出；原等待09ee0b实际0，da4512证原两个PID均不存在。单独App/Core退出码与RPC session census未观测，不据此扩称0或独立零session证明。
