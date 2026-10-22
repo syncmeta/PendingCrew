@@ -48,7 +48,7 @@ except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise Syste
  prefix=out/'prefix';data=out/'data';cache=out/'cache';work=out/'work'
  for p in [data,cache,work]:p.mkdir(mode=0o700)
  require(len(str(data/'crewd.sock').encode())<=103,'short private path required')
- env=dict(os.environ);env.update(PATH='/usr/bin:/bin',XDG_CACHE_HOME=str(cache),SHELL='/usr/bin/false',PYTHONDONTWRITEBYTECODE='1');records=[];terminals=[]
+ env=dict(os.environ);env.update(XDG_CACHE_HOME=str(cache),PYTHONDONTWRITEBYTECODE='1');records=[];terminals=[]
  def run(label,argv,success=True):
   r=subprocess.run(argv,env=env,capture_output=True,text=True,timeout=60);(out/(label+'.log')).write_text(r.stdout+r.stderr);records.append({'phase':label,'argv':argv,'exitCode':r.returncode});require((r.returncode==0)==success,'command outcome differs: '+label);return r
  def install(label,rid,expected,success=True):
