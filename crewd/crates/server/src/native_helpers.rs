@@ -716,7 +716,13 @@ impl Runtime {
         }) {
             return false;
         }
-        self.manual_floor().await
+        let floor = self.manual_floor().await;
+        floor
+            && lease.as_ref().is_some_and(|l| {
+                l.connection.is_live()
+                    && Instant::now() < l.deadline
+                    && self.binding().is_ok_and(|b| same(&b.native, &l.native))
+            })
     }
     pub(crate) async fn manual_floor(&self) -> bool {
         let session = self.session.clone();

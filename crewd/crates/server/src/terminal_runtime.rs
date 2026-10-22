@@ -62,6 +62,15 @@ impl TerminalRuntime {
             Self::Legacy(r) => r.claim(a, owner, old).await,
         }
     }
+    pub(crate) async fn automatic_hook_authority(
+        &self,
+        seal: Arc<crewd_store::native_execution::ManagedRuntime>,
+    ) -> Option<crate::legacy_terminal::AutomaticHookPermit<'_>> {
+        match self {
+            Self::Legacy(r) => r.automatic_hook_authority(seal).await,
+            Self::Native(_) => None,
+        }
+    }
     pub(crate) async fn manual_hook_allowed(&self) -> bool {
         match self {
             Self::Native(r) => r.manual_hook_allowed().await,

@@ -378,6 +378,10 @@ fn managed_current(tx: &Transaction<'_>, seal: &ManagedRuntime) -> Result<()> {
     }
     Ok(())
 }
+/// Final hook authorization under the same Core terminal lease gate as raw claim.
+pub fn verify_managed_authority(tx: &Transaction<'_>, seal: &ManagedRuntime) -> Result<()> {
+    managed_current(tx, seal)
+}
 /// A real prompt UUID may bind only one request in this managed execution.
 pub fn managed_accept_content(
     tx: &Transaction<'_>,

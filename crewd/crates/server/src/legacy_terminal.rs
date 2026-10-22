@@ -39,6 +39,10 @@ struct Lease {
     fence: ManualFence,
     deadline: Instant,
 }
+/// Retains the original raw-claim mutex through the caller's synchronous allow.
+pub(crate) struct AutomaticHookPermit<'a> {
+    _lease: tokio::sync::MutexGuard<'a, Option<Lease>>,
+}
 pub(crate) struct LegacyTerminal {
     pub generation: String,
     session: String,
@@ -208,6 +212,14 @@ impl LegacyTerminal {
     }
     /// A historical manual floor is not permission to submit a new prompt.
     /// Only the actual current Human lease may use the native input path.
+    #[cfg(test)]
+    pub(crate) async fn test_set_lease_deadline(&self, deadline: Instant) {
+        self.lease.lock().await.as_mut().unwrap().deadline = deadline;
+    }
+    #[cfg(test)]
+    pub(crate) fn test_lease_locked(&self) -> bool {
+        self.lease.try_lock().is_err()
+    }
     pub(crate) async fn manual_hook_allowed(&self) -> bool {
         if self.binding().is_err() {
             return false;
@@ -219,7 +231,29 @@ impl LegacyTerminal {
         {
             return false;
         }
-        self.manual_floor().await && self.binding().is_ok()
+        let floor = self.manual_floor().await;
+        floor
+            && self.binding().is_ok()
+            && lease
+                .as_ref()
+                .is_some_and(|l| l.connection.is_live() && Instant::now() < l.deadline)
+    }
+    pub(crate) async fn automatic_hook_authority(
+        &self,
+        seal: Arc<n::ManagedRuntime>,
+    ) -> Option<AutomaticHookPermit<'_>> {
+        let lease = self.lease.lock().await;
+        if self.binding().is_err() {
+            return None;
+        }
+        let valid = self
+            .db
+            .call_result(move |store| store.with_tx(|tx| n::verify_managed_authority(tx, &seal)))
+            .await;
+        if !matches!(valid, Ok(Ok(()))) || self.binding().is_err() {
+            return None;
+        }
+        Some(AutomaticHookPermit { _lease: lease })
     }
     pub(crate) async fn manual_floor(&self) -> bool {
         let session = self.session.clone();

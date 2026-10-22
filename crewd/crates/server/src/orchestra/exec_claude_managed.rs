@@ -121,6 +121,7 @@ pub(crate) struct ManagedHandle {
     next: AtomicU64,
     busy: Arc<AtomicBool>,
     blocked: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
     working: Arc<AtomicBool>,
     manual: Arc<AtomicBool>,
 }
@@ -188,6 +189,7 @@ impl ManagedHandle {
             next: AtomicU64::new(1),
             busy: Arc::new(AtomicBool::new(false)),
             blocked: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
             working: Arc::new(AtomicBool::new(false)),
             manual: Arc::new(AtomicBool::new(false)),
         });
@@ -197,6 +199,10 @@ impl ManagedHandle {
             .map_err(|_| "managed map poisoned")?
             .insert(session, Arc::downgrade(&handle));
         let state = Actor {
+            #[cfg(test)]
+            current_pause: None,
+            #[cfg(test)]
+            accepted_pause: None,
             driver: driver.clone(),
             terminal,
             db: factory.db.clone(),
@@ -209,6 +215,7 @@ impl ManagedHandle {
             ready: Some(ready),
             busy: handle.busy.clone(),
             blocked: handle.blocked.clone(),
+            stopping: handle.stopping.clone(),
             working: handle.working.clone(),
             manual: handle.manual.clone(),
         };
@@ -293,7 +300,24 @@ impl ManagedHandle {
 fn denied_hook() -> HookResult {
     HookResult{stdout:Some(json!({"decision":"block","reason":"PendingCrew managed input has no matching current durable authorization"}).to_string())}
 }
+#[cfg(test)]
+#[derive(Default)]
+struct GuardPause {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+#[cfg(test)]
+impl GuardPause {
+    async fn pause(&self) {
+        self.entered.notify_one();
+        self.release.notified().await;
+    }
+}
 struct Actor {
+    #[cfg(test)]
+    current_pause: Option<Arc<GuardPause>>,
+    #[cfg(test)]
+    accepted_pause: Option<Arc<GuardPause>>,
     driver: SessionHandle,
     terminal: TerminalRuntime,
     db: Db,
@@ -306,6 +330,7 @@ struct Actor {
     ready: Option<oneshot::Sender<()>>,
     busy: Arc<AtomicBool>,
     blocked: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
     working: Arc<AtomicBool>,
     manual: Arc<AtomicBool>,
 }
@@ -354,17 +379,28 @@ impl Actor {
                 .await;
         }
     }
-    async fn current(&self) -> bool {
-        if self.blocked.load(Ordering::Acquire)
-            || self.terminal.binding().is_err()
-            || !crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk)
-        {
+    fn current_now(&self) -> bool {
+        if self.blocked.load(Ordering::Acquire) || self.stopping.load(Ordering::Acquire) {
             return false;
         }
-        self.driver
+        let bound = self.terminal.binding().is_ok()
+            && crate::build_info::exe().is_some_and(crate::build_info::ExeIdentity::still_on_disk);
+        bound && !self.stopping.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire)
+    }
+    async fn current(&self) -> bool {
+        if !self.current_now() {
+            return false;
+        }
+        #[cfg(test)]
+        if let Some(pause) = &self.current_pause {
+            pause.pause().await;
+        }
+        let same = self
+            .driver
             .status()
             .await
-            .is_ok_and(|s| s.agent_session_id == self.agent_session)
+            .is_ok_and(|s| s.agent_session_id == self.agent_session);
+        same && self.current_now()
     }
     async fn submit(&mut self, mut input: Submission) {
         if self.pending.is_some() || !self.current().await {
@@ -403,16 +439,26 @@ impl Actor {
     }
     async fn hook(&mut self, kind: HookKind, payload: Value) -> HookResult {
         if self.terminal.manual_hook_allowed().await {
+            if self.stopping.load(Ordering::Acquire) {
+                return denied_hook();
+            }
+            let old_auto = kind == HookKind::UserPromptSubmit
+                && self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| payload["prompt"].as_str() == Some(p.body.as_str()));
             self.blocked.store(true, Ordering::Release);
             if !self.manual.swap(true, Ordering::AcqRel) {
                 let _ = self
                     .events
                     .send(SessionEvent::Health(Some(manual_health())));
             }
-            return if kind == HookKind::UserPromptSubmit {
+            return if kind == HookKind::UserPromptSubmit && !old_auto {
                 HookResult {
                     stdout: Some(json!({"continue":true}).to_string()),
                 }
+            } else if kind == HookKind::UserPromptSubmit {
+                denied_hook()
             } else {
                 HookResult { stdout: None }
             };
@@ -502,10 +548,23 @@ impl Actor {
                 self.invalidate().await;
                 return denied_hook();
             };
+            #[cfg(test)]
+            if let Some(pause) = &self.accepted_pause {
+                pause.pause().await;
+            }
             if !self.current().await {
                 self.invalidate().await;
                 return denied_hook();
             }
+            let terminal = self.terminal.clone();
+            let permit = terminal.automatic_hook_authority(self.seal.clone()).await;
+            if permit.is_none() || !self.current_now() {
+                drop(permit);
+                self.invalidate().await;
+                return denied_hook();
+            }
+            // No further await: raw claim shares the held lease gate, while
+            // Stop/native birth are rechecked at this allow linearization point.
             let input = self.pending.as_mut().unwrap();
             input.receipt = Some(receipt);
             input.prompt = prompt;
@@ -598,6 +657,13 @@ impl Actor {
                     })
                     .await;
                 if !matches!(result, Ok(Ok(_))) || !self.current().await {
+                    self.invalidate().await;
+                    return HookResult { stdout: None };
+                }
+                let terminal = self.terminal.clone();
+                let permit = terminal.automatic_hook_authority(self.seal.clone()).await;
+                if permit.is_none() || !self.current_now() {
+                    drop(permit);
                     self.invalidate().await;
                     return HookResult { stdout: None };
                 }
@@ -721,6 +787,7 @@ fn store_session(tx: &rusqlite::Transaction<'_>, runtime: &str) -> crewd_store::
 }
 impl Drop for ManagedHandle {
     fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
         self.blocked.store(true, Ordering::Release);
         let _ = self.queue.send(Command::Stop);
     }
@@ -756,6 +823,7 @@ impl ExecHandle for ManagedHandle {
         Err(Closed)
     }
     fn interrupt(&self) -> Result<(), Closed> {
+        self.stopping.store(true, Ordering::Release);
         self.blocked.store(true, Ordering::Release);
         self.queue.send(Command::Interrupt).map_err(|_| Closed)
     }
@@ -778,6 +846,7 @@ impl ExecHandle for ManagedHandle {
         )
     }
     fn stop(&self) -> Result<(), Closed> {
+        self.stopping.store(true, Ordering::Release);
         self.blocked.store(true, Ordering::Release);
         self.queue.send(Command::Stop).map_err(|_| Closed)
     }
@@ -885,5 +954,246 @@ mod tests {
             "no truncation"
         );
         assert!(envelope("core-request", " \n").is_err());
+    }
+    struct RaceRun {
+        actor: Actor,
+        terminal: Arc<crate::legacy_terminal::LegacyTerminal>,
+        fixture: crate::agent::testkit::Fixture,
+        _root: tempfile::TempDir,
+        registry: Arc<registry::ProcessRegistry>,
+        _events: mpsc::UnboundedReceiver<SessionEvent>,
+    }
+    impl Drop for RaceRun {
+        fn drop(&mut self) {
+            let _ = self.actor.driver.stop();
+            let _ = registry::reap_orphans(&self.registry);
+        }
+    }
+    async fn race_run() -> RaceRun {
+        use crewd_exec::{
+            driver::{ClaudeStart, DriverConfig, start_claude},
+            launch::ClaudeSpec,
+            resume::MemoryLedger,
+        };
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let root = tempfile::tempdir().unwrap();
+        let registry =
+            Arc::new(registry::ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
+        let mut config = DriverConfig::new(root.path().join("runtime"));
+        config.registry = Some(registry.clone());
+        config.terminal_observer = Some(Arc::new(
+            crewd_exec::acp::terminal::TerminalTap::new(1, 64).unwrap(),
+        ));
+        config.stop_grace = std::time::Duration::from_millis(100);
+        let fake = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fake_claude");
+        let (driver, events) = start_claude(
+            ClaudeStart {
+                session_id: fixture.worker.clone(),
+                program: fake,
+                child_path: "/usr/bin:/bin".into(),
+                spec: ClaudeSpec {
+                    workdir: root.path().to_owned(),
+                    ..Default::default()
+                },
+                ledger: Arc::new(MemoryLedger::default()),
+            },
+            config,
+        )
+        .await
+        .unwrap();
+        let terminal = crate::legacy_terminal::LegacyTerminal::adopt(
+            fixture.worker.clone(),
+            driver.clone(),
+            fixture.state.db.clone(),
+            &registry,
+        )
+        .await
+        .unwrap();
+        let binding = terminal.binding().unwrap();
+        let status = driver.status().await.unwrap();
+        let runtime = n::Runtime {
+            id: uuid::Uuid::new_v4().to_string(),
+            session: fixture.worker.clone(),
+            generation: binding.generation.clone(),
+            epoch: binding.epoch,
+            native_pid: binding.native.pid,
+            native_start: binding.native.start_time,
+            native_boot: binding.native.boot_id,
+        };
+        let seal = fixture
+            .state
+            .db
+            .call_result(move |store| store.with_tx(|tx| n::register_managed(tx, &runtime)))
+            .await
+            .unwrap()
+            .unwrap();
+        let (events_out, _) = mpsc::unbounded_channel();
+        let actor = Actor {
+            current_pause: None,
+            accepted_pause: None,
+            driver,
+            terminal: TerminalRuntime::Legacy(terminal.clone()),
+            db: fixture.state.db.clone(),
+            seal: Arc::new(seal),
+            agent_session: status.agent_session_id,
+            pending: None,
+            last_waiting: None,
+            events: events_out,
+            observer: None,
+            ready: None,
+            busy: Arc::new(AtomicBool::new(false)),
+            blocked: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            working: Arc::new(AtomicBool::new(false)),
+            manual: Arc::new(AtomicBool::new(false)),
+        };
+        RaceRun {
+            actor,
+            terminal,
+            fixture,
+            _root: root,
+            registry,
+            _events: events,
+        }
+    }
+    fn human_actor(registry: Arc<registry::ProcessRegistry>) -> crate::public_commands::Actor {
+        let policy = Arc::new(crate::peer::PeerPolicy::new(Some(registry)).unwrap());
+        let (server, _client) = tokio::net::UnixStream::pair().unwrap();
+        crate::public_commands::Actor::Local(policy.accept(&server).unwrap())
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn managed_guard_race_stop_across_real_driver_status_cannot_remain_current() {
+        let mut run = race_run().await;
+        let pause = Arc::new(GuardPause::default());
+        run.actor.current_pause = Some(pause.clone());
+        let (queue, _pending_commands) = mpsc::unbounded_channel();
+        let handle = ManagedHandle {
+            driver: run.actor.driver.clone(),
+            queue,
+            next: AtomicU64::new(1),
+            busy: run.actor.busy.clone(),
+            blocked: run.actor.blocked.clone(),
+            stopping: run.actor.stopping.clone(),
+            working: run.actor.working.clone(),
+            manual: run.actor.manual.clone(),
+        };
+        let stop = async {
+            pause.entered.notified().await;
+            handle.stop().unwrap();
+            pause.release.notify_one();
+        };
+        let (current, ()) = tokio::join!(run.actor.current(), stop);
+        assert!(
+            !current,
+            "Stop linearized during current() await must deny the old guard"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn managed_guard_race_raw_claim_after_durable_accept_denies_old_auto_allow() {
+        let mut run = race_run().await;
+        let request = uuid::Uuid::new_v4().to_string();
+        let body = envelope(&request, "SYNTHETIC_RACE_ORIGINAL").unwrap();
+        let runtime = run.actor.seal.runtime().id.clone();
+        let rid = request.clone();
+        let original = body.as_bytes().to_vec();
+        let receipt = run
+            .actor
+            .db
+            .call_result(move |store| {
+                store.with_tx(|tx| n::prepare(tx, &runtime, &rid, &original, "now"))
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        run.actor.pending = Some(Submission {
+            request,
+            external: 1,
+            subject: Subject::Brief,
+            body: body.clone(),
+            local: None,
+            receipt: Some(receipt),
+            prompt: None,
+            stopped: false,
+            last_response: String::new(),
+            delivered: false,
+            unobserved_delivery: None,
+        });
+        let pause = Arc::new(GuardPause::default());
+        run.actor.accepted_pause = Some(pause.clone());
+        let human = human_actor(run.registry.clone());
+        let terminal = run.terminal.clone();
+        let owner = run.fixture.state.clone();
+        let claim = async {
+            pause.entered.notified().await;
+            terminal.claim(&human, &owner, None).await.unwrap();
+            pause.release.notify_one();
+        };
+        let payload = json!({"session_id":run.actor.agent_session,"hook_event_name":"UserPromptSubmit","prompt_id":uuid::Uuid::new_v4().to_string(),"prompt":body});
+        let (result, ()) = tokio::join!(
+            run.actor.hook(HookKind::UserPromptSubmit, payload.clone()),
+            claim
+        );
+        assert_ne!(
+            result.stdout.as_deref(),
+            Some("{\"continue\":true}"),
+            "durable raw claim must close old automatic allow"
+        );
+        let again = run.actor.hook(HookKind::UserPromptSubmit, payload).await;
+        assert_ne!(
+            again.stdout.as_deref(),
+            Some("{\"continue\":true}"),
+            "manual custody cannot reauthorize the retained old automatic envelope"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn managed_guard_race_manual_expiry_during_real_db_queue_denies_allow() {
+        let run = race_run().await;
+        let human = human_actor(run.registry.clone());
+        run.terminal
+            .claim(&human, &run.fixture.state, None)
+            .await
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        run.terminal.test_set_lease_deadline(deadline).await;
+        let (release, held) = std::sync::mpsc::channel();
+        let (entered, ready) = oneshot::channel();
+        let db = run.actor.db.clone();
+        let blocker = tokio::spawn(async move {
+            db.call(move |_| {
+                let _ = entered.send(());
+                held.recv_timeout(std::time::Duration::from_secs(3))
+                    .unwrap();
+            })
+            .await
+            .unwrap()
+        });
+        ready.await.unwrap();
+        let expire = async {
+            while !run.terminal.test_lease_locked() {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "initial lease check must precede actual expiry"
+            );
+            tokio::time::sleep_until(
+                tokio::time::Instant::from_std(deadline) + std::time::Duration::from_millis(1),
+            )
+            .await;
+            release.send(()).unwrap();
+        };
+        let (allowed, ()) = tokio::join!(run.terminal.manual_hook_allowed(), expire);
+        blocker.await.unwrap();
+        assert!(
+            !allowed,
+            "DB queue crossing the actual lease expiry cannot allow native input"
+        );
     }
 }
