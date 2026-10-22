@@ -69,6 +69,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     private(set) var errors: [AppleDraftKey: String] = [:]
     private(set) var unsavedLatest: Set<AppleDraftKey> = []
     var didChange: () -> Void = {}
+    var didCheckpoint: () -> Void = {}
     var savingKeys:Set<AppleDraftKey> { Set(writers.keys) }
     private var pendingCheckpoints: Set<AppleDraftKey> = []
     private var writers: [AppleDraftKey: Task<Void, Never>] = [:]
@@ -119,7 +120,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
                 self.unsavedLatest.remove(key); self.pendingCheckpoints.remove(key)
                 self.errors[key] = nil
             } catch { if self.isCurrent(ticket) { self.errors[key] = "本机版本保存失败；原文仍保留：\(error)" } }
-            if self.isCurrent(ticket) { self.writers[key] = nil; self.didChange() }
+            if self.isCurrent(ticket) { self.writers[key] = nil; self.didChange(); self.didCheckpoint() }
         }
         return ticket
     }
@@ -131,8 +132,8 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         else{unsavedLatest.remove(key)}
         didChange()
     }
-    func snapshot(key:AppleDraftKey,payload:Payload)->Ticket? {
-        guard selected(),(latestMemory[key] ?? payload)==payload else{return nil}
+    func snapshot(key:AppleDraftKey,payload:Payload,empty:Payload)->Ticket? {
+        guard selected(),(latestMemory[key] ?? empty)==payload else{return nil}
         if latestMemory[key] == nil { latestMemory[key]=payload }
         return ticket(key:key)
     }
@@ -163,6 +164,11 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         try validate(applied)
         didChange()
         return applied
+    }
+    func retainedTicket(key:AppleDraftKey)->Ticket? {
+        guard let payload=latestMemory[key] else{return nil}
+        if revisions[key] == nil{revisions[key]=UUID()}
+        return Ticket(namespace:id,selection:selection,key:key,revision:revisions[key]!,payload:payload)
     }
     func ticket(key: AppleDraftKey) -> Ticket? {
         guard selected(), let payload = latestMemory[key] else { return nil }
