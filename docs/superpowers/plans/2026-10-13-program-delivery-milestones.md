@@ -2,6 +2,10 @@
 
 ## 当前交付总览（2026-10-23）
 
+完整B主机安装/单链接配对已源码整合，下一步是准确组合与真实双端流程：后端20c与控制器bb033、客户端0f77和原生产签名配方暖缓存适配35231907共同冻结。后端源门4777e1e5、控制器269b5c05、客户端完整源/原本地seam门ff0d1301通过；Mac/iOS393输入及原两目标证据复用，没有为一行cache路径重复构建。当前源码Store18/API3/129方法、Native16不激活；安装仍下面的9a玻璃版，不冒B已运行。下一普通Mac候选选本机已确认的M42 Developer ID及精确Direct profile，沿原生产sign-only/完整normal witness/原aeh缓存；不新申请证书或建冷目录。真实非memory Keychain、退出重开、两设备同Core单链接/撤权尚待该准确包。跨更新证据随下一真实模块更新自然补，不造第二候选刷证明；publisher只在真实动态门通过后宣称。唯一Linux构建等本组合Mac/iOS实际流程后再运行，仍30分钟硬限，避免原生接线修复造成重复CI。
+
+APNs在独立分支推进，不混本次B的固定Rust树。根已裁定采用受支持Core原生HTTP2/TLS客户端，用户Cloudflare为可选建议，暂不增加Worker/DO/付费Container；旧502 Unknown与删除证据不重探。实际权威源已纠正为organization_work_events/save同事务；日用回复/失败/人工关注按真实session/turn/managed receipt等分类型耐久来源处理，不能把waiting或operation Completed叫Done。必要Store19 writer barrier仅属于通知分支，主线B仍18；原claim之后的潜在外发不能承诺撤回，Unknown不自动重发，24小时原入队有效期不随重开延长，点击只验证并导航、不唤醒会话。真实Apple key、APNs送达与设备展示尚未执行；h2最小官方依赖仅在独立分支锁定，不冒已交付通知。
+
 玻璃前端完整模块已交付日用Mac：`/Applications/PendingCrew.app`，0.1.44/build20748.58461，准确完整构建输入9a0ebdada9acb89eaf4296960f821f19d9448ae5。整窗原生系统材质、workspace顶部五域胶囊、整高sidebar/原生搜索、旧头像人footer及对应机器前真实认证连接绿点均已接线；没有新增连接footer或假额度。GLASS-CONTRAST-01经整块材质/前景修复后，在真实暗色900及一次原生缩放1512画面关闭，根亲看、独立视觉115c96e0通过。原Unknown/原UUID不清除、不重放，稳定业务证据复用。
 
 本批准确normal独验cf33be19、preview产物22aaa9f5及后两包增量779e521c通过，1871源码/3878依赖/11pins前后同，三包来源分列；先实际preview确认材质，再补同源product/iOS，没有重normal或重复preview业务。标准包全50项/签封核同，原d486正常安全暂停后完整备份到 `/Applications/.PendingCrew-d4866cb7-before-9a0ebdad.app` 再整包更新；全部旧包、旧0.1.43数据保全目录和当前数据保持，无迁移或删除。标准入口无私域env首开，本机连接、新UI及原Qincheng消息可见，App89600/Core89604留给用户；首开及最终快照无provider子进程、未操作start/resume或模型，不冒全session账本零任务。最终交付4d1d1ac6与实际首开图b09f7c80保frontend-glass-9a0ebdad-candidates-20261023。此后统筹记录提交不改变包来源。

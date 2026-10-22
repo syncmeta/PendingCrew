@@ -30,7 +30,7 @@ def prepare(manifest):
     for key in ['backendPath','backendWitness','derivedData','sourcePackages']:
         p=pathlib.Path(v[key]);
         if not p.is_absolute() or p.resolve(strict=True)!=p:raise ValueError('canonical existing build input required')
-    if v['derivedData']!='/private/tmp/pcw-codex-first-xcode' or v['sourcePackages']!='/private/tmp/pcw-codex-first-spm':raise ValueError('original warm caches required; no cold directories')
+    if v['derivedData']!='/Users/hey/Library/Developer/Xcode/DerivedData/PendingCrew-aehzthzfjzjnxdfaqjkozipivxpn' or v['sourcePackages']!='/Users/hey/Library/Developer/Xcode/DerivedData/PendingCrew-aehzthzfjzjnxdfaqjkozipivxpn/SourcePackages':raise ValueError('original warm caches required; no cold directories')
     repo=pathlib.Path(__file__).resolve().parents[2]
     ref=subprocess.check_output(['git','rev-parse','--verify',v['sourceRef']+'^{commit}'],cwd=repo,text=True).strip()
     if ref!=v['sourceRef']:raise ValueError('exact commit required')

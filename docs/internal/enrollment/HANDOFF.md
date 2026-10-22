@@ -1,0 +1,37 @@
+# B — complete single-link client source delivery
+
+This module continues the saved f0a81c20 and b8413bf9 enrollment work on the accepted 9a0ebdad glass UI. The ordinary merge base is 66ae3f34. It does not change the installed glass App, root documents, Rust/schema, Cloud account integration or APNs. HANDOFF-WIP.md remains the original historical checkpoint, not the final acceptance claim.
+
+## Actual product entry and behavior
+
+The ordinary PendingCrewApp/RootView routes Mac through MacThreePaneView and iPhone/iPad through IPadShell. Their add-computer form and pendingcrew URL event use the same CrewdEnrollmentView. A URL only opens a parsed identity preview; it does not read credentials, connect, grant access, or start a task. Explicit confirmation saves this installation's original P256 private key, certificate, request UUID and descriptor before begin. The user confirms the actual signed challenge before commit. Successful commit is adopted by the original pairing/receipt verifier and ordinary mTLS transport. There is no automatic session start or resume.
+
+The final callback calls AppModel.connectCrewdAuthority(computerID:) with the exact accepted local record ID. It refreshes and validates that record, selects it through the existing window verifier, and binds the original journal/backend to that same identity. Missing, unpaired, invalid or busy records produce an error without selecting a similarly named host. Default App startup retains the original local selection; it never automatically selects the newly stored remote host. The selection fixture compiles this actual AppModel with bounded external seams and verifies both behaviors.
+
+Normal host lists remain the original device-local paired records and personal directory hints. A directory hint is not authorization. Keys and raw tokens never enter Cloud/preferences. Existing pending three-file exchanges retain their explicit recovery entry; they are not the normal add-computer choice. The original removal/revocation boundaries remain, including removal of the exact private enrollment recovery copy when its paired record is forgotten.
+
+## Fixed backend contract
+
+Consume accepted backend20c7b724 and the primary private host-enrollment-20261022/CONTRACT.md. The one URI is pendingcrew://enroll/v1/<canonical-base64url-JSON>. dbId is an exact opaque identity, not a UUID. Transport authority, request and enrollment IDs remain UUIDs. Closed DTO/frame validation rejects duplicate/unknown fields, invalid endpoints and malformed original results.
+
+Enrollment uses TCP TLS1.3 server authentication with exact pcw-enroll/1 ALPN and the original DER/SPKI pin; it sends no local client certificate and opens no work/admin router. Ordinary mTLS remains unchanged. Begin only reserves the token and obtains the signed challenge; commit performs the backend's atomic invitation/grant/witness transaction. The client never pre-creates a legacy invitation.
+
+Prepared, beginUnknown, challengeReady, commitUnknown and accepted are durable stages. Unknown recovery signs lookup with the original key, request ID and challenge digest (or null if the first response was lost). It cannot replay begin/commit, generate another key, or infer permission to resend from notFound. A malformed/mismatched receipt never becomes accepted.
+
+The existing Local Human management entry has the narrow remote.enrollment capability-gated issuer. The server still verifies the actual Local Human/managed floor; the client does not generalize roles or expose raw RootFD RPC. The issuer persists raw random token and both UUIDs before create, sends only SHA256 of the original 32 token bytes, and uses original lookup after Unknown. An explicit 'another device' action may create a fresh link only after the previous link has a known successful creation receipt. Prepared/Unknown records block replacement and retain their original token/UUID. Old records remain available; no capacity eviction silently drops them.
+
+## Credential and signing qualification
+
+Ordinary product builds select the real non-synchronizing ThisDeviceOnly Keychain vault, service derived from the actual bundle ID plus .crewd.remote.v1.enrollment.v1. Local-only/validation/native builds refuse this store or use their explicit isolated memory scope. The source does not require a hard-coded Team or shared access group. All writes must succeed before a network mutation. This source test delivery has NOT operated the user's Keychain.
+
+Current normal/candidate signing is ad-hoc. That does not qualify cross-process or cross-update persistent credentials. Config/Signing.xcconfig documents changed ad-hoc ACL identity and possible access prompts/storage failure. Minimum stable qualification is an explicitly reviewed, stable M42BKJN82S signing identity for the ordinary com.pendingname.pendingcrew App, valid applicable provisioning/expanded entitlements where required, and exact helper/source/sign/archive provenance. No new Cloud container or family shared-Keychain group is needed for enrollment's per-device private credentials. Do not add shared groups to bypass a failed write.
+
+A real qualification window must test normal persistent prepare/receipt -> close/reopen -> original lookup/adoption, independent device credentials, failed write preservation and same stable identity across an update. ExactCode local admission and remote mTLS are separate from publisher admission. The existing Core publisher guard specifically requires Apple Developer ID Application certificate chain, hardened runtime and no debug entitlement; an Apple Development certificate or Team string alone cannot satisfy it. An exactCode-qualified current build does not promise publisher continuity. No signing identity, profile, entitlement, Keychain ACL or Apple account was changed here.
+
+## Evidence and remaining gates
+
+Current author ignored host-enrollment-client-final-20261023 contains actual production enrollment service plus original P256/X509/receipt verification fixtures. Thirteen lifecycle modes cover normal, begin/commit loss, identity mismatch, notFound, issuer loss, five durable-write refusal points, bad grant and revoked/forgotten recovery. Encoded records are reopened in a new injected memory vault: this proves serialization/recovery logic, not real Keychain or live TLS.
+
+Two runnable original-seam RED/GREEN regressions cover the actual AppModel explicit target being overwritten by default-local selection, and a known one-use issuer link being reused for another device. The original-Unknown begin replay guard mutation compiles and fails the original lifecycle assertion. URI/wire checks cover canonical encoding, escaped duplicate keys, closed shapes, endpoints and malformed replies. No provider, model, App, GUI, VPS, real network pairing, Keychain or Apple service was run.
+
+The separate full-target packet preserves the first Mac compiler failure and its minimal EnvironmentObject scope repair, then final ordinary Mac/iOS target logs and exact arguments. The first failed target used the accurately historical 2feb helper; final targets use accurately historical 9a helper0b9344 solely as a compile input, not a B backend source claim. Complete SwiftUI target success does not constitute a signed B candidate or two-device delivery. Final combined B backend/helper, signature, persistent credentials, live transport and GUI acceptance remain root/quality gates. Stable A/C/glass business was not rerun.

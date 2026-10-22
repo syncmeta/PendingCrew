@@ -124,7 +124,7 @@ struct CrewdRemoteStatus: Codable {
     let identity: CrewdRemotePublicIdentity?
     let failure: String?
 }
-struct CrewdRemoteGrant: Codable, Identifiable {
+struct CrewdRemoteGrant: Codable, Identifiable, Sendable {
     let id: String
     let scope: String
     let deviceLabel: String
@@ -134,7 +134,7 @@ struct CrewdRemoteGrant: Codable, Identifiable {
     let revokedAt: String?
     let revokeNote: String?
 }
-struct CrewdRemoteAcceptResult: Codable {
+struct CrewdRemoteAcceptResult: Codable, Sendable {
     let requestId: String
     let reused: Bool
     let receipt: CrewdRemoteEnvelope
