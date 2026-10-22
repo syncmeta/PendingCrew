@@ -145,6 +145,9 @@ fn encode(v: impl Serialize) -> Result<Value, KnowledgeError> {
     serde_json::to_value(v).map_err(error)
 }
 impl Runtime {
+    pub(crate) fn knowledge_root(&self) -> PathBuf {
+        self.root.clone()
+    }
     pub(crate) fn new(root: PathBuf) -> crewd_store::Result<Self> {
         let parent = root
             .parent()
@@ -1473,8 +1476,18 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            schema, 15,
-            "this fix must not activate the unrelated Native16 development format"
+            schema, 17,
+            "resource17 deliberately skips the unrelated Native16 development format"
+        );
+        assert!(
+            f.state
+                .db
+                .call_result(|store| crewd_store::meta_get(store.conn(), "teamData.format.v1"))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none(),
+            "resource17 must not activate Native16 metadata"
         );
     }
 

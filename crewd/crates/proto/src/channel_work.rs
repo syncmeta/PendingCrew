@@ -14,25 +14,33 @@ pub struct ChannelWorkObject {
     pub kind: ChannelWorkKind,
     pub id: String,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelWorkListParams {
+    #[serde(default)]
+    pub kinds: Option<Vec<ChannelWorkKind>>,
+    #[serde(default)]
+    pub tag: Option<String>,
     pub channel_id: String,
     #[serde(default)]
     pub after: Option<String>,
     #[serde(default)]
     pub limit: Option<u16>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelWorkLinkParams {
     pub channel_id: String,
     pub expected_link_revision: String,
     pub object: ChannelWorkObject,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWorkSummary {
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo: Option<crate::TodoAttributes>,
     pub object: ChannelWorkObject,
     pub crew_id: String,
     pub label: String,
@@ -41,9 +49,11 @@ pub struct ChannelWorkSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWorkPage {
+    pub tag_counts: Vec<crate::TagCount>,
+    pub total: u64,
     pub channel_id: String,
     pub link_revision: String,
     /// Organization event high-water bound into the opaque cursor. A change explicitly expires it.
@@ -51,7 +61,7 @@ pub struct ChannelWorkPage {
     pub items: Vec<ChannelWorkSummary>,
     pub next: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWorkLinkReceipt {
     pub channel_id: String,
@@ -60,14 +70,14 @@ pub struct ChannelWorkLinkReceipt {
     pub linked: bool,
 }
 /// Creation receipt only. Ordinary object reads never imply this association is still present.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWorkAssociation {
     pub channel_id: String,
     pub link_revision: String,
     pub linked: bool,
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWorkChanged {
     pub channel_id: String,

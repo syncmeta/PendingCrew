@@ -517,6 +517,21 @@ async fn request_step(
                 Err(error) => Response::err(id, error),
             })
         }
+        Ok(req) if crate::group_knowledge::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "group knowledge association requires the Human product entry",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::group_knowledge::handle(state.clone(), peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crate::team_data::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(
@@ -637,7 +652,13 @@ async fn request_step(
             if agent.is_attached()
                 && matches!(
                     req.method.as_str(),
-                    methods::ASK_GET
+                    methods::TODO_ATTRIBUTES_GET
+                        | methods::TODO_ASSIGN
+                        | methods::TODO_SET_STATE
+                        | methods::HUMAN_TASK_CREATE
+                        | methods::CHANNEL_WORK_TAGS_SET
+                        | methods::RESOURCE_REQUEST_LOOKUP
+                        | methods::ASK_GET
                         | methods::CHANNEL_WORK_LIST
                         | methods::CHANNEL_WORK_LINK
                         | methods::CHANNEL_WORK_UNLINK
@@ -840,7 +861,8 @@ fn spawn_forwarder(
                     if attached.load(std::sync::atomic::Ordering::Acquire)
                         && matches!(
                             e.event.as_str(),
-                            events::DATA_CHANGED
+                            events::TODO_ATTRIBUTES_CHANGED
+                                | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED
                                 | events::FOLDER_CHANGED
                                 | "channel.workChanged"

@@ -664,6 +664,7 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let app: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if (app != 0 && app != crate::APPLICATION_ID)
+        || version == 16
         || !(1..=crate::schema::SUPPORTED_SCHEMA_VERSION).contains(&version)
     {
         return Err(StoreError::Invalid(format!(
@@ -684,7 +685,7 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(e.into()),
     };
-    if version >= 16 || native_present {
+    if version == 16 || native_present {
         return Err(StoreError::Invalid(
             "paired Core16/native-data restore required; legacy standalone restore refused".into(),
         ));
@@ -693,7 +694,7 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
         && crate::version_guard::with_quiescent_copy(&db, |c| {
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .map_err(StoreError::from)
-        })? >= 16
+        })? == 16
     {
         return Err(StoreError::Invalid(
             "pre16 backup cannot replace a native authority in place; use an isolated target"

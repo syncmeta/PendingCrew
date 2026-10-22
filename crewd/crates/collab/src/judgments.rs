@@ -152,6 +152,8 @@ pub fn message_input(c: &Connection, id: &str) -> Result<Option<InputSnapshot>> 
         c,
         &crate::Sender::Human,
         crewd_proto::ChannelWorkListParams {
+            kinds: None,
+            tag: None,
             channel_id: m.channel_id.clone(),
             after: None,
             limit: Some(10),

@@ -534,3 +534,6 @@ expectedStatus 必须是原始需求状态。
 
 ## command.receipt_capacity
 请求记录容量已满。请先读取已有记录并由人处理未知结果；不要换编号重发。
+
+## todo.attributes_revision_conflict
+这条待办的负责人或人工完成状态已变化。请先查看最新状态，再决定是否另做修改。

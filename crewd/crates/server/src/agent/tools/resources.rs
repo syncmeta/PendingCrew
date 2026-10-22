@@ -160,6 +160,8 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
                     cx.st,
                     session,
                     ChannelWorkListParams {
+                        kinds: None,
+                        tag: None,
                         channel_id: a.channel_id,
                         after: a.after,
                         limit: a.limit,
@@ -319,6 +321,7 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
                 cx.st,
                 session,
                 FolderListParams {
+                    channel_id: None,
                     crew_id: a.crew_id.clone(),
                     view: a.view,
                 },
@@ -409,6 +412,7 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
                     cx.st,
                     session,
                     FolderCreateParams {
+                        channel_id: None,
                         crew_id: a.crew_id,
                         view: a.view,
                         request_id: a.request_id,
@@ -429,6 +433,7 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
                     cx.st,
                     session,
                     FolderUpdateParams {
+                        channel_id: None,
                         crew_id: a.crew_id,
                         view: a.view,
                         id: a.id,
@@ -451,6 +456,7 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
                     cx.st,
                     session,
                     FolderDeleteParams {
+                        channel_id: None,
                         crew_id: a.crew_id,
                         view: a.view,
                         id: a.id,
@@ -469,7 +475,8 @@ pub async fn call(cx: &Ctx<'_>, tool: &str, v: Value) -> CallResult {
             let a = args!(cx, v, FolderAssign);
             let o = a.object.clone();
             let folder = a.folder_id.clone();
-            result(cx,port::folder_assign(cx.st,session,FolderAssignParams{crew_id:a.crew_id,view:a.view,expected_tree_revision:a.expected_tree_revision,object:a.object,folder_id:a.folder_id}).await.map(|s|json!({"crewId":s.crew_id,"view":s.view,"treeRevision":s.tree_revision,"object":o,"folderId":folder})))
+            result(cx,port::folder_assign(cx.st,session,FolderAssignParams{
+channel_id: None,crew_id:a.crew_id,view:a.view,expected_tree_revision:a.expected_tree_revision,object:a.object,folder_id:a.folder_id}).await.map(|s|json!({"crewId":s.crew_id,"view":s.view,"treeRevision":s.tree_revision,"object":o,"folderId":folder})))
         }
         _ => bad(cx, "tool"),
     }

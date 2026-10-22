@@ -10,6 +10,7 @@ pub mod db_health;
 pub mod documents;
 pub mod fsutil;
 pub mod judgment_state;
+pub mod knowledge_channels;
 pub mod local_clients;
 pub mod messages;
 pub mod native_execution;
@@ -22,6 +23,7 @@ pub mod sessions;
 #[path = "sqlite_knowledge.rs"]
 pub mod team_data;
 pub mod testing;
+pub mod todo_attributes;
 // Historical native import source remains inactive; no legacy data migration.
 pub mod todos;
 mod version_guard;

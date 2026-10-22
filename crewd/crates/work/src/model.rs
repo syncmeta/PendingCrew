@@ -252,6 +252,8 @@ pub struct EntryClosure {
 /// 第一层入口（#N）。原文在 M1 的 todos 表里，这里只记工作跟进需要的部分。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryTodo {
+    #[serde(default)]
+    pub manual_done: bool,
     pub no: EntryNo,
     pub registered_at: Ts,
     /// 机长 / 人的裁定关闭（或行政处带证据的事实关闭）。状态推导见 `views::EntryStatus`。
@@ -297,6 +299,8 @@ pub enum WaitTier {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanAsk {
+    #[serde(default)]
+    pub human_task: bool,
     pub id: AskId,
     /// 这条问关于哪一项：卡住时开的问 = 被它卡住的那一项（后来别的项也可以挂到同一条问上）；
     /// `open_ask` 开的问可以不挂任何项（M3 的人类待确认台账也从这里拿 H 号）。

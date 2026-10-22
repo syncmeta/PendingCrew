@@ -23,8 +23,12 @@ pub mod remote;
 pub use remote::*;
 pub mod resources;
 pub use resources::*;
+pub mod knowledge_channels;
+pub use knowledge_channels::*;
 pub mod channel_work;
 pub use channel_work::*;
+pub mod todo_attributes;
+pub use todo_attributes::*;
 pub mod requirements;
 pub use requirements::*;
 pub mod work_patrol;
@@ -86,11 +90,20 @@ pub mod methods {
     pub const SESSION_USAGE: &str = "session.usage";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_GET: &str = "session.get";
+    pub const TODO_ATTRIBUTES_GET: &str = "todo.attributesGet";
+    pub const TODO_ASSIGN: &str = "todo.assign";
+    pub const TODO_SET_STATE: &str = "todo.setState";
+    pub const HUMAN_TASK_CREATE: &str = "humanTask.create";
+    pub const CHANNEL_WORK_TAGS_SET: &str = "channel.workTagsSet";
+    pub const RESOURCE_REQUEST_LOOKUP: &str = "resource.requestLookup";
     pub const DOCUMENT_CREATE: &str = "document.create";
     pub const DOCUMENT_GET: &str = "document.get";
     pub const DOCUMENT_LIST: &str = "document.list";
     pub const DOCUMENT_UPDATE: &str = "document.update";
     pub const DOCUMENT_DELETE: &str = "document.delete";
+    pub const CHANNEL_KNOWLEDGE_LIST: &str = "channel.knowledgeList";
+    pub const CHANNEL_KNOWLEDGE_LINK: &str = "channel.knowledgeLink";
+    pub const CHANNEL_KNOWLEDGE_UNLINK: &str = "channel.knowledgeUnlink";
     pub const CHANNEL_WORK_LIST: &str = "channel.workList";
     pub const CHANNEL_WORK_LINK: &str = "channel.workLink";
     pub const CHANNEL_WORK_UNLINK: &str = "channel.workUnlink";
@@ -168,6 +181,15 @@ pub mod methods {
         SESSION_USAGE,
         SESSION_LIST,
         SESSION_GET,
+        TODO_ATTRIBUTES_GET,
+        TODO_ASSIGN,
+        TODO_SET_STATE,
+        HUMAN_TASK_CREATE,
+        CHANNEL_WORK_TAGS_SET,
+        RESOURCE_REQUEST_LOOKUP,
+        CHANNEL_KNOWLEDGE_LIST,
+        CHANNEL_KNOWLEDGE_LINK,
+        CHANNEL_KNOWLEDGE_UNLINK,
         DOCUMENT_CREATE,
         DOCUMENT_GET,
         DOCUMENT_LIST,
@@ -237,6 +259,7 @@ pub mod methods {
 }
 
 pub mod events {
+    pub const TODO_ATTRIBUTES_CHANGED: &str = "todo.attributesChanged";
     /// `events.subscribe` 接受的主题（= 事件名第一个点之前的部分）；其他一律 -32602。
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
@@ -250,6 +273,7 @@ pub mod events {
         "restart",
         "wake",
         "system",
+        "todo",
         "work",
         "documents",
         "viewFolders",
@@ -300,6 +324,8 @@ pub struct RpcError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcErrorData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_todo_attributes: Option<Box<TodoAttributes>>,
     /// 拒绝码，如 `channel.dm_cannot_grow`（全集见 crewd-collab 的 `refusal::Code`）。
     pub refusal: String,
     /// `decision.changed`：此刻屏上的那个框（没有框了 = 不在）。客户端据它重新问人（M3c T10d）。
@@ -342,6 +368,7 @@ impl RpcError {
     /// 带上规则拒绝码（`data.refusal`）。
     pub fn with_refusal(mut self, code: &str) -> Self {
         self.data = Some(RpcErrorData {
+            current_todo_attributes: None,
             refusal: code.to_string(),
             decision: None,
             current_work: None,
@@ -461,6 +488,10 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::CREW_CHANGED, sub::<Crew>(g)),
         (events::CREW_PURGED, sub::<CrewRef>(g)),
         (events::BADGE_CHANGED, sub::<Badge>(g)),
+        (
+            events::TODO_ATTRIBUTES_CHANGED,
+            sub::<TodoAttributesChanged>(g),
+        ),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
@@ -769,6 +800,60 @@ pub fn api_schema() -> Value {
         (
             methods::SESSION_GET,
             m(sub::<SessionGetParams>(g), sub::<Session>(g)),
+        ),
+        (
+            methods::TODO_ATTRIBUTES_GET,
+            m(sub::<TodoAttributesGetParams>(g), sub::<TodoAttributes>(g)),
+        ),
+        (
+            methods::TODO_ASSIGN,
+            m(sub::<TodoAssignParams>(g), sub::<TodoAttributes>(g)),
+        ),
+        (
+            methods::TODO_SET_STATE,
+            m(sub::<TodoSetStateParams>(g), sub::<TodoAttributes>(g)),
+        ),
+        (
+            methods::HUMAN_TASK_CREATE,
+            m(
+                sub::<HumanTaskCreateParams>(g),
+                sub::<HumanTaskCreateResult>(g),
+            ),
+        ),
+        (
+            methods::CHANNEL_WORK_TAGS_SET,
+            m(
+                sub::<ChannelWorkTagsSetParams>(g),
+                sub::<ChannelWorkTagsReceipt>(g),
+            ),
+        ),
+        (
+            methods::RESOURCE_REQUEST_LOOKUP,
+            m(
+                sub::<ResourceRequestLookupParams>(g),
+                sub::<ResourceRequestLookupResult>(g),
+            ),
+        ),
+        (
+            methods::CHANNEL_KNOWLEDGE_LIST,
+            m(
+                sub::<ChannelKnowledgeListParams>(g),
+                sub::<ChannelKnowledgePage>(g),
+            ),
+        ),
+        (
+            methods::CHANNEL_KNOWLEDGE_LINK,
+            m(
+                sub::<ChannelKnowledgeLinkParams>(g),
+                sub::<ChannelKnowledgeReceipt>(g),
+            ),
+        ),
+        (
+            methods::CHANNEL_KNOWLEDGE_UNLINK,
+            m(
+                sub::<ChannelKnowledgeLinkParams>(g),
+                sub::<ChannelKnowledgeReceipt>(g),
+            ),
         ),
         (
             methods::DOCUMENT_CREATE,

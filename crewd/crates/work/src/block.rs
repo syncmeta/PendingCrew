@@ -63,7 +63,7 @@ impl WorkBook {
                     }
                     BlockOn::Ask(h) => {
                         let ask = d.s.asks.get(&h).ok_or(Rejected::UnknownAsk(h))?;
-                        if ask.state != AskState::Open {
+                        if ask.human_task || ask.state != AskState::Open {
                             return Err(Rejected::AskNotOpen(h));
                         }
                         blockers.push(Blocker::Human(h));
@@ -100,6 +100,24 @@ impl WorkBook {
             }
             d.emit(EventKind::Blocked { id, on: blockers });
             Ok(BlockResult { asks, split })
+        })
+    }
+
+    /// Human-authored H task, not an Agent question and never a default/wake source.
+    pub fn create_human_task(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        crew: CrewId,
+        text: &str,
+    ) -> Result<Applied<AskId>, Rejected> {
+        if !matches!(by, Actor::Human) {
+            return Err(Rejected::Forbidden(Action::OpenAsk));
+        }
+        self.transact(by, now, |d| {
+            let id = d.new_ask(text, None, None, false, Some(crew))?;
+            d.s.asks.get_mut(&id).unwrap().human_task = true;
+            Ok(id)
         })
     }
 
@@ -178,6 +196,9 @@ impl WorkBook {
         self.transact(by, now, |d| {
             let now = d.now;
             d.permit(Action::AnswerAsk, Ctx::default())?;
+            if d.s.asks.get(&ask).is_some_and(|a| a.human_task) {
+                return Err(Rejected::Invalid("manual task is not an Agent question"));
+            }
             let text = text.trim().to_string();
             if text.is_empty() {
                 return Err(Rejected::Blank("answer"));
@@ -240,6 +261,9 @@ impl WorkBook {
         self.transact(by, now, |d| {
             let now = d.now;
             let a = d.s.asks.get(&ask).ok_or(Rejected::UnknownAsk(ask))?;
+            if a.human_task {
+                return Err(Rejected::Invalid("manual task is not an Agent question"));
+            }
             let open = a.state == AskState::Open;
             d.permit(
                 Action::WithdrawAsk,
@@ -320,6 +344,7 @@ impl Draft {
         self.s.asks.insert(
             h,
             HumanAsk {
+                human_task: false,
                 id: h,
                 item,
                 asked_by: self.by.clone(),

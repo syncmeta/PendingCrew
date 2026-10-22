@@ -534,3 +534,6 @@ This work is already closed; create followup work instead of reporting, blocking
 
 ## command.receipt_capacity
 Command receipt capacity is full. Read existing receipts and resolve unknown outcomes with a human; do not submit a replacement identifier.
+
+## todo.attributes_revision_conflict
+This Todo's owner or manual state changed. Inspect its latest state before deciding on a new edit.

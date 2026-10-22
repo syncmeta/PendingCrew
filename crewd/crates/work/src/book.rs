@@ -306,6 +306,7 @@ impl WorkBook {
             d.s.entries.insert(
                 no,
                 EntryTodo {
+                    manual_done: false,
                     no,
                     registered_at: d.now,
                     closed: None,
@@ -313,6 +314,33 @@ impl WorkBook {
             );
             d.emit(EventKind::EntryRegistered { entry: no });
             Ok(true)
+        })
+    }
+
+    /// A Human resolution only gates new claims; existing Plans are untouched.
+    pub fn set_entry_resolution(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        entry: EntryNo,
+        done: bool,
+    ) -> Result<Applied<()>, Rejected> {
+        if !matches!(by, Actor::Human) {
+            return Err(Rejected::Forbidden(Action::CloseEntryDecision));
+        }
+        self.transact(by, now, |d| {
+            let e =
+                d.s.entries
+                    .get_mut(&entry)
+                    .ok_or(Rejected::UnknownEntry(entry))?;
+            if e.closed.is_some() {
+                return Err(Rejected::EntryClosed(entry));
+            }
+            if e.manual_done != done {
+                e.manual_done = done;
+                d.emit(EventKind::EntryResolution { entry, done });
+            }
+            Ok(())
         })
     }
 
@@ -337,7 +365,7 @@ impl WorkBook {
                 d.s.entries
                     .get(&entry)
                     .ok_or(Rejected::UnknownEntry(entry))?;
-            if e.closed.is_some() {
+            if e.closed.is_some() || e.manual_done {
                 return Err(Rejected::EntryClosed(entry));
             }
             if items.is_empty() {
@@ -524,6 +552,9 @@ impl Draft {
             sources.dedup();
             if let Some(missing) = sources.iter().find(|e| !self.s.entries.contains_key(e)) {
                 return Err(Rejected::UnknownEntry(*missing));
+            }
+            if let Some(done) = sources.iter().find(|id| self.s.entries[id].manual_done) {
+                return Err(Rejected::EntryClosed(*done));
             }
             let owner = n.owner.or_else(|| default_owner.cloned());
             if let Some(o) = &owner
@@ -727,6 +758,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ok.value, [WorkId(1)], "W 号没被浪费");
+    }
+
+    #[test]
+    fn human_resolution_gates_every_new_claim_without_settling_existing_plan() {
+        let mut b = book();
+        let original = b
+            .claim_entry(
+                &Actor::worker("a"),
+                T1,
+                EntryNo(1),
+                vec![NewItem::titled("retained Plan")],
+            )
+            .unwrap()
+            .value[0];
+        let retained = b.state().items[&original].clone();
+        assert!(
+            b.set_entry_resolution(&Actor::worker("a"), T1, EntryNo(1), true)
+                .is_err()
+        );
+        b.set_entry_resolution(&Actor::Human, T1, EntryNo(1), true)
+            .unwrap();
+        assert_eq!(b.state().items[&original], retained);
+        assert!(matches!(
+            b.claim_entry(
+                &Actor::worker("a"),
+                T1,
+                EntryNo(1),
+                vec![NewItem::titled("must refuse")]
+            ),
+            Err(Rejected::EntryClosed(EntryNo(1)))
+        ));
+        let mut item = NewItem::titled("alternate new claim");
+        item.sources = vec![EntryNo(1)];
+        assert!(matches!(
+            b.create_item(&Actor::worker("a"), T1, item),
+            Err(Rejected::EntryClosed(EntryNo(1)))
+        ));
+        b.set_entry_resolution(&Actor::Human, T1, EntryNo(1), false)
+            .unwrap();
+        assert_eq!(b.state().items.len(), 1, "reopen creates no Plan");
+        b.claim_entry(
+            &Actor::worker("a"),
+            T1,
+            EntryNo(1),
+            vec![NewItem::titled("explicit new claim")],
+        )
+        .unwrap();
     }
 
     #[test]

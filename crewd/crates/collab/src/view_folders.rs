@@ -7,7 +7,7 @@ use crewd_store::{
     object_refs::{self, ObjectKind},
     view_folders as db,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 fn invalid(s: &str) -> CollabError {
     acl::invalid(s)
 }
@@ -15,8 +15,22 @@ fn missing(id: &str) -> CollabError {
     CollabError::NotFound(Refusal::new(Code::ResourceNotFound).arg("id", id))
 }
 fn canonical(o: &FolderObjectRef) -> Result<FolderObjectRef> {
+    if o.kind == FolderObjectKind::KnowledgeView {
+        let source = o.knowledge.as_ref().ok_or_else(|| invalid("knowledge"))?;
+        if source.reference.kind != "view"
+            || source.reference.id != o.id
+            || source.reference.namespace != source.context.namespace
+            || acl::uuid(&o.id)? != o.id
+        {
+            return Err(invalid("knowledge reference"));
+        }
+        return Ok(o.clone());
+    }
+    if o.knowledge.is_some() {
+        return Err(invalid("knowledge"));
+    }
     let id = match o.kind {
-        FolderObjectKind::Channel => {
+        FolderObjectKind::Channel | FolderObjectKind::Message => {
             if o.id.is_empty() || o.id.len() > 4096 {
                 return Err(invalid("object"));
             }
@@ -34,7 +48,11 @@ fn canonical(o: &FolderObjectRef) -> Result<FolderObjectRef> {
             o.id.clone()
         }
     };
-    Ok(FolderObjectRef { kind: o.kind, id })
+    Ok(FolderObjectRef {
+        knowledge: None,
+        kind: o.kind,
+        id,
+    })
 }
 fn number(id: &str, prefix: char) -> Result<i64> {
     id.strip_prefix(prefix)
@@ -47,8 +65,75 @@ fn visible(
     by: &Sender,
     crew: &str,
     v: FolderView,
+    channel: Option<&str>,
     o: &FolderObjectRef,
 ) -> Result<bool> {
+    if let Some(ch) = channel {
+        crate::channel_work::authorize(conn, by, ch, false)?;
+        if o.kind == FolderObjectKind::Message {
+            if v != FolderView::Messages {
+                return Ok(false);
+            }
+            let actual: Option<String> = conn
+                .query_row(
+                    "SELECT channel_id FROM messages WHERE id=?1",
+                    [&o.id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            return Ok(actual.as_deref() == Some(ch));
+        }
+        if o.kind == FolderObjectKind::KnowledgeView {
+            if v != FolderView::Documents {
+                return Ok(false);
+            }
+            let Some(source) = o.knowledge.as_ref() else {
+                return Ok(false);
+            };
+            if acl::actor(conn, by, &source.context.crew_id, false).is_err() {
+                return Ok(false);
+            }
+            return Ok(crewd_store::knowledge_channels::linked(conn, ch, source)?);
+        }
+        let kind = match o.kind {
+            FolderObjectKind::Requirement => ChannelWorkKind::Requirement,
+            FolderObjectKind::Work => ChannelWorkKind::Work,
+            FolderObjectKind::HumanTask => ChannelWorkKind::HumanTask,
+            _ => return Ok(false),
+        };
+        let allowed = matches!(
+            (v, kind.clone()),
+            (FolderView::Progress, ChannelWorkKind::Work)
+                | (
+                    FolderView::Todo,
+                    ChannelWorkKind::Requirement
+                        | ChannelWorkKind::HumanTask
+                        | ChannelWorkKind::Work
+                )
+        );
+        if !allowed {
+            return Ok(false);
+        }
+        let (k, p) = match kind {
+            ChannelWorkKind::Requirement => (ObjectKind::Requirement, '#'),
+            ChannelWorkKind::Work => (ObjectKind::Plan, 'W'),
+            ChannelWorkKind::HumanTask => (ObjectKind::HumanTask, 'H'),
+        };
+        let Some(source) = object_refs::get(conn, k, number(&o.id, p)?)?.map(|r| r.crew_id) else {
+            return Ok(false);
+        };
+        if acl::actor(conn, by, &source, false).is_err() {
+            return Ok(false);
+        }
+        return Ok(crewd_store::channel_work::linked(
+            conn,
+            ch,
+            &ChannelWorkObject {
+                kind,
+                id: o.id.clone(),
+            },
+        )?);
+    }
     let allowed = matches!(
         (v, o.kind),
         (FolderView::Messages, FolderObjectKind::Channel)
@@ -65,6 +150,7 @@ fn visible(
         return Ok(false);
     }
     match o.kind {
+        FolderObjectKind::Message | FolderObjectKind::KnowledgeView => Ok(false),
         FolderObjectKind::Channel => {
             let ch = match channels::get(conn, &o.id) {
                 Ok(ch) => ch,
@@ -97,16 +183,43 @@ fn visible(
 fn projection(conn: &Connection, by: &Sender, mut s: FolderSnapshot) -> Result<FolderSnapshot> {
     let mut out = Vec::with_capacity(s.assignments.len());
     for a in s.assignments {
-        if visible(conn, by, &s.crew_id, s.view, &a.object)? {
+        if visible(
+            conn,
+            by,
+            &s.crew_id,
+            s.view,
+            s.channel_id.as_deref(),
+            &a.object,
+        )? {
             out.push(a)
         }
     }
     s.assignments = out;
     Ok(s)
 }
+fn scope(c: &Connection, by: &Sender, crew: &str, ch: Option<&str>, write: bool) -> Result<()> {
+    if let Some(ch) = ch {
+        if channels::get(c, ch)?.crew_id != crew {
+            return Err(invalid("channelId"));
+        }
+        crate::channel_work::authorize(c, by, ch, write)?;
+    }
+    Ok(())
+}
 pub fn list(conn: &Connection, by: &Sender, p: FolderListParams) -> Result<FolderSnapshot> {
     acl::actor(conn, by, &p.crew_id, false)?;
-    projection(conn, by, db::snapshot(conn, &p.crew_id, p.view)?)
+    if let Some(ch) = &p.channel_id {
+        let actual = channels::get(conn, ch)?;
+        if actual.crew_id != p.crew_id {
+            return Err(invalid("channelId"));
+        }
+        crate::channel_work::authorize(conn, by, ch, false)?;
+    }
+    projection(
+        conn,
+        by,
+        db::snapshot(conn, &p.crew_id, p.channel_id.as_deref(), p.view)?,
+    )
 }
 fn cas(s: &FolderSnapshot, expected: &str) -> Result<i64> {
     let n = expected
@@ -167,6 +280,7 @@ fn commit(
     let rev = db::commit_change(
         tx.conn(),
         &s.crew_id,
+        s.channel_id.as_deref(),
         s.view,
         expected,
         &actor,
@@ -174,6 +288,7 @@ fn commit(
         &tx.now_ts(),
     )?;
     tx.note(Change::FolderChanged {
+        channel_id: s.channel_id.clone(),
         crew_id: s.crew_id.clone(),
         view: s.view,
         tree_revision: rev.to_string(),
@@ -182,6 +297,7 @@ fn commit(
         tx.conn(),
         by,
         FolderListParams {
+            channel_id: s.channel_id.clone(),
             crew_id: s.crew_id.clone(),
             view: s.view,
         },
@@ -190,13 +306,24 @@ fn commit(
 pub fn create(tx: &mut Tx<'_>, by: &Sender, p: FolderCreateParams) -> Result<FolderSnapshot> {
     let request = acl::uuid(&p.request_id)?;
     acl::actor(tx.conn(), by, &p.crew_id, false)?;
-    let digest = acl::digest(&(
-        &p.crew_id,
-        p.view,
-        &p.name,
-        &p.parent_id,
-        &p.expected_tree_revision,
-    ))?;
+    let digest = if p.channel_id.is_some() {
+        acl::digest(&(
+            &p.crew_id,
+            &p.channel_id,
+            p.view,
+            &p.name,
+            &p.parent_id,
+            &p.expected_tree_revision,
+        ))?
+    } else {
+        acl::digest(&(
+            &p.crew_id,
+            p.view,
+            &p.name,
+            &p.parent_id,
+            &p.expected_tree_revision,
+        ))?
+    };
     if let Some((crew, _, old)) = db::request(tx.conn(), &request)? {
         if crew != p.crew_id || old != digest {
             return Err(CollabError::Conflict(
@@ -207,13 +334,15 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: FolderCreateParams) -> Result<Fol
             tx.conn(),
             by,
             FolderListParams {
+                channel_id: p.channel_id.clone(),
                 crew_id: p.crew_id,
                 view: p.view,
             },
         );
     }
     acl::actor(tx.conn(), by, &p.crew_id, true)?;
-    let mut s = db::snapshot(tx.conn(), &p.crew_id, p.view)?;
+    scope(tx.conn(), by, &p.crew_id, p.channel_id.as_deref(), true)?;
+    let mut s = db::snapshot(tx.conn(), &p.crew_id, p.channel_id.as_deref(), p.view)?;
     let expected = cas(&s, &p.expected_tree_revision)?;
     if s.folders.len() >= 256 {
         return Err(CollabError::Conflict(
@@ -233,7 +362,15 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: FolderCreateParams) -> Result<Fol
     };
     s.folders.push(f.clone());
     validate_tree(&s.folders)?;
-    db::create(tx.conn(), &p.crew_id, p.view, &f, &request, &digest)?;
+    db::create(
+        tx.conn(),
+        &p.crew_id,
+        p.channel_id.as_deref(),
+        p.view,
+        &f,
+        &request,
+        &digest,
+    )?;
     commit(
         tx,
         by,
@@ -244,7 +381,8 @@ pub fn create(tx: &mut Tx<'_>, by: &Sender, p: FolderCreateParams) -> Result<Fol
 }
 pub fn update(tx: &mut Tx<'_>, by: &Sender, p: FolderUpdateParams) -> Result<FolderSnapshot> {
     acl::actor(tx.conn(), by, &p.crew_id, true)?;
-    let s = db::snapshot(tx.conn(), &p.crew_id, p.view)?;
+    scope(tx.conn(), by, &p.crew_id, p.channel_id.as_deref(), true)?;
+    let s = db::snapshot(tx.conn(), &p.crew_id, p.channel_id.as_deref(), p.view)?;
     let expected = cas(&s, &p.expected_tree_revision)?;
     let id = acl::uuid(&p.id)?;
     let old = s
@@ -307,7 +445,8 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, p: FolderUpdateParams) -> Result<Fol
 }
 pub fn delete(tx: &mut Tx<'_>, by: &Sender, p: FolderDeleteParams) -> Result<FolderSnapshot> {
     acl::actor(tx.conn(), by, &p.crew_id, true)?;
-    let s = db::snapshot(tx.conn(), &p.crew_id, p.view)?;
+    scope(tx.conn(), by, &p.crew_id, p.channel_id.as_deref(), true)?;
+    let s = db::snapshot(tx.conn(), &p.crew_id, p.channel_id.as_deref(), p.view)?;
     let expected = cas(&s, &p.expected_tree_revision)?;
     let id = acl::uuid(&p.id)?;
     let old = s
@@ -349,16 +488,27 @@ pub fn delete(tx: &mut Tx<'_>, by: &Sender, p: FolderDeleteParams) -> Result<Fol
 }
 pub fn assign(tx: &mut Tx<'_>, by: &Sender, p: FolderAssignParams) -> Result<FolderSnapshot> {
     acl::actor(tx.conn(), by, &p.crew_id, true)?;
-    let s = db::snapshot(tx.conn(), &p.crew_id, p.view)?;
+    scope(tx.conn(), by, &p.crew_id, p.channel_id.as_deref(), true)?;
+    let s = db::snapshot(tx.conn(), &p.crew_id, p.channel_id.as_deref(), p.view)?;
     let expected = cas(&s, &p.expected_tree_revision)?;
     let o = canonical(&p.object)?;
-    if !visible(tx.conn(), by, &p.crew_id, p.view, &o)? {
+    if !visible(
+        tx.conn(),
+        by,
+        &p.crew_id,
+        p.view,
+        p.channel_id.as_deref(),
+        &o,
+    )? {
         return Err(CollabError::Forbidden(Refusal::new(
             Code::FolderObjectScope,
         )));
     }
     let folder = parent(p.folder_id.as_deref(), &s)?;
-    let current = s.assignments.iter().find(|a| a.object == o);
+    let current = s
+        .assignments
+        .iter()
+        .find(|a| db::object_key(&a.object).ok() == db::object_key(&o).ok());
     if current.map(|a| a.folder_id.as_str()) == folder.as_deref() {
         return projection(tx.conn(), by, s);
     }
@@ -367,7 +517,14 @@ pub fn assign(tx: &mut Tx<'_>, by: &Sender, p: FolderAssignParams) -> Result<Fol
             Refusal::new(Code::FolderLimit).arg("limit", "4096"),
         ));
     }
-    db::assign(tx.conn(), &p.crew_id, p.view, &o, folder.as_deref())?;
+    db::assign(
+        tx.conn(),
+        &p.crew_id,
+        p.channel_id.as_deref(),
+        p.view,
+        &o,
+        folder.as_deref(),
+    )?;
     commit(
         tx,
         by,

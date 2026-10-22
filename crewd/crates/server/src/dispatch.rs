@@ -48,6 +48,7 @@ pub(crate) fn refused(code: i32, r: crewd_collab::refusal::Refusal) -> RpcError 
         .expect("with_refusal has data")
         .current_work = r.current_work;
     let data = error.data.as_mut().expect("refusal data");
+    data.current_todo_attributes = r.current_todo_attributes;
     data.current_document = r.current_document;
     data.current_tree_revision = r.current_tree_revision;
     data.current_link_revision = r.current_link_revision;
@@ -466,6 +467,48 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::SESSION_GET => {
             let p: SessionGetParams = parse_params(p)?;
             read(state, move |c| sessions::get(c, &p.session_id)).await
+        }
+        methods::TODO_ATTRIBUTES_GET => {
+            let p: TodoAttributesGetParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::todo_attributes::get(c, &Sender::Human, &p.object)
+            })
+            .await
+        }
+        methods::TODO_ASSIGN => {
+            let p: TodoAssignParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::todo_attributes::assign(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::TODO_SET_STATE => {
+            let p: TodoSetStateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::todo_attributes::set_state(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::HUMAN_TASK_CREATE => {
+            let p: HumanTaskCreateParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::todo_attributes::create_human(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::CHANNEL_WORK_TAGS_SET => {
+            let p: ChannelWorkTagsSetParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::channel_work::set_tags(tx, &Sender::Human, p)
+            })
+            .await
+        }
+        methods::RESOURCE_REQUEST_LOOKUP => {
+            let p: ResourceRequestLookupParams = parse_params(p)?;
+            read(state, move |c| {
+                crewd_collab::todo_attributes::lookup(c, &Sender::Human, p)
+            })
+            .await
         }
         methods::CHANNEL_WORK_LIST => {
             let p: ChannelWorkListParams = parse_params(p)?;

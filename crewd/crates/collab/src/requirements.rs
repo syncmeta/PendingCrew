@@ -70,7 +70,24 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
         .entry_view(no)
         .ok_or_else(|| StoreError::Invalid("requirement lacks authoritative entry".into()))?;
     todo.requirement_id = Some(r.id());
-    todo.status = status(view.status).into();
+    let derived_status = status(view.status).to_string();
+    let todo_attributes = crate::todo_attributes::get(
+        conn,
+        &Sender::Human,
+        &crewd_proto::ChannelWorkObject {
+            kind: crewd_proto::ChannelWorkKind::Requirement,
+            id: r.id(),
+        },
+    )?;
+    todo.status = if view.status == EntryStatus::Closed {
+        "closed".into()
+    } else {
+        match todo_attributes.manual_state {
+            Some(crewd_proto::ManualTodoState::Open) => "open".into(),
+            Some(crewd_proto::ManualTodoState::Done) => "done".into(),
+            None => derived_status.clone(),
+        }
+    };
     let closure = book.state().entries[&no]
         .closed
         .as_ref()
@@ -79,6 +96,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
             at: crewd_store::ts_from_ms(c.at.0),
         });
     Ok(RequirementDetail {
+        todo_attributes,
+        derived_status,
         todo,
         closure,
         channel_association: None,

@@ -226,6 +226,14 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// Enable the existing production SQLite knowledge runtime in this owned fixture.
+    pub fn enable_knowledge(&self) {
+        let runtime = std::sync::Arc::new(
+            crate::team_data::runtime::Runtime::new(self.data_dir().join("knowledge")).unwrap(),
+        );
+        assert!(self.state.data_runtime.set(runtime).is_ok());
+    }
+
     /// Arm once before the observed caller. No global storage or public wire selector.
     /// Rows are owned by this AgentRuntime and destroyed with its final Arc.
     #[cfg(feature = "testkit")]

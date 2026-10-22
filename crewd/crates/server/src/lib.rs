@@ -6,6 +6,7 @@ pub(crate) mod conn;
 mod connection_scope;
 pub mod control;
 pub mod dispatch;
+mod group_knowledge;
 pub mod hub;
 mod judgments;
 pub mod ledger;

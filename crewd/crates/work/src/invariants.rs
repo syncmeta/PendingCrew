@@ -479,6 +479,7 @@ mod tests {
         s.asks.insert(
             AskId(n),
             HumanAsk {
+                human_task: false,
                 id: AskId(n),
                 item: Some(WorkId(item)),
                 asked_by: Actor::worker("s1"),
@@ -820,6 +821,7 @@ mod tests {
         s.entries.insert(
             EntryNo(5),
             EntryTodo {
+                manual_done: false,
                 no: EntryNo(5),
                 registered_at: NOW,
                 closed: Some(EntryClosure {
@@ -922,6 +924,7 @@ mod tests {
         s.entries.insert(
             EntryNo(1),
             EntryTodo {
+                manual_done: false,
                 no: EntryNo(5),
                 registered_at: NOW,
                 closed: None,
