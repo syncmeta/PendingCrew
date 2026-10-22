@@ -142,6 +142,16 @@ import CryptoKit
             let linkedRoot = root.appendingPathComponent("linked-data")
             try fm.createSymbolicLink(atPath: linkedRoot.path, withDestinationPath: root.path); try refused(linkedRoot)
             try fm.removeItem(at: linkedRoot)
+            for relative in ["frontend-presentation", "frontend-presentation/unknown-submissions"] {
+                let ancestor = root.appendingPathComponent(relative)
+                let keptAncestor = root.appendingPathComponent("preserved-ancestor")
+                try fm.moveItem(at: ancestor, to: keptAncestor)
+                try fm.createSymbolicLink(atPath: ancestor.path, withDestinationPath: keptAncestor.path)
+                try refused(root)
+                let relativeFile = relative == "frontend-presentation" ? "unknown-submissions/" + record + "/" + filename(namespace) : record + "/" + filename(namespace)
+                try check(try Data(contentsOf: keptAncestor.appendingPathComponent(relativeFile)) == original, "intermediate symlink touched original")
+                try fm.removeItem(at: ancestor); try fm.moveItem(at: keptAncestor, to: ancestor)
+            }
             let foreignNamespace = namespace.replacingOccurrences(of: record.uppercased(), with: "00000000-0000-4000-8000-000000000099")
             var foreign = try JSONSerialization.jsonObject(with: original) as! [String: Any]
             foreign["namespace"] = foreignNamespace

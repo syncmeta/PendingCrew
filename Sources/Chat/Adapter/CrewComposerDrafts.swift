@@ -177,7 +177,7 @@ enum CrewOfflineComposerDrafts {
         var missing = false
         var complete: Bool { issues.isEmpty }
     }
-    private enum Refusal: Error { case unsafe, invalid, tooLarge, changed }
+    private enum Refusal: Error { case unsafe, invalid, tooLarge, changed, missing }
     private static func validFileName(_ name: String) -> Bool {
         guard name.hasPrefix("composer-drafts-"), name.hasSuffix(".json") else { return false }
         let hash = name.dropFirst("composer-drafts-".count).dropLast(5)
@@ -187,6 +187,33 @@ enum CrewOfflineComposerDrafts {
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
               info.st_uid == geteuid(), info.st_mode & 0o7777 == 0o700 else { throw Refusal.unsafe }
+    }
+    /// Bind every configured path component before walking the two fixed
+    /// private journal components. A pathname check followed by open(path)
+    /// would leave intermediate ancestors vulnerable to symlink replacement.
+    private static func journalDirectory(_ dataDirectory: URL) throws -> Int32 {
+        guard dataDirectory.isFileURL, dataDirectory.path.hasPrefix("/") else { throw Refusal.unsafe }
+        var current = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard current >= 0 else { throw Refusal.unsafe }
+        var returned = false
+        defer { if !returned { close(current) } }
+        func descend(_ component: String) throws {
+            guard !component.isEmpty, component != ".", component != "..", !component.contains("/") else { throw Refusal.unsafe }
+            let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard next >= 0 else {
+                if errno == ENOENT { throw Refusal.missing }
+                throw Refusal.unsafe
+            }
+            close(current); current = next
+        }
+        for component in dataDirectory.pathComponents where component != "/" { try descend(component) }
+        try directory(current)
+        for component in ["frontend-presentation", "unknown-submissions"] {
+            try descend(component)
+            try directory(current)
+        }
+        returned = true
+        return current
     }
     /// Enumerate the already opened directory; never follow a path discovered
     /// in a file. Only matching immediate names count toward the bounded list.
@@ -261,16 +288,10 @@ enum CrewOfflineComposerDrafts {
     static func read(dataDirectory: URL) -> Readback {
         var result = Readback()
         func issue(_ detail: String) { result.issues.append("未完整读取，原文件保留：" + detail) }
-        let root = dataDirectory.appendingPathComponent("frontend-presentation/unknown-submissions")
-        guard root.isFileURL, root.standardizedFileURL.path == root.standardizedFileURL.resolvingSymlinksInPath().path else {
-            issue("本机草稿目录身份不符。"); return result
-        }
-        let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard fd >= 0 else {
-            if errno == ENOENT { result.missing = true }
-            else { issue("无法安全读取本机草稿目录。") }
-            return result
-        }
+        let fd: Int32
+        do { fd = try journalDirectory(dataDirectory) }
+        catch Refusal.missing { result.missing = true; return result }
+        catch { issue("本机草稿目录或固定祖先身份不符，无法安全读取。"); return result }
         defer { close(fd) }
         do {
             try directory(fd)
