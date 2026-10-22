@@ -2,7 +2,7 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
-群内容后端16120a7c已独验并普通整合main 1978b602；完整双端组合尚待前端冻结和实际验收。111b8a03已普通推送main/global；另一“PendingCrew 前端设计”会话已完成的新demo由根在fdf1209e完整保存（仅21个design路径，原作者41项及离线检查复用，未重测）。前端一致快照65项SHA2165a5f75f1037b6cc203e6eae51e28d3e730e49df48071b7ff969214644d12b与提交前实际源逐项同，以当前TSX而非旧README/标题为准；本记录保存后的远端状态须读实际refs。真实已装Mac仍6f35/0.1.44/20748.07553，普通iOS当前准确候选111b8a03/0.1.43/1，Linux实际编译来源5821310a；a08原配对/P1P2证据与111b资源修复影响分别保留，不能互相改标。
+群内容后端16120a7c和共享Mac/iOS前端bf0f2fce均已独立源码验收，分别普通整合main 1978b602/e9321a9f；完整双端组合仍待准确构建和实际验收。111b8a03已普通推送main/global；另一“PendingCrew 前端设计”会话已完成的新demo由根在fdf1209e完整保存（仅21个design路径，原作者41项及离线检查复用，未重测）。前端一致快照65项SHA2165a5f75f1037b6cc203e6eae51e28d3e730e49df48071b7ff969214644d12b与提交前实际源逐项同，以当前TSX而非旧README/标题为准；本记录保存后的远端状态须读实际refs。真实已装Mac仍6f35/0.1.44/20748.07553，普通iOS当前准确候选111b8a03/0.1.43/1，Linux实际编译来源5821310a；a08原配对/P1P2证据与111b资源修复影响分别保留，不能互相改标。
 
 | 完整交付单元 | 当前状态 | 尚待闭合的范围 |
 | --- | --- | --- |
@@ -18,6 +18,14 @@
 执行边界补清：普通私有文件同步因网络返回Unknown时，作者可自主做同scope有界只读hash/已有receipt/原进程身份查询，不须每次交根裁读；只在已证明安全的同值原子CAS范围内恢复元数据。不能据此重发邀请、生成回应、accept或凭据事务，也不解除184/1ef禁读删边界。作者在完整模块内处理这类内部小项，只把真实权限拒绝、其它实际状态或必要架构决定交根，避免普通状态观察变成全线等待。
 
 最新人类要求继续全工程，并新增“前端和相应逻辑照着demo来改”。主代理仍统筹/接口/整合；backend_continue唯一Rust/schema/API作者，Claude真实PTY受管模块9cb4c57d已独验并整合99f593af，尚未生成准确正式包或真实provider验收；其后接demo真实群资料/分类/标签及一键部署单链接的完整合同；frontend_demo接手原m6-client工作树，唯一Swift/前端/工程作者，依据实际最新demo整块映射真实能力；quality_continue_22独立质量/GUI，不兼实现；client_delivery_22已移交写权，仅核现有VPS部署使用说明。生产Claude新入口必须满足已验证精确guard资格，否则正文前拒绝，不新增旧版兼容开关或静默退回legacy；正式ACP/full history仍分列未完成，Native16不激活。按完整模块持续推进，已验稳定业务复用，不制造无缺陷改动或重复包；尚未讨论定案方案继续保留。 用户另明确部署目标为一键安装脚本+单一配对链接，连接与管理不拆入口；安装前查Codex/Claude Code，缺失则给官方安装与登录指引，让用户自行完成后再装PendingCrew。现有多命令/三文件只作底层与已验证据，不作为日常安装UX；常驻service/Human bootstrap与单链接协议先准备准确源码/方案，实际VPS常驻部署和公开发布仍按具体动作核授权。
+
+## 2026-10-22 双端 demo 源码完整接受；同步模块并行接入
+
+frontend_demo 完整冻结 bf0f2fcec8ce785015e4a4a3a01d6dd92656f2d5，相对 b8760a52 净28路径；独验报告 SHA de91241a0cf4094a1d3e83c7c459e7eedc06fd32e1e6bf8a1a4cd92f1a9ec447，根亲读原文件并核 hash。共享 Mac/iPhone/iPad 真群内容、实际知识 DataRef、Todo/分类/文件夹、任务首句和原指令分层源码接受。此前 ad25 三处实缺陷保留：文档 source/stage 仅 sheet 状态、Unknown 重开缺提交闸、receipt 校验前先结束；作者在原 seam 三项行为红后整块修，质量亲跑七影响模式全0。根普通 no-ff 合入 main e9321a9fc6501ba30988f40301e456f2bff6baaa，无冲突，未改标签或安装。
+
+Apple 个人同步独立新模块由 apple_sync_module 冻结于 /private/tmp/pcw-apple-sync-module-20261022，HANDOFF SHA 0004938a776b8578cf6cf6af4da7073b5cb010169257e5d64bc2702129a5a9c5；三源451行，独立源核与16项实际本地行为通过，QA SHA dedc17d768b6990372886c9d992ff1cdda4de6000b8e65c61c9daf011aa17fc3。包含完整结构化草稿、设备分支/显式合并/退役墓碑、离线原文恢复与账号分区，目录只含可移植主机提示、不含授信凭据；public IP/LAN 允许，loopback/Unix 不冒跨设备地址。CloudKit private DB/CAS 仅源码及 SDK 型验，未触实际账号/容器/云。默认仅本机，不能据模拟结果宣称跨端云同步。
+
+frontend_demo 继续唯一既有 App/Swift/工程作者，接入该完整模块，落实完整 Draft Sendable、每安装唯一 deviceID、同 account/collection 共享唯一 actor、写失败可见保文与双端实际界面。backend_continue 并行完成类型化 Codex 会话控制及后续一键安装/单配对链接；不增加 Core 草稿 schema、Apple 账号服务或双主后台。独立质量线按整块冻结复验。此为源码接受，不是 SwiftUI 全目标编译、准确组合包、Mac+iOS 同 Core GUI、真实 CloudKit 或发布通过。完整组合冻结后统一 normal helper 和原 aeh 暖 Mac/iOS 构建；稳定 backend A/M4/配对/TLS 不反复全测，日用 Mac6f35、iOS111b、Linux582 来源保持。
 
 ## 2026-10-22 群内容后端整块独验并整合，双端组合待完成
 

@@ -1,5 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 共享 Mac/iOS demo 前端完整源码接受并整合；同步独立源接受
+
+完整 frontend bf0f2fcec8ce785015e4a4a3a01d6dd92656f2d5、base b8760a52、净28路径，作者干净且 Git blob/文件 hash 与冻结一致。原 ad25 独验三处真实耐久性缺陷在原 KnowledgeStore/PresentationJournal/Workspace 修复：保存阶段原 input/request/context/result/source 跨重开采用/查询，不重建知识正文；六项资源写在 Unknown 原 UUID 结清前拒新提交；完整 receipt 校验后才 replyObserved，畸形结果保 Unknown，recovery 仅追加原 outcome 的 acknowledgement。三红为真实可运行 seam 失败，不是编译缺符号；质量亲跑当前 ffe5110e…33d6 七模式均0，原红与未变 channel/resources/prompt 证据复用。独验文件 group-content-store17-20261022/independent-qa-frontend-bf0f-final.json SHA de91241a0cf4094a1d3e83c7c459e7eedc06fd32e1e6bf8a1a4cd92f1a9ec447，根亲读/核 hash 后普通 no-ff 整合 e9321a9fc6501ba30988f40301e456f2bff6baaa。
+
+独立 Apple 新模块 /private/tmp/pcw-apple-sync-module-20261022/HANDOFF.md SHA 0004938a776b8578cf6cf6af4da7073b5cb010169257e5d64bc2702129a5a9c5，三源451行。QA /private/tmp/pcw-apple-sync-independent-qa-result-20261022.json SHA dedc17d768b6990372886c9d992ff1cdda4de6000b8e65c61c9daf011aa17fc3，根亲读并核同；质量亲跑16项本地行为0，核完整结构 payload/设备分支/显式合并与墓碑/离线原文、账号切换和容量损坏保全、无凭据主机目录及 CloudKit CAS 源码。作者型验/墓碑 mutation 证据按原来源复用，质量未重编或调用云。此刻未集成既有 App；frontend 唯一作者接工程/完整 Draft/安装唯一 deviceID/共享单 actor/失败保文。真实 CloudKit 容器、entitlement、签名账号和双设备时序全部仍未资格，默认 nil-account/local-only，无自动 CK/KVS 或虚假“已同步”。
+
+以上仅完整源码及定向本地行为接受。没有新 Mac/iOS 全 SwiftUI 构建、双端实际同 Core 窗口验收、安装、VPS 常驻部署、Linux 新包、CI 或真实模型。后端 A/M4 与旧稳定配对/TLS不重跑；最终组合必须有自己的准确 normal/helper 与暖 Mac/iOS 证明，不能重标旧16120/6f35/111b/582。root 继续整合/冻结与交付，客户端接 Sync/Codex，后端完整控制与单链接部署并行；整个工程目标仍 active。
+
+
 ## 2026-10-22 群知识与待办后端整模块独验通过并整合
 
 完整源16120a7c6579d7b82476cdcefee223c61a9c1769、base99f593af，42路径含6新Rust，450项crewd输入；根核source-freeze.json SHA a8cec07c114a06ab84cdfe44cef9807f99adb87d1324c86c64a5147143d6b4ae及独立最终报告SHA ae9aff9aa2d118aa05cc86e40b30d3a83fd4a56740d9ab7127479d08a1b01dcc。质量线亲跑原Unix群RPC9/文件夹5/资源17迁移3/直接claim1均0，502项hash、作者干净源与前后5个产物核同；作者work/proto/refusal/知识及变异/旧15拒写证据复用并明确区分非质量亲跑。根随后普通no-ff整合为1978b60253b4768b1661f3bd6dbf1b8eee3a2fb3，无冲突；后续根记录与推送另读实际refs。
