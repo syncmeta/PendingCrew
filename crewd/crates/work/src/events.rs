@@ -17,6 +17,10 @@ pub struct Event {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventKind {
+    EntryResolution {
+        entry: EntryNo,
+        done: bool,
+    },
     EntryRegistered {
         entry: EntryNo,
     },

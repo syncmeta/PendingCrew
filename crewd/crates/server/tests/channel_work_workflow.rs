@@ -340,7 +340,12 @@ async fn actual_foreign_source_reference_requires_explicit_unbind_before_purge_a
     )
     .await;
     let initial = page(&mut human, &a).await;
-    let linked=tool(&mut owner,"channel_work_link",json!({"channel_id":a,"expected_link_revision":initial["linkRevision"],"object":{"kind":"work","id":foreign["id"]}})).await;
+    let denied=rpc(&mut owner,"agent.call",json!({"tool":"channel_work_link","args":{"channel_id":a,"expected_link_revision":initial["linkRevision"],"object":{"kind":"work","id":foreign["id"]}}})).await;
+    assert_eq!(
+        denied["isError"], true,
+        "group membership does not grant source crew authority"
+    );
+    let linked=rpc(&mut human,"channel.workLink",json!({"channelId":a,"expectedLinkRevision":initial["linkRevision"],"object":{"kind":"work","id":foreign["id"]}})).await;
     assert_eq!(
         rpc(&mut human, "work.get", json!({"id":foreign["id"]})).await,
         foreign,
@@ -356,7 +361,7 @@ async fn actual_foreign_source_reference_requires_explicit_unbind_before_purge_a
         crewd_proto::RpcError::CONFLICT
     );
     assert_eq!(snapshot(&f).await, before);
-    tool(&mut owner,"channel_work_unlink",json!({"channel_id":a,"expected_link_revision":linked["linkRevision"],"object":{"kind":"work","id":foreign["id"]}})).await;
+    rpc(&mut human,"channel.workUnlink",json!({"channelId":a,"expectedLinkRevision":linked["linkRevision"],"object":{"kind":"work","id":foreign["id"]}})).await;
     rpc(&mut human, "crew.purge", json!({"crewId":source})).await;
     assert!(
         page(&mut human, &a).await["items"]
@@ -474,5 +479,325 @@ async fn public_human_task_answer_is_shared_by_both_channel_projections() {
         before,
         "attached session cannot borrow ordinary Human question detail"
     );
+    close_socket(task, stop).await;
+}
+
+#[tokio::test]
+async fn store17_group_knowledge_reference_uses_real_view_authority() {
+    let f = Fixture::new().await;
+    f.enable_knowledge();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut h = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let a = channel(&mut h, &f.crew, "knowledge A", &f.worker).await;
+    let b = channel(&mut h, &f.crew, "knowledge B", &f.worker).await;
+    let workspace = rpc(&mut h, "data.workspace.get", json!({"crewId":f.crew})).await;
+    let saved=rpc(&mut h,"data.submit",json!({"context":workspace["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"apply","message":"save original knowledge","edits":[{"kind":"createView","alias":"page","title":"shared real View","definition":{"kind":"document","placements":[],"layout":{}},"attributes":{},"sources":[]}]}})).await;
+    assert_eq!(saved["phase"], "committed");
+    let source = json!({"context":saved["context"],"reference":saved["created"]["page"]["object"]["reference"]});
+    let before = rpc(&mut h, "channel.knowledgeList", json!({"channelId":a})).await;
+    let params = json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"expectedLinkRevision":before["linkRevision"],"source":source});
+    f.state.db.call(|s|s.conn().execute_batch("CREATE TEMP TRIGGER fail_knowledge_association BEFORE INSERT ON channel_knowledge_links BEGIN SELECT RAISE(ABORT,'association SQL fault'); END;")).await.unwrap().unwrap();
+    let core_before = snapshot(&f).await;
+    assert!(
+        call(&mut h, "channel.knowledgeLink", params.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        snapshot(&f).await,
+        core_before,
+        "failed association is a Core rollback, not a content transaction"
+    );
+    assert_eq!(
+        rpc(
+            &mut h,
+            "resource.requestLookup",
+            json!({"requestId":params["requestId"]})
+        )
+        .await["status"],
+        "notFound"
+    );
+    assert_eq!(
+        rpc(
+            &mut h,
+            "data.object.get",
+            json!({"context":source["context"],"reference":source["reference"]})
+        )
+        .await["object"]["title"],
+        "shared real View",
+        "saved content survives association failure"
+    );
+    f.state
+        .db
+        .call(|s| {
+            s.conn()
+                .execute_batch("DROP TRIGGER fail_knowledge_association;")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    // Explicit fixture continuation after a known rolled-back refusal, not an automatic Unknown resend.
+    let linked = rpc(&mut h, "channel.knowledgeLink", params.clone()).await;
+    assert_eq!(linked["linked"], true);
+    assert_eq!(
+        rpc(&mut h, "channel.knowledgeLink", params.clone()).await,
+        linked
+    );
+    let lookup = rpc(
+        &mut h,
+        "resource.requestLookup",
+        json!({"requestId":params["requestId"]}),
+    )
+    .await;
+    assert_eq!(lookup["result"], linked);
+    let ap = rpc(&mut h, "channel.knowledgeList", json!({"channelId":a})).await;
+    assert_eq!(ap["items"][0]["title"], "shared real View");
+    assert_eq!(ap["items"][0]["state"], "ready");
+    assert!(
+        rpc(&mut h, "channel.knowledgeList", json!({"channelId":b})).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let original = rpc(
+        &mut h,
+        "data.object.get",
+        json!({"context":ap["items"][0]["source"]["context"],"reference":source["reference"]}),
+    )
+    .await;
+    assert_eq!(original["object"]["title"], "shared real View");
+    let bp = rpc(&mut h, "channel.knowledgeList", json!({"channelId":b})).await;
+    rpc(&mut h,"channel.knowledgeLink",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":b,"expectedLinkRevision":bp["linkRevision"],"source":source})).await;
+    let folder=rpc(&mut h,"viewFolder.create",json!({"crewId":f.crew,"channelId":a,"view":"documents","requestId":uuid::Uuid::new_v4().to_string(),"expectedTreeRevision":"0","name":"only A"})).await;
+    let placed=rpc(&mut h,"viewFolder.assign",json!({"crewId":f.crew,"channelId":a,"view":"documents","expectedTreeRevision":folder["treeRevision"],"folderId":folder["folders"][0]["id"],"object":{"kind":"knowledgeView","id":source["reference"]["id"],"knowledge":source}})).await;
+    assert_eq!(placed["assignments"].as_array().unwrap().len(), 1);
+    assert!(
+        rpc(
+            &mut h,
+            "viewFolder.list",
+            json!({"crewId":f.crew,"channelId":b,"view":"documents"})
+        )
+        .await["folders"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let changed=rpc(&mut h,"data.submit",json!({"context":saved["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"apply","message":"edit one shared View","edits":[{"kind":"updateView","id":source["reference"]["id"],"expectedRevision":"1","title":"both groups same changed View","definition":{"kind":"document","placements":[],"layout":{}},"attributes":{}}]}})).await;
+    assert_eq!(changed["phase"], "committed");
+    for ch in [&a, &b] {
+        let p = rpc(&mut h, "channel.knowledgeList", json!({"channelId":ch})).await;
+        assert_eq!(p["items"][0]["title"], "both groups same changed View");
+        assert_eq!(p["items"][0]["viewKind"], "document");
+        assert_eq!(
+            p["items"][0]["source"]["context"]["generation"],
+            changed["context"]["generation"]
+        );
+    }
+    close_socket(task, stop).await;
+}
+#[tokio::test]
+async fn store17_channel_tags_are_real_local_references() {
+    let f = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut h = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let a = channel(&mut h, &f.crew, "tags A", &f.worker).await;
+    let t=rpc(&mut h,"todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"tagged"})).await;
+    let p = page(&mut h, &a).await;
+    let n = wakes(&f).await;
+    let tags=rpc(&mut h,"channel.workTagsSet",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"expectedLinkRevision":p["linkRevision"],"object":{"kind":"requirement","id":t["requirementId"]},"tags":[" 紧急 ","后端","紧急"]})).await;
+    assert_eq!(tags["tags"], json!(["紧急", "后端"]));
+    assert_eq!(wakes(&f).await, n);
+    let b = channel(&mut h, &f.crew, "tags B", &f.worker).await;
+    let bp = page(&mut h, &b).await;
+    rpc(&mut h,"channel.workLink",json!({"channelId":b,"expectedLinkRevision":bp["linkRevision"],"object":{"kind":"requirement","id":t["requirementId"]}})).await;
+    assert_eq!(page(&mut h, &b).await["items"][0]["tags"], json!([]));
+    for i in 0..2 {
+        let t=rpc(&mut h,"todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":format!("count source {i}")})).await;
+        let p = page(&mut h, &a).await;
+        rpc(&mut h,"channel.workTagsSet",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"expectedLinkRevision":p["linkRevision"],"object":{"kind":"requirement","id":t["requirementId"]},"tags":["紧急"]})).await;
+    }
+    let p = rpc(
+        &mut h,
+        "channel.workList",
+        json!({"channelId":a,"kinds":["requirement"],"tag":"紧急","limit":1}),
+    )
+    .await;
+    assert_eq!(p["items"].as_array().unwrap().len(), 1);
+    assert_eq!(p["total"], 3);
+    assert_eq!(
+        p["tagCounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["tag"] == "紧急")
+            .unwrap()["count"],
+        3
+    );
+    assert!(p["next"].is_string());
+    let snap = snapshot(&f).await;
+    assert!(
+        call(
+            &mut h,
+            "channel.workList",
+            json!({"channelId":a,"kinds":["humanTask"],"tag":"紧急","after":p["next"]})
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(snapshot(&f).await, snap);
+    close_socket(task, stop).await;
+}
+#[tokio::test]
+async fn store17_human_task_creation_has_manual_origin_without_wake() {
+    let f = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut h = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let a = channel(&mut h, &f.crew, "manual H", &f.worker).await;
+    let n = wakes(&f).await;
+    let t=rpc(&mut h,"humanTask.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"manual task"})).await;
+    assert_eq!(t["todo"]["origin"], "humanTask");
+    assert_eq!(t["todo"]["owner"], json!({"kind":"human"}));
+    assert_eq!(wakes(&f).await, n);
+    let snap = snapshot(&f).await;
+    assert!(call(&mut h,"ask.answer",json!({"crewId":f.crew,"ask":t["ask"]["ask"],"text":"must not fabricate an Agent answer"})).await.is_err());
+    assert_eq!(snapshot(&f).await, snap);
+    let mut agent = attach(&f, &f.data_dir().join("crewd.sock"), &f.worker).await;
+    assert!(call(&mut agent,"humanTask.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"Agent cannot borrow Human creation"})).await.is_err());
+    assert_eq!(snapshot(&f).await, snap);
+    close_socket(task, stop).await;
+}
+
+#[tokio::test]
+async fn store17_global_todo_owner_manual_done_and_original_receipts_do_not_start_work() {
+    let f = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut h = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let a = channel(&mut h, &f.crew, "facts A", &f.worker).await;
+    let b = channel(&mut h, &f.crew, "facts B", &f.worker).await;
+    let req=rpc(&mut h,"todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"existing Plan is retained"})).await;
+    let object = json!({"kind":"requirement","id":req["requirementId"]});
+    let bp = page(&mut h, &b).await;
+    rpc(
+        &mut h,
+        "channel.workLink",
+        json!({"channelId":b,"expectedLinkRevision":bp["linkRevision"],"object":object}),
+    )
+    .await;
+    let existing=rpc(&mut h,"work.create",json!({"crewId":f.crew,"title":"original independent Plan","owner":f.worker,"sources":[req["requirementId"]]})).await;
+    let before = wakes(&f).await;
+    let mut observations = f.state.hub.subscribe_collab();
+    let assigned=rpc(&mut h,"todo.assign",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"object":object,"expectedRevision":"0","owner":{"kind":"human"}})).await;
+    assert_eq!(
+        page(&mut h, &b).await["items"][0]["todo"]["owner"],
+        json!({"kind":"human"})
+    );
+    let params = json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"object":object,"expectedRevision":assigned["revision"],"state":"done"});
+    let done = rpc(&mut h, "todo.setState", params.clone()).await;
+    assert_eq!(
+        rpc(
+            &mut h,
+            "resource.requestLookup",
+            json!({"requestId":params["requestId"]})
+        )
+        .await["result"],
+        done
+    );
+    assert_eq!(rpc(&mut h, "todo.setState", params.clone()).await, done);
+    assert_eq!(
+        rpc(&mut h, "todo.get", json!({"id":req["requirementId"]})).await["status"],
+        "done"
+    );
+    assert_eq!(page(&mut h, &b).await["items"][0]["status"], "done");
+    assert_eq!(
+        rpc(&mut h, "work.get", json!({"id":existing["id"]})).await,
+        existing,
+        "source resolution does not alter or settle an existing Plan"
+    );
+    let snap = snapshot(&f).await;
+    assert!(call(&mut h,"work.create",json!({"crewId":f.crew,"title":"must not claim resolved source","owner":f.worker,"sources":[req["requirementId"]]})).await.is_err());
+    assert_eq!(snapshot(&f).await, snap);
+    let reopened=rpc(&mut h,"todo.setState",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":b,"object":object,"expectedRevision":done["revision"],"state":"open"})).await;
+    assert_eq!(reopened["manualState"], "open");
+    assert_eq!(wakes(&f).await, before);
+    let mut attributes = 0;
+    while let Ok(event) = observations.try_recv() {
+        match event {
+            crewd_collab::Change::TodoAttributesChanged { .. } => attributes += 1,
+            crewd_collab::Change::WorkChanged { .. }
+            | crewd_collab::Change::MessageAppended { .. }
+            | crewd_collab::Change::AskAnswered { .. } => {
+                panic!("metadata changes must not enter automatic routing or wake consumers")
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(attributes, 3);
+    let mut mismatch = params;
+    mismatch["state"] = json!("open");
+    let snap = snapshot(&f).await;
+    assert!(call(&mut h, "todo.setState", mismatch).await.is_err());
+    assert_eq!(snapshot(&f).await, snap);
+    close_socket(task, stop).await;
+}
+
+#[tokio::test]
+async fn store17_mutation_receipt_fault_rolls_back_source_facts_number_tags_and_events() {
+    let f = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut h = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let a = channel(&mut h, &f.crew, "atomic receipt", &f.worker).await;
+    let req=rpc(&mut h,"todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"original source before injected failure"})).await;
+    let object = json!({"kind":"requirement","id":req["requirementId"]});
+    let page = page(&mut h, &a).await;
+    f.state.db.call(|s|s.conn().execute_batch("CREATE TEMP TRIGGER deny_resource_receipt BEFORE INSERT ON resource_mutation_requests BEGIN SELECT RAISE(ABORT,'original receipt failure'); END;")).await.unwrap().unwrap();
+    for (method, params) in [
+        (
+            "todo.assign",
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"object":object,"expectedRevision":"0","owner":{"kind":"human"}}),
+        ),
+        (
+            "todo.setState",
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"object":object,"expectedRevision":"0","state":"done"}),
+        ),
+        (
+            "humanTask.create",
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"channelId":a,"text":"must not consume an H identity"}),
+        ),
+        (
+            "channel.workTagsSet",
+            json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":a,"object":object,"expectedLinkRevision":page["linkRevision"],"tags":["紧急"]}),
+        ),
+    ] {
+        let before = snapshot(&f).await;
+        assert!(call(&mut h, method, params.clone()).await.is_err());
+        assert_eq!(
+            snapshot(&f).await,
+            before,
+            "whole original transaction must roll back for {method}"
+        );
+        assert_eq!(
+            rpc(
+                &mut h,
+                "resource.requestLookup",
+                json!({"requestId":params["requestId"]})
+            )
+            .await["status"],
+            "notFound"
+        );
+    }
+    f.state
+        .db
+        .call(|s| {
+            s.conn()
+                .execute_batch("DROP TRIGGER deny_resource_receipt;")
+        })
+        .await
+        .unwrap()
+        .unwrap();
     close_socket(task, stop).await;
 }

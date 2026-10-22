@@ -30,6 +30,7 @@ pub mod settings;
 pub mod stop_checks;
 #[cfg(test)]
 mod testkit;
+pub mod todo_attributes;
 pub mod todos;
 pub mod turn_trace;
 pub mod view_folders;
@@ -78,9 +79,15 @@ pub enum Change {
         session_id: String,
     },
     FolderChanged {
+        channel_id: Option<String>,
         crew_id: String,
         view: crewd_proto::FolderView,
         tree_revision: String,
+    },
+    TodoAttributesChanged {
+        crew_id: String,
+        object: crewd_proto::ChannelWorkObject,
+        revision: String,
     },
     ChannelWorkChanged {
         channel_id: String,

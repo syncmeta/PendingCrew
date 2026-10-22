@@ -16,6 +16,11 @@ fn unknown() -> StoreError {
     StoreError::Invalid("数据库/WAL 版本或稳定性无法确认；拒绝打开，原数据文件未触碰".into())
 }
 fn version(v: u32) -> Result<()> {
+    if v == 16 {
+        return Err(StoreError::Invalid(
+            "reserved database16 is not resource17; original files untouched".into(),
+        ));
+    }
     if i64::from(v) > SUPPORTED_SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SUPPORTED_SCHEMA_VERSION} 新，拒绝打开"

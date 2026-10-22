@@ -125,6 +125,18 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
                 channel_id: channel_id.clone(),
             },
         )?],
+        Change::TodoAttributesChanged {
+            crew_id,
+            object,
+            revision,
+        } => vec![ev(
+            events::TODO_ATTRIBUTES_CHANGED,
+            &crewd_proto::TodoAttributesChanged {
+                crew_id: crew_id.clone(),
+                object: object.clone(),
+                revision: revision.clone(),
+            },
+        )?],
         Change::ChannelWorkChanged {
             channel_id,
             link_revision,
@@ -156,12 +168,14 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             },
         )?],
         Change::FolderChanged {
+            channel_id,
             crew_id,
             view,
             tree_revision,
         } => vec![ev(
             events::FOLDER_CHANGED,
             &crewd_proto::FolderChanged {
+                channel_id: channel_id.clone(),
                 crew_id: crew_id.clone(),
                 view: *view,
                 tree_revision: tree_revision.clone(),

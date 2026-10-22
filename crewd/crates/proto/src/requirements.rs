@@ -32,6 +32,9 @@ pub struct RequirementClosure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequirementDetail {
+    #[serde(rename = "todo")]
+    pub todo_attributes: crate::TodoAttributes,
+    pub derived_status: String,
     #[serde(flatten)]
     pub todo: crate::Todo,
     pub closure: Option<RequirementClosure>,

@@ -121,6 +121,7 @@ pub fn migrate_in_tx(conn: &Connection, now: &str) -> Result<()> {
             merged.state.entries.insert(
                 core,
                 crewd_work::EntryTodo {
+                    manual_done: false,
                     no: core,
                     registered_at: crewd_work::Ts(registered_at),
                     closed: None,
@@ -420,9 +421,10 @@ pub fn save(conn: &Connection, state: &BookState, events: &[Event], now: &str) -
     for event in events {
         use crewd_work::EventKind::*;
         let crew = match &event.kind {
-            EntryRegistered { entry } | EntryClaimed { entry, .. } | EntryClosed { entry, .. } => {
-                org.entry_crews.get(entry)
-            }
+            EntryResolution { entry, .. }
+            | EntryRegistered { entry }
+            | EntryClaimed { entry, .. }
+            | EntryClosed { entry, .. } => org.entry_crews.get(entry),
             AskOpened { ask, .. }
             | AskAnswered { ask, .. }
             | AskDefaulted { ask, .. }

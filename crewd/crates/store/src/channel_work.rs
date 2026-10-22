@@ -120,3 +120,42 @@ pub fn record_creation(c: &Connection, request: &str, w: &CreationWitness) -> Re
     c.execute("INSERT INTO work_creation_requests(request_id,work_id,crew_id,creator_key,source_channel_id,payload_digest) VALUES(?1,?2,?3,?4,?5,?6)",params![request,w.work_id,w.crew_id,w.creator_key,w.source_channel_id,w.digest])?;
     Ok(())
 }
+
+pub fn tags(c: &Connection, ch: &str, o: &ChannelWorkObject) -> Result<Vec<String>> {
+    let raw:String=c.query_row("SELECT tags FROM channel_work_links WHERE channel_id=?1 AND object_kind=?2 AND object_id=?3",params![ch,kind(&o.kind),o.id],|r|r.get(0))?;
+    Ok(serde_json::from_str(&raw)?)
+}
+pub fn set_tags(
+    c: &Connection,
+    ch: &str,
+    expected: i64,
+    o: &ChannelWorkObject,
+    tags: &[String],
+    actor: &ResourceActor,
+    at: &str,
+) -> Result<i64> {
+    let next = expected
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Invalid("channel revision exhausted".into()))?;
+    if c.execute(
+        "UPDATE channel_work_scopes SET revision=?1 WHERE channel_id=?2 AND revision=?3",
+        params![next, ch, expected],
+    )? != 1
+    {
+        return Err(StoreError::Invalid(
+            "channel CAS changed in transaction".into(),
+        ));
+    }
+    if c.execute("UPDATE channel_work_links SET tags=?1 WHERE channel_id=?2 AND object_kind=?3 AND object_id=?4",params![serde_json::to_string(tags)?,ch,kind(&o.kind),o.id])?!=1{return Err(StoreError::Invalid("channel object vanished".into()));}
+    c.execute(
+        "INSERT INTO channel_work_events(channel_id,revision,actor,body,at)VALUES(?1,?2,?3,?4,?5)",
+        params![
+            ch,
+            next,
+            serde_json::to_string(actor)?,
+            serde_json::json!({"object":o,"tags":tags}).to_string(),
+            at
+        ],
+    )?;
+    Ok(next)
+}

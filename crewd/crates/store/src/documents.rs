@@ -6,7 +6,7 @@ const META: &str =
     "id,crew_id,title,revision,body_length,created_by,updated_by,created_at,updated_at,deleted_at";
 fn legacy_only(c: &Connection) -> Result<()> {
     let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 16 || crate::meta_get(c, "knowledge.sqlite.v1")?.as_deref() == Some("1") {
+    if version == 16 || crate::meta_get(c, "knowledge.sqlite.v1")?.as_deref() == Some("1") {
         return Err(StoreError::Invalid(
             "documents use the SQLite knowledge API".into(),
         ));

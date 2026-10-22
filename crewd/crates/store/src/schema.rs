@@ -3,7 +3,7 @@ use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent SQLite schema; Core remains version 15.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 17;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
@@ -811,6 +811,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 /// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
 pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if v == 16 {
+        return Err(StoreError::Invalid(
+            "reserved/experimental Core16 is not the resource17 format".into(),
+        ));
+    }
     if v > SCHEMA_VERSION {
         return Err(StoreError::Invalid(format!(
             "数据库版本 {v} 比本程序支持的 {SCHEMA_VERSION} 新，拒绝打开"
@@ -870,6 +875,47 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     if v < 15 {
         migrate_v15(conn)?;
     }
+    if v < 17 {
+        migrate_v17(conn)?;
+    }
+    Ok(())
+}
+
+/// Resource scopes and Human source facts. Deliberately skips experimental Native16.
+pub(crate) fn migrate_v17(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(r#"
+ALTER TABLE view_folder_assignments RENAME TO view_folder_assignments_v15;
+ALTER TABLE view_folder_events RENAME TO view_folder_events_v15;
+ALTER TABLE view_folders RENAME TO view_folders_v15;
+ALTER TABLE view_folder_scopes RENAME TO view_folder_scopes_v15;
+CREATE TABLE view_folder_scopes(crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,channel_key TEXT NOT NULL DEFAULT '',view TEXT NOT NULL CHECK(view IN ('messages','todo','documents','progress')),revision INTEGER NOT NULL CHECK(revision>=0),PRIMARY KEY(crew_id,channel_key,view));
+CREATE TABLE view_folders(id TEXT PRIMARY KEY,crew_id TEXT NOT NULL,channel_key TEXT NOT NULL DEFAULT '',view TEXT NOT NULL,name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256),parent_id TEXT REFERENCES view_folders(id),position INTEGER NOT NULL CHECK(position>=0),FOREIGN KEY(crew_id,channel_key,view) REFERENCES view_folder_scopes(crew_id,channel_key,view) ON DELETE CASCADE);
+CREATE TABLE view_folder_assignments(crew_id TEXT NOT NULL,channel_key TEXT NOT NULL DEFAULT '',view TEXT NOT NULL,object_kind TEXT NOT NULL CHECK(object_kind IN ('channel','message','requirement','work','humanTask','document','knowledgeView')),object_id TEXT NOT NULL,knowledge_source TEXT CHECK(knowledge_source IS NULL OR json_valid(knowledge_source)),folder_id TEXT NOT NULL REFERENCES view_folders(id) ON DELETE CASCADE,PRIMARY KEY(crew_id,channel_key,view,object_kind,object_id),FOREIGN KEY(crew_id,channel_key,view) REFERENCES view_folder_scopes(crew_id,channel_key,view) ON DELETE CASCADE);
+CREATE TABLE view_folder_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,crew_id TEXT NOT NULL,channel_key TEXT NOT NULL DEFAULT '',view TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>0),actor TEXT NOT NULL CHECK(json_valid(actor)),body TEXT NOT NULL CHECK(json_valid(body)),at TEXT NOT NULL,UNIQUE(crew_id,channel_key,view,revision),FOREIGN KEY(crew_id,channel_key,view) REFERENCES view_folder_scopes(crew_id,channel_key,view) ON DELETE CASCADE);
+INSERT INTO view_folder_scopes(crew_id,view,revision) SELECT crew_id,view,revision FROM view_folder_scopes_v15;
+INSERT INTO view_folders(id,crew_id,view,name,parent_id,position) SELECT id,crew_id,view,name,parent_id,position FROM view_folders_v15;
+INSERT INTO view_folder_assignments(crew_id,view,object_kind,object_id,folder_id) SELECT crew_id,view,object_kind,object_id,folder_id FROM view_folder_assignments_v15;
+INSERT INTO view_folder_events(seq,crew_id,view,revision,actor,body,at) SELECT seq,crew_id,view,revision,actor,body,at FROM view_folder_events_v15;
+DROP TABLE view_folder_assignments_v15;
+DROP TABLE view_folder_events_v15;
+DROP TABLE view_folders_v15;
+DROP TABLE view_folder_scopes_v15;
+CREATE INDEX view_folders_scope ON view_folders(crew_id,channel_key,view,parent_id,position,id);
+CREATE INDEX view_folder_object_refs ON view_folder_assignments(object_kind,object_id,crew_id);
+ALTER TABLE channel_work_links RENAME TO channel_work_links_v15;
+CREATE TABLE channel_work_links(channel_id TEXT NOT NULL REFERENCES channel_work_scopes(channel_id) ON DELETE CASCADE,object_kind TEXT NOT NULL CHECK(object_kind IN ('requirement','work','humanTask')),object_id TEXT NOT NULL,source_crew_id TEXT NOT NULL REFERENCES crews(id),tags TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(tags) AND json_type(tags)='array' AND json_array_length(tags)<=16),PRIMARY KEY(channel_id,object_kind,object_id));
+INSERT INTO channel_work_links(channel_id,object_kind,object_id,source_crew_id) SELECT channel_id,object_kind,object_id,source_crew_id FROM channel_work_links_v15;
+DROP TABLE channel_work_links_v15;
+CREATE INDEX channel_work_source_refs ON channel_work_links(source_crew_id,channel_id);
+CREATE TABLE todo_attributes(object_kind TEXT NOT NULL CHECK(object_kind IN ('requirement','humanTask')),object_id TEXT NOT NULL,crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,revision INTEGER NOT NULL CHECK(revision>0),origin TEXT NOT NULL CHECK(origin IN ('requirement','agentAsk','humanTask')),owner TEXT CHECK(owner IS NULL OR json_valid(owner)),manual_state TEXT CHECK(manual_state IS NULL OR manual_state IN ('open','done')),PRIMARY KEY(object_kind,object_id));
+CREATE TABLE todo_attribute_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,object_kind TEXT NOT NULL,object_id TEXT NOT NULL,crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,revision INTEGER NOT NULL CHECK(revision>0),body TEXT NOT NULL CHECK(json_valid(body)),at TEXT NOT NULL,UNIQUE(object_kind,object_id,revision));
+CREATE TABLE resource_mutation_requests(request_id TEXT PRIMARY KEY,operation TEXT NOT NULL CHECK(operation IN ('todo.assign','todo.setState','humanTask.create','channel.workTagsSet','channel.knowledgeLink','channel.knowledgeUnlink')),crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,channel_id TEXT NOT NULL,object_kind TEXT NOT NULL CHECK(object_kind IN ('requirement','humanTask','knowledgeView')),object_id TEXT NOT NULL,payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32),result TEXT NOT NULL CHECK(json_valid(result)),at TEXT NOT NULL);
+CREATE TABLE channel_knowledge_links(channel_id TEXT NOT NULL REFERENCES channel_work_scopes(channel_id) ON DELETE CASCADE,source_key TEXT NOT NULL,source_crew_id TEXT NOT NULL REFERENCES crews(id),source TEXT NOT NULL CHECK(json_valid(source)),PRIMARY KEY(channel_id,source_key));
+CREATE INDEX channel_knowledge_source_refs ON channel_knowledge_links(source_crew_id,channel_id);
+PRAGMA user_version=17;
+"#)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2821,5 +2867,120 @@ mod judgment_format_tests {
         crate::meta_set(&c, "judgment.format.v1", "unknown-version").unwrap();
         assert!(!crate::judgment_state::format_available(&c).unwrap());
         assert_eq!(c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'native_history_%'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+}
+
+#[cfg(test)]
+mod resource17_tests {
+    use super::*;
+    fn original15(c: &Connection) {
+        c.execute_batch(V1).unwrap();
+        c.execute_batch(V2).unwrap();
+        migrate_v3(c).unwrap();
+        migrate_v4(c).unwrap();
+        migrate_v5(c).unwrap();
+        migrate_v6(c).unwrap();
+        migrate_v7(c).unwrap();
+        migrate_v8(c).unwrap();
+        migrate_v9(c).unwrap();
+        migrate_v10(c).unwrap();
+        migrate_v11(c).unwrap();
+        migrate_v12(c).unwrap();
+        migrate_v13(c, false).unwrap();
+        migrate_v14(c).unwrap();
+        migrate_v15(c).unwrap();
+    }
+    fn seed(c: &Connection) {
+        c.execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('resource17-source','retained','now','now');INSERT INTO view_folder_scopes(crew_id,view,revision)VALUES('resource17-source','documents',1);INSERT INTO view_folders(id,crew_id,view,name,parent_id,position)VALUES('retained-folder','resource17-source','documents','retained',NULL,0);INSERT INTO view_folder_assignments(crew_id,view,object_kind,object_id,folder_id)VALUES('resource17-source','documents','document','retained-document','retained-folder');INSERT INTO view_folder_events(crew_id,view,revision,actor,body,at)VALUES('resource17-source','documents',1,'{}','{}','now');").unwrap();
+    }
+    #[test]
+    fn resource17_original15_protected_upgrade_retains_original_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original15.db");
+        let c = Connection::open(&path).unwrap();
+        original15(&c);
+        seed(&c);
+        migrate_guarded(&c, Some(&dir.path().join("backups"))).unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            17
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT channel_key FROM view_folder_scopes WHERE crew_id='resource17-source'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            ""
+        );
+        assert_eq!(c.query_row("SELECT count(*) FROM view_folder_assignments WHERE folder_id='retained-folder' AND channel_key=''",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        let backups = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(backups.len(), 1);
+        let old = Connection::open(backups[0].path()).unwrap();
+        assert_eq!(
+            old.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM meta WHERE key='teamData.format.v1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn resource17_failure_rolls_back_all_scope_rebuilds() {
+        let c = Connection::open_in_memory().unwrap();
+        original15(&c);
+        seed(&c);
+        c.execute_batch("CREATE TABLE todo_attributes(injected_collision TEXT);")
+            .unwrap();
+        assert!(migrate_guarded(&c, None).is_err());
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            15
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT name FROM view_folders WHERE id='retained-folder'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "retained"
+        );
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE '%_v15'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn resource17_reserved16_refused_before_original_file_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reserved16.db");
+        let c = Connection::open(&path).unwrap();
+        original15(&c);
+        seed(&c);
+        c.execute_batch("PRAGMA user_version=16").unwrap();
+        drop(c);
+        let before = std::fs::read(&path).unwrap();
+        assert!(crate::Store::open(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

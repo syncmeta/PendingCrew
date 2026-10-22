@@ -32,6 +32,7 @@ refusal_codes! {
     DocumentDeleted = "document.deleted" ["id"],
     ChannelWorkRevisionConflict = "channel.work_revision_conflict" [],
     ChannelWorkCursorExpired = "channel.work_cursor_expired" [],
+    TodoAttributesRevisionConflict = "todo.attributes_revision_conflict" [],
     FolderRevisionConflict = "view_folder.revision_conflict" [],
     FolderLimit = "view_folder.limit" ["limit"],
     FolderCycle = "view_folder.cycle" [],
@@ -218,6 +219,7 @@ refusal_codes! {
 /// 一次规则拒绝：码 + 填进文字的值。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
+    pub current_todo_attributes: Option<Box<crewd_proto::TodoAttributes>>,
     pub code: Code,
     pub args: Vec<(&'static str, String)>,
     pub current_work: Option<Box<crewd_proto::WorkConflictFacts>>,
@@ -235,6 +237,7 @@ impl Refusal {
             current_work: None,
             current_document: None,
             current_tree_revision: None,
+            current_todo_attributes: None,
             current_link_revision: None,
             current_source_revision: None,
         }

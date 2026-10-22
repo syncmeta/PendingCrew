@@ -91,6 +91,8 @@ pub enum FolderView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum FolderObjectKind {
+    KnowledgeView,
+    Message,
     Channel,
     Requirement,
     Work,
@@ -100,6 +102,8 @@ pub enum FolderObjectKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderObjectRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge: Option<crate::ChannelKnowledgeReference>,
     pub kind: FolderObjectKind,
     pub id: String,
 }
@@ -121,6 +125,8 @@ pub struct FolderAssignment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub tree_revision: String,
@@ -130,12 +136,16 @@ pub struct FolderSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderCreateParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub request_id: String,
@@ -146,6 +156,8 @@ pub struct FolderCreateParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderUpdateParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub id: String,
@@ -157,6 +169,8 @@ pub struct FolderUpdateParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderDeleteParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub id: String,
@@ -165,6 +179,8 @@ pub struct FolderDeleteParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FolderAssignParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub expected_tree_revision: String,
@@ -182,6 +198,8 @@ pub struct DocumentChanged {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderChanged {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
     pub crew_id: String,
     pub view: FolderView,
     pub tree_revision: String,
