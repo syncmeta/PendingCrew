@@ -236,6 +236,7 @@ struct CrewdWorkspaceView: View {
                 }
             }.disabled(workspace.busy)
             if !workspace.sessionID.isEmpty {
+                CrewdCodexSessionControls(workspace:workspace,sessionID:workspace.sessionID)
                 Label(workspace.inspection["runnerRequest"] != .null ? "等待你的答复" : workspace.inspection["live"]["working"] == .bool(true) ? "正在工作" : workspace.inspection["live"]["running"] == .bool(true) ? "等待下一步" : "会话尚未运行", systemImage: workspace.inspection["live"]["working"] == .bool(true) ? "gearshape" : "circle")
                     .font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
             }

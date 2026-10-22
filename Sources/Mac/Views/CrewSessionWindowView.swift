@@ -50,6 +50,8 @@ struct CrewSessionWindowView: View {
     /// 当前已有运行中机长时也不能再占一个 captain slot。
     @State private var startsAsCaptain = false
     @State private var crewdIsolation = false
+    @State private var codexSettings=CrewdCodexSettingsDraft()
+    @State private var explicitCodexTitle=""
 
     // MARK: - 成员列表模式 state（自轮询白板 + roster，与中栏各拉各的）
 
@@ -1062,6 +1064,7 @@ struct CrewSessionWindowView: View {
                 }
             }
             if appModel.usesCrewdAuthority {
+                if let workspace=appModel.crewdBackend?.workspace,workspace.selectedExecutor == "codex"{CrewdCodexStartOptions(workspace:workspace,title:$explicitCodexTitle,settings:$codexSettings)}
                 Toggle("使用独立工作树", isOn: $crewdIsolation)
                     .toggleStyle(.checkbox)
                 Text(crewdIsolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。")
@@ -1176,9 +1179,11 @@ struct CrewSessionWindowView: View {
                 let personal=workspace.personalInputSnapshot(snapshot)
                 let result: CrewdValue
                 do {
-                    result = try await workspace.performValue("session.start", .object([
-                        "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
-                        "executor": .string(executor), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
+                    var fields:[String:CrewdValue] = ["crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
+                        "executor": .string(executor), "brief": .string(originalDraft), "isolation": .bool(crewdIsolation)]
+                    if !explicitCodexTitle.isEmpty{fields["title"] = .string(explicitCodexTitle)}
+                    if executor == "codex",let options=try codexSettings.value(){guard workspace.client.capabilities.contains("session.codex") else{throw CrewdClientError(message:"当前后台未接入所选 Codex 首轮设置。",kind:.notSubmitted)};fields["codexOptions"]=options}
+                    result = try await workspace.performValue("session.start", .object(fields))
                     guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
                     workspace.clearPersonalInput(snapshot,personal:personal)
                     if stillPresentingSubmission() { workspace.selectSession(id) }

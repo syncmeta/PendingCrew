@@ -225,6 +225,7 @@ private struct CrewdMobileConversation: View {
                     DisclosureGroup("成员工作与恢复记录") {
                         if !workspace.history.isEmpty { Text(workspace.history).textSelection(.enabled) }
                         ForEach(workspace.runnerItems.indices, id: \.self) { index in CrewdRunnerItemView(item: workspace.runnerItems[index]) }
+                        CrewdCodexSessionControls(workspace:workspace,sessionID:workspace.sessionID)
                         CrewdSessionStartView(workspace: workspace, drafts: $workspace.messageDrafts)
                         HStack { Button("打断") { action("session.interrupt") }; Button("停止") { action("session.stop") }; Button("恢复") { action("session.resume") } }.disabled(workspace.busy || !workspace.client.connected || workspace.sessionID.isEmpty)
                     }
