@@ -940,7 +940,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
-        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList"].contains(method)
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {
@@ -958,10 +958,13 @@ final class CrewdWorkspace: ObservableObject {
             guard !hasOriginalUnknown(method: method, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
             try requireSessionExecutor(params["sessionId"].string ?? params["target"]["sessionId"].string ?? "")
         }
+        if CrewdPublicOperation(rawValue:method)?.isCodex == true,!client.capabilities.contains("command.receipts") {
+            throw CrewdClientError(message:"当前后台缺少正式命令回执，Codex 控制尚未提交。",kind:.notSubmitted)
+        }
         if client.capabilities.contains("command.receipts"), let operation = CrewdPublicOperation(rawValue: method) {
             let commandParams = try await explicitControlParameters(operation, params)
             var receipt = try await submitPublicCommand(operation, params: commandParams, crew: params["crewId"].string ?? crewID)
-            if [.sessionStart, .sessionResume, .sessionStop, .sessionInterrupt].contains(operation) {
+            if [.sessionStart, .sessionResume, .sessionStop, .sessionInterrupt].contains(operation) || operation.isCodex {
                 receipt = try await observeSessionControl(receipt)
             }
             guard !receipt.historical, ![.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase) else {
@@ -1058,6 +1061,16 @@ final class CrewdWorkspace: ObservableObject {
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
+        if operation.isCodex {
+            let session=params["target"]["sessionId"].string
+            guard client.capabilities.contains("session.codex"),session != nil else{throw CrewdClientError(message:"当前后台未接入 Codex 会话控制。",kind:.notSubmitted)}
+            let unresolved=durableUnknown.contains{record in
+                isCurrentOriginalObservation(record) && record.params["command"]["operation"] == .string(operation.rawValue) && record.params["command"]["params"]["target"]["sessionId"].string == session
+            } || publicCommands.observations.values.contains{row in
+                publicCommands.pending.contains(row.id) && row.envelope.operation == operation && row.envelope.params["target"]["sessionId"].string == session
+            }
+            guard !unresolved else{throw CrewdClientError(message:"该会话此项原控制尚未确认，请核对原请求，不会新发。",kind:.notSubmitted)}
+        }
         if operation == .sessionStart { try requireExecutor(params["executor"].string ?? "", crew: crew) }
         if operation == .sessionResume {
             guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
@@ -1474,3 +1487,21 @@ final class CrewdOwnedLocalLifecycle {
     }
 }
 #endif
+
+
+extension CrewdCodexSessionStore {
+    convenience init(workspace:CrewdWorkspace,sessionID:String){
+        let crew=workspace.crewID
+        self.init(sessionID:sessionID,read:{[weak workspace] method,params in
+            guard let workspace else{throw CancellationError()}
+            return try await workspace.readValue(method,params)
+        },submit:{[weak workspace] method,params in
+            guard let workspace else{throw CancellationError()}
+            return try await workspace.performValue(method,params)
+        },scope:{[weak workspace] in
+            guard let workspace,!workspace.isRetired,workspace.client.readyForWork,workspace.crewID == crew else{return nil}
+            return workspace.observationGeneration.uuidString+"/"+workspace.client.connectionEpoch.uuidString+"/"+crew
+        },available:{[weak workspace] in workspace?.client.capabilities.contains("session.codex") == true})
+        observe(workspace.authorityEvents)
+    }
+}

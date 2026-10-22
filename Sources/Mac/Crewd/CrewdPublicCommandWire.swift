@@ -51,6 +51,9 @@ struct CrewdPublicReceipt {
         self.phase = phase; self.historical = historical
         _ = try CrewdPublicWire.token(value["createdAt"])
         _ = try CrewdPublicWire.token(value["updatedAt"])
+        if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
+            try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
+        }
     }
     // Historical/unknown/reserved/dispatch are preserved for read-only recovery;
     // none of this DTO offers an automatic submit/replay method.
@@ -141,6 +144,14 @@ enum CrewdPublicOperation: String, Codable {
     case sessionStop = "session.stop"
     case sessionResume = "session.resume"
     case sessionInterrupt = "session.interrupt"
+    case codexConfigure = "session.codex.configure"
+    case codexCompact = "session.codex.compact"
+    case codexSteer = "session.codex.steer"
+    case codexQueue = "session.codex.queue"
+    case codexReview = "session.codex.review"
+    case codexTitle = "session.codex.titleSet"
+    case codexFork = "session.codex.fork"
+    var isCodex:Bool{rawValue.hasPrefix("session.codex.")}
     case sessionAnswer = "session.answer"
     case sessionRespond = "session.respondRunnerRequest"
     case terminalClaim = "session.terminal.claim"
@@ -241,6 +252,23 @@ private enum CrewdPublicParameters {
         case .sessionStart:
             required = ["crewId", "role", "executor", "brief", "isolation"]
             defaults = ["title": .null, "model": .null, "effort": .null]
+            if let options=fields["codexOptions"] {
+                guard fields["executor"] == .string("codex") else{throw CrewdPublicWire.invalid()}
+                fields["codexOptions"] = try CrewdCodexWire.settings(options)
+                for key in ["model","effort"] where options[key] != .null && fields[key] != nil && fields[key] != .null{throw CrewdPublicWire.invalid()}
+                defaults["codexOptions"] = .null
+            }
+        case .codexConfigure:
+            required=["target","patch"];fields["patch"]=try CrewdCodexWire.settings(fields["patch"] ?? .null)
+        case .codexCompact:required=["target"]
+        case .codexSteer,.codexQueue:
+            required=["target","text"];try CrewdCodexWire.text(fields["text"] ?? .null)
+        case .codexTitle:required=["target","title"];try CrewdCodexWire.text(fields["title"] ?? .null)
+        case .codexFork:
+            required=["target"];defaults=["lastTurnId":.null,"title":.null]
+            for key in defaults.keys where fields[key] != nil && fields[key] != .null{try CrewdCodexWire.text(fields[key]!)}
+        case .codexReview:
+            required=["target","reviewTarget"];fields["reviewTarget"]=try CrewdCodexWire.review(fields["reviewTarget"] ?? .null)
         case .sessionStop: required = ["target", "reason"]
         case .sessionResume, .sessionInterrupt:
             return try CrewdCommandTarget(value).value

@@ -304,7 +304,7 @@ struct CrewdExecutorChoiceView: View {
                 Text("手工终端：\(profile.manualTerminal ? "支持" : "未开放") · 结构化审批：\(profile.structuredDecisions ? "支持" : "未开放")")
                     .font(.caption).foregroundStyle(.secondary)
                 if !profile.fullHistoryLoad {
-                    Text(profile.recoveryDescription)
+                    Text(profile.backend == "codex" && workspace.client.capabilities.contains("session.codex") ? "原历史可在会话控制页只读读取；手动恢复被拒绝时不会创建替代 thread。":profile.recoveryDescription)
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else {
@@ -321,6 +321,8 @@ struct CrewdExecutorChoiceView: View {
 
 struct CrewdSessionStartView: View {
     @State private var isolation = false
+    @State private var codexSettings=CrewdCodexSettingsDraft()
+    @State private var explicitTitle=""
     @ObservedObject var workspace: CrewdWorkspace
     @Binding var drafts: CrewdDrafts
     @State private var failure: String?
@@ -335,6 +337,7 @@ struct CrewdSessionStartView: View {
             CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)
             TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(2...6)
             CrewPersonalDraftControls(workspace:workspace,context:context,payload:Binding(get:{.init(text:input.wrappedValue)},set:{input.wrappedValue=$0.text}))
+            if workspace.selectedExecutor == "codex"{CrewdCodexStartOptions(workspace:workspace,title:$explicitTitle,settings:$codexSettings)}
             Toggle("使用独立工作树", isOn: $isolation)
             Text(isolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。").font(.caption).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
@@ -353,10 +356,14 @@ struct CrewdSessionStartView: View {
                 let snapshot = drafts.snapshot(for: context), owner = workspace
                 let personal=owner.personalInputSnapshot(snapshot)
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
-                let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(owner.selectedExecutor), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
+                var fields:[String:CrewdValue] = ["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(owner.selectedExecutor), "brief": .string(snapshot.text), "isolation": .bool(isolation)]
+                if !explicitTitle.isEmpty{fields["title"] = .string(explicitTitle)}
+                do{if owner.selectedExecutor == "codex",let options=try codexSettings.value(){guard owner.client.capabilities.contains("session.codex") else{throw CrewdClientError(message:"当前后台未接入所选 Codex 首轮设置。",kind:.notSubmitted)};fields["codexOptions"]=options}}
+                catch{failure=error.localizedDescription;return}
+                let submission=CrewdValue.object(fields)
                 failure = nil; readUnknown = false; reviewedUnknown = false
                 Task {
-                    do { _ = try await owner.performValue("session.start", fields); owner.clearPersonalInput(snapshot,personal:personal) }
+                    do { _ = try await owner.performValue("session.start", submission); owner.clearPersonalInput(snapshot,personal:personal) }
                     catch {
                         owner.recordUncertainSessionStart(snapshot, error: error)
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }
