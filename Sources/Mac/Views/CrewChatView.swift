@@ -376,7 +376,7 @@ struct CrewChatView: View {
     private var conversationHeader:some View {
         HStack(spacing:10){
             Text(conversationTitle).font(CrewdType.label.weight(.semibold)).lineLimit(1)
-            if let controls=messageFolders.controls{controls.fixedSize(horizontal:true,vertical:false)}
+                .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
             Spacer(minLength:2)
             ViewThatFits(in:.horizontal){
                 communicationControls(compact:false)

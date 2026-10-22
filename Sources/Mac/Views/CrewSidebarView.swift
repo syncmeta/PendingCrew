@@ -123,12 +123,6 @@ struct CrewSidebarView: View {
                 }
                 .help("搜索所有群")
                 Button {
-                    crewStore.beginPendingCrew()
-                } label: {
-                    Label("新建机组", systemImage: "plus")
-                }
-                .help("新建机组")
-                Button {
                     Task {
                         await crewStore.refreshList()
                         await crewStore.refreshMachines()
@@ -212,6 +206,8 @@ struct CrewSidebarView: View {
             }
             .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             .tint(Theme.Palette.accent)
+            Button { crewStore.beginPendingCrew() } label: { Image(systemName:"plus") }
+                .buttonStyle(CrewdToolButtonStyle()).help("新建机组").accessibilityLabel("新建机组")
             Menu {
                 Button("按最近消息排序") { viewModeRaw = CrewSidebarViewMode.timeline.rawValue }
                 Button("按机长整理排序") { viewModeRaw = CrewSidebarViewMode.chief.rawValue }

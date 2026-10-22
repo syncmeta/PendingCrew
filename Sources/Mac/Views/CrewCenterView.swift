@@ -76,7 +76,6 @@ struct CrewCenterView: View {
         // 窗口使用透明 titlebar + fullSizeContentView。只给中栏标题后面铺一层
         // 与聊天画布相同的不透明底色，挡住滚到标题下面的消息；不改变整窗 toolbar
         // 背景，sidebar 仍保留自己的材质。高度跟随系统安全区，窄窗口也不写死宽度。
-        .overlay(alignment: .top) { chatTitleBacking }
         // 「回到刚才那条」（人类 Todo #132/#133）。**浮在群聊上方而不是插进版面**：
         // 插进去会把整条时间线往下推一格，而它是个临时件 —— 退回去之后就该消失，
         // 版面不该跟着抖两次。
@@ -106,17 +105,7 @@ struct CrewCenterView: View {
                 .padding(.top, 8)
             }
         }
-        // 标题走原生 navigationTitle —— 位置/收合行为和系统窗口标题完全一致（不会跑到
-        // 红绿灯后面、收 sidebar 也不冒第二个标题），纯文字无胶囊。操作按钮放 trailing
-        // （macOS 26 自动给原生白色液态玻璃岛 + 阴影）。
-        //
-        // 标题文字与按钮组都 gate 在 selectedCrewId（而非 selectedDetail）——后者在切换
-        // crew 时会短暂为 nil（detail 异步加载），导致标题清空 + 工具栏项目消失再出现，
-        // 表现为"切换后 toolbar 闪一下"。用 selectedCrewId（切换瞬间即非 nil）+ 列表里的
-        // title 兜底，整条就稳定不抖。
-        .navigationTitle(crewStore.pendingCrew?.id == crewStore.selectedCrewId
-                         ? "新机组"
-                         : (crewStore.selectedDetail?.crew.title ?? crewStore.selectedCrew?.title ?? ""))
+        .navigationTitle("")
 
         .searchable(text:$searchQuery,placement:.toolbar,prompt:"搜索当前群")
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
@@ -221,19 +210,6 @@ struct CrewCenterView: View {
         }
     }
 
-    @ViewBuilder
-    private var chatTitleBacking: some View {
-        if crewStore.selectedCrewId != nil {
-            GeometryReader { geometry in
-                Color.clear
-                    .frame(height: geometry.safeAreaInsets.top)
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .offset(y: -geometry.safeAreaInsets.top)
-            }
-            .allowsHitTesting(false)
-        }
-    }
-
     private func empty(_ text: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "rectangle.dashed")
@@ -248,9 +224,8 @@ struct CrewCenterView: View {
     }
 
     private var placeholder: some View {
-        CrewdEmptySurface(title: "一起把事情推进", detail: "选择左侧的机组继续工作，或建立一个机组，从第一条消息开始。",
-                          symbol: "bubble.left.and.bubble.right", actionTitle: "新建机组",
-                          action: { crewStore.beginPendingCrew() })
+        CrewdGlassAddButton { crewStore.beginPendingCrew() }
+            .frame(maxWidth:.infinity,maxHeight:.infinity)
     }
 }
 

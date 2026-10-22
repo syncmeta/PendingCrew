@@ -406,6 +406,13 @@ enum CrewdConversationProjection {
             return channel["kind"].string == "dm" ? "私聊" : "话题"
         }
     }
+    static func context(_ channel:CrewdValue)->String {
+        switch channel["kind"].string {
+        case "human":return "人类沟通群：你、当前机长和有效的显式成员；不是仅 @ 你的消息筛选。"
+        case "lobby":return "机组大厅：你和本机组的全部成员会话。"
+        default:return ""
+        }
+    }
     static func selected(_ channels: [CrewdValue], requested: String) -> String {
         if channels.contains(where: { $0["id"].string == requested }) { return requested }
         return channels.first(where: { $0["kind"].string == "human" })?["id"].string ?? channels.first?["id"].string ?? ""
