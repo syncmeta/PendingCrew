@@ -1,5 +1,25 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-23 原生 APNs 后端完整源码接受并整合
+
+独立分支完整778bca140a184c5e9e23472105a76f8fbd0bfe51已整块准入，根全文读canonical合同/DELIVERY/最终质量结论becbb46b65585477055c056c5b17370db200c1f20c1bdcae3306be66150767e9并核净源。当前源码整合Store19/API3/schema137，八个notification typed RPC，原129方法/393定义保持原值；Store19仅为新增同事务outbox必要writer barrier，当前18按原受保护升级与备份恢复，Native16仍inactive。默认关闭；无配置/订阅时不读APNs秘密、不建通知观察或网络连接。当前实际安装及已封5553仍Store18/129，不因Git整合变为19。
+
+原生sender复用reqwest/rustls/h2/ES256；WorkBook原组织事件、真实native Codex outcome、sealed managed Claude receipt、结构化Core决策与Human mention按各自权威同事务投递，不用回复就绪冒业务Done。原UUID/CAS、token保护、真实mTLS grant、claim前持久Unknown、24小时固定期限、撤权/恢复/迟回执不重发均由原seam验证。Linux配置只沿原true-rootFD窄类型，Mac只原LocalHuman。点击完整context需已有准确连接、原installation/delivery精确读和当前ACL，不自动授信/连接/启动/恢复。
+
+独验亲核1903源码及127原产物，修订15产物/日志；29唯一原case实跑通过，未变源的old18拒写1/Jev2/installer12复用，44项净影响资格成立。质量发现的两个原h2 fixture未驱动Connection及remote cfg缺失导致0test误计已在同模块最小test-only/证据修订关闭；397原超时/0test全部保留并排除成功计数，三真实mutation红保原件不重造。无产品逻辑因该修订改变、不重跑稳定全量、不造新验收框架。
+
+本次完成源码与本地合成层，未有新组合normal/签包、Swift消费者准入、真实Apple凭据/token/APNs、设备展示点击或Linux/systemd部署。唯一Swift作者继续Mac/iOS通知opt-in/注册与精确导航，唯一后端作者继续剩余Codex完整控制/输入/原生历史模块；质量按整块冻结接手，不兼任实现。Core-native通知不新增Cloudflare付费Container/公开桥；原Worker Unknown保留。下一自然候选统一准确冻结/normal/暖包，旧5553窗口/安装仅等真人正常退出而独立继续；不重标旧normal或为过渡版本耗Linux分钟。尚缺Cloud真实资格/双端、物理设备、Claude完整历史/恢复及正式分发仍明列。
+
+## 2026-10-23 个人同步 App 完整源码接受，继续并行交付
+
+完整客户端源码 cdf16b5d97e428c681461e4d8f58e8b18ca6c93a 已独立准入，承接5553，净13路径；原 f6 同账号切回后的旧编辑范围覆盖新输入风险已实红、修复并定向复验。实际 App 生命周期、持久 opt-in、账号隔离、完整草稿版本与原文保全、精确合并/导出/退出保护，以及实际外观的可选 KVS 接线已闭合。独验 d005d58b71b21143085251f1520624666aeb9c5a12435be561d80d4f2a34a57c，原 Mac/iOS 全目标0/0、394输入前后及当前一致；仅复验4个受影响原入口，不重建或重跑稳定业务。
+
+默认 applicationConfiguration=nil/off，不构造或探测 CloudKit/KVS/账号；当前普通候选尚不含本源码。真实 iCloud 容器、签名资格、SDK/server 交换及双端真实账号流程仍待完成。已确认只用 M42BKJN82S；本地现有两份 Crew profile 无 CloudKit/KVS/aps 授权，不能外推远端容器不存在。Development 首轮与 Developer ID 日用资格分别核实际 profile/entitlements，Simulator 不冒 Production/真机；首轮 KVS 可不启用。门户需正常登录/解锁时只等待该支路，不改系统账号或借其他产品资格。
+
+准确5553整套候选现已完成普通 normal、Developer ID Mac 和普通 iOS Simulator 产物独验：Mac0.1.44/20748.63094，GUI Release、Core默认Debug，M42 hardened runtime；iOS实际0.1.43/1、Debug Simulator。它们仍是原5553输入，不因本次源码整合重标。当前日用仍9a/20748.58461；正常Quit请求后原App/Core仍在，后续AX读取遭实际审批拒绝并已停止，待真人正常退出。新5553候选从未启动，600秒闲置、受影响窗口和安装尚未执行，旧9a闪退唯一源行未证。原拒绝不换工具重试，等待不阻其他模块。
+
+后端原生 APNs 整块3974905f已冻结并独验中，8RPC/API3/schema137/Store19仅属该独立源码；完整消费者 App 接线由唯一Swift作者继续，后台唯一作者接尚缺Codex控制能力。质量线并行审不同冻结模块，不兼任实现、不重复稳定验收。主代理只做范围/接口/冻结/整合与交付。当前B5553仍Store18/schema129，Native16 inactive。一个付费Linux构建留给最终已接受组合的准确S/C，不为过渡5553先耗一次；原C/S同Rust树、原witness/packager、手动30分钟门保持，未dispatch/部署。VPS缺供应商CLI时仍由用户按脚本自行安装登录，不替用户安装登录或伪造可用。旧184/1ef/c4 Unknown、全部旧App/数据/证据保留。尚待讨论方案保持待决。
+
 ## 当前交付总览（2026-10-23）
 
 本轮用户继续要求收敛原生外壳，并报告无操作时闪退。完整修订f1f61fb8cb5a330685d2fc894a50c86332490cd1从已整合B的53540cf2承接，独立整块源码门e636dbf19e4971f991fe1d15d98fb0e1cedcb32868c1499ea5efa143e4106e67接受：隐藏重复机组标题、五域原生玻璃tab同排置整个会话上方；空workspace只保一个玻璃新增按钮，sidebar固定新增入口；重复地球合为语义明确的电脑与连接菜单；消息文件夹整理收进会话列表，保留既有分类数据与选择。原左下身份布局、对应机器真实绿点、原UUID/Unknown核对与权限不变。Mac/iOS全目标0、393输入前后及当前一致，稳定B/业务证据复用。

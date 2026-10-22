@@ -10,6 +10,28 @@ spec = importlib.util.spec_from_file_location('pendingcrew_host', source)
 host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
 
 class InstallerControls(unittest.TestCase):
+    def test_notification_unknown_saves_only_original_digest_and_lookup_never_resends(self):
+        request='11111111-1111-4111-8111-111111111111'
+        params={'requestId':request,'expectedRevision':'0','enabled':True,'provider':{'privateKeyPkcs8Base64':'DO-NOT-PERSIST-KEY'}}
+        records=[]; calls=[]
+        def write(path,value): records.append(value)
+        def rpc(method,body): calls.append((method,body)); raise OSError('synthetic response loss')
+        with mock.patch.object(host.sys,'stdin',types.SimpleNamespace(buffer=io.BytesIO(json.dumps(params).encode()))),mock.patch.object(host,'private_root'),mock.patch.object(host,'new_record',side_effect=write),mock.patch.object(host,'rpc',side_effect=rpc):
+            with self.assertRaises(OSError): host.notification_configure(types.SimpleNamespace(input_file=None))
+        self.assertEqual(len(records),1);self.assertEqual(records[0]['requestId'],request)
+        self.assertNotIn('DO-NOT-PERSIST-KEY',json.dumps(records));self.assertNotIn('provider',records[0]);self.assertEqual(calls[0][0],'host.notificationConfigure')
+        with mock.patch.object(host,'read_record',return_value=records[0]),mock.patch.object(host,'rpc',return_value={'kind':'unknown','operation':'notification.configure'}) as read,mock.patch('sys.stdout',new_callable=io.StringIO):
+            host.notification_lookup(types.SimpleNamespace(request_id=request))
+        read.assert_called_once_with('host.notificationRequestLookup',{'requestId':request})
+    def test_notification_secret_never_has_an_argv_or_environment_option(self):
+        parsed=host.parser().parse_args(['notification-configure'])
+        self.assertIsNone(parsed.input_file)
+        with mock.patch('sys.stderr',new_callable=io.StringIO):
+            with self.assertRaises(SystemExit):host.parser().parse_args(['notification-configure','--private-key','DO-NOT-ACCEPT'])
+        with mock.patch.object(host.sys,'stdin',types.SimpleNamespace(buffer=io.BytesIO(b'x'*16385))),mock.patch.object(host,'new_record') as write,mock.patch.object(host,'rpc') as request:
+            with self.assertRaises(host.Refused):host.notification_configure(types.SimpleNamespace(input_file=None))
+            write.assert_not_called();request.assert_not_called()
+
     def test_preflight_refusal_performs_no_persistent_install_or_inference(self):
         account = types.SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_dir='/home/ordinary')
         for failure in ['missing', 'version', 'login']:

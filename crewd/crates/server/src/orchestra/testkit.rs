@@ -98,6 +98,8 @@ pub struct MemState {
     pub events: Vec<OrchestraEvent>,
     pub runner_usage: Vec<(String, crewd_exec::session::RunnerUsageSnapshot, Ms)>,
     pub runner_ends: Vec<(String, String, String)>,
+    pub notification_claims: Vec<i64>,
+    pub notification_changes: Vec<(String, NotificationChange)>,
     pub max_live: Option<usize>,
     pub restarts: Vec<Vec<String>>,
     /// 每次 `open_restart` 的 reason（与 `restarts` 一一对应）。
@@ -1887,6 +1889,22 @@ impl Port for MemPort {
                 crewd_collab::turn_trace::QUESTION_LIMIT,
             );
         }
+        Ok(())
+    }
+
+    async fn claim_notification(
+        &self,
+        id: i64,
+        _revision: i64,
+        _now: i64,
+    ) -> Result<Option<crewd_store::notifications::Claimed>> {
+        self.lock().notification_claims.push(id);
+        Ok(None)
+    }
+    async fn notification_change(&self, session: &str, change: NotificationChange) -> Result<()> {
+        self.lock()
+            .notification_changes
+            .push((session.into(), change));
         Ok(())
     }
 

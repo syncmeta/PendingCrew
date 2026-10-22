@@ -573,6 +573,49 @@ impl Actor {
                 stdout: Some(json!({"continue":true}).to_string()),
             };
         }
+        // The hook transport and session checks above are insufficient alone:
+        // only this current managed input's actual prompt can attest failure.
+        if kind == HookKind::StopFailure {
+            let qualified = self
+                .pending
+                .as_ref()
+                .filter(|input| prompt.is_some() && input.prompt == prompt)
+                .and_then(|input| input.receipt.as_ref())
+                .cloned();
+            if let Some(original) = qualified {
+                let terminal = self.terminal.clone();
+                let permit = terminal.automatic_hook_authority(self.seal.clone()).await;
+                let allowed = permit.is_some() && self.current_now();
+                drop(permit);
+                if allowed {
+                    self.invalidate().await;
+                    let request = original.request_id.clone();
+                    let runtime = self.seal.runtime().id.clone();
+                    let proof = self
+                        .db
+                        .call_result(move |store| {
+                            let receipt = n::get(store.conn(), &request)?;
+                            Ok::<_, crewd_store::StoreError>(receipt.filter(|r| {
+                                r.runtime_id == runtime
+                                    && r.prompt_id.is_some()
+                                    && r.phase == n::Phase::Unknown
+                                    && r.turn_id.is_none()
+                            }))
+                        })
+                        .await;
+                    if let Ok(Ok(Some(receipt))) = proof {
+                        self.working.store(false, Ordering::Release);
+                        let _ = self.events.send(SessionEvent::ManagedResponseFailed {
+                            runtime_id: receipt.runtime_id,
+                            request_id: receipt.request_id,
+                            prompt_id: receipt.prompt_id.unwrap(),
+                            receipt_revision: receipt.revision,
+                        });
+                    }
+                    return HookResult { stdout: None };
+                }
+            }
+        }
         if matches!(
             kind,
             HookKind::StopFailure | HookKind::SessionEnd | HookKind::SessionStart
@@ -1067,6 +1110,89 @@ mod tests {
         let (server, _client) = tokio::net::UnixStream::pair().unwrap();
         crate::public_commands::Actor::Local(policy.accept(&server).unwrap())
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn notification_managed_failure_requires_actual_current_request_prompt_and_session() {
+        for mode in [
+            "matched",
+            "foreign-prompt",
+            "foreign-session",
+            "subagent",
+            "stopped",
+        ] {
+            let mut run = race_run().await;
+            let request = uuid::Uuid::new_v4().to_string();
+            let prompt = uuid::Uuid::new_v4().to_string();
+            let body = envelope(&request, "SYNTHETIC_NOTIFICATION_FAILURE").unwrap();
+            let seal = run.actor.seal.clone();
+            let rid = request.clone();
+            let pid = prompt.clone();
+            let original = body.as_bytes().to_vec();
+            let receipt = run
+                .actor
+                .db
+                .call_result(move |s| {
+                    s.with_tx(|tx| {
+                        n::prepare(tx, &seal.runtime().id, &rid, &original, "t")?;
+                        n::managed_accept_content(tx, &seal, &rid, 0, &pid, &original, "t")
+                    })
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            run.actor.pending = Some(Submission {
+                request: request.clone(),
+                external: 1,
+                subject: Subject::Brief,
+                body,
+                local: None,
+                receipt: Some(receipt),
+                prompt: Some(prompt.clone()),
+                stopped: false,
+                last_response: String::new(),
+                delivered: false,
+                unobserved_delivery: None,
+            });
+            let (events, mut observed) = mpsc::unbounded_channel();
+            run.actor.events = events;
+            run.actor.working.store(true, Ordering::Release);
+            let mut payload = json!({"session_id":run.actor.agent_session,"hook_event_name":"StopFailure","prompt_id":prompt});
+            match mode {
+                "foreign-prompt" => payload["prompt_id"] = json!(uuid::Uuid::new_v4().to_string()),
+                "foreign-session" => payload["session_id"] = json!("other-session"),
+                "subagent" => payload["agent_id"] = json!("subagent"),
+                "stopped" => run.actor.stopping.store(true, Ordering::Release),
+                _ => {}
+            }
+            run.actor.hook(HookKind::StopFailure, payload).await;
+            let mut failures = Vec::new();
+            while let Ok(event) = observed.try_recv() {
+                if let SessionEvent::ManagedResponseFailed {
+                    runtime_id,
+                    request_id,
+                    prompt_id,
+                    receipt_revision,
+                } = event
+                {
+                    failures.push((runtime_id, request_id, prompt_id, receipt_revision));
+                }
+            }
+            if mode == "matched" {
+                assert_eq!(failures.len(), 1);
+                assert_eq!(failures[0].0, run.actor.seal.runtime().id);
+                assert_eq!(failures[0].1, request);
+                assert_eq!(failures[0].2, prompt);
+                assert!(failures[0].3 > 1);
+                assert!(!run.actor.working.load(Ordering::Acquire));
+                assert!(run.actor.blocked.load(Ordering::Acquire));
+            } else {
+                assert!(
+                    failures.is_empty(),
+                    "{mode} cannot invent a provider failure"
+                );
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn managed_guard_race_stop_across_real_driver_status_cannot_remain_current() {
         let mut run = race_run().await;

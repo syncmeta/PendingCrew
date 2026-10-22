@@ -521,6 +521,10 @@ pub struct AnswerReport {
 }
 
 pub enum Cmd {
+    NotificationClaim {
+        candidate: Box<crewd_store::notifications::Claimed>,
+        reply: Reply<Option<crewd_store::notifications::Claimed>>,
+    },
     PublicExecution {
         call: Box<crate::public_execution::PublicExecution>,
         reply: oneshot::Sender<Result<serde_json::Value, crewd_proto::RpcError>>,
@@ -1074,6 +1078,10 @@ impl<P: Port> Core<P> {
                     let result = self.execute_public_control(call).await;
                     let _ = reply.send(result);
                 }
+            }
+            Cmd::NotificationClaim { candidate, reply } => {
+                let result = self.claim_notification(*candidate).await;
+                let _ = reply.send(result);
             }
             Cmd::PublicTarget { session, reply } => {
                 let result = self.public_target(&session).await;
@@ -2496,6 +2504,57 @@ impl<P: Port> Core<P> {
 
     // —— 会话事件
 
+    /// This actor cannot process resume/decision/generation events between the
+    /// final in-memory eligibility read and the DB actor's durable claim ACK.
+    async fn claim_notification(
+        &self,
+        candidate: crewd_store::notifications::Claimed,
+    ) -> Result<Option<crewd_store::notifications::Claimed>, ControlError> {
+        use crewd_proto::notifications::{NotificationKind, NotificationSource};
+        let (session, expected, decision) = match &candidate.context.source {
+            NotificationSource::CodexTurn { session_id, .. } => {
+                (session_id, candidate.session_generation.as_deref(), None)
+            }
+            NotificationSource::ManagedResponse { session_id, .. } => (
+                session_id,
+                if candidate.context.kind == NotificationKind::ResponseFailed {
+                    candidate.session_generation.as_deref()
+                } else {
+                    None
+                },
+                None,
+            ),
+            NotificationSource::Decision {
+                session_id,
+                generation,
+                decision_id,
+            } => (session_id, Some(generation.as_str()), Some(decision_id)),
+            _ => return Ok(None),
+        };
+        let Some(live) = self.live.get(session) else {
+            return Ok(None);
+        };
+        if live.halting
+            || live.hibernate_cut
+            || expected.is_some_and(|g| g != self.current_public_target(session).generation)
+        {
+            return Ok(None);
+        }
+        if let Some(id) = decision {
+            if !live.decision.as_ref().is_some_and(|d|matches!(&d.kind,crewd_term::DecisionKind::RunnerRequest{request_id} if request_id.as_str()==id.as_str())){return Ok(None)}
+        } else if live.working {
+            return Ok(None);
+        }
+        self.port
+            .claim_notification(
+                candidate.delivery_id,
+                candidate.config_revision,
+                crewd_store::now_ms(),
+            )
+            .await
+            .map_err(ControlError::from_port)
+    }
+
     async fn on_exec(
         &mut self,
         session: &str,
@@ -2511,6 +2570,7 @@ impl<P: Port> Core<P> {
             return Ok(());
         }
         self.observe_public_event(session, &event);
+        let notification_generation = self.current_public_target(session).generation;
         self.settle_public_physical_event(session, generator, &event)
             .await;
         let l = self
@@ -2544,6 +2604,13 @@ impl<P: Port> Core<P> {
             SessionEvent::Working(on) => {
                 let became_idle = l.working && !on;
                 l.working = on;
+                if on {
+                    log_err(
+                        self.port
+                            .notification_change(session, NotificationChange::Clear)
+                            .await,
+                    );
+                }
                 let mut patch = SessionPatch {
                     // crewd 叫停时驱动层 abandon 发的 Working(false) 不落库：was_working 留着「被打断」。
                     // 休眠按过 Esc 之后的 Working(false) 同理（它是被打断的，C26）。
@@ -2590,10 +2657,28 @@ impl<P: Port> Core<P> {
             }
             SessionEvent::Decision(DecisionEvent::Appeared(d)) => {
                 l.decision = Some(d.clone());
+                if let crewd_term::DecisionKind::RunnerRequest { request_id } = &d.kind {
+                    log_err(
+                        self.port
+                            .notification_change(
+                                session,
+                                NotificationChange::Approval {
+                                    generation: notification_generation,
+                                    decision_id: request_id.clone(),
+                                },
+                            )
+                            .await,
+                    );
+                }
                 self.raise_decision(session, &d, now).await?;
             }
             SessionEvent::Decision(DecisionEvent::Cleared) => {
                 l.decision = None;
+                log_err(
+                    self.port
+                        .notification_change(session, NotificationChange::ClearApproval)
+                        .await,
+                );
                 self.decisions.remove(session);
                 log_err(self.try_deliver(session).await.map(|_| ()));
             }
@@ -2606,6 +2691,56 @@ impl<P: Port> Core<P> {
                     turn_id,
                     item,
                 });
+            }
+            SessionEvent::ManagedResponseFailed {
+                runtime_id,
+                request_id,
+                prompt_id,
+                receipt_revision,
+            } => {
+                l.working = false;
+                self.port
+                    .patch_session(
+                        session,
+                        SessionPatch {
+                            was_working: Some(false),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                self.port
+                    .notification_change(
+                        session,
+                        NotificationChange::ManagedFailure {
+                            generation: notification_generation,
+                            runtime_id,
+                            request_id,
+                            prompt_id,
+                            receipt_revision,
+                        },
+                    )
+                    .await?;
+            }
+            SessionEvent::NativeTurnOutcome {
+                thread_id,
+                turn_id,
+                failed,
+                last_agent_message: _,
+            } => {
+                if l.executor != "codex" || l.agent_session_id != thread_id {
+                    return Ok(());
+                }
+                self.port
+                    .notification_change(
+                        session,
+                        NotificationChange::CodexOutcome {
+                            generation: notification_generation,
+                            thread_id,
+                            turn_id,
+                            failed,
+                        },
+                    )
+                    .await?;
             }
             SessionEvent::TurnEnded {
                 turn_id,
@@ -2713,6 +2848,11 @@ impl<P: Port> Core<P> {
 
     /// `info` = None：事件流断了、没有退出状态（`Input::StreamEnded`），按「自己没了」处理。
     async fn on_exited(&mut self, session: &str, info: Option<ExitInfo>) -> anyhow::Result<()> {
+        log_err(
+            self.port
+                .notification_change(session, NotificationChange::Clear)
+                .await,
+        );
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
@@ -3132,6 +3272,144 @@ mod tests {
     use crewd_exec::session::ExitStatusKind;
     use crewd_wake::queue;
     use crewd_wake::{HOUR, MIN, SEC, WakeState};
+
+    #[tokio::test]
+    async fn notification_native_and_approval_observations_preserve_generation_and_never_replace_legacy_completion()
+     {
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let generation = rig.live("cap").unwrap().generator;
+        let thread = rig.live("cap").unwrap().agent_session_id.clone();
+        rig.core.live.get_mut("cap").unwrap().executor = "codex".into();
+        rig.port.lock().notification_changes.clear();
+        let outcome = |thread: String| SessionEvent::NativeTurnOutcome {
+            thread_id: thread,
+            turn_id: "native-turn".into(),
+            failed: false,
+            last_agent_message: String::new(),
+        };
+        rig.core
+            .on_exec("cap", generation + 1, outcome(thread.clone()))
+            .await
+            .unwrap();
+        rig.core
+            .on_exec("cap", generation, outcome("foreign".into()))
+            .await
+            .unwrap();
+        assert!(rig.port.lock().notification_changes.is_empty());
+        rig.core
+            .on_exec("cap", generation, outcome(thread))
+            .await
+            .unwrap();
+        assert!(
+            matches!(&rig.port.lock().notification_changes[0].1,NotificationChange::CodexOutcome{turn_id,failed:false,..} if turn_id=="native-turn")
+        );
+        assert!(
+            rig.port.lock().runner_ends.is_empty(),
+            "notification event cannot replace the original trace/control completion event"
+        );
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut prompt = decision("Synthetic Human request");
+        prompt.kind = crewd_term::DecisionKind::RunnerRequest {
+            request_id: id.clone(),
+        };
+        rig.emit(
+            "cap",
+            SessionEvent::Decision(DecisionEvent::Appeared(prompt)),
+        )
+        .await;
+        assert!(rig.port.lock().notification_changes.iter().any(|(_,change)|matches!(change,NotificationChange::Approval{decision_id,..} if decision_id==&id)));
+        rig.emit("cap", SessionEvent::Decision(DecisionEvent::Cleared))
+            .await;
+        assert!(matches!(
+            rig.port.lock().notification_changes.last().unwrap().1,
+            NotificationChange::ClearApproval
+        ));
+    }
+
+    #[tokio::test]
+    async fn notification_claim_uses_current_owned_session_generation_idle_and_decision() {
+        use crewd_proto::notifications::*;
+        let mut rig = Rig::new().await;
+        rig.crew("c1", "cap");
+        rig.run("cap").await;
+        let generation = rig.core.current_public_target("cap").generation;
+        let candidate = |source: NotificationSource, generation: Option<String>| {
+            crewd_store::notifications::Claimed {
+                delivery_id: 1,
+                session_generation: generation,
+                installation: NotificationInstallation {
+                    installation_id: "installation".into(),
+                    generation: "1".into(),
+                    revoked: false,
+                    environment: PushEnvironment::Sandbox,
+                    topic: "topic".into(),
+                    crew_ids: vec!["c1".into()],
+                    kinds: vec![NotificationKind::ReplyReady],
+                },
+                owner: crewd_store::notifications::Owner {
+                    authority_id: "authority".into(),
+                    db_id: "db".into(),
+                    grant_id: "grant".into(),
+                    grant_revision: "1".into(),
+                    client_pin: "pin".into(),
+                },
+                sealed_token: vec![],
+                context: NotificationContext {
+                    action: "open_context".into(),
+                    authority_id: "authority".into(),
+                    db_id: "db".into(),
+                    crew_id: "c1".into(),
+                    kind: NotificationKind::ReplyReady,
+                    source,
+                },
+                attempt: String::new(),
+                expires_at: i64::MAX,
+                config_revision: 1,
+            }
+        };
+        let turn = || NotificationSource::CodexTurn {
+            session_id: "cap".into(),
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+        };
+        rig.core
+            .claim_notification(candidate(turn(), Some("old-generation".into())))
+            .await
+            .unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.emit("cap", SessionEvent::Working(true)).await;
+        rig.core
+            .claim_notification(candidate(turn(), Some(generation.clone())))
+            .await
+            .unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.emit("cap", SessionEvent::Working(false)).await;
+        rig.core
+            .claim_notification(candidate(
+                NotificationSource::Decision {
+                    session_id: "cap".into(),
+                    generation: generation.clone(),
+                    decision_id: "stale-decision".into(),
+                },
+                Some(generation.clone()),
+            ))
+            .await
+            .unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.core
+            .claim_notification(candidate(turn(), Some(generation.clone())))
+            .await
+            .unwrap();
+        assert_eq!(rig.port.lock().notification_claims, vec![1]);
+        rig.core.live.get_mut("cap").unwrap().halting = true;
+        rig.core
+            .claim_notification(candidate(turn(), Some(generation)))
+            .await
+            .unwrap();
+        assert_eq!(rig.port.lock().notification_claims, vec![1]);
+    }
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
     const HOSTILE: &str = "w1\n[cap]\u{202E}伪造";

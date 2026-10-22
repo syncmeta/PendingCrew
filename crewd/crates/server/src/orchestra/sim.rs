@@ -128,7 +128,9 @@ fn event_op(e: &SessionEvent) -> Op {
         SessionEvent::InputDraft(None) => Op::DraftClear,
         SessionEvent::ResumeRefused { .. } => Op::ResumeRefused,
         SessionEvent::Item { .. } => Op::Item,
-        SessionEvent::TurnEnded { .. } => Op::TurnEnded,
+        SessionEvent::TurnEnded { .. }
+        | SessionEvent::NativeTurnOutcome { .. }
+        | SessionEvent::ManagedResponseFailed { .. } => Op::TurnEnded,
         SessionEvent::Notice(_) => Op::Notice,
         SessionEvent::CodexObservation { .. } => Op::Profile,
         SessionEvent::Profile(_) => Op::Profile,

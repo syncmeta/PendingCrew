@@ -206,6 +206,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
+            if state.notifications.get().is_some() {
+                capabilities.push("notification.nativeApns".into());
+            }
             if state.remote.get().is_some() {
                 capabilities.push("remote.enrollment".into());
             }
