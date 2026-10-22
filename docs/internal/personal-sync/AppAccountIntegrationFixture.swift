@@ -17,6 +17,7 @@ actor AppAccountFixtureTransport:AppleAccountTransport {
     func cancel()async{}
     func choose(_ value:AppleSyncAccount){account=value}
     func counts()->(Int,Int){(identities,exchanges)}
+    func payloads(_ account:AppleSyncAccount)->[Data]{(rows[account] ?? [:]).values.flatMap{$0.values}.filter{!$0.retired}.compactMap(\.payload)}
 }
 @main struct AppAccountIntegrationFixture {
     @MainActor static func main()async throws {
@@ -36,6 +37,13 @@ actor AppAccountFixtureTransport:AppleAccountTransport {
         let owner=CrewPersonalDraftService.owned(root:root,deviceIdentity:{if mode=="retained"{throw AppAccountFixtureFailure.unavailable};return "fixture-device"},configuration:config,transportFactory:{_ in cloud},defaults:defaults)
         let same=CrewPersonalDraftService.owned(root:root,deviceIdentity:{preconditionFailure("duplicate owner identity")})
         precondition(owner===same)
+        if mode=="returnRead" {
+            try await owner.enablePersonalSync()
+            precondition(owner.localDraft(key)?.text=="A current newer")
+            var late=original;late.text="A old editor late original 2"
+            precondition(owner.recovered.values.contains(late),"whole late original must survive independent process reopen")
+            print("PASS reselected-account late original durable full-payload recovery reopen");return
+        }
         if mode=="latestWrite"{owner.checkpoint(original,key:key);print("PASS actual latest whole payload saved before branch task");return}
         if mode=="latestRead"{precondition(owner.catalog.contains(key) && owner.localDraft(key)==original);print("PASS actual latest-only process reopen catalog without account or Keychain");return}
         if mode=="consentWrite" {
@@ -88,8 +96,13 @@ actor AppAccountFixtureTransport:AppleAccountTransport {
             owner.checkpoint(.init(text:"old unsaved newer"),key:key,scope:local)
             owner.acknowledgeExport(ticket)
             precondition(CrewPersonalDraftService.hasUnsavedInProcess,"old export cannot acknowledge a newer retained original")
-            let fresh=owner.retainedExportTicket(local.owner,key:key)!
-            owner.acknowledgeExport(fresh)
+            owner.acknowledgeExport(ticket)
+            let recovery=owner.staleExportTicket(key,payload:.init(text:"old unsaved newer"),scope:local)!
+            owner.checkpoint(.init(text:"old unsaved newest"),key:key,scope:local)
+            owner.acknowledgeRecoveredExport(recovery)
+            precondition(CrewPersonalDraftService.hasUnsavedInProcess,"an older recovery export must not release newer input")
+            let fresh=owner.staleExportTicket(key,payload:.init(text:"old unsaved newest"),scope:local)!
+            owner.acknowledgeRecoveredExport(fresh)
             precondition(!CrewPersonalDraftService.hasUnsavedInProcess)
             print("PASS retained old namespace failed latest remains in exact export/quit guard");return
         }
@@ -103,14 +116,14 @@ actor AppAccountFixtureTransport:AppleAccountTransport {
         let accountScope=owner.editingScope();owner.checkpoint(.init(text:"account A"),key:key)
         precondition(!owner.clearIfUnchanged(old))
         owner.checkpoint(.init(text:"late local"),key:key,scope:local)
-        precondition(owner.localDraft(key)?.text=="account A" && local.owner.localDraft(key)?.text=="late local")
+        precondition(owner.localDraft(key)?.text=="account A" && local.owner.localDraft(key)==original && local.owner.recovered.values.contains(where:{$0.text=="late local"}))
         let sent=owner.snapshot(key,payload:.init(text:"account A"))!
         NotificationCenter.default.post(name:.CKAccountChanged,object:nil)
         precondition(!owner.isCurrent(sent),"notification must fence before MainActor projection")
         owner.checkpoint(.init(text:"late A"),key:key,scope:accountScope)
         for _ in 0..<8{await Task.yield()}
         await cloud.choose(b);try await owner.enablePersonalSync()
-        precondition(owner.localDraft(key)==nil && accountScope.owner.localDraft(key)?.text=="late A")
+        precondition(owner.localDraft(key)==nil && accountScope.owner.localDraft(key)?.text=="account A" && accountScope.owner.recovered.values.contains(where:{$0.text=="late A"}))
         owner.checkpoint(.init(text:"account B"),key:key)
         precondition(!owner.clearIfUnchanged(sent))
         let source=owner.retainedExportTicket(local.owner,key:key)!,target=owner.snapshot(key,payload:.init(text:"account B"))!
@@ -119,8 +132,27 @@ actor AppAccountFixtureTransport:AppleAccountTransport {
         precondition(owner.localDraft(key)?.text=="B newer")
         owner.checkpoint(original,key:key)
         precondition(owner.snapshot(key,payload:original,scope:local)==nil,"same bytes cannot mint a new-account ticket for an old composer")
-        owner.checkpoint(.init(text:"local ABA replacement"),key:key,scope:local)
+        await owner.disablePersonalSync()
+        owner.checkpoint(.init(text:"local ABA replacement"),key:key)
+        await cloud.choose(b);try await owner.enablePersonalSync()
+        owner.checkpoint(original,key:key)
         do{try owner.copyRetained(source,replacing:owner.snapshot(key,payload:original));preconditionFailure("stale retained source accepted")}catch{}
+        if mode=="return" || mode=="returnWrite" {
+            await cloud.choose(a);try await owner.enablePersonalSync()
+            owner.checkpoint(.init(text:"A current newer"),key:key)
+            var late=original;late.text="A old editor late original"
+            owner.checkpoint(late,key:key,scope:accountScope)
+            precondition(owner.localDraft(key)?.text=="A current newer","old A scope overwrote reselected A latest")
+            precondition(owner.recovered.values.contains(where:{$0.text=="A old editor late original"}),"late original must remain visible for export")
+            let count=owner.recovered.count
+            late.text="A old editor late original 2"
+            owner.checkpoint(late,key:key,scope:accountScope)
+            precondition(owner.recovered.count==count && owner.recovered.values.contains(late),"same stale editor must coalesce, preserving all structured fields")
+            try await owner.synchronizePersonal()
+            let sent=await cloud.payloads(a)
+            precondition(!sent.contains{(try? JSONDecoder().decode(CrewComposerDraftStore.Draft.self,from:$0))==late},"stale originals are local recovery, not automatic Cloud branches")
+            print("PASS actual A to B to A old editor retained without replacing selected latest or uploading late original");return
+        }
         print("PASS actual service namespace projection, original clear CAS, synchronous account fence and explicit target copy CAS")
     }
 }

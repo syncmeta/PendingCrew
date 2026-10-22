@@ -19,6 +19,7 @@ struct CrewPersonalDraftControls:View {
     @State private var showing=false
     @State private var settings=false
     @State private var scope:CrewPersonalDraftService.EditingScope?
+    @State private var recoveredExport:CrewPersonalDraftService.RecoveredExportTicket?
     @State private var exporting=false
     @State private var exportTicket:CrewPersonalDraftService.ExportTicket?
     @State private var exportDocument=CrewPersonalDraftExport(bytes:Data())
@@ -34,13 +35,13 @@ struct CrewPersonalDraftControls:View {
                 Menu {
                     Button("草稿版本"){showing=true}.disabled(key == nil)
                     Button("个人同步与保留原文"){settings=true}
-                    Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload,scope:scope)};exporting=true}catch{failure=error.localizedDescription}}
+                    Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload,scope:scope)};recoveredExport=key.flatMap{service.staleExportTicket($0,payload:payload,scope:scope)};exporting=true}catch{failure=error.localizedDescription}}
                 }label:{Label("草稿",systemImage:"doc.text")}.font(.caption)
             }
             if let issue=key.flatMap({service.errors[$0]}) ?? service.initializationError ?? failure{Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
             if key == nil{Text("来源身份尚未核对；原输入仍按本机草稿保留。").font(.caption2).foregroundStyle(.secondary)}
         }
-        .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)}}}
+        .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)};if let recoveredExport{service.acknowledgeRecoveredExport(recoveredExport)}}}
         .sheet(isPresented:$showing){if let key{CrewPersonalVersionPicker(service:service,key:key,payload:$payload)}}
         .sheet(isPresented:$settings){CrewPersonalSyncSettings(service:service)}
         .task(id:service.projectionID){
@@ -144,13 +145,7 @@ struct CrewPersonalDraftArchive:View {
             ForEach(service.catalog,id:\.self){key in
                 Button{selected=key}label:{VStack(alignment:.leading){Text(key.crewID);Text(label(key)).font(.caption).foregroundStyle(.secondary)}}.buttonStyle(.plain)
             }
-            ForEach(service.recovered.keys.sorted(by:{$0.uuidString < $1.uuidString}),id:\.self){id in
-                if let value=service.recovered[id]{
-                    Text("已结束分支的保全原文").font(.caption).foregroundStyle(.secondary)
-                    Text(value.text).font(.caption).textSelection(.enabled)
-                    Button("导出保全原文"){do{exportDocument = .init(bytes:try appleSyncEncode(value));exporting=true}catch{failure=error.localizedDescription}}
-                }
-            }
+            CrewRecoveredPersonalOriginals(service:service,owner:service.editingScope().owner)
             if service.catalog.isEmpty,service.initializationError == nil{Text("尚无个人草稿版本").font(.caption).foregroundStyle(.secondary)}
             if let issue=service.initializationError ?? failure{Text(issue).font(.caption).foregroundStyle(.orange)}
         }
@@ -175,6 +170,7 @@ private struct CrewPersonalArchiveEditor:View {
     @State private var payload=CrewComposerDraftStore.Draft()
     @State private var loaded=false
     @State private var scope:CrewPersonalDraftService.EditingScope?
+    @State private var recoveredExport:CrewPersonalDraftService.RecoveredExportTicket?
     @State private var editing=false
     @State private var choosing=false
     @State private var exporting=false
@@ -190,7 +186,7 @@ private struct CrewPersonalArchiveEditor:View {
             if let issue=service.errors[key] ?? failure{Text(issue).font(.caption).foregroundStyle(.orange)}
             HStack{
                 Button("各设备版本"){choosing=true}.disabled(!loaded || scope.map{!service.isCurrent($0)} == true)
-                Button("导出"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=service.exportTicket(key,payload:payload,scope:scope);exporting=true}catch{failure=error.localizedDescription}}.disabled(!loaded)
+                Button("导出"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=service.exportTicket(key,payload:payload,scope:scope);recoveredExport=service.staleExportTicket(key,payload:payload,scope:scope);exporting=true}catch{failure=error.localizedDescription}}.disabled(!loaded)
                 Spacer()
                 Button("关闭"){dismiss()}
                 Button("保存本机草稿"){service.checkpoint(payload,key:key,scope:scope);editing=false}.disabled(!loaded).buttonStyle(CrewdPrimaryButtonStyle())
@@ -198,7 +194,7 @@ private struct CrewPersonalArchiveEditor:View {
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:520))
         .task{let current=service.editingScope();scope=current;let original=await service.restoreOwn(key);guard service.isCurrent(current),!editing else{return};payload=original ?? .init();loaded=true}
         .sheet(isPresented:$choosing){CrewPersonalVersionPicker(service:service,key:key,payload:$payload)}
-        .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-离线草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)}}}
+        .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-离线草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)};if let recoveredExport{service.acknowledgeRecoveredExport(recoveredExport)}}}
     }
 }
 
@@ -241,7 +237,8 @@ private struct CrewPersonalSyncSettings:View {
                         ForEach(Array(owner.hosts.enumerated()),id:\.offset){_,host in
                             HStack{Text(host.displayName).font(.caption);Spacer();Button("选入当前目录"){guard let ticket=owner.hostTicket(host) else{return};perform{try await service.copyHost(ticket,from:owner)}}.disabled(!service.cloudOptedIn || service.editingScope().owner === owner || busy)}
                         }
-                        if owner.catalog.isEmpty && owner.hosts.isEmpty{Text("此来源暂无已保留内容").font(.caption).foregroundStyle(.secondary)}
+                        CrewRecoveredPersonalOriginals(service:service,owner:owner)
+                        if owner.catalog.isEmpty && owner.hosts.isEmpty && owner.recovered.isEmpty{Text("此来源暂无已保留内容").font(.caption).foregroundStyle(.secondary)}
                     }.padding(.vertical,6)
                 }
             }}
@@ -283,5 +280,30 @@ private struct RetainedPersonalDraftView:View {
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:460))
         .confirmationDialog("选用这份原文并替换当前输入？",isPresented:$confirming,titleVisibility:.visible){Button("确认选用"){do{try service.copyRetained(ticket,replacing:target);dismiss()}catch{failure="原来源或当前输入已更新；未覆盖，请重新核对。"}};Button("取消",role:.cancel){}}message:{Text("只替换核对时的这一份当前输入；其它窗口若已编辑，本次选择不会覆盖。")}
         .fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"PendingCrew-保留原文"){result in switch result{case .success:service.acknowledgeExport(ticket);case .failure(let error):failure=error.localizedDescription}}
+    }
+}
+
+
+/// Local recovery includes late stale-editor originals, never cloud branches.
+/// Its ticket acknowledges exactly the exported revision, not the current draft.
+private struct CrewRecoveredPersonalOriginals:View {
+    @ObservedObject var service:CrewPersonalDraftService
+    let owner:CrewPersonalDraftService.Namespace
+    @State private var ticket:CrewPersonalDraftService.RecoveredExportTicket?
+    @State private var document=CrewPersonalDraftExport(bytes:Data())
+    @State private var exporting=false
+    @State private var failure:String?
+    var body:some View {
+        VStack(alignment:.leading,spacing:8){
+            ForEach(owner.recovered.keys.sorted{$0.uuidString < $1.uuidString},id:\.self){id in
+                if let original=owner.recovered[id]{
+                    Text("保全原文 · 仅本机").font(.caption).foregroundStyle(.secondary)
+                    Text(original.text.isEmpty ? "（空草稿）":original.text).font(.caption).lineLimit(5).textSelection(.enabled)
+                    if owner.unsavedRecovered.contains(id){Text("此原文尚未保存，请导出后再退出。").font(.caption).foregroundStyle(.orange)}
+                    Button("导出完整原文"){do{guard let value=service.recoveredExportTicket(id,owner:owner) else{throw AppleSyncFailure.invalid};ticket=value;document = .init(bytes:try appleSyncEncode(value.value.payload));exporting=true}catch{failure=error.localizedDescription}}
+                }
+            }
+            if let failure{Text(failure).font(.caption).foregroundStyle(.orange)}
+        }.fileExporter(isPresented:$exporting,document:document,contentType:.json,defaultFilename:"PendingCrew-保全原文"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let ticket{service.acknowledgeRecoveredExport(ticket)}}}
     }
 }

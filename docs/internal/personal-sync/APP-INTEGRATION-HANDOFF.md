@@ -31,6 +31,14 @@ Only the existing AppearanceMode system/light/dark setting is connected. The old
 - Durable offline evidence here covers original personal latest/branch files and typed directory. Retained old bundles are in-process unless their existing files can later be read under the same verified partition. No claim of a durable offline replica of Core messages/work/knowledge is made.
 - No real CloudKit account lookup, server exchange, KVS account exchange, portal/profile action, Keychain credential operation, installed App/GUI action, enrollment, model or provider execution occurred. Cloud SDK/server, real two-device delivery/account switching, signed container qualification and UI runtime are unverified.
 
+## Independent-review ABA correction
+
+The f6 original service seam was deterministically red: A -> B -> A reselects the same namespace owner, and a still-open old archive/editor's stale EditingScope could overwrite the newer canonical latest via retainUnselected. The original failing fixture/source/log is preserved; f6 is not the accepted final source.
+
+All stale scopes now preserve a distinct local recovery original through the SAME CrewComposerDraftStore latest file, keyed by editor identity + original content key. It carries the same complete Draft/sourceIdentity and coalesces that editor's changes; unchanged canonical content is not redundantly archived. This never replaces canonical latest or enters automatic cloud branches. No new actor/database/revision platform is added. Namespace's original recovered surface shows these originals in current or retained-source UI; successful export acknowledges its exact recovery revision, and a newer failed-write original remains protected by the existing aggregate quit token. Reopening the verified account partition discovers the same local recovery entries. Stale archive export uses that original recovery ticket, not a fresh current latest receipt.
+
+The affected final modes additionally cover same-owner A/B/A, repeated late-setter coalescing, full structured payload after independent process reopen, exclusion from automatic Cloud branches, and failed recovery export's revision gate. Both full targets are rerun only for these changed shared sources. The original 28f suite and stable Core/B/shell evidence are still inherited.
+
 ## Next real Cloud qualification window (one complete proposal)
 
 Use confirmed Team M42BKJN82S, normal Mac/iOS bundle com.pendingname.pendingcrew, proposed Crew-only container `iCloud.com.pendingname.pendingcrew` (existence/association not assumed). First inspect the already logged-in Apple team's exact existing App IDs/container/profile capability; create/associate only if missing. Do not borrow another product's container, create a certificate by assumption or change system accounts. Login/2FA/system prompts are handled normally by the human.

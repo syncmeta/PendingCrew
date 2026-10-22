@@ -10,9 +10,10 @@ import Darwin
     typealias Namespace=ApplePersonalAccountNamespace<Payload>
     typealias Coordinator=ApplePersonalAccountCoordinator<Payload>
     struct Version:Identifiable {let id:UUID;let deviceID:String;let own:Bool;let payload:Payload}
-    struct EditingScope { let owner:Namespace;let projection:UUID }
+    struct EditingScope { let owner:Namespace;let projection:UUID;let editorID=UUID() }
     struct Snapshot {let owner:Namespace;let value:Namespace.Ticket;var key:AppleDraftKey{value.key}}
     struct ExportTicket {let owner:Namespace;let value:Namespace.Ticket}
+    struct RecoveredExportTicket {let owner:Namespace;let value:Namespace.RecoveredTicket}
     private static var instance:CrewPersonalDraftService?
     private static var owners:[String:CrewPersonalDraftService]=[:]
     private static var appActive=false
@@ -117,6 +118,15 @@ import Darwin
             };return values
         },initializationError:failure,save:{key,payload in
             guard writer?.save(payload,for:Self.storageKey(key,namespace:id),crew:key.crewID,channel:Self.destinationLabel(key),retainEmpty:true,sourceIdentity:try? appleSyncEncode(key))==true else{return writer?.storageError ?? failure ?? "当前原文尚未保存，请导出。"};return nil
+        },readRecovered:{
+            var result:[UUID:Payload]=[:]
+            let prefix=id.latestNamespace+"/retained/"
+            for (storage,entry) in writer?.entries ?? [:] where storage.hasPrefix(prefix){
+                guard let uuid=UUID(uuidString:String(storage.dropFirst(prefix.count))),let source=entry.sourceIdentity,(try? JSONDecoder().decode(AppleDraftKey.self,from:source)) != nil else{continue}
+                result[uuid]=entry.draft
+            };return result
+        },saveRecovered:{uuid,key,payload in
+            guard writer?.save(payload,for:id.latestNamespace+"/retained/"+uuid.uuidString.lowercased(),crew:key.crewID,channel:Self.destinationLabel(key),retainEmpty:true,sourceIdentity:try? appleSyncEncode(key))==true else{return writer?.storageError ?? failure ?? "保全原文尚未保存，请导出后退出。"};return nil
         })
         let owner=Namespace(id:id,latest:latest,stores:{[weak self] in
             guard let self else{throw AppleSyncFailure.invalid};let device=try await self.installationID()
@@ -216,9 +226,20 @@ import Darwin
     func localDraft(_ key:AppleDraftKey)->Payload?{coordinator.current.localDraft(key)}
     func checkpoint(_ payload:Payload,key:AppleDraftKey,scope:EditingScope?=nil){
         let owner=scope?.owner ?? coordinator.current
-        if let scope,!isCurrent(scope){owner.retainUnselected(payload,key:key);publishProjection();return}
-        do{_ = try owner.checkpoint(payload,key:key)}catch{owner.retainUnselected(payload,key:key)}
+        if let scope,!isCurrent(scope){
+            if owner.localDraft(key)==payload{return}
+            owner.retainStale(payload,key:key,id:Self.recoveryID(scope,key:key));publishProjection();return
+        }
+        do{_ = try owner.checkpoint(payload,key:key)}catch{checkpoint(payload,key:key,scope:scope ?? editingScope());return}
         publishProjection()
+    }
+    private static func recoveryID(_ scope:EditingScope,key:AppleDraftKey)->UUID{
+        let digest=appleSyncDigest(Data((scope.editorID.uuidString+"/"+Self.storageKey(key,namespace:scope.owner.id)).utf8))
+        let chars=Array(digest.prefix(32))
+        return UUID(uuidString:String(chars[0..<8])+"-"+String(chars[8..<12])+"-"+String(chars[12..<16])+"-"+String(chars[16..<20])+"-"+String(chars[20..<32]))!
+    }
+    func staleExportTicket(_ key:AppleDraftKey,payload:Payload,scope:EditingScope?)->RecoveredExportTicket?{
+        guard let scope,!isCurrent(scope),let value=recoveredExportTicket(Self.recoveryID(scope,key:key),owner:scope.owner),value.value.payload==payload else{return nil};return value
     }
     func refresh(_ key:AppleDraftKey)async{do{try await coordinator.current.refresh()}catch{};publishProjection()}
     func restoreOwn(_ key:AppleDraftKey)async->Payload?{let scope=editingScope();if let v=scope.owner.localDraft(key){return v};await refresh(key);guard isCurrent(scope) else{return nil};return scope.owner.localDraft(key) ?? versions[key]?.first(where:{$0.own})?.payload}
@@ -241,6 +262,8 @@ import Darwin
     }
     func copyHost(_ ticket:Namespace.HostTicket,from source:Namespace)async throws{try await coordinator.copySelectedHosts([ticket],from:source);publishProjection();scheduleSync()}
     func acknowledgeExport(_ value:ExportTicket){try? value.owner.acknowledgeExport(value.value);publishProjection()}
+    func recoveredExportTicket(_ id:UUID,owner:Namespace?=nil)->RecoveredExportTicket?{let owner=owner ?? coordinator.current;guard coordinator.retained[owner.id] === owner,let value=owner.recoveredTicket(id) else{return nil};return .init(owner:owner,value:value)}
+    func acknowledgeRecoveredExport(_ ticket:RecoveredExportTicket){try? ticket.owner.acknowledgeRecovered(ticket.value);publishProjection()}
     func loadCatalog()async{do{try await coordinator.current.refresh()}catch{};publishProjection()}
     func loadHosts()async{await loadCatalog()}
     func export(_ key:AppleDraftKey)throws->Data{guard let payload=localDraft(key) else{throw AppleSyncFailure.invalid};return try appleSyncEncode(payload)}

@@ -43,6 +43,11 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     let initializationError: String?
     /// nil means the existing writer durably saved this exact original.
     let save: (AppleDraftKey, Payload) -> String?
+    let readRecovered:()->[UUID:Payload]
+    let saveRecovered:(UUID,AppleDraftKey,Payload)->String?
+    init(readAll:@escaping ()->[AppleDraftKey:Payload],initializationError:String?,save:@escaping (AppleDraftKey,Payload)->String?,readRecovered:@escaping ()->[UUID:Payload]={[:]},saveRecovered:@escaping (UUID,AppleDraftKey,Payload)->String?={_,_,_ in "保全原文尚未保存，请导出。"}){
+        self.readAll=readAll;self.initializationError=initializationError;self.save=save;self.readRecovered=readRecovered;self.saveRecovered=saveRecovered
+    }
 }
 
 /// One whole UI/storage namespace. Retain old bundles, including failed originals,
@@ -58,6 +63,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         let revision: UUID
         let payload: Payload
     }
+    struct RecoveredTicket {let id:UUID;let revision:UUID;let payload:Payload}
     struct HostTicket { let namespace: ApplePersonalNamespaceID; let host: ApplePortableHost }
     let id: ApplePersonalNamespaceID
     let latest: ApplePersonalLatestAccess<Payload>
@@ -70,6 +76,9 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     private(set) var catalog: Set<AppleDraftKey> = []
     private(set) var versions: [AppleDraftKey: [DraftStore.Value]] = [:]
     private(set) var recovered: [UUID: Payload] = [:]
+    private var localRecovered:[UUID:Payload]=[:]
+    private var recoveredRevisions:[UUID:UUID]=[:]
+    private(set) var unsavedRecovered=Set<UUID>()
     private(set) var hosts: [ApplePortableHost] = []
     private(set) var errors: [AppleDraftKey: String] = [:]
     private(set) var unsavedLatest: Set<AppleDraftKey> = []
@@ -83,6 +92,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     init(id: ApplePersonalNamespaceID, latest: ApplePersonalLatestAccess<Payload>, stores: @escaping () async throws -> Stores) {
         self.id = id; self.latest = latest; factory = stores
         latestMemory = latest.readAll(); catalog = Set(latestMemory.keys)
+        localRecovered=latest.readRecovered();recovered=localRecovered
     }
     fileprivate func activate(selected: @escaping () -> Bool) { self.selected = selected; selection = UUID() }
     fileprivate func deactivate() {
@@ -129,14 +139,26 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         }
         return ticket
     }
-    /// Preserve input arriving between the synchronous account fence and its
-    /// MainActor projection. It stays in the old local file, never uploads.
-    func retainUnselected(_ payload:Payload,key:AppleDraftKey) {
-        latestMemory[key]=payload;revisions[key]=UUID();catalog.insert(key)
-        if let error=latest.save(key,payload){unsavedLatest.insert(key);errors[key]=error}
-        else{unsavedLatest.remove(key)}
+    /// A stale editor can never overwrite the namespace's canonical latest,
+    /// including after A -> B -> A reselects this SAME owner. Coalesce its
+    /// full original in the existing local latest writer's recovery entries.
+    func retainStale(_ payload:Payload,key:AppleDraftKey,id:UUID) {
+        guard localRecovered[id] != payload || unsavedRecovered.contains(id) else{return}
+        localRecovered[id]=payload;recovered[id]=payload;recoveredRevisions[id]=UUID()
+        if latest.saveRecovered(id,key,payload) != nil{unsavedRecovered.insert(id)}
+        else{unsavedRecovered.remove(id)}
         didChange()
     }
+    func recoveredTicket(_ id:UUID)->RecoveredTicket?{
+        guard let payload=recovered[id] else{return nil}
+        if recoveredRevisions[id]==nil{recoveredRevisions[id]=UUID()}
+        return .init(id:id,revision:recoveredRevisions[id]!,payload:payload)
+    }
+    func acknowledgeRecovered(_ ticket:RecoveredTicket)throws{
+        guard recoveredRevisions[ticket.id]==ticket.revision,recovered[ticket.id]==ticket.payload else{throw AppleSyncFailure.invalid}
+        unsavedRecovered.remove(ticket.id);didChange()
+    }
+    var unsavedRecoveredToken:[String]{unsavedRecovered.map{ $0.uuidString+"/"+(recoveredRevisions[$0]?.uuidString ?? "unknown") }}
     func snapshot(key:AppleDraftKey,payload:Payload,empty:Payload)->Ticket? {
         guard selected(),(latestMemory[key] ?? empty)==payload else{return nil}
         if latestMemory[key] == nil { latestMemory[key]=payload }
@@ -207,7 +229,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
             for value in await stores.hosts.active(key: key) where !hosts.contains(value.payload) { hosts.append(value.payload) }
         }
         guard selected(), selection == stamp else { throw AppleSyncFailure.accountChanged }
-        catalog.formUnion(keys); versions = values; self.recovered = recovered; self.hosts = hosts
+        catalog.formUnion(keys); versions = values; self.recovered = recovered.merging(localRecovered){_,local in local}; self.hosts = hosts
         didChange()
     }
     func hostTicket(_ host: ApplePortableHost) -> HostTicket? {
@@ -316,9 +338,18 @@ private final class ApplePersonalAccountObservation {
         local.activate { fence.isCurrent(stamp) }
         // No CKContainer, account lookup, observer or KVS construction at startup.
     }
-    var hasUnsavedOriginals: Bool { retained.values.contains { !$0.unsavedLatest.isEmpty } }
+    var hasUnsavedOriginals: Bool { retained.values.contains { !$0.unsavedLatest.isEmpty || !$0.unsavedRecovered.isEmpty } }
     var unsavedExitToken: String? {
-        let rows = retained.values.flatMap { owner in owner.unsavedLatest.map { key in owner.id.stableName + "/" + appleSyncDigest((try? appleSyncEncode(key)) ?? Data()) + "/" + (owner.revisions[key]?.uuidString ?? "unknown") } }.sorted()
+        var rows:[String]=[]
+        for owner in retained.values {
+            for key in owner.unsavedLatest {
+                let identity=appleSyncDigest((try? appleSyncEncode(key)) ?? Data())
+                let revision=owner.revisions[key]?.uuidString ?? "unknown"
+                rows.append(owner.id.stableName+"/"+identity+"/"+revision)
+            }
+            rows += owner.unsavedRecoveredToken.map{owner.id.stableName+"/recovered/"+$0}
+        }
+        rows.sort()
         return rows.isEmpty ? nil : appleSyncDigest(Data(rows.joined(separator: "\n").utf8))
     }
     private func select(_ next: Namespace, stamp: UInt64) {
