@@ -2,20 +2,20 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
-最新精修源码c37已普通合入2ff98dc8，准确完整输入d6a43a9c的normal及三份Mac/iOS候选均独立核过；实际Mac有内容画面尚未达到用户要求，未安装或启动该版移动端。七张实图集中发现会话上方多层工具区、文件夹独立横条、执行器块与新增人/AI工作页主次未收敛；当前安装仍为下述ee9e。唯一作者按用户最新原生裁定一次修正完整模块cd4b2454，15路径已独立源准入通过，Mac/iOS全目标作者编译均0：sidebar贯穿App全高、去独立背景卡片、连接/未完成操作状态移底部；原生SwiftUI内容切换放整个会话workspace上方，聊天用系统背景、搜索用原生控件。并同批收敛文件夹、右栏、草稿次级动作及人/AI工作工具与真实空态。demo只参考信息组织，不保留受网页实现限制的外观；新包GUI仍待执行。
+最新原生前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.52908，准确完整输入d4866cb705abbf3c5c65d039c4404d19a0df0d4f，ordinary Release/product与标准bundle ID。按用户最新裁定完成整高原生sidebar/去浮卡、状态footer、整个会话workspace顶部原生切换、系统聊天背景及两端原生搜索，同批整理文件夹、inspector、草稿次级操作和人/AI工作工具/真实空态。demo只参考信息组织。原生源cd4经独立净核后整合d486；当前源码记录后续提交不改包来源。
 
-d6的隔离机组及Human首消息已保存，唯一false执行器启动结果Unknown保留且不重发；人待办保存遇CUA状态保护后未重放，不能冒业务成功或产品Unknown。私域已安全暂停退出，原launch exit0/socket消失；15份原件与7截图保全，实际窗口控制AX可达、缩放有布局证据，没有交通灯隐藏缺陷实证。后续复用已有内容及状态样本，只验本轮影响的整块展示，不重复创建/启动/稳定业务测试。完整修正冻结后统一准确normal及同暖Mac/iOS候选，再做原生布局实际检查与标准Mac更新；B/Cloud/APNs仍分开交付。
+本轮准确normal、两Mac与普通iOS Simulator三候选均独立准入；1869源输入、3878依赖与11pins前后同，沿原aeh暖缓存/原guard，不新增CI或复验稳定业务全套。Mac有内容及五域/成员表单共6张1440实图，经根与独立设计复核达到本轮主要原生布局/主次要求；原请求UUID及内容只读可见，没有重发false首启或原Todo保存。工具noWindowsAvailable使900/1100恢复、搜索互动及长表单底部仍未验，非空工作/文档/计划与新移动运行也未验，不能称全GUI通过。iOS准确d486仅普通Debug Simulator构建/产物通过，版本仍0.1.43/1，尚未新运行。
 
-新前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.47322，准确源码 ee9e94b5820b7af1c83c22312ead51d02e3d3f2f，ordinary Release/product、标准 bundle ID。实际新三栏界面、本机管理连接与 crewd0.1.0 已可见，窗口留给用户使用；两次进程观察仅 App 与其 Core，未操作 start/resume 或模型。独立额外 session.list 被 lineage 门拒绝后停止，不能把进程观察冒充全局 session 账本计数。旧6f35整包与原0.1.43历史备份保留，数据未删除或迁移。完整来源、安装与首开证据见整合记录最新节。
+安装前原日用ee9e由正常CmdQ/安全暂停退出，stage50文件与签封全核后完整备份到 `/Applications/.PendingCrew-ee9e94b5-before-d4866cb7.app` 并整包替换；旧0.1.43、各历史包及旧数据保全目录不动，不迁移/删数据。正常标准入口无私域env首开0，实际本机连接和新界面可见，原Qincheng及消息仍在；首开及最终进程快照仅App69104/Core69110，无provider子进程，未发start/resume/模型。此为观察证据，不冒全局session账本零任务。App留给用户使用。完整交付报告bdc139e7在frontend-native-d4866cb7-candidates-20261022。
 
-本次只新增同一已验 ee9e 输入的正常安装身份包；原 remote-preview 与 iOS 模拟器包保持不可变。准确默认 normal37c8 复用原独验，1861源输入、3878依赖、11pins和配置前后同；原 builder/签前guard/载入策略保持，沿原aeh暖缓存，无新Rust构建、iOS重建、CI或稳定业务全套复验。临时干净global detached ee9e已在作者终态和QA来源核对后切回原e31开发分支；后续统筹记录不改包来源。
+旧d6未放行的7图及ee9e旧交付原件保持不变。本轮原use_default启动在AppKit注册前被沙箱拒绝，精确PID日志/ips已定位；同包经正常工具审批的require_escalated+tty/loginfalse后成功，无源码/guard重编。退出后CUA App观察可能自动另启测试App，今后只核原handle/精确ps；意外实例的safePause被审批拒绝后未重放，更窄单GUI SIGTERM另获审批并收尾，日用未受影响。所有测试App/Core已结束；原权限/Unknown/旧184/1ef边界保留。B/Cloud/APNs不含在本包。
 
 | 完整交付单元 | 已达到的范围 | 剩余完成判据 |
 | --- | --- | --- |
-| Mac新前端与本机开发 | demo共享前端、群内容、知识切片/自由视图、草稿版本与主要Codex控制已合入；标准版已安装首开，本机已连接 | 用户日用缺陷按影响修复；Codex附件/skill输入、原生archive/delete/revert、命名及全局profile仍待完整接线 |
+| Mac新前端与本机开发 | 原生收敛完整模块及主要功能已合入；准确d486标准版已安装首开、本机连接，主要布局实图通过 | 窄窗恢复/搜索互动/长表单底部待补；日用缺陷按影响修复；Codex附件/skill输入、原生archive/delete/revert、命名及全局profile仍待完整接线 |
 | VPS/Mac主机与简便部署 B | 既有私域VPS流程已验；一键安装、单一配对链接、Local Human窄issuer和设备独立身份后端20c完整源码已独验并保存远端 | 正常客户端与完整组合整合、准确新Linux包、常驻服务及真实链路；不得把旧582包当新B |
 | Mac/iOS同步与iCloud | 同Core事件/CAS基础、本机各设备草稿版本已做；独立Cloud账号边界28f源码已验并封存 | App接线、实际同Core双端并发、M42真实CloudKit能力及跨设备草稿/目录同步；首次默认关闭，用户opt-in可持久 |
-| iOS/iPad交付 | ee9e完整普通Simulator构建和产物独验通过；较早版本VPS配对/持久草稿/撤权整流程已验 | 新前端实际窗口流程、真机/iPad及正式签名分发，不能用模拟器编译冒真实设备验收 |
+| iOS/iPad交付 | d486完整普通Simulator构建和产物独验通过；较早版本VPS配对/持久草稿/撤权整流程已验 | 新原生前端实际窗口流程、真机/iPad及正式签名分发，不能用模拟器编译冒真实设备验收 |
 | Claude受管执行 | 真实交互PTY受管任务源码已合入；Unknown不重发、重开不自动恢复 | 新包真实provider完整生命周期，正式ACP、完整历史和手动恢复分别待闭合；Native16不激活 |
 | APNs任务通知 | 独立Worker候选已准备，尚未接受整合；一次无凭据临时传输探针结果Unknown，已删除临时Worker且不重试 | 安装注册与订阅边界、耐久事件投递和实际APNs传输、签名设备接收/点击；点通知不启动session |
 | 发布及剩余平台 | 较早Linux受管故障恢复与包来源已验 | 新Linux输入分发、稳定Apple签名/公证及剩余平台交付；历史all-features磁盘中断不冒已验 |
