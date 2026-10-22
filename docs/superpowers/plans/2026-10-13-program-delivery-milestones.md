@@ -2,6 +2,12 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+完整组合ee9e94b5820b7af1c83c22312ead51d02e3d3f2f已普通推送main/global并真实构建、封存双端候选；本段是构建后记录，不是包的新输入。准确default normal来源独验2d982f92；Mac ordinary Release remote-preview 0.1.44/20748.45594与ordinary iOS Debug arm64 Simulator 0.1.43/1产物整块独验4eb3d006通过，原签封/载入策略未放宽，原Debug失败/整包raw保全各保真实来源。日用6f35未替换、iOS未安装/启动、真实模型/云/新Linux仍未验。实际同Core窗口尚未开始：工具首读发现锁屏，已请真人正常解锁，未消耗1800窗口或生成邀请；源码两线继续。
+
+GUI准确修订动作3532a35c替代旧准备中只列DATA_DIR的隔离段：必须同时使用私有PENDINGCREW_CREWD_DATA_DIR，原DATA_DIR只是legacy参考；两个provider均false、原App自身持Core、私有208手机、loopback49381和真实canonical安装ID服务严格核对，默认PendingCrewLocal/日用/旧Unknown不碰。旧冻结清单字节保留，不为准备文档重封App。iPad仅有设备库存，现有普通设备归属未知，未boot/安装，不能冒布局通过。
+
+下一独立Cloud账号模块28f677e1已修复两处真实并发缺口、净独验6935bb01接受，尚未接App或访问Apple；首次默认关闭，用户开启后可持久opt-in并沿已有service在启动/前台/活跃输入合并同步，不能把“无自动session”扩成每次手动启云。完整账号分区/旧原文保留/通知同步fence继续，旧local/旧账号不自动上传。客户端当前连续推进B完整单链接消费与Mac原Local Human窄issuer，后端B安装器/rootFD/同端口严格ALPN并行；不把B/Cloud混入ee9e候选，不以小脚本或组件通过冒正式交付。
+
 双端完整目标现已实编通过，修订0fc1ecc0经净独验普通合入62d624c9。实际产品仅两处Swift编译表达修正，无业务/Rust变化；临时编译源3e875与0477 helper各保原来源。Mac原封装因暖target旧rootseal正确拒绝，尚无该轮Mac候选；最终封装前保全并移走这一精确mutable整包（保实际binary/seal/log），沿同暖对象重生，不剥签名/改guard/清缓存。保存本记录后再次冻结完整输入，准确normal与最终Mac/iOS候选须对应这个新冻结源，已验稳定范围不重跑。
 
 最新组合：群内容 A、原 App 草稿版本3841acf3、共享 Codex 界面b38cbfdc及后端最终6a7ff642均已独立接受，普通合入 main；后两次合并分别b6cb4090/b1563490。CloudKit 提案0219e181仅文档，已合4e3d9a03。下一关口是一份干净完整HEAD的准确默认normal helper、原aeh暖缓存完整Mac+iOS目标与不可变候选，再验证新影响范围的双端同Core实际流程。主代理只统筹/整合/冻结；后端唯一Rust/schema/API/部署作者及编译者，客户端唯一Swift/工程/Xcode作者，质量线独立复验。冻结后helper和App构建之间不加入B/Cloud产品源，编译真实缺陷交原作者整块修复，不重造验收框架或全量重跑。
