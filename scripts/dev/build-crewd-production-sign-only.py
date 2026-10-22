@@ -69,7 +69,7 @@ def production_archive_argv(v,snapshot,out,normal_sha,build_number):
     """
     if not re.fullmatch('[0-9a-f]{64}',normal_sha) or not re.fullmatch(r'[0-9]+\.[0-9]{5}',build_number):raise ValueError('exact backend SHA and ordinary build version required')
     return ['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Release','-destination','platform=macOS,arch=arm64','-derivedDataPath',v['derivedData'],'-clonedSourcePackagesDirPath',v['sourcePackages'],'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','ARCHS=arm64',
-        'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','CODE_SIGN_IDENTITY[sdk=macosx*]=','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=',
+        'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=',
         'ENABLE_HARDENED_RUNTIME=YES','ENABLE_DEBUG_DYLIB=NO','ENABLE_PREVIEWS=NO',
         'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT',
         'PENDINGCREW_BACKEND_INPUT='+str(out/'crewd.pre-sign'),'PENDINGCREW_BACKEND_SHA256='+normal_sha,
