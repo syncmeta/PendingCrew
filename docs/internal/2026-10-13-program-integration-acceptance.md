@@ -1,5 +1,23 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 原生工作区完整修正源码准入；下一准确候选冻结
+
+用户最新原生裁定的完整修正cd4b24547a65d986a7b03fc6d56aa3a1ec71ac6b从准确d6出发，15路径（14既有Swift与NATIVE-RULING.md）、作者树干净；独立净核source-review-cd4b2454.md SHA27bf0334c747f1cba97c7465c089e8d2fb0ae33f0ad016ab98cace93edd7957f通过，根亲读报告、作者交接与原编译记录。原生整高sidebar/顶层Picker/系统聊天与两端searchable/footer状态及隐藏后原UUID核对/folder合行/执行器折叠/草稿次级动作/人AI工具与真实空态同批完成。权限、原命令UUID/CAS/Unknown与手动执行不改，无Rust/工程/schema/B/Cloud/APNs差异。
+
+作者最终Mac Debug LOCAL_MAC+REMOTE_PRODUCT和普通arm64 Simulator完整target均exit0；报告SHAee69360b226bce8bfe2f3dd16b997be7de4614a62a2ba6333a392b539f0ca798、388项输入前后原字节相同且逐项匹配冻结，两个实际log hash已独核。6份作者原验证文件与独立报告保全frontend-native-ruling-independent-review-cd4b2454-20261022。d6/5d23仅旧来源型验helper，不冒新候选后台。手机五项native segmented置横向容器，源码可达不等于实际可视/44pt/中文通过，仍留移动新包门。
+
+本节保存后冻结完整整合HEAD，唯一backend制作该准确输入normal、独立准入后唯一client沿原aeh暖缓存封Mac独立偏好preview、标准product及iOS Simulator；正常配置与ui-preview仅bundle ID区别，保原guard/签前资格/加载闭包。新GUI复用既有私域内容及Unknown样本，不重发创建/false首启或原Todo保存；只核受影响原生全高布局、内容页/表单与移动入口，不重复稳定后端。Mac实际通过后沿既有安装授权做完整备份/整包更新及正常无模型首开，不能将源准入或包准入冒已安装。当前日用ee9e仍不变。
+
+## 2026-10-22 精修候选实图未放行；按用户原生裁定完整收敛
+
+d6a43a9cf6a986940900a6de7c5479e706d4103a准确default normal独验SHA9e0b70623e117fcda7f3a10ebf97b19494195b69def3750efde3ce1374514b0d，原binary5d2307d6304d7917545ebccaca96fbcbb119ff4864417817917b020834bc7d2c；三份普通Release ui-preview/product与iOS Simulator完整候选独验SHA9fd55c303ac27e9a29ff600f61ffdd60ea1a6ebbcd39098de38547ee64da628b。1868源码、3878依赖、11pins前后相同，302项manifest及三zip/签态/加载闭包已核；包原件在frontend-polish-d6a43a9c-candidates-20261022，不据此宣称GUI或安装完成。
+
+QA在独立ui-preview私域实际查看有内容宽/900窗口、新crew、人待办表单/空态、原生缩放及正常退出；根和独立设计亲看实图，认为多层chrome、独立文件夹大横条、默认执行器技术块及散落的人/AI工作工具尚不成熟，视觉暂不放行。七图完整报告ae252fcd75ddcbf3506acb21a6f83fe508e5b2edbc82800cc5a2329948e9f289；15份原件逐字节归档frontend-polish-d6a43a9c-gui-discovery-20261022，清单0f1e468fdfa773a938822e4eee73dc5d7eb69f95b21ead2052d80f2db783cf62。原生窗口AX有close/min/fullscreen/zoom，zoom确有divider变化；未将minimize工具成功冒目视确认，没有隐藏交通灯缺陷实证，不自绘系统控制。
+
+该私域经精确双/usr/bin/false实际argv核后仅一次正常UI组合创建，crew及Human首消息真实保存，机长未确认启动/Unknown保原身份且不重发。人待办保存时CUA状态保护，保留输入、未重放，不冒业务成功或产品Unknown；未创建新邀请/远程grant、未启动移动设备或安装日用。原App经正常Quit/安全暂停结束，原launch实际exit0/socketgone。日用ee9e不变，未调用模型。旧源与实际状态作为发现证据保留，不以工具0宣称整块完成。
+
+用户最新明确不必照搬demo：全高原生sidebar、无独立背景卡片，连接与当前未完成操作放底部；消息/人待办/AI待办/文档数据/计划进展用原生SwiftUI导航并置整个会话workspace上方；聊天无额外底板，当前群原生搜索。唯一作者按此与文件夹/内容优先inspector/草稿次级动作/人AI工具和真实空态一次收敛。Unknown短摘要、原文及原UUID只读核对保留，侧栏隐藏时入口仍可达；不改权限/事务或启动任务。完整视觉裁定visual-ruling-native-addendum.md与七图集中评估在frontend-polish-design-20261022。下一准确候选只补影响范围，复用现有私域内容，不重放保存/false首启，不为验收新增产品入口或夹具。
+
 ## 2026-10-22 完整原生体验精修源码接受，冻结下一准确候选
 
 依用户“精雕细琢、参考demo及类似应用/网站”要求，唯一客户端从c78正常衔接另一会话5d32三份公开发布证据，完整精修c37c10647f1097d62fcf5d0ecdccab2c7c091f4d已普通合入main 2ff98dc85623a01ec87380b7b71692de2fd9467c。25路径仅共享presentation、真实Mac/iOS页面/表单与相应工程/交接，无Rust/API/SQLite/身份变更；B客户端f0a、B后端、Cloud账号/APNs均未混入。当前已装/打开版本仍ee9e/20748.47322，本节不是精修版已安装声明。

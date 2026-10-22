@@ -14,6 +14,7 @@ struct MacThreePaneView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var inspectorVisible = true
     @State private var compactInspector = false
+    @State private var showingUnavailableStatus=false
     /// 驾驶舱开关位（人类 Todo #96）。**用 `@State` 持有，不是 `@StateObject`** ——
     /// `@State` 只替我们保管这个引用，**不订阅**它的 `objectWillChange`。于是开关
     /// 驾驶舱不会把本视图（连着整棵三栏）作废；只有下面那层 `CockpitLayer` 观察它。
@@ -33,21 +34,7 @@ struct MacThreePaneView: View {
             // 草稿和滚动位置全被冲掉。驾驶舱改成叠在上面的临时窗口后，群聊视图常驻，
             // 关掉驾驶舱看到的就是离开前那一屏。
             VStack(spacing: 0) {
-            // 「这个窗口现在管不管事」—— 正常编排时渲染成空，不占一个像素。
-            // 挂在三栏**之上**而不是某一栏里：它讲的是整个进程的状态，
-            // 塞进任何一栏都会变成「那一栏的事」。见 `OrchestrationNoticeBar`。
-            if model.usesCrewdAuthority {
-                if let workspace = model.crewdBackend?.workspace {
-                    CrewdOriginalConnectionStatus(workspace: workspace)
-                } else {
-                    HStack {
-                        Text(model.connectingAuthority ? "正在连接当前后台" : model.backendConfigurationError ?? "后台尚未连接")
-                        if !model.connectingAuthority {
-                            Button("重试连接") { Task { await model.connectCrewdAuthority() } }
-                        }
-                    }.font(.caption).padding(8)
-                }
-            } else { OrchestrationNoticeBar() }
+            if !model.usesCrewdAuthority {OrchestrationNoticeBar()}
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 CrewSidebarView()
                     .environmentObject(sessionRunner)
@@ -56,6 +43,19 @@ struct MacThreePaneView: View {
                 CrewCenterView().environmentObject(sessionRunner)
                     .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
                     .toolbar {
+                        if let workspace=model.crewdBackend?.workspace {
+                            ToolbarItem{CrewdOriginalConnectionStatus(workspace:workspace,compact:true)}
+                        }else if model.usesCrewdAuthority {
+                            ToolbarItem{
+                                Button{showingUnavailableStatus=true}label:{Label("连接状态",systemImage:"wifi.exclamationmark")}
+                                    .popover(isPresented:$showingUnavailableStatus){
+                                        VStack(alignment:.leading,spacing:12){
+                                            Text(model.connectingAuthority ? "正在连接后台":model.backendConfigurationError ?? "后台尚未连接").textSelection(.enabled)
+                                            Button("重试连接"){Task{await model.connectCrewdAuthority()}}.disabled(model.connectingAuthority)
+                                        }.padding(16).frame(width:300)
+                                    }
+                            }
+                        }
                         ToolbarItem(placement:.primaryAction) {
                             Button {
                                 if geometry.size.width<1100 {compactInspector=true}
@@ -80,7 +80,7 @@ struct MacThreePaneView: View {
                         .environmentObject(sessionRunner)
                 }.frame(minWidth:360,idealWidth:430,minHeight:480)
             }
-            .navigationSplitViewStyle(.balanced)
+            .navigationSplitViewStyle(.balanced).tint(Theme.Palette.accent)
             // 入口（中栏 toolbar 那颗按钮）只需要**写**这个开关位。给的是普通
             // environment 值而不是 `.environmentObject` —— 后者会让整条中栏订阅它，
             // 等于把 #96 刚拆掉的广播接回来一半。

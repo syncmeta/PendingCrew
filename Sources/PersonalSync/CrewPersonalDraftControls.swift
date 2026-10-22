@@ -28,9 +28,11 @@ struct CrewPersonalDraftControls:View {
             HStack(spacing:8){
                 Text(key.map{service.saving.contains($0) ? (service.unsavedLatest.contains($0) ? "原文尚未保存 · 正在保存版本":"原文已本机保全 · 正在保存版本"):service.status} ?? service.status).font(.caption2).foregroundStyle(.secondary)
                 Spacer(minLength:0)
-                Button("草稿版本"){showing=true}.font(.caption).disabled(key == nil)
                 if let key,service.errors[key] != nil{Button("重试保存"){service.checkpoint(payload,key:key)}.font(.caption)}
-                Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload)};exporting=true}catch{failure=error.localizedDescription}}.font(.caption)
+                Menu {
+                    Button("草稿版本"){showing=true}.disabled(key == nil)
+                    Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload)};exporting=true}catch{failure=error.localizedDescription}}
+                }label:{Label("草稿",systemImage:"doc.text")}.font(.caption)
             }
             if let issue=key.flatMap({service.errors[$0]}) ?? service.initializationError ?? failure{Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
             if key == nil{Text("来源身份尚未核对；原输入仍按本机草稿保留。").font(.caption2).foregroundStyle(.secondary)}
@@ -81,7 +83,7 @@ private struct CrewPersonalVersionPicker:View {
             Text("本设备已有分支时，保存新合并版本需明确结束该分支。未选中的其它设备版本继续保留。").font(.caption).foregroundStyle(.secondary)
             if let failure{Text(failure).font(.caption).foregroundStyle(.orange)}
             Button("导出合并原文"){do{var value=keepStructure ?? .init();value.text=merged;exportDocument = .init(bytes:try appleSyncEncode(value));exportTicket=service.exportTicket(key,payload:value);exporting=true}catch{failure=error.localizedDescription}}
-            HStack{Button("关闭"){dismiss()};Spacer();Button("确认合并/选用"){confirmation=true}.disabled(busy || selected == nil || !own.isSubset(of:retiring))}
+            HStack{Button("关闭"){dismiss()};Spacer();Button("确认合并/选用"){confirmation=true}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(busy || selected == nil || !own.isSubset(of:retiring))}
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:620))
         .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-合并草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)}}}
         .task{merged=payload.text;expected=service.snapshot(key,payload:payload);await service.refresh(key)}

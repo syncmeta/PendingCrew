@@ -380,9 +380,12 @@ struct CrewSessionWindowView: View {
             if appModel.usesCrewdAuthority, !hasRunningCaptain,
                let workspace = appModel.crewdBackend?.workspace,
                workspace.crewID == crewStore.selectedDetail?.crew.id {
-                CrewdExecutorChoiceView(workspace: workspace, executor: Binding(
-                    get: { workspace.selectedExecutor }, set: { workspace.selectedExecutor = $0 }))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
+                VStack(alignment:.leading,spacing:6){
+                    Text("未观察到运行中的机长").font(CrewdType.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("执行器准备"){
+                        CrewdExecutorChoiceView(workspace:workspace,executor:Binding(get:{workspace.selectedExecutor},set:{workspace.selectedExecutor=$0})).padding(.top,6)
+                    }.font(CrewdType.caption)
+                }.padding(.horizontal,12).padding(.vertical,8)
             }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
             // 点击入口（captain 成员行）就在这屏，错误必须在这显，否则点了像没反应。

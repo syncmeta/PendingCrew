@@ -16,6 +16,7 @@ import UIKit
 struct CrewChatView: View {
     @Environment(\.crewdOriginalChannelID) private var crewdChannelID
     @Environment(\.crewdMessageFolders) private var messageFolders
+    @Environment(\.colorScheme) private var chromeScheme
     let crewId: String
     let crewTitle: String
     /// macOS:点 session(右侧成员行 / session 气泡)时打开 inspector 并选中。
@@ -33,7 +34,7 @@ struct CrewChatView: View {
     var showOnlyHumanMentions: Binding<Bool>? = nil
     var communicationView: Binding<CrewTimelineFilter.CommunicationView>? = nil
     /// 当前群搜索框由 `CrewCenterView` 放在原生 toolbar；这里仅消费查询并用共享
-    /// `CrewMessageSearch` 筛时间线。iOS 不传时恒为空。
+    /// `CrewMessageSearch` 筛时间线；iOS 由原 IPadShell 的系统搜索消费同一绑定。
     var searchQuery: Binding<String>? = nil
     /// 跨群结果点进来时的消息 id。定位成功后置 nil，避免白板刷新时反复抢滚动位置。
     var searchTargetMessageId: Binding<String?>? = nil
@@ -204,7 +205,7 @@ struct CrewChatView: View {
 
     var body: some View {
         content
-        .background(Theme.Palette.canvas)
+        .background(CrewdChatStyle.canvas(chromeScheme))
         // 整个聊天面板（消息区 + composer）是一块 drop 区 —— 从 Finder / 文件 App
         // 拖文件进来落进附件托盘，和「+ 面板▸文件」走**同一个** `ingestFiles`。
         //
@@ -288,7 +289,7 @@ struct CrewChatView: View {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(
-                            Capsule().fill(Theme.Palette.canvas.opacity(0.92)))
+                            Capsule().fill(CrewdChatStyle.canvas(chromeScheme).opacity(0.92)))
                 }
                 .padding(8)
                 .allowsHitTesting(false) // 高亮只是装饰，别挡住 drop 本身
@@ -344,7 +345,7 @@ struct CrewChatView: View {
                     errorBar
                     composer
                 }
-                .background(Theme.Palette.canvas)
+                .background(CrewdChatStyle.canvas(chromeScheme))
             }
             .measuringChatColumnHeight()
         #else
@@ -372,30 +373,32 @@ struct CrewChatView: View {
         }
         return crewTitle
     }
-    private var conversationHeader: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                Text(conversationTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 4)
-                communicationControls
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text(conversationTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                communicationControls
-            }
-        }.padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Theme.Palette.canvas)
+    private var conversationHeader:some View {
+        HStack(spacing:10){
+            Text(conversationTitle).font(CrewdType.label.weight(.semibold)).lineLimit(1)
+            if let controls=messageFolders.controls{controls.fixedSize(horizontal:true,vertical:false)}
+            Spacer(minLength:2)
+            ViewThatFits(in:.horizontal){
+                communicationControls(compact:false)
+                communicationControls(compact:true)
+            }.fixedSize(horizontal:false,vertical:true)
+        }.padding(.horizontal,14).padding(.vertical,6).tint(Theme.Palette.accent)
     }
-    private var communicationControls: some View {
-        HStack(spacing: 9) {
+    private func communicationControls(compact:Bool)->some View {
+        HStack(spacing:8){
             if let communicationView {
-                Picker("沟通范围", selection: communicationView) {
-                    ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
-                }.pickerStyle(.segmented).labelsHidden().controlSize(.small).frame(width: 168)
+                if compact {
+                    Picker("沟通范围",selection:communicationView){
+                        ForEach(CrewTimelineFilter.CommunicationView.allCases,id:\.self){mode in Text(mode.title).tag(mode)}
+                    }.pickerStyle(.menu).labelsHidden().fixedSize()
+                }else {
+                    Picker("沟通范围",selection:communicationView){
+                        ForEach(CrewTimelineFilter.CommunicationView.allCases,id:\.self){mode in Text(mode.title).tag(mode)}
+                    }.pickerStyle(.segmented).labelsHidden().controlSize(.small).frame(width:168)
+                }
             }
             if let showOnlyHumanMentions {
-                Toggle("仅@你", isOn: showOnlyHumanMentions).toggleStyle(.button)
-                    .controlSize(.small).tint(Theme.Palette.accent)
+                Toggle("仅@你",isOn:showOnlyHumanMentions).toggleStyle(.button).controlSize(.small)
                     .help("只显示 @ 你的消息和你发出的消息")
             }
         }

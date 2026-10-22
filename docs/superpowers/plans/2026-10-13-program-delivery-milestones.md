@@ -2,7 +2,9 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
-最新精修完整源码c37已独立设计净核、Mac/iOS全目标编译通过并普通合入2ff98dc8；25路径统一共享presentation与真实日用入口，包括手机Codex控制接线。当前安装版仍是下述ee9e，不把新源码门冒新包已可用。保存此记录后一次冻结准确全输入，由唯一后端新normal→独立核→唯一客户端同暖缓存Release ui-preview隔离视觉验/普通product交付/iOS普通Simulator，配置与GUI证据分列；先把精修Mac交用户，不混B/Cloud/APNs或重稳定业务全套。
+最新精修源码c37已普通合入2ff98dc8，准确完整输入d6a43a9c的normal及三份Mac/iOS候选均独立核过；实际Mac有内容画面尚未达到用户要求，未安装或启动该版移动端。七张实图集中发现会话上方多层工具区、文件夹独立横条、执行器块与新增人/AI工作页主次未收敛；当前安装仍为下述ee9e。唯一作者按用户最新原生裁定一次修正完整模块cd4b2454，15路径已独立源准入通过，Mac/iOS全目标作者编译均0：sidebar贯穿App全高、去独立背景卡片、连接/未完成操作状态移底部；原生SwiftUI内容切换放整个会话workspace上方，聊天用系统背景、搜索用原生控件。并同批收敛文件夹、右栏、草稿次级动作及人/AI工作工具与真实空态。demo只参考信息组织，不保留受网页实现限制的外观；新包GUI仍待执行。
+
+d6的隔离机组及Human首消息已保存，唯一false执行器启动结果Unknown保留且不重发；人待办保存遇CUA状态保护后未重放，不能冒业务成功或产品Unknown。私域已安全暂停退出，原launch exit0/socket消失；15份原件与7截图保全，实际窗口控制AX可达、缩放有布局证据，没有交通灯隐藏缺陷实证。后续复用已有内容及状态样本，只验本轮影响的整块展示，不重复创建/启动/稳定业务测试。完整修正冻结后统一准确normal及同暖Mac/iOS候选，再做原生布局实际检查与标准Mac更新；B/Cloud/APNs仍分开交付。
 
 新前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.47322，准确源码 ee9e94b5820b7af1c83c22312ead51d02e3d3f2f，ordinary Release/product、标准 bundle ID。实际新三栏界面、本机管理连接与 crewd0.1.0 已可见，窗口留给用户使用；两次进程观察仅 App 与其 Core，未操作 start/resume 或模型。独立额外 session.list 被 lineage 门拒绝后停止，不能把进程观察冒充全局 session 账本计数。旧6f35整包与原0.1.43历史备份保留，数据未删除或迁移。完整来源、安装与首开证据见整合记录最新节。
 
@@ -11,16 +13,16 @@
 | 完整交付单元 | 已达到的范围 | 剩余完成判据 |
 | --- | --- | --- |
 | Mac新前端与本机开发 | demo共享前端、群内容、知识切片/自由视图、草稿版本与主要Codex控制已合入；标准版已安装首开，本机已连接 | 用户日用缺陷按影响修复；Codex附件/skill输入、原生archive/delete/revert、命名及全局profile仍待完整接线 |
-| VPS/Mac主机与简便部署 B | 既有私域VPS流程已验；一键安装、单一配对链接、Local Human窄issuer和设备独立身份整模块源码推进中 | 完整模块冻结独验、准确新Linux包、常驻服务及正常客户端真实链路；不得把旧582包当新B |
+| VPS/Mac主机与简便部署 B | 既有私域VPS流程已验；一键安装、单一配对链接、Local Human窄issuer和设备独立身份后端20c完整源码已独验并保存远端 | 正常客户端与完整组合整合、准确新Linux包、常驻服务及真实链路；不得把旧582包当新B |
 | Mac/iOS同步与iCloud | 同Core事件/CAS基础、本机各设备草稿版本已做；独立Cloud账号边界28f源码已验并封存 | App接线、实际同Core双端并发、M42真实CloudKit能力及跨设备草稿/目录同步；首次默认关闭，用户opt-in可持久 |
 | iOS/iPad交付 | ee9e完整普通Simulator构建和产物独验通过；较早版本VPS配对/持久草稿/撤权整流程已验 | 新前端实际窗口流程、真机/iPad及正式签名分发，不能用模拟器编译冒真实设备验收 |
 | Claude受管执行 | 真实交互PTY受管任务源码已合入；Unknown不重发、重开不自动恢复 | 新包真实provider完整生命周期，正式ACP、完整历史和手动恢复分别待闭合；Native16不激活 |
-| APNs任务通知 | 用户授权使用其Cloudflare服务；独立推送模块已安排 | 真实耐久事件→认证转发→APNs→设备接收/点击；完成、进展、阻塞不可混义，点通知不启动session |
+| APNs任务通知 | 独立Worker候选已准备，尚未接受整合；一次无凭据临时传输探针结果Unknown，已删除临时Worker且不重试 | 安装注册与订阅边界、耐久事件投递和实际APNs传输、签名设备接收/点击；点通知不启动session |
 | 发布及剩余平台 | 较早Linux受管故障恢复与包来源已验 | 新Linux输入分发、稳定Apple签名/公证及剩余平台交付；历史all-features磁盘中断不冒已验 |
 
-根只负责范围、接口、冻结、整合和交付。backend_continue唯一Rust/schema/API/部署作者及共享Rust编译所有者；frontend_demo唯一Mac/iOS Swift与工程/Xcode作者；quality_continue_22独立质量，不兼产品实现。APNs作者只写独立新Worker私域，不改Rust/Swift。客户端B已保存c7b43f34非冻结checkpoint后恢复整模块工作；后端B保存ed1893d0并继续，未混入已安装ee9e。公共文件不多人并写。
+根只负责范围、接口、冻结、整合和交付。backend_continue唯一Rust/schema/API/部署作者及共享Rust编译所有者；frontend_demo唯一Mac/iOS Swift与工程/Xcode作者；quality_continue_22独立质量，不兼产品实现。APNs作者只写独立新Worker私域，不改Rust/Swift。客户端B独立checkpoint为f0a81c20，未混精修；后端B完整20c7b724源码已独验、普通推远端，与已安装ee9e及精修候选分开。公共文件不多人并写。
 
-B维持Store18，不因旧writer能消费未提交邀请就增Store19：begin只存既有格式reservation/challenge，legacy invitation与grant/witness/consume/Bcommit同事务创建，真实旧18负门与新B恢复接缝已绿，完整B仍未冻结。Cloud账号28f净独验通过并归档，尚未接App/真实Apple服务；旧本机和旧账号资料不自动上传。paid个人Team M42已确认，4L只是同Team证书CN后缀，导入来源未知。
+B维持Store18，不因旧writer能消费未提交邀请就增Store19：begin只存既有格式reservation/challenge，legacy invitation与grant/witness/consume/Bcommit同事务创建；旧18负门、原身份只读查回及checked schema真实缺陷已在原接缝修正。20c独验报告4777e1e5核1874输入/28路径与root4/TLS2/store3/installer10实际通过；新Linux包/常驻服务/正常客户端链路仍未交付。Cloud账号28f净独验通过并归档，尚未接App/真实Apple服务；旧本机和旧账号资料不自动上传。paid个人Team M42已确认，4L只是同Team证书CN后缀，导入来源未知。
 
 通知权威源优先复用work_events同事务不可覆盖的(crew_id,seq)，跨Core幂等身份保authority/dbId；内存hub不是outbox，回应等待Completed不是业务Done。APNs新真实能力未包含在已安装包。Jev多后端、个人记忆、Solid等尚待讨论方案保留待决，不计完成；不引入DoltLite、旧产品数据迁移、固定Agent视图或后台自动恢复session。旧184/1ef Unknown仍不读删重试，新的真实模型运行仍须具体授权。
 

@@ -17,6 +17,7 @@ struct CrewdMessageFolderPresentation {
     var filter:CrewTimelineFilter.MessageFolder = .all
     var clear:(()->Void)? = nil
     var classify:((String)->Void)? = nil
+    var controls:AnyView? = nil
 }
 private struct CrewdMessageFolderKey:EnvironmentKey {
     static let defaultValue=CrewdMessageFolderPresentation()
@@ -46,37 +47,27 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
     var body: some View {
-        CrewdOriginalMessages(workspace: workspace, header: AnyView(sectionHeader), openSession: openSession) { sectionContent }
+        VStack(spacing:0){
+            sectionHeader
+            CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
+        }
     }
-    private var sectionHeader: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing:0){
-                    ForEach([("消息","消息"),("真人Todo","人待办"),("Todo","AI待办"),("文档","文档/数据"),("进展","计划/进展")],id:\.0){key,title in
-                        Button{workspace.originalSection=key}label:{
-                            Text(title).font(CrewdType.label.weight(workspace.originalSection==key ? .semibold:.regular))
-                                .foregroundStyle(workspace.originalSection==key ? CrewdChatStyle.accent(scheme):CrewdChatStyle.muted(scheme))
-                                .padding(.horizontal,13).padding(.vertical,7).frame(minHeight:CrewdType.target)
-                                .background(workspace.originalSection==key ? CrewdChatStyle.bubble(scheme):Color.clear,in:RoundedRectangle(cornerRadius:5))
-                        }.buttonStyle(.plain).accessibilityAddTraits(workspace.originalSection==key ? .isSelected:[])
-                    }
-                }.padding(2).background(CrewdChatStyle.sidebar(scheme).opacity(0.55),in:RoundedRectangle(cornerRadius:7))
-                    .accessibilityLabel("当前群内容")
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            Spacer(minLength: 0)
-            Menu {
-                Button("机组工作总账") { showingCrewLedger = true }
-            } label: { Image(systemName: "ellipsis") }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
-                .frame(minWidth:CrewdType.target,minHeight:CrewdType.target).fixedSize().help("机组共享工作与全组织收件箱")
-            }
-                .padding(.horizontal, 16).padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(CrewdChatStyle.sidebar(scheme).opacity(0.30))
-            Divider().overlay(CrewdChatStyle.line(scheme))
+    private var sectionHeader:some View {
+        VStack(spacing:0){
+            HStack(spacing:12){
+                ScrollView(.horizontal,showsIndicators:false){
+                    Picker("工作区内容",selection:$workspace.originalSection){
+                        Text("消息").tag("消息")
+                        Text("人待办").tag("真人Todo")
+                        Text("AI待办").tag("Todo")
+                        Text("文档/数据").tag("文档")
+                        Text("计划/进展").tag("进展")
+                    }.pickerStyle(.segmented).labelsHidden().fixedSize(horizontal:true,vertical:false)
+                }.frame(maxWidth:.infinity,alignment:.leading)
+                Menu {Button("机组工作总账"){showingCrewLedger=true}}label:{Image(systemName:"ellipsis")}
+                    .frame(minWidth:CrewdType.target,minHeight:CrewdType.target).fixedSize().help("机组共享工作与全组织收件箱")
+            }.padding(.horizontal,14).padding(.vertical,8)
+            Divider()
         }
     }
     private var sectionContent: some View {
@@ -146,11 +137,13 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
             if value == "none"{filter = .exclude(Set(assignments.compactMap{$0["object"]["id"].string}))}
             else{filter = .include(Set(assignments.filter{$0["folderId"] == .string(value)}.compactMap{$0["object"]["id"].string}))}
         }else{filter = .include([])}
-        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
+        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)},controls:AnyView(CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages,compact:true)))
     }
     var body:some View {
         VStack(spacing:0){
-            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages).padding(.horizontal,10).padding(.vertical,5)
+            #if os(iOS)
+            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:selection,view:.messages,compact:true).padding(.horizontal,14).padding(.vertical,4)
+            #endif
             content().environment(\.crewdMessageFolders,classification)
         }
         .sheet(item:$target){target in

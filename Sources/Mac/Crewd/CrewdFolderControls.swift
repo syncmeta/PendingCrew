@@ -20,22 +20,43 @@ struct CrewdFolderControls:View {
     @Binding var selection:String
     let view:CrewdResourceView
     var object:CrewdValue?=nil
+    var compact=false
     @State private var managing=false
     @State private var classifying=false
     var body:some View{
         VStack(alignment:.leading,spacing:4){HStack{
             if store.capabilities.contains("viewFolders"){
-                Picker("文件夹",selection:$selection){Text("全部").tag("all");Text("未分类").tag("none");ForEach(store.folders[view]?.rows ?? []){row in Text(String(repeating:"　",count:row.depth)+(row.value["name"].string ?? "文件夹")).tag(row.id)}}.frame(maxWidth:220)
-                Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help(store.channel.isEmpty ? "管理机组资料库分类":"管理本群分类")
+                if compact {
+                    Menu {
+                        Picker("本群文件夹",selection:$selection){folderChoices}
+                        Divider()
+                        Button("管理本群分类",systemImage:"folder.badge.gearshape"){managing=true}
+                    }label:{Label(currentFolderTitle,systemImage:"folder")}
+                    .fixedSize().help("筛选本群消息；管理分类不会改变原文")
+                }else {
+                    Picker("文件夹",selection:$selection){folderChoices}.frame(maxWidth:220)
+                    Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help(store.channel.isEmpty ? "管理机组资料库分类":"管理本群分类")
+                }
                 if object != nil {Button("归入文件夹"){classifying=true}}
             }else{Text("文件夹 · 配套后台待开放").font(.caption).foregroundStyle(.secondary)}
             Spacer()
-        };if store.capabilities.contains("viewFolders"){Text(store.channel.isEmpty ? "机组资料库分类":"本群分类").font(.caption).foregroundStyle(.secondary)
+        };if store.capabilities.contains("viewFolders"){
+            if !compact{Text(store.channel.isEmpty ? "机组资料库分类":"本群分类").font(.caption).foregroundStyle(.secondary)}
             if let snapshot=store.folders[view],selection != "all",selection != "none",!snapshot.folders.contains(where:{$0["id"] == .string(selection)}){Text("所选文件夹已不在当前目录，请重新选择。").font(.caption).foregroundStyle(.orange)}
         }}.onChange(of:store.crew+store.channel){_,_ in managing=false;classifying=false}.sheet(isPresented:$managing){CrewdFolderEditor(store:store,drafts:$drafts,view:view)}
         .sheet(isPresented:$classifying){if let object{CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}}
         .task(id:store.crew+store.channel+view.rawValue+store.capabilities.sorted().joined(separator:",")+store.activationEpoch.uuidString){await store.activate(view)}
     }
+    private var currentFolderTitle:String {
+        if selection == "all"{return "全部分类"}
+        if selection == "none"{return "未分类"}
+        return store.folders[view]?.folders.first(where:{$0["id"] == .string(selection)})?["name"].string ?? "原分类不可用"
+    }
+    @ViewBuilder private var folderChoices:some View {
+        Text("全部").tag("all");Text("未分类").tag("none")
+        ForEach(store.folders[view]?.rows ?? []){row in Text(String(repeating:"　",count:row.depth)+(row.value["name"].string ?? "文件夹")).tag(row.id)}
+    }
+
 }
 struct CrewdFolderAssignmentButton:View {
     @ObservedObject var store:CrewdResources
@@ -80,7 +101,7 @@ struct CrewdFolderEditor:View {
             Spacer()
             HStack{Button("关闭"){dismiss()};Spacer();Button(store.writing ? "提交中":"提交"){
                 if key.operation == "delete"{confirmDelete=true}else if let draft=drafts.begin(key){send(draft)}
-            }.disabled(store.writing || submitting || reading || fields.revision.isEmpty || (!store.capabilities.contains("viewFolders")) || (object == nil && operation != "create" && selected.isEmpty))}
+            }.buttonStyle(CrewdPrimaryButtonStyle()).disabled(store.writing || submitting || reading || fields.revision.isEmpty || (!store.capabilities.contains("viewFolders")) || (object == nil && operation != "create" && selected.isEmpty))}
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:500)).task(id:key){await read()}
         .confirmationDialog("解散这个文件夹？不会删除其中的内容。",isPresented:$confirmDelete){Button("解散文件夹",role:.destructive){if let draft=drafts.begin(key){send(draft)}}}
     }

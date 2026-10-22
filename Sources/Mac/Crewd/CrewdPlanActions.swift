@@ -206,7 +206,7 @@ struct CrewdPlanActions:View {
                     }
                 }.disabled(drafts.busy(key))
             }
-            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
+            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
         }.padding(20).textFieldStyle(.roundedBorder).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:560,height:640)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {

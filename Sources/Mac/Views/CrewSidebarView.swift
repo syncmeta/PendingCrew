@@ -9,6 +9,7 @@ import Combine
 /// peer / fly。
 struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
+    @EnvironmentObject private var model:AppModel
     @Environment(\.colorScheme) private var scheme
     @State private var showingGlobalSearch = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
@@ -45,7 +46,7 @@ struct CrewSidebarView: View {
                     Button {
                         crewStore.selectCrew(draft.id)
                     } label: {
-                        Label("新 crew · 待发送", systemImage: "bubble.left")
+                        Label("新机组 · 待发送", systemImage: "bubble.left")
                     }
                     .buttonStyle(.plain)
                 }
@@ -98,10 +99,17 @@ struct CrewSidebarView: View {
             else {CrewdProviderStatusFooter()}
             // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
-        }.background(.ultraThinMaterial,in:RoundedRectangle(cornerRadius:16))
-            .overlay(RoundedRectangle(cornerRadius:16).strokeBorder(Color.white.opacity(scheme == .dark ? 0.08:0.65),lineWidth:0.7))
-            .padding(.horizontal,8).padding(.vertical,8)
-            .background(LinearGradient(colors:scheme == .dark ? [Color(red:0.12,green:0.14,blue:0.16),Color(red:0.14,green:0.12,blue:0.16)]:[Color(red:0.91,green:0.95,blue:0.96),Color(red:0.94,green:0.92,blue:0.96)],startPoint:.topLeading,endPoint:.bottomLeading))
+            if model.usesCrewdAuthority {
+                Divider()
+                if let workspace=model.crewdBackend?.workspace {CrewdOriginalConnectionStatus(workspace:workspace)}
+                else {
+                    VStack(alignment:.leading,spacing:6){
+                        Text(model.connectingAuthority ? "正在连接后台":model.backendConfigurationError ?? "后台尚未连接").font(.caption).foregroundStyle(.secondary)
+                        if !model.connectingAuthority {Button("重试连接"){Task{await model.connectCrewdAuthority()}}}
+                    }.padding(12)
+                }
+            }
+        }.frame(maxHeight:.infinity)
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
         // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由

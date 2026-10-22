@@ -32,8 +32,10 @@ struct IPadShell: View {
     @State private var showingRecovery = false
     @State private var showingRetainedInputs = false
     @State private var showingOfflineDrafts = false
+    @State private var showingConnectionStatus=false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
+    @State private var searchQuery=""
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -50,6 +52,7 @@ struct IPadShell: View {
                             if appModel.crewdBackend?.workspace != nil {
                                 Button("新建机组", systemImage: "plus") { showingNewCrew = true }
                             }
+                            Button("连接状态与未完成操作",systemImage:"info.circle"){showingConnectionStatus=true}
                             Button("连接电脑", systemImage: "link") { showingPairing = true }
                             Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
                             if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
@@ -69,6 +72,7 @@ struct IPadShell: View {
         .onChange(of: selectedCrewId) { _, id in
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
             communicationView = .human
+            searchQuery=""
             if let id, id != crewStore.pendingCrew?.id, let workspace = appModel.crewdBackend?.workspace {
                 workspace.selectCrew(id)
             }
@@ -89,6 +93,15 @@ struct IPadShell: View {
         .sheet(isPresented: $showingNewCrew, onDismiss: { Task { await crewStore.refreshList() } }) {
             if let workspace = appModel.crewdBackend?.workspace {
                 CrewdCrewCreationView(workspace: workspace).id(workspace.presentationNamespace)
+            }
+        }
+        .sheet(isPresented:$showingConnectionStatus){
+            if let workspace=appModel.crewdBackend?.workspace{CrewMobileConnectionReadback(workspace:workspace)}
+            else {
+                NavigationStack {
+                    ContentUnavailableView("后台尚未连接",systemImage:"wifi.exclamationmark",description:Text(appModel.backendConfigurationError ?? "请从电脑菜单核对连接。"))
+                        .toolbar{ToolbarItem(placement:.cancellationAction){Button("关闭"){showingConnectionStatus=false}}}
+                }
             }
         }
         .sheet(isPresented: $showingOfflineDrafts) {
@@ -128,7 +141,7 @@ struct IPadShell: View {
             CrewChatView(
                 crewId: id, crewTitle: title,
                 onOpenRemoteSession: { selectedRemoteSessionID = $0 },
-                communicationView: $communicationView)
+                communicationView:$communicationView,searchQuery:$searchQuery)
                 .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace,
                     openSession: { selectedRemoteSessionID = $0 }))
                 .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id)
@@ -137,6 +150,7 @@ struct IPadShell: View {
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。
                 .navigationTitle(isCompact ? title : "")
                 .navigationBarTitleDisplayMode(.inline)
+                .searchable(text:$searchQuery,placement:.navigationBarDrawer(displayMode:.automatic),prompt:"搜索当前群")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Picker("沟通视图", selection: $communicationView) {
