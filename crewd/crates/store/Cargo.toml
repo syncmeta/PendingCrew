@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 chrono = "0.4.45"
 crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-work = { version = "0.1.0", path = "../work" }

@@ -1,10 +1,15 @@
 //! Certificate, signature and TLS primitives only. Neither a pin nor a successful
 //! handshake grants work permission; the server rechecks durable grants per request.
+mod enrollment;
 mod tls;
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use crewd_proto::{
     MAX_REMOTE_CERTIFICATE_BYTES, MAX_REMOTE_ENVELOPE_BYTES, REMOTE_FORMAT, RemoteSignedEnvelope,
+};
+pub use enrollment::{
+    decode_enrollment_link, encode_enrollment_link, enrollment_token, enrollment_token_hash,
+    enrollment_token_matches,
 };
 use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair, KeyUsagePurpose};
 use ring::{
@@ -13,7 +18,10 @@ use ring::{
     signature::{self, KeyPair as _},
 };
 use serde::{Serialize, de::DeserializeOwned};
-pub use tls::{LiveClientPins, client_configuration, server_configuration};
+pub use tls::{
+    LiveClientPins, RemoteTlsRoute, client_configuration, enrollment_client_configuration,
+    enrollment_server_configuration, remote_tls_route, server_configuration,
+};
 use x509_parser::{parse_x509_certificate, prelude::ASN1Time};
 
 /// Private credential has intentionally no Serialize/Debug implementation.

@@ -67,6 +67,38 @@ pub(crate) struct ConnectionPeer {
     kernel_uid: u32,
     pub(crate) connection_scope: crate::connection_scope::ConnectionScope,
 }
+/// A separate sealed service-management capability. Never converts to Actor/Human.
+#[derive(Clone)]
+pub(crate) struct RootAdminPermit(ConnectionPeer);
+impl RootAdminPermit {
+    pub(crate) fn check(&self) -> Result<(), RpcError> {
+        let peer = &self.0;
+        let Some(identity) = peer.identity.as_ref() else {
+            return Err(root_admin_denied());
+        };
+        if peer.kernel_uid != 0
+            || !peer.connection_scope.is_live()
+            || !matches!(registry::parent(identity.pid),ParentProbe::Found{identity:now,..} if same_birth(identity,&now))
+            || !peer.signed_lineage_current(identity)
+        {
+            return Err(root_admin_denied());
+        }
+        Ok(())
+    }
+    pub(crate) fn close(&self) {
+        let _ = self
+            .0
+            .connection_scope
+            .close_until(std::time::Instant::now() + std::time::Duration::from_secs(2));
+    }
+}
+fn root_admin_denied() -> RpcError {
+    RpcError::new(
+        RpcError::FORBIDDEN,
+        "current root service-management peer required",
+    )
+    .with_refusal("host.admin_peer_denied")
+}
 impl PeerPolicy {
     pub(crate) fn new(roots: Option<Arc<ProcessRegistry>>) -> io::Result<Self> {
         let self_pid = i32::try_from(std::process::id()).map_err(io::Error::other)?;
@@ -199,6 +231,32 @@ impl PeerPolicy {
         same_birth(&daemon, &self.daemon_birth).then_some(identity)
     }
 
+    pub(crate) fn accept_root_admin(
+        self: &Arc<Self>,
+        stream: &UnixStream,
+    ) -> io::Result<RootAdminPermit> {
+        let credential = stream.peer_cred()?;
+        if credential.uid() != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "root service-management peer required",
+            ));
+        }
+        let pid = kernel_pid(stream)?;
+        let ParentProbe::Found { identity, .. } = registry::parent(pid) else {
+            return Err(io::Error::other("root peer birth unavailable"));
+        };
+        let permit = RootAdminPermit(ConnectionPeer {
+            policy: self.clone(),
+            identity: Some(identity),
+            kernel_uid: credential.uid(),
+            connection_scope: crate::connection_scope::ConnectionScope::new(),
+        });
+        permit.check().map_err(|_| {
+            io::Error::new(io::ErrorKind::PermissionDenied, "root peer lineage refused")
+        })?;
+        Ok(permit)
+    }
     pub(crate) fn accept(self: &Arc<Self>, stream: &UnixStream) -> io::Result<ConnectionPeer> {
         let cred = stream.peer_cred()?;
         let kernel_uid = cred.uid();
@@ -1726,5 +1784,187 @@ else:
             "restrictive retained history cannot replace current same-generation helper registration"
         );
         drop(owned);
+    }
+}
+
+#[cfg(test)]
+mod host_admin_controls {
+    use super::*;
+
+    // Only this in-module seam supplies synthetic uid0; production's sole
+    // constructor reads actual peer_cred. This is not real Linux root proof.
+    fn synthetic_permit(policy: Arc<PeerPolicy>, uid: u32) -> RootAdminPermit {
+        let ParentProbe::Found { identity, .. } = registry::parent(std::process::id() as i32)
+        else {
+            panic!("current birth required")
+        };
+        RootAdminPermit(ConnectionPeer {
+            policy,
+            identity: Some(identity),
+            kernel_uid: uid,
+            connection_scope: crate::connection_scope::ConnectionScope::new(),
+        })
+    }
+    #[tokio::test]
+    async fn host_admin_real_ordinary_socket_peer_never_becomes_root() {
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "ordinary-user test context required"
+        );
+        let policy = Arc::new(PeerPolicy::new(None).unwrap());
+        let (stream, _other) = UnixStream::pair().unwrap();
+        assert!(policy.accept_root_admin(&stream).is_err());
+        assert!(
+            synthetic_permit(policy, unsafe { libc::geteuid() })
+                .check()
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn host_admin_original_enrollment_lookup_is_readonly_when_identity_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db =
+            crewd_store::Db::spawn(crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap())
+                .unwrap();
+        let state = Arc::new(crate::AppState::new(db.clone()));
+        let (_drain, rx) = tokio::sync::watch::channel(false);
+        let manager = crate::remote::Manager::new(&state, dir.path().to_owned(), rx)
+            .await
+            .unwrap();
+        let permit = synthetic_permit(Arc::new(PeerPolicy::new(None).unwrap()), 0);
+        let query = crewd_proto::HostEnrollmentLookupParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            enrollment_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let found = manager
+            .admin_enrollment_lookup(permit.clone(), query.clone())
+            .await
+            .unwrap();
+        assert_eq!(found, serde_json::json!({"state":"notFound"}));
+        let identity = db
+            .call(|s| crewd_store::remote::identity(s.conn()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            identity.is_none(),
+            "read-only original lookup created server identity"
+        );
+        assert!(
+            !dir.path().join("remote").exists(),
+            "read-only lookup created private identity directory"
+        );
+        permit.close();
+        assert!(
+            manager
+                .admin_enrollment_lookup(permit, query)
+                .await
+                .is_err()
+        );
+        drop(manager);
+        drop(state);
+        db.shutdown();
+    }
+    #[tokio::test]
+    async fn host_admin_configuration_lookup_returns_original_witness_not_fresh_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let db =
+            crewd_store::Db::spawn(crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap())
+                .unwrap();
+        let state = Arc::new(crate::AppState::new(db.clone()));
+        let (_drain, rx) = tokio::sync::watch::channel(false);
+        let manager = crate::remote::Manager::new(&state, dir.path().to_owned(), rx)
+            .await
+            .unwrap();
+        let permit = synthetic_permit(Arc::new(PeerPolicy::new(None).unwrap()), 0);
+        let first = crewd_proto::RemoteConfigureParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: manager.status().await.unwrap().configuration.revision,
+            enabled: false,
+            listen_host: "127.0.0.1".into(),
+            port: 49381,
+        };
+        let absent = manager
+            .admin_configuration_lookup(permit.clone(), first.clone())
+            .await
+            .unwrap();
+        assert_eq!(absent["state"], "notFound");
+        let original = manager
+            .configure_with_admin(first.clone(), Some(permit.clone()))
+            .await
+            .unwrap();
+        let second = crewd_proto::RemoteConfigureParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: original["revision"].as_str().unwrap().into(),
+            enabled: false,
+            listen_host: "127.0.0.1".into(),
+            port: 49382,
+        };
+        manager
+            .configure_with_admin(second, Some(permit.clone()))
+            .await
+            .unwrap();
+        let recovered = manager
+            .admin_configuration_lookup(permit.clone(), first.clone())
+            .await
+            .unwrap();
+        assert_eq!(recovered["state"], "recorded");
+        assert_eq!(recovered["configuration"], original);
+        assert_ne!(
+            recovered["configuration"]["revision"],
+            manager.status().await.unwrap().configuration.revision
+        );
+        let mut altered = first.clone();
+        altered.port = 49383;
+        assert!(
+            manager
+                .admin_configuration_lookup(permit.clone(), altered)
+                .await
+                .is_err()
+        );
+        permit.close();
+        assert!(
+            manager
+                .admin_configuration_lookup(permit, first)
+                .await
+                .is_err()
+        );
+        drop(manager);
+        drop(state);
+        db.shutdown();
+    }
+    #[test]
+    fn host_admin_sealed_permit_rechecks_connection_birth_and_managed_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = Arc::new(ProcessRegistry::load(&dir.path().join("registry.json")).unwrap());
+        let policy = Arc::new(PeerPolicy::new(Some(roots.clone())).unwrap());
+        let permit = synthetic_permit(policy.clone(), 0);
+        assert!(permit.check().is_ok());
+        let enrollment = roots.begin_enrollment().unwrap();
+        assert!(
+            permit.check().is_err(),
+            "spawn enrollment revokes pending management authority"
+        );
+        drop(enrollment);
+        assert!(permit.check().is_ok());
+        let mut reused = synthetic_permit(policy.clone(), 0);
+        reused.0.identity.as_mut().unwrap().start_time += 1;
+        assert!(
+            reused.check().is_err(),
+            "PID reuse is not the original root birth"
+        );
+        permit.close();
+        assert!(
+            permit.check().is_err(),
+            "closed root connection cannot mutate"
+        );
+        let managed = synthetic_permit(policy, 0);
+        let birth = managed.0.identity.clone().unwrap();
+        roots.record("synthetic-managed-root-floor", birth).unwrap();
+        assert!(
+            managed.check().is_err(),
+            "managed lineage cannot acquire root service authority"
+        );
     }
 }

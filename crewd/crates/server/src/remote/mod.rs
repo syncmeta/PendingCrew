@@ -1,4 +1,5 @@
 //! Qualified remote Human transport. Unix process authority is never reused here.
+mod enrollment;
 mod identity;
 mod transport;
 use crate::{AppState, dispatch};
@@ -246,6 +247,8 @@ impl Manager {
         let address = socket.local_addr().map_err(dispatch::internal)?;
         let tls = crewd_remote::server_configuration(&identity.certificate, self.pins.clone())
             .map_err(dispatch::internal)?;
+        let enrollment_tls = crewd_remote::enrollment_server_configuration(&identity.certificate)
+            .map_err(dispatch::internal)?;
         let epoch = self.listener_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         self.changed
             .send_modify(|change| *change = change.wrapping_add(1));
@@ -265,6 +268,7 @@ impl Manager {
             weak,
             socket,
             Arc::new(tls),
+            Arc::new(enrollment_tls),
             revision,
             epoch,
         )));
@@ -339,6 +343,16 @@ impl Manager {
         self: &Arc<Self>,
         p: RemoteConfigureParams,
     ) -> std::result::Result<Value, RpcError> {
+        self.configure_with_admin(p, None).await
+    }
+    pub(crate) async fn configure_with_admin(
+        self: &Arc<Self>,
+        p: RemoteConfigureParams,
+        admin: Option<crate::peer::RootAdminPermit>,
+    ) -> std::result::Result<Value, RpcError> {
+        if let Some(p) = &admin {
+            p.check()?
+        }
         request_id(&p.request_id)?;
         let expected = revision(&p.expected_revision)?;
         let endpoint = RemoteEndpoint {
@@ -400,6 +414,11 @@ impl Manager {
             .db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(p) = &admin {
+                        p.check().map_err(|_| {
+                            crewd_store::StoreError::Invalid("root admin authority changed".into())
+                        })?
+                    }
                     if !facts::configure(
                         tx,
                         expected,
@@ -445,6 +464,36 @@ impl Manager {
             self.stop().await;
         }
         serde_json::to_value(configuration).map_err(dispatch::internal)
+    }
+    pub(crate) async fn admin_configuration_lookup(
+        &self,
+        permit: crate::peer::RootAdminPermit,
+        p: RemoteConfigureParams,
+    ) -> std::result::Result<Value, RpcError> {
+        permit.check()?;
+        request_id(&p.request_id)?;
+        let input = serde_json::to_string(&p).map_err(dispatch::internal)?;
+        let result = self
+            .db
+            .call(move |s| -> crewd_store::Result<_> {
+                let Some(identity) = facts::identity(s.conn())? else {
+                    return Ok(None);
+                };
+                facts::request_witness(s.conn(), &p.request_id, &identity.authority_id)
+            })
+            .await
+            .map_err(store_error)?
+            .map_err(store_error)?;
+        permit.check()?;
+        match result {
+            None => Ok(serde_json::json!({"state":"notFound"})),
+            Some(w) if w.method == "remote.configure" && w.input_json == input => {
+                let original: RemoteConfiguration =
+                    serde_json::from_str(&w.result_json).map_err(dispatch::internal)?;
+                Ok(serde_json::json!({"state":"recorded", "configuration":original}))
+            }
+            Some(_) => Err(conflict()),
+        }
     }
     async fn witness(
         &self,
@@ -548,12 +597,22 @@ impl Manager {
             .map_err(write_error)?;
         Ok(result)
     }
-    async fn accept(&self, p: RemoteAcceptParams) -> std::result::Result<Value, RpcError> {
+    async fn accept(
+        self: &Arc<Self>,
+        p: RemoteAcceptParams,
+    ) -> std::result::Result<Value, RpcError> {
+        let _guard = self.mutation.lock().await;
+        self.accept_locked(p, None).await
+    }
+    async fn accept_locked(
+        self: &Arc<Self>,
+        p: RemoteAcceptParams,
+        enrollment: Option<enrollment::CommitGuard>,
+    ) -> std::result::Result<Value, RpcError> {
         request_id(&p.request_id)?;
         if !p.response_envelope.is_bounded() {
             return Err(bad("配对回复格式无效"));
         }
-        let _guard = self.mutation.lock().await;
         let identity = self.ensure_identity().await?;
         let authority = identity.public.authority_id.clone();
         let input = serde_json::to_string(&p).map_err(dispatch::internal)?;
@@ -561,6 +620,9 @@ impl Manager {
             .witness(&authority, &p.request_id, "remote.accept", &input)
             .await?
         {
+            if enrollment.is_some() {
+                return Err(conflict());
+            }
             let mut result: RemoteAcceptResult =
                 serde_json::from_value(witness).map_err(dispatch::internal)?;
             let id = result.grant.id.clone();
@@ -635,9 +697,13 @@ impl Manager {
         };
         let value = serde_json::to_value(&result).map_err(dispatch::internal)?;
         let saved = value.clone();
+        let enrollment_owner = self.clone();
         self.db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(guard) = &enrollment {
+                        guard.check_tx(&enrollment_owner, tx, &response, &p.request_id)?;
+                    }
                     let invitation = facts::invitation(tx, &response.invitation_id, &authority)?
                         .ok_or_else(|| {
                             crewd_store::StoreError::Invalid("unknown pairing invitation".into())
@@ -676,6 +742,17 @@ impl Manager {
                         &saved.to_string(),
                         &crewd_store::now_ts(),
                     )?;
+                    if let Some(guard) = &enrollment {
+                        crewd_store::enrollment::commit(
+                            tx,
+                            &authority,
+                            &guard.enrollment_id,
+                            crewd_store::enrollment::Committed {
+                                input_digest: guard.digest.clone(),
+                                result: result.clone(),
+                            },
+                        )?;
+                    }
                     facts::audit(
                         tx,
                         &authority,
@@ -695,6 +772,16 @@ impl Manager {
         Ok(value)
     }
     async fn revoke(&self, p: RemoteRevokeParams) -> std::result::Result<Value, RpcError> {
+        self.revoke_with_admin(p, None).await
+    }
+    pub(crate) async fn revoke_with_admin(
+        &self,
+        p: RemoteRevokeParams,
+        admin: Option<crate::peer::RootAdminPermit>,
+    ) -> std::result::Result<Value, RpcError> {
+        if let Some(p) = &admin {
+            p.check()?
+        }
         let expected = revision(&p.expected_revision)?;
         if p.note.trim().is_empty() || p.note.len() > 4096 {
             return Err(bad("请填写撤销理由"));
@@ -708,6 +795,11 @@ impl Manager {
             .db
             .call(move |s| {
                 s.with_tx(|tx| {
+                    if let Some(p) = &admin {
+                        p.check().map_err(|_| {
+                            crewd_store::StoreError::Invalid("root admin authority changed".into())
+                        })?
+                    }
                     if !facts::revoke_grant(
                         tx,
                         &id,

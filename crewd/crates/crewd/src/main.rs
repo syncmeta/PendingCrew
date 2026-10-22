@@ -33,6 +33,9 @@ enum Cmd {
         /// Mac App-owned helper: stop when the original OS parent is confirmed gone.
         #[arg(long)]
         managed_parent: bool,
+        /// Root-created systemd management socket; never grants ordinary work Human authority.
+        #[arg(long)]
+        system_admin_socket: Option<PathBuf>,
         #[arg(long, env = "CREWD_CODEX")]
         codex: Option<PathBuf>,
         #[arg(long = "codex-env", value_name = "K=V", hide = true)]
@@ -199,6 +202,7 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::Serve {
             managed_parent,
+            system_admin_socket,
             claude,
             claude_env,
             managed_claude,
@@ -219,6 +223,10 @@ async fn run() -> anyhow::Result<()> {
                     .with_context(|| format!("--codex-env must be K=V: {kv}"))?;
                 codex_extra.insert(key.to_string(), value.to_string());
             }
+            let admin_socket = system_admin_socket
+                .as_deref()
+                .map(crewd_server::host_admin::HostAdminSocket::from_systemd)
+                .transpose()?;
             crewd_server::ensure_data_dir(&dir)?;
             let runtime = runtime_dir(&dir)?;
             let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
@@ -227,6 +235,7 @@ async fn run() -> anyhow::Result<()> {
                 .map(|d| d.join("projects"));
             let opts = crewd_server::ServeOptions {
                 managed_parent: *managed_parent,
+                admin_socket,
                 orchestra: Some(crewd_server::OrchestraServe {
                     codex: match codex {
                         Some(path) => {

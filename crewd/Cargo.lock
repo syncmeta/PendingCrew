@@ -486,6 +486,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "subtle",
  "x509-parser",
 ]
 
@@ -524,6 +525,7 @@ dependencies = [
 name = "crewd-store"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "crewd-proto",
  "crewd-work",

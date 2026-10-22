@@ -389,6 +389,34 @@ async fn request_step(
                 .with_refusal("remote.local_human_only"),
             ))
         }
+        Ok(req)
+            if matches!(
+                req.method.as_str(),
+                "remote.enrollmentCreate" | "remote.enrollmentLookup"
+            ) =>
+        {
+            let outcome = match peer.command_actor() {
+                crate::public_commands::Actor::Local(local) => match state.remote.get() {
+                    Some(remote) => {
+                        remote
+                            .local_enrollment_route(local, &req.method, req.params)
+                            .await
+                    }
+                    None => Err(RpcError::new(
+                        RpcError::METHOD_NOT_FOUND,
+                        "remote management unavailable",
+                    )),
+                },
+                crate::public_commands::Actor::Remote(_) => Err(RpcError::new(
+                    RpcError::FORBIDDEN,
+                    "local Human enrollment management required",
+                )),
+            };
+            ServerFrame::Response(match outcome {
+                Ok(value) => Response::ok(req.id, value),
+                Err(error) => Response::err(req.id, error),
+            })
+        }
         Ok(req) if req.method == crewd_proto::commands::SESSION_TERMINAL_WATCH => {
             let id = req.id;
             if agent.is_attached() {
