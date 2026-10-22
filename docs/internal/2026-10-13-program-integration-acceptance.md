@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 普通 iOS 离线历史草稿完整源码冻结；VPS 准备未知保全
+
+手机97fb输入/布局已验原包保留，Mac日用仍准确6f35/20748.07553，不改标。此前GitHub故障已恢复，原44480普通atomic push实际0，main/global已保存a0f50dc8；本组合为下一准确普通iOS新包输入。
+
+完整6c iOS→VPS准备中，原11667 SSH255/connectionclosed/stdout空，未返回远端目录/复制/install结果，故原事务Unknown；同scope仅只读20791仍SSH255/空，无事实可恢复，未重发写入/换UUID，也未启动Core、隧道或邀请。远端同scope根由空间实核从未写的/tmp改为磁盘/var/tmp/pcw-ios-r2-20261022-6c1d9e42，原现场保留不读改。手机真实空表单/三文件目的absent与97fb输入门已过，原App48979/console82705终态0、208Shutdown、无测试文件或新信任写入；网络仅阻依赖的完整配对，不冒已验。全部原件ios-vps-r2-6c1d9e42-20261022。
+
+独立源核发现普通iOS撤权断连后虽然保存workspace输入，却无可达入口；客户端16bc补原连接只读入口，继而按用户退出重开数据可用要求收为完整P3。最终作者48bbf03c1f617280e1fe53a23bb2522c73df4f74三文件：普通IPadShell始终可显式打开本机已存草稿，后台只读原presentation journal，不创建目录/第二存储/索引/凭据或liveworkspace，不连接/提交/恢复任务；原格式1与namespace/父recordUUID/文件名SHA/entryprefix绑定，opaque dbID不拆段，原writer逻辑字节不变。逐/FD及每固定组件openat nofollow/fstat、私有uid0700/文件0600/singlelink、mtime/ctime稳定核；单文件8MiB、record/files各256、累计32MiB，坏项或到限明确未完整读取并保原件/安全项，不截断正文或静默当空。界面标明本机历史输入不代表当前服务授权或回执，全文可选择；页面关闭后epoch不回填旧结果。
+
+原既有production composer seam最终28373严格编译0、四独立进程/负向/资源模式均0，A/B全文及1MiB/mention/reply语义完整，损坏/hash/mode/link/schema/namespace/entry/上限与原件保全有原日志。独审ios-offline-drafts-source-20261022/independent-qa-source-seam.json SHAe3472578c16ea52671d8d528d2a2547a7477129a21cf40418535b84c8ad7ab2e。旧TOCTOU仅源码确认，不冒运行RED；原固定ancestorlink拒绝是防回归GREEN；一次合法/private/tmp冗余字符串判断失败-5与修正后0均保留。当前仅源/seam/iOS parse证据，不冒完整target或实际P3界面通过。
+
+本组合冻结后仅唯一普通iOS完整暖构建，准确包门接受再用原production writer一个假record文件、原私有208验证显式离线查看→实际退出重开→同原文；无配对/远程scope重试/新框架。普通iOS原启动仍refresh配对元数据，不自动选择/连接/启动任务；此前笼统无Keychain应限定为无脚本凭据操作/无新授信写入，不能冒整次App零Keychain API。离线reader与入口自身不读Keychain，且不依赖元数据读取成功。M4正式ACP/完整历史与完整持久远程/真机交付仍未完成，184/1ef与6c Unknown边界保持。
+
 ## 2026-10-22 Linux 恢复完整验收通过；iOS 长码实际流程修复验收通过
 
 Linux受管恢复独立实际验收已闭合：managed-r2-recovery-20261022/independent-qa-actual-runtime.json SHA724a627e2cc25e34adbbad3a3bc58537ed66b1bc78c1d66a1afdef43eb2ada4c。原归档521项与28份所取原件逐字节核同，24条原RPC独核原Todo身份、完整block/view/placement、两knowledge请求known、四阶段session空、CAS单winner和preparedUnknown仅status保留；SIGKILL后WAL57712B，坏WAL/未来版副本拒绝前后hash/mode不变。原四Core wait0/-9/0/0，UID1000/真实Linux procfd/运行7.39s，原服务/监听/进程与旧tar/ELF前后相同。实际controller13bde与编译ELF582分列，非新97f Linux构建、远程持久或常驻部署；不重复CI/模型/恢复业务。
