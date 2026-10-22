@@ -121,8 +121,27 @@ def main():
     assert code == 0 and not (out/'schema.stderr').read_bytes() and schema == json.loads(checked.read_bytes())
     assert len(schema['methods']) == 141 and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup',
         'notification.deliveryGet', 'session.codex.inputPrepare', 'session.codex.inputLookup',
-        'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'session.codex.archive',
-        'session.codex.unarchive', 'session.codex.delete', 'session.codex.revert'])
+        'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'command.submit', 'command.lookup'])
+    # Four direct staging/catalog reads and four typed commands are distinct surfaces.
+    direct = {
+        'session.codex.inputPrepare': ('CodexInputPrepareParams', 'CodexInputResult'),
+        'session.codex.inputLookup': ('CodexInputLookupParams', 'CodexInputLookup'),
+        'session.codex.inputDiscard': ('CodexInputDiscardParams', 'CodexInputResult'),
+        'session.codex.permissionProfiles': ('CodexPermissionProfilesParams', 'CodexPermissionProfiles'),
+    }
+    for method, (params, result) in direct.items():
+        assert schema['methods'][method] == {'params': {'$ref': '#/$defs/' + params}, 'result': {'$ref': '#/$defs/' + result}}
+    assert schema['methods']['command.submit'] == {'params': {'$ref': '#/$defs/CommandSubmitParams'}, 'result': {'$ref': '#/$defs/PublicCommandReceipt'}}
+    assert schema['methods']['command.lookup'] == {'params': {'$ref': '#/$defs/CommandLookupParams'}, 'result': {'anyOf': [{'$ref': '#/$defs/PublicCommandReceipt'}, {'type': 'null'}]}}
+    assert schema['$defs']['CommandSubmitParams']['properties']['command'] == {'$ref': '#/$defs/PublicCommand'}
+    variants = schema['$defs']['PublicCommand']['oneOf']
+    for operation, params in [('archive', 'CodexTargetParams'), ('unarchive', 'CodexTargetParams'),
+                              ('delete', 'CodexDeleteParams'), ('revert', 'CodexRevertParams')]:
+        name = 'session.codex.' + operation
+        assert name not in schema['methods'], 'history control is a typed command, not a direct RPC'
+        matching = [v for v in variants if v.get('properties', {}).get('operation', {}).get('const') == name]
+        assert matching == [{'additionalProperties': False, 'properties': {'operation': {'const': name, 'type': 'string'},
+                              'params': {'$ref': '#/$defs/' + params}}, 'required': ['operation', 'params'], 'type': 'object'}]
     assert sha(binary) == digest
     # Project only after original graph/fresh-source verification; keep original witness.
     save(out/'build-proof.json', {'sourceCommit':s, 'sourceClean':True, 'defaultFeatures':True,
