@@ -17,6 +17,8 @@ use crate::codex::proto::{self, ContextUsage};
 /// 喂一条通知之后的结论。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Signals {
+    /// Only a genuinely active exact turn, with explicit completed/failed status.
+    pub notification_outcome: Option<(String,bool)>,
     /// 一个普通回合正常结束：本回合最后一条 agent 正文（没有就是空串）。
     pub turn_ended: Option<String>,
     /// 该触发自动压缩了（调用方发 `thread/compact/start` 并调 [`TurnTracker::begin_compaction`]）。
@@ -235,6 +237,11 @@ impl TurnTracker {
         }
         let ok = params.pointer("/turn/status").and_then(Value::as_str) == Some("completed");
         let finishing_compaction = self.compacting;
+        let failed=params.pointer("/turn/status").and_then(Value::as_str)==Some("failed");
+        if !finishing_compaction && (ok||failed) && self.active_turn.is_some() && self.active_turn==completed_id {
+            s.notification_outcome=completed_id.clone().map(|id|(id,failed));
+        }
+
         if finishing_compaction {
             s.compaction_finished = true;
             if !ok {

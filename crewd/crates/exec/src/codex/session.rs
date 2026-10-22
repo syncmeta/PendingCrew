@@ -1103,7 +1103,9 @@ impl CodexCore {
             }
             self.event(SessionEvent::Item { turn_id, item });
         }
-        if let Some(last) = s.turn_ended {
+        if let Some((turn_id,failed))=s.notification_outcome {
+            self.event(SessionEvent::NativeTurnOutcome {thread_id:self.thread_id.clone().expect("checked active thread"),turn_id,failed,last_agent_message:s.turn_ended.unwrap_or_default()});
+        } else if let Some(last) = s.turn_ended {
             self.event(SessionEvent::TurnEnded {
                 turn_id: params
                     .pointer("/turn/id")

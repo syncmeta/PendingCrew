@@ -43,6 +43,10 @@ pub fn request_lookup(c:&Connection,owner:&str,request:&str)->Result<Notificatio
     let row:Option<(String,String,Option<String>)>=c.query_row("SELECT owner,operation,result FROM notification_requests WHERE request_id=?1",[request],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     match row {None=>Ok(NotificationRequestLookup::NotFound),Some((o,_,_)) if o!=owner=>Err(invalid("notification request owner mismatch")),Some((_,operation,None))=>Ok(NotificationRequestLookup::Unknown{operation}),Some((_,operation,Some(result)))=>Ok(NotificationRequestLookup::Known{operation,result:serde_json::from_str(&result)?})}
 }
+pub fn existing_request(c:&Connection,owner:&str,request:&str,operation:&str,body_hash:&str)->Result<Option<NotificationRequestLookup>> {
+    let old:Option<(String,String,String)>=c.query_row("SELECT owner,operation,digest FROM notification_requests WHERE request_id=?1",[request],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    match old {None=>Ok(None),Some(old) if old!=(owner.into(),operation.into(),body_hash.into())=>Err(invalid("notification original request conflict")),Some(_)=>Ok(Some(request_lookup(c,owner,request)?))}
+}
 /// True means new. Existing identical UUID is read-only, never redoes an effect.
 pub fn reserve(c:&Connection,owner:&str,request:&str,operation:&str,body_hash:&str)->Result<bool> {
     tx(c)?;if !crewd_proto::valid_remote_uuid(request)||body_hash.len()!=64{return Err(invalid("invalid notification request"))}
@@ -92,7 +96,17 @@ pub fn enqueue(c:&Connection,crew:&str,kind:NotificationKind,source:Notification
     tx(c)?;let config=settings(c)?;if !config.enabled{return Ok(())}let Some(binding)=config.binding else{return Ok(())};
     if !crew_live(c,crew)?||now<0{return Ok(())}
     let context=NotificationContext{action:"open_context".into(),authority_id:binding.authority_id.clone(),db_id:binding.db_id.clone(),crew_id:crew.into(),kind,source};
-    let raw=json(&context)?;if raw.len()>3072{return Err(invalid("notification source context exceeds bound"))}let source_key=hash(raw.as_bytes());
+    let raw=json(&context)?;if raw.len()>3072{return Err(invalid("notification source context exceeds bound"))}
+    // Dedupe uses original source identity, never state labels, token generation,
+    // receipt revision, public display metadata, or a new delivery UUID.
+    let original=match &context.source {
+        NotificationSource::WorkEvent{event_seq,..}=>json(&("work",event_seq))?,
+        NotificationSource::CodexTurn{session_id,thread_id,turn_id}=>json(&("codexTurn",session_id,thread_id,turn_id))?,
+        NotificationSource::ManagedResponse{session_id,runtime_id,request_id,prompt_id,..}=>json(&("managedResponse",session_id,runtime_id,request_id,prompt_id))?,
+        NotificationSource::Decision{session_id,generation,decision_id}=>json(&("decision",session_id,generation,decision_id))?,
+        NotificationSource::Message{message_id,message_seq,channel_id}=>json(&("message",message_id,message_seq,channel_id))?,
+    };
+    let source_key=hash(json(&(&binding.authority_id,&binding.db_id,crew,original))?.as_bytes());
     let mut query=c.prepare("SELECT id,grant_id,grant_revision,client_pin,summary FROM notification_installations WHERE revoked=0 AND authority_id=?1 AND db_id=?2 ORDER BY id LIMIT 257")?;
     let rows=query.query_map(params![binding.authority_id,binding.db_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     if rows.len()>256{return Err(invalid("notification installation bound exceeded"))}
@@ -135,21 +149,37 @@ pub fn restored(c:&Connection)->Result<()> {
 }
 pub struct Claimed {pub delivery_id:i64,pub installation:NotificationInstallation,pub owner:Owner,pub sealed_token:Vec<u8>,pub context:NotificationContext,pub attempt:String,pub expires_at:i64,pub config_revision:i64}
 /// Unknown is durable before returning the external-I/O permit. Never selects Unknown again.
-pub fn claim(c:&Connection,now:i64)->Result<Option<Claimed>> {
-    tx(c)?;let config=settings(c)?;if !config.enabled{return Ok(None)}
+pub fn claim(c:&Connection,now:i64,expected_revision:i64)->Result<Option<Claimed>> {claim_inner(c,now,expected_revision,None,true)}
+pub fn claim_checked(c:&Connection,now:i64,expected_revision:i64,expected_id:i64)->Result<Option<Claimed>> {claim_inner(c,now,expected_revision,Some(expected_id),true)}
+pub fn peek(c:&Connection,now:i64,expected_revision:i64)->Result<Option<Claimed>> {claim_inner(c,now,expected_revision,None,false)}
+fn claim_inner(c:&Connection,now:i64,expected_revision:i64,expected_id:Option<i64>,mark_unknown:bool)->Result<Option<Claimed>> {
+    tx(c)?;let config=settings(c)?;if !config.enabled||config.revision!=expected_revision{return Ok(None)}
     c.execute("UPDATE notification_outbox SET state='suppressed',reason='expired' WHERE state='pending' AND expires_at<=?1",[now])?;
     let candidate:Option<(i64,String,String,i64)>=c.query_row("SELECT id,installation_id,context,expires_at FROM notification_outbox WHERE state='pending' ORDER BY id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
     let Some((delivery_id,id,context,expires_at))=candidate else{return Ok(None)};
+    if expected_id.is_some_and(|id|id!=delivery_id){return Ok(None)}
     let context:NotificationContext=serde_json::from_str(&context)?;
     let row:(String,String,String,String,String,String,Option<Vec<u8>>,bool)=c.query_row("SELECT authority_id,db_id,grant_id,grant_revision,client_pin,summary,token,revoked FROM notification_installations WHERE id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?)))?;
     let owner=Owner{authority_id:row.0,db_id:row.1,grant_id:row.2,grant_revision:row.3,client_pin:row.4};let installation:NotificationInstallation=serde_json::from_str(&row.5)?;
-    let live= !row.7&&row.6.is_some()&&owner.authorize(c).is_ok()&&crew_live(c,&context.crew_id)?&&installation.crew_ids.contains(&context.crew_id)&&installation.kinds.contains(&context.kind)&&config.binding.as_ref().is_some_and(|b|b.authority_id==context.authority_id&&b.db_id==context.db_id&&b.environment==installation.environment&&b.topic==installation.topic);
+    let live= source_live(c,&context)? && !row.7&&row.6.is_some()&&owner.authorize(c).is_ok()&&crew_live(c,&context.crew_id)?&&installation.crew_ids.contains(&context.crew_id)&&installation.kinds.contains(&context.kind)&&config.binding.as_ref().is_some_and(|b|b.authority_id==context.authority_id&&b.db_id==context.db_id&&b.environment==installation.environment&&b.topic==installation.topic);
     if !live {c.execute("UPDATE notification_outbox SET state='suppressed',reason='authority_changed' WHERE id=?1 AND state='pending'",[delivery_id])?;return Ok(None)}
-    let attempt=uuid::Uuid::new_v4().to_string();let generation=number(&installation.generation,false)?;
-    if c.execute("UPDATE notification_outbox SET state='unknown',attempt=?1,attempt_generation=?2 WHERE id=?3 AND state='pending'",params![attempt,generation,delivery_id])?!=1{return Err(invalid("notification claim conflict"))}
+    let attempt=if mark_unknown {uuid::Uuid::new_v4().to_string()}else{String::new()};let generation=number(&installation.generation,false)?;
+    if mark_unknown && c.execute("UPDATE notification_outbox SET state='unknown',attempt=?1,attempt_generation=?2 WHERE id=?3 AND state='pending'",params![attempt,generation,delivery_id])?!=1{return Err(invalid("notification claim conflict"))}
     Ok(Some(Claimed{delivery_id,installation,owner,sealed_token:row.6.unwrap(),context,attempt,expires_at,config_revision:config.revision}))
 }
-pub fn still_allowed(c:&Connection,claimed:&Claimed,now:i64)->Result<bool>{let config=settings(c)?;Ok(config.enabled&&config.revision==claimed.config_revision&&claimed.expires_at>now&&claimed.owner.authorize(c).is_ok()&&installation(c,&claimed.owner,&claimed.installation.installation_id)?.is_some_and(|s|!s.revoked&&s.generation==claimed.installation.generation)&&crew_live(c,&claimed.context.crew_id)?)}
+fn source_live(c:&Connection,context:&NotificationContext)->Result<bool>{
+    match &context.source {
+        NotificationSource::ManagedResponse{session_id,runtime_id,request_id,prompt_id,receipt_revision}=>{
+            let revision=number(receipt_revision,true)?;
+            Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_receipts e JOIN native_execution_runtimes r ON r.runtime_id=e.runtime_id JOIN sessions s ON s.id=r.session_id WHERE e.request_id=?1 AND e.runtime_id=?2 AND e.prompt_id=?3 AND e.revision=?4 AND e.phase='completed' AND e.turn_id IS NULL AND r.revoked=0 AND r.manual=0 AND r.session_id=?5 AND s.desired='running')",params![request_id,runtime_id,prompt_id,revision,session_id],|r|r.get(0))?)
+        }
+        NotificationSource::CodexTurn{session_id,..}|NotificationSource::Decision{session_id,..}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND desired='running')",[session_id],|r|r.get(0))?),
+        NotificationSource::Message{message_id,message_seq,channel_id}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1 AND seq=?2 AND channel_id=?3)",params![message_id,number(message_seq,false)?,channel_id],|r|r.get(0))?),
+        NotificationSource::WorkEvent{..}=>Ok(true),
+    }
+}
+pub fn suppress_unclaimed(c:&Connection,id:i64,reason:&str)->Result<()> {tx(c)?;c.execute("UPDATE notification_outbox SET state='suppressed',reason=?1 WHERE id=?2 AND state='pending'",params![reason,id])?;Ok(())}
+pub fn still_allowed(c:&Connection,claimed:&Claimed,now:i64)->Result<bool>{let config=settings(c)?;Ok(source_live(c,&claimed.context)?&&config.enabled&&config.revision==claimed.config_revision&&claimed.expires_at>now&&claimed.owner.authorize(c).is_ok()&&installation(c,&claimed.owner,&claimed.installation.installation_id)?.is_some_and(|s|!s.revoked&&s.generation==claimed.installation.generation)&&crew_live(c,&claimed.context.crew_id)?)}
 pub fn settle(c:&Connection,id:i64,attempt:&str,state:NotificationDeliveryState,reason:Option<&str>,invalidate_token:bool)->Result<()> {
     tx(c)?;let target=match state{NotificationDeliveryState::AcceptedByApns=>"accepted",NotificationDeliveryState::Rejected=>"rejected",NotificationDeliveryState::Suppressed=>"suppressed",NotificationDeliveryState::Unknown=>return Ok(()),NotificationDeliveryState::Pending=>return Err(invalid("notification cannot requeue"))};
     if c.execute("UPDATE notification_outbox SET state=?1,reason=?2 WHERE id=?3 AND attempt=?4 AND state='unknown'",params![target,reason,id,attempt])?!=1{return Err(invalid("notification original attempt conflict"))}
@@ -165,4 +195,81 @@ pub fn deliveries(c:&Connection,owner:&Owner,p:&NotificationDeliveryListParams)-
     let rows=q.query_map(params![p.installation_id,after,p.limit+1],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,i64>(5)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;let more=rows.len()>p.limit as usize;let mut items=Vec::new();
     for (id,context,state,apns_id,reason,expiry) in rows.into_iter().take(p.limit as usize){let state=match state.as_str(){"pending"=>NotificationDeliveryState::Pending,"unknown"=>NotificationDeliveryState::Unknown,"accepted"=>NotificationDeliveryState::AcceptedByApns,"rejected"=>NotificationDeliveryState::Rejected,"suppressed"=>NotificationDeliveryState::Suppressed,_=>return Err(invalid("invalid notification state"))};items.push(NotificationDelivery{delivery_id:id.to_string(),context:serde_json::from_str(&context)?,state,apns_id,reason,expires_at:crate::ts_from_ms(expiry)});}
     Ok(NotificationDeliveryPage{next_after_delivery_id:if more{items.last().map(|v|v.delivery_id.clone())}else{None},items})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Store;
+    const AUTH:&str="01234567-89ab-4cde-8fab-0123456789ab";
+    fn setup(s:&Store)->Owner {
+        let c=s.conn();
+        c.execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew','Synthetic','t','t'); UPDATE remote_configuration SET enabled=1;").unwrap();
+        let db_id=crate::meta_get(c,"dbId").unwrap().unwrap();
+        crate::remote::bind_identity(c,&crewd_proto::RemotePublicIdentity{authority_id:AUTH.into(),db_id:db_id.clone(),certificate_der_base64:"synthetic".into(),spki_sha256:"a".repeat(64)},"t").unwrap();
+        let grant_id=uuid::Uuid::new_v4().to_string();
+        c.execute("INSERT INTO remote_grants(id,authority_id,device_label,client_spki_sha256,client_certificate_der_base64,revision,created_at) VALUES(?1,?2,'Synthetic',?3,'synthetic',1,'t')",params![grant_id,AUTH,"b".repeat(64)]).unwrap();
+        let owner=Owner{authority_id:AUTH.into(),db_id:db_id.clone(),grant_id,grant_revision:"1".into(),client_pin:"b".repeat(64)};
+        let tx=c.unchecked_transaction().unwrap();configure(&tx,0,true,Some(&ProviderBinding{authority_id:AUTH.into(),db_id,team_id:"1234567890".into(),key_id:"ABCDEFGHIJ".into(),environment:PushEnvironment::Sandbox,topic:"com.pendingname.pendingcrew".into(),key_slot:uuid::Uuid::new_v4().to_string(),seal_slot:uuid::Uuid::new_v4().to_string()})).unwrap();tx.commit().unwrap();owner
+    }
+    fn registration()->NotificationRegisterParams {NotificationRegisterParams{request_id:uuid::Uuid::new_v4().to_string(),installation_id:uuid::Uuid::new_v4().to_string(),expected_generation:"0".into(),device_token:"01ab".into(),environment:PushEnvironment::Sandbox,topic:"com.pendingname.pendingcrew".into(),crew_ids:vec!["crew".into()],kinds:vec![NotificationKind::Done,NotificationKind::Reported,NotificationKind::ReplyReady,NotificationKind::ResponseFailed,NotificationKind::HumanApprovalRequired]}}
+    fn install(c:&Connection,owner:&Owner,p:&NotificationRegisterParams){let tx=c.unchecked_transaction().unwrap();register(&tx,owner,p,&[7;32]).unwrap();tx.commit().unwrap();}
+    fn event(c:&Connection,seq:u64,now:i64){let tx=c.unchecked_transaction().unwrap();enqueue(&tx,"crew",NotificationKind::Done,NotificationSource::WorkEvent{event_seq:seq.to_string(),work_id:Some("W1".into()),ask_id:None,entry_no:Some("#1".into()),object_id:"W12".into()},None,now).unwrap();tx.commit().unwrap();}
+    fn claim_one(c:&Connection,now:i64)->Option<Claimed>{let tx=c.unchecked_transaction().unwrap();let result=claim(&tx,now,settings(&tx).unwrap().revision).unwrap();tx.commit().unwrap();result}
+    fn count(c:&Connection)->i64{c.query_row("SELECT COUNT(*) FROM notification_outbox",[],|r|r.get(0)).unwrap()}
+    #[test]
+    fn original_request_uuid_is_owner_bound_and_never_reapplies_unknown_or_known() {
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let id=uuid::Uuid::new_v4().to_string();let h=hash(b"original");
+        let tx=s.conn().unchecked_transaction().unwrap();assert!(reserve(&tx,&owner.key(),&id,"register",&h).unwrap());tx.commit().unwrap();
+        assert!(matches!(request_lookup(s.conn(),&owner.key(),&id).unwrap(),NotificationRequestLookup::Unknown{..}));
+        let tx=s.conn().unchecked_transaction().unwrap();assert!(!reserve(&tx,&owner.key(),&id,"register",&h).unwrap());assert!(reserve(&tx,&owner.key(),&id,"register",&hash(b"new")).is_err());result(&tx,&owner.key(),&id,&serde_json::json!({"generation":"1"})).unwrap();tx.commit().unwrap();
+        assert!(matches!(request_lookup(s.conn(),&owner.key(),&id).unwrap(),NotificationRequestLookup::Known{..}));assert!(request_lookup(s.conn(),"anotherGrant",&id).is_err());
+        assert!(matches!(request_lookup(s.conn(),&owner.key(),&uuid::Uuid::new_v4().to_string()).unwrap(),NotificationRequestLookup::NotFound));
+    }
+    #[test]
+    fn unknown_before_io_survives_actual_close_reopen_and_rotation_without_resend() {
+        let d=tempfile::tempdir().unwrap();let path=d.path().join("db");let owner;let mut p=registration();let attempt;
+        {let s=Store::open(&path).unwrap();owner=setup(&s);install(s.conn(),&owner,&p);event(s.conn(),1,1000);let first=claim_one(s.conn(),1001).unwrap();attempt=first.attempt;assert_eq!(first.expires_at,86_401_000);}
+        {let s=Store::open(&path).unwrap();assert!(claim_one(s.conn(),1002).is_none());p.expected_generation="1".into();install(s.conn(),&owner,&p);event(s.conn(),1,2000);assert_eq!(count(s.conn()),1);assert!(claim_one(s.conn(),2001).is_none());
+         let tx=s.conn().unchecked_transaction().unwrap();settle(&tx,1,&attempt,NotificationDeliveryState::AcceptedByApns,None,false).unwrap();tx.commit().unwrap();assert!(claim_one(s.conn(),2002).is_none());}
+    }
+    #[test]
+    fn grant_revocation_and_subscription_CAS_block_future_claims_but_do_not_withdraw_inflight() {
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let p=registration();install(s.conn(),&owner,&p);event(s.conn(),1,1000);let first=claim_one(s.conn(),1001).unwrap();event(s.conn(),2,1000);
+        s.conn().execute("UPDATE remote_grants SET revoked_at='t',revoke_note='test',revision=2 WHERE id=?1",[&owner.grant_id]).unwrap();assert!(!still_allowed(s.conn(),&first,1002).unwrap());assert!(claim_one(s.conn(),1002).is_none());
+        let tx=s.conn().unchecked_transaction().unwrap();settle(&tx,first.delivery_id,&first.attempt,NotificationDeliveryState::AcceptedByApns,None,false).unwrap();tx.commit().unwrap();
+        let states:Vec<String>=s.conn().prepare("SELECT state FROM notification_outbox ORDER BY id").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();assert_eq!(states,vec!["accepted","suppressed"]);
+    }
+    #[test]
+    fn late_invalid_token_cannot_revoke_rotated_generation_and_tombstone_cannot_resurrect() {
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let mut p=registration();install(s.conn(),&owner,&p);event(s.conn(),1,1000);let first=claim_one(s.conn(),1001).unwrap();p.expected_generation="1".into();install(s.conn(),&owner,&p);
+        let tx=s.conn().unchecked_transaction().unwrap();settle(&tx,first.delivery_id,&first.attempt,NotificationDeliveryState::Rejected,Some("Unregistered"),true).unwrap();tx.commit().unwrap();assert!(!installation(s.conn(),&owner,&p.installation_id).unwrap().unwrap().revoked);
+        let tx=s.conn().unchecked_transaction().unwrap();let revoked=revoke(&tx,&owner,&p.installation_id,2).unwrap();assert_eq!(revoked.generation,"3");tx.commit().unwrap();p.expected_generation="3".into();let tx=s.conn().unchecked_transaction().unwrap();assert!(register(&tx,&owner,&p,&[8;32]).is_err());tx.rollback().unwrap();
+    }
+    #[test]
+    fn immutable_24h_expiry_is_not_extended_by_rotation_replay_and_restore() {
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let mut p=registration();install(s.conn(),&owner,&p);event(s.conn(),1,1000);p.expected_generation="1".into();install(s.conn(),&owner,&p);event(s.conn(),1,20_000);assert!(claim_one(s.conn(),86_401_000).is_none());
+        event(s.conn(),2,86_402_000);let tx=s.conn().unchecked_transaction().unwrap();restored(&tx).unwrap();tx.commit().unwrap();assert!(!settings(s.conn()).unwrap().enabled);assert!(claim_one(s.conn(),86_402_001).is_none());assert!(installation(s.conn(),&owner,&p.installation_id).unwrap().unwrap().revoked);
+    }
+    #[test]
+    fn reply_revision_and_kind_changes_cannot_create_second_original_source_attempt() {
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let p=registration();install(s.conn(),&owner,&p);
+        for (kind,revision) in [(NotificationKind::ReplyReady,"2"),(NotificationKind::ResponseFailed,"3")] {
+            let tx=s.conn().unchecked_transaction().unwrap();enqueue(&tx,"crew",kind,NotificationSource::ManagedResponse{session_id:"session".into(),runtime_id:"runtime".into(),request_id:"request".into(),prompt_id:"prompt".into(),receipt_revision:revision.into()},Some(("session","generation")),1000).unwrap();tx.commit().unwrap();
+        }
+        assert_eq!(count(s.conn()),1);let tx=s.conn().unchecked_transaction().unwrap();suppress_session(&tx,"session","resumed").unwrap();tx.commit().unwrap();assert!(claim_one(s.conn(),1001).is_none());
+    }
+    #[test]
+    fn zero_configuration_or_no_subscription_produces_no_observation_rows() {
+        let s=Store::open_in_memory().unwrap();event(s.conn(),1,1000);assert_eq!(count(s.conn()),0);let _owner=setup(&s);event(s.conn(),2,1000);assert_eq!(count(s.conn()),0);
+    }
+    #[test]
+    fn drop_transaction_discards_notification_and_work_state_together() {
+        use crewd_work::{Actor,Config,CrewId,NewItem,Report,Ts,WorkBook};use crate::object_refs::ObjectKind;
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let p=registration();install(s.conn(),&owner,&p);
+        let tx=s.conn().unchecked_transaction().unwrap();let mut book=WorkBook::restore(crate::work_organization::load(&tx).unwrap().unwrap(),Config::default()).unwrap();let mut n=NewItem::titled("Synthetic");n.crew_id=Some(CrewId::new("crew"));let made=book.create_item(&Actor::Human,Ts(1000),n).unwrap();crate::work_organization::bind_core(&tx,ObjectKind::Plan,"crew",&made.value.to_string(),"t").unwrap();crate::work_organization::save(&tx,book.state(),&made.events,"t").unwrap();tx.commit().unwrap();
+        let before=crate::work_organization::load(s.conn()).unwrap().unwrap();
+        {let tx=s.conn().unchecked_transaction().unwrap();let mut book=WorkBook::restore(before.clone(),Config::default()).unwrap();let reported=book.report(&Actor::Human,Ts(1001),made.value,Report{status:None,next_check_at:None,note:"Synthetic progress".into()}).unwrap();crate::work_organization::save(&tx,book.state(),&reported.events,"t").unwrap();assert_eq!(count(&tx),1);}
+        assert_eq!(count(s.conn()),0);assert_eq!(crate::work_organization::load(s.conn()).unwrap().unwrap(),before);
+    }
 }

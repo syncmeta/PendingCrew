@@ -20,6 +20,7 @@ mod public_execution;
 mod public_terminal;
 pub(crate) mod remote;
 mod apns;
+mod notifications;
 mod signed_client;
 pub mod team_data;
 mod terminal_runtime;
@@ -57,6 +58,7 @@ pub struct AppState {
     pub orchestra: std::sync::OnceLock<orchestra::Handle>,
     pub(crate) peer_policy: std::sync::OnceLock<Arc<peer::PeerPolicy>>,
     pub(crate) remote: std::sync::OnceLock<Arc<remote::Manager>>,
+    pub(crate) notifications: std::sync::OnceLock<Arc<notifications::Runtime>>,
     pub(crate) native_helpers: std::sync::OnceLock<Arc<native_helpers::NativeFactory>>,
     pub(crate) runtime_binding_id: String,
     pub(crate) data_runtime: std::sync::OnceLock<Arc<team_data::runtime::Runtime>>,
@@ -88,6 +90,7 @@ impl AppState {
             orchestra: std::sync::OnceLock::new(),
             peer_policy: std::sync::OnceLock::new(),
             remote: std::sync::OnceLock::new(),
+            notifications: std::sync::OnceLock::new(),
             native_helpers: std::sync::OnceLock::new(),
             runtime_binding_id: uuid::Uuid::new_v4().to_string(),
             admission: Arc::new(lifecycle::Admission::default()),
@@ -662,6 +665,8 @@ async fn serve_with_hooks_inner(
                     let _ = dispatch::log_internal(error);
                 }
             }
+            let notifications = notifications::Runtime::start(&state, data_dir.clone(), drain_rx.clone()).await;
+            let _ = state.notifications.set(notifications);
             #[cfg(any(test, feature = "testkit"))]
             if let Some(ready) = opts.test_s5_fault_ready.take() {
                 ready(S5RequestFaultControl {
@@ -757,6 +762,9 @@ async fn serve_with_hooks_inner(
     {
         conns.abort_all();
         while conns.join_next().await.is_some() {}
+    }
+    if let Some(notifications) = state.notifications.get() {
+        notifications.shutdown().await;
     }
     if let Some(remote) = state.remote.get() {
         remote.shutdown(limit).await;

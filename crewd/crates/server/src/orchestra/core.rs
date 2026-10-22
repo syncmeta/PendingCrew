@@ -2511,6 +2511,7 @@ impl<P: Port> Core<P> {
             return Ok(());
         }
         self.observe_public_event(session, &event);
+        let notification_generation=self.current_public_target(session).generation;
         self.settle_public_physical_event(session, generator, &event)
             .await;
         let l = self
@@ -2590,10 +2591,14 @@ impl<P: Port> Core<P> {
             }
             SessionEvent::Decision(DecisionEvent::Appeared(d)) => {
                 l.decision = Some(d.clone());
+                if let crewd_term::DecisionKind::RunnerRequest{request_id}=&d.kind {
+                    self.port.notification_change(session,NotificationChange::Approval{generation:notification_generation,decision_id:request_id.clone()}).await?;
+                }
                 self.raise_decision(session, &d, now).await?;
             }
             SessionEvent::Decision(DecisionEvent::Cleared) => {
                 l.decision = None;
+                self.port.notification_change(session,NotificationChange::ClearApproval).await?;
                 self.decisions.remove(session);
                 log_err(self.try_deliver(session).await.map(|_| ()));
             }
@@ -2607,12 +2612,15 @@ impl<P: Port> Core<P> {
                     item,
                 });
             }
+            SessionEvent::NativeTurnOutcome{thread_id,turn_id,failed,last_agent_message}=>{
+                self.port.runner_turn_end(session,&turn_id,&last_agent_message,Some(NativeTurnNotice{generation:notification_generation,thread_id,failed})).await?;
+            }
             SessionEvent::TurnEnded {
                 turn_id,
                 last_agent_message,
             } => {
                 self.port
-                    .runner_turn_end(session, &turn_id, &last_agent_message)
+                    .runner_turn_end(session, &turn_id, &last_agent_message, None)
                     .await?;
             }
             SessionEvent::Usage(snapshot) => {
@@ -2713,6 +2721,7 @@ impl<P: Port> Core<P> {
 
     /// `info` = None：事件流断了、没有退出状态（`Input::StreamEnded`），按「自己没了」处理。
     async fn on_exited(&mut self, session: &str, info: Option<ExitInfo>) -> anyhow::Result<()> {
+        log_err(self.port.notification_change(session,NotificationChange::Clear).await);
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };

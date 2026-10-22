@@ -179,6 +179,9 @@ pub struct ExitInfo {
 /// 驱动层往外发的事件（窄接口的状态面）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
+    /// Exact current non-compaction native turn outcome; never WorkBook success.
+    NativeTurnOutcome { thread_id:String, turn_id:String, failed:bool, last_agent_message:String },
+
     /// Genuine Codex protocol observation, never a task completion claim.
     CodexObservation {
         settings: Option<serde_json::Value>,
