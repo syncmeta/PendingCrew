@@ -45,10 +45,10 @@ m.verify=verify;m.inactive=inactive;m.platform.system=lambda:'Linux'
 try:m.main()
 except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise SystemExit('REFUSED/UNKNOWN: '+str(e))
 ''');adapter.write_text(adapter.read_text().replace(repr(INPUT_DIGEST),repr(input_digest)));installer_command=[sys.executable,str(adapter),str(scripts)]
- prefix=out/'prefix';data=out/'data';home=out/'home';work=out/'work'
- for p in [data,home,work]:p.mkdir(mode=0o700)
+ prefix=out/'prefix';data=out/'data';cache=out/'cache';work=out/'work'
+ for p in [data,cache,work]:p.mkdir(mode=0o700)
  require(len(str(data/'crewd.sock').encode())<=103,'short private path required')
- env={'PATH':'/usr/bin:/bin','HOME':str(home),'XDG_CACHE_HOME':str(home/'cache'),'SHELL':'/usr/bin/false','PYTHONDONTWRITEBYTECODE':'1'};records=[];terminals=[]
+ env=dict(os.environ);env.update(PATH='/usr/bin:/bin',XDG_CACHE_HOME=str(cache),SHELL='/usr/bin/false',PYTHONDONTWRITEBYTECODE='1');records=[];terminals=[]
  def run(label,argv,success=True):
   r=subprocess.run(argv,env=env,capture_output=True,text=True,timeout=60);(out/(label+'.log')).write_text(r.stdout+r.stderr);records.append({'phase':label,'argv':argv,'exitCode':r.returncode});require((r.returncode==0)==success,'command outcome differs: '+label);return r
  def install(label,rid,expected,success=True):
@@ -65,7 +65,7 @@ except (ValueError,OSError,KeyError,subprocess.SubprocessError) as e:raise Syste
   finally:os.close(fd)
  @contextlib.contextmanager
  def serve(label,crash=False):
-  log=(out/(label+'.log')).open('w');cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false','--codex-env','HOME='+str(home),'--claude-env','HOME='+str(home)];child=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None
+  log=(out/(label+'.log')).open('w');cmd=[str(prefix/'bin/crewd'),'--data-dir',str(data),'serve','--codex','/usr/bin/false','--claude','/usr/bin/false'];child=subprocess.Popen(cmd,env=env,stdout=log,stderr=log);s=None
   try:
    for _ in range(200):
     require(child.poll() is None,'managed daemon exited before readiness: '+label);s=socket.socket(socket.AF_UNIX);s.settimeout(10)
