@@ -1239,7 +1239,8 @@ final class CrewdWorkspace: ObservableObject {
         case "existingPending":guard [.reserved,.admitted,.dispatched,.unknown].contains(receipt.phase) else{throw CrewdPublicWire.invalid()}
         default:throw CrewdPublicWire.invalid()
         }
-        if [.committed,.rejected,.suppressed].contains(receipt.phase){try acknowledgePersonalDraft(record,receipt:receipt)}
+        // The adapter must verify its captured writer before acknowledging a
+        // terminal result. A valid envelope alone is not a branch confirmation.
         return receipt
     }
     func lookupOriginalCommand(_ record: CrewdPresentationJournal.Prepared) async throws -> CrewdPublicReceipt? {
@@ -1289,6 +1290,9 @@ final class CrewdWorkspace: ObservableObject {
             receipt.value["result"]["sessionId"].string.map { !$0.isEmpty } == true
     }
     func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt, detail: String = "人类明确核对原后台回执；没有重放。") throws {
+        guard record.params["command"]["operation"].string?.hasPrefix("personalDraft.") != true else{
+            throw CrewdClientError(message:"请在个人同步设置中核对这项原请求；需先核实原空间与设备 writer，不能从通用回执入口结束。",kind:.notSubmitted)
+        }
         _ = try publicCommandBinding(for: client)
         guard record.scope == presentationScope, !receipt.historical,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

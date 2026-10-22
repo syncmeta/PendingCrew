@@ -62,10 +62,21 @@ import Combine
     }
     /// User-requested lookup/fence only. NotFound alone never opens the gate.
     func recover(_ row:Record,sealMissing:Bool)async throws{
-        let captured=try origin();guard row.scope==captured.scope,belongs(row) else{throw AppleSyncFailure.accountChanged}
-        if sealMissing{_ = try await io.fence(row);try check(captured);message="原请求已核对；封闭未提交请求不代表原草稿已同步。"}
-        else if let receipt=try await io.lookup(row){try check(captured);if receipt.phase == .committed{try Wire.validateResult(receipt.value["result"],command:row.params["command"],expectedWriter:status?.member?.writer)};if [.committed,.rejected,.suppressed].contains(receipt.phase){try io.acknowledge(row,receipt)};message="已读取原请求结果；没有重发。"}
-        else{try check(captured);message="尚未找到原回执；原项仍待核对，不会重传。"}
+        let captured=try origin(),writer=status?.member?.writer
+        guard row.scope==captured.scope,belongs(row) else{throw AppleSyncFailure.accountChanged}
+        let receipt=try await (sealMissing ? io.fence(row):io.lookup(row))
+        try check(captured)
+        if let receipt{
+            if receipt.phase == .committed{
+                let op=row.params["command"]["operation"].string
+                if ["personalDraft.checkpoint","personalDraft.resolve"].contains(op ?? ""),writer==nil{throw Wire.invalid()}
+                try Wire.validateResult(receipt.value["result"],command:row.params["command"],expectedWriter:writer)
+            }
+            if [.committed,.rejected,.suppressed].contains(receipt.phase){
+                try io.acknowledge(row,receipt)
+                message=sealMissing ? "原请求已核对；封闭未提交请求不代表原草稿已同步。":"已读取原请求结果；没有重发。"
+            }else{message="原请求仍未决；继续核对同一 UUID，不会重发。"}
+        }else{message="尚未找到原回执；原项仍待核对，不会重传。"}
         changed()
     }
     private func mutation(_ op:CrewdPublicOperation,_ params:CrewdValue,crew:String)async throws->CrewdValue{

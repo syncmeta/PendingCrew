@@ -92,6 +92,11 @@ enum CrewPersonalCoreWire {
         guard v["operation"] == .string(op) else{throw invalid()};_ = try uuid(v["spaceId"]);_ = try text(v["spaceEpoch"]);_ = try revision(v["spaceRevision"])
         let member=v["member"] == .null ? nil:try Member(v["member"])
         if p["scope"] != .null{guard v["spaceId"]==p["scope"]["spaceId"],v["spaceEpoch"]==p["scope"]["spaceEpoch"] else{throw invalid()}}
+        if op=="personalDraft.memberSet"{guard v["spaceId"]==p["spaceId"],v["spaceEpoch"]==p["spaceEpoch"] else{throw invalid()}}
+        if op=="personalDraft.ownerConfigure"{
+            guard v["spaceEpoch"]==p["ownerEpoch"],let member,member.grant==nil,member.grantRevision==nil,member.spki==nil,!member.revoked,member.optedIn==(try bool(p["localEnabled"])) else{throw invalid()}
+            if p["expectedSpaceId"] != .null,try !bool(p["acknowledgeRestore"]){guard v["spaceId"]==p["expectedSpaceId"] else{throw invalid()}}
+        }
         if op=="personalDraft.checkpoint"{let b=try branch(v["branch"]);guard b.id.uuidString.lowercased()==p["branchId"].string,try key(b.key)==p["key"],String(b.revision)==p["revision"].string,!b.retired,let bytes=b.payload,try payload(JSONDecoder().decode(Payload.self,from:bytes))==p["payload"] else{throw invalid()}}
         else if op=="personalDraft.resolve"{guard try retirements(v["retired"])==retirements(p["retiring"]) else{throw invalid()};if p["replacement"] == .null{guard v["branch"] == .null else{throw invalid()}}else{let b=try branch(v["branch"]),r=p["replacement"];guard b.id.uuidString.lowercased()==r["branchId"].string,try key(b.key)==p["key"],String(b.revision)==r["revision"].string,!b.retired,let bytes=b.payload,try payload(JSONDecoder().decode(Payload.self,from:bytes))==r["payload"] else{throw invalid()}}}
         else{guard v["branch"] == .null,v["retired"] == .array([]) else{throw invalid()}}
