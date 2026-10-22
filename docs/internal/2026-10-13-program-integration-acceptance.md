@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 两端三阶段文件交换整块源接受，冻结准确候选
+
+客户端b6042e356e5adc6a26730281dc6a548a2ad371ad五文件完整单元已独审接受：Mac管理端邀请/确认文件导出与回应导入、普通Mac客户端和普通iOS真实表单邀请/确认文件导入与回应导出齐全。沿既有纯文本签名信封，无Rust/schema/API/新UTType或URL；262144字节有界regular读取、严格UTF8、既有codec和当前stage DTO检查，导出保持原code精确字节不重新生成。导入只填原文本/清旧预览，保留手动身份核对/回应/批准/确认/选择连接；取消、错误阶段/格式/超限及输入已改/旧表单/忙态晚到均保原输入，不生key、不写credential、不联网或自动推进。
+
+原production remote-flow seam两次67503/6208实际compile0/runtime0，后者包括真实Task晚到；Swift5/mac14 complete/warnings-as-errors，三stage、六跨stage、限长/UTF8、原bytes、epoch与零credentialstats有原件。独审remote-code-file-source-20261022/independent-qa-source-seam.json SHAc1176fc4649ae538dbc03f58e3167a944d827dd5492b544896b137724bfdc5ab；五冻结文件逐Git与author clean相符。实际本次编译shared控件/codec，Mac管理和普通iOS表单为接线源审；不能冒完整target、真实文档选择器或持久配对已验。
+
+本节所在组合提交是下一准确完整来源。唯一后端owner按同源再生成一次普通normal及新证明；唯一客户端owner复用暖缓存，串行普通Mac Release与普通iOS Simulator完整构建；质量只核影响产物，原已验业务/M5/Linux/VPS/首屏不重跑，不触发新CI。当前9490日用版已装未首开、旧数据备份/Keychain/184及1ef Unknown保持；新候选具体替换按已有授权与新鲜无进程条件继续，不能改标9490的旧证据。M4正式ACP/完整history及完整远程/移动持久流程仍未完成。
+
 ## 2026-10-22 执行入口新版已安装；推进完整配对码文件交换
 
 准确9490b742候选0.1.44/20748.05194现已整包安装到/Applications/PendingCrew.app。原55386本次实际poll0af50e终态0，原App/Core精确PID均缺席；没有观察退出选择，不能据此冒安全暂停验收。随后安装d27dfb实际0，三轮新鲜完整进程库存均空，独立核已安装50项字节/链接、Info与严格签名全等9490。原R2私有backup与Applications回退两份各50项等原包，stage消失；旧891与原始数据备份继续保留，数据/Keychain未动。新9490未首开。证据mac-product-9490b742-20261022/independent-qa-postinstallation.json，SHAd5ef4af493d4c1cd79c8e7feacac796e9014fe219e78bda47417600c6814ba6e。文档后续HEAD不改变已安装来源。

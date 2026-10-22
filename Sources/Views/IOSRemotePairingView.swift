@@ -28,7 +28,8 @@ struct IOSRemotePairingView: View {
                     Section("电脑的一次性邀请") {
                         TextEditor(text: $invitation).frame(minHeight: 150)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
-                            .onChange(of: invitation) { _, _ in preview = nil; envelope = nil }
+                            .onChange(of: invitation) { _, _ in preview = nil; envelope = nil; status = nil }
+                        CrewdRemoteCodeFileImport(text: $invitation, stage: .invitation, disabled: busy)
                         Button("核对电脑") { run {
                             let decoded = try CrewdRemoteText.decode(invitation)
                             return (try await appModel.crewdWindow.pairing.invitation(decoded), decoded)
@@ -52,6 +53,7 @@ struct IOSRemotePairingView: View {
                 if let id = pendingID {
                     Section("发回电脑的回应") {
                         TextEditor(text: $response).frame(minHeight: 150).disabled(true)
+                        CrewdRemoteCodeFileExport(text: response, stage: .response, disabled: busy)
                         Button("复制回应") {
                             UIPasteboard.general.string = response
                             status = "回应已复制；配对尚未完成。请在电脑上核对并批准。"
@@ -60,6 +62,7 @@ struct IOSRemotePairingView: View {
                     Section("电脑的正式确认码") {
                         TextEditor(text: $confirmation).frame(minHeight: 150)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(busy)
+                        CrewdRemoteCodeFileImport(text: $confirmation, stage: .receipt, disabled: busy)
                         Button("确认并连接") {
                             run {
                                 try await appModel.crewdWindow.pairing.confirmReceipt(CrewdRemoteText.decode(confirmation), id: id)

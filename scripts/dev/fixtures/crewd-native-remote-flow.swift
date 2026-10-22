@@ -26,7 +26,7 @@ import X509
     func remove(_ id: UUID) throws { enter(); defer { leave() }; removes += 1; values.removeValue(forKey: id) }
 }
 
-#if QA_CREDENTIAL_SERIAL
+#if QA_CREDENTIAL_SERIAL || QA_REMOTE_CODE_FILE
 @CrewdCredentialActor private final class SerialScope {
     let vault = QAMemoryVault()
     let pairing: CrewdRemotePairing
@@ -55,6 +55,81 @@ import X509
     func stats() -> [Int] { [vault.saves, vault.removes, vault.reads, vault.maximumActive] }
     func failWrites() { vault.failSave = true }
 }
+#if QA_REMOTE_CODE_FILE
+@main struct NativeRemoteFlow {
+    @MainActor static func main() async throws {
+        let scope = try await SerialScope()
+        let invitation = try CrewdRemoteText.encode(scope.invitation)
+        let pairing = scope.pairing
+        let before = await scope.stats()
+        let raw = "\n" + invitation + "\n"
+        let imported = try CrewdRemoteCodeFile.text(Data(raw.utf8), stage: .invitation)
+        precondition(imported == raw)
+        let afterParse = await scope.stats()
+        precondition(afterParse == before, "file parsing accessed credentials")
+        let response = try await pairing.respondWithText(scope.invitation, deviceLabel: "File memory device")
+        let receipt = try CrewdRemoteText.encode(try await scope.receipt(response.id))
+        let codes: [(CrewdRemoteCodeStage, String)] = [(.invitation, raw), (.response, response.text), (.receipt, receipt)]
+        var checked = 0
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("pcw-code-file-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for (stage, code) in codes {
+            let bytes = Data(code.utf8)
+            let document = try CrewdRemoteCodeDocument(text: code, stage: stage)
+            precondition(document.bytes == bytes, "export changed original signed text")
+            let file = root.appendingPathComponent(stage.filename)
+            try bytes.write(to: file)
+            let read = try CrewdRemoteCodeFile.read(file, stage: stage)
+            precondition(read == code)
+            for other in codes where other.0 != stage {
+                do { _ = try CrewdRemoteCodeFile.text(bytes, stage: other.0); fatalError("wrong phase accepted") }
+                catch CrewdRemoteCodeFileError.wrongStage { checked += 1 }
+            }
+        }
+        for (bytes, expected) in [(Data(repeating: 32, count: CrewdRemoteCodeFile.maximumBytes + 1), 1), (Data([0xff, 0xfe]), 2), (Data("pendingcrew-remote-v1:broken".utf8), 3)] {
+            do { _ = try CrewdRemoteCodeFile.text(bytes, stage: .invitation); fatalError("malformed file accepted") }
+            catch CrewdRemoteCodeFileError.tooLarge { precondition(expected == 1) }
+            catch CrewdRemoteCodeFileError.invalidUTF8 { precondition(expected == 2) }
+            catch CrewdRemoteCodeFileError.wrongStage { precondition(expected == 3) }
+        }
+        let huge = root.appendingPathComponent("oversized.txt")
+        try Data(repeating: 32, count: CrewdRemoteCodeFile.maximumBytes + 1).write(to: huge)
+        do { _ = try CrewdRemoteCodeFile.read(huge, stage: .invitation); fatalError("oversize file read accepted") }
+        catch CrewdRemoteCodeFileError.tooLarge {}
+        do { _ = try CrewdRemoteCodeFile.read(root, stage: .invitation); fatalError("directory read accepted") }
+        catch CrewdRemoteCodeFileError.notRegularFile {}
+        let gate = CrewdRemoteCodeImport()
+        var field = "original input"
+        let first = gate.prepare(); gate.invalidate() // edit A→B→A still invalidates the request.
+        gate.complete(first, result: .success(raw), apply: { field = $0 })
+        precondition(field == "original input")
+        let closed = gate.prepare(); gate.invalidate() // original form disappeared or became busy.
+        let replacement = gate.prepare()
+        gate.complete(closed, result: .success(raw), apply: { field = $0 })
+        precondition(field == "original input")
+        gate.complete(replacement, result: .failure(CrewdRemoteCodeFileError.wrongStage), apply: { field = $0 })
+        precondition(field == "original input" && gate.message != nil)
+        let fileURL = root.appendingPathComponent(CrewdRemoteCodeStage.invitation.filename)
+        let late = gate.prepare()
+        gate.read(fileURL, stage: .invitation, token: late) { _ in fatalError("late actual file read applied") }
+        gate.invalidate()
+        let current = gate.prepare()
+        gate.complete(current, result: .success("new edit"), apply: { field = $0 })
+        try await Task.sleep(nanoseconds: 30_000_000)
+        precondition(field == "new edit", "late file result overwrote new input")
+        let valid = gate.prepare()
+        let afterSetup = await scope.stats()
+        gate.read(root.appendingPathComponent(CrewdRemoteCodeStage.invitation.filename), stage: .invitation, token: valid) { field = $0 }
+        while gate.reading { try await Task.sleep(nanoseconds: 1_000_000) }
+        precondition(field == raw && gate.message == "已导入，请继续核对。")
+        let afterFiles = await scope.stats()
+        precondition(afterFiles == afterSetup, "import/export touched credentials")
+        precondition(checked == 6)
+        print("PASS production file exchange: three stages, exact original export/import bytes, six wrong-stage refusals, bounded UTF8/file reads, no credential access, stale/edit/closed guards, retained input on errors")
+    }
+}
+#else
 @main struct NativeRemoteFlow {
     @MainActor static func main() async throws {
         let scope = try await SerialScope()
@@ -105,6 +180,7 @@ import X509
         print("PASS production credential serial: main responsive, single-flight, atomic response/confirm, single delete, stale refusal, late result discarded, no retry")
     }
 }
+#endif
 #else
 @main struct NativeRemoteFlow {
     @MainActor static func main() async throws {
