@@ -203,6 +203,37 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
             json!({"apiVersion":3,"capabilities":["agent.attach","remote.configure"]}),
         )
         .await;
+    let notification = remote.call("notification.status", json!({})).await;
+    assert_eq!(notification["enabled"], false);
+    assert_eq!(notification["available"], false);
+    assert!(!root.join("notification-keys").exists());
+    assert!(
+        remote
+            .call(
+                "notification.deliveryGet",
+                json!({"installationId":uuid::Uuid::new_v4().to_string(),"deliveryId":"1"})
+            )
+            .await
+            .is_null()
+    );
+    let forbidden=remote.frame("notification.configure",json!({"requestId":uuid::Uuid::new_v4().to_string(),"expectedRevision":"0","enabled":false,"provider":null})).await.unwrap();
+    assert_eq!(forbidden["error"]["code"], crewd_proto::RpcError::FORBIDDEN);
+    let notification_request = uuid::Uuid::new_v4().to_string();
+    let registration=remote.frame("notification.installationRegister",json!({"requestId":notification_request,"installationId":uuid::Uuid::new_v4().to_string(),"expectedGeneration":"0","deviceToken":"01ab","environment":"sandbox","topic":"com.example.app","crewIds":["home"],"kinds":["replyReady"]})).await.unwrap();
+    assert!(
+        registration.get("error").is_some(),
+        "unconfigured source cannot register or load credentials"
+    );
+    assert_eq!(
+        remote
+            .call(
+                "notification.requestLookup",
+                json!({"requestId":notification_request})
+            )
+            .await["kind"],
+        "notFound"
+    );
+    assert!(!root.join("notification-keys").exists());
     assert_eq!(hello["server"], "crewd");
     assert_eq!(hello["remoteBinding"]["authorityId"], identity.authority_id);
     assert_eq!(hello["remoteBinding"]["dbId"], identity.db_id);

@@ -7797,6 +7797,615 @@
         "null"
       ]
     },
+    "NotificationConfigureParams": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotificationProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "expectedRevision",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "NotificationContext": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "authorityId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NotificationKind"
+        },
+        "source": {
+          "$ref": "#/$defs/NotificationSource"
+        }
+      },
+      "required": [
+        "action",
+        "authorityId",
+        "dbId",
+        "crewId",
+        "kind",
+        "source"
+      ],
+      "type": "object"
+    },
+    "NotificationDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "apnsId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/NotificationContext"
+        },
+        "deliveryId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/NotificationDeliveryState"
+        }
+      },
+      "required": [
+        "deliveryId",
+        "context",
+        "state",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "NotificationDeliveryGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "deliveryId": {
+          "type": "string"
+        },
+        "installationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installationId",
+        "deliveryId"
+      ],
+      "type": "object"
+    },
+    "NotificationDeliveryListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "afterDeliveryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "installationId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "installationId",
+        "limit"
+      ],
+      "type": "object"
+    },
+    "NotificationDeliveryPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NotificationDelivery"
+          },
+          "type": "array"
+        },
+        "nextAfterDeliveryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "NotificationDeliveryState": {
+      "enum": [
+        "pending",
+        "unknown",
+        "acceptedByApns",
+        "rejected",
+        "suppressed"
+      ],
+      "type": "string"
+    },
+    "NotificationGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "installationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installationId"
+      ],
+      "type": "object"
+    },
+    "NotificationInstallation": {
+      "additionalProperties": false,
+      "properties": {
+        "crewIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "environment": {
+          "$ref": "#/$defs/PushEnvironment"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "installationId": {
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/NotificationKind"
+          },
+          "type": "array"
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installationId",
+        "generation",
+        "revoked",
+        "environment",
+        "topic",
+        "crewIds",
+        "kinds"
+      ],
+      "type": "object"
+    },
+    "NotificationKind": {
+      "enum": [
+        "done",
+        "reported",
+        "blocked",
+        "askOpened",
+        "replyReady",
+        "responseFailed",
+        "humanApprovalRequired",
+        "humanMention"
+      ],
+      "type": "string"
+    },
+    "NotificationLookupParams": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "NotificationOpenContext": {
+      "additionalProperties": false,
+      "description": "Push hints are not read/execution authority. Resolve the exact owned delivery first.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/NotificationContext"
+        },
+        "deliveryId": {
+          "type": "string"
+        },
+        "installationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installationId",
+        "deliveryId",
+        "context"
+      ],
+      "type": "object"
+    },
+    "NotificationProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/PushEnvironment"
+        },
+        "keyId": {
+          "type": "string"
+        },
+        "privateKeyPkcs8Base64": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "teamId",
+        "keyId",
+        "environment",
+        "topic",
+        "privateKeyPkcs8Base64"
+      ],
+      "type": "object"
+    },
+    "NotificationRegisterParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deviceToken": {
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/PushEnvironment"
+        },
+        "expectedGeneration": {
+          "type": "string"
+        },
+        "installationId": {
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/NotificationKind"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "installationId",
+        "expectedGeneration",
+        "deviceToken",
+        "environment",
+        "topic",
+        "crewIds",
+        "kinds"
+      ],
+      "type": "object"
+    },
+    "NotificationRequestLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "known",
+              "type": "string"
+            },
+            "operation": {
+              "type": "string"
+            },
+            "result": true
+          },
+          "required": [
+            "kind",
+            "operation",
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NotificationRevokeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedGeneration": {
+          "type": "string"
+        },
+        "installationId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "installationId",
+        "expectedGeneration"
+      ],
+      "type": "object"
+    },
+    "NotificationSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "askId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "entryNo": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "eventSeq": {
+              "type": "string"
+            },
+            "objectId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "workEvent",
+              "type": "string"
+            },
+            "workId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "eventSeq",
+            "objectId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "threadId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "codexTurn",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "threadId",
+            "turnId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "promptId": {
+              "type": "string"
+            },
+            "receiptRevision": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "runtimeId": {
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "managedResponse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "runtimeId",
+            "requestId",
+            "promptId",
+            "receiptRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decisionId": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "generation",
+            "decisionId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channelId": {
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "messageSeq": {
+              "type": "string"
+            },
+            "type": {
+              "const": "message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "messageSeq",
+            "channelId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NotificationStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PushEnvironment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "topic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "enabled",
+        "revision"
+      ],
+      "type": "object"
+    },
     "PendingDecisionView": {
       "properties": {
         "crewId": {
@@ -8266,6 +8875,13 @@
         "historical"
       ],
       "type": "object"
+    },
+    "PushEnvironment": {
+      "enum": [
+        "sandbox",
+        "production"
+      ],
+      "type": "string"
     },
     "ReadMarkParams": {
       "additionalProperties": false,
@@ -12733,6 +13349,84 @@
           "$ref": "#/$defs/Message"
         },
         "type": "array"
+      }
+    },
+    "notification.configure": {
+      "params": {
+        "$ref": "#/$defs/NotificationConfigureParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationRequestLookup"
+      }
+    },
+    "notification.deliveryGet": {
+      "params": {
+        "$ref": "#/$defs/NotificationDeliveryGetParams"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotificationDelivery"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "notification.deliveryList": {
+      "params": {
+        "$ref": "#/$defs/NotificationDeliveryListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationDeliveryPage"
+      }
+    },
+    "notification.installationGet": {
+      "params": {
+        "$ref": "#/$defs/NotificationGetParams"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotificationInstallation"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "notification.installationRegister": {
+      "params": {
+        "$ref": "#/$defs/NotificationRegisterParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationRequestLookup"
+      }
+    },
+    "notification.installationRevoke": {
+      "params": {
+        "$ref": "#/$defs/NotificationRevokeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationRequestLookup"
+      }
+    },
+    "notification.requestLookup": {
+      "params": {
+        "$ref": "#/$defs/NotificationLookupParams"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationRequestLookup"
+      }
+    },
+    "notification.status": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/NotificationStatus"
       }
     },
     "read.mark": {

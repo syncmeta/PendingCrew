@@ -599,9 +599,17 @@ async fn request_step(
         }
         Ok(req) if crate::notifications::is_method(&req.method) => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"agent cannot configure or register Human notifications")))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "agent cannot configure or register Human notifications",
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::notifications::handle(state,&peer.command_actor(),req).await)
+                ServerFrame::Response(
+                    crate::notifications::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if crate::public_commands::is_method(&req.method) => {

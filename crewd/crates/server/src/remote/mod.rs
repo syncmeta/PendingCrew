@@ -889,8 +889,14 @@ impl Manager {
     }
 }
 impl Principal {
-    pub(crate) fn notification_owner(&self)->crewd_store::notifications::Owner {
-        crewd_store::notifications::Owner{authority_id:self.binding.authority_id.clone(),db_id:self.binding.db_id.clone(),grant_id:self.binding.grant_id.clone(),grant_revision:self.binding.grant_revision.clone(),client_pin:self.client_pin.clone()}
+    pub(crate) fn notification_owner(&self) -> crewd_store::notifications::Owner {
+        crewd_store::notifications::Owner {
+            authority_id: self.binding.authority_id.clone(),
+            db_id: self.binding.db_id.clone(),
+            grant_id: self.binding.grant_id.clone(),
+            grant_revision: self.binding.grant_revision.clone(),
+            client_pin: self.client_pin.clone(),
+        }
     }
 
     /// Recheck the authentic grant inside the mutation transaction. Wrapper
@@ -990,6 +996,7 @@ fn allowed_method(method: &str) -> bool {
             | "notification.installationGet"
             | "notification.requestLookup"
             | "notification.deliveryList"
+            | "notification.deliveryGet"
             | "judgment.inspect"
             | "executor.list"
             | "data.workspace.get"

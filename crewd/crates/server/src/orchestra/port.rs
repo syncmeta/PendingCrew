@@ -331,8 +331,28 @@ pub struct Rendered {
 }
 
 /// Accepted native session observation. Native IDs are preserved; no work outcome inferred.
-#[derive(Clone,Debug,PartialEq,Eq)]
-pub enum NotificationChange {CodexOutcome{generation:String,thread_id:String,turn_id:String,failed:bool},Clear,ClearApproval,Approval{generation:String,decision_id:String},ManagedFailure{generation:String,runtime_id:String,request_id:String,prompt_id:String,receipt_revision:i64}}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotificationChange {
+    CodexOutcome {
+        generation: String,
+        thread_id: String,
+        turn_id: String,
+        failed: bool,
+    },
+    Clear,
+    ClearApproval,
+    Approval {
+        generation: String,
+        decision_id: String,
+    },
+    ManagedFailure {
+        generation: String,
+        runtime_id: String,
+        request_id: String,
+        prompt_id: String,
+        receipt_revision: i64,
+    },
+}
 
 /// 改设置（`settings.set`）：外层 None = 不改；`max_live` / `hibernate_deadline_secs` 里层 None = 清掉（回到默认）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -611,8 +631,17 @@ pub trait Port: Send + Sync + 'static {
         turn_id: &str,
         text: &str,
     ) -> impl Future<Output = Result<()>> + Send;
-    fn claim_notification(&self,id:i64,revision:i64,now:i64)->impl Future<Output=Result<Option<crewd_store::notifications::Claimed>>>+Send;
-    fn notification_change(&self,session:&str,change:NotificationChange)->impl Future<Output=Result<()>>+Send;
+    fn claim_notification(
+        &self,
+        id: i64,
+        revision: i64,
+        now: i64,
+    ) -> impl Future<Output = Result<Option<crewd_store::notifications::Claimed>>> + Send;
+    fn notification_change(
+        &self,
+        session: &str,
+        change: NotificationChange,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn record_usage(
         &self,
         session: &str,

@@ -180,9 +180,19 @@ pub struct ExitInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// Authenticated, exactly bound managed StopFailure; not a native turn completion.
-    ManagedResponseFailed { runtime_id:String, request_id:String, prompt_id:String, receipt_revision:i64 },
+    ManagedResponseFailed {
+        runtime_id: String,
+        request_id: String,
+        prompt_id: String,
+        receipt_revision: i64,
+    },
     /// Exact current non-compaction native turn outcome; never WorkBook success.
-    NativeTurnOutcome { thread_id:String, turn_id:String, failed:bool, last_agent_message:String },
+    NativeTurnOutcome {
+        thread_id: String,
+        turn_id: String,
+        failed: bool,
+        last_agent_message: String,
+    },
 
     /// Genuine Codex protocol observation, never a task completion claim.
     CodexObservation {

@@ -284,8 +284,15 @@ impl Handle {
         response.await.map_err(|_| rpc::rpc_err(stopped()))?
     }
 
-    pub(crate) async fn claim_notification(&self,candidate:crewd_store::notifications::Claimed)->Result<Option<crewd_store::notifications::Claimed>,ControlError>{
-        self.call(|reply|Cmd::NotificationClaim{candidate:Box::new(candidate),reply}).await
+    pub(crate) async fn claim_notification(
+        &self,
+        candidate: crewd_store::notifications::Claimed,
+    ) -> Result<Option<crewd_store::notifications::Claimed>, ControlError> {
+        self.call(|reply| Cmd::NotificationClaim {
+            candidate: Box::new(candidate),
+            reply,
+        })
+        .await
     }
 
     pub(crate) async fn public_target(

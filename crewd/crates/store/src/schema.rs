@@ -2988,24 +2988,60 @@ mod resource17_tests {
     }
     #[test]
     fn notification19_current18_migration_keeps_original_rows_and_protected_backup() {
-        fn one<T:rusqlite::types::FromSql>(c:&Connection,sql:&str)->T{c.query_row(sql,[],|r|r.get(0)).unwrap()}
-        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("current18.db");
-        let c=Connection::open(&path).unwrap();original15(&c);seed(&c);migrate_resource17(&c,18).unwrap();
-        assert_eq!(one::<i64>(&c,"PRAGMA user_version"),18);
-        let old=c.query_row("SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",[],|r|r.get::<_,String>(0)).unwrap();
-        migrate_guarded(&c,Some(&dir.path().join("backups"))).unwrap();
-        assert_eq!(one::<i64>(&c,"PRAGMA user_version"),19);
-        assert_eq!(c.query_row("SELECT name FROM view_folders WHERE id='retained-folder'",[],|r|r.get::<_,String>(0)).unwrap(),"retained");
+        fn one<T: rusqlite::types::FromSql>(c: &Connection, sql: &str) -> T {
+            c.query_row(sql, [], |r| r.get(0)).unwrap()
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current18.db");
+        let c = Connection::open(&path).unwrap();
+        original15(&c);
+        seed(&c);
+        migrate_resource17(&c, 18).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 18);
+        let old = c
+            .query_row(
+                "SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+        migrate_guarded(&c, Some(&dir.path().join("backups"))).unwrap();
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 19);
+        assert_eq!(
+            c.query_row(
+                "SELECT name FROM view_folders WHERE id='retained-folder'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "retained"
+        );
         assert!(!crate::notifications::settings(&c).unwrap().enabled);
-        let paths=std::fs::read_dir(dir.path().join("backups")).unwrap().map(|r|r.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),1);
-        let backup=Connection::open(&paths[0]).unwrap();assert_eq!(one::<i64>(&backup,"PRAGMA user_version"),18);
+        let paths = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .map(|r| r.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        let backup = Connection::open(&paths[0]).unwrap();
+        assert_eq!(one::<i64>(&backup, "PRAGMA user_version"), 18);
         assert_eq!(old,backup.query_row("SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",[],|r|r.get::<_,String>(0)).unwrap());
         // A genuine protected transaction failure may not leave partial19 DDL or a bumped writer gate.
-        let broken=Connection::open_in_memory().unwrap();original15(&broken);seed(&broken);migrate_resource17(&broken,18).unwrap();
-        broken.execute_batch("CREATE TABLE notification_outbox(retained TEXT)").unwrap();
-        assert!(migrate_guarded(&broken,None).is_err());
-        assert_eq!(one::<i64>(&broken,"PRAGMA user_version"),18);
-        assert_eq!(one::<i64>(&broken,"SELECT COUNT(*) FROM sqlite_master WHERE name='notification_settings'"),0);
+        let broken = Connection::open_in_memory().unwrap();
+        original15(&broken);
+        seed(&broken);
+        migrate_resource17(&broken, 18).unwrap();
+        broken
+            .execute_batch("CREATE TABLE notification_outbox(retained TEXT)")
+            .unwrap();
+        assert!(migrate_guarded(&broken, None).is_err());
+        assert_eq!(one::<i64>(&broken, "PRAGMA user_version"), 18);
+        assert_eq!(
+            one::<i64>(
+                &broken,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='notification_settings'"
+            ),
+            0
+        );
     }
 
     #[test]

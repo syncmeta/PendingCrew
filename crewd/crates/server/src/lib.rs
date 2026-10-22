@@ -1,5 +1,6 @@
 //! crewd 服务端：Unix socket 上的 NDJSON RPC。
 pub mod agent;
+mod apns;
 pub mod build_info;
 pub mod causal_fence;
 pub(crate) mod conn;
@@ -14,14 +15,13 @@ pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;
 pub mod native_receipts;
+mod notifications;
 pub mod orchestra;
 pub(crate) mod peer;
 mod public_commands;
 mod public_execution;
 mod public_terminal;
 pub(crate) mod remote;
-mod apns;
-mod notifications;
 mod signed_client;
 pub mod team_data;
 mod terminal_runtime;
@@ -668,7 +668,8 @@ async fn serve_with_hooks_inner(
                     let _ = dispatch::log_internal(error);
                 }
             }
-            let notifications = notifications::Runtime::start(&state, data_dir.clone(), drain_rx.clone()).await;
+            let notifications =
+                notifications::Runtime::start(&state, data_dir.clone(), drain_rx.clone()).await;
             let _ = state.notifications.set(notifications);
             #[cfg(any(test, feature = "testkit"))]
             if let Some(ready) = opts.test_s5_fault_ready.take() {

@@ -11,10 +11,10 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
-pub mod notifications;
 pub mod commands;
 pub mod judgments;
 mod model;
+pub mod notifications;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
 mod params;
@@ -620,15 +620,62 @@ pub fn api_schema() -> Value {
     // R8：`gen` 在 edition 2024 是保留字。
     let mut generator = schemars::SchemaGenerator::default();
     let g = &mut generator;
+    let _ = sub::<notifications::NotificationOpenContext>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
-        ("notification.status",m(sub::<Empty>(g),sub::<notifications::NotificationStatus>(g))),
-        ("notification.configure",m(sub::<notifications::NotificationConfigureParams>(g),sub::<notifications::NotificationRequestLookup>(g))),
-        ("notification.installationRegister",m(sub::<notifications::NotificationRegisterParams>(g),sub::<notifications::NotificationRequestLookup>(g))),
-        ("notification.installationRevoke",m(sub::<notifications::NotificationRevokeParams>(g),sub::<notifications::NotificationRequestLookup>(g))),
-        ("notification.installationGet",m(sub::<notifications::NotificationGetParams>(g),sub::<Option<notifications::NotificationInstallation>>(g))),
-        ("notification.requestLookup",m(sub::<notifications::NotificationLookupParams>(g),sub::<notifications::NotificationRequestLookup>(g))),
-        ("notification.deliveryList",m(sub::<notifications::NotificationDeliveryListParams>(g),sub::<notifications::NotificationDeliveryPage>(g))),
+        (
+            "notification.status",
+            m(sub::<Empty>(g), sub::<notifications::NotificationStatus>(g)),
+        ),
+        (
+            "notification.configure",
+            m(
+                sub::<notifications::NotificationConfigureParams>(g),
+                sub::<notifications::NotificationRequestLookup>(g),
+            ),
+        ),
+        (
+            "notification.installationRegister",
+            m(
+                sub::<notifications::NotificationRegisterParams>(g),
+                sub::<notifications::NotificationRequestLookup>(g),
+            ),
+        ),
+        (
+            "notification.installationRevoke",
+            m(
+                sub::<notifications::NotificationRevokeParams>(g),
+                sub::<notifications::NotificationRequestLookup>(g),
+            ),
+        ),
+        (
+            "notification.installationGet",
+            m(
+                sub::<notifications::NotificationGetParams>(g),
+                sub::<Option<notifications::NotificationInstallation>>(g),
+            ),
+        ),
+        (
+            "notification.requestLookup",
+            m(
+                sub::<notifications::NotificationLookupParams>(g),
+                sub::<notifications::NotificationRequestLookup>(g),
+            ),
+        ),
+        (
+            "notification.deliveryGet",
+            m(
+                sub::<notifications::NotificationDeliveryGetParams>(g),
+                sub::<Option<notifications::NotificationDelivery>>(g),
+            ),
+        ),
+        (
+            "notification.deliveryList",
+            m(
+                sub::<notifications::NotificationDeliveryListParams>(g),
+                sub::<notifications::NotificationDeliveryPage>(g),
+            ),
+        ),
         (
             commands::LOCAL_CLIENT_TRUST_STATUS,
             m(

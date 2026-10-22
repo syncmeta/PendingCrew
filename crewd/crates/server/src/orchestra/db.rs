@@ -1233,26 +1233,43 @@ impl Port for DbPort {
     }
 
     async fn runner_turn_end(&self, session: &str, turn_id: &str, text: &str) -> Result<()> {
-        let (session,turn_id,text)=(session.to_owned(),turn_id.to_owned(),text.to_owned());
-        self.write(move|tx|crewd_collab::turn_trace::on_turn_end(tx,&session,&turn_id,&text).map(|_|())).await
+        let (session, turn_id, text) = (session.to_owned(), turn_id.to_owned(), text.to_owned());
+        self.write(move |tx| {
+            crewd_collab::turn_trace::on_turn_end(tx, &session, &turn_id, &text).map(|_| ())
+        })
+        .await
     }
 
-    async fn claim_notification(&self,id:i64,revision:i64,now:i64)->Result<Option<crewd_store::notifications::Claimed>>{
-        Ok(self.state.db.call(move|store|store.with_tx(|c|crewd_store::notifications::claim_checked(c,now,revision,id))).await??)
+    async fn claim_notification(
+        &self,
+        id: i64,
+        revision: i64,
+        now: i64,
+    ) -> Result<Option<crewd_store::notifications::Claimed>> {
+        Ok(self
+            .state
+            .db
+            .call(move |store| {
+                store.with_tx(|c| crewd_store::notifications::claim_checked(c, now, revision, id))
+            })
+            .await??)
     }
 
-    async fn notification_change(&self,session:&str,change:NotificationChange)->Result<()> {
-        let session=session.to_string();self.write(move|tx|{
+    async fn notification_change(&self, session: &str, change: NotificationChange) -> Result<()> {
+        let session = session.to_string();
+        self.write(move|tx|{
             use crewd_proto::notifications::{NotificationKind,NotificationSource};
             match change {
                 NotificationChange::CodexOutcome{generation,thread_id,turn_id,failed}=>{
                     let row=crewd_collab::sessions::get(tx.conn(),&session)?;
+                    if row.executor!="codex"||row.agent_session_id.as_deref()!=Some(thread_id.as_str()){return Ok(())}
                     crewd_store::notifications::enqueue(tx.conn(),&row.crew_id,if failed{NotificationKind::ResponseFailed}else{NotificationKind::ReplyReady},NotificationSource::CodexTurn{session_id:session.clone(),thread_id,turn_id},Some((&session,&generation)),crewd_store::now_ms())?;
                 },
                 NotificationChange::ManagedFailure{generation,runtime_id,request_id,prompt_id,receipt_revision}=>{
                     let row=crewd_collab::sessions::get(tx.conn(),&session)?;
                     let receipt=crewd_store::native_execution::get(tx.conn(),&request_id)?;
-                    if receipt.is_some_and(|r|r.runtime_id==runtime_id&&r.prompt_id.as_deref()==Some(&prompt_id)&&r.phase==crewd_store::native_execution::Phase::Unknown&&r.revision==receipt_revision&&r.turn_id.is_none()) {
+                    let owned:bool=tx.conn().query_row("SELECT EXISTS(SELECT 1 FROM native_execution_runtimes WHERE runtime_id=?1 AND session_id=?2)",rusqlite::params![runtime_id,session],|r|r.get(0))?;
+                    if owned&&receipt.is_some_and(|r|r.runtime_id==runtime_id&&r.prompt_id.as_deref()==Some(&prompt_id)&&r.phase==crewd_store::native_execution::Phase::Unknown&&r.revision==receipt_revision&&r.turn_id.is_none()) {
                         crewd_store::notifications::enqueue(tx.conn(),&row.crew_id,NotificationKind::ResponseFailed,NotificationSource::ManagedResponse{session_id:session.clone(),runtime_id,request_id,prompt_id,receipt_revision:receipt_revision.to_string()},Some((&session,&generation)),crewd_store::now_ms())?;
                     }
                 },

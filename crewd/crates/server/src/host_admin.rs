@@ -164,11 +164,21 @@ pub(crate) async fn route(
         .get()
         .ok_or_else(|| RpcError::new(RpcError::FORBIDDEN, "remote management unavailable"))?;
     match method {
-        "host.notificationConfigure"=>{
-            state.notifications.get().ok_or_else(||RpcError::new(RpcError::CONFLICT,"notifications unavailable"))?.admin_configure(permit.clone(),decode_params(args)?).await
+        "host.notificationConfigure" => {
+            state
+                .notifications
+                .get()
+                .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "notifications unavailable"))?
+                .admin_configure(permit.clone(), decode_params(args)?)
+                .await
         }
-        "host.notificationRequestLookup"=>{
-            state.notifications.get().ok_or_else(||RpcError::new(RpcError::CONFLICT,"notifications unavailable"))?.admin_lookup(permit.clone(),decode_params(args)?).await
+        "host.notificationRequestLookup" => {
+            state
+                .notifications
+                .get()
+                .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "notifications unavailable"))?
+                .admin_lookup(permit.clone(), decode_params(args)?)
+                .await
         }
         "host.status" => {
             let _: NoParams = decode_params(args)?;

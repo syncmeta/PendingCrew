@@ -447,8 +447,25 @@ fn post_with(
         .any(|m| m.kind == MentionKind::Human);
     let unwatched_human_mention =
         human_mention && !is_human_channel && !channels::is_watched(conn, &ch.id)?;
-    if human_mention && message.sender_kind != SenderKind::Human {
-        crewd_store::notifications::enqueue(tx.conn(),&ch.crew_id,crewd_proto::notifications::NotificationKind::HumanMention,crewd_proto::notifications::NotificationSource::Message{message_id:message.id.clone(),message_seq:message.seq.to_string(),channel_id:ch.id.clone()},None,crewd_store::now_ms())?;
+    if human_mention
+        && matches!(
+            message.sender_kind,
+            SenderKind::Session | SenderKind::Captain
+        )
+        && !internal
+    {
+        crewd_store::notifications::enqueue(
+            tx.conn(),
+            &ch.crew_id,
+            crewd_proto::notifications::NotificationKind::HumanMention,
+            crewd_proto::notifications::NotificationSource::Message {
+                message_id: message.id.clone(),
+                message_seq: message.seq.to_string(),
+                channel_id: ch.id.clone(),
+            },
+            None,
+            crewd_store::now_ms(),
+        )?;
     }
     tx.note(Change::MessageAppended {
         channel_id: ch.id.clone(),
@@ -479,6 +496,131 @@ fn post_with(
 mod tests {
     use super::*;
     use crate::testkit::{MIN, NOW, err, ok, ok_at, store};
+
+    #[test]
+    fn notification_ordinary_human_mention_uses_original_message_and_same_transaction() {
+        use crewd_proto::notifications::*;
+        use crewd_store::notifications as n;
+        let mut s = store();
+        let authority = uuid::Uuid::new_v4().to_string();
+        let db = crewd_store::meta_get(s.conn(), "dbId").unwrap().unwrap();
+        crewd_store::remote::bind_identity(
+            s.conn(),
+            &crewd_proto::RemotePublicIdentity {
+                authority_id: authority.clone(),
+                db_id: db.clone(),
+                certificate_der_base64: "synthetic".into(),
+                spki_sha256: "a".repeat(64),
+            },
+            "t",
+        )
+        .unwrap();
+        let grant = uuid::Uuid::new_v4().to_string();
+        s.conn()
+            .execute_batch("UPDATE remote_configuration SET enabled=1")
+            .unwrap();
+        s.conn().execute("INSERT INTO remote_grants(id,authority_id,device_label,client_spki_sha256,client_certificate_der_base64,revision,created_at)VALUES(?1,?2,'Synthetic',?3,'synthetic',1,'t')",rusqlite::params![grant,authority,"b".repeat(64)]).unwrap();
+        let owner = n::Owner {
+            authority_id: authority.clone(),
+            db_id: db.clone(),
+            grant_id: grant,
+            grant_revision: "1".into(),
+            client_pin: "b".repeat(64),
+        };
+        let tx = s.conn().unchecked_transaction().unwrap();
+        n::configure(
+            &tx,
+            0,
+            true,
+            Some(&n::ProviderBinding {
+                authority_id: authority,
+                db_id: db,
+                team_id: "1234567890".into(),
+                key_id: "ABCDEFGHIJ".into(),
+                environment: PushEnvironment::Sandbox,
+                topic: "com.example.app".into(),
+                key_slot: uuid::Uuid::new_v4().to_string(),
+                seal_slot: uuid::Uuid::new_v4().to_string(),
+            }),
+        )
+        .unwrap();
+        n::register(
+            &tx,
+            &owner,
+            &NotificationRegisterParams {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                installation_id: uuid::Uuid::new_v4().to_string(),
+                expected_generation: "0".into(),
+                device_token: "01ab".into(),
+                environment: PushEnvironment::Sandbox,
+                topic: "com.example.app".into(),
+                crew_ids: vec!["crew-a".into()],
+                kinds: vec![NotificationKind::HumanMention],
+            },
+            &[7; 32],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let mention = || NewPost {
+            mentions: vec![m(MentionKind::Human, None)],
+            ..post_text("crew-a/lobby", "synthetic original message")
+        };
+        let posted = ok(&mut s, |tx| post(tx, session("w-a1"), mention()));
+        let raw: String = s
+            .conn()
+            .query_row("SELECT context FROM notification_outbox", [], |r| r.get(0))
+            .unwrap();
+        let context: NotificationContext = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            context.source,
+            NotificationSource::Message {
+                message_id: posted.message.id,
+                message_seq: posted.message.seq.to_string(),
+                channel_id: "crew-a/lobby".into()
+            }
+        );
+        ok(&mut s, |tx| post_internal(tx, session("w-a1"), mention()));
+        ok(&mut s, |tx| {
+            post(
+                tx,
+                session("w-a1"),
+                post_text("crew-a/lobby", "literal @Human is not a structured mention"),
+            )
+        });
+        let count = || {
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM notification_outbox", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            count(),
+            1,
+            "internal ask/restart and literal text cannot create duplicate Human alerts"
+        );
+        let before_messages: i64 = s
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        let _ = err::<()>(&mut s, |tx| {
+            post(tx, session("w-a1"), mention())?;
+            Err(crate::resource_invalid("synthetic rollback"))
+        });
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM notification_outbox", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before_messages
+        );
+    }
 
     fn post_text(ch: &str, text: &str) -> NewPost {
         NewPost {
