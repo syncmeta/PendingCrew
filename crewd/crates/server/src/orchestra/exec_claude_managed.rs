@@ -1194,6 +1194,36 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owned_claude_stop_text_is_durable_before_idle_without_claiming_completion() {
+        let mut run = race_run().await;
+        let request = uuid::Uuid::new_v4().to_string();
+        let prompt = uuid::Uuid::new_v4().to_string();
+        let body = envelope(&request, "Specific owned task, exact text").unwrap();
+        let seal = run.actor.seal.clone(); let rid = request.clone();
+        let pid = prompt.clone(); let original = body.as_bytes().to_vec();
+        let receipt = run.actor.db.call_result(move |s| s.with_tx(|tx| {
+            n::prepare(tx, &seal.runtime().id, &rid, &original, "t")?;
+            n::managed_accept_content(tx, &seal, &rid, 0, &pid, &original, "t")
+        })).await.unwrap().unwrap();
+        run.actor.pending = Some(Submission {
+            request:request.clone(), external:1, subject:Subject::Brief, body,
+            local:None, receipt:Some(receipt), prompt:Some(prompt.clone()), stopped:false,
+            last_response:String::new(), delivered:false, unobserved_delivery:None,
+        });
+        let text = "  Exactly observed reply\n世界\nnot business Done  ";
+        run.actor.hook(HookKind::Stop, json!({"session_id":run.actor.agent_session,
+            "hook_event_name":"Stop","prompt_id":prompt,"last_assistant_message":text})).await;
+        let key = format!("claude.managed.observations.v1/{request}");
+        let observed = run.actor.db.call_result(move |s| crewd_store::meta_get(s.conn(), &key)).await.unwrap().unwrap();
+        let value:Value = serde_json::from_str(&observed.expect("same-seal Stop text must survive actor drop before idle")).unwrap();
+        assert_eq!(value["requestId"],request); assert_eq!(value["runtimeId"],run.actor.seal.runtime().id);
+        assert_eq!(value["observations"][0]["promptId"],prompt);
+        assert_eq!(value["observations"][0]["text"],text);
+        let rid=request.clone(); let receipt=run.actor.db.call_result(move |s|n::get(s.conn(), &rid)).await.unwrap().unwrap().unwrap();
+        assert_ne!(receipt.phase,n::Phase::Completed,"Stop alone is provisional");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn managed_guard_race_stop_across_real_driver_status_cannot_remain_current() {
         let mut run = race_run().await;
         let pause = Arc::new(GuardPause::default());
