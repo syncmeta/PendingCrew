@@ -19,6 +19,16 @@
 
 最新人类要求继续全工程，并新增“前端和相应逻辑照着demo来改”。主代理仍统筹/接口/整合；backend_continue唯一Rust/schema/API作者，Claude真实PTY受管模块9cb4c57d已独验并整合99f593af，尚未生成准确正式包或真实provider验收；其后接demo真实群资料/分类/标签及一键部署单链接的完整合同；frontend_demo接手原m6-client工作树，唯一Swift/前端/工程作者，依据实际最新demo整块映射真实能力；quality_continue_22独立质量/GUI，不兼实现；client_delivery_22已移交写权，仅核现有VPS部署使用说明。生产Claude新入口必须满足已验证精确guard资格，否则正文前拒绝，不新增旧版兼容开关或静默退回legacy；正式ACP/full history仍分列未完成，Native16不激活。按完整模块持续推进，已验稳定业务复用，不制造无缺陷改动或重复包；尚未讨论定案方案继续保留。 用户另明确部署目标为一键安装脚本+单一配对链接，连接与管理不拆入口；安装前查Codex/Claude Code，缺失则给官方安装与登录指引，让用户自行完成后再装PendingCrew。现有多命令/三文件只作底层与已验证据，不作为日常安装UX；常驻service/Human bootstrap与单链接协议先准备准确源码/方案，实际VPS常驻部署和公开发布仍按具体动作核授权。
 
+## 2026-10-22 Codex 会话完整控制、任务首句与原生标题要求
+
+用户明确 Codex session 界面应具备 Codex 应有的控制和选项，Mac/iOS 共用能力与真实状态。按当前实际供应商版本/正式协议和 crewd 生产链一次形成完整能力表：模型、思考强度、速度/服务档位、权限/沙箱/审批与用户问题、工作目录、停止/运行中补充/排队、上下文/用量/压缩、历史查看/手动恢复/分支、名称、工具与附件等。已有 typed 控制复用；缺项作为完整模块接线，不能拿 legacy Swift local runner 或仅有按钮冒当前 Core 已支持，也不新增无约束 raw RPC 代替权限。只读看历史或打开页面不启动任务；删除/回退需说明实际范围，不能把历史回退当文件回滚。
+
+每个新 session 的用户首条 prompt 以具体事情开始，不由 PendingCrew 添加“你是xxx”前缀；原用户任务逐字保留，角色/团队规则放独立 developerInstructions 等指令层。摘要式任务标题优先写入 Codex 原生 thread.name，不仅改 PendingCrew 标签；用户显式命名优先，避免自动摘要覆盖。OpenAI Docs App Server 已实际读取，提供 thread/name/set、thread/name/updated 与 list/read/resume/unarchive name；当前安装版本的支持资格仍需已有本地 schema/能力证据，不能据最新文档冒本机已验。命名不额外调用模型，不直接改 Codex 私有数据库，不为改名唤醒旧 session。
+
+当前39da9ff8独立源核确认：原生产已接启动/排队发送/打断/停止/手动恢复/结构化人工答复/持久 runner 展示；driver 有 model/effort/fast/compact，但 ExecHandle/Core/UI 未贯通，Core SetProfile 仅保存下次启动，不能冒即时切换；runner_usage 已存而 Swift 未消费。rename/steer/fork/结构化附件与 skill/plugin/MCP 管理未接；当前本机方法资格仍未核，不依据旧有限方法快照断言供应商不支持。Structured human/Form 已接四类人工输入，旧兜底拒绝注释不代表全部审批拒绝。默认机长 brief 在 CrewdWorkspace.startCaptainForCreatedCrew 以“你是…”起头；默认标题取 brief 首行，frontend 在当前整块 WIP 修正自动模板。真正 world-model 身份模板已正确位于 developerInstructions，不须混入首条任务。后续 provider 标题在真实 threadId 已落账后更新，显式标题优先；命名与已提交正文结果分列，不因命名失败重发任务。
+
+主代理统筹与合同裁定；backend_continue 为 Rust/schema/API唯一作者，frontend_demo 为双端 Swift/工程唯一作者，quality_continue_22 只读核真实差距后按冻结整块独验。当前已开的 demo/Store17 模块继续，Codex 完整会话模块接续，不把新指令拆成散点控件构建或重跑稳定业务；iCloud/草稿和部署讨论边界保持。此节为人类要求与执行安排，不是功能已完成、已打包或已安装的声明。
+
 ## 2026-10-22 双端 demo、共享数据与简便部署的接口裁定
 
 frontend_demo 是 Mac/iOS 共享 Swift、业务 store 和工程文件唯一作者，两端均按实际最新 demo 改造，手机布局适配而不复制两套业务。backend_continue 是 Rust/schema/API 与部署唯一作者。完整群内容模块 A 扩真实 Document 引用、本群文件夹/消息分类、标签及全量计数；源与目标双许可覆盖所有引用，owner/人工完成是源全局事实，标签/文件夹是群内引用属性。HumanTask 走明确人工来源，Agent ask 权限不放松；Request 人工完成阻止新 claim，保留既有 Plan，不自动停工、结算或唤醒。当前 Store15 直接受保护升级17，fresh17；实验16先拒绝不写，不激活 Native16，不引入旧产品数据迁移。固定 DTO 见私域 group-content-store17-20261022/CONTRACT.md，原合同明确草稿另模块，勿因纯文档重复已验业务。
