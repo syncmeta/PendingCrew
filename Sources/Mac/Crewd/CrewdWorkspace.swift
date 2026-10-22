@@ -885,7 +885,15 @@ final class CrewdWorkspace: ObservableObject {
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
-        if isReadOnly(method) { return try await client.call(method, params) }
+        if isReadOnly(method) {
+            do { return try await client.call(method, params) }
+            catch {
+                // Cancelling a projection read is not an uncertain submission.
+                // Mutation paths below retain their original Unknown semantics.
+                if Task.isCancelled { throw CancellationError() }
+                throw error
+            }
+        }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if method == "session.start" { try requireExecutor(params["executor"].string ?? "", crew: params["crewId"].string ?? crewID) }
         if method == "session.resume" {

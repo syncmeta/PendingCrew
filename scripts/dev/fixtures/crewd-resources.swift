@@ -8,8 +8,10 @@ func folder(_ id:String=folderID,parent:String?=nil)->CrewdValue {.object(["id":
     var calls:[(String,CrewdValue)]=[],row=summary(),body="私有正文🌙",snapshot=tree()
     var error:CrewdClientError?,delay=false,held:CheckedContinuation<CrewdValue,Error>?
     var wrongRequest=false
+    var delayFolders=false
     func call(_ method:String,_ params:CrewdValue)async throws->CrewdValue {
         calls.append((method,params));if let error{throw error}
+        if method == "viewFolder.list",delayFolders{delayFolders=false;return try await withCheckedThrowingContinuation{held=$0}}
         if method == "document.get",delay{delay=false;return try await withCheckedThrowingContinuation{held=$0}}
         switch method {
         case "document.list":return .object(["items":.array([row]),"next":.null])
@@ -24,6 +26,45 @@ func folder(_ id:String=folderID,parent:String?=nil)->CrewdValue {.object(["id":
 @MainActor func rejects(_ action:()async throws->Void)async {do{try await action();preconditionFailure("invalid resource accepted")}catch{}}
 @main struct ResourcesTest {
     @MainActor static func main()async throws {
+        // Exact production activation seam: an old folder read is cancelled while
+        // the same view is mounted for another crew; RPC cancellation is wrapped
+        // by the transport as an uncertain error, not CancellationError.
+        let switching=ResourcePeer(), switched=CrewdResources(call:{try await switching.call($0,$1)})
+        switched.configureCapabilities(["viewFolders","documents"]);switched.selectCrew("a")
+        switching.delayFolders=true
+        let oldActivation=Task{await switched.activate(.documents)}
+        while switching.held == nil {await Task.yield()}
+        switched.selectCrew("b");switching.snapshot=tree("b","todo")
+        await switched.activate(.todo)
+        oldActivation.cancel()
+        switching.held!.resume(throwing:CrewdClientError(message:"等待已取消，提交结果未知；请检查当前状态。"));switching.held=nil
+        await oldActivation.value
+        precondition(switched.failure == nil,"cancelled old folder read must not poison the new crew")
+        precondition(!switching.calls.contains{$0.0 == "document.list"},"old documents activation must not continue into the new crew")
+        precondition(switched.folders[.todo]?.value["crewId"] == .string("b"))
+        switching.delayFolders=true
+        let cancelled=Task{await switched.activate(.progress)}
+        while switching.held == nil {await Task.yield()}
+        cancelled.cancel();switching.held!.resume(throwing:CrewdClientError(message:"等待已取消，提交结果未知；请检查当前状态。"));switching.held=nil
+        await cancelled.value
+        precondition(switched.failure == nil,"cancelled current read is not a submitted mutation")
+        switching.snapshot=tree("b","progress");let retryCount=switching.calls.count
+        await switched.activate(.progress)
+        precondition(switching.calls.count == retryCount+1 && switched.folders[.progress] != nil,"cancelled activation must permit a later explicit read")
+        precondition(switching.calls.allSatisfy{["viewFolder.list","document.list"].contains($0.0)},"workspace switching only reads")
+        switching.delayFolders=true
+        let oldABA=Task{await switched.activate(.messages)}
+        while switching.held == nil {await Task.yield()}
+        switched.selectCrew("a");switched.selectCrew("b")
+        switching.snapshot=tree("b","todo");await switched.activate(.todo)
+        switching.held!.resume(throwing:CrewdClientError(message:"late old read failure"));switching.held=nil
+        await oldABA.value
+        precondition(switched.failure == nil,"A-B-A crew identity must not authorize an old activation's error")
+        switching.error=CrewdClientError(message:"current read failed")
+        await switched.activate(.progress)
+        precondition(switched.failure?.message == "current read failed","current noncancelled read errors remain visible")
+        switching.error=nil
+
         let peer=ResourcePeer(),store=CrewdResources(call:{try await peer.call($0,$1)})
         store.selectCrew("a")
         await rejects{_ = try await store.createDocument(request:UUID(),title:"new",body:"exact")}

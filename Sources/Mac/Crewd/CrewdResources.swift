@@ -47,6 +47,7 @@ struct CrewdFolderSnapshot {
     private var folderQueries:[CrewdResourceView:UUID]=[:]
     private var activeView:CrewdResourceView?
     private var lastActivation:String?
+    private var activationQuery=UUID()
     private var refreshTask:Task<Void,Never>?
     init(call:@escaping Call){self.call=call}
     func selectCrew(_ value:String){guard crew != value else{return};refreshTask?.cancel();generation=UUID();crew=value;documentIDs=[];documentListLoaded=false;lastActivation=nil;folders=[:];failure=nil;detailQueries=[:];folderQueries=[:]}
@@ -55,9 +56,24 @@ struct CrewdFolderSnapshot {
     func activate(_ view:CrewdResourceView,force:Bool=false)async {
         activeView=view
         let key=crew+":"+view.rawValue+":"+capabilities.sorted().joined(separator:",")
-        if !force,lastActivation == key{return};lastActivation=key;failure=nil
-        if capabilities.contains("viewFolders"){do{_ = try await refreshFolders(view)}catch{record(error)}}
-        if view == .documents,capabilities.contains("documents"){do{try await refreshDocuments()}catch{record(error)}}
+        if !force,lastActivation == key{return}
+        let token=generation,query=UUID();activationQuery=query;lastActivation=key;failure=nil
+        do {
+            try check(token)
+            if capabilities.contains("viewFolders"){_ = try await refreshFolders(view)}
+            try check(token)
+            guard activationQuery == query else{throw CancellationError()}
+            if view == .documents,capabilities.contains("documents"){try await refreshDocuments()}
+            try check(token)
+            guard activationQuery == query else{throw CancellationError()}
+        } catch {
+            // An appearance task belongs to its original crew/view only. Its
+            // cancelled read cannot publish into a new activation, or continue
+            // the old documents load using the new crew's authority.
+            guard token == generation,activationQuery == query else{return}
+            lastActivation=nil
+            if !Task.isCancelled{record(error)}
+        }
     }
     func handleEvent(_ name:String,_ value:CrewdValue){
         guard let view=activeView else{return}
@@ -105,7 +121,7 @@ struct CrewdFolderSnapshot {
                 if let cursor {guard uuid(cursor),cursors.insert(cursor).inserted else{throw CrewdClientError(message:"文档分页游标无效。")}}
             }while cursor != nil
             documentIDs=ids;documentListLoaded=true;failure=nil
-        }catch{if token == generation,!(error is CancellationError){failure=(error as? CrewdClientError) ?? CrewdClientError(message:error.localizedDescription)};throw error}
+        }catch{if token == generation,!Task.isCancelled,!(error is CancellationError){failure=(error as? CrewdClientError) ?? CrewdClientError(message:error.localizedDescription)};throw error}
     }
     @discardableResult func document(_ id:String)async throws->CrewdDocument{
         try require("documents");guard uuid(id) else{throw CrewdClientError(message:"文档编号无效。",kind:.notSubmitted)}
