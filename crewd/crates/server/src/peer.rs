@@ -1822,6 +1822,51 @@ mod host_admin_controls {
         );
     }
     #[tokio::test]
+    async fn host_admin_original_enrollment_lookup_is_readonly_when_identity_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db =
+            crewd_store::Db::spawn(crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap())
+                .unwrap();
+        let state = Arc::new(crate::AppState::new(db.clone()));
+        let (_drain, rx) = tokio::sync::watch::channel(false);
+        let manager = crate::remote::Manager::new(&state, dir.path().to_owned(), rx)
+            .await
+            .unwrap();
+        let permit = synthetic_permit(Arc::new(PeerPolicy::new(None).unwrap()), 0);
+        let query = crewd_proto::HostEnrollmentLookupParams {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            enrollment_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let found = manager
+            .admin_enrollment_lookup(permit.clone(), query.clone())
+            .await
+            .unwrap();
+        assert_eq!(found, serde_json::json!({"state":"notFound"}));
+        let identity = db
+            .call(|s| crewd_store::remote::identity(s.conn()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            identity.is_none(),
+            "read-only original lookup created server identity"
+        );
+        assert!(
+            !dir.path().join("remote").exists(),
+            "read-only lookup created private identity directory"
+        );
+        permit.close();
+        assert!(
+            manager
+                .admin_enrollment_lookup(permit, query)
+                .await
+                .is_err()
+        );
+        drop(manager);
+        drop(state);
+        db.shutdown();
+    }
+    #[tokio::test]
     async fn host_admin_configuration_lookup_returns_original_witness_not_fresh_status() {
         let dir = tempfile::tempdir().unwrap();
         let db =

@@ -441,18 +441,28 @@ impl Manager {
         permit.check()?;
         request_id(&p.request_id)?;
         request_id(&p.enrollment_id)?;
-        let identity = self.ensure_identity().await?;
-        let public = identity.public.clone();
+        let public = self
+            .db
+            .call(|s| facts::identity(s.conn()))
+            .await
+            .map_err(store_error)?
+            .map_err(store_error)?;
+        permit.check()?;
+        let Some(public) = public else {
+            return Ok(serde_json::json!({"state":"notFound"}));
+        };
         let authority = public.authority_id.clone();
+        let read_permit = permit.clone();
         let record = self
             .db
             .call(move |s| {
-                permit.check().map_err(|_| invalid_record())?;
+                read_permit.check().map_err(|_| invalid_record())?;
                 records::get(s.conn(), &authority, &p.enrollment_id)
             })
             .await
             .map_err(store_error)?
             .map_err(write_error)?;
+        permit.check()?;
         let Some(record) = record else {
             return Ok(serde_json::json!({"state":"notFound"}));
         };
@@ -478,6 +488,7 @@ fn created(
     })
 }
 
+#[derive(Clone)]
 enum Issuer {
     Root(crate::peer::RootAdminPermit),
     Local(crate::peer::ConnectionPeer),
