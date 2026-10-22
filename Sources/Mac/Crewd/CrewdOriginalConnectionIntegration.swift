@@ -10,6 +10,7 @@ struct CrewdOriginalConnectionIntegration: ViewModifier {
     }
 }
 private struct CrewdOriginalConnectionControls: ViewModifier {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var window: CrewdRemoteWindow
     let directory: URL
     @EnvironmentObject private var crewStore: CrewStore
@@ -18,6 +19,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var managing = false
     @State private var adding = false
     @State private var personalDirectory=false
+    @State private var statusDetails=false
     @State private var reviewing = false
     @State private var recovering = false
     @State private var trusting = false
@@ -27,13 +29,14 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         content
 .toolbar {
             Menu {
+            if window.workspace != nil { Button("当前电脑状态与原请求",systemImage:"info.circle"){statusDetails=true} }
             Button("个人主机目录与同步状态"){personalDirectory=true}
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
                 #else
-                Button("管理远程电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
+                Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
                 switch window.computerListState {
                 case .notLoaded:
                     Text("已存电脑尚未读取")
@@ -70,8 +73,15 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             #if !PENDINGCREW_KNOWLEDGE_VALIDATION && (!PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT)
             Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
             #endif
-            } label: { Label("连接与核对", systemImage: "network") }
-                .labelStyle(.iconOnly).help("连接与核对")
+            } label: { Label("电脑与连接", systemImage: "desktopcomputer") }
+                .labelStyle(.iconOnly).help("电脑选择、添加与原请求核对").accessibilityLabel("电脑与连接")
+        }.sheet(isPresented:$statusDetails){
+            if let current=window.workspace {
+                VStack(spacing:0){
+                    HStack{Text("当前电脑").font(.headline);Spacer();Button("关闭"){statusDetails=false}}.padding(16)
+                    CrewdOriginalConnectionStatus(workspace:current,compact:true,detailOnly:true)
+                }.frame(minWidth:360)
+            }
         }.sheet(isPresented:$personalDirectory){VStack(alignment:.leading,spacing:12){HStack{Text("主机目录").font(.headline);Spacer();Button("关闭"){personalDirectory=false}};ScrollView{VStack(alignment:.leading,spacing:20){CrewPersonalHostDirectory();Divider();CrewPersonalDraftArchive()}}}.padding(20).modifier(CrewdAdaptiveFormFrame(width:580,height:440))}
         .sheet(isPresented: $recovering) {
             if let current = window.workspace {
@@ -91,7 +101,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
             .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
+                    adding = false; Task { await model.connectCrewdAuthority(computerID:id);if model.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()} }
                 }
             }
             .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
@@ -127,6 +137,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 struct CrewdOriginalConnectionStatus: View {
     @ObservedObject var workspace: CrewdWorkspace
     var compact=false
+    var detailOnly=false
     var machineName:String?=nil
     @State private var checkingOriginal=false
     @State private var selectingRecovery = false
@@ -135,6 +146,8 @@ struct CrewdOriginalConnectionStatus: View {
     @State private var selected = Set<String>()
     @State private var showingDetails = false
     var body:some View {
+        Group {
+        if detailOnly { connectionDetails } else {
         VStack(alignment:.leading,spacing:6){
             if let machineName {
                 Button{showingDetails=true}label:{
@@ -159,30 +172,10 @@ struct CrewdOriginalConnectionStatus: View {
                         .buttonStyle(.plain).font(CrewdType.caption).foregroundStyle(.orange)
                 }
             }
-        }.controlSize(.small).padding(.horizontal,compact ? 0:12).padding(.vertical,compact ? 0:10)
-        .popover(isPresented:$showingDetails){
-            ScrollView {
-                VStack(alignment:.leading,spacing:14){
-                    CrewdPanelHeader(title:"连接状态",detail:workspace.status,symbol:"network")
-                    if let error=workspace.error {
-                        DisclosureGroup("当前操作未完成 · 原始说明"){
-                            Text(error).font(CrewdType.label).textSelection(.enabled).fixedSize(horizontal:false,vertical:true).padding(.top,6)
-                        }.foregroundStyle(.orange)
-                        Text("结果未知时只核对原请求，不会自动重新提交。").font(CrewdType.caption).foregroundStyle(.secondary)
-                    }
-                    if workspace.error == nil,!workspace.durableUnknown.isEmpty {
-                        Label("有原请求结果待核对",systemImage:"exclamationmark.triangle").font(CrewdType.caption).foregroundStyle(.orange)
-                    }
-                    if workspace.client.capabilities.contains("command.receipts") {
-                        Button("核对原请求"){showingDetails=false;checkingOriginal=true}
-                    }
-                    if workspace.dataDirectory != nil,!(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false){
-                        Text("下次后台启动尚未配置可执行的 Codex。资料仍可使用；可在设置中准备后停工重开。").font(CrewdType.caption).foregroundStyle(.secondary)
-                    }
-                    managementMenu
-                }.padding(16)
-            }.frame(width:360,height:workspace.error == nil ? 180:360)
         }
+        }
+        }.controlSize(.small).padding(.horizontal,compact ? 0:12).padding(.vertical,compact ? 0:10)
+        .popover(isPresented:$showingDetails){connectionDetails}
         .sheet(isPresented:$checkingOriginal){
             VStack(spacing:0){
                 HStack{Text("核对原请求").font(.headline);Spacer();Button("关闭"){checkingOriginal=false}}.padding(16)
@@ -234,6 +227,29 @@ struct CrewdOriginalConnectionStatus: View {
                 }
             }.padding(20).frame(minWidth: 500, minHeight: 320)
         }
+    }
+    private var connectionDetails:some View {
+            ScrollView {
+                VStack(alignment:.leading,spacing:14){
+                    CrewdPanelHeader(title:"连接状态",detail:workspace.status,symbol:"network")
+                    if let error=workspace.error {
+                        DisclosureGroup("当前操作未完成 · 原始说明"){
+                            Text(error).font(CrewdType.label).textSelection(.enabled).fixedSize(horizontal:false,vertical:true).padding(.top,6)
+                        }.foregroundStyle(.orange)
+                        Text("结果未知时只核对原请求，不会自动重新提交。").font(CrewdType.caption).foregroundStyle(.secondary)
+                    }
+                    if workspace.error == nil,!workspace.durableUnknown.isEmpty {
+                        Label("有原请求结果待核对",systemImage:"exclamationmark.triangle").font(CrewdType.caption).foregroundStyle(.orange)
+                    }
+                    if workspace.client.capabilities.contains("command.receipts") {
+                        Button("核对原请求"){showingDetails=false;checkingOriginal=true}
+                    }
+                    if workspace.dataDirectory != nil,!(CrewdCodexConfiguration.program().map(CrewdCodexConfiguration.executable) ?? false){
+                        Text("下次后台启动尚未配置可执行的 Codex。资料仍可使用；可在设置中准备后停工重开。").font(CrewdType.caption).foregroundStyle(.secondary)
+                    }
+                    managementMenu
+                }.padding(16)
+            }.frame(width:360,height:workspace.error == nil ? 180:360)
     }
     private var managementMenu:some View {
         Menu {

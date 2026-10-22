@@ -18,6 +18,7 @@ pub mod native_history;
 pub mod notifications;
 pub mod object_refs;
 pub mod remote;
+pub mod enrollment;
 pub mod runner_usage;
 pub mod schema;
 pub mod sessions;

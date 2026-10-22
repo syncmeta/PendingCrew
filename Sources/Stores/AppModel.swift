@@ -11,6 +11,8 @@ final class AppModel: ObservableObject {
     lazy var crewdWindow = CrewdRemoteWindow()
     private var authorityObservation: AnyCancellable?
     @Published private(set) var connectingAuthority = false
+    /// Only explicit target selection reports here; startup remains unchanged.
+    @Published var computerSelectionError:String?
 
     var crewdDirectory: URL? { CrewdFrontendConfiguration.directory }
     var backendConfigurationError: String? { crewdWindow.error ?? crewdBackend?.workspace.error ?? "尚未连接已配对的电脑。" }
@@ -53,9 +55,20 @@ final class AppModel: ObservableObject {
             }
         }
     }
-    func connectCrewdAuthority() async {
-        guard usesCrewdAuthority, !connectingAuthority else { return }
-        connectingAuthority = true; defer { connectingAuthority = false }
+    func connectCrewdAuthority(computerID:UUID?=nil) async {
+        guard usesCrewdAuthority else{return}
+        guard !connectingAuthority else {
+            if computerID != nil{computerSelectionError="另一项电脑连接正在进行，请稍后再明确选择。"}
+            return
+        }
+        if computerID != nil{computerSelectionError=nil}
+        connectingAuthority = true
+        defer {
+            connectingAuthority = false
+            if let computerID,crewdWindow.selected != computerID || crewdBackend?.workspace.authorityRecordID != computerID || crewdBackend?.workspace.client.readyForWork != true {
+                computerSelectionError=crewdWindow.error ?? crewdWindow.workspace?.error ?? "这台电脑的身份或连接尚未确认；原配对和输入已保留，不会切换到替代电脑。"
+            }
+        }
         guard let directory = crewdDirectory else {
             crewdWindow.error = "当前后台数据目录配置不可用，连接未建立。"
             return
@@ -63,13 +76,25 @@ final class AppModel: ObservableObject {
         do { try CrewdFrontendIsolation.prepareAuthority(directory: directory) }
         catch { crewdWindow.error = error.localizedDescription; return }
         crewdWindow.error = nil
-        #if os(macOS)
-        await crewdWindow.selectLocal(directory: directory)
-        #else
-        // Loading saved computers is observation, not permission to select one.
-        // The original mobile pairing/list UI explicitly chooses and connects.
-        await crewdWindow.refresh()
-        #endif
+        if let computerID {
+            guard await crewdWindow.refresh() else{return}
+            guard crewdWindow.computers.contains(where:{$0.id==computerID && $0.paired}) else {
+                crewdWindow.error="原电脑记录已失效或尚未完成配对，请核对原请求；不会连接另一条记录。"
+                return
+            }
+            await crewdWindow.select(computerID)
+            guard crewdWindow.selected==computerID,crewdWindow.workspace?.authorityRecordID==computerID else {
+                if crewdWindow.error==nil{crewdWindow.error="未取得这台电脑的原凭据，连接未切换。"}
+                return
+            }
+        }else {
+            #if os(macOS)
+            await crewdWindow.selectLocal(directory: directory)
+            #else
+            // Observation on startup, never an automatic remote selection.
+            await crewdWindow.refresh()
+            #endif
+        }
         if let workspace = crewdWindow.workspace {
             workspace.originalJournalRequired = true
             guard workspace.client.readyForWork else { crewdBackend = nil; return }

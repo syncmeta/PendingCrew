@@ -211,17 +211,20 @@ private struct CrewdWindowVisualEffect:NSViewRepresentable {
     }
     func updateNSView(_ view:NSVisualEffectView,context:Context){configure(view)}
     private func configure(_ view:NSVisualEffectView){
-        view.material = .windowBackground
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        view.appearance=NSAppearance(named:scheme == .dark ? .darkAqua:.aqua)
+        if view.material != .windowBackground { view.material = .windowBackground }
+        if view.blendingMode != .behindWindow { view.blendingMode = .behindWindow }
+        if view.state != .followsWindowActiveState { view.state = .followsWindowActiveState }
+        let name:NSAppearance.Name = scheme == .dark ? .darkAqua:.aqua
+        if view.appearance?.name != name { view.appearance=NSAppearance(named:name) }
     }
 }
 private final class CrewdBehindWindowMaterialView:NSVisualEffectView {
     override func viewDidMoveToWindow(){
         super.viewDidMoveToWindow()
-        window?.isOpaque=false
-        window?.backgroundColor = .clear
+        if let window {
+            if window.isOpaque { window.isOpaque=false }
+            if window.backgroundColor != .clear { window.backgroundColor = .clear }
+        }
     }
 }
 #endif
@@ -279,5 +282,20 @@ struct CrewdHostConnectionLabel:View {
             if hasUnfinishedOperation {Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange)}
         }.accessibilityElement(children:.ignore)
             .accessibilityLabel(name + "，" + state + (hasUnfinishedOperation ? "，当前操作未完成，可核对原请求":""))
+    }
+}
+
+/// A single action for an empty workspace; no decorative canvas or message.
+struct CrewdGlassAddButton:View {
+    let action:()->Void
+    var body:some View {
+        Button(action:action){Image(systemName:"plus").font(.system(size:22,weight:.medium)).frame(width:52,height:52).contentShape(Circle())}
+            .buttonStyle(.plain).modifier(CrewdAddGlass()).accessibilityLabel("新建机组").help("新建机组")
+    }
+}
+private struct CrewdAddGlass:ViewModifier {
+    @ViewBuilder func body(content:Content)->some View {
+        if #available(macOS 26.0,iOS 26.0,*){content.glassEffect(.regular.interactive(),in:Circle())}
+        else{content.background(.regularMaterial,in:Circle())}
     }
 }

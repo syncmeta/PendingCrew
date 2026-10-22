@@ -206,6 +206,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     .collect(),
                 None => Vec::new(),
             };
+            if state.remote.get().is_some() {
+                capabilities.push("remote.enrollment".into());
+            }
             if state.data_runtime.get().is_some() {
                 capabilities.push("data".into());
             }

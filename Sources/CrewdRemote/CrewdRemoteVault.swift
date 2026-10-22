@@ -19,6 +19,7 @@ struct CrewdRemoteStoredPair: Codable {
     let privateKey: Data
     let clientCertificate: Data
     var receipt: CrewdRemoteEnvelope?
+    var enrollmentId: String? = nil
 }
 @CrewdCredentialActor protocol CrewdRemoteCredentialStore {
     func records() throws -> [UUID]

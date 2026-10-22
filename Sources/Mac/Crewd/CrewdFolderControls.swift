@@ -21,6 +21,7 @@ struct CrewdFolderControls:View {
     let view:CrewdResourceView
     var object:CrewdValue?=nil
     var compact=false
+    var iconOnly=false
     @State private var managing=false
     @State private var classifying=false
     var body:some View{
@@ -31,8 +32,8 @@ struct CrewdFolderControls:View {
                         Picker("本群文件夹",selection:$selection){folderChoices}
                         Divider()
                         Button("管理本群分类",systemImage:"folder.badge.gearshape"){managing=true}
-                    }label:{Label(currentFolderTitle,systemImage:"folder")}
-                    .fixedSize().help("筛选本群消息；管理分类不会改变原文")
+                    }label:{if iconOnly{Image(systemName:"folder")}else{Label(currentFolderTitle,systemImage:"folder")}}
+                    .fixedSize().frame(minWidth:iconOnly ? CrewdType.target:0,minHeight:iconOnly ? CrewdType.target:0).help("消息分类："+currentFolderTitle+"；管理分类不会改变原文").accessibilityLabel("消息分类："+currentFolderTitle)
                 }else {
                     Picker("文件夹",selection:$selection){folderChoices}.frame(maxWidth:220)
                     Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help(store.channel.isEmpty ? "管理机组资料库分类":"管理本群分类")

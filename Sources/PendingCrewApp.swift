@@ -60,6 +60,10 @@ struct PendingCrewApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .modifier(CrewdEnrollmentURLEntry{ id in Task{await model.connectCrewdAuthority(computerID:id);if model.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()}} })
+                .alert("这台电脑尚未连接",isPresented:Binding(get:{model.computerSelectionError != nil},set:{if !$0{model.computerSelectionError=nil}})){
+                    Button("好",role:.cancel){model.computerSelectionError=nil}
+                }message:{Text(model.computerSelectionError ?? "请核对原电脑身份与连接。")}
                 .environmentObject(model)
                 .environmentObject(crewStore)
                 .environmentObject(captainTemplates)

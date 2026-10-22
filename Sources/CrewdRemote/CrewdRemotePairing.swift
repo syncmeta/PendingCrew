@@ -18,13 +18,14 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     nonisolated static let shared = CrewdRemotePairing()
     nonisolated static let changed = Notification.Name("PendingCrew.CrewdRemotePairsChanged.v1")
     private var injected: CrewdRemoteCredentialStore?
+    private var enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?
     private var credentials: CrewdRemoteCredentialStore {
         if let injected { return injected }
         let store = CrewdRemoteCredentials.application(); injected = store; return store
     }
     // No store construction or credential access crosses into the UI initializer.
     nonisolated init() {}
-    init(credentials: CrewdRemoteCredentialStore) { injected = credentials }
+    init(credentials: CrewdRemoteCredentialStore, enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?=nil) { injected = credentials;self.enrollmentRemoval=enrollmentRemoval }
     private var responses: [String: (UUID, String)] = [:]
     struct Response: Sendable { let id: UUID; let text: String }
     /// Save and capture the response in one non-suspending transaction. A repeated
@@ -44,6 +45,26 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
             try credentials.save(pair)
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }
+        return receipt
+    }
+    /// Adopt only the already persisted enrollment identity; never generate a
+    /// second response/key when the final receipt or UI acknowledgement is lost.
+    func adoptEnrollment(_ pair: CrewdRemoteStoredPair, grantId:String, grantRevision:String) throws -> CrewdRemoteReceipt {
+        let receipt=try verifyEnrollmentReceipt(pair,grantId:grantId,grantRevision:grantRevision)
+        if try credentials.records().contains(pair.id) {
+            let old=try credentials.read(pair.id)
+            guard old.invitation==pair.invitation,old.response==pair.response,
+                  old.privateKey==pair.privateKey,old.clientCertificate==pair.clientCertificate,
+                  old.receipt==nil || old.receipt==pair.receipt else{throw CrewdRemoteError.wrongIdentity}
+        }
+        try credentials.save(pair)
+        NotificationCenter.default.post(name:Self.changed,object:nil)
+        return receipt
+    }
+    func verifyEnrollmentReceipt(_ pair:CrewdRemoteStoredPair,grantId:String,grantRevision:String)throws->CrewdRemoteReceipt {
+        guard let envelope=pair.receipt else{throw CrewdRemoteError.invalidExchange}
+        let receipt=try validatedReceipt(envelope,pair:pair)
+        guard receipt.grantId==grantId,receipt.grantRevision==grantRevision else{throw CrewdRemoteError.wrongIdentity}
         return receipt
     }
     func receipt(_ id: UUID) throws -> CrewdRemoteReceipt { try paired(id).2 }
@@ -111,6 +132,11 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         return (pair, try invitation(pair.invitation, requireFresh: false), try validatedReceipt(receipt, pair: pair))
     }
     private func forget(_ id: UUID) throws {
+        let pair=try credentials.read(id)
+        if let enrollmentId=pair.enrollmentId {
+            if let enrollmentRemoval{try enrollmentRemoval(pair,enrollmentId)}
+            else{try CrewdEnrollment.shared.removePairAttempt(pair,enrollmentId:enrollmentId)}
+        }
         try credentials.remove(id)
         responses = responses.filter { $0.value.0 != id }
         NotificationCenter.default.post(name:Self.changed,object:nil)

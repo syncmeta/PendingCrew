@@ -7,6 +7,7 @@ mod connection_scope;
 pub mod control;
 pub mod dispatch;
 mod group_knowledge;
+pub mod host_admin;
 pub mod hub;
 mod judgments;
 pub mod ledger;
@@ -298,6 +299,7 @@ impl S5RequestFaultControl {
 pub type TestRegistryReady = Box<dyn FnOnce(Arc<ProcessRegistry>) -> std::io::Result<()> + Send>;
 #[derive(Default)]
 pub struct ServeOptions {
+    pub admin_socket: Option<host_admin::HostAdminSocket>,
     /// Opt-in Mac GUI helper lifetime; never an arbitrary caller-selected PID.
     pub managed_parent: bool,
     pub orchestra: Option<OrchestraServe>,
@@ -652,6 +654,7 @@ async fn serve_with_hooks_inner(
         }
     });
     let (drain_tx, drain_rx) = tokio::sync::watch::channel(false);
+    let admin_socket = opts.admin_socket.take();
     let mut conns = tokio::task::JoinSet::new();
     match listener {
         Err(e) => fatal = Some(anyhow::Error::from(e)),
@@ -719,6 +722,9 @@ async fn serve_with_hooks_inner(
                         break;
                     }
                     _ = conns.join_next(), if !conns.is_empty() => {},
+                    accepted = async { match &admin_socket {Some(listener)=>listener.accept().await,None=>std::future::pending().await} } => {
+                        if let Ok((stream,budget))=accepted {let state=state.clone();conns.spawn(async move {host_admin::run(state,stream,budget).await;});}
+                    }
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, _)) => {
