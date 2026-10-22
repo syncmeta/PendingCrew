@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 用户恢复后的实际移动链路与同源设备产物
+
+用户明确撤销停手并要求继续全工程。实际本地/远端基线192490d2干净；Mac仍准确6f35/20748.07553，普通iOS仍a08094f6，源/工程输入没有新变化。三条线以原证据接续，没有重建Mac/Sim、重跑CI或复制后台包。
+
+后端同a9原data/DB/authority/A-B seed及remote revision2复用，只在run/resume-01隔离当前输出/markers，原历史保留，不重seed/configure/installer或新scope。最小existing-seed控制器SHA aac12fa7644b312e4f05c7770549e55b2456fd4504674c969fe95f5be2f581d7，原控制器hash不冒同；原owner47520/Core3959538及tunnel89266实际资格成立，UID1000/parent/kernelbirth/origfd4、同DB/authority/机组与空session核同。
+
+QA原App73123/console97695从空表单实际导入2019B邀请，核endpoint/SPKI、唯一respond、原native exporter导出1718B，经原publisher一次accept于07:34:39Z成功（有效期止07:35:20Z），grant3e8a3acb-49ec-455d-bb2b-a65c5a11b107/revision1。短filename键入受DeviceHub输入限制时原未保存面板取消，原默认名只保存在新a9-attempt02目录；旧6c/default文件未覆写，不重复respond。995B receipt经普通Files确认、实际保存paired记录并显式连接，原A/B/empty机组可见，A四视图读取、Todo#7=220122、消息220123回显、未发草稿A=220124有原UI证据。完整P1/P2与撤权尚未闭合；实际锁屏后停止GUI，已请求用户正常解锁，原action cutoff经远端monotonic核准为07:56:20.756Z（先前07:56:40仅约值），不延期。到界原App73123经身份核对后正常terminate0，原console97695终态0、208shutdown0，最后booted空且原App不存在；paired记录、Files原件和草稿保留，未撤权/移除。整块真实报告qa-attempt02/module-result.json SHA83e0417eba34fdfabf3c9e0bf103aa17835d239ede48afd14d5e602f35d74ed5明确PARTIAL，根核原文件hash同；原owner47520实际终态1，原因是既定deadline RuntimeError，不改标0；其finally原safePause stopped、Core wait0/socketgone且rpcFailureNoReplay=false。原tunnel89266在精确进程身份复核后TERM、实际0；远端原holder/Core均不存在、49381无监听、socket无，grant未撤销且原DB保留。独立其它工作继续，缺证据不冒整链通过。
+
+客户端准确a08普通未签名iPhoneOS完整target原52205实际0；1766源码/3878依赖前后同，51产物有限独核通过，argv与b76原recipe相同，仅准确ref/产物路径改变。普通Debug/DEBUG、arm64、iphoneos27/min17、版本0.1.43/1，签名/Team/profile关闭且当前app/runtime实际not signed。产物ios-device-unsigned-a08094f6-20261022，独核SHA3390816bd42e75c749598c5815746d165740a1b2606a4dcb8f9bf43c9307cac5；这仅设备SDK编译，不是签名、真机安装或运行，也不替换当前Mac日用。
+
+M4只核现有生产接线而未重做旧CLI/SDK资格或新增框架：现有NativeFactory::launch已完成真实helper spawn、Custody、三通道、native birth登记与SQLite ACK，AppState已初始化；缺口不是整个factory不存在。managed-task外围与标准ACP真实native关联/完整owned历史分层，orchestra Executor自动启动/提交及真实prompt/turn/history来源尚未闭合，不注册假能力、不激活Native16。完整历史不反向阻塞已定外围，但PTY字节ack/legacy Stop不能冒标准提交完成；后端下一完整生产模块复用现有factory/runtime/public_control，不重造底座。官方hooks文档给真实UserPromptSubmit/common prompt_id、Stop及后继Notification idle_prompt关联路径；实施前由独立质量线一次核完整受管合同：单请求envelope关联、额外输入门、缺失/错序Unknown不重发，Stop仅provisional，同session/prompt的真实idle_prompt才等待态，不用本地计时推定、不压原Stop hook或为结算杀runtime。客户端已有working/health/Unknown语义，目前无Swift缺口；不新增占位UI。该项仍在设计/实现，非已验Claude完整生命周期，未新真实模型/SDK调用。
+
 ## 2026-10-22 最终停手：a9发邀前结束，原进程已收尾
 
 a9复用原R2 prefix及七脚本，无新构建/installer/整包复制；仅新私有run数据和标准新data租约。准备6731实际0，普通scope同步66866超时后同scope只读24738证旧hash，再同三键CAS47008实际0核最终c534552bbe841c6c9c684bdc6a5980c4bd40ff632c741d6bfb907e779d336764。原owner44814/Core3952151的UID1000/PPID/kernelbirth/origfd4与claim合格，隧道54865及loopback49381实际ready，三个机组session空；这些仅运行资格，不是完整配对通过。
