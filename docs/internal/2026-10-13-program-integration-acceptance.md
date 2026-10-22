@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 群知识与待办后端整模块独验通过并整合
+
+完整源16120a7c6579d7b82476cdcefee223c61a9c1769、base99f593af，42路径含6新Rust，450项crewd输入；根核source-freeze.json SHA a8cec07c114a06ab84cdfe44cef9807f99adb87d1324c86c64a5147143d6b4ae及独立最终报告SHA ae9aff9aa2d118aa05cc86e40b30d3a83fd4a56740d9ab7127479d08a1b01dcc。质量线亲跑原Unix群RPC9/文件夹5/资源17迁移3/直接claim1均0，502项hash、作者干净源与前后5个产物核同；作者work/proto/refusal/知识及变异/旧15拒写证据复用并明确区分非质量亲跑。根随后普通no-ff整合为1978b60253b4768b1661f3bd6dbf1b8eee3a2fb3，无冲突；后续根记录与推送另读实际refs。
+
+正常源继续sqlite_knowledge原View/Block/Placement，不解除legacy document guard；保存内容与本群关联分开原UUID/receipt，关联失败不重建正文。完整原DataContext/DataRef、源/目标授权、原请求lookup、冲突及回滚已闭合；群标签/文件夹局部而Todo属性全局，Human H来源与Agent ask权限分明。人工done阻止两条新claim入口、保既有Plan；仅todo属性事件防止旧自动判断/唤醒路由。当前15直接受保护升17，实验16先拒不写，不激活Native16。旧15精确bin拒17的私域header测试不冒旧产品数据迁移；postimplementation变异101→逐字节恢复→group9绿不冒初始红。
+
+准确默认Core16120编译0、SHA644b4e1ee781bbb92ba2b1148bb360305159151fc57530c247b67bf445f1e4be；它不是后续组合HEAD的后台证明。前端Mac/iPhone/iPad共享A源码/型验仍在收口，真正双端同时同Core的事件/冲突/重开/零自动任务必须用准确组合候选验证。未安装/部署/新Linux或CI/真实模型；日用Mac仍6f35、已有Sim111b与Linux582来源不改标，稳定业务证据复用。独立Sync草稿/同账号目录模块继续，不新增Core账号或草稿DDL作为阻塞；下一Codex完整控制合同已交唯一后台作者接续。
+
 ## 2026-10-22 Claude 受管真实 PTY 整模块独验通过并整合
 
 02e3fe13 完整模块一次独验发现三个真实跨等待竞态：最终身份状态复核、等待 DB 后连接/期限资格、Human 原始输入撤销后同 lease 最终门。作者保留原 seam 三项实际 RED，9cb4c57d 修复后，质量线亲跑竞态3/Core8/store3及此前 guard2/helper1均通过；5源码/18哈希、干净状态及二进制前后相同。独立最终报告 m4-managed-hooks-20261022/independent-qa-final-result.json SHA cb35fff6edd49f62ca5eb1775cf70338a5e9fa10fd1efb241d6f88956495601b，根核原文件 hash；普通 no-ff 整合 main 为99f593afc9ae3c5fc0e03d8a30ddddd5160e0873，无冲突。其后根文档保存及远端状态另读实际 refs，不能改标产物来源。

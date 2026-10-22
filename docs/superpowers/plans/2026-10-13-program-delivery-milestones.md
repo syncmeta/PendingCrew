@@ -2,7 +2,7 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
-111b8a03已普通推送main/global；另一“PendingCrew 前端设计”会话已完成的新demo由根在fdf1209e完整保存（仅21个design路径，原作者41项及离线检查复用，未重测）。前端一致快照65项SHA2165a5f75f1037b6cc203e6eae51e28d3e730e49df48071b7ff969214644d12b与提交前实际源逐项同，以当前TSX而非旧README/标题为准；本记录保存后的远端状态须读实际refs。真实已装Mac仍6f35/0.1.44/20748.07553，普通iOS当前准确候选111b8a03/0.1.43/1，Linux实际编译来源5821310a；a08原配对/P1P2证据与111b资源修复影响分别保留，不能互相改标。
+群内容后端16120a7c已独验并普通整合main 1978b602；完整双端组合尚待前端冻结和实际验收。111b8a03已普通推送main/global；另一“PendingCrew 前端设计”会话已完成的新demo由根在fdf1209e完整保存（仅21个design路径，原作者41项及离线检查复用，未重测）。前端一致快照65项SHA2165a5f75f1037b6cc203e6eae51e28d3e730e49df48071b7ff969214644d12b与提交前实际源逐项同，以当前TSX而非旧README/标题为准；本记录保存后的远端状态须读实际refs。真实已装Mac仍6f35/0.1.44/20748.07553，普通iOS当前准确候选111b8a03/0.1.43/1，Linux实际编译来源5821310a；a08原配对/P1P2证据与111b资源修复影响分别保留，不能互相改标。
 
 | 完整交付单元 | 当前状态 | 尚待闭合的范围 |
 | --- | --- | --- |
@@ -18,6 +18,12 @@
 执行边界补清：普通私有文件同步因网络返回Unknown时，作者可自主做同scope有界只读hash/已有receipt/原进程身份查询，不须每次交根裁读；只在已证明安全的同值原子CAS范围内恢复元数据。不能据此重发邀请、生成回应、accept或凭据事务，也不解除184/1ef禁读删边界。作者在完整模块内处理这类内部小项，只把真实权限拒绝、其它实际状态或必要架构决定交根，避免普通状态观察变成全线等待。
 
 最新人类要求继续全工程，并新增“前端和相应逻辑照着demo来改”。主代理仍统筹/接口/整合；backend_continue唯一Rust/schema/API作者，Claude真实PTY受管模块9cb4c57d已独验并整合99f593af，尚未生成准确正式包或真实provider验收；其后接demo真实群资料/分类/标签及一键部署单链接的完整合同；frontend_demo接手原m6-client工作树，唯一Swift/前端/工程作者，依据实际最新demo整块映射真实能力；quality_continue_22独立质量/GUI，不兼实现；client_delivery_22已移交写权，仅核现有VPS部署使用说明。生产Claude新入口必须满足已验证精确guard资格，否则正文前拒绝，不新增旧版兼容开关或静默退回legacy；正式ACP/full history仍分列未完成，Native16不激活。按完整模块持续推进，已验稳定业务复用，不制造无缺陷改动或重复包；尚未讨论定案方案继续保留。 用户另明确部署目标为一键安装脚本+单一配对链接，连接与管理不拆入口；安装前查Codex/Claude Code，缺失则给官方安装与登录指引，让用户自行完成后再装PendingCrew。现有多命令/三文件只作底层与已验证据，不作为日常安装UX；常驻service/Human bootstrap与单链接协议先准备准确源码/方案，实际VPS常驻部署和公开发布仍按具体动作核授权。
+
+## 2026-10-22 群内容后端整块独验并整合，双端组合待完成
+
+backend_continue 已在16120a7c6579d7b82476cdcefee223c61a9c1769完整保存 A（base99f593af，42路径含6新Rust，作者树干净）；主代理核原source-freeze.json SHA a8cec07c114a06ab84cdfe44cef9807f99adb87d1324c86c64a5147143d6b4ae及交接。正常默认Core对应450项crewd输入、准确embedded16120与Store17/api3，冻结二进制SHA644b4e1ee781bbb92ba2b1148bb360305159151fc57530c247b67bf445f1e4be。知识实际DataRef源/独立关联receipt、群文件夹/标签、源Todo与Human H、原UUID查回、直接claim保护和15→17必要保护已完整接线；作者定向验证与真实postimplementation mutation/恢复证据在原私域，不冒全features、正式ACP或真实供应商验收。quality_continue_22独验通过，亲跑群RPC/文件夹/资源17迁移/直接claim均0，450输入/42diff/502hash及前后产物核同；原报告SHA ae9aff9aa2d118aa05cc86e40b30d3a83fd4a56740d9ab7127479d08a1b01dcc。根核原文件hash后普通no-ff整合main1978b602；尚未产完整Mac/iOS组合包或双端GUI通过，不提前称交付。
+
+frontend_demo 继续同合同共享Mac/iPhone/iPad源码与受影响型验，独立Sync源码准备不混A冻结。QA期间后台不覆写冻结bin、不与QA争编译；后续准确组合冻结再统一normal helper及两端暖构建，不能把16120证明改标组合HEAD。当前日用App82088保持，Linux仍实际编译5821310a，iOS现有候选111b与M4已验source不重新贴新来源。根继续整合与最终门，完整工程目标未完成。
 
 ## 2026-10-22 Codex 会话完整控制、任务首句与原生标题要求
 
