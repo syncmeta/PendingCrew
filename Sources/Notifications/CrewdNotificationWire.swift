@@ -21,7 +21,7 @@ enum CrewdNotificationWire {
                 try exact(source,["type","eventSeq","workId","askId","entryNo","objectId"],optional:["workId","askId","entryNo"])
                 _ = try decimal(source["eventSeq"],zero:false);_ = try text(source["objectId"])
                 for key in ["workId","askId","entryNo"] where source[key] != .null{_ = try text(source[key])}
-                guard [.done,.reported,.blocked,.askOpened].contains(kind) else{throw invalid()}
+                guard [.done,.reported,.blocked,.askOpened].contains(kind),CrewdWorkID(try text(source["objectId"]),kind:kind == .askOpened ? .human:.plan) != nil else{throw invalid()}
             case "codexTurn":
                 try exact(source,["type","sessionId","threadId","turnId"])
                 for key in ["sessionId","threadId","turnId"]{_ = try text(source[key])}

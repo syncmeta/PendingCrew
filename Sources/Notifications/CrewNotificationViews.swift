@@ -24,11 +24,28 @@ struct CrewNotificationEntry:ViewModifier {
         }
         .alert("此通知的原内容暂不可用",isPresented:$unavailable){Button("好",role:.cancel){}}message:{Text("需当前已验证的原电脑连接、原设备注册与现有访问权限。没有自动连接、恢复或重新执行任务。")}
         .modifier(CrewNotificationOpened(workspace:model.crewdBackend?.workspace))
-        .task(id:(model.crewdBackend?.workspace.presentationNamespace ?? "")+"/"+(model.crewdBackend?.workspace.client.connectionEpoch.uuidString ?? "")){
-            guard CrewNativeNotifications.qualification != nil,let workspace=model.crewdBackend?.workspace,workspace.notifications.optedIn else{return}
+        .modifier(CrewNotificationLifecycle(workspace:model.crewdBackend?.workspace))
+    }
+}
+/// Observe the actual handshake and journal readiness, not just the root's
+/// workspace pointer. Startup never chooses or connects a computer.
+private struct CrewNotificationLifecycle:ViewModifier {
+    let workspace:CrewdWorkspace?
+    func body(content:Content)->some View{
+        if let workspace{content.modifier(CrewNotificationLifecycleScope(workspace:workspace,client:workspace.client))}else{content}
+    }
+}
+private struct CrewNotificationLifecycleScope:ViewModifier {
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject var client:CrewdClient
+    @Environment(\.scenePhase) private var scenePhase
+    private var identity:String{(workspace.notifications.currentOrigin.map{($0.scope.grantID ?? "")+"/"+($0.scope.grantRevision ?? "")+"/"+$0.connection.uuidString} ?? "offline")+"/"+String(describing:scenePhase)}
+    func body(content:Content)->some View{
+        content.task(id:identity){
+            guard CrewNativeNotifications.qualification != nil,scenePhase == .active,let origin=workspace.notifications.currentOrigin,workspace.notifications.optedIn else{return}
             let store=workspace.notifications;await store.refresh()
-            guard let origin=store.currentOrigin,let choices=store.subscriptions(for:origin) else{return}
-            await native.enable(store:store,crews:choices.0,kinds:choices.1,ask:false)
+            guard store.currentOrigin==origin,let choices=store.subscriptions(for:origin),!Task.isCancelled else{return}
+            await CrewNativeNotifications.shared.enable(store:store,crews:choices.0,kinds:choices.1,ask:false)
         }
     }
 }
@@ -53,6 +70,7 @@ private struct CrewNotificationOpenedScope:ViewModifier {
                     DisclosureGroup("原通知来源"){Text((try? JSONEncoder().encode(value.hint)).flatMap{String(data:$0,encoding:.utf8)} ?? "").font(.caption.monospaced()).textSelection(.enabled)}
                 }
                 Button("在工作区查看"){
+                    guard store.canNavigate(value) else{store.opened=nil;return}
                     let context=value.hint.context,source=context.source
                     crewStore.selectCrew(context.crewId);workspace.selectCrew(context.crewId)
                     switch source["type"].string {
@@ -61,7 +79,7 @@ private struct CrewNotificationOpenedScope:ViewModifier {
                     default:if let id=source["sessionId"].string{workspace.selectSession(id)}
                     }
                     store.opened=nil
-                }.buttonStyle(CrewdPrimaryButtonStyle()).disabled(workspace.isRetired || !workspace.client.readyForWork)
+                }.buttonStyle(CrewdPrimaryButtonStyle()).disabled(workspace.isRetired || !workspace.client.readyForWork || !store.canNavigate(value))
             }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:480))
         }.onChange(of:workspace.client.connectionEpoch){_,_ in store.opened=nil}
     }
@@ -88,6 +106,12 @@ private struct CrewNotificationSettings:View {
                 }
                 if !store.remoteEligible{Text("接收通知需要本设备独立配对后的已验证连接。本机管理连接不能当作设备接收授权。").font(.caption).foregroundStyle(.secondary)}
                 if CrewNativeNotifications.qualification == nil{Text("此版本尚未启用系统通知，未申请系统权限或注册设备。").font(.caption).foregroundStyle(.secondary)}
+                if store.installationIDs.count>1{
+                    DisclosureGroup("选择原设备注册"){
+                        Text("不会按时间或列表顺序猜注册身份。选择后只读核对原注册。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(store.installationIDs,id:\.self){id in Button(id){run{try await store.selectInstallation(id)}}.font(.caption.monospaced()).disabled(store.busy)}
+                    }
+                }
                 if let install=store.installation{Text(install.revoked ? "原设备通知注册已撤销":"原设备通知注册已核对 · 第 \(install.generation) 代").font(.caption)}
                 VStack(alignment:.leading,spacing:8){
                     Text("接收哪些机组").font(.subheadline)
@@ -95,7 +119,7 @@ private struct CrewNotificationSettings:View {
                     Text("提醒类型").font(.subheadline)
                     ForEach(CrewdNotificationWire.Kind.allCases,id:\.rawValue){kind in Toggle(kind.label,isOn:Binding(get:{kinds.contains(kind)},set:{if $0{kinds.insert(kind)}else{kinds.remove(kind)}}))}
                 }
-                Button(store.optedIn ? "更新所选设备通知":"启用设备通知"){confirming=true}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(CrewNativeNotifications.qualification == nil || !store.remoteEligible || store.status?.available != true || store.busy || native.pending || crews.isEmpty || kinds.isEmpty || !store.unknown.isEmpty)
+                Button(store.optedIn ? "更新所选设备通知":"启用设备通知"){confirming=true}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(CrewNativeNotifications.qualification == nil || !store.remoteEligible || !store.selectionReady || store.status?.available != true || store.busy || native.pending || crews.isEmpty || kinds.isEmpty || !store.unknown.isEmpty)
                 if native.pending{Button("取消本次系统注册等待"){native.cancelRegistration()}}
                 if store.optedIn || store.installation?.revoked==false{Button("停用并撤销本设备通知",role:.destructive){native.cancelRegistration();run{try await store.revoke()}}.disabled(store.busy)}
                 Text("撤销不能收回可能已交给 Apple 的通知；不会撤销独立的电脑配对授权。").font(.caption).foregroundStyle(.secondary)
