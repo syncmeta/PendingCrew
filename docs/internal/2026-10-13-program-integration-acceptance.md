@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 完整 N Mac/iOS 成套产物与 Linux M 独验接受
+
+根全文读取 N normal交接/独验 `f8df9c315d3df99ac43b93186ba027b1f81d728ce130517e4feb9ea9f1354b5a`、具体manifest/plan/guards及计划独验 `a2deec933566722b70ec7447bb5c32ca081e62c53de86f31e587c5cd1a8e568c` 后，放行原5f06配方的一次准确N执行。N=`158e347942207d0ce4d4f892e11ee340dab7b96e`，1943全输入/478Rust、Store21/API3/schema149，helper `2a64ecc8c7591d72392d85f8d996f6fad79a04ad2f958107fd8688f16b8f13db`、witness `64d1178058a0a7d9aeef21ebce68217dc52b18bd33d66d28150ffc78d70d989e`；原 require_fresh 的12 owning/13 raw、默认Debug/features[]、实际compileenv158e34794220/dirtyfalse、纯schema149及完整siblings均独核。M normal与原失败73424没有改标或重试。
+
+Mac原execute1087、随后普通iOS driver10757均实际终态0。根全文读HANDOFF/COMBINATION及完整独验 `c3884039ed21a5720d1a239efadc2fb654e8d6500d054e9a1a9db5f04c43eae8` 后接受成套产物，保存在 `docs/private/preserved-delivery-artifacts/complete-158e3479-production-20261023`。2696项manifest `9c6ad383a0f1075a81e6eb22e4d89473af0c0d468f9298a1a18ca7ebcc3bd783`、COMBINATION `8c3b3b33446a490d083effdc2f0a5b3d221ad5a21a20029b98f6a7b570b35c91`；1943全Git blob/实际snapshot、404target和3878SPM before/after/current一致。Mac51/iOS76文件与各自原archive/ZIP逐byte相同，未改产品/工程/版本或冷建缓存。
+
+Mac实际 **0.1.44/20748.85010**，普通Release/standard bundle、M42 Developer ID/hardened，精确证书9CD5…AFC0、profile1afa及entitlements独核；复制品正常授权context strictdeep与原静态publisher requirement均0，GUI/helper normalized seal-equivalence和完整load closure独立重算通过，双来源戳准确N。main SHA `d27116fab4e85bda549f5474775177c3a9b8abea40471ecb80eb8bb8d43c1141`，签后helper `fc5d076be262a27afc082a474bd07002dfb5a42a6df97645ab1c7a3decd433e3`；ZIP `aad9fd0bfdf6a3d249e4fca4e8f8fe635f3978bea4a09722aa700f8c72d6e61d`。iOS实际 **0.1.43/1**，普通Debug arm64 Simulator/adhoc，独立xcent==Mach-O entitlements及strictdeep0、N BuildStamp；PendingCrewSourceRef保iOS原nil语义，无Macprofile。ZIP `f126a8f6246fd5ad11dd2d136989d903006c1df3a7296508c5fa396f3325f762`。签名身份使用不冒App凭据运行资格。
+
+Linux M run **39870803043/attempt1/job120144452893** 实际成功405秒，完整527项原artifact、501 ZIP/500内部清单、C/M各1942Git输入/478Rust、12own/13raw fresh、Release[]、原Linux纯schema149、ELF/tar/source-after经 `73543edb138b254a0ba3e67f9c8b951c0a384bc2733f64826bf987725e6ae69d` 独验接受，根已全文读原报告。artifact12466821252/99035923B、API及本地ZIP同SHA `149858bc9300985f7152f66bad15cd76099e5dfce7ecf189f2bc51cbbbc017e4`；tar `3f4b5837094a6862ce0890545a992d1e66bd688f461648a5935ecf5abfd49e76`。它仍仅来源eb3f0d29，不重标N，不再发Mac-only修订的CI。保守项目用量18分钟不是GitHub账户余额；未发布资源、执行VPS ELF或部署systemd。
+
+本次VPS原strict-known-host/BatchMode只读0，selected debian UID1000；自然nonlogin PATH及指定四个CLI路径未找到工具，约定安装目录/socket/两units absent/not-found。该覆盖不能外推全机或登录状态；未运行provider/version/auth/模型、未改远端。独立说明包 `linux-vps-prerequisites-20261023` 保事实，用户自行安装登录前提不绕过。
+
+质量一次当前窗口观察仅见锁屏；精确PS见旧93537/93539，报告SHA `81b4931e8da2c57ccb9fb4f1543897acd2cdf09eea93650f3989e69425e1d3c9`。N没有启动/安装/实际双端同步，Cloud/APNs nil/off，门户不可见不等于能力不存在；真实模型/SDK/凭据vault/真机/公证/公开发布均未执行。根全文接受独立安装准备 `41a72aeae16183aa2d30934663b528be288fd90fc23516ba23ba47e7b92eb144`；既有安装授权沿用，但须用户正常退出和桌面可用，先保全旧043与停止后完整数据，再整包替换。首次正常打开联做600秒idle及有限受影响GUI，避免先旧5553/S再N的重复试跑；实际验收后才称日用交付闭合。旧post-Quit AX拒绝不重试、不强退；旧184/1ef/c4及所有原失败/数据/包/日志保持。本记录提交不改变N/M产物来源，无新构建或稳定全套复验。
+
 ## 2026-10-23 准确候选源戳故障与最小净修
 
 完整CoreDraft已在M=eb3f0d29965f1092f61df0ef1ad30e8d9057edad整合推送。1942/478输入fresh normal独验13b22270328329a4fce2f1b8ac985dd2b80da394d5c88accd9479d3fe3f6e916通过；具体6962manifest/4c1plan经9442受领后单次73424实际ARCHIVE SUCCEEDED0，却因原stamp忽略PRODUCT_SOURCE_REF并向上读归档祖先C4，被原unsigned source guard于codesign前拒绝。原archive/settings/terminal及c31aaee3失败说明保原件，未改包、签名、安装或重试；M iOS未运行。
