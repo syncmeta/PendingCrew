@@ -1571,6 +1571,25 @@ mod tests {
     }
 
     #[test]
+    fn api3_start_without_options_preserves_the_original_command_envelope() {
+        let original = json!({"operation":"session.start","params":{"crewId":"crew-original","role":"captain","executor":"codex","brief":"Original task exactly","title":null,"model":null,"effort":null,"isolation":false}});
+        let command: commands::PublicCommand = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&command).unwrap(),
+            original,
+            "an absent additive field must not change the preexisting API3 envelope"
+        );
+        let mut configured = original;
+        configured["params"]["codexOptions"] = json!({"fast":false});
+        let command: commands::PublicCommand = serde_json::from_value(configured.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(command).unwrap(),
+            configured,
+            "actual options retain their exact command identity"
+        );
+    }
+
+    #[test]
     fn every_ref_resolves_to_a_single_top_level_def() {
         let s = api_schema();
         let defs = s["$defs"].as_object().unwrap();
