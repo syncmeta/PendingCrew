@@ -888,7 +888,7 @@ struct CrewChatView: View {
                 .frame(width: 2)
             Text(ref.found ? "回复 \(ref.senderName)：\(ref.snippet)" : ref.snippet)
                 .font(Theme.Fonts.caption)
-                .foregroundStyle(Theme.Palette.inkMuted)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
@@ -910,7 +910,7 @@ struct CrewChatView: View {
                     .foregroundStyle(Theme.Palette.accent)
                 Text(target.quotedSnippet)
                     .font(Theme.Fonts.caption)
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -919,7 +919,7 @@ struct CrewChatView: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(Theme.Fonts.glyph(size: 15))
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
         }
@@ -1444,7 +1444,7 @@ struct CrewChatView: View {
             } label: {
                 Text("加载更早的 \(min(remaining, CrewChatWindow.historyBatchSize)) 条（上面还有 \(remaining) 条）")
                     .font(Theme.Fonts.caption)
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(
