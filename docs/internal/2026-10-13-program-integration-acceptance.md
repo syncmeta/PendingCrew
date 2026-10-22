@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 完整 P3 离线历史输入：实际双进程验收闭合
+
+候选实际来源a08094f62dee835e0176b1f50f3d2f8169ef0583，普通Sim原20542完整0，1766源码/3878依赖前后同、76产物和自身entitlement/strict签名独核通过，包门SHAe504ac783fbab245fe02efdf727421e48545ad5b52223b1ea14446f0d7dc618e。实际版本仍0.1.43/1，不改标为Mac版本或后续文档HEAD。
+
+原208实际P1 App55568/console79825→正常退出0，P2新App55851/console37676→正常退出0。两次未连接状态，原“电脑与草稿”Menu可达，显式读取同A/B及B全文/历史非授权说明；生产writer单文件1049400B、SHAfb0e2ce788c5c355624018974ec0d9ce9291cb88b2ef5aa4b1e699e097c94554、uid501/0600/link1全过程不变。只删本次准确文件/新空recorddir，保其他祖先，最终原shutdown66046实际0及381510证208Shutdown/booted空。报告ios-normal-a08094f6-20261022/offline-ui-p3/module-result.json SHA124c4b1b0e55bc5c969a76086f45e219eca0dc6a799189e5f0a528a7bbde0df9，原截图/AX/工具终态均保留；根已看实际P2正文截图。
+
+证据边界：输入由原production composer writer生成后投放本机私有容器，不是iOS远端真实输入创建/配对P1P2；A在GUI仅有限前缀，1MiB全文由原独立进程seam证明。离线入口/reader不读凭据、不连接或执行，普通App原启动配对元数据refresh不冒零SecItem API。b76设备SDK包保原来源，仅未签名编译；Mac日用6f35及旧数据备份不动，6c/184/1ef未知现场未读改或重发。本节为构建后记录，未新增CI/模型/公共发布，全工程持续目标未完成。
+
 ## 2026-10-22 P3 实际可达性缺陷与准确修复候选冻结
 
 b76普通Sim包门25531dcbd4899bdeab4b46c29fdc9977c273019e33767a399b6a2363ca34d6b7已接受。真实P1仅连接按钮可见，单ToolbarItem多子按钮未形成可达菜单，故未进入离线页/未P2；一份production-writer测试文件hash/uid501/0600/link1未变，仅删本次文件和新空recorddir，App/console0、208Shutdown。原件ios-normal-b76e56f7-20261022/offline-ui-p3/module-result.json，SHAf3ee46bec894c8ab1d34671f106e52ea42f7d3b071ea27c60a0695a84131bdac。
