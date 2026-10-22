@@ -140,3 +140,61 @@ struct CrewdRemoteAcceptResult: Codable {
     let receipt: CrewdRemoteEnvelope
     let grant: CrewdRemoteGrant
 }
+
+/// File exchange is only a bounded transport for the existing signed text.
+/// Parsing here never creates a key, reads credentials, approves or connects.
+enum CrewdRemoteCodeStage: String, Sendable {
+    case invitation, response, receipt
+    var title: String {
+        switch self { case .invitation: return "电脑邀请"; case .response: return "设备回应"; case .receipt: return "电脑确认" }
+    }
+    var filename: String { "PendingCrew-" + rawValue + ".txt" }
+}
+enum CrewdRemoteCodeFileError: LocalizedError {
+    case tooLarge, invalidUTF8, notRegularFile, wrongStage, readFailed
+    var errorDescription: String? {
+        switch self {
+        case .tooLarge: return "连接码文件过大，原输入未更改。"
+        case .invalidUTF8: return "请选择 UTF-8 纯文本连接码文件，原输入未更改。"
+        case .notRegularFile: return "请选择一个普通文本文件，原输入未更改。"
+        case .wrongStage: return "文件格式不正确，或不是当前步骤所需的连接码，原输入未更改。"
+        case .readFailed: return "无法读取所选文件，原输入未更改。"
+        }
+    }
+}
+enum CrewdRemoteCodeFile {
+    static let maximumBytes = 262144
+    static func text(_ data: Data, stage: CrewdRemoteCodeStage) throws -> String {
+        guard data.count <= maximumBytes else { throw CrewdRemoteCodeFileError.tooLarge }
+        guard let text = String(data: data, encoding: .utf8) else { throw CrewdRemoteCodeFileError.invalidUTF8 }
+        do {
+            let envelope = try CrewdRemoteText.decode(text)
+            guard let payload = Data(base64Encoded: envelope.payload), payload.count <= 65536 else { throw CrewdRemoteCodeFileError.wrongStage }
+            let decoder = JSONDecoder()
+            switch stage {
+            case .invitation: _ = try decoder.decode(CrewdRemoteInvitation.self, from: payload)
+            case .response: _ = try decoder.decode(CrewdRemoteResponse.self, from: payload)
+            case .receipt: _ = try decoder.decode(CrewdRemoteReceipt.self, from: payload)
+            }
+        } catch { throw CrewdRemoteCodeFileError.wrongStage }
+        return text // Preserve the received text and signed payload byte for byte.
+    }
+    static func read(_ url: URL, stage: CrewdRemoteCodeStage) throws -> String {
+        guard url.isFileURL else { throw CrewdRemoteCodeFileError.notRegularFile }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { throw CrewdRemoteCodeFileError.notRegularFile }
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            var bytes = Data()
+            while bytes.count <= maximumBytes {
+                let part = try handle.read(upToCount: min(16384, maximumBytes + 1 - bytes.count)) ?? Data()
+                if part.isEmpty { return try text(bytes, stage: stage) }
+                bytes.append(part)
+            }
+            throw CrewdRemoteCodeFileError.tooLarge
+        } catch let error as CrewdRemoteCodeFileError { throw error }
+        catch { throw CrewdRemoteCodeFileError.readFailed }
+    }
+}

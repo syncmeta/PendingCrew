@@ -38,11 +38,13 @@ struct CrewdRemoteManagementView: View {
                                 if !invitationText.isEmpty {
                                     Text("把邀请连接码交给你的设备。邀请五分钟内有效。")
                                     ShareLink("分享邀请连接码", item: invitationText)
+                                    CrewdRemoteCodeFileExport(text: invitationText, stage: .invitation, disabled: admin.busy)
                                     Text(invitationText).font(.caption.monospaced()).lineLimit(3).textSelection(.enabled)
                                 }
                                 Text("粘贴设备生成的回复码")
                                 TextEditor(text: $admin.responseText).frame(minHeight: 80).disabled(admin.busy)
                                     .onChange(of: admin.responseText) { _, _ in admin.preview = nil }
+                                CrewdRemoteCodeFileImport(text: $admin.responseText, stage: .response, disabled: admin.busy)
                                 Button("核对设备") { admin.reviewResponse() }.disabled(admin.busy || admin.responseText.isEmpty)
                                 if let preview = admin.preview {
                                     Text(preview.deviceLabel).font(.headline)
@@ -59,6 +61,7 @@ struct CrewdRemoteManagementView: View {
                                     else {
                                         Text("已批准 \(accepted.grant.deviceLabel)，把确认码交回设备完成配对。")
                                         ShareLink("分享电脑确认码", item: receiptText)
+                                        CrewdRemoteCodeFileExport(text: receiptText, stage: .receipt, disabled: admin.busy)
                                         Text(receiptText).font(.caption.monospaced()).lineLimit(3).textSelection(.enabled)
                                     }
                                 }

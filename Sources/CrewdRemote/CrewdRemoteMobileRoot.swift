@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(iOS)
 
 /// No legacy PSK backend enters the new mobile workbench.
@@ -109,10 +110,12 @@ struct CrewdRemotePairingView: View {
                     Section("把回复码交给电脑") {
                         Text("请在电脑端核对设备并批准连接，再复制电脑给出的确认码。")
                         ShareLink("分享回复码", item: responseText)
+                        CrewdRemoteCodeFileExport(text: responseText, stage: .response, disabled: busy)
                         Text(responseText).font(.caption.monospaced()).textSelection(.enabled).lineLimit(4)
                     }
                     Section("电脑确认码") {
                         TextEditor(text: $receiptText).frame(minHeight: 100).crewdRemoteCodeInput().disabled(busy)
+                        CrewdRemoteCodeFileImport(text: $receiptText, stage: .receipt, disabled: busy)
                         Button("完成配对") { run { try await pairing.confirmReceipt(CrewdRemoteText.decode(receiptText), id: id) } apply: { _ in completed(id) } }
                             .disabled(busy || receiptText.isEmpty)
                     }
@@ -120,6 +123,7 @@ struct CrewdRemotePairingView: View {
                     Section("电脑邀请连接码") {
                         TextEditor(text: $inviteText).frame(minHeight: 110).crewdRemoteCodeInput().disabled(busy)
                             .onChange(of: inviteText) { _, _ in preview = nil; envelope = nil; error = nil }
+                        CrewdRemoteCodeFileImport(text: $inviteText, stage: .invitation, disabled: busy)
                         Button("核对电脑") { run {
                             let value = try CrewdRemoteText.decode(inviteText)
                             return (try await pairing.invitation(value), value)
@@ -156,5 +160,104 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+/// A file request belongs to one presentation and one unchanged input revision.
+@MainActor final class CrewdRemoteCodeImport: ObservableObject {
+    @Published private(set) var reading = false
+    @Published var message: String?
+    private var request: UUID?
+    func prepare() -> UUID {
+        let token = UUID(); request = token; message = nil; return token
+    }
+    func invalidate() {
+        if request != nil { message = "输入或配对步骤已更改，未导入所选文件。" }
+        request = nil; reading = false
+    }
+    func cancel(_ token: UUID) {
+        guard request == token else { return }
+        request = nil; reading = false; message = nil
+    }
+    func complete(_ token: UUID, result: Result<String, Error>, apply: (String) -> Void) {
+        guard request == token else { return }
+        request = nil; reading = false
+        switch result {
+        case .success(let text): apply(text); message = "已导入，请继续核对。"
+        case .failure(let error): message = error.localizedDescription
+        }
+    }
+    func read(_ url: URL, stage: CrewdRemoteCodeStage, token: UUID, apply: @escaping @MainActor (String) -> Void) {
+        guard request == token else { return }
+        reading = true
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try CrewdRemoteCodeFile.read(url, stage: stage) }
+            }.value
+            complete(token, result: result, apply: apply)
+        }
+    }
+}
+struct CrewdRemoteCodeFileImport: View {
+    @Binding var text: String
+    let stage: CrewdRemoteCodeStage
+    let disabled: Bool
+    @StateObject private var request = CrewdRemoteCodeImport()
+    @State private var choosing = false
+    @State private var ticket: UUID?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button("从文件导入" + stage.title) { ticket = request.prepare(); choosing = true }
+                .disabled(disabled || request.reading)
+            if let message = request.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [.plainText], allowsMultipleSelection: false) { result in
+            guard let ticket else { return }
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first, urls.count == 1 else { request.invalidate(); return }
+                request.read(url, stage: stage, token: ticket) { text = $0 }
+            case .failure(let error):
+                if (error as NSError).code == NSUserCancelledError { request.cancel(ticket) }
+                else { request.complete(ticket, result: .failure(CrewdRemoteCodeFileError.readFailed), apply: { _ in }) }
+            }
+        }
+        .onChange(of: text) { _, _ in request.invalidate() }
+        .onChange(of: disabled) { _, _ in request.invalidate() }
+        .onDisappear { request.invalidate() }
+    }
+}
+struct CrewdRemoteCodeDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+    let bytes: Data
+    init(text: String, stage: CrewdRemoteCodeStage) throws {
+        let bytes = Data(text.utf8)
+        _ = try CrewdRemoteCodeFile.text(bytes, stage: stage)
+        self.bytes = bytes
+    }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents, data.count <= CrewdRemoteCodeFile.maximumBytes else { throw CrewdRemoteCodeFileError.tooLarge }
+        bytes = data
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: bytes) }
+}
+struct CrewdRemoteCodeFileExport: View {
+    let text: String
+    let stage: CrewdRemoteCodeStage
+    let disabled: Bool
+    @State private var document: CrewdRemoteCodeDocument?
+    @State private var saving = false
+    @State private var message: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button("保存" + stage.title + "文件") {
+                do { document = try CrewdRemoteCodeDocument(text: text, stage: stage); message = nil; saving = true }
+                catch { message = error.localizedDescription }
+            }.disabled(disabled || text.isEmpty)
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }
+        .fileExporter(isPresented: $saving, document: document, contentType: .plainText, defaultFilename: stage.filename) { result in
+            if case .failure(let error) = result, (error as NSError).code != NSUserCancelledError { message = "无法保存连接码文件，请重新选择保存位置。" }
+        }
     }
 }
