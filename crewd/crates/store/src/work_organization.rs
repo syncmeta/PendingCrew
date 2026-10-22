@@ -451,6 +451,7 @@ pub fn save(conn: &Connection, state: &BookState, events: &[Event], now: &str) -
             "INSERT INTO organization_work_events(seq,crew_id,body) VALUES(?1,?2,?3)",
             params![seq, crew, serde_json::to_string(event)?],
         )?;
+        crate::notifications::enqueue_work(conn, &crew, event)?;
     }
     if conn.execute(
         "UPDATE organization_work_book SET state=?1,updated_at=?2 WHERE singleton=1",

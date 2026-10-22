@@ -11,6 +11,7 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
+pub mod notifications;
 pub mod commands;
 pub mod judgments;
 mod model;

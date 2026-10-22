@@ -19,6 +19,7 @@ mod public_commands;
 mod public_execution;
 mod public_terminal;
 pub(crate) mod remote;
+mod apns;
 mod signed_client;
 pub mod team_data;
 mod terminal_runtime;

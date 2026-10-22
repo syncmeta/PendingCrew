@@ -2,8 +2,8 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-/// Knowledge files have an independent SQLite schema; Core remains version 15.
-pub const SCHEMA_VERSION: i64 = 18;
+/// Knowledge files have an independent SQLite schema; notification writer barrier is Core19.
+pub const SCHEMA_VERSION: i64 = 19;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
@@ -880,6 +880,12 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
     } else if v < 18 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch("PRAGMA user_version=18;")?;
+        tx.commit()?;
+    }
+    if v < 19 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::notifications::DDL)?;
+        tx.execute_batch("PRAGMA user_version=19;")?;
         tx.commit()?;
     }
     Ok(())
