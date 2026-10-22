@@ -29,8 +29,8 @@ struct CrewdPanelHeader:View {
         HStack(alignment:.top,spacing:12){
             if let symbol{Image(systemName:symbol).font(.system(size:18,weight:.medium)).foregroundStyle(Theme.Palette.accent).frame(width:30,height:32)}
             VStack(alignment:.leading,spacing:5){
-                Text(title).font(CrewdType.title).foregroundStyle(Theme.Palette.ink)
-                if let detail{Text(detail).font(CrewdType.label).foregroundStyle(Theme.Palette.inkMuted).fixedSize(horizontal:false,vertical:true)}
+                Text(title).font(CrewdType.title).foregroundStyle(.primary)
+                if let detail{Text(detail).font(CrewdType.label).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
             }
             Spacer(minLength:8)
             if let close{Button(action:close){Image(systemName:"xmark").font(.system(size:11,weight:.semibold))}.buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("关闭")}
@@ -44,8 +44,8 @@ struct CrewdFormSection<Content:View>:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12){
             VStack(alignment:.leading,spacing:4){
-                Text(title).font(CrewdType.label.weight(.semibold)).foregroundStyle(Theme.Palette.ink)
-                if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(Theme.Palette.inkMuted).fixedSize(horizontal:false,vertical:true)}
+                Text(title).font(CrewdType.label.weight(.semibold)).foregroundStyle(.primary)
+                if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
             }
             content().frame(maxWidth:.infinity,alignment:.leading)
         }.padding(16).frame(maxWidth:.infinity,alignment:.leading)
@@ -59,16 +59,16 @@ struct CrewdFormField<Content:View>:View {
     @ViewBuilder let content:()->Content
     var body:some View {
         VStack(alignment:.leading,spacing:6){
-            Text(title).font(CrewdType.label.weight(.medium)).foregroundStyle(Theme.Palette.ink)
+            Text(title).font(CrewdType.label.weight(.medium)).foregroundStyle(.primary)
             content().font(CrewdType.body).textFieldStyle(.roundedBorder)
-            if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(Theme.Palette.inkMuted).fixedSize(horizontal:false,vertical:true)}
+            if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
 }
 struct CrewdToolButtonStyle:ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration:Configuration)->some View {
-        configuration.label.foregroundStyle(Theme.Palette.inkMuted)
+        configuration.label.foregroundStyle(.secondary)
             .frame(minWidth:CrewdType.target,minHeight:CrewdType.target)
             .background(configuration.isPressed ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))
             .contentShape(RoundedRectangle(cornerRadius:6)).opacity(enabled ? 1:0.4)
@@ -94,7 +94,7 @@ struct CrewdInlineNotice:View {
             Image(systemName:symbol).font(CrewdType.body).foregroundStyle(warning ? Theme.Palette.amber:Theme.Palette.accent)
             VStack(alignment:.leading,spacing:4){
                 Text(title).font(CrewdType.label.weight(.medium))
-                if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(Theme.Palette.inkMuted).textSelection(.enabled)}
+                if let detail{Text(detail).font(CrewdType.caption).foregroundStyle(.secondary).textSelection(.enabled)}
             }.frame(maxWidth:.infinity,alignment:.leading)
         }.padding(12).background(warning ? Theme.Palette.amberBg.opacity(0.5):Theme.Palette.surfaceMuted.opacity(0.5),in:RoundedRectangle(cornerRadius:8))
     }
@@ -103,7 +103,7 @@ struct CrewdDetailValue:View {
     let title:String
     let value:String
     var body:some View {
-        HStack(alignment:.firstTextBaseline,spacing:12){Text(title).foregroundStyle(Theme.Palette.inkMuted);Spacer(minLength:12);Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)}.font(CrewdType.label)
+        HStack(alignment:.firstTextBaseline,spacing:12){Text(title).foregroundStyle(.secondary);Spacer(minLength:12);Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)}.font(CrewdType.label)
     }
 }
 
@@ -185,30 +185,37 @@ struct CrewdPairingStepHeader:View {
 /// One material at the window root; panes remain transparent rather than
 /// stacking glass sheets behind the conversation or individual sidebar rows.
 struct CrewdWindowMaterial:ViewModifier {
+    @Environment(\.colorScheme) private var scheme
     @ViewBuilder func body(content:Content)->some View {
         #if os(macOS)
-        if #available(macOS 15.0,*) {
-            content.containerBackground(.ultraThinMaterial,for:.window)
-        }else {
-            content.background(CrewdWindowVisualEffect().ignoresSafeArea())
-        }
+        // One native semantic material on every supported Mac version. The
+        // view's appearance is projected from the same SwiftUI scheme as text,
+        // not inferred separately by a window-container background host.
+        content.background(CrewdWindowVisualEffect(scheme:scheme).ignoresSafeArea())
         #else
         if #available(iOS 18.0,*) {
-            content.containerBackground(.ultraThinMaterial,for:.navigationSplitView)
-        }else {content.background(.ultraThinMaterial)}
+            content.containerBackground(for:.navigationSplitView){
+                Rectangle().fill(.regularMaterial).environment(\.colorScheme,scheme)
+            }
+        }else {content.background(.regularMaterial)}
         #endif
     }
 }
 #if os(macOS)
 private struct CrewdWindowVisualEffect:NSViewRepresentable {
+    let scheme:ColorScheme
     func makeNSView(context:Context)->NSVisualEffectView {
         let view=CrewdBehindWindowMaterialView()
-        view.material = .underWindowBackground
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
+        configure(view)
         return view
     }
-    func updateNSView(_ view:NSVisualEffectView,context:Context){}
+    func updateNSView(_ view:NSVisualEffectView,context:Context){configure(view)}
+    private func configure(_ view:NSVisualEffectView){
+        view.material = .windowBackground
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        view.appearance=NSAppearance(named:scheme == .dark ? .darkAqua:.aqua)
+    }
 }
 private final class CrewdBehindWindowMaterialView:NSVisualEffectView {
     override func viewDidMoveToWindow(){
@@ -246,7 +253,7 @@ struct CrewdGlassWorkspaceTabs:View {
             ForEach(items,id:\.1){item in
                 Button {selection=item.1}label:{
                     Text(item.0).font(CrewdType.label.weight(selection == item.1 ? .semibold:.regular))
-                        .foregroundStyle(selection == item.1 ? Theme.Palette.accent:Theme.Palette.inkMuted)
+                        .foregroundStyle(.primary)
                         .lineLimit(1).padding(.horizontal,13).frame(minHeight:max(CrewdType.target,tabHeight))
                         .background(selection == item.1 ? Theme.Palette.accent.opacity(0.13):Color.clear,in:Capsule())
                         .contentShape(Capsule())

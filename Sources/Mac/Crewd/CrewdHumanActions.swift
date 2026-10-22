@@ -21,8 +21,10 @@ enum CrewdChatStyle {
         // Inherit the shared window material; never add a chat-only plate.
         Color.clear
     }
-    static func ink(_ scheme:ColorScheme)->Color {color(0x1B1A14,0xECE9E0,scheme)}
-    static func muted(_ scheme:ColorScheme)->Color {color(0x6E6A5C,0xA8A294,scheme)}
+    // Hierarchical styles preserve Material vibrancy. The old fixed warm
+    // colors assumed an opaque canvas and were not readable over root glass.
+    static func ink(_ scheme:ColorScheme)->HierarchicalShapeStyle {.primary}
+    static func muted(_ scheme:ColorScheme)->HierarchicalShapeStyle {.secondary}
 }
 
 /// Shared native chrome, using the product tour's warm neutral surfaces.
