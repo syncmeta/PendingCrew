@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 普通 iOS→VPS 持久工作与草稿整块闭合；接续 demo 前端与 Claude
+
+同a9原DB/authority/grant跨有界窗口续用，原a08三阶段文件交换、真实配对保存及A业务读写证据复用；人工解锁后，普通新进程首页不自动选中/连接，原A草稿220124离线全文恢复。原record d56d6dde…显式连接，A消息220123/Todo7=220122及原草稿恢复；真实B输入未发草稿220224，P1 App78646/console23001正常0，P2 App81277/console83381不自动选连。原p1-exited/p2-before-select三crew session均空；仅手动同record连接，A/B原topic草稿逐文恢复，没有发送草稿或调用模型。
+
+实际B资源切换曾把旧viewFolder.list只读等待取消显示为“提交结果未知”，未发生B写/凭据Unknown。唯一作者111b8a03在原resources/workspace链加generation/activationQuery与只读取消门，写入Unknown保护不变；原production seam RED133→GREEN0、一次独验SHA857354577468cbded4723ae2a05c1e6e8c147216224d504e93105c6d85a08075，四文件整合main/global并普通推送。唯一普通Sim暖构建9412实际0，1825源/3878依赖前后同、76产物，Debug/arm64/SDK27/0.1.43/1、自身AppID与group不变；包门SHAa202009fdc0208c83323171e97555c8e11aae88e8d1298afa0375db2ac4b022e。保原记录覆盖私有测试App，沿同grant仅补A Todo→B Todo，实际读取原B事项且无取消Unknown；CUA -10005工具错误单列保留，同API有界只读证明旧导航未生效后继续，非权限/业务拒绝，不扩验收工具或重配。
+
+原R2 owner accepted-record模式只复用DB/authority/种子与grant，controller SHA f0fceb6e09f16a70d4784536b9e8f9620caa30cf9d54beb36749e81d34ea181e；无新invite/respond/accept/configure/seed。原grant唯一CAS至revision2/revokedAt08:57:57.672Z，手机实际收到推送断连，仍可显式只读A/B原文；确认准确record一次本地移除后paired0/pending0。App84351/console97939及208shutdown均0，booted空；原owner91506、Core3971724与隧道69401均实际0，safePause stopped/socketgone，原holder/Core/49381监听均无。五checkpoint各三crew session全空，原交换文件与旧6c/default hash全同；没有新模型、日用Mac操作、旧184/1ef访问、系统权限修改或生产服务安装。
+
+独立整块接受：ios-vps-r2-a9f17e32-20261022/qa-accepted-resume01/independent-qa-complete-lifecycle.json SHA2fda2192859b5df606d2c18f4e4b5904ba983c60cf1e934b406e83d144145656；最终module-result.json SHAc5a0e2bcdf7bfe5a5e1330f5699783d550556069100d909f8e8e103bcb732e78，根核原文件hash同。跨窗口原归档SHA7b99379f60733e314b25efc2fd696f31b43887c7ada9b6bff3fe2dda825b8614；当前窗口revoke1/1，invite/accept/seed/configure/session.start/resume全0。来源明确a08原配对/P1P2、111b修复影响/撤权/移除、Linux仍实际582原包；这闭合普通Sim私域整条用户流，不冒真机/正式签名、Mac普通持久远程、常驻VPS生产服务或全M4完成。
+
+后续职责：backend继续完整Claude受管模块，精确guard资格不足须正文前拒，生产不静默退回legacy、不增兼容开关；正式ACP/full history与Native16仍未交付/未激活。用户新增demo前端与对应逻辑要求，frontend_demo唯一接手原m6-client树Swift/工程，先核实际最新demo与真实能力映射后整模块实现；原client_delivery只读整理VPS使用说明。主代理继续接口裁决/整合，质量线按影响一次独验，不重做本节稳定验收。 用户随后要求一键安装与单一配对链接，参考PendingNet；Codex/Claude Code缺失时只给官方安装/登录指引，由用户自行完成，安装器不替装CLI、不导凭据或运行模型。统一链接/常驻Human bootstrap/群资料与标签合同作为后续真实产品模块，不把当前源码支持但未实测的普通SSH shell配方冒一键日用交付。主目录新demo来自已完成的设计会话，原作者报告41项及离线交互已过；根确认65项源与前端一致快照hash全同、diff-check0后，仅21个design路径普通保存为fdf1209e，未重跑其稳定检查。前端以实际TSX新术语与交互为准；旧四主视图文字不限制新demo可见导航，仍保权限/零自启/SQLite与自由视图不变式。Claude受管源02e3fe13冻结SHAbab1d61e9d1b92ce88b18554418b542c5f19b20ebc658abc1fff09fa7f31c30a已交质量一次影响独验，尚未合入、生成准确正式包或做真实provider/ACP验收。
+
 ## 2026-10-22 用户恢复后的实际移动链路与同源设备产物
 
 用户明确撤销停手并要求继续全工程。实际本地/远端基线192490d2干净；Mac仍准确6f35/20748.07553，普通iOS仍a08094f6，源/工程输入没有新变化。三条线以原证据接续，没有重建Mac/Sim、重跑CI或复制后台包。
