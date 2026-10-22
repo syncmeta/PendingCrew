@@ -71,6 +71,16 @@ impl<P: Port> Core<P> {
             call.request.command,
             Cmd::CodexTitleSet(_) | Cmd::CodexFork(_)
         );
+        if metadata
+            && self
+                .public_fences
+                .get(&target.session_id)
+                .is_some_and(|f| f.metadata.is_some())
+        {
+            return self
+                .codex_suppress(&call, "command.codex_metadata_pending")
+                .await;
+        }
         if live.is_none() && !metadata {
             return self
                 .codex_suppress(&call, "command.codex_requires_running")
@@ -146,6 +156,16 @@ impl<P: Port> Core<P> {
             )
         };
         let receipt = call.dispatch().await?;
+        if metadata {
+            self.public_fences
+                .entry(target.session_id.clone())
+                .or_default()
+                .metadata = Some(super::public_control::PendingMetadataControl {
+                request_id: call.request.request_id.clone(),
+                permit: permit.clone(),
+                revoked: false,
+            });
+        }
         self.advance_public_control(&target.session_id);
         let after = self.current_public_target(&target.session_id);
         let inbox = self.inbox.clone();
@@ -265,8 +285,23 @@ impl<P: Port> Core<P> {
             .live
             .get(&target.session_id)
             .is_none_or(|l| !l.stopping && !l.halting && !l.hibernate_cut);
+        let metadata = matches!(
+            call.request.command,
+            Cmd::CodexTitleSet(_) | Cmd::CodexFork(_)
+        );
+        let metadata_current = !metadata
+            || self
+                .public_fences
+                .get(&target.session_id)
+                .and_then(|f| f.metadata.as_ref())
+                .is_some_and(|p| p.request_id == call.request.request_id && !p.revoked);
         let (phase, mut result) = match outcome {
-            Out::Observed(value) if generation_current && not_stopping => {
+            Out::Observed(value)
+                if generation_current
+                    && not_stopping
+                    && metadata_current
+                    && !self.shutting_down =>
+            {
                 (CommandPhase::Confirmed, value)
             }
             Out::Observed(_) => (
@@ -314,6 +349,20 @@ impl<P: Port> Core<P> {
         };
         if let Err(e) = call.settle(CommandPhase::Dispatched, phase, result).await {
             eprintln!("Codex original control receipt remains unknown: {e:?}");
+        }
+        // Keep ownership through child reaping and durable settlement. No second
+        // metadata child may overtake a still-owned first request, even after Stop.
+        if metadata
+            && self
+                .public_fences
+                .get(&target.session_id)
+                .and_then(|f| f.metadata.as_ref())
+                .is_some_and(|p| p.request_id == call.request.request_id)
+        {
+            self.public_fences
+                .get_mut(&target.session_id)
+                .expect("owned metadata fence")
+                .metadata = None;
         }
         if let Ok(state) = call.state() {
             state.hub.publish(crewd_proto::Event {

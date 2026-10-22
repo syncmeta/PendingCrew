@@ -283,6 +283,15 @@ impl Fake {
             };
             match method.as_str() {
                 "initialize" => {
+                    // Disposable process-seam gate: only the first child that
+                    // atomically claims the test marker waits before its ACK.
+                    if let Some(path)=std::env::var_os("FAKE_CODEX_INIT_GATE") {
+                        let path=std::path::PathBuf::from(path);
+                        if std::fs::rename(&path,path.with_extension("entered")).is_ok() {
+                            let until=std::time::Instant::now()+std::time::Duration::from_secs(10);
+                            while !path.with_extension("release").exists() && std::time::Instant::now()<until {std::thread::sleep(std::time::Duration::from_millis(5));}
+                        }
+                    }
                     if self.has("die_on_init") {
                         eprintln!("fake codex: not logged in");
                         std::process::exit(3);

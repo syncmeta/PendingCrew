@@ -1530,6 +1530,7 @@ impl<P: Port> Core<P> {
             .human_stop(session)
             .await
             .map_err(ControlError::from_port)?;
+        self.revoke_codex_metadata(session);
         if !pending.is_empty() {
             self.port.publish(wake_changed(session, &pending));
         }

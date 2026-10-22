@@ -1104,3 +1104,180 @@ async fn controls_unknown_settings_and_fork_never_retry_on_manual_reopen() {
         .unwrap()
         .unwrap();
 }
+
+async fn metadata_pending_case(stop_first: bool, public_stop: bool) {
+    let f = Fixture::new();
+    let gate = f.root.path().join("metadata.hold");
+    let mut options = f.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+        ("FAKE_CODEX_INIT_GATE".into(), gate.display().to_string()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
+    let identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"metadata order","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let row=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","title":"initial","brief":"","isolation":false})).await.unwrap();
+    let sid = row["id"].as_str().unwrap();
+    wait("initial native name", || {
+        native_calls(&f, "thread/name/set").len() == 1
+    })
+    .await;
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"metadata seam"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    std::fs::write(&gate, b"hold only first metadata initialize").unwrap();
+    let first_id = uuid::Uuid::new_v4().to_string();
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let dispatched=c.call("command.submit",json!({"requestId":first_id,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.codex.titleSet","params":{"target":target,"title":"first slow"}}})).await.unwrap();
+    assert_eq!(dispatched["phase"], "dispatched");
+    wait("first metadata child held", || {
+        gate.with_extension("entered").exists()
+    })
+    .await;
+    if !stop_first {
+        for method in [
+            "session.codex.inspect",
+            "session.codex.history",
+            "session.codex.models",
+            "session.codex.tools",
+            "session.usage",
+        ] {
+            assert!(
+                c.call(method, json!({"sessionId":sid}))
+                    .await
+                    .unwrap()
+                    .is_object(),
+                "ordinary reads remain available while a metadata mutation is pending: {method}"
+            );
+        }
+    }
+    let second = if stop_first && public_stop {
+        let target = c
+            .call("session.controlTarget", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        let stopped = control_receipt(
+            &mut c,
+            &identity,
+            &uuid::Uuid::new_v4().to_string(),
+            "session.stop",
+            json!({"target":target,"reason":"cancel metadata through normal public Stop"}),
+        )
+        .await;
+        // A stopped source has no new owned birth to certify. The original
+        // physical Stop receipt may be Unknown; do not weaken it for this test.
+        stopped
+    } else if stop_first {
+        c.call(
+            "session.stop",
+            json!({"sessionId":sid,"reason":"cancel held metadata before native write"}),
+        )
+        .await
+        .unwrap();
+        json!(null)
+    } else {
+        let target = c
+            .call("session.controlTarget", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        control_receipt(
+            &mut c,
+            &identity,
+            &uuid::Uuid::new_v4().to_string(),
+            "session.codex.titleSet",
+            json!({"target":target,"title":"second fast"}),
+        )
+        .await
+    };
+    std::fs::write(gate.with_extension("release"), b"release").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(35);
+    let first = loop {
+        let r = c
+            .call(
+                "command.lookup",
+                json!({"requestId":first_id,"dbId":identity["dbId"]}),
+            )
+            .await
+            .unwrap();
+        if r["phase"] != "dispatched" {
+            break r;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let inspect = c
+        .call("session.codex.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let names: Vec<_> = native_calls(&f, "thread/name/set")
+        .into_iter()
+        .map(|r| r["params"]["name"].clone())
+        .collect();
+    eprintln!(
+        "metadata stop={stop_first} first={first} second={second} native_order={names:?} title={}",
+        inspect["title"]
+    );
+    assert!(registry(&f.data).is_empty());
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    if stop_first {
+        if public_stop {
+            assert!(
+                matches!(second["phase"].as_str(), Some("confirmed" | "unknown")),
+                "Stop must have dispatched, never silently bypassed: {second}"
+            );
+        }
+        assert_eq!(
+            names,
+            vec![json!("initial")],
+            "durable explicit Stop must revoke stopped metadata before native name write"
+        );
+        assert_eq!(first["phase"], "unknown");
+        assert_ne!(inspect["title"]["status"], "synced");
+    } else {
+        assert_eq!(
+            second["phase"], "suppressed",
+            "a second metadata mutation must not race a still-owned first child"
+        );
+        assert_eq!(names, vec![json!("initial"), json!("first slow")]);
+        assert_eq!(inspect["title"]["native"], "first slow");
+        assert_eq!(inspect["title"]["status"], "synced");
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_pending_title_cannot_be_overtaken_by_a_second_child() {
+    metadata_pending_case(false, false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_pending_stop_revokes_before_native_write() {
+    metadata_pending_case(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metadata_pending_public_stop_revokes_before_native_write() {
+    metadata_pending_case(true, true).await;
+}

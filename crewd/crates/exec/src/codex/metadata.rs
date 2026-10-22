@@ -44,7 +44,8 @@ async fn response(g: &mut Guard, id: i64) -> Result<Value, Out> {
                     id: rpc::RequestId::Int(got),
                     result,
                 }) if got == id => {
-                    return result.map_err(|e| Out::Rejected(format!("{} ({})", e.message, e.code)));
+                    return result
+                        .map_err(|e| Out::Rejected(format!("{} ({})", e.message, e.code)));
                 }
                 Ok(rpc::Incoming::Request { id, .. }) => {
                     // Metadata must not acquire a tool, login, attestation or
@@ -174,6 +175,19 @@ pub async fn run(
                 provider_accepted: false,
                 detail: "metadata initialized write failed".into(),
             })?;
+        // Early refusal avoids waiting for a provider response after a known
+        // revoked Stop. The writer still rechecks atomically at each kernel poll.
+        if request.permit.as_ref().is_some_and(|permit| {
+            !matches!(
+                permit.poll_controlled(|| std::task::Poll::Ready(Ok(()))),
+                std::task::Poll::Ready(Ok(()))
+            )
+        }) {
+            return Err(Out::Unknown {
+                provider_accepted: false,
+                detail: "original metadata write authority revoked before request; no retry".into(),
+            });
+        }
         guard
             .proc
             .writer

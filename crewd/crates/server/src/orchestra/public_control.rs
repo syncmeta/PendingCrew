@@ -5,6 +5,11 @@ use super::port::Port;
 use crewd_exec::session::SessionEvent;
 use crewd_proto::commands::CommandRuntimeTarget;
 
+pub(crate) struct PendingMetadataControl {
+    pub request_id: String,
+    pub permit: crewd_exec::driver::ManualWritePermit,
+    pub revoked: bool,
+}
 #[derive(Default)]
 pub(crate) struct RuntimeFence {
     pub generation: u64,
@@ -13,6 +18,7 @@ pub(crate) struct RuntimeFence {
     pub turn_id: Option<String>,
     pub birth: Option<crewd_exec::registry::ProcessIdentity>,
     pub manual: bool,
+    pub metadata: Option<PendingMetadataControl>,
 }
 
 pub(crate) struct PendingPhysicalControl {
@@ -393,6 +399,7 @@ impl<P: Port> Core<P> {
         }
         let dispatched = call.dispatch().await?;
         if matches!(call.request.command, PublicCommand::SessionStop(_)) {
+            self.revoke_codex_metadata(&target.session_id);
             if let Some(l) = self.live.get(&target.session_id) {
                 l.handle.fence_inputs();
             }
@@ -883,6 +890,16 @@ impl<P: Port> Core<P> {
         }
     }
 
+    pub(crate) fn revoke_codex_metadata(&mut self, session: &str) {
+        if let Some(pending) = self
+            .public_fences
+            .get_mut(session)
+            .and_then(|f| f.metadata.as_mut())
+        {
+            pending.revoked = true;
+            pending.permit.revoke();
+        }
+    }
     pub(crate) fn advance_public_control(&mut self, session: &str) {
         let fence = self.public_fences.entry(session.into()).or_default();
         // Exhaustion is fail-closed. There is no wrapping value a delayed
@@ -893,6 +910,7 @@ impl<P: Port> Core<P> {
             .expect("public control revision exhausted");
     }
     pub(crate) fn observe_public_runtime(&mut self, session: &str, generation: u64) {
+        self.revoke_codex_metadata(session);
         self.advance_public_control(session);
         let fence = self.public_fences.get_mut(session).expect("advanced fence");
         fence.generation = generation;
