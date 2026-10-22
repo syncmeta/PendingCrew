@@ -335,6 +335,7 @@ struct CrewdSessionStartView: View {
     @ObservedObject private var personalService=CrewPersonalDraftService.shared
     @State private var personalScope:CrewPersonalDraftService.EditingScope?
     @State private var codexSettings=CrewdCodexSettingsDraft()
+    @State private var codexInputChoice=CrewdCodexInputChoice()
     @State private var explicitTitle=""
     @ObservedObject var workspace: CrewdWorkspace
     @Binding var drafts: CrewdDrafts
@@ -353,7 +354,7 @@ struct CrewdSessionStartView: View {
                 TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(3...8)
             }
             CrewPersonalDraftControls(workspace:workspace,context:context,payload:Binding(get:{.init(text:input.wrappedValue)},set:{input.wrappedValue=$0.text}))
-            if workspace.selectedExecutor == "codex"{CrewdCodexStartOptions(workspace:workspace,title:$explicitTitle,settings:$codexSettings)}
+            if workspace.selectedExecutor == "codex"{CrewdCodexStartOptions(workspace:workspace,title:$explicitTitle,settings:$codexSettings,inputs:$codexInputChoice)}
             Toggle("使用独立工作树", isOn: $isolation)
             Text(isolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。").font(.caption).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
@@ -374,7 +375,7 @@ struct CrewdSessionStartView: View {
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
                 var fields:[String:CrewdValue] = ["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(owner.selectedExecutor), "brief": .string(snapshot.text), "isolation": .bool(isolation)]
                 if !explicitTitle.isEmpty{fields["title"] = .string(explicitTitle)}
-                do{if owner.selectedExecutor == "codex",let options=try codexSettings.value(){guard owner.client.capabilities.contains("session.codex") else{throw CrewdClientError(message:"当前后台未接入所选 Codex 首轮设置。",kind:.notSubmitted)};fields["codexOptions"]=options}}
+                do{if owner.selectedExecutor == "codex",let inputs=try codexInputChoice.value(store:owner.codexInputs,context:.init(crew:snapshot.context.crew,session:nil)){fields["codexInputs"]=inputs};if owner.selectedExecutor == "codex",let options=try codexSettings.value(){guard owner.client.capabilities.contains("session.codex") else{throw CrewdClientError(message:"当前后台未接入所选 Codex 首轮设置。",kind:.notSubmitted)};fields["codexOptions"]=options}}
                 catch{failure=error.localizedDescription;return}
                 let submission=CrewdValue.object(fields)
                 failure = nil; readUnknown = false; reviewedUnknown = false

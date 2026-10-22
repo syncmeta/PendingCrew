@@ -45,7 +45,10 @@ final class CrewdWorkspace: ObservableObject {
         },
         prepare: { [weak self] envelope, crew in
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪，未发送。", kind: .notSubmitted) }
-            return try journal.prepare(method: "command.submit", params: envelope.value, crew: crew)
+            try journal.validateUnusedCodexInputs(envelope.command)
+            let record=try journal.prepare(method: "command.submit", params: envelope.value, crew: crew)
+            if envelope.params["codexInputs"] != .null || envelope.params["inputs"] != .null{self?.codexInputs.refreshProjection()}
+            return record
         },
         finish: { [weak self] record, state, detail in
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪。") }
@@ -129,6 +132,10 @@ final class CrewdWorkspace: ObservableObject {
         guard let self, !self.retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted) }
         return try await self.submitRPC(method, params)
     }
+    lazy var codexInputs=CrewdCodexInputStore(origin:{[weak self] in
+        guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains("session.codex"),self.originalJournalReady,let scope=self.presentationScope else{return nil}
+        return .init(scope:scope,generation:self.observationGeneration,connection:self.client.connectionEpoch,crew:self.crewID)
+    },rpc:{[weak self] method,params in guard let self,!self.retired,self.client.readyForWork,!self.stopping else{throw CrewdClientError(message:"原输入连接已关闭，未提交。",kind:.notSubmitted)};return try await self.client.call(method,params)},journal:{[weak self] in guard let self,self.originalJournalReady,let journal=self.originalJournal else{throw CrewdPublicWire.invalid()};return journal})
     lazy var notifications=CrewdNotificationStore(origin:{[weak self] in
         guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains("notification.nativeApns"),self.originalJournalBound,let scope=self.presentationScope else{return nil}
         let remote=self.dataDirectory==nil && scope.grantID?.isEmpty==false && scope.grantRevision?.isEmpty==false && !self.stopping
@@ -952,7 +959,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
-        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools"].contains(method)
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {

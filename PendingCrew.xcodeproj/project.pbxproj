@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9D300000000000000000102 /* CrewdCodexInputViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000002 /* CrewdCodexInputViews.swift */; };
+		A9D300000000000000000202 /* CrewdCodexInputViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000002 /* CrewdCodexInputViews.swift */; };
+		A9D300000000000000000101 /* CrewdCodexInputStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000001 /* CrewdCodexInputStore.swift */; };
+		A9D300000000000000000201 /* CrewdCodexInputStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000001 /* CrewdCodexInputStore.swift */; };
 		A9D200000000000000000101 /* CrewdNotificationWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000001 /* CrewdNotificationWire.swift */; };
 		A9D200000000000000000102 /* CrewdNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000002 /* CrewdNotificationStore.swift */; };
 		A9D200000000000000000103 /* CrewNativeNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D200000000000000000003 /* CrewNativeNotifications.swift */; };
@@ -955,6 +959,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A9D300000000000000000002 /* CrewdCodexInputViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexInputViews.swift; sourceTree = "<group>"; };
+		A9D300000000000000000001 /* CrewdCodexInputStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexInputStore.swift; sourceTree = "<group>"; };
 		A9D200000000000000000001 /* CrewdNotificationWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNotificationWire.swift; sourceTree = "<group>"; };
 		A9D200000000000000000002 /* CrewdNotificationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNotificationStore.swift; sourceTree = "<group>"; };
 		A9D200000000000000000003 /* CrewNativeNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewNativeNotifications.swift; sourceTree = "<group>"; };
@@ -2033,6 +2039,8 @@
 				924F931ECA25D5A85942C9D2 /* CrewdChannelWorkStore.swift */,
 				9ED1364BB456C51758515468 /* CrewdClient.swift */,
 				A9158DAB3E93656A8F6C6A28 /* CrewdCodexControlsView.swift */,
+				A9D300000000000000000001 /* CrewdCodexInputStore.swift */,
+				A9D300000000000000000002 /* CrewdCodexInputViews.swift */,
 				6A2A43D1FE3D510FCFDC731A /* CrewdCodexSessionStore.swift */,
 				A8D36E110707731F04B85E30 /* CrewdCodexWire.swift */,
 				D9DD59908EF7A1D9532A2654 /* CrewdDocumentsView.swift */,
@@ -2923,6 +2931,8 @@
 				BA734DC3655CE77291F02094 /* CrewdChannelWorkStore.swift in Sources */,
 				4931675C8C5E6114A69A73B7 /* CrewdClient.swift in Sources */,
 				198F37D5CAA3B779CEEEA411 /* CrewdCodexControlsView.swift in Sources */,
+				A9D300000000000000000101 /* CrewdCodexInputStore.swift in Sources */,
+				A9D300000000000000000102 /* CrewdCodexInputViews.swift in Sources */,
 				6BA51FB4182F4A4457F5496B /* CrewdCodexSessionStore.swift in Sources */,
 				757D2D51947C83A45E06C4D5 /* CrewdCodexWire.swift in Sources */,
 				9621DB45E88A35FCB2DA6BA2 /* CrewdDeliveryValidation.swift in Sources */,
@@ -3380,6 +3390,8 @@
 				99F7D517A46FF7AEFD05822C /* CrewdChannelWorkStore.swift in Sources */,
 				80CECC65D0B02715A4D31BFB /* CrewdClient.swift in Sources */,
 				030242F5F8DA96E5897E05ED /* CrewdCodexControlsView.swift in Sources */,
+				A9D300000000000000000201 /* CrewdCodexInputStore.swift in Sources */,
+				A9D300000000000000000202 /* CrewdCodexInputViews.swift in Sources */,
 				817A9AA362C4BCD02AEF3885 /* CrewdCodexSessionStore.swift in Sources */,
 				E6C61FAC534252AC54FCF33C /* CrewdCodexWire.swift in Sources */,
 				C71814B846548B12CF9E2185 /* CrewdDocumentsView.swift in Sources */,

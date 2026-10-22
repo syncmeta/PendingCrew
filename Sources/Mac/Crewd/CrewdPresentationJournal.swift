@@ -53,7 +53,7 @@ final class CrewdPresentationJournal {
         try Self.privateDirectory(directory.appendingPathComponent("prepared"))
         try Self.privateDirectory(directory.appendingPathComponent("outcomes"))
         try Self.privateDirectory(directory.appendingPathComponent("reconciled"))
-        for name in ["document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
+        for name in ["document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished","codex-input-results"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
     }
     static func localNamespace(directory: URL) throws -> UUID {
         let canonical = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -300,7 +300,36 @@ final class CrewdPresentationJournal {
             .filter { $0.method == "command.submit" && $0.params["command"]["operation"].string == "crew.createFirstMessage" }
             .sorted { $0.preparedAt > $1.preparedAt }.prefix(64))
     }
-    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false) throws -> [Prepared] {
+    func codexInputRecords()throws->[Prepared]{try records(includeObservedFirstMessages:false,includeCodexInputs:true).filter{$0.method.hasPrefix("session.codex.input") || $0.method=="command.submit"}}
+    func codexInputResult(_ record:Prepared)throws->CrewdValue?{
+        guard record.scope==scope else{throw CrewdPublicWire.invalid()}
+        let file=directory.appendingPathComponent("codex-input-results").appendingPathComponent(record.id.uuidString.lowercased()+".json")
+        guard FileManager.default.fileExists(atPath:file.path) else{return nil};try Self.privateFile(file)
+        let wrapper=try decoder.decode(CrewdValue.self,from:Data(contentsOf:file))
+        let original=directory.appendingPathComponent("prepared").appendingPathComponent(record.id.uuidString.lowercased()+".json");try Self.privateFile(original)
+        let originalBytes=try Data(contentsOf:original),saved=try decoder.decode(Prepared.self,from:originalBytes)
+        guard saved.id==record.id,saved.scope==record.scope,saved.method==record.method,saved.params==record.params,wrapper["preparedSHA256"] == .string(Self.hash(originalBytes)) else{throw CrewdPublicWire.invalid()}
+        try CrewdCodexInputWire.staging(wrapper["result"],record:record);return wrapper["result"]
+    }
+    func recordCodexInputResult(_ value:CrewdValue,record:Prepared)throws{
+        guard record.scope==scope else{throw CrewdPublicWire.invalid()};try CrewdCodexInputWire.staging(value,record:record)
+        if let old=try codexInputResult(record){guard old==value else{throw CrewdPublicWire.invalid()};return}
+        let original=directory.appendingPathComponent("prepared").appendingPathComponent(record.id.uuidString.lowercased()+".json");try Self.privateFile(original)
+        let wrapper=CrewdValue.object(["preparedSHA256":.string(Self.hash(try Data(contentsOf:original))),"result":value])
+        try Self.immutableWrite(encoder.encode(wrapper),to:directory.appendingPathComponent("codex-input-results").appendingPathComponent(record.id.uuidString.lowercased()+".json"))
+    }
+    func validateUnusedCodexInputs(_ command:CrewdValue)throws{
+        let fields=command["params"],selection=fields["codexInputs"] == .null ? fields["inputs"]:fields["codexInputs"]
+        if selection == .null{return};_ = try CrewdCodexInputWire.selection(selection)
+        let wanted=Set(selection["inputs"].array.compactMap{$0["inputId"].string});if wanted.isEmpty{return}
+        for record in try codexInputRecords() where record.scope==scope{
+            if record.method=="command.submit"{
+                let p=record.params["command"]["params"],old=p["codexInputs"] == .null ? p["inputs"]:p["codexInputs"]
+                if !wanted.isDisjoint(with:old["inputs"].array.compactMap{$0["inputId"].string}){throw CrewdClientError(message:"原输入已被任务尝试引用；请核对原任务，不能重新使用。",kind:.notSubmitted)}
+            }else if record.method=="session.codex.inputDiscard",let id=record.params["input"]["inputId"].string,wanted.contains(id){throw CrewdClientError(message:"原输入已请求丢弃；请只读核对原请求。",kind:.notSubmitted)}
+        }
+    }
+    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -325,7 +354,8 @@ final class CrewdPresentationJournal {
                 observed = observation
             }
             guard let outcome = observed else { rows.append(record); continue }
-            if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
+            if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
+            else if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
             else if outcome.state == "unknown" { rows.append(record) }
             else if includeObservedFirstMessages, outcome.state == "replyObserved",
                     record.method == "command.submit", record.params["command"]["operation"].string == "crew.createFirstMessage" { rows.append(record) }

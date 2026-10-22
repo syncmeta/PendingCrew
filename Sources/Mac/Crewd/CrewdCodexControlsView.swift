@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CrewdCodexSettingsDraft {
+    var permissionsEnabled=false,permissionProfile=""
     var modelEnabled=false,effortEnabled=false,fastEnabled=false,policyEnabled=false,reviewerEnabled=false,sandboxEnabled=false,modeEnabled=false,summaryEnabled=false
     var model="",effort="",fast=false,policy="onRequest",reviewer="user",sandbox="workspaceWrite",network=false,mode="default",summary="auto"
     var mcp=true,permissions=true,rules=true,sandboxApproval=true,skill=true
@@ -11,6 +12,7 @@ struct CrewdCodexSettingsDraft {
         if fastEnabled{fields["fast"] = .bool(fast)}
         if policyEnabled{fields["approvalPolicy"] = policy == "granular" ? .object(["granular":.object(["mcpElicitations":.bool(mcp),"requestPermissions":.bool(permissions),"rules":.bool(rules),"sandboxApproval":.bool(sandboxApproval),"skillApproval":.bool(skill)])]):.string(policy)}
         if reviewerEnabled{fields["approvalsReviewer"] = .string(reviewer)}
+        if permissionsEnabled{fields["permissions"] = .string(permissionProfile)}
         if sandboxEnabled{fields["sandbox"] = sandbox == "dangerFullAccess" ? .object(["type":.string(sandbox)]):.object(["type":.string(sandbox),"networkAccess":.bool(network)])}
         if modeEnabled{fields["collaborationMode"] = .string(mode)}
         if summaryEnabled{fields["summary"] = .string(summary)}
@@ -43,7 +45,9 @@ struct CrewdCodexSettingsEditor:View {
                     }
                     Toggle("设置审批者",isOn:$draft.reviewerEnabled)
                     if draft.reviewerEnabled{Picker("审批者",selection:$draft.reviewer){Text("用户").tag("user");Text("自动审批审查").tag("autoReview")}}
-                    Toggle("设置沙箱",isOn:$draft.sandboxEnabled)
+                    Toggle("使用已选目录权限Profile",isOn:$draft.permissionsEnabled).onChange(of:draft.permissionsEnabled){_,on in if on{draft.sandboxEnabled=false}}
+                    if draft.permissionsEnabled{Text(draft.permissionProfile.isEmpty ? "请从原目录中选择一个允许的Profile":draft.permissionProfile).font(.caption);Text("权限Profile与沙箱二选一。").font(.caption).foregroundStyle(.secondary)}
+                    Toggle("设置沙箱",isOn:$draft.sandboxEnabled).onChange(of:draft.sandboxEnabled){_,on in if on{draft.permissionsEnabled=false}}
                     if draft.sandboxEnabled{
                         Picker("沙箱",selection:$draft.sandbox){Text("只读").tag("readOnly");Text("工作区可写").tag("workspaceWrite");Text("完整访问").tag("dangerFullAccess")}
                         if draft.sandbox != "dangerFullAccess"{Toggle("允许网络",isOn:$draft.network)}
@@ -74,10 +78,17 @@ private struct CrewdCodexControlPanel:View {
     @ObservedObject var workspace:CrewdWorkspace
     @StateObject private var store:CrewdCodexSessionStore
     let sessionID:String
+    private let originalCrew:String
+    private let originalChannel:String
     @Environment(\.dismiss) private var dismiss
     @State private var settings=CrewdCodexSettingsDraft()
     @State private var title=""
     @State private var bodyText=""
+    @State private var bodyRevision=UUID()
+    @State private var personalScope:CrewPersonalDraftService.EditingScope?
+    @State private var queueInputs=CrewdCodexInputChoice()
+    @State private var steerInputs=CrewdCodexInputChoice()
+    @State private var revertTurn=""
     @State private var reviewKind="uncommittedChanges"
     @State private var reviewValue=""
     @State private var forkTurn=""
@@ -86,7 +97,7 @@ private struct CrewdCodexControlPanel:View {
     @State private var confirmationTarget:CrewdCommandTarget?
     @State private var confirmation:String?
     @State private var page="概览"
-    init(workspace:CrewdWorkspace,sessionID:String){self.workspace=workspace;self.sessionID=sessionID;_store=StateObject(wrappedValue:.init(workspace:workspace,sessionID:sessionID))}
+    init(workspace:CrewdWorkspace,sessionID:String){self.workspace=workspace;self.sessionID=sessionID;originalCrew=workspace.crewID;originalChannel=workspace.channelID;_store=StateObject(wrappedValue:.init(workspace:workspace,sessionID:sessionID))}
     private var info:CrewdValue{store.inspection?.value ?? .null}
     var body:some View{
         VStack(spacing:0){
@@ -115,12 +126,23 @@ private struct CrewdCodexControlPanel:View {
                 .background(Theme.Palette.surfaceMuted.opacity(0.22))
         }.background(Theme.Palette.canvas).tint(Theme.Palette.accent)
             .modifier(CrewdAdaptiveFormFrame(width:680,height:760,scrolls:false))
-        .task{await store.refresh()}
+        .task{workspace.bindPersonalProjection();personalScope=workspace.personalDrafts.editingScope();await workspace.restorePersonalInput(inputContext);bodyText=workspace.messageDrafts.text(for:inputContext);await store.refresh()}
+        .onChange(of:bodyText){_,text in bodyRevision=UUID();workspace.setPersonalInput(text,context:inputContext,scope:personalScope)}
+        .onChange(of:workspace.crewID){_,crew in if crew != originalCrew{dismiss()}}
         .onDisappear{store.retire()}
         .confirmationDialog("确认执行这个会话操作？",isPresented:Binding(get:{confirmation != nil},set:{if !$0{confirmation=nil}}),titleVisibility:.visible){
             if let action=confirmation{Button(action){executeConfirmed(action)}}
             Button("取消",role:.cancel){confirmation=nil}
-        }message:{Text("副作用绑定当前已读取的原会话代际；未知结果只核对原请求。")}
+        }message:{Text(confirmation == "永久删除原生历史" ? "这将不可逆删除Codex原生历史，不能撤销；PCW工作、消息、原回执和工作文件保留。":confirmation == "截断所选原生历史" ? "只保留所选轮次之前的对话历史，不回滚任何文件。":"副作用绑定当前已读取的原会话代际；未知结果只核对原请求。")}
+    }
+    private var inputContext:CrewdDrafts.Context{.message(crew:originalCrew,channel:originalChannel,session:sessionID)}
+    private var canRevert:Bool{info["historyMode"] == .string("paginated") && info["running"] == .bool(true) && info["working"] == .bool(false) && info["queuedInputs"].int==0 && info["pendingRequest"] == .null}
+    private func submitText(_ operation:CrewdPublicOperation,choice:CrewdCodexInputChoice){
+        do{guard let personalScope,workspace.personalDrafts.isCurrent(personalScope),workspace.crewID==originalCrew else{throw CrewdClientError(message:"个人草稿空间或原机组已变化；请重新打开控制页，原文仍保留。",kind:.notSubmitted)};let context=CrewdCodexInputStore.Context(crew:workspace.crewID,session:sessionID);var fields:[String:CrewdValue]=["text":.string(bodyText)];if let selection=try choice.value(store:workspace.codexInputs,context:context){fields["inputs"]=selection}
+            workspace.setPersonalInput(bodyText,context:inputContext,scope:personalScope)
+            let snapshot=workspace.messageDrafts.snapshot(for:inputContext),personal=workspace.personalInputSnapshot(snapshot),revision=bodyRevision
+            Task{if await store.submit(operation,fields:fields){let cleared=workspace.clearPersonalInput(snapshot,personal:personal);if cleared,bodyRevision==revision{bodyText=""}}}
+        }catch{localError=error.localizedDescription}
     }
     private var identity:some View{
         VStack(alignment:.leading,spacing:6){
@@ -148,6 +170,7 @@ private struct CrewdCodexControlPanel:View {
                     Text("实际观察："+info["settings"].pretty).font(.caption.monospaced()).textSelection(.enabled)
                     Text("后续轮次期望："+info["desiredSettings"].pretty).font(.caption.monospaced()).textSelection(.enabled)
                 }
+                CrewdCodexPermissionProfiles(workspace:workspace,session:sessionID,settings:$settings)
                 actionButton("读取实际模型目录",capability:"models"){Task{await store.read("models")}}
                 ForEach(store.models.indices,id:\.self){index in
                     let model=store.models[index]
@@ -166,9 +189,11 @@ private struct CrewdCodexControlPanel:View {
         VStack(alignment:.leading,spacing:12){
             VStack(alignment:.leading,spacing:10){
                 TextField("给当前轮次或下一轮的原文",text:$bodyText,axis:.vertical).lineLimit(3...8)
-                actionButton("Steer 当前轮次",capability:"steer"){Task{await store.submit(.codexSteer,fields:["text":.string(bodyText)])}}
+                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"当前轮次的独立输入与Skills",choice:$steerInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
+                actionButton("Steer 当前轮次",capability:"steer"){submitText(.codexSteer,choice:steerInputs)}
                     .disabled(store.inspection?.target.turnID == nil)
-                actionButton("明确排入下一轮",capability:"queue"){Task{await store.submit(.codexQueue,fields:["text":.string(bodyText)])}}
+                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"下一轮的独立输入与Skills",choice:$queueInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
+                actionButton("明确排入下一轮",capability:"queue"){submitText(.codexQueue,choice:queueInputs)}
                 Text("排队被接受不代表已投递或任务完成；停止会放弃余下队列。").font(.caption).foregroundStyle(.secondary)
                 #if os(macOS)
                 HStack{lifecycleActions}
@@ -203,7 +228,10 @@ private struct CrewdCodexControlPanel:View {
                     VStack(alignment:.leading,spacing:6){
                         Text((turn["id"].string ?? "未知轮次")+" · "+(turn["status"].string ?? "未知状态")).font(.caption.monospaced()).textSelection(.enabled)
                         ForEach(turn["items"].array.indices,id:\.self){itemIndex in CrewdRunnerItemView(item:turn["items"].array[itemIndex])}
-                        if turn["status"] == .string("completed"),let id=turn["id"].string{Button("选此已完成轮次为分叉起点"){forkTurn=id}.font(.caption)}
+                        if let id=turn["id"].string{
+                            if turn["status"] == .string("completed"){Button("选此已完成轮次为分叉起点"){forkTurn=id}.font(.caption)}
+                            Button("选择在此轮次前截断原生历史"){revertTurn=id}.font(.caption).disabled(!canRevert)
+                        }
                         DisclosureGroup("原始历史记录"){Text(turn.pretty).font(.caption.monospaced()).textSelection(.enabled)}
                     }.padding(.vertical,5)
                 }
@@ -212,6 +240,15 @@ private struct CrewdCodexControlPanel:View {
                 TextField("新会话名称（可留空）",text:$forkTitle)
                 actionButton("建立停止状态的分叉",capability:"fork"){confirm("建立分叉")}.disabled(info["working"] == .bool(true))
                 Text("分叉不会启动源或新会话，需另行明确恢复。").font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Text("原生历史状态："+(info["nativeHistory"]["status"].string ?? "尚未观察到，不代表active")).font(.caption)
+                Text("历史模式："+(info["historyMode"].string ?? "未观察到")).font(.caption)
+                actionButton("归档原生历史",capability:"archive"){confirm("归档原生历史")}
+                actionButton("取消原生历史归档",capability:"unarchive"){confirm("取消原生历史归档")}
+                actionButton("永久删除原生历史",capability:"delete"){confirm("永久删除原生历史")}.tint(.red)
+                if !revertTurn.isEmpty{Text("截断到此轮之前："+revertTurn).font(.caption.monospaced()).textSelection(.enabled)}
+                actionButton("截断所选原生历史",capability:"revert"){confirm("截断所选原生历史")}.disabled(!canRevert || revertTurn.isEmpty)
+                Text("删除不可逆，但不删除PCW工作、消息或原回执。归档/取消归档不启动会话；截断只改变对话历史，不回滚文件。").font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical,8)
         }
     }
@@ -231,7 +268,7 @@ private struct CrewdCodexControlPanel:View {
                 if store.usageCursor != nil{Button("读取后续用量记录"){Task{await store.read("usage",more:true)}}.disabled(store.busy)}
                 actionButton("读取工具与 Skill 元数据",capability:"tools"){Task{await store.read("tools")}}
                 if store.tools != .null{DisclosureGroup("工具与 Skill 原始清单"){Text(store.tools.pretty).font(.caption.monospaced()).textSelection(.enabled)}}
-                Text("读取清单不调用工具或安装插件。原生附件与 Skill 输入的可信传输尚未接线。").font(.caption).foregroundStyle(.secondary)
+                Text("读取清单不调用工具或安装插件。需要发送的Skills与输入请在执行页明确选择；暂存成功不代表已投递。").font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical,8)
         }
     }
@@ -240,7 +277,7 @@ private struct CrewdCodexControlPanel:View {
             ForEach(store.inspection?.capabilities ?? []){capability in
                 VStack(alignment:.leading){Text(capability.id+" · "+capability.protocolKind);Text(capability.explanation).font(.caption).foregroundStyle(.secondary)}.padding(.vertical,3)
             }
-            Text("归档、删除、历史回退和命名/全局权限配置：PendingCrew 尚未接线。").font(.caption).foregroundStyle(.secondary)
+            Text("以上按当前后台真实能力显示；任意二进制、插件安装和全局配置写入仍未开放。").font(.caption).foregroundStyle(.secondary)
             DisclosureGroup("只读核对原控制请求"){CrewdPublicRecoveryView(workspace:workspace)}
         }
     }
@@ -258,6 +295,10 @@ private struct CrewdCodexControlPanel:View {
         confirmation=nil;confirmationTarget=nil
         guard let target else{return}
         switch action {
+        case "归档原生历史":Task{await store.submit(.codexArchive,target:target)}
+        case "取消原生历史归档":Task{await store.submit(.codexUnarchive,target:target)}
+        case "永久删除原生历史":Task{await store.submit(.codexDelete,fields:["confirmNativeHistoryDelete":.bool(true)],target:target)}
+        case "截断所选原生历史":Task{await store.submit(.codexRevert,fields:["beforeTurnId":.string(revertTurn)],target:target)}
         case "停止会话":existingControl("session.stop",target:target)
         case "恢复原会话":existingControl("session.resume",target:target)
         case "压缩上下文":Task{await store.submit(.codexCompact,target:target)}
@@ -279,12 +320,15 @@ struct CrewdCodexStartOptions:View {
     @ObservedObject var workspace:CrewdWorkspace
     @Binding var title:String
     @Binding var settings:CrewdCodexSettingsDraft
+    @Binding var inputs:CrewdCodexInputChoice
     var body:some View {
         DisclosureGroup("Codex 首轮设置与名称"){
             VStack(alignment:.leading,spacing:8){
                 CrewdFormField(title:"会话名称",detail:"留空时取首条任务摘要；名称不会替代首条任务。") {TextField("例如：整理发布资料",text:$title)}
                 if workspace.client.capabilities.contains("session.codex"){
+                    CrewdCodexPermissionProfiles(workspace:workspace,session:nil,settings:$settings)
                     CrewdCodexSettingsEditor(draft:$settings)
+                    CrewdCodexInputPicker(workspace:workspace,session:nil,title:"首轮的独立输入与Skills",choice:$inputs)
                     Text("配置确认后才提交首轮原任务；标题不同步不会重发任务。").font(.caption).foregroundStyle(.secondary)
                 }else{Text("当前后台尚未接入首轮 Codex 设置。").font(.caption).foregroundStyle(.secondary)}
             }

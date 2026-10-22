@@ -151,6 +151,7 @@ enum CrewdPublicOperation: String, Codable {
     case codexReview = "session.codex.review"
     case codexTitle = "session.codex.titleSet"
     case codexFork = "session.codex.fork"
+    case codexArchive="session.codex.archive",codexUnarchive="session.codex.unarchive",codexDelete="session.codex.delete",codexRevert="session.codex.revert"
     var isCodex:Bool{rawValue.hasPrefix("session.codex.")}
     case sessionAnswer = "session.answer"
     case sessionRespond = "session.respondRunnerRequest"
@@ -258,11 +259,15 @@ private enum CrewdPublicParameters {
                 for key in ["model","effort"] where options[key] != .null && fields[key] != nil && fields[key] != .null{throw CrewdPublicWire.invalid()}
                 defaults["codexOptions"] = .null
             }
+            if let selection=fields["codexInputs"]{guard fields["executor"] == .string("codex") else{throw CrewdPublicWire.invalid()};fields["codexInputs"]=try CrewdCodexInputWire.selection(selection);defaults["codexInputs"] = .null}
         case .codexConfigure:
             required=["target","patch"];fields["patch"]=try CrewdCodexWire.settings(fields["patch"] ?? .null)
-        case .codexCompact:required=["target"]
+        case .codexCompact,.codexArchive,.codexUnarchive:required=["target"]
+        case .codexDelete:required=["target","confirmNativeHistoryDelete"];guard fields["confirmNativeHistoryDelete"] == .bool(true) else{throw CrewdPublicWire.invalid()}
+        case .codexRevert:required=["target","beforeTurnId"];try CrewdCodexWire.text(fields["beforeTurnId"] ?? .null)
         case .codexSteer,.codexQueue:
             required=["target","text"];try CrewdCodexWire.text(fields["text"] ?? .null)
+            if let selection=fields["inputs"]{fields["inputs"]=try CrewdCodexInputWire.selection(selection);defaults["inputs"] = .null}
         case .codexTitle:required=["target","title"];try CrewdCodexWire.text(fields["title"] ?? .null)
         case .codexFork:
             required=["target"];defaults=["lastTurnId":.null,"title":.null]

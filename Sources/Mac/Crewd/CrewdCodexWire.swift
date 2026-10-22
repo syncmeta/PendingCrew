@@ -4,11 +4,12 @@ import Foundation
 /// settings never accept arbitrary provider methods or configuration keys.
 enum CrewdCodexWire {
     static func settings(_ value:CrewdValue)throws->CrewdValue {
-        let allowed:Set<String>=["model","effort","fast","approvalPolicy","approvalsReviewer","sandbox","collaborationMode","summary"]
+        let allowed:Set<String>=["model","effort","fast","approvalPolicy","approvalsReviewer","sandbox","collaborationMode","summary","permissions"]
         guard case .object(let fields)=value,!fields.isEmpty,Set(fields.keys).isSubset(of:allowed) else{throw CrewdPublicWire.invalid()}
+        guard fields["permissions"] == nil || fields["sandbox"] == nil else{throw CrewdPublicWire.invalid()}
         for (key,item) in fields {
             switch key {
-            case "model","effort":
+            case "model","effort","permissions":
                 guard let text=item.string,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,text.utf8.count<=256,!text.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) else{throw CrewdPublicWire.invalid()}
             case "fast":_ = try CrewdPublicWire.boolean(item)
             case "approvalsReviewer":try choice(item,["user","autoReview"])
@@ -59,7 +60,7 @@ enum CrewdCodexWire {
         case "session.codex.compact","session.codex.review":application="started"
         case "session.codex.steer":application="currentTurn"
         case "session.codex.queue":application="queued"
-        case "session.codex.titleSet","session.codex.fork":application="metadata"
+        case "session.codex.titleSet","session.codex.fork","session.codex.archive","session.codex.unarchive","session.codex.delete","session.codex.revert":application="metadata"
         default:throw CrewdPublicWire.invalid()
         }
         _ = try CrewdPublicWire.boolean(value["providerAccepted"])
@@ -118,4 +119,51 @@ struct CrewdCodexInspection:Equatable {
         self.value=value
     }
     func capability(_ id:String)->Capability?{capabilities.first{$0.id == id}}
+}
+
+/// Staging is not a command receipt, delivery or permission to reuse an input.
+enum CrewdCodexInputWire {
+    static func reference(_ value:CrewdValue)throws->CrewdValue{
+        try exact(value,["inputId","sha256","kind","bytes"])
+        guard value["inputId"].string.flatMap(UUID.init(uuidString:)) != nil,let hash=value["sha256"].string,hash.count==64,hash.allSatisfy({$0.isASCII && ($0.isNumber || ("a"..."f").contains(String($0)))}),let count=value["bytes"].int,count>0,count<=4*1024*1024 else{throw CrewdPublicWire.invalid()}
+        try CrewdCodexWire.choice(value["kind"],["image","audio","text"])
+        guard value["kind"] != .string("text") || count<=512*1024 else{throw CrewdPublicWire.invalid()}
+        return value
+    }
+    static func selection(_ value:CrewdValue)throws->CrewdValue{
+        try exact(value,["inputs","skills"],optional:["inputs","skills"])
+        var fields:[String:CrewdValue]=[:],count=0,textBytes=0
+        if value["inputs"] != .null{
+            guard case .array(let refs)=value["inputs"],!refs.isEmpty,refs.count<=16 else{throw CrewdPublicWire.invalid()}
+            let parsed=try refs.map(reference);guard Set(parsed.compactMap{$0["inputId"].string}).count==parsed.count else{throw CrewdPublicWire.invalid()}
+            count+=parsed.count;for item in parsed where item["kind"] == .string("text"){textBytes+=item["bytes"].int ?? 0};fields["inputs"] = .array(parsed)
+        }
+        if value["skills"] != .null{
+            guard case .array(let rows)=value["skills"],!rows.isEmpty,rows.count<=16 else{throw CrewdPublicWire.invalid()}
+            for row in rows{try exact(row,["name","path"]);let name=try CrewdPublicWire.token(row["name"]),path=try CrewdPublicWire.token(row["path"]);guard name.utf8.count<=256,path.hasPrefix("/"),path.utf8.count<=4096,!name.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains),!path.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) else{throw CrewdPublicWire.invalid()}}
+            guard Set(rows.compactMap{$0["path"].string}).count==rows.count else{throw CrewdPublicWire.invalid()};count+=rows.count;fields["skills"] = .array(rows)
+        }
+        guard count>0,count<=16,textBytes<=1024*1024 else{throw CrewdPublicWire.invalid()};return .object(fields)
+    }
+    static func exact(_ value:CrewdValue,_ keys:Set<String>,optional:Set<String>=[])throws{
+        guard case .object(let fields)=value,Set(fields.keys).isSubset(of:keys),keys.subtracting(optional).isSubset(of:Set(fields.keys)) else{throw CrewdPublicWire.invalid()}
+    }
+    static func tools(_ value:CrewdValue)throws->[CrewdValue]{
+        guard case .array=value["mcpServers"],case .array(let groups)=value["skills"] else{throw CrewdPublicWire.invalid()}
+        return groups.flatMap{$0["skills"].array}
+    }
+    static func profiles(_ value:CrewdValue)throws->[CrewdValue]{
+        try exact(value,["items","nextCursor"],optional:["nextCursor"])
+        guard case .array(let rows)=value["items"],rows.count<=100 else{throw CrewdPublicWire.invalid()}
+        for row in rows{try exact(row,["id","allowed","description"],optional:["description"]);try CrewdCodexWire.text(row["id"]);guard (row["id"].string?.utf8.count ?? 0)<=256 else{throw CrewdPublicWire.invalid()};_ = try CrewdPublicWire.boolean(row["allowed"]);guard row["description"] == .null || row["description"].string != nil else{throw CrewdPublicWire.invalid()}}
+        guard value["nextCursor"] == .null || (value["nextCursor"].string?.utf8.count ?? 8193)<=8192 else{throw CrewdPublicWire.invalid()};return rows
+    }
+    static func staging(_ value:CrewdValue,record:CrewdPresentationJournal.Prepared)throws{
+        if record.method=="session.codex.inputPrepare"{
+            try exact(value,["operation","input"]);guard value["operation"] == .string("prepared") else{throw CrewdPublicWire.invalid()}
+            let ref=try reference(value["input"]);guard ref["sha256"]==record.params["sha256"],ref["kind"]==record.params["kind"],ref["bytes"]==record.params["bytes"] else{throw CrewdPublicWire.invalid()}
+        }else{
+            try exact(value,["operation","inputId"]);guard record.method=="session.codex.inputDiscard",value["operation"] == .string("discarded"),value["inputId"]==record.params["input"]["inputId"] else{throw CrewdPublicWire.invalid()}
+        }
+    }
 }
