@@ -112,7 +112,7 @@ import CryptoKit
         defaults.set(params["installationId"].string,forKey:preferenceKey(token)+".installation")
         do{
             let result=try await rpc(method,params)
-            let parsed=try Wire.validateReceipt(result,method:method,params:redacted)
+            let parsed=try Wire.knownReceipt(result,method:method,params:redacted)
             try owner.finish(prepared,state:"replyObserved",detail:"Validated original notification installation receipt; no token retained")
             try current(token);installation=parsed;selectionResolved=true;try reload(token);failure=nil
         }catch{
@@ -128,8 +128,7 @@ import CryptoKit
         let value=try await rpc("notification.requestLookup",.object(["requestId":.string(id)]));try current(token)
         switch value["kind"].string {
         case "known":
-            try Wire.exact(value,["kind","operation","result"]);guard value["operation"] == .string(record.method) else{throw Wire.invalid()}
-            let parsed=try Wire.validateReceipt(value["result"],method:record.method,params:record.params)
+            let parsed=try Wire.knownReceipt(value,method:record.method,params:record.params)
             try journal().acknowledge(record,detail:"Validated original notification receipt; no resend")
             installation=parsed;selectionResolved=true;try reload(token);failure=nil
         case "unknown":

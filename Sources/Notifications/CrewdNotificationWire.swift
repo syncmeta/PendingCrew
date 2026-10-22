@@ -88,6 +88,12 @@ enum CrewdNotificationWire {
         }
         var label:String{switch state{case "pending":return "待发送";case "unknown":return "发送结果未知";case "acceptedByApns":return "Apple 已接受（不代表已展示）";case "rejected":return "Apple 已拒绝";default:return "已抑制"}}
     }
+    /// Mutations and lookup both return the original closed Known envelope.
+    static func knownReceipt(_ value:CrewdValue,method:String,params:CrewdValue)throws->Installation{
+        try exact(value,["kind","operation","result"])
+        guard value["kind"] == .string("known"),value["operation"] == .string(method) else{throw invalid()}
+        return try validateReceipt(value["result"],method:method,params:params)
+    }
     static func validateReceipt(_ value:CrewdValue,method:String,params:CrewdValue)throws->Installation{
         let result=try Installation(value)
         guard result.id==params["installationId"].string,let old=UInt64(try decimal(params["expectedGeneration"],zero:true)),old<UInt64.max,result.generation==String(old+1),result.revoked==(method=="notification.installationRevoke") else{throw invalid()}
