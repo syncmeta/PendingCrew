@@ -24,8 +24,9 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/source/crewd/target
       CONTROLLER_SHA: ${{ inputs.controller_sha }}
       SOURCE_SHA: ${{ inputs.source_sha }}
-      HOST_EVIDENCE: ${{ runner.temp }}/host-package
     steps:
+      - name: Initialize the evidence path on the runner
+        run: printf 'HOST_EVIDENCE=%s/host-package\n' "${RUNNER_TEMP:?}" >> "${GITHUB_ENV:?}"
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
