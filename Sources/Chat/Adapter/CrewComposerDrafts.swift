@@ -18,15 +18,7 @@ final class CrewComposerDraftStore {
         return store
     }
 
-    struct Draft: Codable, Equatable {
-        var text: String = ""
-        var stagedMentions: [CrewStagedMention] = []
-        var replyTarget: CrewReplyTarget?
-        var isEmpty: Bool {
-            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && stagedMentions.isEmpty && replyTarget == nil
-        }
-    }
+
     struct Entry: Codable {
         let draft: Draft
         let revision: UUID
@@ -72,9 +64,9 @@ final class CrewComposerDraftStore {
     func snapshot(for key: String) -> Snapshot {
         Snapshot(key: key, draft: draft(for: key), revision: drafts[key]?.revision)
     }
-    @discardableResult func save(_ draft: Draft, for key: String, crew: String? = nil, channel: String? = nil) -> Bool {
+    @discardableResult func save(_ draft: Draft, for key: String, crew: String? = nil, channel: String? = nil, retainEmpty: Bool = false) -> Bool {
         if let old = drafts[key], old.draft == draft, old.crew == crew, old.channel == channel { return storageError == nil }
-        if draft.isEmpty { drafts.removeValue(forKey: key) }
+        if draft.isEmpty && !retainEmpty { drafts.removeValue(forKey: key) }
         else { drafts[key] = Entry(draft: draft, revision: UUID(), crew: crew, channel: channel) }
         return persist()
     }

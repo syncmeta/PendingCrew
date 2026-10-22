@@ -149,7 +149,7 @@ final class CrewdPendingCrewBackend: PendingCrewBackend {
         if let replyToId { fields["inReplyTo"] = .string(replyToId) }
         let context = CrewdDrafts.Context.message(crew: crewId, channel: channel, session: "")
         workspace.messageDrafts.set(text, for: context)
-        _ = try await workspace.submitOriginalText(.object(fields), snapshot: workspace.messageDrafts.snapshot(for: context))
+        _ = try await workspace.submitOriginalText(.object(fields), snapshot: workspace.messageDrafts.snapshot(for: context),clearPersonal:false)
         return nil
     }
     func whiteboardChanges(crewId: String) -> AsyncStream<Void> {

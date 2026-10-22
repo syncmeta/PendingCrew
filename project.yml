@@ -207,6 +207,7 @@ targets:
           - CrewdMobileWorkspaceView.swift
           - CrewdWorkspaceView.swift
       # The workspace observes the same SQLite store and renderer contracts.
+      - path: Sources/PersonalSync
       - path: Sources/CrewdRemote/CrewdKnowledgeWire.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeStore.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeViewRuntime.swift
@@ -457,6 +458,7 @@ targets:
       - path: Sources/Chat/Adapter/GroupBubbleSender.swift
       # CrewComposerMentions.swift：composer @ 候选构建/过滤 + @token 解析 +
       # staged 撤销对账 + reply 自动@推导(Phase 6)。纯 Foundation，自包含。
+      - path: Sources/Chat/Adapter/CrewComposerDraftValue.swift
       - path: Sources/Chat/Adapter/CrewComposerMentions.swift
       # CrewSessionTitle.swift：session 精简标题 clamp/derive（≤18 字、剥项目名）。纯 Foundation。
       - path: Sources/Chat/Adapter/CrewSessionTitle.swift

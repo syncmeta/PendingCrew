@@ -97,6 +97,8 @@ struct IOSRemotePairingView: View {
                         }
                     }
                 }
+                Section{CrewPersonalHostDirectory()}
+                Section{CrewPersonalDraftArchive()}
                 Section("已配对的电脑") {
                     ForEach(appModel.crewdWindow.computers.filter(\.paired)) { computer in
                         HStack {

@@ -71,6 +71,8 @@ struct CrewdRemoteMobileRoot: View {
                     }
                 }.contextMenu { Button("仅从本设备移除", role: .destructive) { Task { await window.forget(computer) } } }
             }
+            Section{CrewPersonalHostDirectory()}
+                Section{CrewPersonalDraftArchive()}
             if !window.retainedWorkspaces.isEmpty {
                 Section("切换前的未确认操作") {
                     Text("旧连接已停止。原草稿保留在本窗口，切换不会重新提交。")

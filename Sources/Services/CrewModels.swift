@@ -9,19 +9,7 @@ import Foundation
 /// A mention target for a crew message. `@session <id>` routes to that
 /// session's mailbox; `@captain` to the captain's session; empty list or
 /// `broadcast` fans out to all sessions.
-struct CrewMention: Codable, Equatable {
-    let kind: String          // 'session' | 'captain' | 'broadcast' | 'human'
-    let targetId: String?
 
-    enum CodingKeys: String, CodingKey {
-        case kind
-        case targetId = "target_id"
-    }
-
-    static func session(_ id: String) -> CrewMention { .init(kind: "session", targetId: id) }
-    static let captain = CrewMention(kind: "captain", targetId: nil)
-    static let broadcast = CrewMention(kind: "broadcast", targetId: nil)
-}
 
 /// One image / file attachment on a whiteboard message. Mirror of PendingBot
 /// iOS `Attachment` — the server hydrates these from `messages.attachments`

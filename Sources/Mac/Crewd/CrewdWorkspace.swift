@@ -235,6 +235,8 @@ final class CrewdWorkspace: ObservableObject {
     @Published var originalFirstMessages: [OriginalFirstMessage] = []
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
+    @Published private(set) var personalDraftContexts:[String:CrewdDataContext]=[:]
+    var personalDrafts:CrewPersonalDraftService{.shared}
     private(set) var composerDrafts = CrewComposerDraftStore()
     @Published var requirementDrafts = CrewdRequirementDrafts()
     @Published var composerRequirementDrafts = CrewdRequirementDrafts()
@@ -870,6 +872,7 @@ final class CrewdWorkspace: ObservableObject {
         if !dmPeer && !sessions.contains(where: {$0["id"].string == sessionID}) { sessionID = sessions.first?["id"].string ?? ""; runnerItems = []; history = "" }
         if !channels.contains(where: {$0["id"].string == channelID}) { channelID = CrewdConversationProjection.selected(channels, requested: channelID) }
         channelWork.selectChannel(crew:crew,channel:channelID);channelResources.selectScope(crew:crew,channel:channelID);channelKnowledge.selectChannel(crew:crew,channel:channelID)
+        if personalDraftContexts[crew]?.dbId != client.runtimeIdentity["dbId"].string{await qualifyPersonalDraftContext(crew)}
         let session = sessionID, channel = channelID
         if !session.isEmpty {
             let view = try await client.call("session.inspect", .object(["sessionId": .string(session), "maxLines": .number(200)]))
@@ -916,6 +919,7 @@ final class CrewdWorkspace: ObservableObject {
             let history = try journal.firstMessageRecords()
             if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
             guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            personalDraftContexts=personalDraftContexts.filter{$0.value.dbId == scope.databaseID}
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
             originalFirstMessageHistory = history; journalFailureConnection = nil
             composerDrafts = CrewComposerDraftStore.durable(file: journal.composerDraftFile(namespace: presentationNamespace), namespace: presentationNamespace)
@@ -1087,6 +1091,44 @@ final class CrewdWorkspace: ObservableObject {
         guard target.sessionID == id else { throw CrewdClientError(message: "控制目标返回其它会话，未接受。") }
         controlTargets[id] = target; return target
     }
+    func personalDraftKey(_ context:CrewdDrafts.Context)->AppleDraftKey? {
+        guard let source=personalDraftContexts[context.crew] else{return nil}
+        if client.connected,let observed=client.runtimeIdentity["dbId"].string,observed != source.dbId{return nil}
+        let kind:String,destination:AppleDraftKey.Destination
+        if context.kind == .initialTask{kind="initialTask";destination = .channel(context.channel.isEmpty ? context.crew+"/lobby":context.channel)}
+        else if !context.session.isEmpty{kind="sessionMessage";destination = .originalSession(context.session)}
+        else{kind="channelMessage";destination = .channel(context.channel)}
+        return .init(authorityID:source.authorityId,databaseID:source.dbId,crewID:context.crew,destination:destination,kind:kind)
+    }
+    func checkpointComposer(_ payload:CrewComposerDraftStore.Draft,crew:String,channel:String){
+        guard let key=personalDraftKey(.message(crew:crew,channel:channel,session:"")) else{return}
+        personalDrafts.checkpoint(payload,key:key)
+    }
+    func setPersonalInput(_ text:String,context:CrewdDrafts.Context){
+        messageDrafts.set(text,for:context)
+        if let key=personalDraftKey(context){personalDrafts.checkpoint(.init(text:text),key:key)}
+    }
+    @discardableResult func clearPersonalInput(_ snapshot:CrewdDrafts.Snapshot)->Bool {
+        guard messageDrafts.clearIfUnchanged(snapshot) else{return false}
+        if let key=personalDraftKey(snapshot.context){personalDrafts.checkpoint(.init(),key:key)}
+        return true
+    }
+    func restorePersonalInput(_ context:CrewdDrafts.Context)async {
+        guard let key=personalDraftKey(context) else{return}
+        let old=messageDrafts.snapshot(for:context)
+        guard old.text.isEmpty,let payload=await personalDrafts.restoreOwn(key),messageDrafts.text(for:context).isEmpty,personalDraftKey(context) == key,messageDrafts.snapshot(for:context) == old else{return}
+        messageDrafts.set(payload.text,for:context)
+    }
+    private func qualifyPersonalDraftContext(_ crew:String)async {
+        guard client.readyForWork,!crew.isEmpty,let expected=client.runtimeIdentity["dbId"].string else{return}
+        let epoch=observationGeneration,connection=client.connectionEpoch
+        do{
+            let raw=try await client.call("data.workspace.get",.object(["crewId":.string(crew)]))
+            let info=try CrewdKnowledgeStore.decode(raw,CrewdDataWorkspaceInfo.self)
+            guard acceptsObservation(epoch),client.connectionEpoch == connection,info.context.dbId == expected,info.context.authorityId == expected,info.context.crewId == crew else{return}
+            personalDraftContexts[crew]=info.context
+        }catch{ /* Existing durable composer remains usable; no fabricated source key. */ }
+    }
     static let resourceMutationMethods=CrewdPresentationJournal.resourceMutationMethods
     func lookupOriginalResource(_ record:CrewdPresentationJournal.Prepared)async throws->CrewdValue {
         guard record.scope == presentationScope,Self.resourceMutationMethods.contains(record.method),
@@ -1223,13 +1265,13 @@ final class CrewdWorkspace: ObservableObject {
     }
     /// Original chat uses a typed single submission. Snapshot identity is UI
     /// bookkeeping only until the public request-status contract freezes.
-    func submitOriginalText(_ params: CrewdValue, snapshot: CrewdDrafts.Snapshot) async throws -> CrewdValue {
+    func submitOriginalText(_ params: CrewdValue, snapshot: CrewdDrafts.Snapshot, clearPersonal:Bool=true) async throws -> CrewdValue {
         guard !hasOriginalUnknown(method: "message.post", crew: snapshot.context.crew, channel: snapshot.context.channel), !uncertainTextSubmissions.contains(where: { $0.snapshot.context == snapshot.context }) else {
             throw CrewdClientError(message: "原消息结果尚未确认。请核对原连接记录，不会重新发送。", kind: .notSubmitted)
         }
         do {
             let result = try await performValue("message.post", params)
-            messageDrafts.clearIfUnchanged(snapshot)
+            if clearPersonal{clearPersonalInput(snapshot)}else{messageDrafts.clearIfUnchanged(snapshot)}
             return result
         } catch {
             if CrewdClientError.isUncertainSubmission(error) {
@@ -1242,7 +1284,7 @@ final class CrewdWorkspace: ObservableObject {
     @discardableResult func performText(_ method:String,_ params:CrewdValue,snapshot:CrewdDrafts.Snapshot) async -> Bool {
         do {
             _ = try await performValue(method,params)
-            messageDrafts.clearIfUnchanged(snapshot)
+            clearPersonalInput(snapshot)
             return true
         } catch {
             if CrewdClientError.isUncertainSubmission(error) {

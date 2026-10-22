@@ -17,6 +17,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var previousAdmins: [CrewdRemoteAdmin] = []
     @State private var managing = false
     @State private var adding = false
+    @State private var personalDirectory=false
     @State private var reviewing = false
     @State private var recovering = false
     @State private var trusting = false
@@ -26,6 +27,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         content
 .toolbar {
             Menu {
+            Button("个人主机目录与同步状态"){personalDirectory=true}
             Menu("电脑") {
                 Button("本机") { Task { await chooseLocal() } }
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
@@ -70,7 +72,8 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             #endif
             } label: { Label("连接与核对", systemImage: "network") }
                 .labelStyle(.iconOnly).help("连接与核对")
-        }.sheet(isPresented: $recovering) {
+        }.sheet(isPresented:$personalDirectory){VStack(alignment:.leading,spacing:12){HStack{Text("主机目录").font(.headline);Spacer();Button("关闭"){personalDirectory=false}};ScrollView{VStack(alignment:.leading,spacing:20){CrewPersonalHostDirectory();Divider();CrewPersonalDraftArchive()}}}.padding(20).modifier(CrewdAdaptiveFormFrame(width:580,height:440))}
+        .sheet(isPresented: $recovering) {
             if let current = window.workspace {
                 ScrollView { CrewdPublicRecoveryView(workspace: current, openCrew: { crewStore.selectCrew($0) }).padding(20) }.frame(minWidth: 520, minHeight: 360)
             }

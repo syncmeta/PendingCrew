@@ -151,15 +151,26 @@ final class PendingCrewApplicationDelegate: NSObject, NSApplicationDelegate {
     private var waitingForDaemon = false
     // GUI termination permission is distinct from a confirmed backend stop.
     private var crewdTerminationAllowed = false
+    private var unsavedDraftExitConfirmation:String?
     private var stopCoordinator: CrewdStopCoordinator?
     private var stopProgress: CrewdStopProgressWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if crewdTerminationAllowed { return .terminateNow }
+        if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
+        if let unsavedToken=CrewPersonalDraftService.unsavedExitToken,unsavedToken != unsavedDraftExitConfirmation {
+            let alert=NSAlert()
+            alert.messageText="当前草稿尚未保存到本机"
+            alert.informativeText="原文仍在当前窗口。建议先在草稿版本中保存或导出；仍要退出可能丢失尚未保存的原文。"
+            alert.addButton(withTitle:"返回保存/导出")
+            alert.addButton(withTitle:"仍要退出，放弃未保存原文")
+            guard alert.runModal() == .alertSecondButtonReturn else{return .terminateCancel}
+            unsavedDraftExitConfirmation=unsavedToken
+        }
         let lifecycle = AppQuitLifecycle.shared
         if let quit = lifecycle.crewdExit {
             if waitingForDaemon { stopProgress?.present(); return .terminateCancel }
-            guard let mode = CrewdQuitPreference.choose() else { return .terminateCancel }
+            guard let mode = CrewdQuitPreference.choose() else { unsavedDraftExitConfirmation=nil;return .terminateCancel }
             waitingForDaemon = true
             let progress = CrewdStopProgressWindow()
             let coordinator = CrewdStopCoordinator(stop: { try await quit(.safePause) }, force: { try await quit(.direct) }, mayForce: { lifecycle.crewdMayForceStop?() == true })

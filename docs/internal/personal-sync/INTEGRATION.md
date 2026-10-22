@@ -1,0 +1,33 @@
+# Original App integration — local personal versions
+
+Status: complete source module, not a built/installed client or real iCloud qualification. Based on main 2feb93f1f17ba51c76d4ccee1ece9173a7ea359c after accepted A/bf0. A's backend/source acceptance is reused. Final shared SwiftUI target compilation and Mac/iPhone/iPad GUI acceptance remain for the root's single combined candidate.
+
+## Actual original user flow
+
+The original Mac and iOS composers keep the whole original Draft (text, stagedMentions, replyTarget). The Sendable value declarations moved unchanged into CrewComposerDraftValue.swift. Existing original draft persistence remains, and the personal owner synchronously persists the latest full payload before a debounced branch checkpoint. Empty checkpoints are durable, so sending does not resurrect old content. A reply clears personal input only after the original full-payload revision test succeeds. Personal source keys come from actual read-only data.workspace.get and are validated against the observed Core dbId. The current SQLite DataContext authorityId equals that dbId across local/remote; transport authority, grant, local record UUID and generation are not content keys.
+
+CrewPersonalDraftService is shared by canonical App data root; every window reuses the same owner and account:nil/collection actor. Each installation gets a random non-synchronizable ThisDeviceOnly Keychain ID; it is neither copied from a peer nor a device grant. No startup CloudKit, KVS, account discovery, network connection or session action is added.
+
+The shared composer controls restore only the own-device branch into a still-empty input and recheck the route after awaits. Nonempty input survives newly read versions. The version sheet requires an explicit starting version and explicit retirement list before confirming replacement/merge. Whole mention/reply structure accompanies the chosen version. The offline archive exposes source-specific personal input and local recovered originals without contacting an offline Core. Export writes full JSON payloads. Both platforms expose the personal directory/archive in their original connection surfaces. Directory entries are public hints; they do not connect, authorize, copy credentials or execute work.
+
+The latest-file or branch write failure preserves current original input and shows retry/export. An exact export ticket cannot acknowledge a newer edit. The Mac's existing quit coordinator prompts only for input without a durable original copy, offers return/save/export or explicit discard-and-exit, and binds that confirmation to the exact revision. Existing quit modes and closeable/forceable stopping progress are retained. On iOS every edit first attempts the synchronous local latest save; an OS termination cannot be prevented, so the visible failure/export path must be exercised in final device acceptance.
+
+## Integrated accepted module / net adaptations
+
+Original isolated HANDOFF SHA: 0004938a776b8578cf6cf6af4da7073b5cb010169257e5d64bc2702129a5a9c5. The copied HANDOFF.md is historical provenance; this file describes actual integration. Original independent QA report dedc17d7…17fc3 accepted its 16 local behavior cases and tombstone mutation. Those stable cases are reused, not rerun as App evidence.
+
+AppleCloudKitTransport.swift is byte-identical to accepted SHA 1c61180431e6481d26efde3e0d041f84c70cae509a356d4646896dacefe24615. AppleBranchStore adds only read-only keys() for the offline archive. ApplePortableDirectory now expresses the existing NWParameters(tls:tcp:) transport as tls://host:explicit-port, rejecting wss, missing/invalid port, loopback, unspecified, credentials, path and token. Public numeric IPv4/IPv6 and explicit LAN hints remain valid. CONTRACT.md corrects actual source authority/db identity; no new Core API or cloud account service is required.
+
+## Affected source evidence
+
+The actual full original Draft, original durable draft writer, shared App owner and accepted module sources compile with Swift 6 using the existing aeh ModuleCache.noindex. No App target, SDK download or SPM cold build was run. The new original-seam fixture scripts/dev/fixtures/apple-personal-app.swift passes shared-owner reuse, exact structured payload, cross-source isolation, actual local file permission refusal, original export versus newer-edit ABA, explicit export acknowledgement, recovery after permission repair and actual TLS endpoint validation. A second process passes reopening of the full original Draft.
+
+Exact run record: /private/tmp/pcw-personal-app-integration-20261022.json; executable SHA 48140d14369a6d83a4551b5b020e1dc99dbfc3600a29479844494573d6ec0f97; root /private/tmp/pcw-personal-app-freeze.aeew1r1i. Both modes exit 0. It injects a device identity; no real Keychain, CloudKit, KVS, account, GUI, model or daily App was touched. Shared SwiftUI source syntax and net whitespace checks are separate from full target compilation. project.yml and generated pbxproj include the shared sources in the existing application/test graph.
+
+## Actual cloud qualification boundary
+
+The App currently deliberately runs only account:nil, with visible “草稿仅本机保存”. The real adapter exists, but account selection/sync invocation is not enabled in the App. This is not cross-device draft sync acceptance. A's real same-Core business-data Mac+iOS acceptance also remains for the combined candidate.
+
+Read-only source/current-cache inspection: normal Mac/iOS Bundle ID com.pendingname.pendingcrew; NativeCandidate/NativeDelivery/NativeKnowledge IDs com.pendingname.pendingcrew.native-candidate; Config/Signing.xcconfig has empty DEVELOPMENT_TEAM, manual ad-hoc identity, empty CODE_SIGN_ENTITLEMENTS. No actual CloudKit container or iCloud entitlement is configured. Existing warm Debug PendingCrew.app metadata has the normal Bundle ID and an ad-hoc signature with no TeamIdentifier/CloudKit entitlement; that historical cache is not a current source candidate. No account or service was queried.
+
+To enable real private cloud: supply the approved Apple Team and signing profiles, explicit actual container and environment, correctly associated Mac/iOS Bundle IDs/entitlements, and private PCWPersonalBranch schema with queryable collectionID and payload Bytes. Then wire explicit opt-in and qualified account selection/invalidation into this owner without changing per-install IDs or sharing grants. Perform signed two-device concurrent/offline, nonempty-input, account-switch and tombstone checks; prove actual server exchange before displaying any synced state. The end-user UI does not expose development configuration. No container, account, entitlement, signing setting or system configuration was guessed or changed in this module.

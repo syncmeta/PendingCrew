@@ -19,7 +19,7 @@ struct CrewdWorkspaceView: View {
     }
     private var compose: String { workspace.messageDrafts.text(for: messageContext) }
     private func draftBinding(_ context: CrewdDrafts.Context) -> Binding<String> {
-        Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.messageDrafts.set($0, for: context) })
+        Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.setPersonalInput($0,context:context) })
     }
     var body: some View {
         NavigationSplitView {
@@ -203,6 +203,7 @@ struct CrewdWorkspaceView: View {
                     if let last = workspace.messages.last?["id"].string { proxy.scrollTo(last, anchor: .bottom) }
                 }
             }
+            CrewPersonalDraftControls(workspace:workspace,context:messageContext,payload:Binding(get:{.init(text:compose)},set:{workspace.setPersonalInput($0.text,context:messageContext)}))
             TextField("发给当前 Codex 会话", text: draftBinding(messageContext), axis: .vertical).lineLimit(2...6)
             HStack {
                 Text("发送会通知选中的会话").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
