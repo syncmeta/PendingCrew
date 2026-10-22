@@ -435,6 +435,7 @@ pub async fn call(
 
         methods::SESSION_START => {
             let p: SessionStartParams = parse_params(params)?;
+            if p.codex_inputs.is_some(){return Err(RpcError::new(RpcError::FORBIDDEN,"native inputs require the original command.submit receipt"))}
             let req = StartSession {
                 crew_id: p.crew_id,
                 captain: p.role == Role::Captain,

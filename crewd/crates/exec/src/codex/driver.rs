@@ -58,6 +58,7 @@ pub struct CodexSpec {
     pub developer_instructions: Option<String>,
     /// 开场任务（就绪后的第一个回合）。
     pub initial_prompt: Option<String>,
+    pub initial_inputs: Option<super::input::Prepared>,
     /// 开场任务附带的不可信上下文（首轮白板）。
     pub initial_context: UntrustedContext,
     /// crew 通讯：挂到 `config.mcp_servers.crew`。codex 没有 hook，`hooks` 不看。
@@ -143,6 +144,7 @@ pub async fn start_codex(
         .await
         .map_err(|e| StartError::Ledger(io::Error::other(e)))?
         .map_err(StartError::Ledger)?;
+    if recorded.is_some() && start.spec.initial_inputs.is_some(){return Err(StartError::Ledger(io::Error::other("consumed initial native inputs cannot be replayed on resume")))}
     // 要续的那条先占住：同一个 thread 被两个 app-server 同时接着写，对话会乱。
     let live = match recorded
         .as_deref()
@@ -256,7 +258,8 @@ pub async fn start_codex(
             }),
         unix_now,
     };
-    let core = CodexCore::new(opening, config.core, Instant::now());
+    let mut core = CodexCore::new(opening, config.core, Instant::now());
+    if let Some(inputs)=start.spec.initial_inputs.clone(){core.initial_inputs(inputs);}
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let (tx, cmd_rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();

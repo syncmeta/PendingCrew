@@ -1063,3 +1063,4 @@ mod tests {
 mod recovery_guard_tests;
 
 pub mod codex_controls;
+pub mod codex_inputs;

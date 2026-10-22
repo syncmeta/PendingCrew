@@ -1923,11 +1923,15 @@ impl<P: Port> Core<P> {
 
     /// 同 [`launch`](Self::launch)，带一整批（含随批的窗口外行 `Batch::riders`）。这批在拉起之前 claim。
     pub(crate) async fn launch_carrying(
+        &mut self,row:SessionRow,exec:Arc<dyn Executor>,text:Option<String>,batch:Batch,
+    )->anyhow::Result<bool>{self.launch_carrying_inputs(row,exec,text,batch,None).await}
+    pub(crate) async fn launch_carrying_inputs(
         &mut self,
         row: SessionRow,
         exec: Arc<dyn Executor>,
         text: Option<String>,
         mut batch: Batch,
+        initial_inputs:Option<crewd_exec::codex::input::Submission>,
     ) -> anyhow::Result<bool> {
         if self
             .cfg
@@ -2008,6 +2012,7 @@ impl<P: Port> Core<P> {
         }
         let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
         let req = LaunchRequest {
+            initial_inputs,
             title,
             codex_options,
             session_id: row.id.clone(),
@@ -4545,6 +4550,7 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            initial_inputs: None,
             codex_options: None,
             title: None,
 

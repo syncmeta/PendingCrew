@@ -27,6 +27,7 @@ pub(crate) fn is_command(c: &Cmd) -> bool {
             | Cmd::CodexReview(_)
             | Cmd::CodexTitleSet(_)
             | Cmd::CodexFork(_)
+            | Cmd::CodexArchive(_) | Cmd::CodexUnarchive(_) | Cmd::CodexDelete(_) | Cmd::CodexRevert(_)
     )
 }
 fn target(c: &Cmd) -> CommandRuntimeTarget {
@@ -38,6 +39,7 @@ fn target(c: &Cmd) -> CommandRuntimeTarget {
         Cmd::CodexReview(p) => p.target.clone(),
         Cmd::CodexTitleSet(p) => p.target.clone(),
         Cmd::CodexFork(p) => p.target.clone(),
+        Cmd::CodexArchive(p)|Cmd::CodexUnarchive(p)=>p.target.clone(),Cmd::CodexDelete(p)=>p.target.clone(),Cmd::CodexRevert(p)=>p.target.clone(),
         _ => unreachable!("closed Codex commands"),
     }
 }
@@ -63,13 +65,17 @@ impl<P: Port> Core<P> {
                     .await;
             }
         };
+        if !call.codex_native_ready().await? {return self.codex_suppress(&call,"command.native_history_unavailable_or_unknown").await}
+        if let Cmd::CodexQueue(p)|Cmd::CodexSteer(p)=&call.request.command {
+            if let Some(inputs)=&p.inputs {if let Err(e)=inputs.validate(){return self.codex_suppress(&call,e).await}}
+        }
         let live = self
             .live
             .get(&target.session_id)
             .filter(|l| !l.stopping && !l.halting && !l.hibernate_cut);
         let metadata = matches!(
             call.request.command,
-            Cmd::CodexTitleSet(_) | Cmd::CodexFork(_)
+            Cmd::CodexTitleSet(_) | Cmd::CodexFork(_) | Cmd::CodexArchive(_) | Cmd::CodexUnarchive(_) | Cmd::CodexDelete(_) | Cmd::CodexRevert(_)
         );
         if metadata
             && self
@@ -87,6 +93,16 @@ impl<P: Port> Core<P> {
                 .await;
         }
         match &call.request.command {
+            Cmd::CodexArchive(_) | Cmd::CodexUnarchive(_) | Cmd::CodexDelete(_)
+                if self.live.contains_key(&target.session_id) || self.starting.contains_key(&target.session_id) => {
+                return self.codex_suppress(&call,"command.native_history_requires_physical_stop").await;
+            }
+            Cmd::CodexDelete(p) if !p.confirm_native_history_delete=>{
+                return self.codex_suppress(&call,"command.native_delete_requires_explicit_confirmation").await;
+            }
+            Cmd::CodexRevert(p) if live.is_none_or(|l|l.working||l.decision.is_some()) || p.before_turn_id.trim().is_empty() || p.before_turn_id.len()>256 || p.before_turn_id.chars().any(char::is_control)=>{
+                return self.codex_suppress(&call,"command.native_revert_requires_idle_loaded_thread").await;
+            }
             Cmd::SessionInterrupt(p) if p.turn_id.is_none() => {
                 return self
                     .codex_suppress(&call, "command.codex_interrupt_requires_exact_turn")
@@ -186,15 +202,24 @@ impl<P: Port> Core<P> {
                     request_id: call.request.request_id.clone(),
                 }),
                 Cmd::CodexReview(p) => Some(Op::Review(p.review_target.clone())),
+                Cmd::CodexArchive(_)|Cmd::CodexUnarchive(_)|Cmd::CodexDelete(_)|Cmd::CodexRevert(_)=>Some(Op::HistoryMutation{action:call.request.command.native_history_action().expect("closed history action"),before_turn_id:match &call.request.command{Cmd::CodexRevert(p)=>Some(p.before_turn_id.clone()),_=>None}}),
                 Cmd::CodexFork(p) => Some(Op::Fork {
                     last_turn_id: p.last_turn_id.clone(),
                 }),
                 _ => None,
             };
+            let native_inputs=call.codex_original_inputs(&target.session_id).await;
             let outcome = if let Err(e) = call.recheck_dispatched().await {
                 Out::Unknown {
                     provider_accepted: false,
                     detail: format!("dispatch authority no longer current: {e:?}"),
+                }
+            } else if let Err(e)=native_inputs {
+                Out::Unknown{provider_accepted:false,detail:format!("original native input unavailable: {e:?}")}
+            } else if let Some(inputs)=native_inputs.unwrap() {
+                match (&call.request.command,handle) {
+                    (Cmd::CodexQueue(p)|Cmd::CodexSteer(p),Some(h))=>h.codex_submit_inputs(p.text.clone(),call.request.request_id.clone(),if matches!(call.request.command,Cmd::CodexSteer(_)){p.target.turn_id.clone()}else{None},inputs,permit).await.unwrap_or(Out::Unknown{provider_accepted:false,detail:"original native input handle closed".into()}),
+                    _=>Out::Rejected("native inputs require original live Codex handle".into()),
                 }
             } else if let Some(op) = op {
                 match handle {
@@ -287,7 +312,7 @@ impl<P: Port> Core<P> {
             .is_none_or(|l| !l.stopping && !l.halting && !l.hibernate_cut);
         let metadata = matches!(
             call.request.command,
-            Cmd::CodexTitleSet(_) | Cmd::CodexFork(_)
+            Cmd::CodexTitleSet(_) | Cmd::CodexFork(_) | Cmd::CodexArchive(_) | Cmd::CodexUnarchive(_) | Cmd::CodexDelete(_) | Cmd::CodexRevert(_)
         );
         let metadata_current = !metadata
             || self

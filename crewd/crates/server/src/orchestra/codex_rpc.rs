@@ -6,7 +6,7 @@ use crewd_proto::{RpcError, codex::*, orchestra::SessionIdParams, parse_params};
 use serde_json::{Value, json};
 
 pub(crate) fn handles(method: &str) -> bool {
-    [INSPECT, HISTORY, MODELS, TOOLS].contains(&method)
+    [INSPECT, HISTORY, MODELS, TOOLS, crewd_proto::codex_inputs::PERMISSION_PROFILES].contains(&method)
 }
 pub(crate) async fn read(
     h: &Handle,
@@ -14,7 +14,8 @@ pub(crate) async fn read(
     method: &str,
     params: Value,
 ) -> Result<Value, RpcError> {
-    let (sid, history) = if method == HISTORY {
+    let profiles=if method==crewd_proto::codex_inputs::PERMISSION_PROFILES {Some(parse_params::<crewd_proto::codex_inputs::CodexPermissionProfilesParams>(params.clone())?)} else {None};
+    let (sid, history) = if let Some(p)=&profiles {(p.session_id.clone(),None)} else if method == HISTORY {
         let p: CodexHistoryParams = parse_params(params)?;
         (p.session_id.clone(), Some(p))
     } else {
@@ -52,6 +53,7 @@ pub(crate) async fn read(
             Some(r) => r.codex(Op::Inspect).await.ok(),
             None => None,
         };
+        let history_mode=local.as_ref().and_then(|o|match o {Out::Observed(v)=>v.get("historyMode").and_then(Value::as_str).map(str::to_owned),_=>None});
         let queued = match local {
             Some(Out::Observed(v)) => {
                 v.get("queuedInputs").and_then(Value::as_u64).unwrap_or(0) as u32
@@ -76,7 +78,32 @@ pub(crate) async fn read(
                 params: r.params,
             }
         });
-        let capabilities=[("configure",true,true),("compact",true,false),("steer",true,false),("queue",true,false),("interrupt",true,false),("review",true,false),("history",false,false),("resume",false,false),("fork",false,false),("title",false,false),("models",false,false),("tools",false,false),("attachments",false,false),("skillInput",false,false)].into_iter().map(|(id,needs_run,experimental)|CodexCapability{id:id.into(),availability:if id=="resume"&&meta.fork_pending{CodexCapabilityAvailability::Unavailable}else if matches!(id,"attachments"|"skillInput"){CodexCapabilityAvailability::PcwNotImplemented}else if needs_run&&!live.running{CodexCapabilityAvailability::RequiresRunning}else{CodexCapabilityAvailability::Available},protocol:if experimental{CodexProtocol::Experimental}else{CodexProtocol::Stable},detail:if id=="resume"&&meta.fork_pending{Some("original fork result is unconfirmed; query original request, no native resume/start is allowed".into())}else if matches!(id,"attachments"|"skillInput"){Some("native input exists; trusted PCW attachment/skill transport remains a separate unfinished delivery unit".into())}else{None}}).collect();
+        let native_status=meta.native_history.as_ref().map(|h|h.status);
+        let blocked=meta.fork_pending||matches!(native_status,Some(CodexNativeHistoryStatus::Unknown|CodexNativeHistoryStatus::Deleted|CodexNativeHistoryStatus::Archived));
+        let capabilities=[
+            ("configure",true,true),("compact",true,false),("steer",true,false),("queue",true,false),
+            ("interrupt",true,false),("review",true,false),("history",false,false),("resume",false,false),
+            ("fork",false,false),("title",false,false),("models",false,false),("tools",false,false),
+            ("attachments",true,false),("skillInput",true,false),("permissionProfiles",false,true),
+            ("archive",false,false),("unarchive",false,false),("delete",false,true),("revert",true,true),
+        ].into_iter().map(|(id,needs_run,experimental)|{
+            let requires_thread=!matches!(id,"models"|"tools"|"permissionProfiles");
+            let unavailable=if requires_thread&&row.agent_session_id.as_deref().is_none_or(str::is_empty){Some("original native thread identity unavailable")}
+                else if matches!(id,"models"|"tools"|"permissionProfiles"|"history"){None}
+                else if id=="unarchive"&&native_status==Some(CodexNativeHistoryStatus::Archived){None}
+                else if id=="delete"&&native_status==Some(CodexNativeHistoryStatus::Archived){None}
+                else if blocked{Some("native history/fork is archived, deleted or unconfirmed; query original receipt")}
+                else if matches!(id,"archive"|"unarchive"|"delete")&&live.running{Some("native history management requires physical runtime exit")}
+                else if id=="revert"&&(history_mode.as_deref()!=Some("paginated")||live.working||queued>0||live.pending_decision.is_some()){Some("revert requires observed paginated history, idle runtime, empty queue and no pending decision; files are not reverted")}
+                else{None};
+            CodexCapability{id:id.into(),availability:if unavailable.is_some(){CodexCapabilityAvailability::Unavailable}else if needs_run&&!live.running{CodexCapabilityAvailability::RequiresRunning}else{CodexCapabilityAvailability::Available},protocol:if experimental{CodexProtocol::Experimental}else{CodexProtocol::Stable},detail:unavailable.map(str::to_owned).or_else(||match id{
+                "attachments"=>Some("One-shot original-owner prepared image/audio/UTF8 text input; no arbitrary binary/PDF, server paths or message attachments".into()),
+                "skillInput"=>Some("Explicit uniquely enabled skill from the current original workspace catalog".into()),
+                "configure"=>Some("Native ACK records accepted/desired-next-turn; observed-effective fields remain separate".into()),
+                "delete"=>Some("Explicit confirmation required; tombstones native binding only, retaining PCW work and receipts".into()),
+                _=>None,
+            })}
+        }).collect();
         return serde_json::to_value(CodexSessionInspection {
             session_id: sid.clone(),
             thread_id: row.agent_session_id,
@@ -92,17 +119,20 @@ pub(crate) async fn read(
             pending_request: pending,
             desired_settings: meta.desired_settings,
             settings_status: meta.settings_status,
+            native_history: meta.native_history,
+            history_mode,
         })
         .map_err(dispatch::internal);
     }
-    let thread = row
+    let thread = if method==crewd_proto::codex_inputs::PERMISSION_PROFILES {row.agent_session_id.clone().unwrap_or_default()} else {row
         .agent_session_id
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "native thread identity missing"))?;
+        .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "native thread identity missing"))?};
     let op = match method {
         HISTORY => Op::History(history.unwrap()),
         MODELS => Op::Models,
         TOOLS => Op::Tools,
+        crewd_proto::codex_inputs::PERMISSION_PROFILES=>Op::PermissionProfiles(profiles.unwrap()),
         _ => unreachable!(),
     };
     let outcome = match handle {
@@ -203,6 +233,11 @@ pub(crate) async fn read(
                     .map(str::to_string),
             })
             .map_err(dispatch::internal)?
+        }
+        crewd_proto::codex_inputs::PERMISSION_PROFILES=>{
+            let rows=native.get("data").and_then(Value::as_array).filter(|v|v.len()<=100).ok_or_else(||RpcError::new(RpcError::CONFLICT,"invalid permission profile page"))?;
+            let items=rows.iter().cloned().map(serde_json::from_value).collect::<Result<Vec<crewd_proto::codex_inputs::CodexPermissionProfile>,_>>().map_err(|_|RpcError::new(RpcError::CONFLICT,"permission catalog shape differs"))?;
+            serde_json::to_value(crewd_proto::codex_inputs::CodexPermissionProfiles{items,next_cursor:native.get("nextCursor").and_then(Value::as_str).map(str::to_owned)}).map_err(dispatch::internal)?
         }
         TOOLS => {
             let servers = native

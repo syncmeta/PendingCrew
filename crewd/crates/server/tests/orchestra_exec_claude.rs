@@ -27,6 +27,7 @@ fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
 
 fn request(session: &str, workdir: &Path) -> LaunchRequest {
     LaunchRequest {
+        initial_inputs: None,
         codex_options: None,
         title: None,
 

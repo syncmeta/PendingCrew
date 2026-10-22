@@ -690,7 +690,7 @@ impl<P: Port> Core<P> {
             .port
             .insert_public_session(
                 super::port::NewSession {
-                    codex_options: None,
+                    codex_options: req.codex_options,
 
                     crew_id: req.crew_id,
                     captain: req.captain,
@@ -711,7 +711,9 @@ impl<P: Port> Core<P> {
         if let Some(admission) = &self.cfg.admission {
             admission.allow(&row.id);
         }
-        self.launch(row.clone(), executor, brief, vec![], vec![])
+        let inputs=call.codex_original_inputs(&row.id).await.map_err(|e|ControlError::Internal(format!("original initial native input: {e:?}")))?;
+        let batch=super::port::Batch{session:row.id.clone(),..Default::default()};
+        self.launch_carrying_inputs(row.clone(),executor,brief,batch,inputs)
             .await
             .map_err(ControlError::from_port)?;
         if let Some(starting) = self.starting.get(&row.id) {

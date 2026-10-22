@@ -61,6 +61,7 @@ pub struct ThreadOptions {
 pub fn thread_start_params(cwd: &Path, o: &ThreadOptions) -> Value {
     let mut p = Map::new();
     p.insert("cwd".into(), json!(cwd.display().to_string()));
+    p.insert("historyMode".into(), json!("paginated"));
     p.insert("approvalPolicy".into(), json!("on-request"));
     p.insert("sandbox".into(), json!("workspace-write"));
     p.insert("approvalsReviewer".into(), json!("auto_review"));
@@ -111,6 +112,7 @@ pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> V
             config.remove("model_reasoning_effort");
         }
     }
+    p.as_object_mut().expect("thread params object").remove("historyMode");
     p["threadId"] = json!(thread_id);
     p["excludeTurns"] = json!(true);
     p

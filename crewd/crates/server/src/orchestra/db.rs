@@ -387,7 +387,7 @@ impl Port for DbPort {
 
     async fn codex_resume_ready(&self, session: &str) -> Result<bool> {
         let session = session.to_string();
-        self.read(move |c| Ok(!crewd_store::codex_controls::get(c, &session)?.fork_pending))
+        self.read(move |c| Ok(crewd_store::codex_controls::native_ready(c, &session,None)?))
             .await
     }
     async fn codex_launch_options(
@@ -404,12 +404,12 @@ impl Port for DbPort {
                 return Ok((None, None));
             }
             let mut s = crewd_store::codex_controls::get(tx.conn(), &session)?;
-            if s.fork_pending {
+            if !crewd_store::codex_controls::native_ready(tx.conn(),&session,None)? {
                 return Err(crewd_collab::CollabError::Invalid(
                     crewd_collab::refusal::Refusal::new(
                         crewd_collab::refusal::Code::ResourceInvalid,
                     )
-                    .arg("field", "codex.forkUnconfirmed"),
+                    .arg("field", "codex.nativeHistoryUnavailableOrUnknown"),
                 ));
             }
             // These are at-most-once initialization intents. A restart/manual

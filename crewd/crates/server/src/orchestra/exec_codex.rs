@@ -184,12 +184,21 @@ impl Executor for CodexExecutor {
             self.check_launch()?;
             let (program, child_path) = self.program().await?;
             self.check_launch()?;
+            let initial_inputs=if let Some(inputs)=req.initial_inputs {
+                if !inputs.skills.is_empty(){
+                    let result=self.codex_metadata(crewd_exec::codex::metadata::MetadataRequest{session_id:req.session_id.clone(),thread_id:String::new(),workdir:req.workdir.clone(),operation:crewd_exec::codex::control::CodexOperation::Tools,permit:None}).await;
+                    match result {crewd_exec::codex::control::CodexOutcome::Observed(catalog)=>crewd_exec::codex::input::qualify_skills(&inputs.skills,&catalog,&req.workdir).map_err(LaunchError::Failed)?,_=>return Err(LaunchError::Failed("native skill catalog unavailable; no first input sent".into()))}
+                }
+                Some(inputs.prepare(&self.config.runtime_dir).map_err(LaunchError::Failed)?)
+            }else{None};
+            self.check_launch()?;
             let config = CodexConfig {
                 registry: self.config.registry.clone(),
                 runtime_dir: self.config.runtime_dir.clone(),
                 delivery_observer: req.delivery_observer,
                 ..Default::default()
             };
+            let workdir=req.workdir.clone();
             let start = CodexStart {
                 session_id: req.session_id.clone(),
                 program,
@@ -204,6 +213,7 @@ impl Executor for CodexExecutor {
                     effort: req.effort,
                     developer_instructions: req.system_prompt,
                     initial_prompt: req.initial_prompt,
+                    initial_inputs,
                     initial_context: req.initial_context,
                     comms: Some(CommsSpec {
                         helper: self.config.helper.clone(),
@@ -220,13 +230,13 @@ impl Executor for CodexExecutor {
             let (handle, events) = start_codex(start, config)
                 .await
                 .map_err(LaunchError::Start)?;
-            Ok((Arc::new(CodexHandle(handle)) as Arc<dyn ExecHandle>, events))
+            Ok((Arc::new(CodexHandle(handle,self.config.runtime_dir.clone(),workdir)) as Arc<dyn ExecHandle>, events))
         })
     }
 }
 
 /// Codex 接收结构化 additionalContext；不改变 Claude 的句柄能力。
-struct CodexHandle(SessionHandle);
+struct CodexHandle(SessionHandle,PathBuf,PathBuf);
 impl ExecHandle for CodexHandle {
     fn control_controlled(
         &self,
@@ -244,6 +254,22 @@ impl ExecHandle for CodexHandle {
         permit: crewd_exec::driver::ManualWritePermit,
     ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
         Box::pin(self.0.codex_controlled(op, permit))
+    }
+    fn codex_submit_inputs(&self,text:String,request_id:String,expected_turn_id:Option<String>,inputs:crewd_exec::codex::input::Submission,permit:crewd_exec::driver::ManualWritePermit)->BoxFut<'_,Result<crewd_exec::codex::control::CodexOutcome,Closed>> {
+        Box::pin(async move {
+            use crewd_exec::codex::{control::{CodexOperation as Op,CodexOutcome as Out},input};
+            if !inputs.skills.is_empty(){
+                match self.0.codex(Op::Tools).await? {
+                    Out::Observed(catalog)=>if let Err(e)=input::qualify_skills(&inputs.skills,&catalog,&self.2){return Ok(Out::Rejected(e))},
+                    _=>return Ok(Out::Rejected("native skill catalog unavailable".into())),
+                }
+            }
+            let root=self.1.clone();
+            let inputs=match tokio::task::spawn_blocking(move||inputs.prepare(&root)).await {
+                Ok(Ok(v))=>v,Ok(Err(e))=>return Ok(Out::Rejected(e)),Err(_)=>return Ok(Out::Rejected("native input materialization unavailable".into())),
+            };
+            self.0.codex_prepared_controlled(text,request_id,expected_turn_id,inputs,permit).await
+        })
     }
     fn codex_queue_controlled(
         &self,

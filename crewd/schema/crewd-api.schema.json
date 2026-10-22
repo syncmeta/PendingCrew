@@ -1460,6 +1460,22 @@
       ],
       "type": "object"
     },
+    "CodexDeleteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "confirmNativeHistoryDelete": {
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "confirmNativeHistoryDelete"
+      ],
+      "type": "object"
+    },
     "CodexForkParams": {
       "additionalProperties": false,
       "properties": {
@@ -1513,6 +1529,15 @@
         "skillApproval"
       ],
       "type": "object"
+    },
+    "CodexHistoryAction": {
+      "enum": [
+        "archive",
+        "unarchive",
+        "delete",
+        "revert"
+      ],
+      "type": "string"
     },
     "CodexHistoryItems": {
       "enum": [
@@ -1605,6 +1630,208 @@
       ],
       "type": "object"
     },
+    "CodexInputDiscardParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/CodexInputRef"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "crewId",
+        "input"
+      ],
+      "type": "object"
+    },
+    "CodexInputKind": {
+      "enum": [
+        "image",
+        "audio",
+        "text"
+      ],
+      "type": "string"
+    },
+    "CodexInputLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/CodexInputResult"
+            },
+            "state": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodexInputLookupParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "CodexInputPrepareParams": {
+      "additionalProperties": false,
+      "properties": {
+        "bytesBase64": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CodexInputKind"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "crewId",
+        "kind",
+        "filename",
+        "mimeType",
+        "sha256",
+        "bytesBase64"
+      ],
+      "type": "object"
+    },
+    "CodexInputRef": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inputId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CodexInputKind"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputId",
+        "sha256",
+        "kind",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "CodexInputResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/CodexInputRef"
+            },
+            "operation": {
+              "const": "prepared",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "inputId": {
+              "type": "string"
+            },
+            "operation": {
+              "const": "discarded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "inputId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodexInputSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/CodexInputRef"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/CodexSkillSelection"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "CodexModel": {
       "properties": {
         "defaultReasoningEffort": {
@@ -1675,6 +1902,43 @@
         "items"
       ],
       "type": "object"
+    },
+    "CodexNativeHistoryState": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexHistoryAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/CodexNativeHistoryStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "CodexNativeHistoryStatus": {
+      "enum": [
+        "active",
+        "archived",
+        "deleted",
+        "unknown"
+      ],
+      "type": "string"
     },
     "CodexObservedSettings": {
       "properties": {
@@ -1767,6 +2031,78 @@
       },
       "type": "object"
     },
+    "CodexPermissionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "allowed"
+      ],
+      "type": "object"
+    },
+    "CodexPermissionProfiles": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CodexPermissionProfile"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CodexPermissionProfilesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
     "CodexProtocol": {
       "enum": [
         "stable",
@@ -1797,6 +2133,22 @@
         "none"
       ],
       "type": "string"
+    },
+    "CodexRevertParams": {
+      "additionalProperties": false,
+      "properties": {
+        "beforeTurnId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "beforeTurnId"
+      ],
+      "type": "object"
     },
     "CodexReviewParams": {
       "additionalProperties": false,
@@ -1961,6 +2313,22 @@
         "historical": {
           "type": "boolean"
         },
+        "historyMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nativeHistory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexNativeHistoryState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pendingRequest": {
           "anyOf": [
             {
@@ -2083,6 +2451,12 @@
             "null"
           ]
         },
+        "permissions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sandbox": {
           "anyOf": [
             {
@@ -2114,6 +2488,22 @@
       ],
       "type": "string"
     },
+    "CodexSkillSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ],
+      "type": "object"
+    },
     "CodexSortDirection": {
       "enum": [
         "asc",
@@ -2136,6 +2526,16 @@
     "CodexTextParams": {
       "additionalProperties": false,
       "properties": {
+        "inputs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexInputSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "target": {
           "$ref": "#/$defs/CommandRuntimeTarget"
         },
@@ -8680,6 +9080,74 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "session.codex.archive",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTargetParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.unarchive",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTargetParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.delete",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexDeleteParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.revert",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexRevertParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.stop",
               "type": "string"
             },
@@ -10268,6 +10736,16 @@
       "properties": {
         "brief": {
           "type": "string"
+        },
+        "codexInputs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexInputSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "codexOptions": {
           "anyOf": [
@@ -13551,6 +14029,30 @@
         "$ref": "#/$defs/CodexHistoryPage"
       }
     },
+    "session.codex.inputDiscard": {
+      "params": {
+        "$ref": "#/$defs/CodexInputDiscardParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexInputResult"
+      }
+    },
+    "session.codex.inputLookup": {
+      "params": {
+        "$ref": "#/$defs/CodexInputLookupParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexInputLookup"
+      }
+    },
+    "session.codex.inputPrepare": {
+      "params": {
+        "$ref": "#/$defs/CodexInputPrepareParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexInputResult"
+      }
+    },
     "session.codex.inspect": {
       "params": {
         "$ref": "#/$defs/SessionIdParams"
@@ -13565,6 +14067,14 @@
       },
       "result": {
         "$ref": "#/$defs/CodexModels"
+      }
+    },
+    "session.codex.permissionProfiles": {
+      "params": {
+        "$ref": "#/$defs/CodexPermissionProfilesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexPermissionProfiles"
       }
     },
     "session.codex.tools": {

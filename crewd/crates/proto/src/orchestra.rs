@@ -169,6 +169,8 @@ pub struct SessionStartParams {
     pub brief: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_options: Option<crate::codex::CodexSettingsPatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_inputs: Option<crate::codex_inputs::CodexInputSelection>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
