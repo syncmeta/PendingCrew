@@ -3,9 +3,12 @@
 import hashlib, importlib.util, json, os, pathlib, re, subprocess, sys
 sys.dont_write_bytecode = True
 
-# This controller admits only the exact frozen Codex/Store20 source tree.
+# Final complete source qualification is bound once after root supplies S.
+# None deliberately refuses every build during source-only preparation.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_RUST_TREE = '232239060a0851997f1863e2877b1af2629fab63'
+QUALIFIED_RUST_TREE = None
+QUALIFIED_METHOD_COUNT = 149
+QUALIFIED_STORE_VERSION = 21
 SOURCE_RECIPES = [
     'scripts/dev/record-crewd-build.py',
     'scripts/dev/write-codex-first-provenance.py',
@@ -42,6 +45,7 @@ def inventory(root, ref):
 def binding(controller, source, controller_sha, source_sha):
     assert all(re.fullmatch('[0-9a-f]{40}', ref) for ref in [controller_sha, source_sha])
     assert controller_sha == os.environ['GITHUB_SHA'], 'controller input must equal actual run SHA'
+    assert isinstance(QUALIFIED_RUST_TREE, str) and re.fullmatch('[0-9a-f]{40}', QUALIFIED_RUST_TREE), 'final root-frozen Rust/source qualification is not bound; do not dispatch'
     before = {'controllerSha': controller_sha, 'sourceSha': source_sha,
               'controllerInputs': inventory(controller, controller_sha),
               'sourceInputs': inventory(source, source_sha)}
@@ -49,6 +53,9 @@ def binding(controller, source, controller_sha, source_sha):
     assert git(controller, 'rev-parse', controller_sha + ':crewd').decode().strip() == QUALIFIED_RUST_TREE
     for path in SOURCE_RECIPES:
         assert (source / path).read_bytes() == (controller / path).read_bytes(), 'reviewed source recipe changed: ' + path
+    qualify_schema(json.loads((source/'crewd/schema/crewd-api.schema.json').read_bytes()))
+    version_source = (source/'crewd/crates/store/src/schema.rs').read_text()
+    assert re.search(r'pub const SCHEMA_VERSION: i64 = ([0-9]+);', version_source).group(1) == str(QUALIFIED_STORE_VERSION)
     for key in ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
                 'CARGO_BUILD_TARGET', 'CREWD_GIT_SHA', 'CREWD_GIT_DIRTY']:
         assert not os.environ.get(key), 'undeclared compiler override: ' + key
@@ -65,6 +72,49 @@ def command(argv, cwd, log):
         code = subprocess.run(argv, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT).returncode
         stream.write('\nExit: ' + str(code) + '\n')
     assert code == 0, 'original command failed; retain log, do not retry: ' + str(log)
+
+
+def qualify_schema(schema):
+    assert len(schema['methods']) == QUALIFIED_METHOD_COUNT and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup',
+        'notification.deliveryGet', 'session.codex.inputPrepare', 'session.codex.inputLookup',
+        'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'command.submit', 'command.lookup'])
+    # Direct native input/catalog and Claude reads, private draft reads/control,
+    # and typed commands are distinct surfaces; a fence is not a read/retry.
+    direct = {
+        'session.codex.inputPrepare': ('CodexInputPrepareParams', 'CodexInputResult'),
+        'session.codex.inputLookup': ('CodexInputLookupParams', 'CodexInputLookup'),
+        'session.codex.inputDiscard': ('CodexInputDiscardParams', 'CodexInputResult'),
+        'session.codex.permissionProfiles': ('CodexPermissionProfilesParams', 'CodexPermissionProfiles'),
+        'session.claude.inspect': ('ClaudeSessionParams', 'ClaudeInspect'),
+        'session.claude.history': ('ClaudeHistoryParams', 'ClaudeHistoryPage'),
+        'session.claude.taskGet': ('ClaudeTaskGetParams', 'ClaudeTaskDetail'),
+        'personalDraft.status': ('PersonalDraftStatusParams', 'PersonalDraftStatus'),
+        'personalDraft.members': ('PersonalDraftMembersParams', 'PersonalDraftMembers'),
+        'personalDraft.catalog': ('PersonalDraftCatalogParams', 'PersonalDraftCatalogPage'),
+        'personalDraft.branches': ('PersonalDraftBranchesParams', 'PersonalDraftBranchPage'),
+        'personalDraft.requestFence': ('PersonalDraftRequestFenceParams', 'PersonalDraftRequestFence'),
+    }
+    for method, (params, result) in direct.items():
+        assert schema['methods'][method] == {'params': {'$ref': '#/$defs/' + params}, 'result': {'$ref': '#/$defs/' + result}}
+    assert schema['methods']['command.submit'] == {'params': {'$ref': '#/$defs/CommandSubmitParams'}, 'result': {'$ref': '#/$defs/PublicCommandReceipt'}}
+    assert schema['methods']['command.lookup'] == {'params': {'$ref': '#/$defs/CommandLookupParams'}, 'result': {'anyOf': [{'$ref': '#/$defs/PublicCommandReceipt'}, {'type': 'null'}]}}
+    assert schema['$defs']['CommandSubmitParams']['properties']['command'] == {'$ref': '#/$defs/PublicCommand'}
+    variants = schema['$defs']['PublicCommand']['oneOf']
+    for operation, params in [('archive', 'CodexTargetParams'), ('unarchive', 'CodexTargetParams'),
+                              ('delete', 'CodexDeleteParams'), ('revert', 'CodexRevertParams')]:
+        name = 'session.codex.' + operation
+        assert name not in schema['methods'], 'history control is a typed command, not a direct RPC'
+        matching = [v for v in variants if v.get('properties', {}).get('operation', {}).get('const') == name]
+        assert matching == [{'additionalProperties': False, 'properties': {'operation': {'const': name, 'type': 'string'},
+                              'params': {'$ref': '#/$defs/' + params}}, 'required': ['operation', 'params'], 'type': 'object'}]
+    for operation, params in [('ownerConfigure','PersonalDraftOwnerParams'), ('memberSet','PersonalDraftMemberSetParams'),
+                              ('consentSet','PersonalDraftConsentParams'), ('checkpoint','PersonalDraftCheckpointParams'),
+                              ('resolve','PersonalDraftResolveParams')]:
+        name = 'personalDraft.' + operation
+        assert name not in schema['methods'], 'draft SQL mutation is a typed command, not a direct RPC'
+        matching = [v for v in variants if v.get('properties', {}).get('operation', {}).get('const') == name]
+        assert matching == [{'additionalProperties': False, 'properties': {'operation': {'const': name, 'type': 'string'},
+                              'params': {'$ref': '#/$defs/' + params}}, 'required': ['operation', 'params'], 'type': 'object'}]
 
 
 def main():
@@ -119,29 +169,7 @@ def main():
     checked = source/'crewd/schema/crewd-api.schema.json'
     schema = json.loads((out/'schema.json').read_bytes())
     assert code == 0 and not (out/'schema.stderr').read_bytes() and schema == json.loads(checked.read_bytes())
-    assert len(schema['methods']) == 141 and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup',
-        'notification.deliveryGet', 'session.codex.inputPrepare', 'session.codex.inputLookup',
-        'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'command.submit', 'command.lookup'])
-    # Four direct staging/catalog reads and four typed commands are distinct surfaces.
-    direct = {
-        'session.codex.inputPrepare': ('CodexInputPrepareParams', 'CodexInputResult'),
-        'session.codex.inputLookup': ('CodexInputLookupParams', 'CodexInputLookup'),
-        'session.codex.inputDiscard': ('CodexInputDiscardParams', 'CodexInputResult'),
-        'session.codex.permissionProfiles': ('CodexPermissionProfilesParams', 'CodexPermissionProfiles'),
-    }
-    for method, (params, result) in direct.items():
-        assert schema['methods'][method] == {'params': {'$ref': '#/$defs/' + params}, 'result': {'$ref': '#/$defs/' + result}}
-    assert schema['methods']['command.submit'] == {'params': {'$ref': '#/$defs/CommandSubmitParams'}, 'result': {'$ref': '#/$defs/PublicCommandReceipt'}}
-    assert schema['methods']['command.lookup'] == {'params': {'$ref': '#/$defs/CommandLookupParams'}, 'result': {'anyOf': [{'$ref': '#/$defs/PublicCommandReceipt'}, {'type': 'null'}]}}
-    assert schema['$defs']['CommandSubmitParams']['properties']['command'] == {'$ref': '#/$defs/PublicCommand'}
-    variants = schema['$defs']['PublicCommand']['oneOf']
-    for operation, params in [('archive', 'CodexTargetParams'), ('unarchive', 'CodexTargetParams'),
-                              ('delete', 'CodexDeleteParams'), ('revert', 'CodexRevertParams')]:
-        name = 'session.codex.' + operation
-        assert name not in schema['methods'], 'history control is a typed command, not a direct RPC'
-        matching = [v for v in variants if v.get('properties', {}).get('operation', {}).get('const') == name]
-        assert matching == [{'additionalProperties': False, 'properties': {'operation': {'const': name, 'type': 'string'},
-                              'params': {'$ref': '#/$defs/' + params}}, 'required': ['operation', 'params'], 'type': 'object'}]
+    qualify_schema(schema)
     assert sha(binary) == digest
     # Project only after original graph/fresh-source verification; keep original witness.
     save(out/'build-proof.json', {'sourceCommit':s, 'sourceClean':True, 'defaultFeatures':True,
@@ -157,7 +185,8 @@ def main():
     save(out/'source-after.json', after)
     save(out/'result.json', {'controllerSha':c, 'sourceSha':s, 'rustTree':QUALIFIED_RUST_TREE,
                             'binarySha256':digest, 'originalWitnessSha256':sha(witness),
-                            'schemaExitCode':code, 'schemaEqualsChecked':True, 'methodCount':141,
+                            'schemaExitCode':code, 'schemaEqualsChecked':True, 'methodCount':QUALIFIED_METHOD_COUNT,
+                            'storeVersion':QUALIFIED_STORE_VERSION,
                             'sourceBeforeAfterEqual':True, 'published':False, 'installed':False,
                             'providerExecuted':False, 'runtimeQualified':False,
                             'plannedReleaseBase':base,
