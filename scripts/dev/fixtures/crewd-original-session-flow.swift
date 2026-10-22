@@ -5,6 +5,7 @@ import Foundation
     @MainActor static func main() async throws {
         let path = CommandLine.arguments[1], scenario = CommandLine.arguments[2]
         let root = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent(scenario + "-data")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let workspace = CrewdWorkspace(dataDirectory: root)
         try await workspace.client.connect(path: path)
         workspace.crewID = "crew-a"; workspace.sessionID = "session-a"
@@ -40,6 +41,7 @@ import Foundation
             print("PASS actual App profile refusal: " + scenario); return
         }
         if scenario == "legacy-text" || scenario == "legacy-resume" {
+            workspace.originalJournalRequired = true
             await workspace.prepareOriginalJournal(root: root.appendingPathComponent("original-journal"))
             precondition(workspace.originalJournalReady)
             do {

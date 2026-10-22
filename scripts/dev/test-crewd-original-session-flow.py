@@ -29,6 +29,7 @@ def main():
     (out/'compile-argv.json').write_text(json.dumps(command,indent=2)+'\n')
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+    results = []
     for scenario in ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']:
         path = out/(scenario+'.sock')
         listener = socket.socket(socket.AF_UNIX); listener.bind(str(path)); listener.listen(1)
@@ -92,7 +93,11 @@ def main():
             assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') else 0), methods
             assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
+            results.append({'scenario':scenario,'actualProbeExitCode':0,'rawStartCount':methods.count('session.start'),'rawResumeCount':methods.count('session.resume'),'publicSubmitCount':methods.count('command.submit'),'profileReadCount':methods.count('executor.list')})
             print('PASS '+scenario)
-        finally: listener.close()
+        finally:
+            (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
+            (out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
+            listener.close()
     print('Evidence: '+str(out))
 if __name__ == '__main__': main()
