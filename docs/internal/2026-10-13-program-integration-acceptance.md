@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 最终停手：a9发邀前结束，原进程已收尾
+
+a9复用原R2 prefix及七脚本，无新构建/installer/整包复制；仅新私有run数据和标准新data租约。准备6731实际0，普通scope同步66866超时后同scope只读24738证旧hash，再同三键CAS47008实际0核最终c534552bbe841c6c9c684bdc6a5980c4bd40ff632c741d6bfb907e779d336764。原owner44814/Core3952151的UID1000/PPID/kernelbirth/origfd4与claim合格，隧道54865及loopback49381实际ready，三个机组session空；这些仅运行资格，不是完整配对通过。
+
+JIT前原只读AX审批超时的工具允许同动作一次重审，随后空表单可见；但验收代理服务capacity错误及网络断连出现，按用户“当前任务完成之后提交推送然后停下来”结束本轮。原ownerSSH44814和隧道54865实际255。后端仅同scope有界核原身份并写既定abort，原持有者safePause stopped/Core wait0/socket不存在，未以新owner接管；holder自身退出码未观测不冒0。原RPC日志SHA a840e3416398646be3db99483da90ee10a9d95be3d292c08abfcc2278aaf5818证invite/accept/revoke意图及响应全0，无新a9配对记录或手机导入/回应/确认。
+
+手机原App64445 terminate07e7cc=0、console5478终态38881b=0、shutdown4099终态b804a8=0，最后ec845f证208 Shutdown/booted空；旧6c文件均保留，先前原pending通过准确UI移除已有独立证据。不触日用Mac、旧184/1ef或系统权限。完整原件ios-vps-r2-a9f17e32-20261022/{module-result.json,abort-cleanup-proof.json,qa-phone-final-terminal.json,original-owner-rpc.jsonl}，真实移动远程持久流程仍未完成，不归因产品协议失败。本轮无产品源码改动；在其他会话已提交5a0d931f之上仅补统筹记录，保存后停止，不再新轮。持续目标已paused，不是complete。
+
 ## 2026-10-22 iOS 原配对回应中断恢复通过；远端完整流程未完成
 
 6c按原scope/安装UUID及exclusive mkdir安全恢复准备：27858实际0，committed-current与所有输入/activation核同。准确a08普通phone新App58874/console60365就绪后，原owner64887/Core3937091实际samefd4/UID1000/parent+birth、同端口隧道59789就绪；原邀请2015B经真实Files导入，endpoint/SPKI核对通过，唯一respond成功并保存本机pending。原Save面板最后一步遭工具noWindowsAvailable、未取得回应文件硬门，随后SSH/隧道均255；未publish/accept，不能称协议或凭据产品失败。
