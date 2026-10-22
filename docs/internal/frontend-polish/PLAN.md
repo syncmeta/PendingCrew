@@ -1,6 +1,6 @@
-# 完整原生体验打磨方案 — 待根裁定
+# 完整原生体验打磨方案 — 已接受执行
 
-基线为已安装并验收的 main `c78c9b6ddb49db999f054e74cd3b248760906cbd`，独立分支 `codex/mac-demo-polish-20261022`。B 全部保存于原分支 `f0a81c20`，不进入本候选；Cloud 账号/APNs/未冻结后台 API 同样不进入。本模块只修改原生产品的视觉、信息组织与交互表达，现 Core/SQLite/ACL/receipt/草稿与设备身份保持真实。
+产品基线为已安装并验收的 main `c78c9b6ddb49db999f054e74cd3b248760906cbd`；最新三项发布截图/证据已普通rebase至 `5d32b32e021e99477e1950581b4320293b892ec7`，独立分支 `codex/mac-demo-polish-20261022`。B 全部保存于原分支 `f0a81c20`，不进入本候选；Cloud 账号/APNs/未冻结后台 API 同样不进入。本模块只修改原生产品的视觉、信息组织与交互表达，现 Core/SQLite/ACL/receipt/草稿与设备身份保持真实。
 
 Demo 精确目录 `design/prototypes/2026-10-14-react-product-tour`，当前实际 TSX/CSS/资产与 primary 全部逐 hash 一致，逐文件证据在 `DEMO-BASELINE.json`。以 `PendingCrewTour.tsx`、`Sidebar/ConversationList/Chat/Inspector/Workspace/Dialogs.tsx` 与 `styles/pendingcrew.css` 的最终级联规则为准：尤其 CSS 最后追加的浮动半透明侧栏、去装饰 lineage、两种待办计数、会话角标、五个顶级内容入口与胶囊输入区，不只套最开始的浅色变量。样本展示值、假时刻、模拟额度、模拟更新与正文替换函数不进入真实产品。
 

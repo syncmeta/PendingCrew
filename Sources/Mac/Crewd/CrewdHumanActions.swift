@@ -36,9 +36,9 @@ struct CrewdConversationRow<Avatar: View>: View {
             HStack(spacing: 9) {
                 avatar()
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.system(size: 13, weight: selected ? .semibold : .medium)).lineLimit(1)
+                    Text(title).font(CrewdType.body.weight(selected ? .semibold:.medium)).lineLimit(1)
                         .foregroundStyle(CrewdChatStyle.ink(scheme))
-                    Text(subtitle).font(.system(size: 11)).lineLimit(1)
+                    Text(subtitle).font(CrewdType.caption).lineLimit(1)
                         .foregroundStyle(CrewdChatStyle.muted(scheme))
                 }
                 Spacer(minLength: 0)
@@ -61,8 +61,8 @@ struct CrewdEmptySurface: View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 27, weight: .light))
                 .foregroundStyle(CrewdChatStyle.accent(scheme))
-            Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(CrewdChatStyle.ink(scheme))
-            Text(detail).font(.system(size: 12)).foregroundStyle(CrewdChatStyle.muted(scheme))
+            Text(title).font(CrewdType.title).foregroundStyle(CrewdChatStyle.ink(scheme))
+            Text(detail).font(CrewdType.label).foregroundStyle(CrewdChatStyle.muted(scheme))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 320)
             if let actionTitle, let action {
                 Button(actionTitle, action: action).buttonStyle(.borderedProminent)
@@ -121,7 +121,8 @@ struct CrewdHumanActions:View {
     private func binding<T>(_ path:WritableKeyPath<CrewdHumanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f);reviewedUnknown=false;readUnknown=false})}
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
-            Text(key.ask+" · 待你处理").font(.title2)
+            CrewdPanelHeader(title:"处理人工待办",detail:"答复或撤回 Agent 的原问题。",symbol:"person.crop.circle.badge.questionmark")
+            DisclosureGroup("原事项编号"){Text(key.ask).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
             Text("所属机组："+(target.crewTitle ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
             Text(ask["question"].string ?? "此问题已不在当前待处理收件箱，请刷新核对。").textSelection(.enabled)
             if let item=ask["item"].string {Text("关联计划："+item).font(.caption)}
@@ -135,12 +136,14 @@ struct CrewdHumanActions:View {
             }
             if humanOrigin{Text("这是人创建的待办，请从关联群的人待办入口更新人工状态；不会把它当作 Agent 提问作答。").font(.caption).foregroundStyle(.secondary)}
             Picker("操作",selection:binding(\.action)){ForEach(CrewdHumanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented).disabled(drafts.busy(key))
-            TextField(fields.action == .answer ? "你的答复":"撤回理由",text:binding(\.text),axis:.vertical).lineLimit(4...10).disabled(drafts.busy(key))
+            CrewdFormField(title:fields.action == .answer ? "你的答复":"撤回理由"){
+                TextField(fields.action == .answer ? "写下处理意见":"说明撤回的原因",text:binding(\.text),axis:.vertical).lineLimit(4...10).disabled(drafts.busy(key))
+            }
             if fields.action == .withdraw {Text("仍阻塞活跃计划的问题不能撤回；请先由负责人调整计划，后台会最终校验。").font(.caption).foregroundStyle(.secondary)}
             if let failure {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             Spacer()
             HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.disabled(humanOrigin || drafts.busy(key) || reading || store.selectedCrew != key.scope || ask["state"] != .string("open") || fields.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!drafts.uncertain(key).isEmpty && !reviewedUnknown))}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:540,height:480))
+        }.padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
         .task(id:key){guard let id else{return};do{let value=try await store.humanTodoAttributes(id);humanOrigin=value["origin"] == .string("humanTask")}catch{failure=error.localizedDescription}}
     }
     private func describe(_ error:Error)->String {
@@ -300,6 +303,7 @@ struct CrewdExecutorChoiceView: View {
             if let profile = workspace.executorProfile(executor) {
                 Text(profile.canStart ? "后台已配置此执行器；登录、额度与实际启动仍以原请求及会话状态为准。" : profile.unavailableDescription)
                     .font(.caption).foregroundStyle(profile.canStart ? Color.secondary : Color.orange)
+                DisclosureGroup("执行能力详情") {
                 Text("额外任务上下文：\(profile.initialContext ? "支持" : "未开放")").font(.caption).foregroundStyle(.secondary)
                 Text("手工终端：\(profile.manualTerminal ? "支持" : "未开放") · 结构化审批：\(profile.structuredDecisions ? "支持" : "未开放")")
                     .font(.caption).foregroundStyle(.secondary)
@@ -307,6 +311,8 @@ struct CrewdExecutorChoiceView: View {
                     Text(profile.backend == "codex" && workspace.client.capabilities.contains("session.codex") ? "原历史可在会话控制页只读读取；手动恢复被拒绝时不会创建替代 thread。":profile.recoveryDescription)
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                }.font(CrewdType.caption)
+
             } else {
                 Text(workspace.executorProfilesFailure ?? "尚未读取当前后台的执行能力，不能启动。")
                     .font(.caption).foregroundStyle(.secondary)
@@ -333,9 +339,12 @@ struct CrewdSessionStartView: View {
     private var context: CrewdDrafts.Context { .initialTask(crew: workspace.crewID, session: workspace.sessionID) }
     private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context); reviewedUnknown = false }) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)
-            TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(2...6)
+        VStack(alignment: .leading, spacing: 16) {
+            CrewdPanelHeader(title:"新成员会话",detail:"发送第一件具体任务后才会启动。",symbol:"person.badge.plus")
+            CrewdFormSection(title:"执行成员") {CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)}
+            CrewdFormField(title:"第一件事",detail:"这段任务原文会作为新会话的首条消息。") {
+                TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(3...8)
+            }
             CrewPersonalDraftControls(workspace:workspace,context:context,payload:Binding(get:{.init(text:input.wrappedValue)},set:{input.wrappedValue=$0.text}))
             if workspace.selectedExecutor == "codex"{CrewdCodexStartOptions(workspace:workspace,title:$explicitTitle,settings:$codexSettings)}
             Toggle("使用独立工作树", isOn: $isolation)
@@ -370,6 +379,7 @@ struct CrewdSessionStartView: View {
                     }
                 }
             }.disabled(workspace.executorProfile(workspace.selectedExecutor)?.canStart != true || reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
+            Text(workspace.status).font(CrewdType.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }.onChange(of: workspace.crewID) { _, _ in
             failure = nil; readUnknown = false; reviewedUnknown = false
         }
@@ -388,57 +398,74 @@ struct CrewdCrewCreationView: View {
         Binding(get: { workspace.crewCreationDrafts.fields[keyPath: key] }, set: { var fields = workspace.crewCreationDrafts.fields; fields[keyPath: key] = $0; workspace.crewCreationDrafts.edit(fields); reviewedUnknown = false })
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("新建机组").font(.title2)
-            TextField("机组名称", text: input(\.title))
-            Picker("上级机组", selection: input(\.parent)) {
-                Text("独立机组").tag("")
-                ForEach(workspace.crews.filter { $0["management"] != .bool(true) }.indices, id: \.self) { index in
-                    let rows = workspace.crews.filter { $0["management"] != .bool(true) }, crew = rows[index]
-                    Text(crew["title"].string ?? "机组").tag(crew["id"].string ?? "")
-                }
-            }
-            Text("工作目录属于被连接的电脑。").font(.caption).foregroundStyle(.secondary)
-            #if os(iOS)
-            TextField("电脑上的完整目录路径", text: input(\.directory)).textInputAutocapitalization(.never).autocorrectionDisabled()
-            #else
-            HStack {
-                TextField("电脑上的完整目录路径", text: input(\.directory))
-                if workspace.dataDirectory != nil {
-                    Button("选择…") {
-                        let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true
-                        do { panel.directoryURL = try workspace.localDirectoryPickerRoot() }
-                        catch { workspace.error = error.localizedDescription; return }
-                        if panel.runModal() == .OK, !workspace.isRetired {input(\.directory).wrappedValue=panel.url?.path ?? ""}
+        VStack(spacing:0){
+            CrewdPanelHeader(title:"新建机组",detail:"把同一件事情的人、消息和工作放在一起。",symbol:"person.3",close:{dismiss()}).padding(20)
+            Divider()
+            ScrollView {
+                VStack(alignment:.leading,spacing:20){
+                    CrewdFormSection(title:"机组信息") {
+                        CrewdFormField(title:"名称") {TextField("例如：产品发布",text:input(\.title))}
+                        CrewdFormField(title:"所属机组",detail:"独立工作可保持独立机组；组织关系不代替访问权限。") {
+                            Picker("上级机组",selection:input(\.parent)) {
+                                Text("独立机组").tag("")
+                                ForEach(workspace.crews.filter{$0["management"] != .bool(true)}.indices,id:\.self){index in
+                                    let crew=workspace.crews.filter{$0["management"] != .bool(true)}[index]
+                                    Text(crew["title"].string ?? "机组").tag(crew["id"].string ?? "")
+                                }
+                            }.labelsHidden()
+                        }
                     }
+                    CrewdFormSection(title:"电脑上的工作目录",detail:"使用当前连接电脑的路径；此操作不会启动成员或模型。") {
+                        CrewdFormField(title:"目录路径"){directoryInput}
+                        Menu("沿用已有机组的目录") {
+                            ForEach(workspace.crews.indices,id:\.self){index in
+                                let crew=workspace.crews[index]
+                                if let directory=crew["workingDirectory"].string{Button(crew["title"].string ?? "工作目录"){input(\.directory).wrappedValue=directory}}
+                            }
+                        }.font(CrewdType.caption)
+                    }
+                    if !workspace.crewCreationDrafts.unknown.isEmpty {
+                        CrewdFormSection(title:"此前创建结果未确认",detail:"原输入仍保留；先核对列表，避免重复创建。") {
+                            ForEach(workspace.crewCreationDrafts.unknown,id:\.version){snapshot in
+                                VStack(alignment:.leading,spacing:4){Text(snapshot.fields.title).font(CrewdType.label.weight(.medium));Text(snapshot.fields.directory).font(CrewdType.caption).foregroundStyle(.secondary).textSelection(.enabled)}
+                            }
+                            Button("读取当前机组列表核对"){Task{reading=true;defer{reading=false};do{try await workspace.refreshCrewDirectory();readAfterUnknown=true}catch{failure=error.localizedDescription}}}.disabled(reading || workspace.crewCreationDrafts.busy)
+                            Toggle("已核对列表，仍要创建这份输入",isOn:$reviewedUnknown).disabled(!readAfterUnknown || reading)
+                        }
+                    }
+                    if let failure{CrewdInlineNotice(title:"机组尚未创建",detail:failure,symbol:"exclamationmark.triangle",warning:true)}
+                }.padding(20)
+            }.background(Theme.Palette.surfaceMuted.opacity(0.22))
+            Divider()
+            VStack(alignment:.leading,spacing:8){
+                Text(workspace.crewCreationDrafts.busy ? "正在提交原请求…":"创建后再为成员交代具体任务").font(CrewdType.caption).foregroundStyle(.secondary)
+                HStack{
+                Spacer()
+                Button("取消"){dismiss()}.keyboardShortcut(.cancelAction)
+                Button("创建机组"){create()}.buttonStyle(CrewdPrimaryButtonStyle())
+                    .disabled(reading || workspace.busy || workspace.crewCreationDrafts.busy || !workspace.client.connected || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || fields.directory.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!workspace.crewCreationDrafts.unknown.isEmpty && !reviewedUnknown))
+                }
+            }.padding(16)
+        }.background(Theme.Palette.canvas).tint(Theme.Palette.accent)
+        .modifier(CrewdAdaptiveFormFrame(width:560,height:640,scrolls:false))
+    }
+    private var directoryInput:some View {
+        HStack{
+            #if os(iOS)
+            TextField("连接电脑的完整路径",text:input(\.directory)).textInputAutocapitalization(.never).autocorrectionDisabled()
+            #else
+            TextField("连接电脑的完整路径",text:input(\.directory))
+            if workspace.dataDirectory != nil {
+                Button("选择…") {
+                    let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true
+                    do{panel.directoryURL=try workspace.localDirectoryPickerRoot()}catch{workspace.error=error.localizedDescription;return}
+                    if panel.runModal() == .OK,!workspace.isRetired{input(\.directory).wrappedValue=panel.url?.path ?? ""}
                 }
             }
             #endif
-            Menu("沿用已有机组的工作目录") {
-                ForEach(workspace.crews.indices, id: \.self) { index in
-                    let crew = workspace.crews[index]
-                    if let directory = crew["workingDirectory"].string { Button(crew["title"].string ?? "工作目录") { input(\.directory).wrappedValue = directory } }
-                }
-            }
-            ForEach(workspace.crewCreationDrafts.unknown, id: \.version) { snapshot in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("此前创建结果未确认，可能已存在；原输入保留，不会自动再建。").foregroundStyle(.orange)
-                    Text(snapshot.fields.title); Text(snapshot.fields.directory).font(.caption).textSelection(.enabled)
-                }
-            }
-            if !workspace.crewCreationDrafts.unknown.isEmpty {
-                Button("读取当前机组列表核对") { Task {
-                    reading = true; defer { reading = false }
-                    do { try await workspace.refreshCrewDirectory(); readAfterUnknown = true }
-                    catch { failure = error.localizedDescription }
-                }}.disabled(reading || workspace.crewCreationDrafts.busy)
-                Toggle("我已核对列表，仍要创建这份输入", isOn: $reviewedUnknown).disabled(!readAfterUnknown || reading)
-            }
-            if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
-            HStack { Button("关闭") { dismiss() }; Spacer(); Button("创建") { create() }
-                .disabled(reading || workspace.busy || workspace.crewCreationDrafts.busy || !workspace.client.connected || fields.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || fields.directory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!workspace.crewCreationDrafts.unknown.isEmpty && !reviewedUnknown)) }
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width: 540, height: 500))
+        }
     }
+
     private func create() {
         guard let snapshot = workspace.crewCreationDrafts.begin() else { return }
         let owner = workspace

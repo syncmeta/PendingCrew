@@ -9,8 +9,12 @@ struct CrewdKnowledgeDocumentsEntry: View {
     var body:some View {
         VStack(spacing:0){
             VStack(alignment:.leading,spacing:8){
-                Picker("资料范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.segmented).frame(maxWidth:300)
-                Picker("资料类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.segmented).frame(maxWidth:360)
+                ViewThatFits(in:.horizontal){
+                    HStack(spacing:16){scopePicker;collectionPicker}
+                    VStack(alignment:.leading,spacing:10){scopePicker;collectionPicker}
+                }
+                Text(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
+                    .font(CrewdType.caption).foregroundStyle(.secondary)
             }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14).padding(.vertical,10)
             Divider()
             if library {
@@ -18,6 +22,9 @@ struct CrewdKnowledgeDocumentsEntry: View {
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
         }
     }
+    private var scopePicker:some View{Picker("资料范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.segmented).frame(maxWidth:280)}
+    private var collectionPicker:some View{Picker("资料类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.segmented).frame(maxWidth:340)}
+
 }
 
 /// Native placements and free Agent-authored pages share stored blocks, while
@@ -209,10 +216,10 @@ private struct CrewdKnowledgePlacementView: View {
     var body:some View {
         VStack(alignment:.leading,spacing:6) {
             if let block,case .block(_,_,_,let content,_,_)=block.object {
-                Text(content.string ?? content.pretty).textSelection(.enabled)
+                Text(content.string ?? content.pretty).font(CrewdType.body).lineSpacing(6).textSelection(.enabled)
                 Text(placement.atRevision == nil ? "Live 共享引用":"固定版本引用").font(.caption).foregroundStyle(.secondary)
             } else {Text(loaded ? "不可用":"尚未读取").foregroundStyle(.secondary)}
-        }.frame(maxWidth:.infinity,alignment:.leading).padding(10).background(.quaternary.opacity(0.25))
+        }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,12)
         .task(id:parent.object.revision+":"+placement.id) {
             block=nil;loaded=false
             do {block=try await store.resolved(placement.block,anchor:"placement:"+placement.id,atRevision:placement.atRevision,parent:parent)}catch{block=nil}
@@ -243,7 +250,7 @@ private struct CrewdKnowledgeObjectSurface:View {
                 case .document(let placements, _):
                     ScrollView { LazyVStack(alignment: .leading) {
                         ForEach(placements, id: \.id) { CrewdKnowledgePlacementView(store: store, parent: detail, placement: $0) }
-                    }.padding() }
+                    }.padding(24).frame(maxWidth:760,alignment:.leading).frame(maxWidth:.infinity,alignment:.center) }
                 }
             }
         case .block(_, _, _, let content, _, _): Text(content.string ?? content.pretty).textSelection(.enabled)
@@ -300,7 +307,7 @@ private struct CrewdGroupKnowledgeView:View {
         ScrollView{LazyVStack(alignment:.leading,spacing:4){
             if group.loaded,rows.isEmpty{Text("本群尚无此类资料引用").font(.caption).foregroundStyle(.secondary).padding(12)}
             ForEach(rows){item in
-                Button{selected=item.id}label:{VStack(alignment:.leading,spacing:4){Text(item.title ?? "原知识引用").font(.system(size:13,weight:.medium));Text(item.state == "ready" ? "原机组："+item.source.context.crewId:item.state == "contextChanged" ? "来源上下文已变化":"原内容当前不可用").font(.caption).foregroundStyle(.secondary)}.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(selected == item.id ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
+                Button{selected=item.id}label:{VStack(alignment:.leading,spacing:4){Text(item.title ?? "知识资料").font(CrewdType.body.weight(.medium));Text(item.state == "ready" ? "共享原文 · 本群引用":item.state == "contextChanged" ? "来源上下文已变化":"原内容当前不可用").font(.caption).foregroundStyle(.secondary)}.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(selected == item.id ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
             }
         }}
     }
@@ -308,7 +315,7 @@ private struct CrewdGroupKnowledgeView:View {
         if let chosen {
             VStack(alignment:.leading,spacing:8){
                 HStack{Text(chosen.title ?? "知识引用").font(.headline);Spacer();CrewdFolderAssignmentButton(store:resources,drafts:$workspace.resourceDrafts,view:.documents,object:folderObject(chosen.source))}.padding(.horizontal,12)
-                Text("共享原文 · "+chosen.source.context.crewId).font(.caption).foregroundStyle(.secondary).padding(.horizontal,12)
+                DisclosureGroup("来源信息"){Text("原机组："+chosen.source.context.crewId).textSelection(.enabled);Text(chosen.source.reference.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,12)
                 if chosen.state == "ready",let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
@@ -341,21 +348,28 @@ private struct CrewdKnowledgeLinkPicker:View {
     init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.library=workspace.linkedKnowledge;self.group=workspace.channelKnowledge;self.collection=collection}
     private var current:Bool{group.crew == targetCrew && group.channel == targetChannel && !workspace.isRetired}
     var body:some View {
-        VStack(alignment:.leading,spacing:14){
-            Text("引用已有知识资料").font(.headline)
+        VStack(alignment:.leading,spacing:0){
+            CrewdPanelHeader(title:"引用已有资料",detail:"将原文加入本群，保留同一份内容。",symbol:"doc.on.doc").padding(20)
+            Divider()
+            ScrollView{VStack(alignment:.leading,spacing:16){
+            CrewdFormSection(title:"选择资料来源"){
             Picker("源机组",selection:$sourceCrew){ForEach(workspace.crews.compactMap{$0["id"].string},id:\.self){id in Text(workspace.crews.first(where:{$0["id"] == .string(id)})?["title"].string ?? id).tag(id)}}
-            if library.busy{ProgressView()}
-            ScrollView{LazyVStack(alignment:.leading,spacing:4){ForEach(library.objects.filter(collection.includes),id:\.identity){object in
+            }
+            if library.busy{ProgressView("正在读取资料")}
+            if !library.busy,library.objects.filter(collection.includes).isEmpty{CrewdInlineNotice(title:"这个机组尚无可引用的资料",detail:"请选择其他源机组，或先在原机组保存内容。",symbol:"doc.text.magnifyingglass")}
+            LazyVStack(alignment:.leading,spacing:4){ForEach(library.objects.filter(collection.includes),id:\.identity){object in
                 Button{chosen=object.identity}label:{Text(object.displayTitle).padding(10).frame(maxWidth:.infinity,alignment:.leading).background(chosen == object.identity ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
-            }}}
+            }}
             Text("只加入本群引用；原内容与知识块不复制。").font(.caption).foregroundStyle(.secondary)
-            if let failure{Text(failure).font(.caption).foregroundStyle(.orange)}
+            if let failure{CrewdInlineNotice(title:"引用尚未完成",detail:failure,warning:true)}
             ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == targetChannel}){snapshot in
                 Text("原引用结果未确认，不会重发："+snapshot.source.reference.id).font(.caption).foregroundStyle(.orange)
                 Button("查询原引用请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);dismiss()}else{failure="原请求当前未找到已提交回执，输入保留。"}}catch{failure=error.localizedDescription}}}
             }
-            HStack{Button("关闭"){dismiss()};Spacer();Button("引用到本群"){link()}.disabled(!current || chosen.isEmpty || group.writing || library.busy)}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:560,height:540))
+            }.padding(20)}
+            Divider()
+            HStack{Button("关闭"){dismiss()};Spacer();Button(group.writing ? "正在加入…":"引用到本群"){link()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || chosen.isEmpty || group.writing || library.busy)}.padding(16)
+        }.modifier(CrewdAdaptiveFormFrame(width:560,height:580,scrolls:false))
         .onAppear{targetCrew=group.crew;targetChannel=group.channel;sourceCrew=group.crew}
         .task(id:sourceCrew){guard !sourceCrew.isEmpty else{return};chosen="";do{try await workspace.readKnowledgeLibrary(crew:sourceCrew);try await group.refresh();failure=nil}catch{failure=error.localizedDescription}}
     }
@@ -385,22 +399,33 @@ private struct CrewdNativeDocumentCreation:View {
     private var current:Bool{workspace.crewID == crew && workspace.channelID == channel && !workspace.isRetired}
     private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{Binding(get:{if let stage{return path == \CrewdResourceDrafts.Fields.title ? stage.title:stage.body};return fields[keyPath:path]},set:{value in var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f)})}
     var body:some View {
-        VStack(alignment:.leading,spacing:14){
-            Text("新建文档").font(.headline)
-            TextField("标题",text:field(\.title)).disabled(stage != nil || store.busy || submission != nil)
-            TextEditor(text:field(\.body)).frame(minHeight:180).disabled(stage != nil || store.busy || submission != nil)
-            Text(saved == nil ? "先保存SQLite知识原文，再单独加入本群。":"原文已保存；尚未加入本群。加入失败会保留原文，不重新创建。").font(.caption).foregroundStyle(.secondary)
-            Text(store.status).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment:.leading,spacing:0){
+            CrewdPanelHeader(title:"新建文档",detail:saved == nil ? "先保存原文，再加入当前群。":"原文已保存，等待加入当前群。",symbol:"doc.badge.plus").padding(20)
+            Divider()
+            ScrollView{VStack(alignment:.leading,spacing:16){
+            CrewdFormSection(title:"文档内容"){
+                CrewdFormField(title:"标题"){TextField("给文档起一个名字",text:field(\.title)).disabled(stage != nil || store.busy || submission != nil)}
+                CrewdFormField(title:"正文"){
+                    TextEditor(text:field(\.body)).font(CrewdType.body).frame(minHeight:200).padding(8)
+                        .background(Theme.Palette.canvas,in:RoundedRectangle(cornerRadius:8))
+                        .overlay(RoundedRectangle(cornerRadius:8).strokeBorder(Theme.Palette.hairline,lineWidth:0.7))
+                        .disabled(stage != nil || store.busy || submission != nil)
+                }
+            }
+            CrewdInlineNotice(title:saved == nil ? "1 · 保存原文":"2 · 加入本群",detail:saved == nil ? "保存后会保留原文，再单独建立本群引用。":"加入失败仍保留已保存原文，可以稍后继续，不会重新创建。",symbol:saved == nil ? "square.and.arrow.down":"checkmark.circle")
+            Text(store.status).font(CrewdType.caption).foregroundStyle(.secondary)
             if saved != nil{Button("重新核对已保存原文"){Task{await store.refresh();guard current,let original=saved,let context=store.workspace?.context else{return};let refreshed=CrewdChannelKnowledgeReference(context:context,reference:original.reference);guard refreshed.identity == original.identity else{failure="知识来源已换代，原文引用保留，不自动重新绑定。";return};await store.open(original.reference);if store.detail?.object.identity == original.reference.id{saved=refreshed;failure=nil}}}.disabled(store.busy)}
-            if let failure{Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
+            if let failure{CrewdInlineNotice(title:"需要核对保存状态",detail:failure,warning:true)}
             if let stage,saved == nil{Button("查询原保存结果"){Task{_ = await store.lookupNativeDocument(stage);restoreStage()}}.disabled(store.busy)}
             ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == channel && $0.source.identity == saved?.identity}){snapshot in
                 Button("查询原加入请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);finishDraft()}else{failure="原加入请求当前未找到已提交回执；已保存原文保留。"}}catch{failure=error.localizedDescription}}}
             }
             if refused{Button("原保存已明确拒绝，修改后另存"){reviseRefusedDraft()}}
             if saved != nil{Button("仅保留已保存原文，结束本次新建"){finishDraft()}}
-            HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button("保存原文"){save()}.disabled(!current || store.busy || store.hasBlockingPending || store.workspace?.state != "ready" || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button("加入本群"){join()}.disabled(!current || group.writing || store.busy)}}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:600,height:560))
+            }.padding(20)}
+            Divider()
+            HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || store.busy || store.hasBlockingPending || store.workspace?.state != "ready" || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button(group.writing ? "正在加入…":"加入本群"){join()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || group.writing || store.busy)}}.padding(16)
+        }.modifier(CrewdAdaptiveFormFrame(width:600,height:680,scrolls:false))
         .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();restoreStage();try? await group.refresh()}
     }
     private func restoreStage(){

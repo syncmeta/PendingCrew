@@ -9,7 +9,7 @@ enum CrewdQuitMode: String { case direct, safePause, background }
         if let value = UserDefaults.standard.string(forKey: key), let mode = CrewdQuitMode(rawValue: value) { return mode }
         let alert = NSAlert()
         alert.messageText = "如何退出 PendingCrew？"
-        alert.informativeText = "直接退出：尽快停止本应用自有工作，未确认结果保留。安全暂停：关闭新执行并等待安全停止。通知停工后退出：先叫他们停工，显示可关闭的进度提示，并可强制停止本App管理的工作。观察窗口的退出仅关闭自身，不改变其他窗口管理的后台。"
+        alert.informativeText = "安全暂停：关闭新执行，等待本应用管理的工作安全停止。\n\n直接退出：尽快停止自有工作，未确认的结果保留待核对。\n\n通知停工后退出：先叫他们停工，再显示进度；提示可以关闭，也可明确强制停止。\n\n观察窗口只关闭自身，不改变其他窗口管理的后台。"
         alert.addButton(withTitle: "安全暂停")
         alert.addButton(withTitle: "直接退出")
         alert.addButton(withTitle: "通知停工后退出")
@@ -144,6 +144,8 @@ enum CrewdQuitMode: String { case direct, safePause, background }
         panel.title = "正在叫他们停工"; panel.isReleasedWhenClosed = false
         super.init(window: panel)
         panel.delegate = self
+        explanation.font = .systemFont(ofSize:13)
+        explanation.textColor = .secondaryLabelColor
         spinner.style = .spinning; spinner.controlSize = .small
         forceButton.target = self; forceButton.action = #selector(forceClicked)
         let row = NSStackView(views: [spinner, forceButton]); row.orientation = .horizontal; row.spacing = 16

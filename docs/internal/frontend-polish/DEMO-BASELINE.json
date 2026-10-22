@@ -632,5 +632,21 @@
       "path": "design/prototypes/2026-10-14-react-product-tour/vite.library.config.ts",
       "sha256": "ced0ed58d354b5efb220b80c26784cbc8565d232fccf4ceb9522475ebf42ffa6"
     }
+  ],
+  "presentationBase": "5d32b32e021e99477e1950581b4320293b892ec7",
+  "publishedDemo": "https://pendingname.com/crewdemo/",
+  "publicationEvidence": [
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167-desktop.png",
+      "sha256": "e9d0fb715c9fd789410b510fac6e242843e376a3620537aa5a7d31a1ffe0a881"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167-mobile.png",
+      "sha256": "1640a2d72feaa4fc6c8e0063ad8ed59a022662eaec66a5bfa849f75e8d194903"
+    },
+    {
+      "path": "design/prototypes/2026-10-14-react-product-tour/evidence/publication-d2805167.json",
+      "sha256": "cb91123063e5fd59301a68eba691b097d5d4f09ec3f09931d760667994ab7a90"
+    }
   ]
 }

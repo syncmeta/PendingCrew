@@ -146,14 +146,15 @@ private struct CrewMobileDirectory: View {
                         if let crew = crews.first(where: { $0.id == id }) { directoryRow(crew).tag(crew.id) }
                     }
                 }
-            }.listStyle(.sidebar)
-        }
+            }.listStyle(.sidebar).scrollContentBackground(.hidden)
+            CrewdProviderStatusFooter()
+        }.background(Theme.Palette.surfaceMuted.opacity(0.25))
     }
     private func directoryRow(_ crew: CrewSummary) -> some View {
         HStack(spacing: 10) {
             CrewdGroupAvatar(members: workspace.crewAvatarMembers[crew.id] ?? [], channel: crew.id, name: crew.title)
             VStack(alignment: .leading, spacing: 4) {
-                Text(crew.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
+                Text(crew.title).font(.body.weight(.medium)).lineLimit(2)
                 if mode == .messages {
                     Text(workspace.crewActivity[crew.id]?["text"].string ?? (workspace.activityRead.contains(crew.id) ? "暂无消息" : "消息尚未读取"))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)

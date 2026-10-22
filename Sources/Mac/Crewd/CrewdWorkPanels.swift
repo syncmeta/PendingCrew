@@ -55,8 +55,8 @@ struct CrewdWorkPanels: View {
                         }.font(.caption).padding(.bottom, 4)
                     }
                     if progressOnly && visibleProgress.isEmpty && !store.loading && store.lastFailure == nil {
-                        CrewdEmptySurface(title: "把工作展开成计划", detail: "从 Todo 中记录的需求开始，计划、负责人和进展会整理在这里。",
-                                          symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 Todo", action: openTodo)
+                        CrewdEmptySurface(title: "把工作展开成计划", detail: "从 AI 待办中记录的事情开始，计划、负责人和进展会整理在这里。",
+                                          symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 AI 待办", action: openTodo)
                             .frame(minHeight: 200)
                     }
                     if !progressOnly && !compact {
@@ -70,7 +70,7 @@ struct CrewdWorkPanels: View {
                                 } label: {
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(id.raw).font(.system(size: 10, weight: .medium)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                                        Text(store.requirements[id]?["text"].string ?? "需求").font(.system(size: 13, weight: .medium)).multilineTextAlignment(.leading)
+                                        Text(store.requirements[id]?["text"].string ?? "需求").font(CrewdType.body.weight(.medium)).multilineTextAlignment(.leading)
                                     }
                                 }.buttonStyle(.plain)
                                 HStack {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("requirement",id.raw));Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
@@ -91,7 +91,7 @@ struct CrewdWorkPanels: View {
                                     Image(systemName:plan.status == "done" ? "checkmark.circle.fill":plan.status == "blocked" ? "questionmark.circle":"circle").foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label: {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(plan.value["title"].string ?? "计划").font(.system(size: 13, weight: .medium)).multilineTextAlignment(.leading)
+                                            Text(plan.value["title"].string ?? "计划").font(CrewdType.body.weight(.medium)).multilineTextAlignment(.leading)
                                             Text(id.raw).font(.system(size: 10)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                         }
                                     }.buttonStyle(.plain)
@@ -100,7 +100,13 @@ struct CrewdWorkPanels: View {
                                     if plan.value["pendingTransfer"] != .null {Text("交接中").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                                 }
                                 if !compact {
-                                    Text([plan.value["owner"].string,plan.value["note"].string,plan.value["nextCheckAt"].string].compactMap{$0}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
+                                    VStack(alignment:.leading,spacing:5){
+                                        if let owner=plan.value["owner"].string {
+                                            Label(members.first(where:{$0["id"] == .string(owner)})?["displayName"].string ?? owner,systemImage:"person").font(CrewdType.caption)
+                                        }
+                                        if let note=plan.value["note"].string,!note.isEmpty{Text(note).font(CrewdType.label).lineLimit(selected == id.raw ? nil:3)}
+                                        if let date=plan.value["nextCheckAt"].string{Label("下次检查 · "+date,systemImage:"clock").font(CrewdType.caption)}
+                                    }.foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     if let parent=plan.value["parent"].string,row.depth == 0 {Text("上级：\(parent)").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                                     if row.depth >= 3 {Text("后台返回超过三层的计划，请核对账本。").font(.caption).foregroundStyle(.orange)}
                                 }

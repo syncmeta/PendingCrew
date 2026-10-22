@@ -107,7 +107,8 @@ struct CrewdRemotePairingView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let error { Text(error).foregroundStyle(.red) }
+                Section {CrewdPairingStepHeader(awaitingReceipt:pendingID != nil,hasPreview:preview != nil)}
+                if let error { Section {CrewdInlineNotice(title:"配对尚未完成",detail:error,warning:true)} }
                 if let id = pendingID {
                     Section("把回复码交给电脑") {
                         Text("请在电脑端核对设备并批准连接，再复制电脑给出的确认码。")
@@ -143,7 +144,7 @@ struct CrewdRemotePairingView: View {
                         }
                     }
                 }
-            }.navigationTitle("添加电脑")
+            }.formStyle(.grouped).tint(Theme.Palette.accent).navigationTitle("添加电脑")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { operation.invalidate(); dismiss() } } }
                 .task { if let pending { run { try await pairing.responseText(pending) } apply: { text in pendingID = pending; responseText = text } } }
                 .onDisappear { operation.invalidate() }

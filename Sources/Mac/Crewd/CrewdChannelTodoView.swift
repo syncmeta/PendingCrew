@@ -30,7 +30,7 @@ struct CrewdChannelTodoView:View {
     private var tags: [String] {
         Array(Set(["紧急","小工程","大工程","前端","后端"] + kindItems.flatMap{$0["tags"].array.compactMap(\.string)})).sorted()
     }
-    private enum TodoKind: String, CaseIterable { case ai = "AI Todo", human = "真人 Todo" }
+    private enum TodoKind: String, CaseIterable { case ai = "AI待办", human = "人待办" }
     @State private var todoKind = TodoKind.ai
     @State private var queries: [String: String] = [:]
     private var selectedKind: TodoKind { humanOnly.map { $0 ? .human : .ai } ?? todoKind }
@@ -97,8 +97,15 @@ struct CrewdChannelTodoView:View {
                             let row=visibleItems[i]
                             if let id=CrewdChannelWorkStore.workID(row["object"]) {
                                 VStack(alignment:.leading,spacing:4){
-                                    Button{select(row)}label:{Text(id.raw+"  "+(row["label"].string ?? "")+(row["labelTruncated"] == .bool(true) ? "…":"")).font(.caption).multilineTextAlignment(.leading)}.buttonStyle(.plain)
-                                    Text(statusLabel(row)).font(.caption2).foregroundStyle(.secondary)
+                                    Button{select(row)}label:{
+                                        HStack(alignment:.top,spacing:9){
+                                            Image(systemName:statusLabel(row)=="人工完成" || row["status"] == .string("done") ? "checkmark.circle.fill":"circle")
+                                                .font(.system(size:15)).foregroundStyle(id.kind == .human ? Theme.Palette.amber:Theme.Palette.accent).padding(.top,2)
+                                            Text((row["label"].string ?? "")+(row["labelTruncated"] == .bool(true) ? "…":""))
+                                                .font(CrewdType.body.weight(.medium)).foregroundStyle(Theme.Palette.ink).multilineTextAlignment(.leading)
+                                        }.frame(maxWidth:.infinity,alignment:.leading)
+                                    }.buttonStyle(.plain)
+                                    HStack(spacing:8){Text(id.raw);Text("·");Text(statusLabel(row))}.font(CrewdType.caption).foregroundStyle(.secondary)
                                     if id.kind != .plan {
                                         let source=group.todoAttributes[id.raw] ?? row["todo"]
                                         Text("负责人："+ownerLabel(source["owner"])).font(.caption).foregroundStyle(.secondary)
@@ -108,7 +115,9 @@ struct CrewdChannelTodoView:View {
                                         if mutationDrafts != nil {Button("负责人、状态与标签"){metadataTarget = .init(row:row)}.font(.caption)}
                                     }
                                     if selected?["object"] == row["object"] {selectedDetails(row,id)}
-                                }.padding(12).frame(maxWidth:.infinity,alignment:.leading).background(Theme.Palette.canvas,in:RoundedRectangle(cornerRadius:10))
+                                }.padding(16).frame(maxWidth:.infinity,alignment:.leading)
+                                    .background(Theme.Palette.surface,in:RoundedRectangle(cornerRadius:9))
+                                    .overlay(RoundedRectangle(cornerRadius:9).strokeBorder(Theme.Palette.hairline.opacity(0.75),lineWidth:0.6))
                             }
                         }
                     }.frame(maxWidth:.infinity,alignment:.leading)
@@ -134,7 +143,7 @@ struct CrewdChannelTodoView:View {
         }
     }
     private func tagButton(_ value:String,count:Int)->some View {
-        Button {tag.wrappedValue=value} label:{Text((value.isEmpty ? "所有待办":value)+" \(count)").font(.caption).padding(.horizontal,9).padding(.vertical,5)
+        Button {tag.wrappedValue=value} label:{Text((value.isEmpty ? "所有待办":value)+(group.loaded ? " \(count)":"")).font(CrewdType.caption).padding(.horizontal,9).padding(.vertical,6)
                 .background(tag.wrappedValue == value ? Theme.Palette.surfaceMuted:Color.clear,in:Capsule())}.buttonStyle(.plain)
     }
     private func ownerLabel(_ value:CrewdValue)->String {
@@ -149,7 +158,7 @@ struct CrewdChannelTodoView:View {
         return row["object"]["kind"] == .string("humanTask") && row["status"] == .string("open") ? "待答复":CrewdWorkStatusLabel.display(row["status"].string ?? "")
     }
     private var kindPicker: some View {
-        Picker("Todo 类型", selection: $todoKind) {
+        Picker("待办归属", selection: $todoKind) {
             ForEach(TodoKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }.pickerStyle(.segmented).frame(maxWidth: 260)
     }
@@ -163,8 +172,8 @@ struct CrewdChannelTodoView:View {
                 Text(old.text).font(.caption).lineLimit(3).textSelection(.enabled)
                 Button("确认这份原始提交"){if requirementDrafts.confirm(old){create(old)}}.font(.caption).disabled(busy)
             }
-            TextField("写下本群原始需求",text:Binding(get:{requirementDrafts.text(crew,channel:channel)},set:{requirementDrafts.set(crew,channel:channel,text:$0)}),axis:.vertical).lineLimit(2...4).disabled(busy)
-            Button(busy ? "提交中":"新增群需求"){if let snapshot=requirementDrafts.begin(crew,channel:channel){create(snapshot)}}.font(.caption).disabled(busy || requirementDrafts.text(crew,channel:channel).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+            TextField("写下希望完成的事情",text:Binding(get:{requirementDrafts.text(crew,channel:channel)},set:{requirementDrafts.set(crew,channel:channel,text:$0)}),axis:.vertical).lineLimit(2...4).disabled(busy)
+            Button(busy ? "提交中":"新增 AI 待办"){if let snapshot=requirementDrafts.begin(crew,channel:channel){create(snapshot)}}.font(.caption).disabled(busy || requirementDrafts.text(crew,channel:channel).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
         }
     }
     private func create(_ snapshot:CrewdRequirementDrafts.Snapshot){Task{
@@ -307,11 +316,11 @@ private struct CrewdTodoMetadataEditor:View {
     var body:some View {
         ScrollView {
             VStack(alignment:.leading,spacing:14) {
-                Text(target.row["label"].string ?? "待办").font(.headline).textSelection(.enabled)
-                Text(target.id).font(.caption).foregroundStyle(.secondary)
+                CrewdPanelHeader(title:target.row["label"].string ?? "待办工作",detail:"负责人和状态用于共享原事项；标签只用于本群。",symbol:"checklist")
+                DisclosureGroup("原事项编号"){Text(target.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
                 if reading{ProgressView()}
                 if let failure{Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
-                Text("负责人和人工状态属于共享原事项；标签只属于本群引用。").font(.caption).foregroundStyle(.secondary)
+                CrewdFormSection(title:"负责人") {
                 Picker("负责人",selection:Binding(get:{owner},set:{value in edit("todo.assign"){$0.owner=value.isEmpty ? .null:.object(value == "human" ? ["kind":.string("human")]:["kind":.string("session"),"id":.string(value)])}})) {
                     Text("未分配").tag("");Text("你").tag("human")
                     ForEach(members.compactMap{$0["id"].string},id:\.self){id in Text(members.first(where:{$0["id"] == .string(id)})?["displayName"].string ?? id).tag(id)}
@@ -319,19 +328,23 @@ private struct CrewdTodoMetadataEditor:View {
                 }
                 revisionControl("todo.assign")
                 submitButton("保存负责人","todo.assign")
+                }
+                CrewdFormSection(title:"处理状态") {
                 if source["origin"] != .string("agentAsk"),source != .null {
                     Picker("人工状态",selection:Binding(get:{fields("todo.setState").state},set:{value in edit("todo.setState"){$0.state=value}})) {Text("待处理").tag("open");Text("已完成").tag("done")}.pickerStyle(.segmented)
                     Text("人工完成不停止或结算既有计划；重新打开不会启动会话。").font(.caption).foregroundStyle(.secondary)
                     revisionControl("todo.setState")
                     submitButton("保存人工状态","todo.setState")
                 } else {Text("这是 Agent 提问，请通过原来的答复或撤回入口处理。人工完成不会替代回答。").font(.caption).foregroundStyle(.secondary)}
-                Text("本群标签").font(.subheadline)
+                }
+                CrewdFormSection(title:"本群标签",detail:"同一原事项在其他群的标签不受影响。") {
                 ForEach(fields("channel.workTagsSet").tags,id:\.self){tag in
                     HStack{Text(tag);Spacer();Button("移除"){edit("channel.workTagsSet"){$0.tags.removeAll{$0 == tag}}}.font(.caption)}
                 }
                 HStack{TextField("新标签",text:$tagInput);Button("添加"){let value=tagInput.trimmingCharacters(in:.whitespacesAndNewlines);if !value.isEmpty,!fields("channel.workTagsSet").tags.contains(value){edit("channel.workTagsSet"){$0.tags.append(value)}};tagInput=""}}
                 revisionControl("channel.workTagsSet")
                 submitButton("保存本群标签","channel.workTagsSet")
+                }
                 ForEach(operations,id:\.self){op in
                     ForEach(drafts.uncertain(key(op)),id:\.requestID){snapshot in
                         Text("原提交结果未确认，输入保留；不会重新发送。").font(.caption).foregroundStyle(.orange)
@@ -339,10 +352,10 @@ private struct CrewdTodoMetadataEditor:View {
                     }
                 }
                 Button("重新读取源版本与本群引用"){Task{await read()}}.disabled(reading || group.writing || !current)
-                Text("源版本："+(source["revision"].string ?? "未读取")+"；本群引用版本："+(group.linkRevision ?? "未读取")).font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("版本详情"){Text("源版本："+(source["revision"].string ?? "未读取")+"；本群引用版本："+(group.linkRevision ?? "未读取")).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
                 Button("关闭"){dismiss()}
             }.padding(20)
-        }.modifier(CrewdAdaptiveFormFrame(width:560,height:620))
+        }.modifier(CrewdAdaptiveFormFrame(width:560,height:680,scrolls:false))
         .task{originalCrew=group.crew;originalChannel=group.channel;await read()}
     }
     @ViewBuilder private func revisionControl(_ operation:String)->some View {
@@ -386,17 +399,19 @@ private struct CrewdHumanTodoCreation:View {
     private var key:CrewdTodoMutationDrafts.Key{.init(crew:crew,channel:channel,object:"",operation:"humanTask.create")}
     private var current:Bool{group.crew == crew && group.channel == channel}
     var body:some View {
-        VStack(alignment:.leading,spacing:14){
-            Text("新建人待办").font(.headline)
-            TextField("需要人处理的事项",text:Binding(get:{drafts.fields(key).text},set:{value in var f=drafts.fields(key);f.text=value;drafts.edit(key,f)}),axis:.vertical).lineLimit(3...8)
-            Text("保存到当前群，不发送给 Agent，也不启动会话。").font(.caption).foregroundStyle(.secondary)
-            if let failure{Text(failure).foregroundStyle(.orange).font(.caption)}
+        VStack(alignment:.leading,spacing:16){
+            CrewdPanelHeader(title:"新建人待办",detail:"留给你或其他人处理的事。",symbol:"person.crop.circle.badge.checkmark")
+            CrewdFormSection(title:"待办内容") {
+                TextField("需要人处理的事项",text:Binding(get:{drafts.fields(key).text},set:{value in var f=drafts.fields(key);f.text=value;drafts.edit(key,f)}),axis:.vertical).lineLimit(3...8).font(CrewdType.body).textFieldStyle(.roundedBorder)
+            }
+            CrewdInlineNotice(title:"只保存到当前群",detail:"不会发送给 Agent，也不会启动会话。")
+            if let failure{CrewdInlineNotice(title:"尚未保存",detail:failure,warning:true)}
             ForEach(drafts.uncertain(key),id:\.requestID){snapshot in
                 Text(snapshot.fields.text).textSelection(.enabled)
                 Button("查询原创建结果"){Task{do{if try await group.lookup(snapshot) != nil{drafts.finish(snapshot,accepted:true);dismiss()}else{failure="原请求当前没有已提交回执；输入保留，不会重发。"}}catch{failure=error.localizedDescription}}}
             }
             HStack{Button("关闭"){dismiss()};Spacer();Button("保存"){guard let snapshot=drafts.begin(key) else{return};Task{do{_ = try await group.submit(snapshot);drafts.finish(snapshot,accepted:true);if current{dismiss()}}catch{drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));if current{failure=error.localizedDescription}}}}.disabled(!current || group.writing || drafts.fields(key).text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !drafts.uncertain(key).isEmpty)}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:520,height:360))
+        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:520,height:460))
         .onAppear{crew=group.crew;channel=group.channel}
     }
 }
