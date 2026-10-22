@@ -1,5 +1,23 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-23 原生通知 Mac/iOS 客户端完整源码接受
+
+完整客户端0800ee5448b451f86f3ac06ac1b54a87bb2d72e2净9路径已独验准入；根全文读最终交接、冻结及质量报告b4b93969baa36851dd4b13f0586db2c9a3fb6e54ea69f25cf33df89a96a9eada并核准确净源。实际App/delegate、当前authority/db/grant绑定、显式订阅与token/CAS注册、原UUID Unknown恢复、只读通知点击与当前ACL导航整块接线完成。默认qualification=nil，启动不构造通知中心、不查权限或注册；真实Apple资格、OS token/APNs和设备展示仍待准确签名窗口，源码准入不叫已可用推送。
+
+原38c成功fixture错误模拟bare Installation；质量以正式后台Known envelope发现真实注册/撤销会被误判Unknown，作者在原Store/Wire最小修复并保留实红。最终8个受影响原模式独立绿，正式Known注册→轮换→撤销及错kind/operation/result不采纳、原UUID查回、重试零新增RPC均核实际断言。原完整38c审查/84材料、Mac/iOS398输入0/0仅按原输入复用；0800的实际Foundation生产切片编译通过，不把旧全目标改标，后续完整组合一次覆盖。没有重复后台稳定测试或新验收框架。
+
+当前已整合后台仍Store19/API3/schema137、Native16 inactive。旧5553封包和日用9a保持原准确来源；本次未新normal、签包、安装、Apple/Cloud/Keychain/模型或Linux CI。唯一Swift作者承接下一完整Codex消费者并利用等待做Core个人草稿窄设计；唯一后台作者继续Codex控制/输入/历史/profile，质量等待整块冻结后审。主代理仅裁决、整合和交付，GUI等待不阻这两线。
+
+## 2026-10-23 后续交付边界与同步缺口裁决
+
+下一实际 Mac/iOS 候选以完整 Codex 会话控制、受支持输入、原生历史操作和权限 profile 及对应客户端为交付边界；包含已接受的主机配对与通知/个人同步源码，尚未取得真实 Apple 资格的能力继续明确关闭。后续 Claude 与个人草稿 Core transport 不反复加入这个候选的前置条件；各完整单元在冻结后继续并行，准确 Linux 构建仅对本次接受的 Codex Rust 组合更新控制器并执行一次，不为 schema137 过渡输入先消耗一次 CI。未改源码的已接受业务和原目标构建证据复用。
+
+根已核当前个人草稿路径为本机持久版本与可选 CloudKit adapter，未实现经 VPS/Mac Core 的个人草稿 transport；同 Core 的业务事件同步不代表草稿同步。当前配对仅有 authority/db/grant/revision/SPKI 的设备身份，没有稳定同人账号或设备组；同 crew、显示名和同 Core 均不构成同人证明。下一完整同步单元需复用现有完整 Draft、各设备 branch/tombstone、保全/导出与 CAS UI，并先裁定显式个人设备归属及撤权，不能把所有获 crew 权限的设备自动共享个人草稿。唯一 Swift 作者先做窄接入设计；公共 API/schema/Rust 仍唯一后台作者，暂不实现推测的账号系统或共享媒体凭据。
+
+Claude 下一源码单元沿用户已定受管边界推进：保留真实交互 PTY，提供 PCW 自有受管任务历史与精确原 UUID 的显式手动恢复，复用已有 driver/resume/receipt。官方存在 session/prompt/history 合同，不能继续笼统宣称不存在；但本机已确认二进制与公开 SDK 声明的对应及完整 producer 来源尚未闭合，不用 SDK query 替换 PTY，不用猜测 JSONL 投影冒供应商完整历史。full_history_load=false、Native16 inactive 保持，真实供应商生命周期及恢复另核准确动作授权。只读研究报告 SHA256 6b94fa5ea49ac301fda47755d63640d323bdeffde381254b6d8b9b2b4fbb51d3。
+
+通知客户端原38c曾因真实后端 Known envelope 与 App bare Installation 解析不一致而未准入，旧合成绿不覆盖该缺口；现已按上节由0800替代冻结完成准入，原拒绝/失败保留。当前旧9a正常退出后的实际 AX 审批拒绝仍停；未启动5553、未开始600秒实窗，也未安装新包。等待只限制该 GUI 支路，不阻源码模块。
+
 ## 2026-10-23 原生 APNs 后端完整源码接受并整合
 
 独立分支完整778bca140a184c5e9e23472105a76f8fbd0bfe51已整块准入，根全文读canonical合同/DELIVERY/最终质量结论becbb46b65585477055c056c5b17370db200c1f20c1bdcae3306be66150767e9并核净源。当前源码整合Store19/API3/schema137，八个notification typed RPC，原129方法/393定义保持原值；Store19仅为新增同事务outbox必要writer barrier，当前18按原受保护升级与备份恢复，Native16仍inactive。默认关闭；无配置/订阅时不读APNs秘密、不建通知观察或网络连接。当前实际安装及已封5553仍Store18/129，不因Git整合变为19。
