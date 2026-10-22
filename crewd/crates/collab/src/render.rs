@@ -453,6 +453,7 @@ fn batch_window(
     session: &str,
     ch: &str,
     queued: &[i64],
+    automatic_after:Option<i64>,
 ) -> Result<(Vec<Message>, i64)> {
     let (Some(&min), Some(&max)) = (queued.iter().min(), queued.iter().max()) else {
         return Ok((Vec::new(), 0));
@@ -460,7 +461,7 @@ fn batch_window(
     let cap = cursors::UNREAD_CAP as usize;
     let mut after = cursors::cursor(conn, session, ch)?
         .unwrap_or(min - 1)
-        .min(min - 1);
+        .min(min - 1).max(automatic_after.unwrap_or(0));
     let mut got: Vec<Message> = Vec::new();
     'scan: loop {
         let page = crewd_store::messages::list(conn, ch, after, None, cursors::UNREAD_CAP)?;
@@ -511,7 +512,10 @@ pub fn build_batch(
     l: Locale,
     rows: &[WakeRow],
     now_ms: i64,
-) -> Result<WakeBatch> {
+) -> Result<WakeBatch> {build_batch_after(conn,session,l,rows,now_ms,None)}
+/// Core-owned resumed-birth automatic context boundary, never a stored cursor.
+pub fn build_batch_after(conn:&Connection,session:&str,l:Locale,rows:&[WakeRow],now_ms:i64,automatic_after:Option<i64>)->Result<WakeBatch>{
+    if automatic_after.is_some_and(|n|n<0){return Err(crewd_store::StoreError::Invalid("negative automatic message floor".into()).into())}
     let mut items: Vec<WakeItem> = Vec::new();
     let mut unusable = Vec::new();
     let mut msg_slot: Option<usize> = None;
@@ -710,7 +714,7 @@ pub fn build_batch(
                 .filter(|(_, c, _)| *c == ch)
                 .map(|(_, _, s)| *s)
                 .collect();
-            let (window, end) = batch_window(conn, session, &ch, &seqs)?;
+            let (window, end) = batch_window(conn, session, &ch, &seqs,automatic_after)?;
             ends.push((ch.clone(), end));
             msgs.push((ch, window));
         }

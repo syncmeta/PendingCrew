@@ -281,7 +281,7 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
             let mut pending = self.port.pending(session).await?;
-            if let Some(cut)=self.live.get(session).and_then(|l|l.managed_resume_wake_cut){pending.retain(|w|w.id>cut);}
+            if let Some(cut)=self.live.get(session).and_then(|l|l.managed_resume_wake_cut){pending.retain(|w|w.id>cut.wake_id);}
 
             if self.cfg.admission.is_some() {
                 pending.retain(|w| w.id > self.held_watermark);
@@ -300,9 +300,9 @@ impl<P: Port> Core<P> {
                 })
             {
                 // Actual preparation precedes readonly causal filtering, so a new episode is durable.
-                self.port.prepare_causal_admission(session, now).await?;
+                self.port.prepare_causal_admission_after(session, now,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
             }
-            let diagnostics = self.port.causal_diagnostics(session, now).await?;
+            let diagnostics = self.port.causal_diagnostics_after(session, now,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
             let eligible = pending
                 .iter()
                 .filter(|w| causal_for(w, &diagnostics).is_none())
@@ -620,7 +620,7 @@ impl<P: Port> Core<P> {
         mut batch: Vec<QueuedWake>,
     ) -> anyhow::Result<Fitted> {
         loop {
-            let r = self.port.render_wake(session, &batch).await?;
+            let r = self.port.render_wake_after(session, &batch,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
             let riders: Vec<QueuedWake> = batch
                 .iter()
                 .filter(|w| r.deferred.contains(&w.id))

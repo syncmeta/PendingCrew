@@ -91,3 +91,8 @@ crewd 二进制已替换；请重启 crewd 后再启动新会话。
 
 ## notice.runner
 {name} 的执行器通知：{detail}
+
+## resume.refused.managed
+
+{name} 的受管恢复被拒：{said}
+原会话号 {id} 已保留，没有新建替代对话或补发旧任务。请先停止此运行，再由人明确处理。

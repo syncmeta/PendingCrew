@@ -880,7 +880,7 @@ pub fn capture(
     let mut parts = Vec::new();
     let mut unresolved_ids = Vec::new();
     for w in &windows {
-        let (ms, _) = crate::cursors::scan_unread(c, session, &w.channel, w.from_exclusive)?;
+        let (ms, _) = crate::cursors::scan_unread(c, session, &w.channel, snap.automatic_after(w.from_exclusive))?;
         for m in ms.into_iter().filter(|m| m.seq <= w.to_inclusive) {
             let f = match read_message(c, &m)? {
                 MessageCause::Resolved(f) => recovered(c, session, &m, f)?,
@@ -1131,6 +1131,10 @@ pub fn inspect_admission(
 }
 /// Pure read. Never prepare_unread, lazy-pin or advance a leading-own cursor.
 pub fn diagnostics(c: &Connection, session: &str, now_ms: i64) -> Result<Admission> {
+    diagnostics_after(c,session,now_ms,None)
+}
+pub fn diagnostics_after(c:&Connection,session:&str,now_ms:i64,after:Option<i64>)->Result<Admission>{
+    if after.is_some_and(|n|n<0){return Err(invalid("negative automatic message floor"))}
     let reader = crate::sessions::get(c, session)?;
     if crate::crews::is_archived(c, &reader.crew_id)? {
         return Ok(Admission {
@@ -1149,13 +1153,13 @@ pub fn diagnostics(c: &Connection, session: &str, now_ms: i64) -> Result<Admissi
             unknown_channels.push(channel);
             continue;
         };
-        let (messages, _) = crate::cursors::scan_unread(c, session, &channel, base)?;
+        let (messages, _) = crate::cursors::scan_unread(c, session, &channel, base.max(after.unwrap_or(0)))?;
         if let Some(m) = messages.last() {
             ends.push((channel.clone(), m.seq));
             channels.push(channel);
         }
     }
-    let snapshot = crate::cursor_reservations::snapshot(c, session, &channels, now_ms)?;
+    let snapshot = crate::cursor_reservations::snapshot_after(c, session, &channels, now_ms,after)?;
     let captured = capture(c, &snapshot, &ends)?;
     let mut result = inspect_admission(c, &captured, CAUSAL_HOP_MAX, now_ms)?;
     result.unknown_channels = unknown_channels;

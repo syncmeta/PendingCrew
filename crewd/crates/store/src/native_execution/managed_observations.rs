@@ -501,6 +501,13 @@ mod tests {
         assert!(!d.task.waiting_observed);
     }
     #[test]
+    fn raw_custody_keeps_historical_stamp_but_cannot_report_current_waiting(){
+        let(s,seal)=fixture();let(r,p)=task(&s,&seal,"original");
+        let tx=s.conn().unchecked_transaction().unwrap();observe_stop(&tx,&seal,&r,&p,Some("actual observation"),"s").unwrap();let receipt=get(&tx,&r).unwrap().unwrap();managed_response_waiting(&tx,&seal,&r,receipt.revision,&p,"idle").unwrap();mark_waiting(&tx,&seal,&r,&p).unwrap();super::super::revoke_before_raw(&tx,&seal.runtime.id,0,"raw").unwrap();tx.commit().unwrap();
+        let detail=reads::task_get(s.conn(),&crewd_proto::claude::ClaudeTaskGetParams{session_id:"owned-session".into(),request_id:r},Some(&seal.runtime.id)).unwrap();
+        assert_eq!(detail.task.phase,"completed");assert!(detail.waiting_observation_no.is_some());assert!(!detail.task.waiting_observed);assert!(!detail.task.current_runtime);assert_eq!(detail.observations[0].text.as_deref(),Some("actual observation"));
+    }
+    #[test]
     fn immutable_task_observation_bindings_reject_wrong_prompt_and_rollback() {
         let (s, seal) = fixture();
         let (r, p) = task(&s, &seal, "original");
@@ -515,4 +522,27 @@ mod tests {
         tx.rollback().unwrap();
         assert_eq!(crate::meta_get(s.conn(), &key(&r)).unwrap(), before);
     }
+}
+
+#[cfg(test)]
+mod old_writer_tests {
+ use super::*;
+ use super::super::{Runtime,register_managed,prepare,managed_accept_content,managed_response_waiting};
+ #[test]
+ #[ignore="requires approved exact original Store20 production helper path and hash"]
+ fn owned_history_exact_old20_restore_preserves_observations_but_never_a_live_seal(){
+  let binary=std::path::PathBuf::from(std::env::var("PCW_CLAUDE_OLD20_CORE").unwrap());
+  let expected=std::env::var("PCW_CLAUDE_OLD20_SHA256").unwrap();let binary_before=std::fs::read(&binary).unwrap();assert_eq!(hash(&binary_before),expected);
+  let root=tempfile::tempdir().unwrap();let data=root.path().join("data");std::fs::create_dir(&data).unwrap();let s=crate::Store::open_data_dir(&data).unwrap();
+  s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('owned-crew','fixture','now','now');INSERT INTO sessions(id,crew_id,role,executor,agent_session_id,updated_at)VALUES('owned-session','owned-crew','worker','claude','71bd51cf-3df2-4638-9a3f-d0d58d630174','now');").unwrap();
+  let runtime=Runtime{id:uuid::Uuid::new_v4().to_string(),session:"owned-session".into(),generation:uuid::Uuid::new_v4().to_string(),epoch:1,native_pid:42,native_start:123,native_boot:"synthetic".into()};
+  let request=uuid::Uuid::new_v4().to_string();let prompt=uuid::Uuid::new_v4().to_string();let task="original task with exact\n世界";let body=envelope(&request,task).unwrap();let tx=s.conn().unchecked_transaction().unwrap();let seal=register_managed(&tx,&runtime).unwrap();prepare(&tx,&runtime.id,&request,body.as_bytes(),"prepared").unwrap();record_task(&tx,&seal,&request,Some(task)).unwrap();managed_accept_content(&tx,&seal,&request,0,&prompt,body.as_bytes(),"accepted").unwrap();observe_stop(&tx,&seal,&request,&prompt,Some("durable observed reply"),"observed").unwrap();let r=get(&tx,&request).unwrap().unwrap();managed_response_waiting(&tx,&seal,&request,r.revision,&prompt,"idle").unwrap();mark_waiting(&tx,&seal,&request,&prompt).unwrap();tx.commit().unwrap();
+  let raw=crate::meta_get(s.conn(),&key(&request)).unwrap().unwrap();let db_id=crate::meta_get(s.conn(),"dbId").unwrap();let backup=root.path().join("original20-with-new-optional-observation.db");crate::backup::backup_db(&data.join(crate::DB_FILE),&backup).unwrap();let backup_before=std::fs::read(&backup).unwrap();drop(s);
+  let result=std::process::Command::new(&binary).arg("--data-dir").arg(&data).arg("restore").arg("--from").arg(&backup).output().unwrap();
+  eprintln!("exact old20 restore status={} stderr={}",result.status,String::from_utf8_lossy(&result.stderr));assert!(result.status.success());assert_eq!(std::fs::read(&binary).unwrap(),binary_before);assert_eq!(std::fs::read(&backup).unwrap(),backup_before);
+  let restored=crate::Store::open_data_dir(&data).unwrap();assert_eq!(restored.conn().query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),20);assert_eq!(crate::meta_get(restored.conn(),"dbId").unwrap(),db_id);assert_eq!(crate::meta_get(restored.conn(),&key(&request)).unwrap().as_deref(),Some(raw.as_str()));assert!(super::super::current_runtime(restored.conn(),"owned-session").unwrap().is_none());
+  let detail=reads::task_get(restored.conn(),&crewd_proto::claude::ClaudeTaskGetParams{session_id:"owned-session".into(),request_id:request.clone()},None).unwrap();assert_eq!(detail.original_task.text.as_deref(),Some(task));assert_eq!(detail.observations[0].text.as_deref(),Some("durable observed reply"));assert!(!detail.task.waiting_observed);
+  let tx=restored.conn().unchecked_transaction().unwrap();assert!(super::super::verify_managed_authority(&tx,&seal).is_err());assert!(prepare(&tx,&runtime.id,&uuid::Uuid::new_v4().to_string(),body.as_bytes(),"no-replay").is_err());tx.rollback().unwrap();
+  let native:String=restored.conn().query_row("SELECT agent_session_id FROM sessions WHERE id='owned-session'",[],|r|r.get(0)).unwrap();assert_eq!(native,"71bd51cf-3df2-4638-9a3f-d0d58d630174");
+ }
 }

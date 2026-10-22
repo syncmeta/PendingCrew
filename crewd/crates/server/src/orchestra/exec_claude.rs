@@ -232,7 +232,8 @@ impl Executor for ClaudeExecutor {
             } else {
                 req.delivery_observer.clone()
             };
-            config.claude_projects_dir = self.projects_dir.clone();
+            // Managed history/auth is witnessed by PTY/hooks, never private JSONL.
+            config.claude_projects_dir = if managed {None}else{self.projects_dir.clone()};
             let mut comms = comms_for(
                 &self.helper,
                 &self.data_dir,
@@ -296,6 +297,7 @@ impl Executor for ClaudeExecutor {
     }
 
     fn locate_transcript(&self, agent_session_id: &str) -> Option<PathBuf> {
+        if self.managed_factory.is_some(){return None}
         // 会话号要当路径段用：先过 M2b 的字符集校验。
         if !valid_agent_session_id(agent_session_id) {
             return None;
@@ -451,4 +453,26 @@ mod tests {
         assert_eq!(exec.locate_transcript("nope"), None);
         assert_eq!(exec.locate_transcript("../p2/abc-1"), None);
     }
+    #[tokio::test]
+    async fn owned_managed_resume_proves_previous_physical_birth_before_program_or_files(){
+        use crewd_exec::registry::{self,ProbeResult};
+        let ProbeResult::Found(birth)=registry::probe(std::process::id() as i32)else{panic!("actual owned test birth must be readable")};
+        let id="71bd51cf-3df2-4638-9a3f-d0d58d630174";
+        for stale in [false,true] {
+            let root=tempfile::tempdir().unwrap();let mut store=crewd_store::Store::open_in_memory().unwrap();
+            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('c1','fixture','t','t');INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('owned','c1','worker','claude','t')").unwrap();
+            let runtime=crewd_store::native_execution::Runtime{id:uuid::Uuid::new_v4().to_string(),session:"owned".into(),generation:uuid::Uuid::new_v4().to_string(),epoch:1,native_pid:birth.pid,native_start:birth.start_time+u64::from(stale),native_boot:birth.boot_id.clone()};
+            store.with_tx(|tx|{crewd_store::native_execution::register(tx,&runtime)?;tx.execute("UPDATE native_execution_runtimes SET revoked=1",[])?;Ok(())}).unwrap();
+            let db=crewd_store::Db::spawn(store).unwrap();let registry=Arc::new(ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
+            let factory=Arc::new(crate::native_helpers::NativeFactory::new(db,registry,root.path().join("no-helper")));
+            let mut exec=executor(ClaudeProgram::Path(root.path().join("no-program")),root.path());exec.managed_factory=Some(factory);
+            let ledger=Arc::new(MemoryLedger::with(Some(id)));let mut req=request("owned",root.path());req.ledger=ledger.clone();req.managed_resume_id=Some(id.into());
+            let error=exec.launch(req).await.err().unwrap();
+            if stale {assert!(matches!(error,LaunchError::NotConfigured(_)),"dead original identity may reach only the missing-program gate: {error}")}
+            else {assert!(error.to_string().contains("previous managed birth live or unknown"),"revoked row does not prove physical exit: {error}")}
+            assert_eq!(ledger.current().as_deref(),Some(id));assert!(!root.path().join("run").exists());
+            let project=root.path().join("synthetic-project");std::fs::create_dir(&project).unwrap();std::fs::write(project.join(format!("{id}.jsonl")),"synthetic, never imported").unwrap();exec.projects_dir=Some(root.path().into());assert!(exec.locate_transcript(id).is_none(),"managed diagnostic never scans private transcript roots");
+        }
+    }
+
 }

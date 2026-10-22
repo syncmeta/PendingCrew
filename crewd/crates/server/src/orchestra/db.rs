@@ -523,6 +523,10 @@ impl Port for DbPort {
         })
     }
 
+    async fn managed_resume_cut(&self,session:&str)->Result<ManagedResumeCut>{
+        let session=session.to_owned();
+        self.read(move|c|Ok(c.query_row("SELECT (SELECT COALESCE(MAX(id),0) FROM wakes WHERE session_id=?1 AND state='pending'),(SELECT COALESCE(MAX(seq),0) FROM messages)",[session],|r|Ok(ManagedResumeCut{wake_id:r.get(0)?,message_seq:r.get(1)?}))?)).await
+    }
     async fn pending(&self, session: &str) -> Result<Vec<QueuedWake>> {
         let session = session.to_string();
         // `due_for(…, i64::MAX)` = 全部 pending（不论到没到点），按优先级、入队先后。
@@ -876,10 +880,11 @@ impl Port for DbPort {
         .await
     }
 
-    async fn prepare_causal_admission(&self, session: &str, _now: Ms) -> Result<()> {
+    async fn prepare_causal_admission(&self,session:&str,now:Ms)->Result<()>{self.prepare_causal_admission_after(session,now,None).await}
+    async fn prepare_causal_admission_after(&self, session: &str, _now: Ms, after:Option<i64>) -> Result<()> {
         let session = session.to_owned();
         self.write(move |tx| {
-            let captured = cr::prepare_causal_unread(tx, &session)?;
+            let captured = cr::prepare_causal_unread_after(tx, &session,after)?;
             crate::causal_fence::blocked_channels(tx, &captured.causes)?;
             Ok(())
         })
@@ -889,11 +894,12 @@ impl Port for DbPort {
         &self,
         session: &str,
         now: Ms,
-    ) -> Result<Vec<(String, crewd_wake::explain::CausalBlockage)>> {
+    ) -> Result<Vec<(String, crewd_wake::explain::CausalBlockage)>> {self.causal_diagnostics_after(session,now,None).await}
+    async fn causal_diagnostics_after(&self,session:&str,now:Ms,after:Option<i64>)->Result<Vec<(String,crewd_wake::explain::CausalBlockage)>>{
         let session = session.to_owned();
         self.read(move |conn| {
             Ok(crate::causal_fence::diagnostic_values(
-                collab::causal::diagnostics(conn, &session, now.0)?,
+                collab::causal::diagnostics_after(conn, &session, now.0,after)?,
             ))
         })
         .await
@@ -1125,7 +1131,8 @@ impl Port for DbPort {
         .await
     }
 
-    async fn render_wake(&self, session: &str, batch: &[QueuedWake]) -> Result<Rendered> {
+    async fn render_wake(&self,session:&str,batch:&[QueuedWake])->Result<Rendered>{self.render_wake_after(session,batch,None).await}
+    async fn render_wake_after(&self, session: &str, batch: &[QueuedWake],after:Option<i64>) -> Result<Rendered> {
         let session = session.to_string();
         #[cfg(feature = "testkit")]
         let gate_session = session.clone();
@@ -1135,7 +1142,7 @@ impl Port for DbPort {
             .write(move |tx| {
                 // Normalize absent cursors and leading-own prefixes only with the shared
                 // reservation-aware scanner. Rendering and snapshot stay in this same job.
-                let captured = cr::prepare_causal_unread(tx, &session)?;
+                let captured = cr::prepare_causal_unread_after(tx, &session,after)?;
                 let blocked = crate::causal_fence::blocked_channels(tx, &captured.causes)?;
                 let c = tx.conn();
                 // `by_ids` 按 id 排；正文的顺序要跟这一批（按优先级选好的）一致。
@@ -1157,7 +1164,7 @@ impl Port for DbPort {
 
                 let locale = collab::settings::locale(c)?;
                 // 报错（如账本坏了）是 fail-loud：原样上抛，Core 记日志、这批留在 pending，不在这里重试。
-                let original = collab::render::build_batch(c, &session, locale, &rows, now_ms)?;
+                let original = collab::render::build_batch_after(c, &session, locale, &rows, now_ms,after)?;
                 let mut already = Vec::new();
                 for row in &rows {
                     if row.state != cw::WakeState::Pending
@@ -1181,11 +1188,11 @@ impl Port for DbPort {
                 }
                 rows.retain(|r| !already.contains(&r.id));
                 let c = tx.conn();
-                let b = collab::render::build_batch(c, &session, locale, &rows, now_ms)?;
+                let b = collab::render::build_batch_after(c, &session, locale, &rows, now_ms,after)?;
                 let text = collab::render::wake_text(locale, &b);
                 let targets = b.cursor_targets();
                 let channels: Vec<_> = targets.iter().map(|(ch, _)| ch.clone()).collect();
-                let mut reservation = cr::snapshot(tx.conn(), &session, &channels, now_ms)?;
+                let mut reservation = cr::snapshot_after(tx.conn(), &session, &channels, now_ms,after)?;
                 reservation.capture_work_followups(tx.conn(), &rows, now_ms)?;
                 let causes = captured.causes.select(&targets)?;
                 let prepared = PreparedSnapshot::CausalDatabase {
@@ -8628,4 +8635,48 @@ mod s42_task_fence_db_windows {
         assert_eq!(capture, wanted);
         assert!(receipt.contains("trailing_bytes=0"));
     }
+}
+
+#[cfg(test)]
+mod owned_managed_context_tests {
+    use super::*;
+    use super::fixture::{seeded,post_as};
+
+    #[tokio::test]
+    async fn owned_claude_resume_context_floor_keeps_large_backlog_and_rejects_stale_snapshot(){
+        let(state,port,_d)=seeded().await;
+        let old=state.collab(|tx|{
+            let mut first=None;
+            for n in 0..collab::cursors::UNREAD_CAP+5 {
+                let m=collab::messages::post(tx,collab::Sender::Human,collab::messages::NewPost{channel_id:"c-1/lobby".into(),text:format!("OLD_AUTOMATIC_CONTEXT_{n}"),..Default::default()})?;
+                if first.is_none(){first=Some(m.message)}
+            }
+            Ok(first.unwrap())
+        }).await.unwrap();
+        let old_wake=port.enqueue(NewWake{session:"w-1".into(),kind:WakeKind::Message,source:cw::source::message(&old.id),priority:Priority::Human,not_before:Ms(0),note:None,origin:HUMAN.into()}).await.unwrap().unwrap();
+        let cursor_before=port.cursor("w-1","c-1/lobby").await.unwrap();
+        let cut=port.managed_resume_cut("w-1").await.unwrap();
+        assert_eq!(port.cursor("w-1","c-1/lobby").await.unwrap(),cursor_before,"resume cut is not a read-cursor write");
+        assert_eq!(cut.wake_id,old_wake);
+        let fresh=post_as(&state,collab::Sender::Human,"c-1/lobby","NEW_EXPLICIT_CONTEXT",&[]).await;
+        let fresh_wake=port.enqueue(NewWake{session:"w-1".into(),kind:WakeKind::Message,source:cw::source::message(&fresh.id),priority:Priority::Human,not_before:Ms(0),note:None,origin:HUMAN.into()}).await.unwrap().unwrap();
+        let row=port.pending("w-1").await.unwrap().into_iter().find(|r|r.id==fresh_wake).unwrap();
+        // The ordinary path still observes its original oldest unread window.
+        let normal=port.render_wake("w-1",std::slice::from_ref(&row)).await.unwrap();
+        assert!(normal.text.contains("OLD_AUTOMATIC_CONTEXT_0"));
+        assert!(normal.deferred.contains(&fresh_wake));
+        let rendered=port.render_wake_after("w-1",std::slice::from_ref(&row),Some(cut.message_seq)).await.unwrap();
+        assert!(rendered.text.contains("NEW_EXPLICIT_CONTEXT"),"{}",rendered.text);
+        assert!(!rendered.text.contains("OLD_AUTOMATIC_CONTEXT"));assert!(rendered.deferred.is_empty());
+        assert_eq!(port.cursor("w-1","c-1/lobby").await.unwrap(),cursor_before,"render/snapshot is not an ACK");
+        let batch=Batch{session:"w-1".into(),wakes:vec![row.clone()],cursor_targets:rendered.cursor_targets,prepared:rendered.prepared,..Default::default()};
+        state.collab(move|tx|collab::cursors::advance(tx,"w-1","c-1/lobby",cut.message_seq)).await.unwrap();
+        assert!(matches!(port.claim_reserved(&batch,1).await.unwrap(),cr::Decision::Stale),"the original real cursor CAS must reject the old prepared snapshot");
+        let rendered=port.render_wake_after("w-1",std::slice::from_ref(&row),Some(cut.message_seq)).await.unwrap();
+        let mut current=Batch{session:"w-1".into(),wakes:vec![row],cursor_targets:rendered.cursor_targets,prepared:rendered.prepared,..Default::default()};
+        let cr::Decision::Applied(lease)=port.claim_reserved(&current,2).await.unwrap()else{panic!("same-floor current snapshot must claim the new task")};current.lease=Some(lease);
+        let rows=port.list_wakes(Some("w-1")).await.unwrap();let old=rows.iter().find(|r|r.id==old_wake).unwrap();assert_eq!(old.state,crewd_wake::WakeState::Pending);assert_eq!(old.attempts,0);
+        port.settle_batch(&current,Settle::Dropped{error:"synthetic cleanup".into()},Ms(1)).await.unwrap();
+    }
+
 }

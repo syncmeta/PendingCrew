@@ -69,7 +69,8 @@ async fn read(
   if row.executor!="claude" {return Err(unavailable())}
   let crew=crewd_collab::crews::get(c,&row.crew_id).map_err(dispatch::collab_err)?;
   let current=crewd_store::native_execution::current_runtime(c,&sid).map_err(|_|unavailable())?;
-  let live_runtime=current.as_ref().filter(|n|live.running&&managed_live&&!birth_gone(n.native_pid,n.native_start,&n.native_boot)).map(|n|n.id.as_str());
+  let automatic=if let Some(n)=&current {c.query_row("SELECT manual=0 AND revoked=0 FROM native_execution_runtimes WHERE runtime_id=?1",[&n.id],|r|r.get::<_,bool>(0)).map_err(|_|unavailable())?}else{false};
+  let live_runtime=current.as_ref().filter(|n|live.running&&automatic&&managed_live&&!birth_gone(n.native_pid,n.native_start,&n.native_boot)).map(|n|n.id.as_str());
   let value=match method2.as_str(){
    INSPECT=>{
     let mut q=c.prepare("SELECT native_pid,native_start,native_boot FROM native_execution_runtimes WHERE session_id=?1").map_err(|_|unavailable())?;

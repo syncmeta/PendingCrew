@@ -4766,4 +4766,21 @@ mod managed_resume_policy_tests {
         }
         assert!(violations.is_empty(), "managed existing IDs require an explicit exact resume before program/filesystem I/O and must never be replaced: {violations:?}");
     }
+    #[tokio::test]
+    async fn owned_managed_explicit_resume_rejects_missing_noncanonical_and_foreign_ids(){
+        let original="71bd51cf-3df2-4638-9a3f-d0d58d630174";
+        for(recorded,expected,managed)in[
+            (None,Some(original),true),
+            (Some(" 71bd51cf-3df2-4638-9a3f-d0d58d630174 "),Some(original),true),
+            (Some(original),Some("81bd51cf-3df2-4638-9a3f-d0d58d630174"),true),
+            (Some("00000000-0000-0000-0000-000000000000"),Some("00000000-0000-0000-0000-000000000000"),true),
+            (Some("71BD51CF-3DF2-4638-9A3F-D0D58D630174"),Some("71BD51CF-3DF2-4638-9A3F-D0D58D630174"),true),
+            (Some(original),Some(original),false),
+        ]{
+            let root=tempfile::tempdir().unwrap();let ledger=Arc::new(MemoryLedger::with(recorded));let runtime=root.path().join("runtime");let mut config=DriverConfig::new(runtime.clone());config.managed_hook_producer=managed;config.managed_resume_id=expected.map(str::to_owned);
+            let result=start_claude(ClaudeStart{session_id:"owned-invalid".into(),program:root.path().join("never-run"),child_path:"/usr/bin:/bin".into(),spec:ClaudeSpec{workdir:root.path().into(),..Default::default()},ledger:ledger.clone()},config).await;
+            assert!(matches!(result,Err(StartError::Ledger(_))));assert_eq!(ledger.current().as_deref(),recorded);assert!(!runtime.exists());
+        }
+    }
+
 }

@@ -15,6 +15,7 @@ pub enum Lang {
 pub const SECTIONS: &[(&str, &[&str])] = &[
     ("restart.interrupted", &[]),
     ("resume.refused.group", &["name", "said"]),
+    ("resume.refused.managed", &["name", "id", "said"]),
     ("resume.refused.diag.found", &["path"]),
     ("resume.refused.diag.missing", &[]),
     ("resume.refused.agent", &["id", "said"]),

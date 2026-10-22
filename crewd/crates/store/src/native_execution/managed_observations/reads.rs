@@ -94,7 +94,8 @@ pub fn summary(
         ))
     })?;
     let h = header(c, &runtime, request)?;
-    let current = live_runtime == Some(runtime.as_str());
+    let automatic:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_runtimes WHERE runtime_id=?1 AND revoked=0 AND manual=0)",[&runtime],|r|r.get(0))?;
+    let current = automatic && live_runtime == Some(runtime.as_str());
     let waiting = current
         && phase == "completed"
         && prompt.is_some()

@@ -91,3 +91,8 @@ The opening brief for "{name}" was not delivered. Re-dispatch the brief.
 
 ## notice.runner
 Runner notice for {name}: {detail}
+
+## resume.refused.managed
+
+Managed resume for {name} was refused: {said}
+Original session ID {id} is retained. No replacement conversation or old task was submitted. Stop this run before explicit Human recovery.

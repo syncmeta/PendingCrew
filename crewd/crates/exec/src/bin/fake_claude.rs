@@ -799,7 +799,7 @@ fn main() {
         if std::env::var("FAKE_CLAUDE_MANAGED_CASE").as_deref() != Ok("skip-start") {
             fake.managed_hook(
                 "SessionStart",
-                serde_json::json!({"source":if fake.resumed {"resume"} else {"startup"}}),
+                serde_json::json!({"source":if fake.resumed && std::env::var("FAKE_CLAUDE_MANAGED_CASE").as_deref()!=Ok("wrong-resume-source") {"resume"} else {"startup"}}),
             );
         }
     }
