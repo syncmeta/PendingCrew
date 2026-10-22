@@ -5,11 +5,11 @@ import X509
 actor EnrollmentFixtureServer {
     let key:Data;let link:CrewdEnrollmentLink
     var calls:[String]=[]
-    var loseBegin=false;var loseCommit=false;var mismatch=false;var noResult=false
+    var loseBegin=false;var loseCommit=false;var mismatch=false;var noResult=false;var badReceipt=false;var revoked=false
     var invitation:CrewdRemoteEnvelope?
     var accepted:CrewdRemoteAcceptResult?
     init(key:Data,link:CrewdEnrollmentLink){self.key=key;self.link=link}
-    func set(_ mode:String){loseBegin=mode=="beginLoss";loseCommit=mode=="commitLoss";mismatch=mode=="mismatch";noResult=mode=="notFound"}
+    func set(_ mode:String){loseBegin=mode=="beginLoss";loseCommit=mode=="commitLoss";mismatch=mode=="mismatch";noResult=mode=="notFound";badReceipt=mode=="badReceipt";revoked=mode=="revoked"}
     func count(_ method:String)->Int{calls.filter{$0==method}.count}
     func call(_ method:String,_ bytes:Data,_ descriptor:CrewdEnrollmentLink) throws -> Data {
         precondition(descriptor==link);calls.append(method)
@@ -29,7 +29,8 @@ actor EnrollmentFixtureServer {
             precondition(response.challenge=="original-challenge")
             let grant=CrewdRemoteGrant(id:UUID().uuidString.lowercased(),scope:"ownerWorkspace",deviceLabel:response.deviceLabel,clientSpkiSha256:response.clientSpkiSha256,revision:"1",createdAt:ISO8601DateFormatter().string(from:Date()),revokedAt:nil,revokeNote:nil)
             let receipt=try CrewdRemoteCertificate.sign(CrewdRemoteReceipt(invitationId:link.enrollmentId,grantId:grant.id,authorityId:link.server.authorityId,dbId:link.server.dbId,serverSpkiSha256:link.server.spkiSha256,clientSpkiSha256:response.clientSpkiSha256,grantRevision:grant.revision,acceptedAt:grant.createdAt),privateKey:key)
-            let result=CrewdRemoteAcceptResult(requestId:p.requestId,reused:false,receipt:receipt,grant:grant);accepted=result
+            let returnedGrant=badReceipt ? CrewdRemoteGrant(id:UUID().uuidString.lowercased(),scope:grant.scope,deviceLabel:grant.deviceLabel,clientSpkiSha256:grant.clientSpkiSha256,revision:grant.revision,createdAt:grant.createdAt,revokedAt:nil,revokeNote:nil):grant
+            let result=CrewdRemoteAcceptResult(requestId:p.requestId,reused:false,receipt:receipt,grant:returnedGrant);accepted=result
             if loseCommit{throw CrewdRemoteError.invalidExchange}
             return try JSONEncoder().encode(result)
         }
@@ -47,7 +48,8 @@ actor EnrollmentFixtureServer {
             if let digest=verified.beginDigest {
                 precondition(digest==SHA256.hash(data:Data(base64Encoded:invitation!.payload)!).map{String(format:"%02x",$0)}.joined())
             }
-            return try JSONSerialization.data(withJSONObject:["requestId":p.requestId,"state":"accepted","accepted":JSONSerialization.jsonObject(with:JSONEncoder().encode(accepted)),"grantState":JSONSerialization.jsonObject(with:JSONEncoder().encode(accepted.grant))])
+            let current=revoked ? CrewdRemoteGrant(id:accepted.grant.id,scope:accepted.grant.scope,deviceLabel:accepted.grant.deviceLabel,clientSpkiSha256:accepted.grant.clientSpkiSha256,revision:"2",createdAt:accepted.grant.createdAt,revokedAt:ISO8601DateFormatter().string(from:Date()),revokeNote:"synthetic revoke"):accepted.grant
+            return try JSONSerialization.data(withJSONObject:["requestId":p.requestId,"state":revoked ? "revoked":"accepted","accepted":JSONSerialization.jsonObject(with:JSONEncoder().encode(accepted)),"grantState":JSONSerialization.jsonObject(with:JSONEncoder().encode(current))])
         }
         precondition(object["beginDigest"] is NSNull)
         return try JSONSerialization.data(withJSONObject:["requestId":p.requestId,"state":"pending","pendingInvitation":JSONSerialization.jsonObject(with:JSONEncoder().encode(invitation!))])
@@ -68,19 +70,21 @@ actor EnrollmentFixtureServer {
         let (key,identity)=try serverIdentity()
         let link=CrewdEnrollmentLink(version:1,enrollmentId:UUID().uuidString.lowercased(),server:identity,endpoint:.init(host:"154.36.143.228",port:7423),expiresAt:ISO8601DateFormatter().string(from:Date().addingTimeInterval(300)),computerLabel:"synthetic",token:CrewdEnrollmentLink.url64(Data(repeating:7,count:32)))
         _ = try CrewdEnrollment.preview(link.encoded())
-        for mode in ["normal","beginLoss","commitLoss","mismatch","notFound"] {
+        for mode in ["normal","beginLoss","commitLoss","mismatch","notFound","badReceipt","revoked"] {
             let vault=CrewdEnrollmentVault(service:nil,memory:true)
-            let credentials=CrewdRemoteMemoryCredentials();let pairing=CrewdRemotePairing(credentials:credentials)
+            let credentials=CrewdRemoteMemoryCredentials()
+            var removalOwner:CrewdEnrollment?
+            let pairing=CrewdRemotePairing(credentials:credentials,enrollmentRemoval:{pair,id in try removalOwner!.removePairAttempt(pair,enrollmentId:id)})
             let server=EnrollmentFixtureServer(key:key,link:link);await server.set(mode)
             @CrewdCredentialActor func service(_ store:CrewdEnrollmentVault)->CrewdEnrollment{.init(vault:store,pairing:pairing,call:{try await server.call($0,$1,$2)})}
             let a=service(vault);let original=try a.prepare(link,deviceLabel:"A")
             let second=try a.prepare(link,deviceLabel:"B");precondition(second.id==original.id && second.privateKey==original.privateKey)
             do{_ = try await a.begin(original.id)}catch{precondition(mode=="beginLoss" || mode=="mismatch")}
-            if mode=="normal" || mode=="commitLoss" {do{_ = try await a.commit(original.id)}catch{precondition(mode=="commitLoss")}}
+            if ["normal","commitLoss","badReceipt","revoked"].contains(mode) {do{_ = try await a.commit(original.id)}catch{precondition(mode=="commitLoss" || mode=="badReceipt")}}
             // Reopen from exact encoded record bytes, not the coordinator's cache.
             let data=try JSONEncoder().encode(vault.all())
             let fresh=CrewdEnrollmentVault(service:nil,memory:true,records:try JSONDecoder().decode([CrewdEnrollmentVault.Record].self,from:data))
-            let b=service(fresh)
+            let b=service(fresh);removalOwner=b
             do{_ = try await b.begin(original.id)}catch{let n=await server.count("enrollment.begin");precondition(n==1,"replayed original begin")}
             let count=await server.count("enrollment.begin");precondition(count==1)
             if mode=="beginLoss" {
@@ -95,10 +99,36 @@ actor EnrollmentFixtureServer {
                 _ = try await b.commit(original.id)
                 let commits=await server.count("enrollment.commit");precondition(commits==0)
             }
-            if mode=="normal" || mode=="beginLoss" || mode=="commitLoss" {
+            if mode=="normal" || mode=="beginLoss" || mode=="commitLoss" || mode=="revoked" {
                 let receipt=try pairing.receipt(original.id);precondition(receipt.clientSpkiSha256==original.clientPin)
             }
+            if mode=="badReceipt" {let pairs=try credentials.records();precondition(pairs.isEmpty)}
+            if mode=="revoked" {let state=try await b.lookup(original.id);precondition(state.phase == .revoked);_ = try await b.commit(original.id);let n=await server.count("enrollment.commit");precondition(n==1)}
+            if mode=="normal" {
+                let summary=try pairing.summaries().first!;try pairing.forget(summary)
+                let pairs=try credentials.records();let records=try fresh.all();precondition(pairs.isEmpty && records.isEmpty)
+                do{_ = try await b.lookup(original.id);fatalError("forgotten key restored")}catch{}
+            }
             print("PASS "+mode+" original key/request, durable phase, no automatic replay")
+        }
+        for failingPhase in [CrewdEnrollmentAttempt.Phase.prepared,.beginUnknown,.challengeReady,.commitUnknown,.accepted] {
+            let storage=EnrollmentFixtureFailingVault();storage.fail=failingPhase
+            let credentials=CrewdRemoteMemoryCredentials();let pairing=CrewdRemotePairing(credentials:credentials)
+            let server=EnrollmentFixtureServer(key:key,link:link)
+            let service=CrewdEnrollment(vault:storage,pairing:pairing,call:{try await server.call($0,$1,$2)})
+            if failingPhase == .prepared {
+                do{_ = try service.prepare(link,deviceLabel:"A");fatalError("save refusal ignored")}catch{}
+                let values=try storage.all();precondition(values.isEmpty)
+            }else {
+                let original=try service.prepare(link,deviceLabel:"A")
+                do{_ = try await service.begin(original.id);if failingPhase == .commitUnknown || failingPhase == .accepted {_ = try await service.commit(original.id)};fatalError("stage write refusal ignored")}catch{}
+                guard case .recipient(let saved)=try storage.read(original.id) else{fatalError("wrong record")}
+                if failingPhase == .beginUnknown {precondition(saved.phase == .prepared);let count=await server.count("enrollment.begin");precondition(count==0)}
+                if failingPhase == .challengeReady {precondition(saved.phase == .beginUnknown)}
+                if failingPhase == .commitUnknown {precondition(saved.phase == .challengeReady);let count=await server.count("enrollment.commit");precondition(count==0)}
+                if failingPhase == .accepted {precondition(saved.phase == .commitUnknown);storage.fail=nil;let recovered=try await service.lookup(original.id);precondition(recovered.phase == .accepted)}
+            }
+            print("PASS storage refusal "+failingPhase.rawValue+" retains last durable original, no premature mutation")
         }
         let vault=CrewdEnrollmentVault(service:nil,memory:true)
         let issuer=EnrollmentFixtureIssuer(server:identity)
@@ -139,5 +169,20 @@ actor EnrollmentFixtureIssuer {
         let raw=CrewdEnrollmentLink.decodeURL64(link.token)!
         precondition(params?.tokenHash==SHA256.hash(data:raw).map{String(format:"%02x",$0)}.joined())
         precondition(link.enrollmentId==params?.enrollmentId)
+    }
+}
+
+@CrewdCredentialActor final class EnrollmentFixtureFailingVault:CrewdEnrollmentStoring {
+    let underlying=CrewdEnrollmentVault(service:nil,memory:true)
+    var fail:CrewdEnrollmentAttempt.Phase?
+    var failInitial=false
+    func all()throws->[CrewdEnrollmentVault.Record]{try underlying.all()}
+    func read(_ id:UUID)throws->CrewdEnrollmentVault.Record{try underlying.read(id)}
+    func remove(_ id:UUID)throws{try underlying.remove(id)}
+    func save(_ record:CrewdEnrollmentVault.Record)throws {
+        if case .recipient(let a)=record, (failInitial && a.phase == .prepared) || a.phase==fail {
+            throw CrewdRemoteError.storageFailure
+        }
+        try underlying.save(record)
     }
 }

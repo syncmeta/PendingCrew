@@ -166,10 +166,46 @@ struct IOSRemotePairingView:View {
     @EnvironmentObject private var crewStore:CrewStore
     @Environment(\.dismiss) private var dismiss
     @State private var computers=false
+    @State private var pending:CrewdRemotePairSummary?
+    @State private var removing:CrewdRemotePairSummary?
     var body:some View {
-        CrewdEnrollmentView {id in Task{await appModel.crewdWindow.select(id);await appModel.connectCrewdAuthority();await crewStore.refreshList();dismiss()}}
-            .safeAreaInset(edge:.bottom){Button("已存电脑与旧文件配对"){computers=true}.padding(8)}
-            .sheet(isPresented:$computers){IOSLegacyRemotePairingView()}
+        CrewdEnrollmentView(completed:choose)
+            .safeAreaInset(edge:.bottom){Button("已存电脑与草稿"){computers=true}.padding(8)}
+            .sheet(isPresented:$computers){computerList}
+            .sheet(item:$pending){computer in
+                CrewdRemotePairingView(pairing:appModel.crewdWindow.pairing,pending:computer.id,completed:choose)
+            }
     }
+    private var computerList:some View {
+        NavigationStack {
+            List {
+                Section("已存电脑") {
+                    if let error=appModel.crewdWindow.error{Text(error).foregroundStyle(.red)}
+                    if appModel.crewdWindow.computers.isEmpty{Text("尚无已存电脑。返回添加电脑，粘贴一次性配对链接。")}
+                    ForEach(appModel.crewdWindow.computers){computer in
+                        HStack {
+                            Button {
+                                computers=false
+                                if computer.paired{choose(computer.id)}else{pending=computer}
+                            }label:{VStack(alignment:.leading){Text(computer.name);Text(computer.paired ? "\(computer.endpoint.host):\(computer.endpoint.port)":"原文件配对等待确认").font(.caption).foregroundStyle(.secondary)}}
+                            .buttonStyle(.borderless)
+                            Spacer()
+                            Button("移除",role:.destructive){removing=computer}.buttonStyle(.borderless)
+                        }.disabled(appModel.crewdWindow.credentialBusy)
+                    }
+                }
+                Section{CrewPersonalHostDirectory()}
+                Section{CrewPersonalDraftArchive()}
+            }
+            .navigationTitle("已存电脑")
+            .toolbar{ToolbarItem(placement:.cancellationAction){Button("返回添加电脑"){computers=false}}}
+            .task{await appModel.crewdWindow.refresh()}
+            .alert("从本设备移除已存电脑",isPresented:Binding(get:{removing != nil},set:{if !$0{removing=nil}}),presenting:removing){computer in
+                Button("移除配对凭据",role:.destructive){Task{_ = await appModel.crewdWindow.forget(computer)};removing=nil}
+                Button("取消",role:.cancel){removing=nil}
+            }message:{computer in Text(computer.name+" · "+computer.endpoint.host+":"+String(computer.endpoint.port)+"\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。")}
+        }
+    }
+    private func choose(_ id:UUID){Task{await appModel.crewdWindow.select(id);await appModel.connectCrewdAuthority();await crewStore.refreshList();dismiss()}}
 }
 #endif

@@ -29,7 +29,13 @@ struct CrewdHostEnrollmentAttempt: Codable, Sendable, Identifiable {
 }
 /// Only B's two closed record shapes live here. ThisDeviceOnly and a separate
 /// service keep raw one-use tokens away from Cloud, preferences and old pairs.
-@CrewdCredentialActor final class CrewdEnrollmentVault {
+@CrewdCredentialActor protocol CrewdEnrollmentStoring {
+    func all()throws->[CrewdEnrollmentVault.Record]
+    func read(_ id:UUID)throws->CrewdEnrollmentVault.Record
+    func save(_ record:CrewdEnrollmentVault.Record)throws
+    func remove(_ id:UUID)throws
+}
+@CrewdCredentialActor final class CrewdEnrollmentVault:CrewdEnrollmentStoring {
     enum Record:Codable {case recipient(CrewdEnrollmentAttempt),issuer(CrewdHostEnrollmentAttempt)
         var id:UUID {switch self{case .recipient(let v):return v.id;case .issuer(let v):return v.id}}
     }
@@ -75,11 +81,12 @@ struct CrewdHostEnrollmentAttempt: Codable, Sendable, Identifiable {
     }
     func save(_ record:Record)throws {
         let data=try JSONEncoder().encode(record);guard data.count<=524288 else{throw CrewdRemoteError.storageFailure}
-        if memory{values[record.id]=record;return}
+        if memory{guard values[record.id] != nil || values.count<128 else{throw CrewdRemoteError.storageFailure};values[record.id]=record;return}
         let q=try query(record.id)
         let fields:[String:Any]=[kSecValueData as String:data,kSecAttrAccessible as String:kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
         let status=SecItemUpdate(q as CFDictionary,fields as CFDictionary)
         if status==errSecSuccess{return}
-        guard status==errSecItemNotFound,SecItemAdd(q.merging(fields){_,new in new} as CFDictionary,nil)==errSecSuccess else{throw CrewdRemoteError.storageFailure}
+        guard status==errSecItemNotFound else{throw CrewdRemoteError.storageFailure}
+        guard try all().count<128,SecItemAdd(q.merging(fields){_,new in new} as CFDictionary,nil)==errSecSuccess else{throw CrewdRemoteError.storageFailure}
     }
 }

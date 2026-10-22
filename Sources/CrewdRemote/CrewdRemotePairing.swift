@@ -18,13 +18,14 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     nonisolated static let shared = CrewdRemotePairing()
     nonisolated static let changed = Notification.Name("PendingCrew.CrewdRemotePairsChanged.v1")
     private var injected: CrewdRemoteCredentialStore?
+    private var enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?
     private var credentials: CrewdRemoteCredentialStore {
         if let injected { return injected }
         let store = CrewdRemoteCredentials.application(); injected = store; return store
     }
     // No store construction or credential access crosses into the UI initializer.
     nonisolated init() {}
-    init(credentials: CrewdRemoteCredentialStore) { injected = credentials }
+    init(credentials: CrewdRemoteCredentialStore, enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?=nil) { injected = credentials;self.enrollmentRemoval=enrollmentRemoval }
     private var responses: [String: (UUID, String)] = [:]
     struct Response: Sendable { let id: UUID; let text: String }
     /// Save and capture the response in one non-suspending transaction. A repeated
@@ -132,7 +133,10 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     }
     private func forget(_ id: UUID) throws {
         let pair=try credentials.read(id)
-        if let enrollmentId=pair.enrollmentId {try CrewdEnrollment.shared.removePairAttempt(pair,enrollmentId:enrollmentId)}
+        if let enrollmentId=pair.enrollmentId {
+            if let enrollmentRemoval{try enrollmentRemoval(pair,enrollmentId)}
+            else{try CrewdEnrollment.shared.removePairAttempt(pair,enrollmentId:enrollmentId)}
+        }
         try credentials.remove(id)
         responses = responses.filter { $0.value.0 != id }
         NotificationCenter.default.post(name:Self.changed,object:nil)

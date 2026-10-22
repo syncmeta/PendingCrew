@@ -40,6 +40,7 @@ import Combine
             let state = try decode(await workspace.client.call("remote.status"), as: CrewdRemoteStatus.self)
             let grants = try decode(await workspace.client.call("remote.grants"), as: [CrewdRemoteGrant].self)
             guard readEpoch == epoch else { return }
+            if self.status?.identity != state.identity { enrollment=nil }
             self.status = state; self.grants = grants; error = nil
             if let old = accepted {
                 if let current = grants.first(where: { $0.id == old.grant.id }) {

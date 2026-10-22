@@ -29,6 +29,7 @@ private final class EnrollmentSocket:@unchecked Sendable {
         let options=NWProtocolTLS.Options()
         sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions,.TLSv13)
         sec_protocol_options_set_max_tls_protocol_version(options.securityProtocolOptions,.TLSv13)
+        sec_protocol_options_set_peer_authentication_required(options.securityProtocolOptions,true)
         sec_protocol_options_set_tls_tickets_enabled(options.securityProtocolOptions,false)
         sec_protocol_options_set_tls_resumption_enabled(options.securityProtocolOptions,false)
         sec_protocol_options_add_tls_application_protocol(options.securityProtocolOptions,"pcw-enroll/1")

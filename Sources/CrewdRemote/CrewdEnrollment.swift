@@ -7,13 +7,13 @@ import Security
 @CrewdCredentialActor final class CrewdEnrollment {
     nonisolated static let shared=CrewdEnrollment()
     typealias Call = @Sendable (String,Data,CrewdEnrollmentLink) async throws -> Data
-    private var injectedVault:CrewdEnrollmentVault?
-    private var vault:CrewdEnrollmentVault {if let injectedVault{return injectedVault};let v=CrewdEnrollmentVault.application();injectedVault=v;return v}
+    private var injectedVault:CrewdEnrollmentStoring?
+    private var vault:CrewdEnrollmentStoring {if let injectedVault{return injectedVault};let v=CrewdEnrollmentVault.application();injectedVault=v;return v}
     private let call:Call
     private let pairing:CrewdRemotePairing
     private var running=Set<UUID>()
     nonisolated init(){call={try await CrewdEnrollmentTransport.call($0,$1,link:$2)};pairing = .shared}
-    init(vault:CrewdEnrollmentVault,pairing:CrewdRemotePairing,call:@escaping Call){injectedVault=vault;self.pairing=pairing;self.call=call}
+    init(vault:CrewdEnrollmentStoring,pairing:CrewdRemotePairing,call:@escaping Call){injectedVault=vault;self.pairing=pairing;self.call=call}
     nonisolated static func preview(_ text:String)throws->CrewdEnrollmentLink {
         let link=try CrewdEnrollmentLink.decode(text)
         let certificate=try CrewdRemoteCertificate.decode(link.server.certificateDerBase64)
