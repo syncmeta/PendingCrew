@@ -33,6 +33,8 @@
 
 frontend_demo 是 Mac/iOS 共享 Swift、业务 store 和工程文件唯一作者，两端均按实际最新 demo 改造，手机布局适配而不复制两套业务。backend_continue 是 Rust/schema/API 与部署唯一作者。完整群内容模块 A 扩真实 Document 引用、本群文件夹/消息分类、标签及全量计数；源与目标双许可覆盖所有引用，owner/人工完成是源全局事实，标签/文件夹是群内引用属性。HumanTask 走明确人工来源，Agent ask 权限不放松；Request 人工完成阻止新 claim，保留既有 Plan，不自动停工、结算或唤醒。当前 Store15 直接受保护升级17，fresh17；实验16先拒绝不写，不激活 Native16，不引入旧产品数据迁移。固定 DTO 见私域 group-content-store17-20261022/CONTRACT.md，原合同明确草稿另模块，勿因纯文档重复已验业务。
 
+A 正常生产路由裁定补正：作者定向验证发现正常 serve 始终标记 knowledge.sqlite.v1，旧 document.* 被 legacy guard 拒绝；根实核 marker、DataContext/namespace、原 submit/lookup/changed 与 View/Block/Placement。因此撤回初冻合同的旧 document.create/list 群参数扩展及跨库原子承诺，不解除 guard 或写第二文档源。群内文档/页面沿现 SQLite 知识 DataRef 与源 crew/context 引用；内容保存和加入本群分开原 UUID/receipt，关联失败保已保存内容，Unknown 只查原结果、不再创建。复用既有 data API、源/目标权限与知识 generation/changed；不引入新的跨库 intent 平台，不复制固定视图。作者修订唯一 DTO 并与双端同步；旧 document 资源保护的 version>=16 应精准区分实验16和资源17，Native16仍不激活。此补正不缩掉 A 的真实群资料/文件夹范围，其余合同继续。
+
 共同连接同一 Core authority/DB 的数据、事件和 CAS 已有基础；Mac+iOS 同时使用、并发冲突和离线重连完整流程仍未验，独立本机后台不会自动互相同步。用户现明确未发送草稿也同步、保留各设备版本防覆盖；按 authority/DB/群/设备隔离与原文版本保护提出完整合同，不把同步等同发送或 session 自动恢复。用户新增同账号配对设备同步、iCloud 补位、VPS 离线及 Mac 主机讨论；目前只研究裁定，不擅自建立新账号服务、同步设备私钥或开放自动授信。
 
 只读现状核实：PendingCrew 当前无 CloudKit/KVS entitlement 或实现；vault 明确不同步且使用 ThisDeviceOnly，草稿是本地 latest-entry 文件，不是完整版本历史。PendingNet 实际是 KVS 配对目录+同步 Keychain 普通令牌，无 CloudKit；其共享设备 token 与 LWW 名单不能直接照搬为 Crew 的独立设备授权/全文版本库，账号切换隔离须另做。建议待用户确认：Core 主机可选 VPS/Mac；同账号 Apple 云层同步主机目录、偏好和按设备保留的草稿版本，本地 SQLite 保留草稿与已缓存快照。主机离线仍可读缓存/写草稿；双方有 iCloud 网络则异步交换草稿，完全断网则稍后同步。任务与权威业务提交仍须主机，不能借云副本重放 Unknown 或自动执行。主机记录跨端共享不等同复制私钥或自动授信；新设备独立身份/撤权、账户切换隔离、删除墓碑及云副本留存规则随完整合同核定。上述为讨论建议，尚未实施 CloudKit 或访问用户 iCloud。
