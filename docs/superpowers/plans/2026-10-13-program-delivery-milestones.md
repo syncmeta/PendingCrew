@@ -2,6 +2,8 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+双端完整目标现已实编通过，修订0fc1ecc0经净独验普通合入62d624c9。实际产品仅两处Swift编译表达修正，无业务/Rust变化；临时编译源3e875与0477 helper各保原来源。Mac原封装因暖target旧rootseal正确拒绝，尚无该轮Mac候选；最终封装前保全并移走这一精确mutable整包（保实际binary/seal/log），沿同暖对象重生，不剥签名/改guard/清缓存。保存本记录后再次冻结完整输入，准确normal与最终Mac/iOS候选须对应这个新冻结源，已验稳定范围不重跑。
+
 最新组合：群内容 A、原 App 草稿版本3841acf3、共享 Codex 界面b38cbfdc及后端最终6a7ff642均已独立接受，普通合入 main；后两次合并分别b6cb4090/b1563490。CloudKit 提案0219e181仅文档，已合4e3d9a03。下一关口是一份干净完整HEAD的准确默认normal helper、原aeh暖缓存完整Mac+iOS目标与不可变候选，再验证新影响范围的双端同Core实际流程。主代理只统筹/整合/冻结；后端唯一Rust/schema/API/部署作者及编译者，客户端唯一Swift/工程/Xcode作者，质量线独立复验。冻结后helper和App构建之间不加入B/Cloud产品源，编译真实缺陷交原作者整块修复，不重造验收框架或全量重跑。
 
 当前Store18/API3是Unknown fork防旧writer误启动的必要保护，无新增表或旧产品导入；Native16仍inactive。Codex附件/skill输入、原生archive/delete/revert、命名/全局profile仍未完，不以七项控制及四read完成冒全部Codex要求。日用Mac仍6f35，既有iOS111b/Linux582不改来源，当前完整组合尚无全目标/窗口/真实provider/安装通过。

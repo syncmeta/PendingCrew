@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 Mac/iOS完整target净修正通过，最终候选输入待准确重封
+
+作者0fc1ecc01ba2f758282738a9acbe7977666005ee干净，普通整合62d624c9；产品只有两Swift文件7+/2-（@State分声明与content memberwise标签顺序），无业务/Rust/配置变化。私域combined-client-compile-3e8751d5-20261022/REPORT.json SHA1f927073013fd4fddafca5a22576bf909f98db2f94ce160598d389eb97be166d，净独验SHA9f1a5eefc9501ce45358bd37cc245cb7dac5b61a1d2835379a0c8335a7681b0c，根实际读取核同。Mac LOCAL_MAC+REMOTE_PRODUCT完整BUILD SUCCEEDED；wrapper1因旧rootseal拒绝，未冒候选。ordinary iOS准确3e875 build0、源/依赖前后相同、复制与签名证据核同；未boot/install/launch。排错helper仍准确0477/b816，未改标签，原两次65失败日志保留。
+
+最终封装裁定：先核精确aeh Debug/PendingCrew.app的canonical路径、Info/main/helper/rootseal和未运行身份，整包移入本轮私有preserved-raw保全实际binary及旧seal，原位置空后沿同Intermediates/SPM暖构建。保持现有unsigned资格规则，不删除缓存/SDK/已交包、不剥签名让已封App假装unsigned。该动作尚未执行。保存本记录后冻结准确完整HEAD，唯一backend从该完整输入构建normal，再client同输入封最终Mac+iOS；此前0477 normal provenance独验799f29ca3309eddb13f6798b5958e3ea2c59d0dfb69eb45988922f47893ceaf2仅保其原来源。A/Sync/C业务与旧配对稳定证据复用，当前未新增GUI/provider/云/安装/CI。
+
 ## 2026-10-22 草稿版本与 Codex 有界控制接受，进入准确双端组合
 
 原App草稿3841acf3独验SHA c12030f3b8b029b8a531363e3682600fc5557e7cc47f76a61380bebf1f7f617c，共享Codex UI b38cbfdc独验SHA a1283ace5cd6eca1509672501de5fbb69b6081d15e79bd3d92885062aa160042，根亲读原报告核同后普通整合bd6fca07/b6cb4090。原ecc三项真实持久缺陷保留红证：发送/merge原revision CAS、最新原文和sourceIdentity共同持久可发现、异步Stop/force最终退出重新核新输入。六影响模式与实际delegate前缀含展示stub亲跑0；production安装身份Keychain尚未实证，fixture注入不冒真实机制通过。C界面沿原UUID/Unknown只查与结构化人工答复，actual wire/Store红绿通过，完整SwiftUI目标尚待首次实编。
