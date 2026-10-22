@@ -337,6 +337,15 @@ final class CrewdClient: ObservableObject {
     func retire() { retired = true; disconnect() }
     func disconnect() { fail("连接已断开。", notify: false); lastError = nil }
 
+    private var personalDraftEventEpoch:UUID?
+    /// Only after a successful typed status read on this exact connection.
+    func subscribePersonalDraftEvents()async throws{
+        let epoch=connectionEpoch
+        guard readyForWork,personalDraftEventEpoch != epoch else{return}
+        let topics=["crew","session","message","channel","ask","work","todo","restart","system","personalDraft"]+["documents","viewFolders","data"].filter{capabilities.contains($0)}
+        _ = try await call("events.subscribe",.object(["topics":.array(topics.map(CrewdValue.string))]))
+        guard connectionEpoch==epoch,readyForWork else{throw CancellationError()};personalDraftEventEpoch=epoch
+    }
     private func transportEnded(_ message: String) {
         // Network can announce failure before completing an outstanding receive.
         // Let that receive drain final bytes; only received RPC frames prove success.

@@ -294,6 +294,7 @@ final class CrewdPresentationJournal {
     }
     /// Redacted notification attempts retain only a token digest, never the
     /// APNs token or provider key. Reading history does not confirm a mutation.
+    func personalDraftHistory()throws->[Prepared]{try records(includeObservedFirstMessages:false,includePersonalDrafts:true).filter{$0.method=="command.submit" && $0.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true}.sorted{$0.preparedAt < $1.preparedAt}}
     func notificationHistory()throws->[Prepared]{try records(includeObservedFirstMessages:false,includeNotifications:true).filter{["notification.installationRegister","notification.installationRevoke"].contains($0.method)}.sorted{$0.preparedAt < $1.preparedAt}}
     func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
     /// Original successful-observation snapshots remain available for lookup;
@@ -378,7 +379,7 @@ final class CrewdPresentationJournal {
             }else if record.method=="session.codex.inputDiscard",let id=record.params["input"]["inputId"].string,wanted.contains(id){throw CrewdClientError(message:"原输入已请求丢弃；请只读核对原请求。",kind:.notSubmitted)}
         }
     }
-    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false) throws -> [Prepared] {
+    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false,includePersonalDrafts:Bool=false) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -403,7 +404,8 @@ final class CrewdPresentationJournal {
                 observed = observation
             }
             guard let outcome = observed else { rows.append(record); continue }
-            if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
+            if includePersonalDrafts,record.method=="command.submit",record.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true{rows.append(record)}
+            else if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
             else if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
             else if outcome.state == "unknown" { rows.append(record) }
             else if includeObservedFirstMessages, outcome.state == "replyObserved",

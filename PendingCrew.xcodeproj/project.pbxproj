@@ -960,6 +960,10 @@
 		FF48D3B747561242FE65B3CD /* McpAddHumanTodoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0289B7CA9949BA817F748B6A /* McpAddHumanTodoTests.swift */; };
 		FF58C8EF769FBFB39F76FDCE /* CaptainRunnerPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88BB47BAAC6B3F33DBF3BBD1 /* CaptainRunnerPreferences.swift */; };
 		FF9BE8106C80F0581C04480D /* CrewLocalAttachmentPersistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FB6CBB0B9FAA3C6B00383E6 /* CrewLocalAttachmentPersistTests.swift */; };
+		4E9E14CA8808E8EA76A6AE1E /* CrewPersonalCoreWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19702D02C689014918B9B4CD /* CrewPersonalCoreWire.swift */; };
+		E82DCD6718EBD35911EB61E8 /* CrewPersonalCoreWire.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19702D02C689014918B9B4CD /* CrewPersonalCoreWire.swift */; };
+		BE70866DFA14303D4061E539 /* CrewPersonalCoreTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827A9A9483050952443E9D28 /* CrewPersonalCoreTransport.swift */; };
+		F4E21F535DE7C1160264F93A /* CrewPersonalCoreTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827A9A9483050952443E9D28 /* CrewPersonalCoreTransport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -1619,6 +1623,8 @@
 		FF44EDED680B7F41686086C5 /* TestBundleStandaloneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBundleStandaloneTests.swift; sourceTree = "<group>"; };
 		FF58B04620F9FAC4489B04BC /* AgentTerminationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminationTests.swift; sourceTree = "<group>"; };
 		FF7CAFD68BA96FE5F76B5906 /* CrewMessageReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewMessageReference.swift; sourceTree = "<group>"; };
+		19702D02C689014918B9B4CD /* CrewPersonalCoreWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPersonalCoreWire.swift; sourceTree = "<group>"; };
+		827A9A9483050952443E9D28 /* CrewPersonalCoreTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPersonalCoreTransport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2510,6 +2516,8 @@
 		EEFD678B1AC0CD10D4E77F47 /* PersonalSync */ = {
 			isa = PBXGroup;
 			children = (
+				827A9A9483050952443E9D28 /* CrewPersonalCoreTransport.swift */,
+				19702D02C689014918B9B4CD /* CrewPersonalCoreWire.swift */,
 				65DBDF51789A0755185E4762 /* AppleBranchStore.swift */,
 				1EF91CD6D43DB00C32E56D07 /* AppleCloudKitTransport.swift */,
 				2E6D5580AAA87268F14FCBC1 /* ApplePortableDirectory.swift */,
@@ -2761,6 +2769,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F4E21F535DE7C1160264F93A /* CrewPersonalCoreTransport.swift in Sources */,
+				E82DCD6718EBD35911EB61E8 /* CrewPersonalCoreWire.swift in Sources */,
 				A450DF0144655682630A1E09 /* AgentCLIMaintenance.swift in Sources */,
 				22E6418BBAB647E3670BD8E6 /* AgentCLIVersionCenter.swift in Sources */,
 				E3C641A832623EC0C2454F81 /* AgentCLIVersionView.swift in Sources */,
@@ -3171,6 +3181,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BE70866DFA14303D4061E539 /* CrewPersonalCoreTransport.swift in Sources */,
+				4E9E14CA8808E8EA76A6AE1E /* CrewPersonalCoreWire.swift in Sources */,
 				C0F69B04623726CCCA0D4A7F /* AgentCLIMaintenance.swift in Sources */,
 				DAB60EC0C7CC1E76651174F2 /* AgentCLIMaintenanceTests.swift in Sources */,
 				4FB514980B00DE74F822E8EA /* AgentModelCatalog.swift in Sources */,

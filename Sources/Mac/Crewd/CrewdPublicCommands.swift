@@ -42,7 +42,7 @@ final class CrewdPublicCommands: ObservableObject {
     }
     /// One explicit send, only after its immutable original scope/payload/UUID
     /// has been privately persisted. A refused/unknown response never clears it.
-    func submit(_ envelope: CrewdPublicCommandEnvelope, crew: String) async throws -> CrewdPublicReceipt {
+    func submit(_ envelope: CrewdPublicCommandEnvelope, crew: String, validateReceipt:((CrewdPublicReceipt)throws->Void)?=nil) async throws -> CrewdPublicReceipt {
         guard allowsSubmission() else { throw notSubmitted("正在停工，不再接受新执行。") }
         let captured = try binding()
         if observations.count >= maximumObservations {
@@ -76,6 +76,7 @@ final class CrewdPublicCommands: ObservableObject {
             guard (try? binding()) == captured else {
                 throw CrewdClientError(message: "原命令返回时连接已改变；保留原请求并在原数据库只读确认。")
             }
+            try validateReceipt?(receipt)
             observations[envelope.requestID]?.receipt = receipt
             // A real response can itself report Unknown. Historical or merely
             // dispatched external work remains unresolved, never auto-replayed.

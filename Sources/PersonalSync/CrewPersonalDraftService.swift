@@ -68,6 +68,16 @@ import Darwin
     private var syncID:UUID?
     private var syncAgain=false
     private var active=false
+    @Published private(set) var coreTransport:CrewPersonalCoreTransport?
+    @Published private(set) var coreGrants:[CrewdRemoteGrant]=[]
+    @Published private(set) var coreSynchronized=false
+    private var coreBinding:CrewdPublicCommands.Binding?
+    private weak var coreWorkspace:CrewdWorkspace?
+    private var coreSyncedRevisions:[AppleDraftKey:UUID]=[:]
+    private var coreSourcesKey:String{consentKey+".coreSources"}
+    private var coreSelectionKey:String{consentKey+".coreSelection"}
+    var usingCore:Bool{coordinator.current.id.core != nil}
+    var coreStatus:CrewPersonalCoreWire.Status?{coreTransport?.status}
     private var projected:ApplePersonalNamespaceID = .local
     private var preferenceStore:NSUbiquitousKeyValueStore?
     private var preferenceObserver:NSObjectProtocol?
@@ -96,6 +106,12 @@ import Darwin
         let local=makeNamespace(.local)
         coordinator=Coordinator(local:local,configuration:configuration,namespaceFactory:{[weak self] id in guard let self else{throw AppleSyncFailure.invalid};return self.makeNamespace(id)},transportFactory:transportFactory ?? {try AppleCloudKitTransport(containerIdentifier:$0.containerIdentifier,environment:$0.environment)})
         coordinator.didChange={[weak self] in self?.publishProjection()}
+        if let data=defaults.data(forKey:coreSourcesKey),let sources=try? JSONDecoder().decode([PersonalCoreDraftProjection].self,from:data){
+            for projection in sources.prefix(64){try? coordinator.retainCoreSource(.init(account:nil,core:projection,draftsCollection:"drafts",hostsCollection:"hosts"))}
+        }
+        if let bytes=defaults.data(forKey:coreSelectionKey),let projection=try? JSONDecoder().decode(PersonalCoreDraftProjection.self,from:bytes){
+            try? coordinator.restoreCoreSelection(.init(account:nil,core:projection,draftsCollection:"drafts",hostsCollection:"hosts"))
+        }
         publishProjection()
         defaultsObserver=NotificationCenter.default.addObserver(forName:UserDefaults.didChangeNotification,object:defaults,queue:.main){[weak self] _ in Task{@MainActor in self?.appearanceChanged()}}
     }
@@ -129,8 +145,9 @@ import Darwin
             guard writer?.save(payload,for:id.latestNamespace+"/retained/"+uuid.uuidString.lowercased(),crew:key.crewID,channel:Self.destinationLabel(key),retainEmpty:true,sourceIdentity:try? appleSyncEncode(key))==true else{return writer?.storageError ?? failure ?? "保全原文尚未保存，请导出后退出。"};return nil
         })
         let owner=Namespace(id:id,latest:latest,stores:{[weak self] in
-            guard let self else{throw AppleSyncFailure.invalid};let device=try await self.installationID()
-            return .init(namespace:id,deviceID:device,drafts:try AppleBranchStore(root:directory,deviceID:device,account:id.account,collection:id.draftsCollection),hosts:try AppleBranchStore(root:directory,deviceID:device,account:id.account,collection:id.hostsCollection))
+            guard let self else{throw AppleSyncFailure.invalid};let device:String
+            if let core=id.core{device=core.writerID}else{device=try await self.installationID()}
+            return .init(namespace:id,deviceID:device,drafts:try AppleBranchStore(root:directory,deviceID:device,account:id.account,collection:id.draftsCollection,coreProjection:id.core),hosts:try AppleBranchStore(root:directory,deviceID:device,account:id.account,collection:id.hostsCollection))
         })
         owner.didChange={[weak self] in self?.publishProjection()}
         owner.didCheckpoint={[weak self] in self?.scheduleSync()}
@@ -141,11 +158,20 @@ import Darwin
     private func publishProjection(){
         guard let coordinator else{return};let current=coordinator.current
         if current.id != projected{projected=current.id;projectionID=UUID()}
-        versions=current.versions.mapValues{$0.map{.init(id:$0.branchID,deviceID:$0.deviceID,own:$0.deviceID==deviceID,payload:$0.payload)}}
+        versions=current.versions.mapValues{$0.map{.init(id:$0.branchID,deviceID:$0.deviceID,own:$0.deviceID==(current.id.core?.writerID ?? deviceID),payload:$0.payload)}}
         errors=current.errors;unsavedLatest=current.unsavedLatest;saving=current.savingKeys
         catalog=current.catalog.sorted{Self.storageKey($0,namespace:current.id)<Self.storageKey($1,namespace:current.id)}
         recovered=current.recovered;hosts=current.hosts;initializationError=current.initializationError
         updatePreferenceProjection()
+        if let core=current.id.core{
+            if current.revisions != coreSyncedRevisions{coreSynchronized=false}
+            if let adapter=coreTransport,adapter.ready(core){
+                let issues=adapter.issues
+                for (key,value) in issues where errors[key]==nil{errors[key]=value}
+                status=syncBusy ? "正在与当前 Core 核对草稿版本":(coreSynchronized && issues.isEmpty ? "当前 Core 个人草稿版本已同步":"Core 个人草稿有待核对版本 · 本机原文已保留")
+            }else{status="Core 草稿离线或资格待核对 · 原文仍在原空间本机保存"}
+            return
+        }
         switch coordinator.status {
         case .localOnly:status="草稿仅本机保存"
         case .notConfigured:status="个人同步暂未启用；草稿仅本机保存"
@@ -198,34 +224,40 @@ import Darwin
     private func setActive(_ value:Bool){
         active=value
         if !value{activityTask?.cancel();activityTask=nil;activityID=nil;return}
+        if usingCore{scheduleSync();return}
         guard cloudConfigured,cloudOptedIn,activityTask==nil else{return}
         let operation=UUID();activityID=operation
         activityTask=Task{[weak self] in guard let self else{return};defer{if self.activityID==operation{self.activityTask=nil;self.activityID=nil}};do{try await self.coordinator.enable();guard self.activityID==operation,!Task.isCancelled,self.active else{return};self.publishProjection();self.scheduleSync()}catch{if self.activityID==operation{self.publishProjection()}}}
     }
     func enablePersonalSync()async throws{
         guard cloudConfigured else{throw AppleSyncFailure.invalid}
+        defaults.removeObject(forKey:coreSelectionKey)
         defaults.set(true,forKey:consentKey)
         try await coordinator.enable();publishProjection();scheduleSync()
     }
     func disablePersonalSync()async{
+        defaults.removeObject(forKey:coreSelectionKey)
         defaults.set(false,forKey:consentKey);activityTask?.cancel();activityTask=nil;activityID=nil;syncTask?.cancel();syncTask=nil;syncID=nil;syncAgain=false;syncBusy=false
         await coordinator.disable();publishProjection()
     }
     private func scheduleSync(){
-        guard active,cloudOptedIn,coordinator.optedIn,coordinator.current.id.account != nil else{return}
+        guard active,(usingCore && coreTransport != nil) || (cloudOptedIn && coordinator.optedIn && coordinator.current.id.account != nil) else{return}
         if syncTask != nil{syncAgain=true;return}
         let operation=UUID();syncID=operation
         syncTask=Task{[weak self] in guard let self else{return};self.syncBusy=true;defer{if self.syncID==operation{self.syncBusy=false;self.syncTask=nil;self.syncID=nil}}
-            repeat{self.syncAgain=false;do{try await self.coordinator.synchronize()}catch{if self.syncID==operation{self.publishProjection()};return};guard self.syncID==operation else{return};self.publishProjection()}while self.syncAgain && !Task.isCancelled && self.active && self.cloudOptedIn
+            repeat{self.syncAgain=false;do{if self.usingCore{guard let adapter=self.coreTransport else{throw AppleSyncFailure.accountChanged};self.coreSynchronized = try await self.coordinator.current.synchronizeCore(using:adapter);if self.coreSynchronized{self.coreSyncedRevisions=self.coordinator.current.revisions}}else{try await self.coordinator.synchronize()}}catch{if self.syncID==operation{self.publishProjection()};return};guard self.syncID==operation else{return};self.publishProjection()}while self.syncAgain && !Task.isCancelled && self.active && (self.usingCore || self.cloudOptedIn)
         }
     }
-    func synchronizePersonal()async throws{try await coordinator.synchronize();publishProjection()}
-    var cacheSuffix:String{coordinator.current.id.account == nil ? "":"/personal-"+coordinator.current.id.stableName}
+    func synchronizePersonal()async throws{
+        if usingCore{guard let coreTransport else{throw AppleSyncFailure.accountChanged};coreSynchronized = try await coordinator.current.synchronizeCore(using:coreTransport);if coreSynchronized{coreSyncedRevisions=coordinator.current.revisions}}else{try await coordinator.synchronize()};publishProjection()
+    }
+    var cacheSuffix:String{coordinator.current.id == .local ? "":"/personal-"+coordinator.current.id.stableName}
     func editingScope()->EditingScope{.init(owner:coordinator.current,projection:projectionID)}
     func isCurrent(_ scope:EditingScope)->Bool{scope.owner === coordinator.current && scope.projection==projectionID && scope.owner.isSelected}
     func localDraft(_ key:AppleDraftKey)->Payload?{coordinator.current.localDraft(key)}
     func checkpoint(_ payload:Payload,key:AppleDraftKey,scope:EditingScope?=nil){
         let owner=scope?.owner ?? coordinator.current
+        if owner === coordinator.current,owner.id.core != nil{coreSynchronized=false}
         if let scope,!isCurrent(scope){
             if owner.localDraft(key)==payload{return}
             owner.retainStale(payload,key:key,id:Self.recoveryID(scope,key:key));publishProjection();return
@@ -247,8 +279,56 @@ import Darwin
     func isCurrent(_ value:Snapshot)->Bool{coordinator.current === value.owner && value.owner.isCurrent(value.value)}
     @discardableResult func clearIfUnchanged(_ value:Snapshot)->Bool{guard isCurrent(value) else{return false};do{_ = try value.owner.clearIfUnchanged(value.value,empty:.init());publishProjection();return true}catch{return false}}
     func resolve(_ key:AppleDraftKey,payload:Payload?,retiring:Set<UUID>,expected:Snapshot)async throws->Snapshot{
-        guard isCurrent(expected) else{throw AppleSyncFailure.accountChanged};let ticket=try await expected.owner.resolve(key:key,payload:payload,empty:.init(),retiring:retiring,expected:expected.value);let result=Snapshot(owner:expected.owner,value:ticket);guard isCurrent(result) else{throw AppleSyncFailure.accountChanged};publishProjection();scheduleSync();return result
+        guard isCurrent(expected) else{throw AppleSyncFailure.accountChanged};coreSynchronized=false;let ticket=try await expected.owner.resolve(key:key,payload:payload,empty:.init(),retiring:retiring,expected:expected.value,coreTransport:coreTransport);let result=Snapshot(owner:expected.owner,value:ticket);guard isCurrent(result) else{throw AppleSyncFailure.accountChanged};publishProjection();scheduleSync();return result
     }
+    func saveCurrentAsNewVersion(_ key:AppleDraftKey,payload:Payload,expected:Snapshot)async throws{
+        guard isCurrent(expected),expected.key==key else{throw AppleSyncFailure.accountChanged}
+        coreSynchronized=false;try await expected.owner.saveNewVersion(payload,key:key);guard coordinator.current === expected.owner else{throw AppleSyncFailure.accountChanged};publishProjection();scheduleSync()
+    }
+    /// Selecting a Core changes no Apple account and performs no implicit import.
+    /// Rebinding after a connection change does not switch the selected namespace.
+    func bindCore(_ workspace:CrewdWorkspace?){
+        let binding=workspace.flatMap{try? $0.publicCommandBinding(for:$0.client)}
+        if coreWorkspace === workspace{
+            if coreBinding != binding{coreBinding=binding;coreSynchronized=false;publishProjection();if usingCore,binding != nil{scheduleSync()}}
+            return
+        }
+        coreBinding=binding
+        coreTransport?.invalidate();coreWorkspace=workspace;coreGrants=[];coreSynchronized=false
+        guard let workspace else{coreTransport=nil;publishProjection();return}
+        let adapter=CrewPersonalCoreTransport(.init(origin:{[weak workspace,weak self] in
+            guard let self,let workspace,self.coreWorkspace === workspace,workspace.client.readyForWork else{return nil};return try? workspace.publicCommandBinding(for:workspace.client)
+        },selected:{[weak self] projection in self?.coordinator.current.id.core==projection && self?.coordinator.current.isSelected==true},rpc:{[weak workspace] method,params in guard let workspace else{throw AppleSyncFailure.accountChanged};let epoch=workspace.client.connectionEpoch;let result=try await workspace.client.call(method,params)
+            if method=="personalDraft.status"{guard workspace.client.connectionEpoch==epoch else{throw CancellationError()};_ = try CrewPersonalCoreWire.Status(result);try await workspace.client.subscribePersonalDraftEvents()};return result},submit:{[weak workspace] operation,params,crew,writer in
+            guard let workspace else{throw AppleSyncFailure.accountChanged};return try await workspace.submitPublicCommand(operation,params:params,crew:crew,validateReceipt:{receipt in if receipt.phase == .committed{try CrewPersonalCoreWire.validateResult(receipt.value["result"],command:.object(["operation":.string(operation.rawValue),"params":params]),expectedWriter:writer)}})
+        },history:{[weak workspace] in guard let workspace else{throw AppleSyncFailure.accountChanged};return try workspace.personalDraftHistory()},unknown:{[weak workspace] in Set(workspace?.durableUnknown.map(\.id) ?? [])},lookup:{[weak workspace] row in guard let workspace else{throw AppleSyncFailure.accountChanged};return try await workspace.lookupOriginalCommand(row)},acknowledge:{[weak workspace] row,receipt in guard let workspace else{throw AppleSyncFailure.accountChanged};try workspace.acknowledgePersonalDraft(row,receipt:receipt)},fence:{[weak workspace] row in guard let workspace else{throw AppleSyncFailure.accountChanged};return try await workspace.fencePersonalDraft(row)}))
+        adapter.changed={[weak self,weak adapter] in guard self?.coreTransport === adapter else{return};self?.publishProjection()};coreTransport=adapter
+        publishProjection();if usingCore{scheduleSync()}
+    }
+    func coreChanged(_ workspace:CrewdWorkspace){guard coreWorkspace === workspace,usingCore else{return};coreSynchronized=false;scheduleSync()}
+    func inspectCore()async throws{guard let coreTransport else{throw AppleSyncFailure.accountChanged};_ = try await coreTransport.refreshStatus();publishProjection()}
+    func selectCore()async throws{
+        guard let adapter=coreTransport else{throw AppleSyncFailure.accountChanged}
+        let original=projectionID
+        var current=try await adapter.refreshStatus()
+        guard coreTransport === adapter,projectionID==original,current.member?.revoked==false else{throw AppleSyncFailure.accountChanged}
+        if current.member?.optedIn != true{try await adapter.consent(true);guard let updated=adapter.status else{throw AppleSyncFailure.invalid};current=updated}
+        guard coreTransport === adapter,projectionID==original,current.available,let projection=current.projection else{throw AppleSyncFailure.accountChanged}
+        var sources=defaults.data(forKey:coreSourcesKey).flatMap{try? JSONDecoder().decode([PersonalCoreDraftProjection].self,from:$0)} ?? []
+        if !sources.contains(projection){guard sources.count<64 else{throw CrewdClientError(message:"已保留的 Core 来源达到上限；原文未删除，请先导出整理。",kind:.notSubmitted)};sources.append(projection)}
+        stopSync();defaults.set(false,forKey:consentKey)
+        try await coordinator.selectCore(.init(account:nil,core:projection,draftsCollection:"drafts",hostsCollection:"hosts"))
+        guard coordinator.current.id.core==projection,coreTransport === adapter else{throw AppleSyncFailure.accountChanged}
+        defaults.set(try appleSyncEncode(sources),forKey:coreSourcesKey)
+        defaults.set(try appleSyncEncode(projection),forKey:coreSelectionKey);publishProjection();scheduleSync()
+    }
+    func disableCoreConsent()async throws{
+        guard let adapter=coreTransport else{throw AppleSyncFailure.accountChanged}
+        stopSync();coreSynchronized=false
+        try await adapter.consent(false);guard coreTransport === adapter else{throw AppleSyncFailure.accountChanged};publishProjection()
+    }
+    private func stopSync(){syncTask?.cancel();syncTask=nil;syncID=nil;syncAgain=false;syncBusy=false;activityTask?.cancel();activityTask=nil;activityID=nil}
+    func loadCoreMembers()async throws{guard let adapter=coreTransport else{throw AppleSyncFailure.accountChanged};try await adapter.loadMembers();guard let workspace=coreWorkspace,coreTransport === adapter,adapter.status?.owner==true else{throw AppleSyncFailure.accountChanged};let binding=try workspace.publicCommandBinding(for:workspace.client);let values=try await workspace.client.call("remote.grants",.null);guard coreWorkspace === workspace,coreTransport === adapter,try workspace.publicCommandBinding(for:workspace.client)==binding else{throw AppleSyncFailure.accountChanged};coreGrants=try JSONDecoder().decode([CrewdRemoteGrant].self,from:JSONEncoder().encode(values));publishProjection()}
     func retry(_ key:AppleDraftKey){if let payload=localDraft(key){checkpoint(payload,key:key)}}
     func exportTicket(_ key:AppleDraftKey,payload:Payload,scope:EditingScope?=nil)->ExportTicket?{let owner=scope?.owner ?? coordinator.current;guard owner.localDraft(key)==payload,let ticket=owner.retainedTicket(key:key) else{return nil};return .init(owner:owner,value:ticket)}
     func copyRetained(_ ticket:ExportTicket,replacing target:Snapshot?)throws {

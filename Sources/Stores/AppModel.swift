@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let selected = self.crewdWindow.workspace
+                CrewPersonalDraftService.shared.bindCore(selected)
                 if let selected {
                     selected.originalJournalRequired = true
                     guard selected.client.readyForWork else {
@@ -50,6 +51,7 @@ final class AppModel: ObservableObject {
                     }
                 }
                 guard self.crewdWindow.workspace === selected else { return }
+                CrewPersonalDraftService.shared.bindCore(selected)
                 if self.crewdBackend?.workspace !== selected { self.crewdBackend = selected.map(CrewdPendingCrewBackend.init) }
                 self.objectWillChange.send()
             }
@@ -106,6 +108,7 @@ final class AppModel: ObservableObject {
                 if let message = workspace.error { crewdWindow.error = message }
                 return
             }
+            CrewPersonalDraftService.shared.bindCore(workspace)
             if crewdBackend?.workspace !== workspace { crewdBackend = CrewdPendingCrewBackend(workspace: workspace) }
         }
     }

@@ -34,6 +34,7 @@ struct CrewPersonalDraftControls:View {
                 if let key,service.errors[key] != nil{Button("重试保存"){service.checkpoint(payload,key:key,scope:scope)}.font(.caption)}
                 Menu {
                     Button("草稿版本"){showing=true}.disabled(key == nil)
+                    if let key,service.usingCore{Button("保存当前内容为新版本"){guard let expected=service.snapshot(key,payload:payload,scope:scope) else{failure="原输入已变化，请重新核对。";return};Task{do{try await service.saveCurrentAsNewVersion(key,payload:payload,expected:expected)}catch{failure=error.localizedDescription}}}}
                     Button("个人同步与保留原文"){settings=true}
                     Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload,scope:scope)};recoveredExport=key.flatMap{service.staleExportTicket($0,payload:payload,scope:scope)};exporting=true}catch{failure=error.localizedDescription}}
                 }label:{Label("草稿",systemImage:"doc.text")}.font(.caption)
@@ -115,6 +116,7 @@ struct CrewPersonalHostDirectory:View {
         VStack(alignment:.leading,spacing:8){
             HStack{Text("个人主机目录").font(.headline);Spacer();Button("个人同步"){settings=true}}
             Text(service.status).font(.caption).foregroundStyle(.secondary)
+            if service.usingCore{Text("当前 Core 模式仅交换个人草稿；这里的主机线索仅本机保存。").font(.caption).foregroundStyle(.secondary)}
             ForEach(Array(service.hosts.enumerated()),id:\.offset){_,host in
                 VStack(alignment:.leading,spacing:3){
                     Text(host.displayName)
@@ -182,7 +184,7 @@ private struct CrewPersonalArchiveEditor:View {
             Text("离线个人草稿").font(.headline)
             Text("历史来源："+key.crewID+" · "+String(key.databaseID.prefix(12))).font(.caption).foregroundStyle(.secondary)
             TextEditor(text:Binding(get:{payload.text},set:{editing=true;payload.text=$0;service.checkpoint(payload,key:key,scope:scope)})).frame(minHeight:220).disabled(!loaded)
-            Text(scope.map{service.isCurrent($0)} == false ? "账号已变化；此页的编辑仍保留在原账号，可导出后关闭。":"@ 目标与回复引用随原草稿保留；这里只保存个人输入，不向来源电脑提交。").font(.caption).foregroundStyle(.secondary)
+            Text(scope.map{service.isCurrent($0)} == false ? "来源已变化；此页的编辑仍在原来源保全，可导出后关闭。":"@ 目标与回复引用随原草稿保留；这里只保存个人草稿，不发送消息或执行任务。已获准且选中的 Core 来源会同步版本。").font(.caption).foregroundStyle(.secondary)
             if let issue=service.errors[key] ?? failure{Text(issue).font(.caption).foregroundStyle(.orange)}
             HStack{
                 Button("各设备版本"){choosing=true}.disabled(!loaded || scope.map{!service.isCurrent($0)} == true)
@@ -206,12 +208,20 @@ private struct CrewPersonalSyncSettings:View {
     @State private var confirming=false
     @State private var failure:String?
     @State private var selected:RetainedPersonalSelection?
+    @State private var confirmingCore=false
+    @State private var configuringCore=false
+    @State private var pendingGrant:CrewdRemoteGrant?
+    @State private var enableGrant=true
     var body:some View {
         VStack(alignment:.leading,spacing:14){
             HStack{Text("个人同步").font(.headline);Spacer();Button("关闭"){dismiss()}}
             ScrollView{VStack(alignment:.leading,spacing:14){
                 Text(service.status).font(.callout)
-                Text("仅同步个人草稿的设备版本与公开主机线索。主机目录不含密钥或设备授权；在另一设备仍需独立配对。不会同步工作数据库，也不会自动发送草稿、连接电脑或启动会话。").font(.caption).foregroundStyle(.secondary)
+                Text("同步个人草稿的设备版本；iCloud 另可保存公开主机线索。主机线索不含密钥或设备授权，在另一设备仍需独立配对。不会复制工作数据库，也不会自动发送草稿、连接电脑或启动会话。").font(.caption).foregroundStyle(.secondary)
+                HStack{Text("草稿来源").font(.subheadline);Spacer();if service.editingScope().owner.id == .local{Text("仅本机").font(.caption)}else if service.usingCore{Text("当前 Core 私有空间").font(.caption)}else{Text("个人 iCloud").font(.caption)}}
+                Button("只在本机保存"){perform{await service.disablePersonalSync()}}.disabled(busy || service.editingScope().owner.id == .local)
+                coreSettings
+                Divider()
                 if service.cloudConfigured {
                     if service.cloudOptedIn {
                         HStack{Button("核对账号并重试"){perform{try await service.enablePersonalSync()}};Button("停用个人同步"){perform{await service.disablePersonalSync()}}}.disabled(busy || service.syncBusy)
@@ -220,7 +230,7 @@ private struct CrewPersonalSyncSettings:View {
                             Toggle("同步外观偏好",isOn:Binding(get:{service.preferencesOptedIn},set:{service.setPreferenceSync($0)}))
                         }else{Text("外观偏好保留在本设备。").font(.caption).foregroundStyle(.secondary)}
                     }else{Button("启用个人 iCloud 同步"){confirming=true}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(busy)}
-                }else{Text("此版本的草稿仅本机保存；可以照常编辑、选择版本和导出。").font(.caption).foregroundStyle(.secondary)}
+                }else{Text("此版本尚未配置 iCloud；本机与具备资格的 Core 草稿不受影响。").font(.caption).foregroundStyle(.secondary)}
                 if busy || service.syncBusy{ProgressView("正在核对个人同步").controlSize(.small)}
                 if let failure{Text(failure).font(.caption).foregroundStyle(.orange)}
                 Divider()
@@ -228,7 +238,7 @@ private struct CrewPersonalSyncSettings:View {
                 Text("切换账号或停用不会把旧原文带入当前输入。只在这里明确选用或导出；已有输入会再次确认。").font(.caption).foregroundStyle(.secondary)
                 ForEach(service.retainedNamespaces.filter{$0 !== service.editingScope().owner},id:\.id){owner in
                     VStack(alignment:.leading,spacing:8){
-                        Text(owner.id.account == nil ? "仅本机":"其它 iCloud 来源 · "+String(owner.id.stableName.prefix(8))).font(.caption).foregroundStyle(.secondary)
+                        Text(owner.id.core != nil ? "保留的 Core 来源 · "+String(owner.id.stableName.prefix(13)):(owner.id.account == nil ? "仅本机":"其它 iCloud 来源 · "+String(owner.id.stableName.prefix(8)))).font(.caption).foregroundStyle(.secondary)
                         ForEach(Array(owner.catalog).sorted{String(describing:$0)<String(describing:$1)},id:\.self){key in
                             if let ticket=service.retainedExportTicket(owner,key:key){
                                 Button{selected = .init(ticket:ticket)}label:{VStack(alignment:.leading,spacing:3){Text(ticket.value.payload.text.isEmpty ? "（空草稿）":ticket.value.payload.text).lineLimit(3);Text(key.crewID+" · "+String(key.databaseID.prefix(12))).font(.caption).foregroundStyle(.secondary)}}.buttonStyle(.plain)
@@ -245,6 +255,48 @@ private struct CrewPersonalSyncSettings:View {
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:560))
         .sheet(item:$selected){choice in RetainedPersonalDraftView(service:service,ticket:choice.ticket)}
         .confirmationDialog("启用个人 iCloud 同步？",isPresented:$confirming,titleVisibility:.visible){Button("同意并核对账号"){perform{try await service.enablePersonalSync()}};Button("取消",role:.cancel){}}message:{Text("使用当前系统 iCloud 账号的私有空间。各设备原文保留独立分支，本机旧原文不会自动上传到新账号。")}
+    }
+    @ViewBuilder private var coreSettings:some View {
+        VStack(alignment:.leading,spacing:8){
+            Text("已配对 Core 的个人草稿").font(.subheadline)
+            Text("VPS 与 Mac 主机使用同一私有空间机制。只有主机明确纳入的个人设备可选；机组权限不代表同一人。选择来源不会导入旧草稿，断连后仍在原空间本机保存。").font(.caption).foregroundStyle(.secondary)
+            Button("核对当前 Core 资格"){perform{try await service.inspectCore()}}.disabled(busy || service.coreTransport==nil)
+            if let current=service.coreStatus{
+                Text(coreReason(current)).font(.caption).foregroundStyle(.secondary)
+                if current.member?.revoked==false{
+                    Button(service.usingCore && current.member?.optedIn==true ? "核对并同步当前版本":"同意在此个人空间同步草稿"){if service.usingCore,current.member?.optedIn==true{perform{try await service.synchronizePersonal()}}else{confirmingCore=true}}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(busy || service.syncBusy)
+                }
+                if current.member?.optedIn==true{Button("停用此设备的 Core 同步"){perform{try await service.disableCoreConsent()}}.disabled(busy || service.syncBusy)}
+                if current.owner{
+                    DisclosureGroup("个人设备归属"){
+                        VStack(alignment:.leading,spacing:8){
+                            Text("仅管理已认证的准确设备授权；不改变其机组权限。不把所有已配对设备自动归为本人。").font(.caption).foregroundStyle(.secondary)
+                            Button(current.reason == "restoreRequired" ? "确认恢复并创建新的个人空间":"配置本机个人草稿空间"){configuringCore=true}.disabled(busy)
+                            Button("读取已认证设备与个人成员"){perform{try await service.loadCoreMembers()}}.disabled(busy || current.space==nil)
+                            ForEach(service.coreGrants.filter{$0.revokedAt==nil}){grant in
+                                HStack{VStack(alignment:.leading){Text(grant.deviceLabel);Text(String(grant.id.prefix(12))+" · "+String(grant.clientSpkiSha256.prefix(12))).font(.caption2.monospaced()).foregroundStyle(.secondary)};Spacer();Button("纳入个人设备"){enableGrant=true;pendingGrant=grant};Button("移出"){enableGrant=false;pendingGrant=grant}}.font(.caption)
+                            }
+                            ForEach(service.coreTransport?.members ?? [],id:\.id){member in Text("成员 "+String(member.id.prefix(8))+" · "+(member.revoked ? "已移出":(member.optedIn ? "已同意":"待本设备同意"))).font(.caption2).foregroundStyle(.secondary)}
+                        }
+                    }
+                }
+                ForEach(service.coreTransport?.pending ?? []){row in
+                    VStack(alignment:.leading,spacing:5){
+                        Text("原个人草稿操作待核对").font(.caption)
+                        Text(row.params["requestId"].string ?? "").font(.caption2.monospaced()).textSelection(.enabled)
+                        HStack{Button("只读查原结果"){perform{try await service.coreTransport?.recover(row,sealMissing:false)}};Button("封闭未提交的原请求"){perform{try await service.coreTransport?.recover(row,sealMissing:true)}}}.font(.caption)
+                        Text("封闭只会拒绝尚未提交的同一原请求，不会把原文标为已同步，也不会重发。可明确保存当前内容为新版本。").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                if let message=service.coreTransport?.message{Text(message).font(.caption).foregroundStyle(.secondary)}
+            }else if service.coreTransport==nil{Text("当前没有已核验的 Core 连接；原文继续本机保存。").font(.caption).foregroundStyle(.secondary)}
+        }
+        .confirmationDialog("在当前 Core 个人空间同步草稿？",isPresented:$confirmingCore,titleVisibility:.visible){Button("同意并选择此来源"){perform{try await service.selectCore()}};Button("取消",role:.cancel){}}message:{Text("仅传输完整文字、@ 与回复引用。其它设备版本独立保留，不上传附件凭据，不自动连接或发送。原本机/iCloud 内容不会自动导入。")}
+        .confirmationDialog("配置新的或现有的个人草稿空间？",isPresented:$configuringCore,titleVisibility:.visible){Button("确认配置本机成员"){perform{guard let adapter=service.coreTransport else{throw AppleSyncFailure.invalid};try await adapter.configureOwner(localEnabled:true,acknowledgeRestore:adapter.status?.reason=="restoreRequired")}};Button("取消",role:.cancel){}}message:{Text("恢复确认会为恢复后的数据库创建新空间；旧空间的原文仍保留，不会沿用旧设备订阅。")}
+        .confirmationDialog("更改此准确设备的个人归属？",isPresented:Binding(get:{pendingGrant != nil},set:{if !$0{pendingGrant=nil}}),titleVisibility:.visible){Button(enableGrant ? "确认纳入":"确认移出",role:enableGrant ? nil:.destructive){guard let grant=pendingGrant else{return};pendingGrant=nil;perform{try await service.coreTransport?.setMember(grant:grant,enabled:enableGrant)}};Button("取消",role:.cancel){pendingGrant=nil}}message:{Text("只针对核对的设备授权；移出后该设备不能再读取此私有空间，原配对不变。")}
+    }
+    private func coreReason(_ current:CrewPersonalCoreWire.Status)->String{
+        switch current.reason{case "notConfigured":return "当前 Core 尚未配置个人空间。";case "notApproved":return "此设备尚未被主机明确纳入个人空间。";case "optedOut":return "此设备已获准，尚未同意同步。";case "restoreRequired":return "数据库恢复后需主机确认新空间；旧原文仍可导出。";default:return current.available ? "此设备当前具备个人草稿同步资格。":"个人同步当前不可用；原文保留。"}
     }
     private func perform(_ action:@escaping @MainActor ()async throws->Void){busy=true;Task{do{try await action();failure=nil}catch{failure="个人同步未完成；原文仍保留，可稍后重试或导出。"};busy=false}}
 }
@@ -275,7 +327,7 @@ private struct RetainedPersonalDraftView:View {
                     let current=service.localDraft(ticket.value.key) ?? .init()
                     guard let exact=service.snapshot(ticket.value.key,payload:current) else{failure="当前来源已变化，请重新核对。";return}
                     target=exact;confirming=true
-                }.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!service.cloudOptedIn || service.editingScope().owner.id.account == nil || service.editingScope().owner === ticket.owner)
+                }.buttonStyle(CrewdPrimaryButtonStyle()).disabled((!service.cloudOptedIn && !service.usingCore) || service.editingScope().owner.id == .local || service.editingScope().owner === ticket.owner)
             }
         }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:460))
         .confirmationDialog("选用这份原文并替换当前输入？",isPresented:$confirming,titleVisibility:.visible){Button("确认选用"){do{try service.copyRetained(ticket,replacing:target);dismiss()}catch{failure="原来源或当前输入已更新；未覆盖，请重新核对。"}};Button("取消",role:.cancel){}}message:{Text("只替换核对时的这一份当前输入；其它窗口若已编辑，本次选择不会覆盖。")}
