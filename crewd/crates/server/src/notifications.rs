@@ -1133,13 +1133,18 @@ mod tests {
         let accepted = listener.clone();
         let observed = db.clone();
         let task = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(12), async move {
+                eprintln!("synthetic APNs runtime h2 phase: accept TCP");
             let (socket, _) = accepted.accept().await.unwrap();
+            eprintln!("synthetic APNs runtime h2 phase: TLS handshake");
             let stream = tokio_rustls::TlsAcceptor::from(Arc::new(tls))
                 .accept(socket)
                 .await
                 .unwrap();
             assert_eq!(stream.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
+            eprintln!("synthetic APNs runtime h2 phase: h2 handshake");
             let mut connection = h2::server::handshake(stream).await.unwrap();
+            eprintln!("synthetic APNs runtime h2 phase: request headers");
             let (request, _reply) = connection.accept().await.unwrap().unwrap();
             assert_eq!(request.uri().path(), "/3/device/01ab");
             let attempt = request.headers()["apns-id"].to_str().unwrap().to_string();
@@ -1164,11 +1169,19 @@ mod tests {
             assert!(expiry > now() / 1000);
             let mut body = request.into_body();
             let mut payload = Vec::new();
-            while let Some(data) = body.data().await {
+            eprintln!("synthetic APNs runtime h2 phase: read DATA while driving Connection");
+            loop {
+                // h2.0.4.20 requires Connection polling for later DATA frames.
+                let next = tokio::select! {
+                    data = body.data() => data,
+                    _ = connection.accept() => panic!("synthetic APNs runtime h2 connection ended or received another stream before request body completion"),
+                };
+                let Some(data) = next else { break };
                 let data = data.unwrap();
                 payload.extend_from_slice(&data);
                 body.flow_control().release_capacity(data.len()).unwrap();
             }
+            eprintln!("synthetic APNs runtime h2 phase: complete request body");
             let payload: Value = serde_json::from_slice(&payload).unwrap();
             let hint: NotificationOpenContext =
                 serde_json::from_value(payload["pendingCrew"].clone()).unwrap();
@@ -1196,8 +1209,11 @@ mod tests {
                 serde_json::from_str::<NotificationContext>(&exact.2).unwrap()
             );
             // Lose the response only after reading the actual native request.
+            }).await.expect("synthetic APNs runtime h2 server exceeded its 12s phase deadline");
         });
-        runtime.pump().await;
+        tokio::time::timeout(Duration::from_secs(12), runtime.pump())
+            .await
+            .expect("synthetic APNs runtime pump exceeded its 12s phase deadline");
         task.await.unwrap();
         assert_eq!(
             db.call(|s| s

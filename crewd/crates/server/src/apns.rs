@@ -357,13 +357,18 @@ mod tests {
         .unwrap();
         let public = sender.key.public_key().as_ref().to_vec();
         let task = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(12), async move {
+                eprintln!("synthetic APNs h2 phase: accept TCP");
             let (socket, _) = listener.accept().await.unwrap();
+            eprintln!("synthetic APNs h2 phase: TLS handshake");
             let tls = tokio_rustls::TlsAcceptor::from(Arc::new(tls))
                 .accept(socket)
                 .await
                 .unwrap();
             assert_eq!(tls.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
+            eprintln!("synthetic APNs h2 phase: h2 handshake");
             let mut conn = h2::server::handshake(tls).await.unwrap();
+            eprintln!("synthetic APNs h2 phase: request headers");
             let (request, mut response) = conn.accept().await.unwrap().unwrap();
             observed.fetch_add(1, Ordering::SeqCst);
             assert_eq!(request.method(), "POST");
@@ -389,11 +394,20 @@ mod tests {
             let requested = request.headers()["apns-id"].clone();
             let mut stream = request.into_body();
             let mut payload = Vec::new();
-            while let Some(data) = stream.data().await {
+            eprintln!("synthetic APNs h2 phase: read DATA while driving Connection");
+            loop {
+                // h2.0.4.20 requires Connection polling to advance socket I/O;
+                // RecvStream::data alone cannot fetch a later DATA frame.
+                let next = tokio::select! {
+                    data = stream.data() => data,
+                    _ = conn.accept() => panic!("synthetic APNs h2 connection ended or received another stream before the request body completed"),
+                };
+                let Some(data) = next else { break };
                 let data = data.unwrap();
                 payload.extend_from_slice(&data);
                 stream.flow_control().release_capacity(data.len()).unwrap();
             }
+            eprintln!("synthetic APNs h2 phase: complete request body");
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&payload).unwrap()["context"]["action"],
                 "open_context"
@@ -418,6 +432,7 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_millis(500), conn.accept()).await;
             // No second request is allowed by the client retry policy.
             assert_eq!(observed.load(Ordering::SeqCst), 1);
+            }).await.expect("synthetic APNs h2 server exceeded its 12s phase deadline");
         });
         sender.client = client_builder()
             .tls_backend_preconfigured(client_tls)
