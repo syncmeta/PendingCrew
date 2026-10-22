@@ -35,9 +35,13 @@ frontend_demo 是 Mac/iOS 共享 Swift、业务 store 和工程文件唯一作�
 
 A 正常生产路由裁定补正：作者定向验证发现正常 serve 始终标记 knowledge.sqlite.v1，旧 document.* 被 legacy guard 拒绝；根实核 marker、DataContext/namespace、原 submit/lookup/changed 与 View/Block/Placement。因此撤回初冻合同的旧 document.create/list 群参数扩展及跨库原子承诺，不解除 guard 或写第二文档源。群内文档/页面沿现 SQLite 知识 DataRef 与源 crew/context 引用；内容保存和加入本群分开原 UUID/receipt，关联失败保已保存内容，Unknown 只查原结果、不再创建。复用既有 data API、源/目标权限与知识 generation/changed；不引入新的跨库 intent 平台，不复制固定视图。作者修订唯一 DTO 并与双端同步；旧 document 资源保护的 version>=16 应精准区分实验16和资源17，Native16仍不激活。此补正不缩掉 A 的真实群资料/文件夹范围，其余合同继续。
 
-共同连接同一 Core authority/DB 的数据、事件和 CAS 已有基础；Mac+iOS 同时使用、并发冲突和离线重连完整流程仍未验，独立本机后台不会自动互相同步。用户现明确未发送草稿也同步、保留各设备版本防覆盖；按 authority/DB/群/设备隔离与原文版本保护提出完整合同，不把同步等同发送或 session 自动恢复。用户新增同账号配对设备同步、iCloud 补位、VPS 离线及 Mac 主机讨论；目前只研究裁定，不擅自建立新账号服务、同步设备私钥或开放自动授信。
+人类再次明确此前多端同步与 iOS 也须同步推进：Mac/iPhone/iPad 为同一完整交付，不是 Mac 完成后才补移动端；A 必含两端同时同 Core 的真实业务验证。草稿各设备版本与同账号主机目录同步不长期串行等待全部 Codex 控制或安装器完成；两作者在 A 正常接口闭合同时准备完整同步合同与独立模块，公共 Rust/API/schema、Swift/工程各保唯一写者。iCloud 私有草稿版本/轻量主机目录与偏好纳入源码准备；不为 Linux 接 Apple 账户、不擅建新账号服务或自动双主接管。真实 CloudKit 容器、entitlements、账户及双设备同步仍须实际资格和证据，模拟 transport 不冒已验；未定的细部继续明确待决而不阻塞独立工作。
 
-只读现状核实：PendingCrew 当前无 CloudKit/KVS entitlement 或实现；vault 明确不同步且使用 ThisDeviceOnly，草稿是本地 latest-entry 文件，不是完整版本历史。PendingNet 实际是 KVS 配对目录+同步 Keychain 普通令牌，无 CloudKit；其共享设备 token 与 LWW 名单不能直接照搬为 Crew 的独立设备授权/全文版本库，账号切换隔离须另做。建议待用户确认：Core 主机可选 VPS/Mac；同账号 Apple 云层同步主机目录、偏好和按设备保留的草稿版本，本地 SQLite 保留草稿与已缓存快照。主机离线仍可读缓存/写草稿；双方有 iCloud 网络则异步交换草稿，完全断网则稍后同步。任务与权威业务提交仍须主机，不能借云副本重放 Unknown 或自动执行。主机记录跨端共享不等同复制私钥或自动授信；新设备独立身份/撤权、账户切换隔离、删除墓碑及云副本留存规则随完整合同核定。上述为讨论建议，尚未实施 CloudKit 或访问用户 iCloud。
+Sync 依赖进一步收敛：个人草稿版本/同账号主机目录可直接采用客户端 private CloudKit 与本机持久存储，业务源仍唯一 Core；不预设新增 Core 草稿 DDL/API 才能开工，不给 Linux 后台接入 Apple 账号或另建账号服务。仅复用已有稳定 authority/db/crew/channel 身份；如未来明确要求无 iCloud 或非 Apple 草稿同步，再一次裁定服务端权威/镜像关系，当前不造两个草稿主库或双写框架。KVS 仅轻量非敏感偏好，目录不得包含设备私钥/短期配对凭据，loopback/Unix 本机地址不冒其他设备可达。A 当前资源与双端源码冻结仍独立，不能混入未完成的 Sync 代码冒整包已验。
+
+共同连接同一 Core authority/DB 的数据、事件和 CAS 已有基础；Mac+iOS 同时使用、并发冲突和离线重连完整流程仍未验，独立本机后台不会自动互相同步。用户现明确未发送草稿也同步、保留各设备版本防覆盖；按 authority/DB/群/设备隔离与原文版本保护提出完整合同，不把同步等同发送或 session 自动恢复。用户新增同账号配对设备同步、iCloud 补位、VPS 离线及 Mac 主机讨论；已按后续重申纳入源码准备；不擅自建立新账号服务、同步设备私钥或开放自动授信。
+
+只读现状核实：PendingCrew 当前无 CloudKit/KVS entitlement 或实现；vault 明确不同步且使用 ThisDeviceOnly，草稿是本地 latest-entry 文件，不是完整版本历史。PendingNet 实际是 KVS 配对目录+同步 Keychain 普通令牌，无 CloudKit；其共享设备 token 与 LWW 名单不能直接照搬为 Crew 的独立设备授权/全文版本库，账号切换隔离须另做。按后续重申纳入源码准备的方案：Core 主机可选 VPS/Mac；同账号 Apple 云层同步主机目录、偏好和按设备保留的草稿版本，本地 SQLite 保留草稿与已缓存快照。主机离线仍可读缓存/写草稿；双方有 iCloud 网络则异步交换草稿，完全断网则稍后同步。任务与权威业务提交仍须主机，不能借云副本重放 Unknown 或自动执行。主机记录跨端共享不等同复制私钥或自动授信；新设备独立身份/撤权、账户切换隔离、删除墓碑及云副本留存规则随完整合同核定。该方向已安排独立完整模块源码准备，尚未取得真实 CloudKit 同步证据或访问用户 iCloud。
 
 部署模块 B 按一键安装+单一配对链接准备源码：安装前在实际运行用户自然环境核 Codex/Claude 安装、登录与已支持版本；缺失/未登录/不支持先给官方指引并停止，不替装/降级/登录或运行模型。不可变包校验与原子前缀、受限持久管理 bootstrap、短效一次 enrollment、每设备独立身份与原 UUID 结果恢复作为整块合同。不是三文件 JSON 换 URL；需要新的准确 Linux 包。当前仅源码/配置准备，不冒实际 VPS 常驻生产服务、公开端口或发布；实际部署动作单独核授权。组合候选在完整 demo/必要 API 冻结后再统一构建，避免小项反复出包。
 
