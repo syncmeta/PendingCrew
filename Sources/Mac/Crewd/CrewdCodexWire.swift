@@ -108,6 +108,8 @@ struct CrewdCodexInspection:Equatable {
         _ = try CrewdPublicWire.boolean(value["running"]);_ = try CrewdPublicWire.boolean(value["working"]);_ = try CrewdPublicWire.boolean(value["historical"])
         try CrewdCodexWire.choice(value["title"]["source"],["human","task"])
         try CrewdCodexWire.choice(value["title"]["status"],["pending","synced","unknown","rejected"])
+        if value["historyMode"] != .null{try CrewdCodexWire.text(value["historyMode"])}
+        if value["nativeHistory"] != .null{try CrewdCodexWire.choice(value["nativeHistory"]["status"],["active","archived","deleted","unknown"])}
         if value["settingsStatus"] != .null{try CrewdCodexWire.choice(value["settingsStatus"],["pending","accepted","unknown","rejected"])}
         guard let queued=value["queuedInputs"].int,UInt32(exactly:queued) != nil else{throw CrewdPublicWire.invalid()}
         self.capabilities=try capabilities.map{item in

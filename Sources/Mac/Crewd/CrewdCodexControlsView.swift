@@ -189,10 +189,10 @@ private struct CrewdCodexControlPanel:View {
         VStack(alignment:.leading,spacing:12){
             VStack(alignment:.leading,spacing:10){
                 TextField("给当前轮次或下一轮的原文",text:$bodyText,axis:.vertical).lineLimit(3...8)
-                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"当前轮次的独立输入与Skills",choice:$steerInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
+                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"当前轮次的独立输入与Skills",lane:"steer",choice:$steerInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
                 actionButton("Steer 当前轮次",capability:"steer"){submitText(.codexSteer,choice:steerInputs)}
                     .disabled(store.inspection?.target.turnID == nil)
-                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"下一轮的独立输入与Skills",choice:$queueInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
+                CrewdCodexInputPicker(workspace:workspace,session:sessionID,title:"下一轮的独立输入与Skills",lane:"queue",choice:$queueInputs,allowMedia:store.inspection?.capability("attachments")?.available==true,allowSkills:store.inspection?.capability("skillInput")?.available==true)
                 actionButton("明确排入下一轮",capability:"queue"){submitText(.codexQueue,choice:queueInputs)}
                 Text("排队被接受不代表已投递或任务完成；停止会放弃余下队列。").font(.caption).foregroundStyle(.secondary)
                 #if os(macOS)

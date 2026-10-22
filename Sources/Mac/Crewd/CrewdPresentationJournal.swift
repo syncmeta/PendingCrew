@@ -42,18 +42,21 @@ final class CrewdPresentationJournal {
         case refused(String)
         var errorDescription: String? { if case .refused(let reason) = self { return reason }; return nil }
     }
-    init(root: URL, scope: Scope) throws {
+    init(root: URL, scope: Scope, readOnly:Bool=false) throws {
         self.scope = scope
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        if readOnly{guard FileManager.default.fileExists(atPath:root.path) else{throw CrewdPublicWire.invalid()}}
         try Self.privateDirectory(root)
         directory = root.appendingPathComponent(scope.namespace.uuidString.lowercased())
-        try Self.privateDirectory(directory)
-        try Self.privateDirectory(directory.appendingPathComponent("prepared"))
-        try Self.privateDirectory(directory.appendingPathComponent("outcomes"))
-        try Self.privateDirectory(directory.appendingPathComponent("reconciled"))
-        for name in ["document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished","codex-input-results"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
+        if readOnly{
+            guard FileManager.default.fileExists(atPath:directory.path) else{throw CrewdPublicWire.invalid()}
+            try Self.privateDirectory(directory)
+        }else{
+            try Self.privateDirectory(directory)
+            for name in ["prepared","outcomes","reconciled","document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished","codex-input-results","codex-input-originals","codex-input-choices"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
+        }
     }
     static func localNamespace(directory: URL) throws -> UUID {
         let canonical = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -128,7 +131,7 @@ final class CrewdPresentationJournal {
         defer { close(parent) }
         guard fsync(parent) == 0 else { throw StorageError.refused("前端历史目录同步失败；未提交后台操作。") }
     }
-    private static func hash(_ bytes: Data) -> String { CryptoKit.SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+    nonisolated private static func hash(_ bytes: Data) -> String { CryptoKit.SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
     func prepare(method: String, params: CrewdValue, crew: String) throws -> Prepared {
         let record = Prepared(format: 1, id: UUID(), scope: scope, method: method, params: params, crew: crew, preparedAt: Date())
         try Self.immutableWrite(encoder.encode(record), to: directory.appendingPathComponent("prepared").appendingPathComponent(record.id.uuidString.lowercased() + ".json"))
@@ -299,6 +302,52 @@ final class CrewdPresentationJournal {
         Array(try records(includeObservedFirstMessages: true)
             .filter { $0.method == "command.submit" && $0.params["command"]["operation"].string == "crew.createFirstMessage" }
             .sorted { $0.preparedAt > $1.preparedAt }.prefix(64))
+    }
+    struct CodexChoice:Codable{let scope:Scope;let key:CrewdValue;let revision:UUID;let value:CrewdValue}
+    func codexChoice(_ key:CrewdValue)throws->CodexChoice?{
+        let file=directory.appendingPathComponent("codex-input-choices").appendingPathComponent(Self.hash(try encoder.encode(scope)+encoder.encode(key))+".json")
+        guard FileManager.default.fileExists(atPath:file.path) else{return nil};try Self.privateFile(file)
+        let row=try decoder.decode(CodexChoice.self,from:Data(contentsOf:file));guard row.scope==scope,row.key==key else{throw CrewdPublicWire.invalid()};return row
+    }
+    func saveCodexChoice(_ value:CrewdValue,key:CrewdValue,expected:UUID?)throws->UUID{
+        let old=try codexChoice(key);guard old?.revision==expected else{throw CrewdClientError(message:"其它窗口已改变原输入选择；请重新读取，不会覆盖。",kind:.notSubmitted)}
+        let id=UUID(),record=CodexChoice(scope:scope,key:key,revision:id,value:value),file=directory.appendingPathComponent("codex-input-choices").appendingPathComponent(Self.hash(try encoder.encode(scope)+encoder.encode(key))+".json")
+        let temp=file.deletingLastPathComponent().appendingPathComponent(".pending-"+UUID().uuidString);defer{try? FileManager.default.removeItem(at:temp)}
+        try Self.immutableWrite(encoder.encode(record),to:temp)
+        guard rename(temp.path,file.path)==0 else{throw CrewdPublicWire.invalid()}
+        let fd=open(file.deletingLastPathComponent().path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW);guard fd>=0 else{throw CrewdPublicWire.invalid()};defer{close(fd)};guard fsync(fd)==0 else{throw CrewdPublicWire.invalid()};return id
+    }
+    func recordCodexInputOriginal(_ data:Data,record:Prepared)throws{
+        guard record.scope==scope,record.method=="session.codex.inputPrepare",data.count==record.params["bytes"].int,data.count<=4*1024*1024,Self.hash(data)==record.params["sha256"].string else{throw CrewdPublicWire.invalid()}
+        let folder=directory.appendingPathComponent("codex-input-originals")
+        var total=0
+        for file in try FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil){try Self.privateFile(file);total += (try FileManager.default.attributesOfItem(atPath:file.path)[.size] as? NSNumber)?.intValue ?? 0}
+        guard total+data.count<=256*1024*1024 else{throw CrewdClientError(message:"本机输入保全已达到上限；这份文件尚未加入，未上传。请保留原文件并导出已有原输入。",kind:.notSubmitted)}
+        try Self.immutableWrite(data,to:folder.appendingPathComponent(record.id.uuidString.lowercased()+".input"))
+    }
+    func codexInputOriginal(_ record:Prepared)throws->Data{
+        guard record.scope==scope,record.method=="session.codex.inputPrepare" else{throw CrewdPublicWire.invalid()}
+        let file=directory.appendingPathComponent("codex-input-originals").appendingPathComponent(record.id.uuidString.lowercased()+".input");try Self.privateFile(file)
+        guard ((try FileManager.default.attributesOfItem(atPath:file.path)[.size] as? NSNumber)?.intValue ?? Int.max)<=4*1024*1024 else{throw CrewdPublicWire.invalid()}
+        let bytes=try Data(contentsOf:file);guard bytes.count==record.params["bytes"].int,Self.hash(bytes)==record.params["sha256"].string else{throw CrewdPublicWire.invalid()};return bytes
+    }
+    struct CodexArchive:Identifiable{var id:String{Self.scopeID(journal.scope)}
+        private static func scopeID(_ scope:Scope)->String{let e=JSONEncoder();e.outputFormatting=[.sortedKeys];return CrewdPresentationJournal.hash((try? e.encode(scope)) ?? Data())};let journal:CrewdPresentationJournal;let records:[Prepared]}
+    static func codexArchives(root:URL)throws->[CodexArchive]{
+        guard FileManager.default.fileExists(atPath:root.path) else{return []};try privateDirectory(root)
+        let folders=try FileManager.default.contentsOfDirectory(at:root,includingPropertiesForKeys:nil);guard folders.count<=512 else{throw CrewdPublicWire.invalid()}
+        var result:[CodexArchive]=[]
+        for folder in folders{
+            guard let namespace=UUID(uuidString:folder.lastPathComponent),FileManager.default.fileExists(atPath:folder.appendingPathComponent("codex-input-originals").path) else{continue};try privateDirectory(folder)
+            let prepared=folder.appendingPathComponent("prepared");try privateDirectory(prepared)
+            let files=try FileManager.default.contentsOfDirectory(at:prepared,includingPropertiesForKeys:nil);guard files.count<=10000 else{throw CrewdPublicWire.invalid()}
+            var rows:[Prepared]=[]
+            let decoder=JSONDecoder();decoder.dateDecodingStrategy = .iso8601
+            for file in files{try privateFile(file);let row=try decoder.decode(Prepared.self,from:Data(contentsOf:file));guard row.format==1,row.scope.namespace==namespace,file.lastPathComponent==row.id.uuidString.lowercased()+".json" else{throw CrewdPublicWire.invalid()};if row.method=="session.codex.inputPrepare",FileManager.default.fileExists(atPath:folder.appendingPathComponent("codex-input-originals").appendingPathComponent(row.id.uuidString.lowercased()+".input").path){rows.append(row)}}
+            let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+            let grouped=try Dictionary(grouping:rows,by:{Self.hash(try encoder.encode($0.scope))})
+            for group in grouped.values{if let first=group.first{let journal=try CrewdPresentationJournal(root:root,scope:first.scope,readOnly:true);result.append(.init(journal:journal,records:group))}}
+        };return result
     }
     func codexInputRecords()throws->[Prepared]{try records(includeObservedFirstMessages:false,includeCodexInputs:true).filter{$0.method.hasPrefix("session.codex.input") || $0.method=="command.submit"}}
     func codexInputResult(_ record:Prepared)throws->CrewdValue?{

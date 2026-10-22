@@ -33,6 +33,7 @@ struct IPadShell: View {
     @State private var showingRecovery = false
     @State private var showingRetainedInputs = false
     @State private var showingOfflineDrafts = false
+    @State private var showingLocalCodexInputs=false
     @State private var showingConnectionStatus=false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
@@ -55,6 +56,7 @@ struct IPadShell: View {
                             }
                             Button("连接状态与未完成操作",systemImage:"info.circle"){showingConnectionStatus=true}
                             Button("连接电脑", systemImage: "link") { showingPairing = true }
+                            Button("本机Codex原输入",systemImage:"paperclip"){showingLocalCodexInputs=true}
                             Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
                             if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
                                 Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
@@ -106,6 +108,7 @@ struct IPadShell: View {
                 }
             }
         }
+        .sheet(isPresented:$showingLocalCodexInputs){CrewdCodexLocalInputs(directory:appModel.crewdDirectory)}
         .sheet(isPresented: $showingOfflineDrafts) {
             IOSOfflineComposerDrafts(dataDirectory: appModel.crewdDirectory)
         }

@@ -135,7 +135,7 @@ final class CrewdWorkspace: ObservableObject {
     lazy var codexInputs=CrewdCodexInputStore(origin:{[weak self] in
         guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains("session.codex"),self.originalJournalReady,let scope=self.presentationScope else{return nil}
         return .init(scope:scope,generation:self.observationGeneration,connection:self.client.connectionEpoch,crew:self.crewID)
-    },rpc:{[weak self] method,params in guard let self,!self.retired,self.client.readyForWork,!self.stopping else{throw CrewdClientError(message:"原输入连接已关闭，未提交。",kind:.notSubmitted)};return try await self.client.call(method,params)},journal:{[weak self] in guard let self,self.originalJournalReady,let journal=self.originalJournal else{throw CrewdPublicWire.invalid()};return journal})
+    },rpc:{[weak self] method,params in guard let self,!self.retired,self.client.readyForWork,!self.stopping else{throw CrewdClientError(message:"原输入连接已关闭，未提交。",kind:.notSubmitted)};return try await self.client.call(method,params)},journal:{[weak self] in guard let self,let journal=self.originalJournal else{throw CrewdPublicWire.invalid()};return journal})
     lazy var notifications=CrewdNotificationStore(origin:{[weak self] in
         guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains("notification.nativeApns"),self.originalJournalBound,let scope=self.presentationScope else{return nil}
         let remote=self.dataDirectory==nil && scope.grantID?.isEmpty==false && scope.grantRevision?.isEmpty==false && !self.stopping
