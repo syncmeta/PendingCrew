@@ -2,6 +2,8 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+最新精修完整源码c37已独立设计净核、Mac/iOS全目标编译通过并普通合入2ff98dc8；25路径统一共享presentation与真实日用入口，包括手机Codex控制接线。当前安装版仍是下述ee9e，不把新源码门冒新包已可用。保存此记录后一次冻结准确全输入，由唯一后端新normal→独立核→唯一客户端同暖缓存Release ui-preview隔离视觉验/普通product交付/iOS普通Simulator，配置与GUI证据分列；先把精修Mac交用户，不混B/Cloud/APNs或重稳定业务全套。
+
 新前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.47322，准确源码 ee9e94b5820b7af1c83c22312ead51d02e3d3f2f，ordinary Release/product、标准 bundle ID。实际新三栏界面、本机管理连接与 crewd0.1.0 已可见，窗口留给用户使用；两次进程观察仅 App 与其 Core，未操作 start/resume 或模型。独立额外 session.list 被 lineage 门拒绝后停止，不能把进程观察冒充全局 session 账本计数。旧6f35整包与原0.1.43历史备份保留，数据未删除或迁移。完整来源、安装与首开证据见整合记录最新节。
 
 本次只新增同一已验 ee9e 输入的正常安装身份包；原 remote-preview 与 iOS 模拟器包保持不可变。准确默认 normal37c8 复用原独验，1861源输入、3878依赖、11pins和配置前后同；原 builder/签前guard/载入策略保持，沿原aeh暖缓存，无新Rust构建、iOS重建、CI或稳定业务全套复验。临时干净global detached ee9e已在作者终态和QA来源核对后切回原e31开发分支；后续统筹记录不改包来源。
