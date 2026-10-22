@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9C100000000000000000002 /* ApplePersonalAccountCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */; };
+		A9C100000000000000000003 /* ApplePersonalAccountCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */; };
 		002013C931534BC908DE4B5E /* TodoEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A66BE415A2B49FD3458C071F /* TodoEvidenceTests.swift */; };
 		00269569B467F772560F5FD3 /* CrewTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6901E421E4A10CDEB59E6514 /* CrewTimestamp.swift */; };
 		00384409C41B8F5886C8313E /* CrewChatAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A233B79D2CE87B8C6D3BF1 /* CrewChatAdapterTests.swift */; };
@@ -945,6 +947,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePersonalAccountCoordinator.swift; sourceTree = "<group>"; };
 		00067E85D453D3D64937B60B /* CrewdRemoteAdmin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdRemoteAdmin.swift; sourceTree = "<group>"; };
 		00782B87D49EDF8E53E40F70 /* CrewPersonalDraftService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewPersonalDraftService.swift; sourceTree = "<group>"; };
 		009B8E8275EA70BDCE213EE8 /* CrewFileAttachmentIntakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewFileAttachmentIntakeTests.swift; sourceTree = "<group>"; };
@@ -2477,6 +2480,7 @@
 				2E6D5580AAA87268F14FCBC1 /* ApplePortableDirectory.swift */,
 				FA839952C6CF57232C008411 /* CrewPersonalDraftControls.swift */,
 				00782B87D49EDF8E53E40F70 /* CrewPersonalDraftService.swift */,
+				A9C100000000000000000001 /* ApplePersonalAccountCoordinator.swift */,
 			);
 			path = PersonalSync;
 			sourceTree = "<group>";
@@ -2855,6 +2859,7 @@
 				AE9CD824B8EE20B3AE8090EE /* CrewPasteboardReader.swift in Sources */,
 				41C712793A452AB633AC4DC1 /* CrewPersonalDraftControls.swift in Sources */,
 				F12F3640F385E497A60DA022 /* CrewPersonalDraftService.swift in Sources */,
+				A9C100000000000000000002 /* ApplePersonalAccountCoordinator.swift in Sources */,
 				6D63FEFFD255E981B7CCBDA7 /* CrewRPC.swift in Sources */,
 				24CDCE5F04BE62E9B9D73194 /* CrewRecentContextRender.swift in Sources */,
 				C9EBEEED2D0091CCCF27C554 /* CrewReportingParent.swift in Sources */,
@@ -3308,6 +3313,7 @@
 				D4F75E208B119D616D861BD8 /* CrewPasteAttachmentsTests.swift in Sources */,
 				7E887077E30CF540CC8C1041 /* CrewPersonalDraftControls.swift in Sources */,
 				CDCC32C3C7959FF08EA2BAE8 /* CrewPersonalDraftService.swift in Sources */,
+				A9C100000000000000000003 /* ApplePersonalAccountCoordinator.swift in Sources */,
 				57205E927075ED4A9F5E985F /* CrewRPC.swift in Sources */,
 				671D45A9D765AF34281D3993 /* CrewRecentContextRender.swift in Sources */,
 				8C463DCAD53729C43CFFC249 /* CrewRecentContextRenderTests.swift in Sources */,

@@ -19,6 +19,7 @@ import SwiftUI
 /// 两者均由 WindowGroup → RootView 链路上的 .environmentObject(...) 注入，
 /// IPadShell 自身声明同样的 @EnvironmentObject 让 SwiftUI 知道它用到了它们。
 struct IPadShell: View {
+    @ObservedObject private var personalService=CrewPersonalDraftService.shared
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var appModel: AppModel
     /// compact = iPhone 竖屏 / 大多数 iPhone 形态；regular = iPad 与
@@ -145,7 +146,7 @@ struct IPadShell: View {
                 communicationView:$communicationView,searchQuery:$searchQuery)
                 .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace,
                     openSession: { selectedRemoteSessionID = $0 }))
-                .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id)
+                .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id + "/" + personalService.projectionID.uuidString)
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。

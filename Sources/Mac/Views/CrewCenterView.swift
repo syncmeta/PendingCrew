@@ -7,6 +7,7 @@ import SwiftUI
 /// (顶栏 ⓘ 打开)。session 终端不再常驻,收进按需 inspector（`CrewSessionWindowView`,
 /// 由 MacThreePaneView 挂在 .inspector），从 toolbar 终端开关弹出。
 struct CrewCenterView: View {
+    @ObservedObject private var personalService=CrewPersonalDraftService.shared
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
@@ -62,7 +63,7 @@ struct CrewCenterView: View {
                 // 滚底正好打在上一个 crew 的内容上（Todo #45 的 macOS 错位）。重建也顺带
                 // 掐掉草稿/回复目标跨群残留（在 A 群打一半的字出现在 B 群、可能误发）——
                 // 未发出的草稿由 `CrewComposerDraftStore` 按 crew 记着，切回来原样在。
-                .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id)
+                .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id + "/" + personalService.projectionID.uuidString)
                 .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace))
             } else if let id = crewStore.selectedCrewId, crewStore.loadingDetailIds.contains(id) {
                 ProgressView("正在读取机组…")

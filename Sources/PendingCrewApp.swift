@@ -29,6 +29,7 @@ struct PendingCrewApp: App {
     @StateObject private var captainTemplates: CaptainTemplateStore
     /// App-wide appearance override (跟随系统/浅/深)，设置里改。
     /// `.system` → nil → 跟随 OS。对齐 PendingBot #299。
+    @Environment(\.scenePhase) private var personalScenePhase
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.default.rawValue
 
     init() {
@@ -60,6 +61,8 @@ struct PendingCrewApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .task { CrewPersonalDraftService.setApplicationActive(personalScenePhase == .active) }
+                .onChange(of:personalScenePhase){_,phase in CrewPersonalDraftService.setApplicationActive(phase == .active)}
                 .modifier(CrewdEnrollmentURLEntry{ id in Task{await model.connectCrewdAuthority(computerID:id);if model.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()}} })
                 .alert("这台电脑尚未连接",isPresented:Binding(get:{model.computerSelectionError != nil},set:{if !$0{model.computerSelectionError=nil}})){
                     Button("好",role:.cancel){model.computerSelectionError=nil}
