@@ -424,6 +424,25 @@ mod tests {
     }
 
     #[test]
+    fn notification_outcome_requires_exact_active_noncompaction_native_completion() {
+        let mut t=TurnTracker::new("thr");
+        assert_eq!(t.on_notification("turn/completed",&completed("none","completed")).notification_outcome,None);
+        t.on_notification("turn/started",&started("one"));
+        assert_eq!(t.on_notification("turn/completed",&completed("foreign","completed")).notification_outcome,None);
+        let s=t.on_notification("turn/completed",&completed("one","completed"));
+        assert_eq!(s.notification_outcome,Some(("one".into(),false)));
+        assert_eq!(t.on_notification("turn/completed",&completed("one","completed")).notification_outcome,None);
+        for status in ["interrupted","cancelled","inProgress","unknown"] {
+            let id=format!("turn-{status}");t.on_notification("turn/started",&started(&id));
+            assert_eq!(t.on_notification("turn/completed",&completed(&id,status)).notification_outcome,None);
+        }
+        t.on_notification("turn/started",&started("failed"));
+        assert_eq!(t.on_notification("turn/completed",&completed("failed","failed")).notification_outcome,Some(("failed".into(),true)));
+        t.on_notification("turn/started",&started("compact"));t.compacting=true;
+        assert_eq!(t.on_notification("turn/completed",&completed("compact","completed")).notification_outcome,None);
+    }
+
+    #[test]
     fn a_turn_starts_works_and_ends_with_its_own_last_answer() {
         let mut t = TurnTracker::new("thr");
         t.on_notification("turn/started", &started("t1"));

@@ -2987,7 +2987,29 @@ mod resource17_tests {
         );
     }
     #[test]
-    fn store18_original17_protected_writer_barrier_preserves_schema_and_data() {
+    fn notification19_current18_migration_keeps_original_rows_and_protected_backup() {
+        fn one<T:rusqlite::types::FromSql>(c:&Connection,sql:&str)->T{c.query_row(sql,[],|r|r.get(0)).unwrap()}
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("current18.db");
+        let c=Connection::open(&path).unwrap();original15(&c);seed(&c);migrate_resource17(&c,18).unwrap();
+        assert_eq!(one::<i64>(&c,"PRAGMA user_version"),18);
+        let old=c.query_row("SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",[],|r|r.get::<_,String>(0)).unwrap();
+        migrate_guarded(&c,Some(&dir.path().join("backups"))).unwrap();
+        assert_eq!(one::<i64>(&c,"PRAGMA user_version"),19);
+        assert_eq!(c.query_row("SELECT name FROM view_folders WHERE id='retained-folder'",[],|r|r.get::<_,String>(0)).unwrap(),"retained");
+        assert!(!crate::notifications::settings(&c).unwrap().enabled);
+        let paths=std::fs::read_dir(dir.path().join("backups")).unwrap().map(|r|r.unwrap().path()).collect::<Vec<_>>();assert_eq!(paths.len(),1);
+        let backup=Connection::open(&paths[0]).unwrap();assert_eq!(one::<i64>(&backup,"PRAGMA user_version"),18);
+        assert_eq!(old,backup.query_row("SELECT group_concat(sql,';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",[],|r|r.get::<_,String>(0)).unwrap());
+        // A genuine protected transaction failure may not leave partial19 DDL or a bumped writer gate.
+        let broken=Connection::open_in_memory().unwrap();original15(&broken);seed(&broken);migrate_resource17(&broken,18).unwrap();
+        broken.execute_batch("CREATE TABLE notification_outbox(retained TEXT)").unwrap();
+        assert!(migrate_guarded(&broken,None).is_err());
+        assert_eq!(one::<i64>(&broken,"PRAGMA user_version"),18);
+        assert_eq!(one::<i64>(&broken,"SELECT COUNT(*) FROM sqlite_master WHERE name='notification_settings'"),0);
+    }
+
+    #[test]
+    fn notification19_original17_protected_writer_barrier_preserves_original_schema_and_data() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("original17.db");
         let c = Connection::open(&path).unwrap();
@@ -2996,7 +3018,7 @@ mod resource17_tests {
         migrate_v17(&c).unwrap();
         let schema: String = c
             .query_row(
-                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master WHERE name NOT LIKE 'notification_%' ORDER BY name)",
                 [],
                 |r| r.get(0),
             )
@@ -3005,11 +3027,11 @@ mod resource17_tests {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            18
+            19
         );
         let after: String = c
             .query_row(
-                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master WHERE name NOT LIKE 'notification_%' ORDER BY name)",
                 [],
                 |r| r.get(0),
             )
@@ -3047,8 +3069,8 @@ mod resource17_tests {
     }
 
     #[test]
-    #[ignore = "requires the exact preserved normal Store17 writer supplied by the acceptance owner"]
-    fn store18_saved_writer17_refuses_before_modifying_store() {
+    #[ignore = "requires the exact preserved normal Store18 writer supplied by the acceptance owner"]
+    fn notification19_saved_writer18_refuses_before_modifying_store() {
         use std::{
             collections::BTreeMap,
             process::{Command, Stdio},
@@ -3058,13 +3080,13 @@ mod resource17_tests {
             .expect("exact preserved writer path required");
         let dir = tempfile::tempdir().unwrap();
         let store = crate::Store::open_data_dir(dir.path()).unwrap();
-        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('retained18','writer barrier','now','now')").unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('retained19','writer barrier','now','now')").unwrap();
         assert_eq!(
             store
                 .conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            18
+            19
         );
         drop(store);
         let snapshot = || {
@@ -3100,12 +3122,12 @@ mod resource17_tests {
         let output = child.wait_with_output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!(
-            "saved Store17 writer status={} stderr={stderr}",
+            "saved Store18 writer status={} stderr={stderr}",
             output.status
         );
         assert!(!output.status.success());
         assert!(
-            stderr.contains("18") && stderr.contains("17") && stderr.contains("拒绝"),
+            stderr.contains("19") && stderr.contains("18") && stderr.contains("拒绝"),
             "{stderr}"
         );
         let mut after = snapshot();
@@ -3116,7 +3138,7 @@ mod resource17_tests {
         );
         assert!(
             after == before,
-            "actual fresh18 DB, identity and all SQLite sidecars must remain byte-identical"
+            "actual fresh19 DB, identity and all SQLite sidecars must remain byte-identical"
         );
     }
 

@@ -498,6 +498,8 @@ fn observation(event: SessionEvent) -> Option<NativePtyObservation> {
         | SessionEvent::Delivery { .. }
         | SessionEvent::Item { .. }
         | SessionEvent::TurnEnded { .. }
+        | SessionEvent::NativeTurnOutcome { .. }
+        | SessionEvent::ManagedResponseFailed { .. }
         | SessionEvent::Profile(_)
         | SessionEvent::Usage(_)
         | SessionEvent::CodexObservation { .. } => None,

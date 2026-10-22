@@ -1877,7 +1877,7 @@ impl Port for MemPort {
         })
     }
 
-    async fn runner_turn_end(&self, session: &str, turn_id: &str, text: &str, _notification:Option<NativeTurnNotice>) -> Result<()> {
+    async fn runner_turn_end(&self, session: &str, turn_id: &str, text: &str) -> Result<()> {
         let mut state = self.lock();
         state
             .runner_ends
@@ -1891,6 +1891,7 @@ impl Port for MemPort {
         Ok(())
     }
 
+    async fn claim_notification(&self,_id:i64,_revision:i64,_now:i64)->Result<Option<crewd_store::notifications::Claimed>>{Ok(None)}
     async fn notification_change(&self,session:&str,change:NotificationChange)->Result<()> {self.lock().notification_changes.push((session.into(),change));Ok(())}
 
     async fn record_usage(

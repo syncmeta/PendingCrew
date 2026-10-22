@@ -74,12 +74,16 @@ impl Runtime {
         }
         let Some(ready)=self.ready(&s).await else{return};
         let expected_id=candidate.delivery_id;
-        let claim=self.db.call(move|store|store.with_tx(|c|facts::claim_checked(c,now(),revision,expected_id))).await;
-        let Ok(Ok(Some(claim)))=claim else{return};
+        let session_source=matches!(&candidate.context.source,NotificationSource::CodexTurn{..}|NotificationSource::ManagedResponse{..}|NotificationSource::Decision{..});
+        let claim=if session_source {
+            let Some(state)=self.state.upgrade()else{return};let Some(handle)=state.orchestra.get()else{return};
+            tokio::time::timeout(Duration::from_secs(2),handle.claim_notification(candidate)).await.ok().and_then(|v|v.ok()).flatten()
+        }else{self.db.call(move|store|store.with_tx(|c|facts::claim_checked(c,now(),revision,expected_id))).await.ok().and_then(|v|v.ok()).flatten()};
+        let Some(claim)=claim else{return};
         let aad=match facts::token_aad(&claim.owner,&claim.installation){Ok(v)=>v,Err(_)=>return};
         let token=open(&ready.seal,&aad,&claim.sealed_token).ok().and_then(|v|String::from_utf8(v).ok());
-        let allowed={let id=claim.delivery_id;let attempt=claim.attempt.clone();let owner=claim.owner.clone();let installation=claim.installation.clone();let context=claim.context.clone();let expires=claim.expires_at;let revision=claim.config_revision;
-            self.db.call(move|store|facts::still_allowed(store.conn(),&facts::Claimed{delivery_id:id,attempt,owner,installation,context,expires_at:expires,config_revision:revision,sealed_token:Vec::new()},now())).await.ok().and_then(|v|v.ok()).unwrap_or(false)};
+        let allowed={let id=claim.delivery_id;let attempt=claim.attempt.clone();let owner=claim.owner.clone();let installation=claim.installation.clone();let context=claim.context.clone();let expires=claim.expires_at;let revision=claim.config_revision;let session_generation=claim.session_generation.clone();
+            self.db.call(move|store|facts::still_allowed(store.conn(),&facts::Claimed{delivery_id:id,session_generation,attempt,owner,installation,context,expires_at:expires,config_revision:revision,sealed_token:Vec::new()},now())).await.ok().and_then(|v|v.ok()).unwrap_or(false)};
         let (outcome,reason,invalid)=if !allowed||*self.drain.borrow() {(NotificationDeliveryState::Suppressed,Some("authority_changed".to_string()),false)} else if let Some(token)=token{
             let payload=serde_json::to_vec(&json!({"aps":{"alert":{"title":"PendingCrew","body":"有新的工作动态，请打开查看。"}},"context":claim.context})).unwrap_or_default();
             let result=ready.sender.send(&token,&claim.attempt,&payload,now()/1000,claim.expires_at/1000).await;
@@ -91,8 +95,8 @@ impl Runtime {
     /// None means transient/unpublished observation: leave pending until its fixed expiry.
     async fn session_current(&self,candidate:&facts::Claimed)->Option<bool>{
         let (session,expected,decision)=match &candidate.context.source {
-            NotificationSource::CodexTurn{session_id,..}=>(session_id.as_str(),None,None),
-            NotificationSource::ManagedResponse{session_id,..}=>(session_id.as_str(),None,None),
+            NotificationSource::CodexTurn{session_id,..}=>(session_id.as_str(),candidate.session_generation.as_deref(),None),
+            NotificationSource::ManagedResponse{session_id,..}=>(session_id.as_str(),if candidate.context.kind==NotificationKind::ResponseFailed{candidate.session_generation.as_deref()}else{None},None),
             NotificationSource::Decision{session_id,generation,decision_id}=>(session_id.as_str(),Some(generation.as_str()),Some(decision_id.as_str())),
             _=>return Some(true),
         };
@@ -159,8 +163,8 @@ impl Runtime {
         let settings=self.read(actor,operation,facts::settings).await?;if !settings.enabled{return Err(unavailable())}let binding=settings.binding.as_ref().ok_or_else(unavailable)?;
         let seal=self.load(&binding.db_id,&binding.seal_slot).await.map_err(|_|unavailable())?;
         let summary=NotificationInstallation{installation_id:p.installation_id.clone(),generation:(expected+1).to_string(),revoked:false,environment:p.environment,topic:p.topic.clone(),crew_ids:p.crew_ids.clone(),kinds:p.kinds.clone()};let aad=facts::token_aad(&owner,&summary).map_err(store_error)?;let token=seal_token(&seal,&aad,p.device_token.as_bytes()).map_err(|_|unavailable())?;
-        let state=self.state()?;let actor=actor.clone();let request=p.request_id.clone();let key=owner.key();
-        let result=self.db.call(move|store|store.with_tx(|c|{actor.authorize_tx(&state,c,operation).map_err(|_|crewd_store::StoreError::Invalid("notification permission denied".into()))?;if !facts::reserve(c,&key,&request,operation,&hash)?{return facts::request_lookup(c,&key,&request)}let result=json!(facts::register(c,&owner,&p,&token)?);facts::result(c,&key,&request,&result)?;Ok(NotificationRequestLookup::Known{operation:operation.into(),result})})).await.map_err(|_|unavailable())?.map_err(store_error)?;value(result)
+        let revision=settings.revision;let state=self.state()?;let actor=actor.clone();let request=p.request_id.clone();let key=owner.key();
+        let result=self.db.call(move|store|store.with_tx(|c|{actor.authorize_tx(&state,c,operation).map_err(|_|crewd_store::StoreError::Invalid("notification permission denied".into()))?;if !facts::reserve(c,&key,&request,operation,&hash)?{return facts::request_lookup(c,&key,&request)}if facts::settings(c)?.revision!=revision{return Err(crewd_store::StoreError::Invalid("notification configuration changed".into()))}let result=json!(facts::register(c,&owner,&p,&token)?);facts::result(c,&key,&request,&result)?;Ok(NotificationRequestLookup::Known{operation:operation.into(),result})})).await.map_err(|_|unavailable())?.map_err(store_error)?;value(result)
     }
     async fn revoke(&self,actor:&Actor,p:NotificationRevokeParams)->Result<Value>{
         let owner=Self::owner(actor)?;request_id(&p.request_id)?;request_id(&p.installation_id)?;let expected=facts::number(&p.expected_generation,false).map_err(store_error)?;let hash=facts::hash(&serde_json::to_vec(&p).map_err(|_|bad())?);let key=owner.key();let operation="notification.installationRevoke";let state=self.state()?;let actor=actor.clone();
@@ -172,3 +176,25 @@ fn seal_token(key:&[u8],aad:&[u8],plain:&[u8])->std::result::Result<Vec<u8>,()> 
 fn open(key:&[u8],aad:&[u8],sealed:&[u8])->std::result::Result<Vec<u8>,()> {if sealed.len()<28{return Err(())}let key=aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM,key).map_err(|_|())?);let nonce:aead::Nonce=aead::Nonce::try_assume_unique_for_key(&sealed[..12]).map_err(|_|())?;let mut body=sealed[12..].to_vec();Ok(key.open_in_place(nonce,aead::Aad::from(aad),&mut body).map_err(|_|())?.to_vec())}
 pub(crate) fn is_method(s:&str)->bool{matches!(s,"notification.status"|"notification.configure"|"notification.installationRegister"|"notification.installationRevoke"|"notification.installationGet"|"notification.requestLookup"|"notification.deliveryList")}
 pub(crate) async fn handle(state:&Arc<AppState>,actor:&Actor,req:Request)->Response {let id=req.id;let result=match state.notifications.get(){Some(runtime)=>runtime.route(actor,&req.method,req.params).await,None=>Err(unavailable())};match result{Ok(v)=>Response::ok(id,v),Err(e)=>Response::err(id,e)}}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn sealed_token_is_randomized_and_bound_to_exact_owner_generation_and_provider() {
+        let key=[7;32];let token=b"001122aaff";let aad=b"authority/db/grant/installation/1/sandbox/topic";
+        let first=seal_token(&key,aad,token).unwrap();let second=seal_token(&key,aad,token).unwrap();
+        assert_ne!(first,second);assert!(!first.windows(token.len()).any(|v|v==token));
+        assert_eq!(open(&key,aad,&first).unwrap(),token);
+        for other in [b"authority/db/grant/installation/2/sandbox/topic".as_slice(),b"other-authority/db/grant/installation/1/sandbox/topic"] {assert!(open(&key,other,&first).is_err());}
+        assert!(open(&[8;32],aad,&first).is_err());let mut corrupt=first;corrupt[12]^=1;assert!(open(&key,aad,&corrupt).is_err());
+        assert!(open(&key,aad,b"short").is_err());
+    }
+    #[test]
+    fn provider_and_registration_debug_redact_input_secrets() {
+        let p=NotificationProvider{team_id:"ABCDEFGHIJ".into(),key_id:"KLMNOPQRST".into(),environment:PushEnvironment::Sandbox,topic:"com.example.app".into(),private_key_pkcs8_base64:"SENSITIVE-APPLE-KEY".into()};
+        assert!(!format!("{p:?}").contains("SENSITIVE"));
+        let r=NotificationRegisterParams{request_id:"id".into(),installation_id:"installation".into(),expected_generation:"0".into(),device_token:"SENSITIVE-TOKEN".into(),environment:PushEnvironment::Sandbox,topic:p.topic,crew_ids:vec![],kinds:vec![]};
+        assert!(!format!("{r:?}").contains("SENSITIVE"));
+    }
+}

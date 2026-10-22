@@ -447,6 +447,9 @@ fn post_with(
         .any(|m| m.kind == MentionKind::Human);
     let unwatched_human_mention =
         human_mention && !is_human_channel && !channels::is_watched(conn, &ch.id)?;
+    if human_mention && message.sender_kind != SenderKind::Human {
+        crewd_store::notifications::enqueue(tx.conn(),&ch.crew_id,crewd_proto::notifications::NotificationKind::HumanMention,crewd_proto::notifications::NotificationSource::Message{message_id:message.id.clone(),message_seq:message.seq.to_string(),channel_id:ch.id.clone()},None,crewd_store::now_ms())?;
+    }
     tx.note(Change::MessageAppended {
         channel_id: ch.id.clone(),
         seq: message.seq,

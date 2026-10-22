@@ -137,7 +137,7 @@ pub fn enqueue_work(c:&Connection,crew:&str,event:&crewd_work::Event)->Result<()
     enqueue(c,crew,kind,NotificationSource::WorkEvent{event_seq:event.seq.to_string(),work_id:work.map(|v|v.to_string()),ask_id:ask.map(|v|v.to_string()),entry_no:None,object_id:reference.id()},None,event.at.0)
 }
 /// These reminders represent a current live observation, not permanent work truth.
-pub fn suppress_session(c:&Connection,session:&str,reason:&str)->Result<()> {tx(c)?;c.execute("UPDATE notification_outbox SET state='suppressed',reason=?1 WHERE session_id=?2 AND state='pending'",params![reason,session])?;Ok(())}
+pub fn suppress_session(c:&Connection,session:&str,reason:&str)->Result<()> {tx(c)?;if c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0))?<19{return Ok(())}c.execute("UPDATE notification_outbox SET state='suppressed',reason=?1 WHERE session_id=?2 AND state='pending'",params![reason,session])?;Ok(())}
 pub fn restart(c:&Connection)->Result<()> {tx(c)?;c.execute("UPDATE notification_outbox SET state='suppressed',reason='runtime_reopened' WHERE session_id IS NOT NULL AND state='pending'",[])?;Ok(())}
 pub fn restored(c:&Connection)->Result<()> {
     tx(c)?;
@@ -147,7 +147,7 @@ pub fn restored(c:&Connection)->Result<()> {
     for (id,raw) in rows{let mut value:NotificationInstallation=serde_json::from_str(&raw)?;value.revoked=true;c.execute("UPDATE notification_installations SET revoked=1,token=NULL,summary=?1 WHERE id=?2",params![json(&value)?,id])?;}
     c.execute("UPDATE notification_outbox SET state='suppressed',reason='database_restored' WHERE state='pending'",[])?;Ok(())
 }
-pub struct Claimed {pub delivery_id:i64,pub installation:NotificationInstallation,pub owner:Owner,pub sealed_token:Vec<u8>,pub context:NotificationContext,pub attempt:String,pub expires_at:i64,pub config_revision:i64}
+pub struct Claimed {pub delivery_id:i64,pub session_generation:Option<String>,pub installation:NotificationInstallation,pub owner:Owner,pub sealed_token:Vec<u8>,pub context:NotificationContext,pub attempt:String,pub expires_at:i64,pub config_revision:i64}
 /// Unknown is durable before returning the external-I/O permit. Never selects Unknown again.
 pub fn claim(c:&Connection,now:i64,expected_revision:i64)->Result<Option<Claimed>> {claim_inner(c,now,expected_revision,None,true)}
 pub fn claim_checked(c:&Connection,now:i64,expected_revision:i64,expected_id:i64)->Result<Option<Claimed>> {claim_inner(c,now,expected_revision,Some(expected_id),true)}
@@ -155,8 +155,8 @@ pub fn peek(c:&Connection,now:i64,expected_revision:i64)->Result<Option<Claimed>
 fn claim_inner(c:&Connection,now:i64,expected_revision:i64,expected_id:Option<i64>,mark_unknown:bool)->Result<Option<Claimed>> {
     tx(c)?;let config=settings(c)?;if !config.enabled||config.revision!=expected_revision{return Ok(None)}
     c.execute("UPDATE notification_outbox SET state='suppressed',reason='expired' WHERE state='pending' AND expires_at<=?1",[now])?;
-    let candidate:Option<(i64,String,String,i64)>=c.query_row("SELECT id,installation_id,context,expires_at FROM notification_outbox WHERE state='pending' ORDER BY id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-    let Some((delivery_id,id,context,expires_at))=candidate else{return Ok(None)};
+    let candidate:Option<(i64,String,String,i64,Option<String>)>=c.query_row("SELECT id,installation_id,context,expires_at,generation FROM notification_outbox WHERE state='pending' ORDER BY id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+    let Some((delivery_id,id,context,expires_at,session_generation))=candidate else{return Ok(None)};
     if expected_id.is_some_and(|id|id!=delivery_id){return Ok(None)}
     let context:NotificationContext=serde_json::from_str(&context)?;
     let row:(String,String,String,String,String,String,Option<Vec<u8>>,bool)=c.query_row("SELECT authority_id,db_id,grant_id,grant_revision,client_pin,summary,token,revoked FROM notification_installations WHERE id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?)))?;
@@ -165,15 +165,17 @@ fn claim_inner(c:&Connection,now:i64,expected_revision:i64,expected_id:Option<i6
     if !live {c.execute("UPDATE notification_outbox SET state='suppressed',reason='authority_changed' WHERE id=?1 AND state='pending'",[delivery_id])?;return Ok(None)}
     let attempt=if mark_unknown {uuid::Uuid::new_v4().to_string()}else{String::new()};let generation=number(&installation.generation,false)?;
     if mark_unknown && c.execute("UPDATE notification_outbox SET state='unknown',attempt=?1,attempt_generation=?2 WHERE id=?3 AND state='pending'",params![attempt,generation,delivery_id])?!=1{return Err(invalid("notification claim conflict"))}
-    Ok(Some(Claimed{delivery_id,installation,owner,sealed_token:row.6.unwrap(),context,attempt,expires_at,config_revision:config.revision}))
+    Ok(Some(Claimed{delivery_id,session_generation,installation,owner,sealed_token:row.6.unwrap(),context,attempt,expires_at,config_revision:config.revision}))
 }
 fn source_live(c:&Connection,context:&NotificationContext)->Result<bool>{
     match &context.source {
         NotificationSource::ManagedResponse{session_id,runtime_id,request_id,prompt_id,receipt_revision}=>{
             let revision=number(receipt_revision,true)?;
-            Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_receipts e JOIN native_execution_runtimes r ON r.runtime_id=e.runtime_id JOIN sessions s ON s.id=r.session_id WHERE e.request_id=?1 AND e.runtime_id=?2 AND e.prompt_id=?3 AND e.revision=?4 AND e.phase='completed' AND e.turn_id IS NULL AND r.revoked=0 AND r.manual=0 AND r.session_id=?5 AND s.desired='running')",params![request_id,runtime_id,prompt_id,revision,session_id],|r|r.get(0))?)
+            let failed=context.kind==NotificationKind::ResponseFailed;
+            Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM native_execution_receipts e JOIN native_execution_runtimes r ON r.runtime_id=e.runtime_id JOIN sessions s ON s.id=r.session_id WHERE e.request_id=?1 AND e.runtime_id=?2 AND e.prompt_id=?3 AND e.revision=?4 AND e.phase=?6 AND e.turn_id IS NULL AND (r.revoked=0 OR ?7) AND r.manual=0 AND r.session_id=?5 AND s.desired='running' AND s.was_working=0)",params![request_id,runtime_id,prompt_id,revision,session_id,if failed{"unknown"}else{"completed"},failed],|r|r.get(0))?)
         }
-        NotificationSource::CodexTurn{session_id,..}|NotificationSource::Decision{session_id,..}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND desired='running')",[session_id],|r|r.get(0))?),
+        NotificationSource::CodexTurn{session_id,..}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND desired='running' AND was_working=0)",[session_id],|r|r.get(0))?),
+        NotificationSource::Decision{session_id,..}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND desired='running')",[session_id],|r|r.get(0))?),
         NotificationSource::Message{message_id,message_seq,channel_id}=>Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE id=?1 AND seq=?2 AND channel_id=?3)",params![message_id,number(message_seq,false)?,channel_id],|r|r.get(0))?),
         NotificationSource::WorkEvent{..}=>Ok(true),
     }

@@ -573,6 +573,29 @@ impl Actor {
                 stdout: Some(json!({"continue":true}).to_string()),
             };
         }
+        // The hook transport and session checks above are insufficient alone:
+        // only this current managed input's actual prompt can attest failure.
+        if kind==HookKind::StopFailure {
+            let qualified=self.pending.as_ref().filter(|input|prompt.is_some()&&input.prompt==prompt).and_then(|input|input.receipt.as_ref()).cloned();
+            if let Some(original)=qualified {
+                let terminal=self.terminal.clone();
+                let permit=terminal.automatic_hook_authority(self.seal.clone()).await;
+                let allowed=permit.is_some()&&self.current_now();
+                drop(permit);
+                if allowed {
+                    self.invalidate().await;
+                    let request=original.request_id.clone();let runtime=self.seal.runtime().id.clone();
+                    let proof=self.db.call_result(move|store|{
+                        let receipt=n::get(store.conn(),&request)?;
+                        Ok::<_,crewd_store::StoreError>(receipt.filter(|r|r.runtime_id==runtime&&r.prompt_id.is_some()&&r.phase==n::Phase::Unknown&&r.turn_id.is_none()))
+                    }).await;
+                    if let Ok(Ok(Some(receipt)))=proof {
+                        let _=self.events.send(SessionEvent::ManagedResponseFailed{runtime_id:receipt.runtime_id,request_id:receipt.request_id,prompt_id:receipt.prompt_id.unwrap(),receipt_revision:receipt.revision});
+                    }
+                    return HookResult{stdout:None};
+                }
+            }
+        }
         if matches!(
             kind,
             HookKind::StopFailure | HookKind::SessionEnd | HookKind::SessionStart

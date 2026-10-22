@@ -521,6 +521,10 @@ pub struct AnswerReport {
 }
 
 pub enum Cmd {
+    NotificationClaim {
+        candidate: Box<crewd_store::notifications::Claimed>,
+        reply: Reply<Option<crewd_store::notifications::Claimed>>,
+    },
     PublicExecution {
         call: Box<crate::public_execution::PublicExecution>,
         reply: oneshot::Sender<Result<serde_json::Value, crewd_proto::RpcError>>,
@@ -1074,6 +1078,10 @@ impl<P: Port> Core<P> {
                     let result = self.execute_public_control(call).await;
                     let _ = reply.send(result);
                 }
+            }
+            Cmd::NotificationClaim{candidate,reply}=>{
+                let result=self.claim_notification(*candidate).await;
+                let _=reply.send(result);
             }
             Cmd::PublicTarget { session, reply } => {
                 let result = self.public_target(&session).await;
@@ -2496,6 +2504,24 @@ impl<P: Port> Core<P> {
 
     // —— 会话事件
 
+    /// This actor cannot process resume/decision/generation events between the
+    /// final in-memory eligibility read and the DB actor's durable claim ACK.
+    async fn claim_notification(&self,candidate:crewd_store::notifications::Claimed)->Result<Option<crewd_store::notifications::Claimed>,ControlError>{
+        use crewd_proto::notifications::{NotificationSource,NotificationKind};
+        let (session,expected,decision)=match &candidate.context.source {
+            NotificationSource::CodexTurn{session_id,..}=>(session_id,candidate.session_generation.as_deref(),None),
+            NotificationSource::ManagedResponse{session_id,..}=>(session_id,if candidate.context.kind==NotificationKind::ResponseFailed{candidate.session_generation.as_deref()}else{None},None),
+            NotificationSource::Decision{session_id,generation,decision_id}=>(session_id,Some(generation.as_str()),Some(decision_id)),
+            _=>return Ok(None),
+        };
+        let Some(live)=self.live.get(session)else{return Ok(None)};
+        if live.halting||live.hibernate_cut||expected.is_some_and(|g|g!=self.current_public_target(session).generation){return Ok(None)}
+        if let Some(id)=decision {
+            if !live.decision.as_ref().is_some_and(|d|matches!(&d.kind,crewd_term::DecisionKind::RunnerRequest{request_id} if request_id.as_str()==id.as_str())){return Ok(None)}
+        }else if live.working{return Ok(None)}
+        self.port.claim_notification(candidate.delivery_id,candidate.config_revision,crewd_store::now_ms()).await.map_err(ControlError::from_port)
+    }
+
     async fn on_exec(
         &mut self,
         session: &str,
@@ -2543,6 +2569,7 @@ impl<P: Port> Core<P> {
                 }
             }
             SessionEvent::Working(on) => {
+                if on {self.port.notification_change(session,NotificationChange::Clear).await?;}
                 let became_idle = l.working && !on;
                 l.working = on;
                 let mut patch = SessionPatch {
@@ -2612,15 +2639,20 @@ impl<P: Port> Core<P> {
                     item,
                 });
             }
-            SessionEvent::NativeTurnOutcome{thread_id,turn_id,failed,last_agent_message}=>{
-                self.port.runner_turn_end(session,&turn_id,&last_agent_message,Some(NativeTurnNotice{generation:notification_generation,thread_id,failed})).await?;
+            SessionEvent::ManagedResponseFailed{runtime_id,request_id,prompt_id,receipt_revision}=>{
+                l.working=false;
+                self.port.patch_session(session,SessionPatch{was_working:Some(false),..Default::default()}).await?;
+                self.port.notification_change(session,NotificationChange::ManagedFailure{generation:notification_generation,runtime_id,request_id,prompt_id,receipt_revision}).await?;
+            }
+            SessionEvent::NativeTurnOutcome{thread_id,turn_id,failed,last_agent_message:_}=>{
+                self.port.notification_change(session,NotificationChange::CodexOutcome{generation:notification_generation,thread_id,turn_id,failed}).await?;
             }
             SessionEvent::TurnEnded {
                 turn_id,
                 last_agent_message,
             } => {
                 self.port
-                    .runner_turn_end(session, &turn_id, &last_agent_message, None)
+                    .runner_turn_end(session, &turn_id, &last_agent_message)
                     .await?;
             }
             SessionEvent::Usage(snapshot) => {
