@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "url": "https://pendingname.com/crewdemo/",
+  "sourceCommit": "fdf1209e36a120adac487f625be0a241dbd1ab7a",
+  "htmlSha256": "581e0762c4c7d6aa03797a434db7f755d0ed8c091e6372eab606b107f639214a",
+  "homepageUnchanged": true,
+  "homepageSha256": "ca25464979781d0e7e04f11f730fbccc2795ce3d13e1c4e5f0c36fec3d5e9bdc",
+  "checks": [
+    "HTML matches build excluding Cloudflare analytics injection; runtime JS and CSS hashes match",
+    "unified pending-work terminology",
+    "per-group AI red and human yellow badges with zero hidden",
+    "completion and answer update only corresponding badge",
+    "independent human and AI inspector tabs and detail navigation",
+    "black OpenAI icon",
+    "desktop and mobile sidebar hide and restore",
+    "persistence after reload",
+    "mobile width and footer links"
+  ],
+  "errors": [],
+  "worker": "pendingcrew-demo",
+  "versionId": "d2805167-5bc4-4eab-a50c-81c09fbdaf5a",
+  "routes": [
+    "pendingname.com/crewdemo",
+    "pendingname.com/crewdemo/*"
+  ]
+}
