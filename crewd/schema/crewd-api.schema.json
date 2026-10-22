@@ -6266,6 +6266,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/PersonalDraftChanged"
+            },
+            "event": {
+              "const": "personalDraft.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/TerminalWatchEvent"
             },
             "event": {
@@ -9222,9 +9238,898 @@
       ],
       "type": "object"
     },
+    "PersonalDraftBranch": {
+      "additionalProperties": false,
+      "properties": {
+        "branchId": {
+          "type": "string"
+        },
+        "key": {
+          "$ref": "#/$defs/PersonalDraftKey"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonalDraftPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retired": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "writerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branchId",
+        "key",
+        "writerId",
+        "revision",
+        "retired"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftBranchPage": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/PersonalDraftBranch"
+          },
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "membershipCut": {
+          "type": "string"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "branches",
+        "membershipCut",
+        "complete",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftBranchesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/PersonalDraftKey"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "key"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftCatalogEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "activeBranches": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "$ref": "#/$defs/PersonalDraftKey"
+        },
+        "retiredBranches": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "activeBranches",
+        "retiredBranches"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftCatalogPage": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/PersonalDraftCatalogEntry"
+          },
+          "type": "array"
+        },
+        "membershipCut": {
+          "type": "string"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "entries",
+        "membershipCut",
+        "complete",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftCatalogParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftChanged": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "spaceEpoch": {
+          "type": "string"
+        },
+        "spaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "spaceEpoch",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftCheckpointParams": {
+      "additionalProperties": false,
+      "properties": {
+        "branchId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "key": {
+          "$ref": "#/$defs/PersonalDraftKey"
+        },
+        "payload": {
+          "$ref": "#/$defs/PersonalDraftPayload"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "branchId",
+        "key",
+        "expectedRevision",
+        "revision",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftConsentParams": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftDestination": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "channel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "originalSession",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PersonalDraftFenceState": {
+      "enum": [
+        "existingTerminal",
+        "existingPending",
+        "missingFenced"
+      ],
+      "type": "string"
+    },
+    "PersonalDraftKey": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "destination": {
+          "$ref": "#/$defs/PersonalDraftDestination"
+        },
+        "kind": {
+          "$ref": "#/$defs/PersonalDraftKind"
+        }
+      },
+      "required": [
+        "authorityId",
+        "dbId",
+        "crewId",
+        "destination",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftKind": {
+      "enum": [
+        "channelMessage",
+        "sessionMessage",
+        "initialTask"
+      ],
+      "type": "string"
+    },
+    "PersonalDraftMember": {
+      "additionalProperties": false,
+      "properties": {
+        "clientSpkiSha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grantId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grantRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memberId": {
+          "type": "string"
+        },
+        "optedIn": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "writerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "memberId",
+        "writerId",
+        "revision",
+        "optedIn",
+        "revoked"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftMemberSetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "clientSpkiSha256": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "expectedSpaceRevision": {
+          "type": "string"
+        },
+        "grantId": {
+          "type": "string"
+        },
+        "grantRevision": {
+          "type": "string"
+        },
+        "spaceEpoch": {
+          "type": "string"
+        },
+        "spaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "spaceEpoch",
+        "expectedSpaceRevision",
+        "grantId",
+        "grantRevision",
+        "clientSpkiSha256",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftMembers": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PersonalDraftMember"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "spaceEpoch": {
+          "type": "string"
+        },
+        "spaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "spaceEpoch",
+        "revision",
+        "members"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftMembersParams": {
+      "additionalProperties": false,
+      "properties": {
+        "spaceEpoch": {
+          "type": "string"
+        },
+        "spaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "spaceEpoch"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftMention": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftOwnerParams": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledgeRestore": {
+          "type": "boolean"
+        },
+        "expectedSpaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expectedSpaceRevision": {
+          "type": "string"
+        },
+        "localEnabled": {
+          "type": "boolean"
+        },
+        "ownerEpoch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ownerEpoch",
+        "expectedSpaceRevision",
+        "localEnabled",
+        "acknowledgeRestore"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "replyTarget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonalDraftReply"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stagedMentions": {
+          "items": {
+            "$ref": "#/$defs/PersonalDraftStagedMention"
+          },
+          "type": "array"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "stagedMentions"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftReplacement": {
+      "additionalProperties": false,
+      "properties": {
+        "branchId": {
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/PersonalDraftPayload"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branchId",
+        "revision",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftReply": {
+      "additionalProperties": false,
+      "properties": {
+        "mention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonalDraftMention"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quotedSender": {
+          "type": "string"
+        },
+        "quotedSnippet": {
+          "type": "string"
+        },
+        "replyToId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "replyToId",
+        "quotedSender",
+        "quotedSnippet"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftRequestFence": {
+      "additionalProperties": false,
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/PublicCommandReceipt"
+        },
+        "state": {
+          "$ref": "#/$defs/PersonalDraftFenceState"
+        }
+      },
+      "required": [
+        "state",
+        "receipt"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftRequestFenceParams": {
+      "additionalProperties": false,
+      "description": "This writes a negative receipt; it is not a read/lookup or a resubmission.",
+      "properties": {
+        "original": {
+          "$ref": "#/$defs/CommandSubmitParams"
+        }
+      },
+      "required": [
+        "original"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftResolveParams": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/PersonalDraftKey"
+        },
+        "replacement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonalDraftReplacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retiring": {
+          "items": {
+            "$ref": "#/$defs/PersonalDraftRetire"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/PersonalDraftScope"
+        }
+      },
+      "required": [
+        "scope",
+        "key",
+        "retiring"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftRetire": {
+      "additionalProperties": false,
+      "properties": {
+        "branchId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branchId",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftScope": {
+      "additionalProperties": false,
+      "properties": {
+        "memberId": {
+          "type": "string"
+        },
+        "memberRevision": {
+          "type": "string"
+        },
+        "spaceEpoch": {
+          "type": "string"
+        },
+        "spaceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spaceId",
+        "spaceEpoch",
+        "memberId",
+        "memberRevision"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftStagedMention": {
+      "additionalProperties": false,
+      "properties": {
+        "mention": {
+          "$ref": "#/$defs/PersonalDraftMention"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "mention"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "branchLimit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dbId": {
+          "type": "string"
+        },
+        "member": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PersonalDraftMember"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memberLimit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner": {
+          "type": "boolean"
+        },
+        "ownerEpoch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payloadLimitBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spaceEpoch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spaceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spaceLimitBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spaceRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dbId",
+        "owner",
+        "available",
+        "spaceRevision",
+        "payloadLimitBytes",
+        "spaceLimitBytes",
+        "branchLimit",
+        "memberLimit"
+      ],
+      "type": "object"
+    },
+    "PersonalDraftStatusParams": {
+      "additionalProperties": false,
+      "type": "object"
+    },
     "PublicCommand": {
       "description": "Closed typed whitelist. Resource-specific requestId/CAS methods keep their\nexisting contracts; this is not an arbitrary RPC proxy.",
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "personalDraft.ownerConfigure",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PersonalDraftOwnerParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "personalDraft.memberSet",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PersonalDraftMemberSetParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "personalDraft.consentSet",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PersonalDraftConsentParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "personalDraft.checkpoint",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PersonalDraftCheckpointParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "personalDraft.resolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PersonalDraftResolveParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -11292,6 +12197,7 @@
               "work",
               "documents",
               "viewFolders",
+              "personalDraft",
               "data"
             ],
             "type": "string"
@@ -13565,6 +14471,9 @@
     "message.appended": {
       "$ref": "#/$defs/Message"
     },
+    "personalDraft.changed": {
+      "$ref": "#/$defs/PersonalDraftChanged"
+    },
     "restart.changed": {
       "$ref": "#/$defs/RestartPrompt"
     },
@@ -14295,6 +15204,46 @@
         "$ref": "#/$defs/NotificationStatus"
       }
     },
+    "personalDraft.branches": {
+      "params": {
+        "$ref": "#/$defs/PersonalDraftBranchesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PersonalDraftBranchPage"
+      }
+    },
+    "personalDraft.catalog": {
+      "params": {
+        "$ref": "#/$defs/PersonalDraftCatalogParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PersonalDraftCatalogPage"
+      }
+    },
+    "personalDraft.members": {
+      "params": {
+        "$ref": "#/$defs/PersonalDraftMembersParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PersonalDraftMembers"
+      }
+    },
+    "personalDraft.requestFence": {
+      "params": {
+        "$ref": "#/$defs/PersonalDraftRequestFenceParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PersonalDraftRequestFence"
+      }
+    },
+    "personalDraft.status": {
+      "params": {
+        "$ref": "#/$defs/PersonalDraftStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PersonalDraftStatus"
+      }
+    },
     "read.mark": {
       "params": {
         "$ref": "#/$defs/ReadMarkParams"
@@ -14846,6 +15795,7 @@
     "work",
     "documents",
     "viewFolders",
+    "personalDraft",
     "data"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"

@@ -341,6 +341,11 @@ async fn submit(
     p: CommandSubmitParams,
 ) -> Result<Value, RpcError> {
     match &p.command {
+        PublicCommand::PersonalDraftOwner(_)
+        | PublicCommand::PersonalDraftMember(_)
+        | PublicCommand::PersonalDraftConsent(_)
+        | PublicCommand::PersonalDraftCheckpoint(_)
+        | PublicCommand::PersonalDraftResolve(_) => crate::personal_drafts::submit(state,actor,p).await,
         PublicCommand::LocalClientTrust(_)
         | PublicCommand::LocalClientTrustRevoke(_)
         | PublicCommand::CrewCreate(_)
@@ -473,6 +478,7 @@ pub(crate) async fn lookup(
                 for method in r.command.authorized_methods() {
                     own_actor.authorize_tx(&own_state, s.conn(), method)?;
                 }
+                crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).map_err(|_|collab::CollabError::Forbidden(collab::refusal::Refusal::new(collab::refusal::Code::ResourceForbidden)))?;
             }
             Ok(result)
         })
@@ -483,6 +489,10 @@ pub(crate) async fn lookup(
         for method in receipt.command.authorized_methods() {
             actor.authorize(state, method).await?;
         }
+    }
+    if result.as_ref().is_some_and(|r|crewd_store::personal_drafts::is_command(&r.command)) {
+        let current=result.clone();let owner=state.clone();let source=actor.clone();
+        state.db.call(move|s|{if let Some(r)=&current{crate::personal_drafts::receipt_allowed_tx(&owner,&source,s.conn(),r)?}Ok::<_,RpcError>(())}).await.map_err(dispatch::internal)??;
     }
     if let Some(r) = &mut result {
         r.historical |= r.runtime_binding_id != state.runtime_binding_id;
@@ -512,6 +522,7 @@ pub(crate) async fn list_unknown(
         .call(move |s| -> collab::Result<_> {
             let rows =
                 receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
+            let rows:Vec<_>=rows.into_iter().filter(|r|crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).is_ok()).collect();
             for r in &rows {
                 for method in r.command.authorized_methods() {
                     own_actor.authorize_tx(&own_state, s.conn(), method)?;
@@ -560,6 +571,17 @@ mod tests {
         let peer = policy.accept(&server).unwrap();
         assert!(matches!(peer.authority(), crate::peer::Authority::Human));
         (state, Actor::Local(peer), db)
+    }
+    #[tokio::test]
+    async fn core_personal_draft_owner_uses_original_receipt_and_real_local_authority() {
+        let(state,actor,db)=state_actor().await;
+        let request=uuid::Uuid::new_v4().to_string();
+        let p=CommandSubmitParams{request_id:request.clone(),db_id:db.clone(),runtime_binding_id:state.runtime_binding_id.clone(),command:PublicCommand::PersonalDraftOwner(crewd_proto::personal_drafts::PersonalDraftOwnerParams{owner_epoch:state.db.call(|s|crewd_store::judgment_state::epoch(s.conn())).await.unwrap().unwrap(),expected_space_id:None,expected_space_revision:"0".into(),local_enabled:true,acknowledge_restore:false})};
+        let result=submit(&state,&actor,p.clone()).await;
+        assert!(result.is_ok(),"real original command route must commit the new personal-space fact and receipt: {result:?}");
+        let r=result.unwrap();assert_eq!(r["phase"],"committed");assert_eq!(r["requestId"],request);
+        let repeated=submit(&state,&actor,p).await.unwrap();assert_eq!(r,repeated,"same immutable UUID is attribution only");
+        let lookup=lookup(&state,&actor,CommandLookupParams{request_id:request,db_id:db}).await.unwrap();assert_eq!(lookup,r);
     }
     #[tokio::test]
     async fn local_trust_status_is_readonly_and_bound_to_current_caller() {

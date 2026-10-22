@@ -17,6 +17,7 @@ pub mod native_helpers;
 pub mod native_receipts;
 mod codex_inputs;
 mod claude_history;
+mod personal_drafts;
 mod notifications;
 pub mod orchestra;
 pub(crate) mod peer;

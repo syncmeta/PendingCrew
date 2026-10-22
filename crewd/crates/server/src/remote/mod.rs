@@ -995,6 +995,8 @@ fn allowed_method(method: &str) -> bool {
             | "notification.installationRevoke"
             | "notification.installationGet"
             | "notification.requestLookup"
+            | "personalDraft.status" | "personalDraft.members" | "personalDraft.catalog" | "personalDraft.branches" | "personalDraft.requestFence"
+            | "personalDraft.consentSet" | "personalDraft.checkpoint" | "personalDraft.resolve"
             | "notification.deliveryList"
             | "notification.deliveryGet"
             | "judgment.inspect"
