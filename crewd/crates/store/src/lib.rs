@@ -17,6 +17,7 @@ pub mod messages;
 pub mod native_execution;
 pub mod native_history;
 pub mod notifications;
+pub mod personal_drafts;
 pub mod object_refs;
 pub mod remote;
 pub mod runner_usage;
