@@ -1,25 +1,29 @@
 # PendingCrew 全工程执行计划
 
-## 2026-10-23 完整 Codex 双端源码接受，进入准确组合候选
+## 2026-10-23 当前完整候选与并行模块
 
-后台 `2b31504562af0c8a2a718413f8242b5093440cde` 与共享 Mac/iOS 客户端 `860f76ef914e30540628d69cdfbb0307259b816a` 均已通过独立整块源码门。根已全文读交接、冻结及最终质量报告，核实际 clean/HEAD 后共同整合；这次源码的 Rust 树为 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive。下一候选范围保持 Codex 完整控制、受支持输入、原生历史及命名权限方案，不把后续 Claude 或个人草稿 Core transport 再加入前置条件。
+完整 Codex 后台及共享 Mac/iOS 消费者已独立准入并整合为产品源码 `6c5fdb30fadba68deac90dc3de733325047d8b68`（S）。该完整输入的新 production normal、普通 Developer ID Mac 包和普通 iOS Simulator 包也已通过独立成套产物门。Mac 为 **0.1.44 / 20748.73718**，iOS 实际为 **0.1.43 / 1**；两端源码同 S，版本字段按实际记录。Rust树 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive，Cloud/APNs 真实资格 nil/off。
 
-新增能力使用原 Mac/iPhone/iPad 入口：首轮、queue、精确 steer 的附件与 Skill 输入；实际 cwd 的技能和权限目录；显式 archive/unarchive/delete/revert。原 Human 任务正文不重写，原生命名与任务分开；设置接受不冒生效、queue 不冒送达、历史回退不改工作文件。客户端在上传前同步耐久保存原始字节，退出重开保留原请求和选择，支持离线只读导出；重开、重连和查看页面不会补传、重发或唤醒 session。Unknown 只约束原项，独立输入与本机文本继续可用。
+main/global 的产品输入为 S；其后 Linux 控制器修订至 `b4d0c37b015326f629fb99e4cda74712a0da381e`（C），另有本次统筹记录。S 之后只改 Linux 控制器、workflow 及对应说明；**现有 normal 和签包仍属于 S，不改标为 C 或记录提交**。根已核完整独验和准确 diff，普通推送及实际远端核对记录在检查点。下方既往阶段保留当时原义，以本节为当前交付总览。
 
-Store20 仅为实证必要的 writer barrier：准确旧19曾恢复消费前快照，使同一引用可被新 UUID 再消费；新20拒绝旧写者，恢复使全部旧引用失效而保原 bytes/receipt，原生绑定恢复为未确认、已删除 tombstone 不复活。这不是旧产品数据导入或通用迁移工程。独验还发现有附件/Skill 而首任务空白会先消费却不送首轮，作者已在原入口准入前最小拒绝，四组合实红/绿及无附件空会话正控制保留。稳定业务、B、Cloud、APNs 和旧全目标均按未变影响范围复用。
-
-当前交付边界如下；下方历史记录保留其当时原义。
-
-| 完整单元 | 当前层次 | 下一完成判据 |
+| 完整交付单元 | 已完成的证据层 | 剩余完成判据与责任 |
 | --- | --- | --- |
-| 本次 Codex 后台与双端消费者 | 独立源码及受影响本机合成验收通过，正在整合 | 同一完整输入的新 normal、普通签名 Mac 与同源 iOS 候选，再做准确运行验收 |
-| Mac 原生玻璃界面与日用产品 | 已装仍为9a/20748.58461；5553封包保持原来源 | 新组合实窗、闲置及正常退出通过后按既有授权整包替换，旧包/旧数据保全 |
-| 单链接主机安装/配对 B | 源码及5553产物已验 | 正常非 memory 凭据、两端同 Core、退出重开与撤权实际链；Linux/VPS另核准确包与前提 |
-| 个人 Cloud App 与通知 App/Core | 完整源码已接受，真实资格仍 nil/off | M42 实际资源/profile、准确签名和真实双端/设备资格，不以源码或 Simulator 冒送达 |
-| Claude 受管任务历史/手动恢复 | 下一独立源码单元设计已定，真实 PTY 保留 | 有界实际观察正文耐久、跨 runtime 只读历史、精确原 UUID 显式恢复；供应商完整历史仍另列 |
-| 个人草稿经 VPS/Mac Core 同步 | 窄身份及复用现有各设备版本方案已定，尚未实现 | 唯一后台合同与共享客户端、真实成员/撤权/CAS/离线合并；同 crew 不冒同账号 |
+| Codex 完整控制、输入、原生历史与权限 | 后台2b315045/客户端860f76ef整块源码及受影响本机合成准入；准确 S normal、签名 Mac 与同源 iOS 产物准入 | 质量线按新 S 包完成实际窗口、闲置、正常退出及同 Core 流程；根交付安装，不为后续 Claude/同步再后移候选 |
+| Mac 原生玻璃界面与日用版 | 已装9a/20748.58461；本次新包含后续整块界面收敛及幂等材质桥修正 | 日用 App 正常退出与解锁后，实测受影响 tab/sidebar/缩放及闲置；具体旧闪退源行仍未证，不冒源码修正已关闭实际闪退 |
+| 单链接主机安装与配对 B | 完整源码及新 S 组合产物已验 | 非 memory 凭据、双端同 Core、重开/撤权实际链；准确 Linux 构建与 VPS 前提分别核，不冒源码等于远端可用 |
+| Cloud 与 APNs | 完整 App/Core 源码及新 S 两端产物已验，默认关闭 | M42 实际资源/profile、准确签名、真实账号双端/设备送达；Simulator 与源码不冒真实 Apple 资格 |
+| Claude 受管历史及手动恢复 A | 真实 PTY 保留，完整设计已定，原缺口实红及唯一作者实现推进中；双端真实入口 UX 已定 | 后台 d335585f 已封稳定三只读 DTO，客户端已并行接线；有界观察正文耐久、跨 runtime 历史、精确原 UUID 恢复及故障闭合整块冻结后独验 |
+| 个人草稿经 VPS/Mac Core 同步 | 个人设备显式归属、复用本机各设备版本/CAS/保全的窄方案已定 | A 合同冻结后由唯一后台作者承接 transport，再由共享客户端接入；尚未实现，不以业务事件同步或 Cloud 源码冒已可用 |
 
-Linux 控制器已精确约束本次 Rust 树/141/20，C/S 原五配方逐字一致、手动单 job/30分钟、fresh witness/default features=[] 保持；尚未 dispatch、发布或部署。VPS 上供应商 CLI 安装登录仍按用户自办前提，不复制凭据或伪造可用。Mac 于04:12实际锁屏，日用 App/Core 原进程仍待正常退出；原 post-quit AX 拒绝不重试、不强退。该等待只阻窗口/安装/门户支路，准确编译封包和后续源码继续。真实模型/SDK/Apple/Keychain 新动作没有因本次源码接受而获得运行证明。
+Linux 原一次有效 job39850414371 的 Release 构建和 fresh graph 通过，但原 raw SHA 字串判断失败，单 artifact 还漏掉 `.config/nextest.toml`；schema、tar 与 source-after 未执行。原失败/缺失证据全部保留，不重构补造为通过。C462 仅去掉不成立的字串启发式、保持原 ELF/full source/fresh graph/hash/compileenv/schema/package/source-after 守卫，并在原证据目录启用隐藏文件上传。唯一新 C462/S6c5 job **39853422628** 已在4分12秒失败：完整471源/fresh witness/Release来源及纯schema0、空stderr、全JSON==checked141均独验成立，后续控制器误将四个历史command操作列为独立RPC而停；此前静态审查漏了这一原清单错误。tar/source-after仍未产出，不重构为合格包。已停止第三次同S构建；作者一次对齐原typed command/schema/packager合同，质量只审净源码，下一付费运行留给后续自然完整候选并另核具体预算。旧308秒保守计6分钟，本次252秒保守计5分钟；无自动重试、公开Release或部署授权扩张。
+
+完整 typed-schema 修正 Cb4d0 已独验接受（93449b4f）：原实际 schema 上旧断言红、新四direct/四typed command及receipt包装绿，八个缺失/错误结果负例拒绝；原controller其余字节、workflow及原verifier/packager合同保持。仅整合保存源码，不再开第三次同S构建，不把它叫Linux交付完成。
+
+Mac 实际进程93537/Core93539仍在，正常退出问题已发、未重复询问；最后实际锁屏检查04:12。等待只阻窗口、安装及 Apple 门户支路；不重试原 post-quit AX 拒绝、不强退。新 S 包尚未启动或安装；旧5553候选保留历史来源，不先重复一轮旧包 GUI。最新只读磁盘检查约13GiB，无删除缓存。
+
+Claude 恢复仅在明确手动操作后创建新 runtime birth，并在原 actor admission 内固定旧 pending wake 上界；首扫、tick、Working 统一不送旧输入，保原行/UUID/attempts/Unknown，不把其冒已完成。新的手动请求仍可送达，不加第二调度器或全局恢复开关。每次普通打开均不自动启动/恢复 session；新恢复的 Unknown 仅约束准确依赖 session，旧无绑定 Unknown 仍按原安全边界。
+
+已确认的 SQLite 知识、工作闭环、确定性跟进/行政/调度和 Jev 首个单厂商模块继续复用原整块证据。额外 all-features 的旧 ENOSPC 中断仍未验，不以 normal/标准 CI 冒覆盖；多厂商 Jev、个人记忆、Solid 与供应商完整原生历史仍按各自待决/未交付层记录。
 
 ## 2026-10-23 原生通知 Mac/iOS 客户端完整源码接受
 

@@ -1,5 +1,23 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 完整 Codex 准确 normal 与 Mac/iOS 成套产物接受
+
+产品完整输入 S=`6c5fdb30fadba68deac90dc3de733325047d8b68`；后台2b315045与客户端860f76ef的源码资格见下节。根已全文读取 normal 的交接、身份/schema证明及独验 `53d4d8e0acc252d13fb4eb6f57bc177e1bbb3bf60274faf65bd19908650af9d0`，接受其不可变来源链：1923完整 tracked/471 Rust 前后相同，原 recorder prepare0/build0，默认 Debug/features=[]、offline/locked、非testkit，12个实际 fresh owning production packages（13 raw 包含 build script）。原 verify_witness(require_fresh=True)0，纯 schema 完整逐值等141、stderr空、helper hash不变。helper SHA `5ef3cace9432a8f32e1cfc626a1a96893e9bd053eb1d9373e88bd5b94081e5d8`，原 witness `7380de542aadce11c3eac21bf6b8e4bffade7496c9b39220ce12be729aaa916e`，493项 manifest `1d29aefc657812f3e663f910b44f0a5719fea9ff1b847b6ed3b89cc3d0217c8c`；全部原 sidecars/snapshot/preflight/graph/raw compiler 及二进制已封存，不依赖可变 target。
+
+同 S 的原生产签包配方、精确 M42 Developer ID/Direct profile manifest 及无执行计划经根接受后，仅执行一次普通 Mac Release 和普通 iOS arm64 Simulator Debug，实际两进程51726/21946均终态0。1923源码/3878 SPM 输入前后同，原 aeh/SPM 缓存复用。完整组合 `984c0248177cef175508595e5f48bea3d54549b97dcba1f969bcea92613966ee`、2664项 manifest `803a5c931a650745da4da8e2e9ebb22d6c8b730ab3cdefef4737df768c3d82b0`；根全文读交接及独验 `1d43086cb82c5302f7b5b0b73921a036bc711af17b4f8916e9830567d4e90f03`，接受全51/76实际 App 文件、zip、normal/fresh context、严格签封、准确 entitlements/profile/load/seal equivalence 及 Git S/SPM 输入核验。
+
+Mac 实际 **0.1.44/20748.73718**、standard com.pendingname.pendingcrew、M42 Developer ID/hardened；main SHA `e6ca4403571795e739eea943f6a99302bfa8582e649345a62d913cfbf110501e`，签后 helper `0c323adea217cc027ff929fd27425f6a514648d7d57247b43cc7404d8f1b3c82` 与 presign normal 分列，zip `ceeba35d146c54b862f74e1687f90b4c75ad20a7c73a0059283908006c67d429`。iOS 实际 **0.1.43/1**、普通 Debug Simulator/adhoc、独立 Simulator.entitlements，zip `0ced0567afcdb747b2a0f178333198aeaf2d286f805f4d00cb6e3905e72b05cf`；没有借 Mac profile，也不冒真机或商店交付。
+
+此成套产物尚未启动或安装。签名使用现有签名身份，App runtime 凭据 vault 尚未访问；动态 publisher、持久凭据、实际窗口/闲置及两端正常配对仍未验。Cloud/APNs qualification=nil/off；实际供应商/Apple/设备资格不因源码或签包而改变。日用仍9a，正常退出与解锁等待只约束 GUI/安装/门户；原 AX 审批拒绝不换路径重试。未启动的旧5553候选不重复刷 GUI，旧包/旧数据/旧184/1ef/c4现场全部保全。
+
+Linux 控制器 C 与产品 S 分别记录：当前 C=`462bb5424ee57f0d584c3b24bb1acb2022e6bcad` 已普通 atomic 推 main/global，根实际核两远端同 C，现 Mac/iOS/normal 仍来源 S。先前 S/S dispatch HTTP422未创建job；有效 C2ac/S6c job39850414371（308秒，保守预算6分钟）Release/fresh graph成功，但 raw 字串判断失败、上传漏隐藏 nextest 源，原 full witness 不合格，后续schema/tar/source-after未执行；完整终态质量 `d73e86a6d800c73bf6a5642fef7b5e09d57ccc7237c5bd642e6a40785b4e47a9` 保留。不能补造缺源、缺 source-after 或称已有合格 Linux 包。
+
+C462 净3路径独验 `27ecb6247f9dc1e2d3672eb9b9a36ccf9da667f87a21bc08aed6ad36eec5b918` 由根全文接受；仅删 raw SHA substring 启发式，保 ELF64LE、原 full source/fresh graph/binary hash/exact compileenv/S/dirtyfalse/schema/package/source-after 全守卫，原 scoped artifact 启用 include-hidden-files，硬限30→20分钟。Rust树232及五个 source 侧原 recipe C/S逐字同；C自身controller recipe独立绑定，不冒S旧字节。原ELF旧断言红/新格式绿、原compileenv和缺源原样保留。
+
+根推送后明确单次新 C462/S6c 请求，run **39853422628 / attempt1 / job120085312258** 实际4分12秒失败。根全文读独立终态artifact报告 `3d0ec87b4c21fd094590688bd9dbcb90777c55e5b0e2938f29aee9c44b57d8c7`：完整486文件/471Rust含hidden、原require_fresh verifier、12own/13raw features[]/Release/testfalse、C/S各1923Git blob、exact buildenv、ELF64LE/x86_64及原hash均通过；实际纯schema0、空stderr、全JSON==checked141成立。line122误将四个PublicCommand操作列为direct RPC而停，正式形状确为command.submit→PublicCommand.oneOf及CodexTarget/Delete/RevertParams。此前静态审查漏该既有断言错误，不称产品schema失败。显式schema后hash断言、tar、source-after/result未执行；独核原witness中binary hash相同不冒已执行后续断言。无补造/第三次同S运行/Release/VPS/provider操作，Linux完整安装包仍不准入；作者一次校正剩余controller合同，仅做净源码门，下一实际付费构建留给后续自然完整候选另核预算。两job实际总560秒、保守计11分钟，不冒GitHub账户余额。
+
+后续完整净修控制器 `b4d0c37b015326f629fb99e4cda74712a0da381e`，parent462、clean、仅Python与Linux合同两路径，根全文读交接/verification/准确diff及独验 `93449b4ff70a59c9d16c0d45569399321a8e05751c0d87b4975bd1f11169cff6` 后接受。manifest `bf7a5305fa1a17862e5f197ccb9c05b10773b83c0ce81e8f24b69d9786f7f9c8`、freeze `3e2e5127f0c77213ebb672b8da388fa232c167b193686cd2493e9c7a662ec09d`。独取原run实际schema字节，精确旧块拒绝、新4direct params/results、submit/lookup receipt包装及4PublicCommand tagged/ref通过，8个原缺失/错误结果负例均拒绝。其余controller prefix/suffix、workflow、五source recipes及Rust232逐字同；原proof/verifier/packager的ELF machine62、来源字段、source-qualified URL、sole三output与mandatory source-after静态实合同核同。未执行Cargo/CI/ELF/packager/installer，不补造旧tar或source-after；此处只接受源码整合保存，不接受Linux完整包。统筹记录提交不改变产品S、normal或Mac/iOS包的来源。
+
 ## 2026-10-23 完整 Codex 后台及 Mac/iOS 消费者源码整合接受
 
 完整后台替代冻结 `2b31504562af0c8a2a718413f8242b5093440cde`（原完整f0ad保留）与消费者 `860f76ef914e30540628d69cdfbb0307259b816a` 均 clean，根全文读取两模块交接/冻结/最终独验并核实际 HEAD，作为一个组合整合。Rust树 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive；Cloud/通知资格仍 nil/off。本节只接受源码及受影响本机合成层，不宣称新 normal、签包、运行、安装或真实 provider/Apple 资格。
