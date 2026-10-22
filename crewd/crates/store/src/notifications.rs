@@ -236,7 +236,7 @@ mod tests {
          let tx=s.conn().unchecked_transaction().unwrap();settle(&tx,1,&attempt,NotificationDeliveryState::AcceptedByApns,None,false).unwrap();tx.commit().unwrap();assert!(claim_one(s.conn(),2002).is_none());}
     }
     #[test]
-    fn grant_revocation_and_subscription_CAS_block_future_claims_but_do_not_withdraw_inflight() {
+    fn grant_revocation_and_subscription_cas_block_future_claims_but_do_not_withdraw_inflight() {
         let s=Store::open_in_memory().unwrap();let owner=setup(&s);let p=registration();install(s.conn(),&owner,&p);event(s.conn(),1,1000);let first=claim_one(s.conn(),1001).unwrap();event(s.conn(),2,1000);
         s.conn().execute("UPDATE remote_grants SET revoked_at='t',revoke_note='test',revision=2 WHERE id=?1",[&owner.grant_id]).unwrap();assert!(!still_allowed(s.conn(),&first,1002).unwrap());assert!(claim_one(s.conn(),1002).is_none());
         let tx=s.conn().unchecked_transaction().unwrap();settle(&tx,first.delivery_id,&first.attempt,NotificationDeliveryState::AcceptedByApns,None,false).unwrap();tx.commit().unwrap();
@@ -265,6 +265,22 @@ mod tests {
     fn zero_configuration_or_no_subscription_produces_no_observation_rows() {
         let s=Store::open_in_memory().unwrap();event(s.conn(),1,1000);assert_eq!(count(s.conn()),0);let _owner=setup(&s);event(s.conn(),2,1000);assert_eq!(count(s.conn()),0);
     }
+    #[test]
+    fn managed_reply_original_receipt_and_outbox_commit_rollback_and_retraction_are_one_transaction() {
+        use crate::native_execution as n;
+        let s=Store::open_in_memory().unwrap();let owner=setup(&s);let p=registration();install(s.conn(),&owner,&p);
+        s.conn().execute("INSERT INTO sessions(id,crew_id,role,executor,updated_at,desired,was_working)VALUES('session','crew','worker','claude','t','running',0)",[]).unwrap();
+        let runtime=n::Runtime{id:uuid::Uuid::new_v4().to_string(),session:"session".into(),generation:uuid::Uuid::new_v4().to_string(),epoch:1,native_pid:42,native_start:123,native_boot:"synthetic".into()};
+        let tx=s.conn().unchecked_transaction().unwrap();let seal=n::register_managed(&tx,&runtime).unwrap();tx.commit().unwrap();
+        let request=uuid::Uuid::new_v4().to_string();let prompt=uuid::Uuid::new_v4().to_string();
+        let tx=s.conn().unchecked_transaction().unwrap();n::prepare(&tx,&runtime.id,&request,b"body","t").unwrap();let accepted=n::managed_accept_content(&tx,&seal,&request,0,&prompt,b"body","t").unwrap();tx.commit().unwrap();
+        {let tx=s.conn().unchecked_transaction().unwrap();let waiting=n::managed_response_waiting(&tx,&seal,&request,accepted.revision,&prompt,"t").unwrap();assert!(waiting.turn_id.is_none());assert_eq!(count(&tx),1);}
+        assert_eq!(count(s.conn()),0);assert_eq!(n::get(s.conn(),&request).unwrap().unwrap().phase,n::Phase::ContentAccepted);
+        let tx=s.conn().unchecked_transaction().unwrap();n::managed_response_waiting(&tx,&seal,&request,accepted.revision,&prompt,"t").unwrap();tx.commit().unwrap();assert_eq!(count(s.conn()),1);
+        let tx=s.conn().unchecked_transaction().unwrap();n::managed_response_resumed(&tx,&seal,&prompt,"t").unwrap();tx.commit().unwrap();assert!(claim_one(s.conn(),crate::now_ms()).is_none());
+        assert_eq!(s.conn().query_row("SELECT state FROM notification_outbox",[],|r|r.get::<_,String>(0)).unwrap(),"suppressed");
+    }
+
     #[test]
     fn drop_transaction_discards_notification_and_work_state_together() {
         use crewd_work::{Actor,Config,CrewId,NewItem,Report,Ts,WorkBook};use crate::object_refs::ObjectKind;

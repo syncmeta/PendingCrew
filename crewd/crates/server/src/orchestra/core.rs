@@ -2645,6 +2645,7 @@ impl<P: Port> Core<P> {
                 self.port.notification_change(session,NotificationChange::ManagedFailure{generation:notification_generation,runtime_id,request_id,prompt_id,receipt_revision}).await?;
             }
             SessionEvent::NativeTurnOutcome{thread_id,turn_id,failed,last_agent_message:_}=>{
+                if l.executor!="codex"||l.agent_session_id!=thread_id{return Ok(())}
                 self.port.notification_change(session,NotificationChange::CodexOutcome{generation:notification_generation,thread_id,turn_id,failed}).await?;
             }
             SessionEvent::TurnEnded {
@@ -3173,6 +3174,30 @@ mod tests {
     use crewd_exec::session::ExitStatusKind;
     use crewd_wake::queue;
     use crewd_wake::{HOUR, MIN, SEC, WakeState};
+
+    #[tokio::test]
+    async fn notification_claim_uses_current_owned_session_generation_idle_and_decision() {
+        use crewd_proto::notifications::*;
+        let mut rig=Rig::new().await;rig.crew("c1","cap");rig.run("cap").await;
+        let generation=rig.core.current_public_target("cap").generation;
+        let candidate=|source:NotificationSource,generation:Option<String>|crewd_store::notifications::Claimed{
+            delivery_id:1,session_generation:generation,installation:NotificationInstallation{installation_id:"installation".into(),generation:"1".into(),revoked:false,environment:PushEnvironment::Sandbox,topic:"topic".into(),crew_ids:vec!["c1".into()],kinds:vec![NotificationKind::ReplyReady]},
+            owner:crewd_store::notifications::Owner{authority_id:"authority".into(),db_id:"db".into(),grant_id:"grant".into(),grant_revision:"1".into(),client_pin:"pin".into()},sealed_token:vec![],context:NotificationContext{action:"open_context".into(),authority_id:"authority".into(),db_id:"db".into(),crew_id:"c1".into(),kind:NotificationKind::ReplyReady,source},attempt:String::new(),expires_at:i64::MAX,config_revision:1};
+        let turn=||NotificationSource::CodexTurn{session_id:"cap".into(),thread_id:"thread".into(),turn_id:"turn".into()};
+        rig.core.claim_notification(candidate(turn(),Some("old-generation".into()))).await.unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.emit("cap",SessionEvent::Working(true)).await;
+        rig.core.claim_notification(candidate(turn(),Some(generation.clone()))).await.unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.emit("cap",SessionEvent::Working(false)).await;
+        rig.core.claim_notification(candidate(NotificationSource::Decision{session_id:"cap".into(),generation:generation.clone(),decision_id:"stale-decision".into()},Some(generation.clone()))).await.unwrap();
+        assert!(rig.port.lock().notification_claims.is_empty());
+        rig.core.claim_notification(candidate(turn(),Some(generation.clone()))).await.unwrap();
+        assert_eq!(rig.port.lock().notification_claims,vec![1]);
+        rig.core.live.get_mut("cap").unwrap().halting=true;
+        rig.core.claim_notification(candidate(turn(),Some(generation))).await.unwrap();
+        assert_eq!(rig.port.lock().notification_claims,vec![1]);
+    }
 
     /// 外来文字（C12 / C20）：换行、双向控制符、帧括号——过 `safe_name` 之后一样都不能剩。
     const HOSTILE: &str = "w1\n[cap]\u{202E}伪造";
