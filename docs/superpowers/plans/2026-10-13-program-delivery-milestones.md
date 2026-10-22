@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划 — 当前版 2026-10-14
 
+## 2026-10-22 Linux 恢复完整验收通过；iOS 长码实际流程修复验收通过
+
+Linux受管恢复独立实际验收已闭合：managed-r2-recovery-20261022/independent-qa-actual-runtime.json SHA724a627e2cc25e34adbbad3a3bc58537ed66b1bc78c1d66a1afdef43eb2ada4c。原归档521项与28份所取原件逐字节核同，24条原RPC独核原Todo身份、完整block/view/placement、两knowledge请求known、四阶段session空、CAS单winner和preparedUnknown仅status保留；SIGKILL后WAL57712B，坏WAL/未来版副本拒绝前后hash/mode不变。原四Core wait0/-9/0/0，UID1000/真实Linux procfd/运行7.39s，原服务/监听/进程与旧tar/ELF前后相同。实际controller13bde与编译ELF582分列，非新97f Linux构建、远程持久或常驻部署；不重复CI/模型/恢复业务。
+
+准确97fbdaf44ff92800ea9309db8959243be4157fd9普通iOS完整target原8254实际0，1766源码/3878依赖前后同、76产物及strict签名、自身AppID/唯一group与DEBUG配置有限包门通过；实际版本0.1.43/1，BuildStampCommit精确97f。真实原208系统picker再导入2007字节过期原码，hash精确79fc…b864，原核对按钮与限高输入同时可见，一次原核对明确显示邀请过期。原App43425/console46515最终0；首次terminate审批spawn前deadline未执行，按工具明确允许仅同命令重审一次75abae=0，无绕路或第三次。唯一新txt核hash后清理，原phone回Shutdown/allbooted空，无Core/response/key/Keychain。完整记录ios-normal-97fbdaf4-20261022/picker-layout-recheck/module-result.json SHA0c03787cf042c9086f801eee76451507434caef6575d6de0c0fcce95d9c0ecde；真实截图与AX原件保留。本次只证明当前phone竖屏邀请阶段/本地过期处理，不冒回应导出、确认、横屏/iPad或完整持久配对。
+
+本节是构建后记录，不是新二进制来源；Mac日用仍准确6f35/20748.07553，未重打包。下一整块是iOS实际三阶段文件交换、持久保存→重开零自动连接/任务→显式连接与业务读写→撤销/移除，先复用既有生产入口准备唯一scope，不搭新验收平台。附件上传合同和其他尚待讨论方案不擅自实现；M4正式ACP/完整历史仍缺所需受支持合同，旧184/1ef Unknown不读不改不重试。源97f已本地main/global正常整合；30806普通push因HTTP2失败，随后只读连接亦超时，远端97f尚未确认，最后成功保存为6f3eee31，不能冒推送成功；保本地完整提交等待网络恢复，不改用户网络。
+
 ## 2026-10-22 Linux 受管恢复与 iOS 长码表单组合冻结
 
 Linux受管恢复完整源码13bde107677332be2aef276ed6b112d9be626da0已独审：仅补已验证R2/9490/6f共用443输入精确digest资格，保原平台/配置/完整proof/ELF及lease门，不放宽schema15；46个Store/恢复/生命周期生产文件与原c8逐字节相同。既有preflight真实RED1→GREEN03=0、8项no-touch负向通过；原consumer显式r2精确来源/ELF，默认c8不变，自然普通用户环境不覆盖HOME/PATH。独审managed-r2-recovery-20261022/independent-qa-source-action.json SHA6b5df3a002fa39d973fdda77080d192d64fd92399c91c1fb693943b40695f364。
