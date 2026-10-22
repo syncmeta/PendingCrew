@@ -225,6 +225,7 @@ fn snapshot_steps(
             crate::command_receipts::restored(&tx, &crate::now_ts())?;
             crate::local_clients::restored(&tx)?;
             crate::judgment_state::restored(&tx)?;
+            crate::personal_drafts::restored(&tx)?;
             crate::notifications::restored(&tx)?;
             crate::codex_inputs::restored(&tx)?;
             crate::codex_controls::restored(&tx)?;

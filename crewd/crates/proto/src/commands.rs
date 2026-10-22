@@ -110,6 +110,16 @@ pub struct LocalClientTrustRevokeParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "params", deny_unknown_fields)]
 pub enum PublicCommand {
+    #[serde(rename="personalDraft.ownerConfigure")]
+    PersonalDraftOwner(crate::personal_drafts::PersonalDraftOwnerParams),
+    #[serde(rename="personalDraft.memberSet")]
+    PersonalDraftMember(crate::personal_drafts::PersonalDraftMemberSetParams),
+    #[serde(rename="personalDraft.consentSet")]
+    PersonalDraftConsent(crate::personal_drafts::PersonalDraftConsentParams),
+    #[serde(rename="personalDraft.checkpoint")]
+    PersonalDraftCheckpoint(crate::personal_drafts::PersonalDraftCheckpointParams),
+    #[serde(rename="personalDraft.resolve")]
+    PersonalDraftResolve(crate::personal_drafts::PersonalDraftResolveParams),
     #[serde(rename = "local.clientTrust")]
     LocalClientTrust(LocalClientTrustParams),
     #[serde(rename = "local.clientTrustRevoke")]
@@ -183,6 +193,11 @@ impl PublicCommand {
     }
     pub fn authorized_methods(&self) -> &'static [&'static str] {
         match self {
+            Self::PersonalDraftOwner(_) => &["personalDraft.ownerConfigure"],
+            Self::PersonalDraftMember(_) => &["personalDraft.memberSet"],
+            Self::PersonalDraftConsent(_) => &["personalDraft.consentSet"],
+            Self::PersonalDraftCheckpoint(_) => &["personalDraft.checkpoint"],
+            Self::PersonalDraftResolve(_) => &["personalDraft.resolve"],
             Self::LocalClientTrust(_) => &["local.clientTrust"],
             Self::LocalClientTrustRevoke(_) => &["local.clientTrustRevoke"],
             Self::Hibernate(_) => &["crewd.hibernate"],
@@ -214,6 +229,11 @@ impl PublicCommand {
     }
     pub fn method(&self) -> &'static str {
         match self {
+            Self::PersonalDraftOwner(_) => "personalDraft.ownerConfigure",
+            Self::PersonalDraftMember(_) => "personalDraft.memberSet",
+            Self::PersonalDraftConsent(_) => "personalDraft.consentSet",
+            Self::PersonalDraftCheckpoint(_) => "personalDraft.checkpoint",
+            Self::PersonalDraftResolve(_) => "personalDraft.resolve",
             Self::LocalClientTrust(_) => "local.clientTrust",
             Self::LocalClientTrustRevoke(_) => "local.clientTrustRevoke",
             Self::Hibernate(_) => "crewd.hibernate",

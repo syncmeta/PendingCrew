@@ -16,6 +16,18 @@ struct AppleDraftKey: Codable, Hashable, Sendable {
     let destination: Destination
     let kind: String
 }
+/// A Core private writer projection, never an Apple account or transport grant.
+struct PersonalCoreDraftProjection:Codable,Hashable,Sendable {
+    let databaseID:String
+    let spaceID:String
+    let spaceEpoch:String
+    let memberID:String
+    let writerID:String
+}
+protocol CoreDraftBranchTransport:Sendable {
+    func exchangeCore(projection:PersonalCoreDraftProjection,branches:[AppleBranch])async throws->[AppleBranch]
+    func resolveCore(projection:PersonalCoreDraftProjection,key:AppleDraftKey,retiring:[AppleBranch],replacement:AppleBranch?)async throws->[AppleBranch]
+}
 enum AppleSyncFailure: Error { case invalid, capacity, corrupt, accountChanged, collision, storage }
 struct AppleBranch: Codable, Equatable, Sendable {
     let id: UUID
@@ -46,12 +58,14 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
     private struct Disk: Codable {
         let format: Int
         let account: AppleSyncAccount?
+        let coreProjection:PersonalCoreDraftProjection?
         let collection: String
         var branches: [UUID: AppleBranch]
         var recovery: [UUID: Data]
     }
     private let root: URL
     private let deviceID: String
+    private let coreProjection:PersonalCoreDraftProjection?
     private let collection: String
     private let byteLimit: Int
     private var account: AppleSyncAccount?
@@ -63,11 +77,13 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
     private var running: (any AppleBranchTransport)?
     private(set) var status: Status = .localOnly
     private(set) var storageError: String?
-    init(root: URL, deviceID: String, account: AppleSyncAccount? = nil, collection: String = "drafts", byteLimit: Int = 8 * 1024 * 1024) throws {
+    init(root: URL, deviceID: String, account: AppleSyncAccount? = nil, collection: String = "drafts", coreProjection:PersonalCoreDraftProjection?=nil, byteLimit: Int = 8 * 1024 * 1024) throws {
         guard !deviceID.isEmpty, !collection.isEmpty, byteLimit > 0 else { throw AppleSyncFailure.invalid }
+        guard account==nil || coreProjection==nil,coreProjection.map({$0.writerID==deviceID}) ?? true else{throw AppleSyncFailure.invalid}
+        self.coreProjection=coreProjection
         self.root = root; self.deviceID = deviceID; self.account = account; self.collection = collection; self.byteLimit = byteLimit
         try Self.directory(root)
-        let result = Self.load(root: root, account: account, collection: collection, byteLimit: byteLimit)
+        let result = Self.load(root: root, account: account, collection: collection, coreProjection:coreProjection, byteLimit: byteLimit)
         branches = result.0; blocked = result.1; storageError = result.2; recovery = result.3
         status = result.1 ? .failed(result.2!) : (account == nil ? .localOnly : .pending)
     }
@@ -84,7 +100,7 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
         let identity = (try? appleSyncEncode(account)) ?? Data("null".utf8)
         return root.appendingPathComponent(appleSyncDigest(identity + Data(collection.utf8)) + ".json")
     }
-    private static func load(root: URL, account: AppleSyncAccount?, collection: String, byteLimit: Int) -> ([UUID: AppleBranch], Bool, String?, [UUID: Data]) {
+    private static func load(root: URL, account: AppleSyncAccount?, collection: String, coreProjection:PersonalCoreDraftProjection?, byteLimit: Int) -> ([UUID: AppleBranch], Bool, String?, [UUID: Data]) {
         let file = file(root: root, account: account, collection: collection)
         var s = stat()
         guard lstat(file.path, &s) == 0 else { return errno == ENOENT ? ([:], false, nil, [:]) : ([:], true, "Local file unavailable; preserved", [:]) }
@@ -96,7 +112,7 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
             let bytes = try FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() ?? Data()
             guard bytes.count <= byteLimit else { throw AppleSyncFailure.capacity }
             let saved = try JSONDecoder().decode(Disk.self, from: bytes)
-            guard saved.format == 1, saved.account == account, saved.collection == collection, saved.branches.allSatisfy({ $0.key == $0.value.id }) else { throw AppleSyncFailure.corrupt }
+            guard saved.format == 1, saved.account == account, saved.coreProjection==coreProjection, saved.collection == collection, saved.branches.allSatisfy({ $0.key == $0.value.id }) else { throw AppleSyncFailure.corrupt }
             for row in saved.branches.values where !row.retired { guard let data = row.payload else { throw AppleSyncFailure.corrupt }; _ = try JSONDecoder().decode(Payload.self, from: data) }
             return (saved.branches, false, nil, saved.recovery)
         } catch { return ([:], true, "Local data corrupt or unavailable; original file preserved", [:]) }
@@ -110,13 +126,14 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
         }
     }
     /// A deliberate checkpoint, normally debounced by the UI. Capacity failures retain memory.
-    @discardableResult func checkpoint(key: AppleDraftKey, payload: Payload) throws -> UUID {
+    @discardableResult func checkpoint(key: AppleDraftKey, payload: Payload, forceRevision:Bool=false) throws -> UUID {
         guard !key.authorityID.isEmpty, !key.databaseID.isEmpty, !key.crewID.isEmpty, !key.kind.isEmpty else { throw AppleSyncFailure.invalid }
         let bytes = try appleSyncEncode(payload)
         let own = branches.values.filter { $0.key == key && $0.deviceID == deviceID && !$0.retired }
         guard own.count <= 1 else { throw AppleSyncFailure.collision }
+        if coreProjection != nil,own.isEmpty,!forceRevision,branches.values.contains(where:{$0.key==key && $0.deviceID==deviceID && $0.retired && recovery[$0.id]==bytes}){throw AppleSyncFailure.collision}
         let id = own.first?.id ?? UUID()
-        if let previous = own.first, previous.payload == bytes { if storageError != nil { try persist() }; return id }
+        if let previous = own.first, previous.payload == bytes,!forceRevision { if storageError != nil { try persist() }; return id }
         let revision = (own.first?.revision ?? 0)
         guard revision < UInt64.max else { throw AppleSyncFailure.capacity }
         branches[id] = AppleBranch(id: id, key: key, deviceID: deviceID, revision: revision + 1, payload: bytes, retired: false)
@@ -149,7 +166,7 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
         // Never silently discard unsaved input on account switch.
         guard storageError == nil else { status = .failed("Save/export current local input before switching account"); throw AppleSyncFailure.storage }
         account = next
-        let loaded = Self.load(root: root, account: next, collection: collection, byteLimit: byteLimit)
+        let loaded = Self.load(root: root, account: next, collection: collection, coreProjection:coreProjection, byteLimit: byteLimit)
         branches = loaded.0; blocked = loaded.1; storageError = loaded.2; recovery = loaded.3
         status = blocked ? .failed(loaded.2!) : (next == nil ? .localOnly : .pending)
     }
@@ -175,12 +192,43 @@ actor AppleBranchStore<Payload: Codable & Equatable & Sendable> {
             throw error
         }
     }
+    /// The same actor merges a complete Core exchange. No fake Apple identity.
+    func synchronizeCore(using transport:any CoreDraftBranchTransport)async throws {
+        guard let coreProjection,!blocked,storageError==nil else{throw AppleSyncFailure.storage}
+        let generation=epoch,revision=localRevision
+        let remote=try await transport.exchangeCore(projection:coreProjection,branches:Array(branches.values))
+        guard epoch==generation else{throw AppleSyncFailure.accountChanged}
+        try mergeCore(remote)
+        let represented=branches.values.filter{$0.deviceID==deviceID && !$0.retired}.allSatisfy{local in
+            remote.contains{row in row.id==local.id && row.key==local.key && row.deviceID==local.deviceID && (row.retired || row==local)}
+        }
+        status=revision==localRevision && represented ? .synced:.pending
+    }
+    /// Core retirement is applied only after its original atomic receipt.
+    func resolveCore(key:AppleDraftKey,payload:Payload?,retiring ids:Set<UUID>,using transport:any CoreDraftBranchTransport)async throws {
+        guard let coreProjection,!blocked,storageError==nil,!ids.isEmpty,ids.allSatisfy({branches[$0]?.key==key && branches[$0]?.retired==false}) else{throw AppleSyncFailure.invalid}
+        if payload != nil,branches.values.contains(where:{$0.key==key && $0.deviceID==deviceID && !$0.retired && !ids.contains($0.id)}){throw AppleSyncFailure.invalid}
+        let replacement=try payload.map{AppleBranch(id:UUID(),key:key,deviceID:deviceID,revision:1,payload:try appleSyncEncode($0),retired:false)}
+        let original=ids.compactMap{branches[$0]},generation=epoch
+        let result=try await transport.resolveCore(projection:coreProjection,key:key,retiring:original,replacement:replacement)
+        guard generation==epoch else{throw AppleSyncFailure.accountChanged}
+        try mergeCore(result);localRevision &+= 1;status = .pending
+    }
+    private func mergeCore(_ remote:[AppleBranch])throws {
+        var merged=branches
+        for row in remote {
+            if !row.retired{guard let payload=row.payload else{throw AppleSyncFailure.invalid};_ = try JSONDecoder().decode(Payload.self,from:payload)}
+            if row.retired,let previous=merged[row.id],!previous.retired,let bytes=previous.payload{recovery[row.id]=bytes}
+            merged[row.id]=try merged[row.id].map{try AppleBranch.merge($0,row)} ?? row
+        }
+        branches=merged;try persist()
+    }
     private func persist() throws {
-        status = account == nil ? .localOnly : .pending
+        status = account == nil && coreProjection == nil ? .localOnly : .pending
         do {
             guard !blocked else { throw AppleSyncFailure.corrupt }
             try Self.directory(root)
-            let bytes = try appleSyncEncode(Disk(format: 1, account: account, collection: collection, branches: branches, recovery: recovery))
+            let bytes = try appleSyncEncode(Disk(format: 1, account: account, coreProjection:coreProjection, collection: collection, branches: branches, recovery: recovery))
             guard bytes.count <= byteLimit else { throw AppleSyncFailure.capacity }
             let target = Self.file(root: root, account: account, collection: collection)
             let temp = root.appendingPathComponent(".pending-" + UUID().uuidString)

@@ -23,18 +23,20 @@ struct ApplePersonalCloudConfiguration: Equatable, Sendable {
 }
 struct ApplePersonalNamespaceID: Hashable, Sendable {
     let account: AppleSyncAccount?
+    var core:PersonalCoreDraftProjection?=nil
     let draftsCollection: String
     let hostsCollection: String
     static let local = Self(account: nil, draftsCollection: "drafts", hostsCollection: "hosts")
     var stableName: String {
+        if let core{return "core-"+appleSyncDigest((try? appleSyncEncode(core)) ?? Data())}
         guard let account else { return "local" }
         // A structured tuple separates both account and qualification collections.
         return appleSyncDigest((try? appleSyncEncode([account.container, account.environment.rawValue, account.userRecordID, draftsCollection, hostsCollection])) ?? Data())
     }
     func directory(in originalRoot: URL) -> URL {
-        account == nil ? originalRoot : originalRoot.appendingPathComponent("account-" + stableName, isDirectory: true)
+        self == .local ? originalRoot : originalRoot.appendingPathComponent("account-" + stableName, isDirectory: true)
     }
-    var latestNamespace: String { account == nil ? "personal" : "personal/" + stableName }
+    var latestNamespace: String { self == .local ? "personal" : "personal/" + stableName }
 }
 
 /// Wraps the existing synchronous CrewComposerDraftStore. It owns no persistence.
@@ -92,6 +94,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     init(id: ApplePersonalNamespaceID, latest: ApplePersonalLatestAccess<Payload>, stores: @escaping () async throws -> Stores) {
         self.id = id; self.latest = latest; factory = stores
         latestMemory = latest.readAll(); catalog = Set(latestMemory.keys)
+        if id.core != nil{pendingCheckpoints=Set(latestMemory.keys)}
         localRecovered=latest.readRecovered();recovered=localRecovered
     }
     fileprivate func activate(selected: @escaping () -> Bool) { self.selected = selected; selection = UUID() }
@@ -116,7 +119,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
     }
     func localDraft(_ key: AppleDraftKey) -> Payload? { latestMemory[key] }
     /// Synchronous source save before any async work. No cloud operation here.
-    @discardableResult func checkpoint(_ payload: Payload, key: AppleDraftKey) throws -> Ticket {
+    @discardableResult func checkpoint(_ payload: Payload, key: AppleDraftKey, forceRevision:Bool=false) throws -> Ticket {
         guard selected() else { throw AppleSyncFailure.accountChanged }
         latestMemory[key] = payload; revisions[key] = UUID(); catalog.insert(key); pendingCheckpoints.insert(key)
         if let error = latest.save(key, payload) { unsavedLatest.insert(key); errors[key] = error }
@@ -130,7 +133,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
             do {
                 let stores = try await self.stores()
                 guard self.isCurrent(ticket), !Task.isCancelled else { return }
-                _ = try await stores.drafts.checkpoint(key: key, payload: payload)
+                _ = try await stores.drafts.checkpoint(key: key, payload: payload,forceRevision:forceRevision)
                 guard self.isCurrent(ticket) else { return }
                 self.unsavedLatest.remove(key); self.pendingCheckpoints.remove(key)
                 self.errors[key] = nil
@@ -169,9 +172,15 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         return try checkpoint(empty,key:expected.key)
     }
     /// Original merge semantics remain in this one namespace/writer owner.
-    func resolve(key:AppleDraftKey,payload:Payload?,empty:Payload,retiring:Set<UUID>,expected:Ticket)async throws->Ticket {
+    func resolve(key:AppleDraftKey,payload:Payload?,empty:Payload,retiring:Set<UUID>,expected:Ticket,coreTransport:(any CoreDraftBranchTransport)?=nil)async throws->Ticket {
         guard expected.key==key else{throw AppleSyncFailure.invalid}
         try validate(expected)
+        if id.core != nil{guard inflight==nil else{throw AppleSyncFailure.collision}}
+        if id.core != nil,retiring.isEmpty{
+            let applied=try checkpoint(payload ?? empty,key:key,forceRevision:true)
+            if let writer=writers[key]{await writer.value};try validate(applied)
+            guard !unsavedLatest.contains(key),errors[key]==nil else{throw AppleSyncFailure.storage};return applied
+        }
         if let previous=writers[key]{await previous.value}
         try validate(expected)
         let stores=try await stores()
@@ -182,7 +191,7 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         if let error{unsavedLatest.insert(key);errors[key]=error}else{unsavedLatest.remove(key);errors[key]=nil}
         let applied=ticket(key:key)!
         didChange()
-        do{_ = try await stores.drafts.resolve(key:key,payload:payload,retiring:retiring)}
+        do{if id.core != nil{guard let coreTransport else{throw AppleSyncFailure.accountChanged};try await stores.drafts.resolveCore(key:key,payload:payload,retiring:retiring,using:coreTransport)}else{_ = try await stores.drafts.resolve(key:key,payload:payload,retiring:retiring)}}
         catch{if isCurrent(applied){errors[key]=error.localizedDescription;didChange()};throw error}
         try validate(applied)
         unsavedLatest.remove(key);pendingCheckpoints.remove(key)
@@ -191,6 +200,35 @@ struct ApplePersonalNamespaceID: Hashable, Sendable {
         try validate(applied)
         didChange()
         return applied
+    }
+    func saveNewVersion(_ payload:Payload,key:AppleDraftKey)async throws {
+        let original=try checkpoint(payload,key:key,forceRevision:true)
+        if let writer=writers[key]{await writer.value}
+        try validate(original)
+        guard !unsavedLatest.contains(key),errors[key]==nil else{throw AppleSyncFailure.storage}
+    }
+    func synchronizeCore(using transport:any CoreDraftBranchTransport)async throws->Bool {
+        guard selected(),id.core != nil,inflight==nil else{throw AppleSyncFailure.accountChanged}
+        let stamp=selection,originalRevisions=revisions,operation=UUID()
+        let task=Task {
+            let stores=try await self.stores()
+            guard self.selected(),self.selection==stamp else{throw AppleSyncFailure.accountChanged}
+            for writer in self.writers.values{await writer.value}
+            for key in self.pendingCheckpoints{
+                guard self.selected(),self.selection==stamp,let payload=self.latestMemory[key] else{throw AppleSyncFailure.accountChanged}
+                let revision=self.revisions[key];_ = try await stores.drafts.checkpoint(key:key,payload:payload)
+                if self.revisions[key]==revision{self.pendingCheckpoints.remove(key);self.unsavedLatest.remove(key)}
+            }
+            try Task.checkCancellation();try await stores.drafts.synchronizeCore(using:transport)
+        }
+        inflight = .init(id:operation,selection:stamp,task:task)
+        defer{if inflight?.id==operation{inflight=nil}}
+        try await task.value
+        guard selected(),selection==stamp,inflight?.id==operation else{throw AppleSyncFailure.accountChanged}
+        try await refresh();let stores=try await stores(),status=await stores.drafts.status
+        guard selected(),selection==stamp,inflight?.id==operation else{throw AppleSyncFailure.accountChanged}
+        let represented=latestMemory.allSatisfy{key,payload in versions[key]?.contains(where:{$0.deviceID==stores.deviceID && $0.payload==payload})==true}
+        return revisions==originalRevisions && unsavedLatest.isEmpty && initializationError==nil && represented && status == .synced
     }
     func retainedTicket(key:AppleDraftKey)->Ticket? {
         guard let payload=latestMemory[key] else{return nil}
@@ -357,6 +395,22 @@ private final class ApplePersonalAccountObservation {
         current.deactivate(); current = next
         let fence = self.fence; next.activate { fence.isCurrent(stamp) }
     }
+    func retainCoreSource(_ id:ApplePersonalNamespaceID)throws{
+        guard id.core != nil,id.account==nil else{throw AppleSyncFailure.invalid}
+        if retained[id]==nil{retained[id]=try factory(id)}
+    }
+    /// Local selection restoration: no account/transport/SDK construction.
+    func restoreCoreSelection(_ id:ApplePersonalNamespaceID)throws {
+        guard id.core != nil,id.account==nil else{throw AppleSyncFailure.invalid}
+        let owner=try retained[id] ?? factory(id);retained[id]=owner
+        let stamp=fence.bump();select(owner,stamp:stamp);status = .localOnly
+    }
+    func selectCore(_ id:ApplePersonalNamespaceID)async throws {
+        if current.id==id,current.isSelected{return}
+        optedIn=false;let previous=transport;transport=nil;observer=nil
+        try restoreCoreSelection(id)
+        await previous?.cancel()
+    }
     /// Invoke only for the explicit opt-in / account refresh button.
     func enable() async throws {
         guard let configuration else { status = .notConfigured; throw AppleSyncFailure.invalid }
@@ -429,7 +483,9 @@ private final class ApplePersonalAccountObservation {
     }
     /// A reviewed, explicit selection copies only these contents; source stays intact.
     func copySelected(_ tickets: [Namespace.Ticket], from source: Namespace, replacing targets: [AppleDraftKey: Namespace.Ticket] = [:]) throws {
-        guard optedIn, current.id.account != nil, retained[source.id] === source, source !== current else { throw AppleSyncFailure.invalid }
+        guard (optedIn && current.id.account != nil) || current.id.core != nil else{throw AppleSyncFailure.invalid}
+        guard retained[source.id] === source, source !== current else{throw AppleSyncFailure.invalid}
+        if let core=current.id.core{guard tickets.allSatisfy({$0.key.databaseID==core.databaseID}) else{throw AppleSyncFailure.invalid}}
         guard Set(tickets.map(\.key)).count == tickets.count, tickets.allSatisfy({ source.sameOriginal($0) }) else { throw AppleSyncFailure.invalid }
         for ticket in tickets where current.localDraft(ticket.key) != nil {
             guard let target = targets[ticket.key], target.key == ticket.key, current.isCurrent(target) else { throw AppleSyncFailure.invalid }

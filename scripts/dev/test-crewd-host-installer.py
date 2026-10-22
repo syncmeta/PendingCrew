@@ -10,6 +10,35 @@ spec = importlib.util.spec_from_file_location('pendingcrew_host', source)
 host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
 
 class InstallerControls(unittest.TestCase):
+    def test_draft_unknown_preserves_exact_owner_packet_and_only_original_lookup_or_fence(self):
+        request='11111111-1111-4111-8111-111111111111'
+        params={'requestId':request,'dbId':'opaque-core-db','runtimeBindingId':'22222222-2222-4222-8222-222222222222','params':{'ownerEpoch':'private-stamp','expectedSpaceId':None,'expectedSpaceRevision':'0','localEnabled':False,'acknowledgeRestore':False}}
+        records=[]; calls=[]
+        def rpc(method,body): calls.append((method,body)); raise OSError('synthetic response loss')
+        with mock.patch.object(host,'read_record',return_value=params),mock.patch.object(host,'private_root'),mock.patch.object(host,'new_record',side_effect=lambda path,value:records.append(value)),mock.patch.object(host,'rpc',side_effect=rpc):
+            with self.assertRaises(OSError):host.draft_control(types.SimpleNamespace(operation_file='owned0600',kind='owner'))
+        self.assertEqual(len(records),1);record=records[0];original=record['original']
+        self.assertEqual(original['command'],{'operation':'personalDraft.ownerConfigure','params':params['params']})
+        self.assertEqual(calls, [('host.personalDraftOwnerConfigure',params)])
+        calls.clear()
+        with mock.patch.object(host,'read_record',return_value=record),mock.patch.object(host,'rpc',side_effect=lambda method,body:calls.append((method,body))),mock.patch('sys.stdout',new_callable=io.StringIO):
+            host.draft_lookup(types.SimpleNamespace(request_id=request));host.draft_fence(types.SimpleNamespace(request_id=request))
+        self.assertEqual(calls,[('host.personalDraftRequestLookup',{'requestId':request,'dbId':params['dbId']}),('host.personalDraftRequestFence',{'original':original})])
+        record['original']['runtimeBindingId']='33333333-3333-4333-8333-333333333333'
+        with mock.patch.object(host,'read_record',return_value=record),mock.patch.object(host,'rpc') as send:
+            with self.assertRaises(host.Refused):host.draft_fence(types.SimpleNamespace(request_id=request))
+            send.assert_not_called()
+    def test_draft_root_owner_never_creates_local_writer_or_general_command_proxy(self):
+        params={'requestId':'11111111-1111-4111-8111-111111111111','dbId':'opaque-core-db','runtimeBindingId':'22222222-2222-4222-8222-222222222222','params':{'ownerEpoch':'private-stamp','expectedSpaceId':None,'expectedSpaceRevision':'0','localEnabled':True,'acknowledgeRestore':False}}
+        with mock.patch.object(host,'read_record',return_value=params),mock.patch.object(host,'new_record') as write,mock.patch.object(host,'rpc') as send:
+            with self.assertRaises(host.Refused):host.draft_control(types.SimpleNamespace(operation_file='owned0600',kind='owner'))
+            write.assert_not_called();send.assert_not_called()
+        args=host.parser().parse_args(['draft-control','--kind','member','--operation-file','owned0600'])
+        self.assertEqual(args.kind,'member')
+        record={'format':1,'kind':'personalDraftControl','original':{'requestId':params['requestId'],'command':{'operation':'session.resume'}},'payloadSha256':'invalid'}
+        with mock.patch.object(host,'read_record',return_value=record),mock.patch.object(host,'rpc') as send:
+            with self.assertRaises(host.Refused):host.draft_lookup(types.SimpleNamespace(request_id=params['requestId']))
+            send.assert_not_called()
     def test_notification_unknown_saves_only_original_digest_and_lookup_never_resends(self):
         request='11111111-1111-4111-8111-111111111111'
         params={'requestId':request,'expectedRevision':'0','enabled':True,'provider':{'privateKeyPkcs8Base64':'DO-NOT-PERSIST-KEY'}}
@@ -102,6 +131,7 @@ class InstallerControls(unittest.TestCase):
             self.assertEqual((unpacked.stat().st_mode & 0o777),0o755)
             self.assertEqual(((unpacked/'bin').stat().st_mode & 0o777),0o755)
             self.assertEqual(((unpacked/'bin/crewd').stat().st_mode & 0o777),0o555)
+            self.assertEqual(release['storeVersion'],21)
             self.assertEqual(release['files']['bin/crewd'],host.sha(header))
             self.assertIn(repr(host.sha((output/'manifest.json').read_bytes())),(output/'install.py').read_text())
     def test_activation_pointer_is_bounded_and_never_follows_arbitrary_path(self):

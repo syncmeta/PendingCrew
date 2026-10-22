@@ -167,7 +167,7 @@ def extract_release(payload, root, expected):
     for directory in unpacked.rglob('*'):
         if directory.is_dir(): directory.chmod(0o755)
     release = json.loads((unpacked / 'release.json').read_bytes())
-    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 20 or release.get('apiVersion') != 3:
+    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 21 or release.get('apiVersion') != 3:
         raise Refused('wrong release source/architecture/schema')
     files = release.get('files', {})
     actual = {str(p.relative_to(unpacked)) for p in unpacked.rglob('*') if p.is_file()}
@@ -387,7 +387,7 @@ def install(args):
             (activation / 'release').symlink_to('../../releases/' + release['sourceCommit'])
             (activation / 'bin').symlink_to('release/bin')
             # Transaction file is public provenance only; all secret operations live in STATE.
-            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 20}).encode(), 0o444)
+            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 21}).encode(), 0o444)
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
@@ -526,7 +526,7 @@ def rollback(args):
         version = stopped_database_version(pathlib.Path(binding['dataDir']))
         # This candidate has exactly one writer qualification. No guessed ranges
         # or downgrade migrations; the old writer must match the stopped format.
-        if release.get('storeVersion') != 20 or version not in (None, 20):
+        if release.get('storeVersion') != 21 or version not in (None, 21):
             raise Refused('rollback target is not qualified for the stopped database')
         new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version})
         pending = PREFIX / ('.current-' + operation)
@@ -566,6 +566,48 @@ def notification_lookup(args):
         raise Refused('original notification operation witness required')
     print(json.dumps(rpc('host.notificationRequestLookup', {'requestId':request}), indent=2))
 
+
+def draft_control(args):
+    params = read_record(pathlib.Path(args.operation_file))
+    if not isinstance(params, dict) or set(params) != {'requestId','dbId','runtimeBindingId','params'} or not isinstance(params['params'], dict):
+        raise Refused('exact typed personal draft owner envelope required')
+    request = canonical_uuid(params['requestId']); canonical_uuid(params['runtimeBindingId'])
+    checked_text(params['dbId'],128)
+    method, operation, keys = {
+        'owner': ('host.personalDraftOwnerConfigure','personalDraft.ownerConfigure',{'ownerEpoch','expectedSpaceId','expectedSpaceRevision','localEnabled','acknowledgeRestore'}),
+        'member': ('host.personalDraftMemberSet','personalDraft.memberSet',{'spaceId','spaceEpoch','expectedSpaceRevision','grantId','grantRevision','clientSpkiSha256','enabled'})
+    }[args.kind]
+    if set(params['params']) != keys: raise Refused('exact personal draft owner params required')
+    if args.kind == 'owner' and params['params']['localEnabled'] is not False:
+        raise Refused('root administration never becomes an App draft writer')
+    original = {key:params[key] for key in ['requestId','dbId','runtimeBindingId']}
+    original['command'] = {'operation':operation,'params':params['params']}
+    private_root(STATE, create=True)
+    new_record(STATE / ('draft-' + request + '.json'), {'format':1,'kind':'personalDraftControl','original':original,'payloadSha256':sha(json.dumps(original,sort_keys=True,separators=(',',':')).encode())})
+    # Same original witness survives response loss. Never automatically resend.
+    print(json.dumps(rpc(method,params),indent=2))
+
+def draft_original(args):
+    request = canonical_uuid(args.request_id)
+    record = read_record(STATE / ('draft-' + request + '.json'))
+    if record.get('format') != 1 or record.get('kind') != 'personalDraftControl': raise Refused('original private draft control witness required')
+    original = record['original']
+    if original.get('requestId') != request or original.get('command',{}).get('operation') not in ('personalDraft.ownerConfigure','personalDraft.memberSet'):
+        raise Refused('wrong exact draft owner control')
+    if record.get('payloadSha256') != sha(json.dumps(original,sort_keys=True,separators=(',',':')).encode()):
+        raise Refused('original immutable draft envelope changed')
+    return original
+
+def draft_lookup(args):
+    original = draft_original(args)
+    print(json.dumps(rpc('host.personalDraftRequestLookup',{'requestId':original['requestId'],'dbId':original['dbId']}),indent=2))
+
+def draft_fence(args):
+    original = draft_original(args)
+    # This writes only an original notSubmitted terminal receipt if missing.
+    # It never calls owner/member mutation or changes the original UUID/body.
+    print(json.dumps(rpc('host.personalDraftRequestFence',{'original':original}),indent=2))
+
 def parser():
     p = argparse.ArgumentParser(description='PendingCrew one-link host installation/administration; never provider login or inference')
     commands = p.add_subparsers(dest='command', required=True)
@@ -579,6 +621,12 @@ def parser():
     notification = commands.add_parser('notification-configure'); notification.add_argument('--input-file')
     notification = commands.add_parser('notification-lookup'); notification.add_argument('--request-id', required=True)
     commands.add_parser('status'); commands.add_parser('stop'); commands.add_parser('grants')
+    commands.add_parser('draft-status')
+    draft = commands.add_parser('draft-members'); draft.add_argument('--space-id',required=True); draft.add_argument('--space-epoch',required=True)
+    draft = commands.add_parser('draft-control'); draft.add_argument('--kind',required=True,choices=['owner','member']); draft.add_argument('--operation-file',required=True)
+    for name in ['draft-lookup','draft-fence']:
+        draft = commands.add_parser(name); draft.add_argument('--request-id',required=True)
+
     configuration = commands.add_parser('configuration'); configuration.add_argument('--operation-file', required=True)
     revoke = commands.add_parser('revoke'); revoke.add_argument('--grant-id', required=True); revoke.add_argument('--expected-revision', required=True); revoke.add_argument('--note', required=True)
     lookup = commands.add_parser('installation'); lookup.add_argument('--request-id', required=True)
@@ -596,6 +644,11 @@ def main():
         else: print(json.dumps(rpc('host.status', {}), indent=2))
     elif args.command == 'notification-configure': notification_configure(args)
     elif args.command == 'notification-lookup': notification_lookup(args)
+    elif args.command == 'draft-status': print(json.dumps(rpc('host.personalDraftStatus',{}),indent=2))
+    elif args.command == 'draft-members': print(json.dumps(rpc('host.personalDraftMembers',{'spaceId':canonical_uuid(args.space_id),'spaceEpoch':checked_text(args.space_epoch,512)}),indent=2))
+    elif args.command == 'draft-control': draft_control(args)
+    elif args.command == 'draft-lookup': draft_lookup(args)
+    elif args.command == 'draft-fence': draft_fence(args)
     elif args.command == 'grants': print(json.dumps(rpc('host.grants', {}), indent=2))
     elif args.command == 'configuration':
         record = read_record(pathlib.Path(args.operation_file))

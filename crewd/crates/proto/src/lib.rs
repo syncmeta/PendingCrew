@@ -153,6 +153,11 @@ pub mod methods {
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
         crate::commands::SESSION_CONTROL_TARGET,
+        crate::personal_drafts::STATUS,
+        crate::personal_drafts::MEMBERS,
+        crate::personal_drafts::CATALOG,
+        crate::personal_drafts::BRANCHES,
+        crate::personal_drafts::REQUEST_FENCE,
         crate::claude::INSPECT,
         crate::claude::HISTORY,
         crate::claude::TASK_GET,
@@ -295,6 +300,7 @@ pub mod events {
         "work",
         "documents",
         "viewFolders",
+        "personalDraft",
         "data",
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
@@ -494,7 +500,7 @@ pub enum ShutdownReason {
 
 /// 每个事件名 → 它的 `data` 类型。契约的 `events` 表与 `Event` 的 schema 都从这一张表来。
 fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value)> {
-    vec![
+    vec![("personalDraft.changed",sub::<personal_drafts::PersonalDraftChanged>(g)),
         (
             commands::TERMINAL_OUTPUT_EVENT,
             sub::<commands::TerminalWatchEvent>(g),
@@ -1066,6 +1072,11 @@ pub fn api_schema() -> Value {
                 sub::<codex::CodexTools>(g),
             ),
         ),
+        (personal_drafts::STATUS,m(sub::<personal_drafts::PersonalDraftStatusParams>(g),sub::<personal_drafts::PersonalDraftStatus>(g))),
+        (personal_drafts::MEMBERS,m(sub::<personal_drafts::PersonalDraftMembersParams>(g),sub::<personal_drafts::PersonalDraftMembers>(g))),
+        (personal_drafts::CATALOG,m(sub::<personal_drafts::PersonalDraftCatalogParams>(g),sub::<personal_drafts::PersonalDraftCatalogPage>(g))),
+        (personal_drafts::BRANCHES,m(sub::<personal_drafts::PersonalDraftBranchesParams>(g),sub::<personal_drafts::PersonalDraftBranchPage>(g))),
+        (personal_drafts::REQUEST_FENCE,m(sub::<personal_drafts::PersonalDraftRequestFenceParams>(g),sub::<personal_drafts::PersonalDraftRequestFence>(g))),
         (claude::INSPECT,m(sub::<claude::ClaudeSessionParams>(g),sub::<claude::ClaudeInspect>(g))),
         (claude::HISTORY,m(sub::<claude::ClaudeHistoryParams>(g),sub::<claude::ClaudeHistoryPage>(g))),
         (claude::TASK_GET,m(sub::<claude::ClaudeTaskGetParams>(g),sub::<claude::ClaudeTaskDetail>(g))),
@@ -1931,3 +1942,4 @@ pub mod codex;
 pub mod codex_inputs;
 
 pub mod claude;
+pub mod personal_drafts;

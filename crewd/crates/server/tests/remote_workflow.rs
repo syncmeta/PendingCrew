@@ -1866,3 +1866,361 @@ async fn enrollment_real_tls_original_key_rejects_changed_request_and_atomic_bad
     );
     stopped(running).await;
 }
+
+fn draft_packet(hello: &Value, operation: &str, params: Value) -> Value {
+    json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":operation,"params":params}})
+}
+fn draft_scope(status: &Value) -> Value {
+    json!({"spaceId":status["spaceId"],"spaceEpoch":status["spaceEpoch"],"memberId":status["member"]["memberId"],"memberRevision":status["member"]["revision"]})
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn core_personal_drafts_real_tls_exact_approval_two_writers_retirement_restart_and_revoke() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let mut running = service(&data).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let owner_hello = local(&mut running.owner, "system.hello", json!({"apiVersion":3})).await;
+    let owner_status = local(&mut running.owner, "personalDraft.status", json!({})).await;
+    let owner=local(&mut running.owner,"command.submit",draft_packet(&owner_hello,"personalDraft.ownerConfigure",json!({"ownerEpoch":owner_status["ownerEpoch"],"expectedSpaceId":null,"expectedSpaceRevision":"0","localEnabled":true,"acknowledgeRestore":false}))).await;
+    assert_eq!(owner["phase"], "committed");
+    let crew=local(&mut running.owner,"crew.create",json!({"title":"Synthetic personal draft crew","workingDirectory":root.path().join("work").to_str().unwrap()})).await;
+    let key = json!({"authorityId":identity.db_id,"dbId":identity.db_id,"crewId":crew["id"],"destination":{"kind":"channel","id":format!("{}/lobby",crew["id"].as_str().unwrap())},"kind":"channelMessage"});
+    let (cert_a, _, grant_a) = approved(&mut running.owner, &identity).await;
+    let (cert_b, _, grant_b) = approved(&mut running.owner, &identity).await;
+    let mut a = RemoteRpc::connect(port, &cert_a, &identity.spki_sha256).await;
+    let mut b = RemoteRpc::connect(port, &cert_b, &identity.spki_sha256).await;
+    let hello_a = a.call("system.hello", json!({"apiVersion":3})).await;
+    let hello_b = b.call("system.hello", json!({"apiVersion":3})).await;
+    let outsider = b.call("personalDraft.status", json!({})).await;
+    assert_eq!(outsider["available"], false);
+    assert!(
+        outsider["spaceId"].is_null()
+            && outsider["member"].is_null()
+            && outsider["ownerEpoch"].is_null()
+    );
+    let guessed = draft_packet(
+        &hello_b,
+        "personalDraft.memberSet",
+        json!({"spaceId":owner["result"]["spaceId"],"spaceEpoch":owner["result"]["spaceEpoch"],"expectedSpaceRevision":owner["result"]["spaceRevision"],"grantId":grant_b.grant.id,"grantRevision":grant_b.grant.revision,"clientSpkiSha256":cert_b.pin(),"enabled":true}),
+    );
+    let refused = b.frame("command.submit", guessed).await.unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::FORBIDDEN);
+    for (grant, pin) in [
+        (&grant_a.grant, cert_a.pin()),
+        (&grant_b.grant, cert_b.pin()),
+    ] {
+        let status = local(&mut running.owner, "personalDraft.status", json!({})).await;
+        let approved=local(&mut running.owner,"command.submit",draft_packet(&owner_hello,"personalDraft.memberSet",json!({"spaceId":status["spaceId"],"spaceEpoch":status["spaceEpoch"],"expectedSpaceRevision":status["spaceRevision"],"grantId":grant.id,"grantRevision":grant.revision,"clientSpkiSha256":pin,"enabled":true}))).await;
+        assert_eq!(approved["phase"], "committed");
+    }
+    let pre_a = a.call("personalDraft.status", json!({})).await;
+    assert_eq!(pre_a["available"], false);
+    assert_eq!(pre_a["member"]["optedIn"], false);
+    assert!(
+        a.frame(
+            "personalDraft.branches",
+            json!({"scope":draft_scope(&pre_a),"key":key})
+        )
+        .await
+        .unwrap()
+        .get("error")
+        .is_some()
+    );
+    let consent_a = a
+        .call(
+            "command.submit",
+            draft_packet(
+                &hello_a,
+                "personalDraft.consentSet",
+                json!({"scope":draft_scope(&pre_a),"enabled":true}),
+            ),
+        )
+        .await;
+    assert_eq!(consent_a["phase"], "committed");
+    let status_a = a.call("personalDraft.status", json!({})).await;
+    let scope_a = draft_scope(&status_a);
+    assert_eq!(pre_a["member"]["memberId"], status_a["member"]["memberId"]);
+    assert_eq!(pre_a["member"]["writerId"], status_a["member"]["writerId"]);
+    let status_b = b.call("personalDraft.status", json!({})).await;
+    b.call(
+        "command.submit",
+        draft_packet(
+            &hello_b,
+            "personalDraft.consentSet",
+            json!({"scope":draft_scope(&status_b),"enabled":true}),
+        ),
+    )
+    .await;
+    let status_b = b.call("personalDraft.status", json!({})).await;
+    let scope_b = draft_scope(&status_b);
+    assert_ne!(
+        status_a["member"]["writerId"],
+        status_b["member"]["writerId"]
+    );
+    a.call("events.subscribe", json!({"topics":["personalDraft"]}))
+        .await;
+    b.call("events.subscribe", json!({"topics":["personalDraft"]}))
+        .await;
+    let (cert_c, _, _) = approved(&mut running.owner, &identity).await;
+    let mut c = RemoteRpc::connect(port, &cert_c, &identity.spki_sha256).await;
+    c.call("system.hello", json!({"apiVersion":3})).await;
+    c.call("events.subscribe", json!({"topics":["personalDraft"]}))
+        .await;
+    assert!(
+        c.frame("personalDraft.branches", json!({"scope":scope_a,"key":key}))
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    let branch_a = uuid::Uuid::new_v4().to_string();
+    let branch_b = uuid::Uuid::new_v4().to_string();
+    let payload_a = json!({"text":"A exact 原文","stagedMentions":[{"token":"@原样","mention":{"kind":"human","target_id":null}}],"replyTarget":{"mention":null,"replyToId":"synthetic-reply","quotedSender":"quoted","quotedSnippet":"original quote"}});
+    let payload_b = json!({"text":"B independent 原文","stagedMentions":[],"replyTarget":null});
+    let packet_a = draft_packet(
+        &hello_a,
+        "personalDraft.checkpoint",
+        json!({"scope":scope_a,"branchId":branch_a,"key":key,"expectedRevision":"0","revision":"1","payload":payload_a}),
+    );
+    let first_a = a.call("command.submit", packet_a.clone()).await;
+    assert_eq!(first_a["phase"], "committed");
+    let packet_b = draft_packet(
+        &hello_b,
+        "personalDraft.checkpoint",
+        json!({"scope":scope_b,"branchId":branch_b,"key":key,"expectedRevision":"0","revision":"1","payload":payload_b}),
+    );
+    b.call("command.submit", packet_b).await;
+    let first = a
+        .call(
+            "personalDraft.branches",
+            json!({"scope":scope_a,"key":key,"limit":1}),
+        )
+        .await;
+    assert_eq!(first["complete"], false);
+    assert_eq!(first["branches"][0]["payload"], payload_a);
+    let second = a
+        .call(
+            "personalDraft.branches",
+            json!({"scope":scope_a,"key":key,"limit":1,"cursor":first["nextCursor"]}),
+        )
+        .await;
+    assert_eq!(second["complete"], true);
+    assert_eq!(second["branches"][0]["payload"], payload_b);
+    let empty = json!({"text":"","stagedMentions":[],"replyTarget":null});
+    a.call("command.submit",draft_packet(&hello_a,"personalDraft.checkpoint",json!({"scope":scope_a,"branchId":branch_a,"key":key,"expectedRevision":"1","revision":"2","payload":empty}))).await;
+    let cleared = b
+        .call("personalDraft.branches", json!({"scope":scope_b,"key":key}))
+        .await;
+    assert_eq!(cleared["branches"][0]["payload"], empty);
+    assert_eq!(
+        cleared["branches"][1]["payload"], payload_b,
+        "own send-clear must preserve B independent unsent draft"
+    );
+    let bad=b.frame("command.submit",draft_packet(&hello_b,"personalDraft.checkpoint",json!({"scope":scope_b,"branchId":branch_a,"key":key,"expectedRevision":"2","revision":"99","payload":payload_b}))).await.unwrap();
+    assert!(
+        bad.get("error").is_some(),
+        "other writer cannot raise A revision"
+    );
+    b.call("command.submit",draft_packet(&hello_b,"personalDraft.checkpoint",json!({"scope":scope_b,"branchId":branch_b,"key":key,"expectedRevision":"1","revision":"3","payload":{"text":"B newer","stagedMentions":[],"replyTarget":null}}))).await;
+    let replacement = uuid::Uuid::new_v4().to_string();
+    let resolve = |b_revision: &str| {
+        draft_packet(
+            &hello_a,
+            "personalDraft.resolve",
+            json!({"scope":scope_a,"key":key,"retiring":[{"branchId":branch_a,"revision":"2"},{"branchId":branch_b,"revision":b_revision}],"replacement":{"branchId":replacement,"revision":"1","payload":{"text":"explicit merged","stagedMentions":[],"replyTarget":null}}}),
+        )
+    };
+    assert!(
+        a.frame("command.submit", resolve("1"))
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    let unchanged = a
+        .call("personalDraft.branches", json!({"scope":scope_a,"key":key}))
+        .await;
+    assert!(
+        unchanged["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["retired"] == false)
+    );
+    let resolved = a.call("command.submit", resolve("3")).await;
+    assert_eq!(resolved["result"]["retired"][1]["revision"], "3");
+    let late=b.frame("command.submit",draft_packet(&hello_b,"personalDraft.checkpoint",json!({"scope":scope_b,"branchId":branch_b,"key":key,"expectedRevision":"3","revision":"100","payload":payload_b}))).await.unwrap();
+    assert!(late.get("error").is_some());
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    c.call("personalDraft.status", json!({})).await;
+    assert!(
+        c.events
+            .iter()
+            .all(|e| e["event"] != "personalDraft.changed"),
+        "unapproved same-Core/crew grant must receive no personal event"
+    );
+    drop(c);
+    drop(a);
+    drop(b);
+    stopped(running).await;
+    let mut running = service(&data).await;
+    let owner_hello2 = local(&mut running.owner, "system.hello", json!({"apiVersion":3})).await;
+    assert_ne!(
+        owner_hello["runtimeIdentity"]["runtimeBindingId"],
+        owner_hello2["runtimeIdentity"]["runtimeBindingId"]
+    );
+    let mut a = RemoteRpc::connect(port, &cert_a, &identity.spki_sha256).await;
+    let mut b = RemoteRpc::connect(port, &cert_b, &identity.spki_sha256).await;
+    a.call("system.hello", json!({"apiVersion":3})).await;
+    b.call("system.hello", json!({"apiVersion":3})).await;
+    let resumed = a.call("personalDraft.status", json!({})).await;
+    assert_eq!(resumed["spaceEpoch"], status_a["spaceEpoch"]);
+    assert_eq!(
+        resumed["member"]["memberId"],
+        status_a["member"]["memberId"]
+    );
+    assert_eq!(
+        resumed["member"]["writerId"],
+        status_a["member"]["writerId"]
+    );
+    assert_eq!(resumed["available"], true);
+    let original = a
+        .call(
+            "command.lookup",
+            json!({"requestId":packet_a["requestId"],"dbId":identity.db_id}),
+        )
+        .await;
+    assert_eq!(original["command"], packet_a["command"]);
+    assert_eq!(original["runtimeBindingId"], packet_a["runtimeBindingId"]);
+    assert_eq!(original["historical"], true);
+    let old_fence = a
+        .call("personalDraft.requestFence", json!({"original":packet_a}))
+        .await;
+    assert_eq!(old_fence["state"], "existingTerminal");
+    let page = a
+        .call("personalDraft.branches", json!({"scope":scope_a,"key":key}))
+        .await;
+    assert_eq!(
+        page["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["retired"] == false)
+            .count(),
+        1
+    );
+    assert_eq!(page["branches"][2]["payload"]["text"], "explicit merged");
+    let current = local(&mut running.owner, "personalDraft.status", json!({})).await;
+    local(&mut running.owner,"command.submit",draft_packet(&owner_hello2,"personalDraft.memberSet",json!({"spaceId":current["spaceId"],"spaceEpoch":current["spaceEpoch"],"expectedSpaceRevision":current["spaceRevision"],"grantId":grant_a.grant.id,"grantRevision":grant_a.grant.revision,"clientSpkiSha256":cert_a.pin(),"enabled":false}))).await;
+    assert!(
+        a.frame("personalDraft.branches", json!({"scope":scope_a,"key":key}))
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    assert!(
+        a.frame(
+            "command.lookup",
+            json!({"requestId":first_a["requestId"],"dbId":identity.db_id})
+        )
+        .await
+        .unwrap()
+        .get("error")
+        .is_some()
+    );
+    let removed = a.call("personalDraft.status", json!({})).await;
+    assert_eq!(removed["available"], false);
+    assert!(removed["member"].is_null() && removed["spaceId"].is_null());
+    let current = local(&mut running.owner, "personalDraft.status", json!({})).await;
+    local(&mut running.owner,"command.submit",draft_packet(&owner_hello2,"personalDraft.memberSet",json!({"spaceId":current["spaceId"],"spaceEpoch":current["spaceEpoch"],"expectedSpaceRevision":current["spaceRevision"],"grantId":grant_a.grant.id,"grantRevision":grant_a.grant.revision,"clientSpkiSha256":cert_a.pin(),"enabled":true}))).await;
+    let new_member = a.call("personalDraft.status", json!({})).await;
+    assert_ne!(
+        new_member["member"]["memberId"],
+        status_a["member"]["memberId"]
+    );
+    assert_ne!(
+        new_member["member"]["writerId"],
+        status_a["member"]["writerId"]
+    );
+    assert_eq!(new_member["available"], false);
+    assert!(
+        a.frame("personalDraft.requestFence", json!({"original":packet_a}))
+            .await
+            .unwrap()
+            .get("error")
+            .is_some()
+    );
+    local(&mut running.owner,"remote.revoke",json!({"grantId":grant_b.grant.id,"expectedRevision":grant_b.grant.revision,"note":"Synthetic draft test complete"})).await;
+    let revoked = tokio::time::timeout(LIMIT, b.frame("personalDraft.status", json!({}))).await;
+    assert!(!matches!(revoked,Ok(Ok(ref v))if v.get("result").is_some()));
+    drop(a);
+    drop(b);
+    stopped(running).await;
+    let store = crewd_store::Store::open_data_dir(&data).unwrap();
+    let executions: i64 = store
+        .conn()
+        .query_row("SELECT count(*) FROM native_execution_runtimes", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        executions, 0,
+        "draft sync never spawns or restores a session"
+    );
+}
+
+#[tokio::test]
+async fn core_personal_drafts_attached_agent_has_no_read_write_or_subscription_oracle() {
+    let fixture = crewd_server::agent::testkit::Fixture::new().await;
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(rx).await;
+    let mut client = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    let hello = local(&mut client, "system.hello", json!({"apiVersion":3})).await;
+    local(
+        &mut client,
+        "agent.attach",
+        json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)}),
+    )
+    .await;
+    for method in [
+        "personalDraft.status",
+        "personalDraft.members",
+        "personalDraft.catalog",
+        "personalDraft.branches",
+        "personalDraft.requestFence",
+    ] {
+        let refused = client
+            .call(
+                method,
+                json!({"deliberatelyInvalid":"no parsing or body oracle"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
+    }
+    let refused = client
+        .call("events.subscribe", json!({"topics":["personalDraft"]}))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.0, crewd_proto::RpcError::FORBIDDEN);
+    let refused=client.call("command.submit",draft_packet(&hello,"personalDraft.ownerConfigure",json!({"ownerEpoch":"unavailable","expectedSpaceId":null,"expectedSpaceRevision":"0","localEnabled":true,"acknowledgeRestore":false}))).await.unwrap_err();
+    assert_eq!(refused.0, crewd_proto::RpcError::FORBIDDEN);
+    drop(client);
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+    let count = fixture
+        .state
+        .db
+        .call(|s| {
+            s.conn()
+                .query_row("SELECT COUNT(*)FROM public_command_receipts", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count, 0);
+}

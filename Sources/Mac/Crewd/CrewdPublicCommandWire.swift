@@ -51,6 +51,7 @@ struct CrewdPublicReceipt {
         self.phase = phase; self.historical = historical
         _ = try CrewdPublicWire.token(value["createdAt"])
         _ = try CrewdPublicWire.token(value["updatedAt"])
+        if originalCommand["operation"].string?.hasPrefix("personalDraft.")==true,phase == .committed{try CrewPersonalCoreWire.validateResult(value["result"],command:originalCommand)}
         if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
             try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
         }
@@ -134,6 +135,8 @@ enum CrewdPublicWire {
 
 /// Mirrors the server's closed operation enum. It cannot proxy arbitrary RPCs.
 enum CrewdPublicOperation: String, Codable {
+    case personalDraftOwner="personalDraft.ownerConfigure",personalDraftMember="personalDraft.memberSet",personalDraftConsent="personalDraft.consentSet",personalDraftCheckpoint="personalDraft.checkpoint",personalDraftResolve="personalDraft.resolve"
+    var isPersonalDraft:Bool{rawValue.hasPrefix("personalDraft.")}
     case localClientTrust = "local.clientTrust"
     case localClientTrustRevoke = "local.clientTrustRevoke"
     case hibernate = "crewd.hibernate"
@@ -233,6 +236,7 @@ private enum CrewdPublicParameters {
         var required: Set<String> = []
         var defaults: [String: CrewdValue] = [:]
         switch operation {
+        case .personalDraftOwner,.personalDraftMember,.personalDraftConsent,.personalDraftCheckpoint,.personalDraftResolve:return try CrewPersonalCoreWire.canonical(operation.rawValue,value)
         case .crewCreate: required = ["title", "workingDirectory"]; defaults = ["parentId": .null]
         case .firstMessage:
             required = ["crew", "text"]

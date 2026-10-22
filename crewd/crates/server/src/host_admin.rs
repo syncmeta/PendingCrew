@@ -159,6 +159,10 @@ pub(crate) async fn route(
     args: &str,
 ) -> Result<serde_json::Value, RpcError> {
     permit.check()?;
+    if matches!(method,"host.personalDraftStatus"|"host.personalDraftMembers"|"host.personalDraftOwnerConfigure"|"host.personalDraftMemberSet"|"host.personalDraftRequestLookup"|"host.personalDraftRequestFence") {
+        let params=serde_json::from_str(args).map_err(|_|RpcError::new(RpcError::INVALID_PARAMS,"invalid personal-draft admin request"))?;
+        return crate::personal_drafts::admin(state,permit.clone(),method,params).await;
+    }
     let remote = state
         .remote
         .get()

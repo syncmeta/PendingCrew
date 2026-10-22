@@ -597,6 +597,10 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crate::personal_drafts::is_method(&req.method) => {
+            if agent.is_attached(){ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot access personal drafts")))}
+            else {ServerFrame::Response(crate::personal_drafts::handle(state,&peer.command_actor(),req).await)}
+        }
         Ok(req) if crate::claude_history::is_method(&req.method) => {
             if agent.is_attached(){ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot read Human managed task bodies")))}
             else{ServerFrame::Response(crate::claude_history::handle(state,&peer.command_actor(),req).await)}
@@ -661,7 +665,7 @@ async fn request_step(
             if agent.is_attached()
                 && p.topics
                     .iter()
-                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders" | "data"))
+                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders" | "data" | "personalDraft"))
             {
                 return RequestStep::Reply(ServerFrame::Response(Response::err(
                     id,
@@ -915,7 +919,7 @@ fn spawn_forwarder(
                     if attached.load(std::sync::atomic::Ordering::Acquire)
                         && matches!(
                             e.event.as_str(),
-                            events::TODO_ATTRIBUTES_CHANGED
+                            "personalDraft.changed" | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED
                                 | events::FOLDER_CHANGED
@@ -925,6 +929,7 @@ fn spawn_forwarder(
                     continue;
                 }
                 Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => {
+                    if e.event=="personalDraft.changed"&&!crate::personal_drafts::event_allowed(&state,&actor,&e.data).await{continue;}
                     if e.event == events::DATA_CHANGED
                         && !data_event_allowed(&state, &actor, &e.data).await
                     {

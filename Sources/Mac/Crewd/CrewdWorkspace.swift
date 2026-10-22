@@ -412,6 +412,7 @@ final class CrewdWorkspace: ObservableObject {
             self.linkedKnowledge.handleEvent(name,data)
             self.channelKnowledge.handleEvent(name,data)
             self.authorityEvents.send((name, data))
+            if name=="personalDraft.changed" || name=="events.lagged"{CrewPersonalDraftService.shared.coreChanged(self)}
             self.resources.handleEvent(name,data)
             self.channelResources.handleEvent(name,data)
             self.channelWork.handleEvent(name,data)
@@ -1080,7 +1081,7 @@ final class CrewdWorkspace: ObservableObject {
         if operation == .sessionStop { return .object(["target": target.value, "reason": fields["reason"]!]) }
         return target.value
     }
-    func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID()) async throws -> CrewdPublicReceipt {
+    func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID(), validateReceipt:((CrewdPublicReceipt)throws->Void)?=nil) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if operation.isCodex {
             let session=params["target"]["sessionId"].string
@@ -1103,7 +1104,7 @@ final class CrewdWorkspace: ObservableObject {
         let envelope: CrewdPublicCommandEnvelope
         do { envelope = try CrewdPublicCommandEnvelope(request: request, binding: client.runtimeIdentity, operation: operation, params: params) }
         catch { throw CrewdClientError(message: "命令参数尚未满足正式契约，未发送：" + error.localizedDescription, kind: .notSubmitted) }
-        do { return try await publicCommands.submit(envelope, crew: crew) }
+        do { return try await publicCommands.submit(envelope, crew: crew,validateReceipt:validateReceipt) }
         catch {
             // Retain the exact submitted identity even when the reply is lost.
             // A pre-send failure has no submitted observation and stays unlinked.
@@ -1207,6 +1208,41 @@ final class CrewdWorkspace: ObservableObject {
         durableUnknown=try journal.unknownRecords()
         if let id=record.params["requestId"].string.flatMap(UUID.init(uuidString:)){todoMutationDrafts.acknowledge(id);knowledgeLinkDrafts.acknowledge(id)}
     }
+    /// Personal SQL history reuses the original private command journal. Keeping
+    /// observed attempts prevents reopening from silently minting a new UUID.
+    func personalDraftHistory()throws->[CrewdPresentationJournal.Prepared]{
+        guard let journal=originalJournal,originalJournalReady else{throw CrewdPublicWire.invalid()}
+        return try journal.personalDraftHistory()
+    }
+    func acknowledgePersonalDraft(_ record:CrewdPresentationJournal.Prepared,receipt:CrewdPublicReceipt)throws{
+        guard record.scope==presentationScope,record.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true,
+            record.params["requestId"].string.flatMap(UUID.init(uuidString:))==receipt.requestID,
+            record.params["dbId"].string==receipt.databaseID,record.params["runtimeBindingId"].string==receipt.runtimeBindingID,
+            record.params["command"]==receipt.value["command"],[.committed,.rejected,.suppressed].contains(receipt.phase),let journal=originalJournal else{throw CrewdPublicWire.invalid()}
+        // Historical SQL outcome is the ORIGINAL result, never current presence
+        // or permission to replay. The adapter rechecks the live scope separately.
+        try journal.acknowledge(record,detail:"Verified original personal draft SQL receipt; no replay")
+        durableUnknown=try journal.unknownRecords()
+    }
+    func fencePersonalDraft(_ record:CrewdPresentationJournal.Prepared)async throws->CrewdPublicReceipt{
+        let binding=try publicCommandBinding(for:client)
+        guard record.scope==binding.scope,record.params["dbId"].string==binding.databaseID,
+            record.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true,
+            let request=record.params["requestId"].string.flatMap(UUID.init(uuidString:)) else{throw CrewdPublicWire.invalid()}
+        let value=try await client.call("personalDraft.requestFence",.object(["original":record.params]))
+        guard try publicCommandBinding(for:client)==binding else{throw CancellationError()}
+        try CrewPersonalCoreWire.fields(value,["state","receipt"])
+        let receipt=try CrewdPublicReceipt(value["receipt"],request:request,database:binding.databaseID,originalRuntimeBinding:try CrewdPublicWire.token(record.params["runtimeBindingId"]),originalCommand:record.params["command"])
+        switch value["state"].string{
+        case "missingFenced":guard receipt.phase == .rejected,receipt.value["result"]["reason"] == .string("notSubmitted") else{throw CrewdPublicWire.invalid()}
+        case "existingTerminal":guard [.committed,.rejected,.suppressed].contains(receipt.phase) else{throw CrewdPublicWire.invalid()}
+        case "existingPending":guard [.reserved,.admitted,.dispatched,.unknown].contains(receipt.phase) else{throw CrewdPublicWire.invalid()}
+        default:throw CrewdPublicWire.invalid()
+        }
+        // The adapter must verify its captured writer before acknowledging a
+        // terminal result. A valid envelope alone is not a branch confirmation.
+        return receipt
+    }
     func lookupOriginalCommand(_ record: CrewdPresentationJournal.Prepared) async throws -> CrewdPublicReceipt? {
         _ = try publicCommandBinding(for: client)
         guard record.scope == presentationScope, record.method == "command.submit", let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:)) else {
@@ -1254,6 +1290,9 @@ final class CrewdWorkspace: ObservableObject {
             receipt.value["result"]["sessionId"].string.map { !$0.isEmpty } == true
     }
     func acknowledgeOriginalCommand(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt, detail: String = "人类明确核对原后台回执；没有重放。") throws {
+        guard record.params["command"]["operation"].string?.hasPrefix("personalDraft.") != true else{
+            throw CrewdClientError(message:"请在个人同步设置中核对这项原请求；需先核实原空间与设备 writer，不能从通用回执入口结束。",kind:.notSubmitted)
+        }
         _ = try publicCommandBinding(for: client)
         guard record.scope == presentationScope, !receipt.historical,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

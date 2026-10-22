@@ -4,7 +4,7 @@
 
 完整 Codex 后台及共享 Mac/iOS 消费者已独立准入并整合为产品源码 `6c5fdb30fadba68deac90dc3de733325047d8b68`（S）。该完整输入的新 production normal、普通 Developer ID Mac 包和普通 iOS Simulator 包也已通过独立成套产物门。Mac 为 **0.1.44 / 20748.73718**，iOS 实际为 **0.1.43 / 1**；两端源码同 S，版本字段按实际记录。Rust树 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive，Cloud/APNs 真实资格 nil/off。
 
-已封存的 Codex 候选产品输入仍为 S。main/global 后续统一整合了完整 Claude A 后台 `cbe438e2bba8d1f1fe177e337c6f6003064bd3d9` 与三端消费者 `81f67414fffe8f6dc4fb7e9d39815b36b03db60b`，二者完整源码均独验通过；当前整合源码为 Store20/API3/schema144、Rust树 `06db10108e69b0dff17399072c6d21a81648a6ba`。Linux 控制器保留 C=`b4d0c37b015326f629fb99e4cda74712a0da381e` 的修正，其准确来源守卫仍针对原 S，不自动运行于新 main。**现有 normal、Mac/iOS 签包仍属于 S/schema141，不改标为新 A 组合或记录提交**。根核完整交接/独验、1933整合输入及 staged Rust/Swift 与各自准入源逐字相同，普通推送及实际远端核对记录在检查点。下方既往阶段保留当时原义，以本节为当前交付总览。
+已封存的 Codex 候选产品输入仍为 S。本次 main/global 在已接受 Claude A 后台cbe438e2与三端消费者81f67414的基础上，统一整合完整 Core 私人草稿后台d3f925af5ec56cf77f11cac333292df5f367443f及最终三端消费者64188ec0c2167452dec3132f44833593448cc811；两块完整源码均独验通过。整合Rust树0a10ccb9785ba2552d8a101665b44998edf27cdb，Store21/API3/schema149，Native16仍inactive。旧S/schema141的normal及Mac/iOS签包保原来源，本次整合源是下一自然候选输入，尚未实际构建或安装。Linux控制器仍保留原C=b4d0的S守卫；独立C5准备尚未绑定最终输入，不能对任意main运行。根核完整交接/独验、公共接口唯一作者与客户端来源后整合；staged实际1942输入/Rust/Swift核对及普通推送结果写入检查点。下方既往阶段保留当时原义，以本节为当前交付总览。
 
 | 完整交付单元 | 已完成的证据层 | 剩余完成判据与责任 |
 | --- | --- | --- |
@@ -13,13 +13,15 @@
 | 单链接主机安装与配对 B | 完整源码及新 S 组合产物已验 | 非 memory 凭据、双端同 Core、重开/撤权实际链；准确 Linux 构建与 VPS 前提分别核，不冒源码等于远端可用 |
 | Cloud 与 APNs | 完整 App/Core 源码及新 S 两端产物已验，默认关闭 | M42 实际资源/profile、准确签名、真实账号双端/设备送达；Simulator 与源码不冒真实 Apple 资格 |
 | Claude 受管历史及手动恢复 A | 后台33路径/三端9路径完整源码及净影响合成故障独验接受，并统一整合；真实 PTY 和原恢复控制链保留 | 下一自然组合再做准确 fresh normal/签包及实际运行；仍不冒真实 Claude、供应商完整历史、ACP 或 Native16 已资格 |
-| 个人草稿经 VPS/Mac Core 同步 | 窄方案已定，唯一后台作者已在独立树实施，A原树/证据不动 | 稳定完整 typed 合同给共享客户端并行；空间归属、各设备版本/CAS/撤权/恢复整块完成后独验。目前未准入，不以业务同步或 Cloud 源码冒已可用 |
+| 个人草稿经 VPS/Mac Core 同步 | 后台完整d3f925af及18原函数、最终三端64188ec0及18净影响模式均独验准入；原11fe WITHHOLD与全部实红保留，A原树/证据不动 | 源码整体准入后，下一准确组合normal及Mac/iOS完整候选，再验实际双端同Core/离线/恢复/撤权；不以合成TLS或Cloud源码冒实际多端已交付 |
+
+Core草稿正式接口1b1a0cb6保持API3、checked149，新增5个typed direct方法及原command.submit内5个SQL操作；独立主机管理仍仅true-rootFD窄类型。ownerEpoch只给真实owner，首配置也受当前恢复标记约束；全部5项共用原UUID/receipt负fence，普通重启查回不改原包，不让Unknown阻塞无关草稿或本机编辑。根与独立质量亲读现有restore/judgment后否决把Draft当判断源witness：普通remote.configure改变判断域fallback，复用它会误换草稿空间；最窄方案是原受保护初始化/迁移与restore staging事务中的私有Draft stamp，不建第二恢复引擎。准确旧20 helper的实际restore0保留私有stamp、dbId及旧opt-in，原scope checkpoint仍commit，安全断言101；根已读原proof5d289e，必要Store21已获裁决并在唯一作者处实施，复用原writer guard，不为兼容旧产品扩张迁移。最终d3f正式合同4eb52c76已统一私有stamp/Store21事实，DTO/checked149逐字同1b。根已全文读后台DELIVERY/HANDOFF/freeze和独验e09e1bb0；1939/478输入、45产物、18原函数实际PASS，judgment域字节不变。三端完整客户端64188ec0最终净修经f455b278整块接受：8原生产seam实红保原层，18受影响模式亲跑全PASS，普通提交/查回/fence均核原scope/ownerEpoch/writer，通用ACK只拒个人草稿旁路并保其它命令原字节。旧11fe的404输入/两目标0保持原源，641只实际Foundation切片编译；下一准确组合候选覆盖最终两目标。后台另有独立Linux C5准备，根发准确整合S后才一次绑定最终source/Rust/五recipe，无CI dispatch。
 
 Linux 原一次有效 job39850414371 的 Release 构建和 fresh graph 通过，但原 raw SHA 字串判断失败，单 artifact 还漏掉 `.config/nextest.toml`；schema、tar 与 source-after 未执行。原失败/缺失证据全部保留，不重构补造为通过。C462 仅去掉不成立的字串启发式、保持原 ELF/full source/fresh graph/hash/compileenv/schema/package/source-after 守卫，并在原证据目录启用隐藏文件上传。唯一新 C462/S6c5 job **39853422628** 已在4分12秒失败：完整471源/fresh witness/Release来源及纯schema0、空stderr、全JSON==checked141均独验成立，后续控制器误将四个历史command操作列为独立RPC而停；此前静态审查漏了这一原清单错误。tar/source-after仍未产出，不重构为合格包。已停止第三次同S构建；作者一次对齐原typed command/schema/packager合同，质量只审净源码，下一付费运行留给后续自然完整候选并另核具体预算。旧308秒保守计6分钟，本次252秒保守计5分钟；无自动重试、公开Release或部署授权扩张。
 
 完整 typed-schema 修正 Cb4d0 已独验接受（93449b4f）：原实际 schema 上旧断言红、新四direct/四typed command及receipt包装绿，八个缺失/错误结果负例拒绝；原controller其余字节、workflow及原verifier/packager合同保持。仅整合保存源码，不再开第三次同S构建，不把它叫Linux交付完成。
 
-Mac 实际进程93537/Core93539仍在，正常退出问题已发、未重复询问；最后实际锁屏检查04:12。等待只阻窗口、安装及 Apple 门户支路；不重试原 post-quit AX 拒绝、不强退。新 S 包尚未启动或安装；旧5553候选保留历史来源，不先重复一轮旧包 GUI。最新只读磁盘检查约13GiB，无删除缓存。
+Mac最后一次只读进程观察为App93537/Core93539仍在，当前未据旧PID推断已退出；正常退出问题已发、未重复询问，最后实际锁屏检查04:12。等待只阻窗口、安装及 Apple 门户支路；不重试原 post-quit AX 拒绝、不强退。新 S 包尚未启动或安装；旧5553候选保留历史来源，不先重复一轮旧包 GUI。最新只读磁盘检查约13GiB，无删除缓存。
 
 Claude 恢复仅在明确手动操作后创建新 runtime birth，并在原 actor admission 内固定旧 pending wake 上界；首扫、tick、Working 统一不送旧输入，保原行/UUID/attempts/Unknown，不把其冒已完成。新的手动请求仍可送达，不加第二调度器或全局恢复开关。每次普通打开均不自动启动/恢复 session；新恢复的 Unknown 仅约束准确依赖 session，旧无绑定 Unknown 仍按原安全边界。
 
