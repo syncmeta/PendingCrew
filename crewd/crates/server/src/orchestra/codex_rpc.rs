@@ -83,7 +83,7 @@ pub(crate) async fn read(
                 params: r.params,
             }
         });
-        let native_status=meta.native_history.as_ref().map(|h|h.status);
+        let native_status=if meta.restore_unconfirmed&&meta.native_history.as_ref().is_none_or(|h|h.status!=CodexNativeHistoryStatus::Deleted){Some(CodexNativeHistoryStatus::Unknown)}else{meta.native_history.as_ref().map(|h|h.status)};
         let blocked=meta.fork_pending||matches!(native_status,Some(CodexNativeHistoryStatus::Unknown|CodexNativeHistoryStatus::Deleted|CodexNativeHistoryStatus::Archived));
         let capabilities=[
             ("configure",true,true),("compact",true,false),("steer",true,false),("queue",true,false),
@@ -124,7 +124,7 @@ pub(crate) async fn read(
             pending_request: pending,
             desired_settings: meta.desired_settings,
             settings_status: meta.settings_status,
-            native_history: meta.native_history,
+            native_history: if meta.restore_unconfirmed&&native_status!=Some(CodexNativeHistoryStatus::Deleted){Some(CodexNativeHistoryState{status:CodexNativeHistoryStatus::Unknown,request_id:None,operation:None})}else{meta.native_history},
             history_mode,
         })
         .map_err(dispatch::internal);

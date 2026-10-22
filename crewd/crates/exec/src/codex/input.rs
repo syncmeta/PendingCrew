@@ -62,7 +62,7 @@ pub fn qualify_skills(
     if selected.is_empty() {
         return Ok(());
     }
-    let catalog=catalog.get("providerResult").unwrap_or(catalog);
+    let catalog = catalog.get("providerResult").unwrap_or(catalog);
     let rows = catalog
         .pointer("/skills/data")
         .and_then(Value::as_array)
@@ -92,7 +92,9 @@ pub fn qualify_skills(
             })
             .collect();
         if matches.len() != 1 || matches[0].get("enabled").and_then(Value::as_bool) != Some(true) {
-            return Err("selected native skill is not uniquely enabled in current workspace".into());
+            return Err(
+                "selected native skill is not uniquely enabled in current workspace".into(),
+            );
         }
     }
     Ok(())
@@ -197,13 +199,16 @@ mod tests {
                 filename: "display.png".into(),
                 mime_type: "image/png".into(),
                 sha256: "b".repeat(64),
-                body: b"synthetic private media".to_vec(),
+                body: b"\x89PNG\r\n\x1a\nsynthetic private media".to_vec(),
             }],
             skills: vec![],
         };
         let prepared = submission.prepare(root.path()).unwrap();
         let path = PathBuf::from(prepared.items[0]["path"].as_str().unwrap());
-        assert_eq!(std::fs::read(&path).unwrap(), b"synthetic private media");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"\x89PNG\r\n\x1a\nsynthetic private media"
+        );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -229,6 +234,53 @@ mod tests {
             .prepare(&link)
             .is_err()
         );
+    }
+    #[test]
+    fn completion_image_and_audio_use_native_paths_and_keep_original_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let media = [
+            (
+                CodexInputKind::Image,
+                "a.png",
+                "image/png",
+                b"\x89PNG\r\n\x1a\nsynthetic".as_slice(),
+            ),
+            (
+                CodexInputKind::Audio,
+                "a.wav",
+                "audio/wav",
+                b"RIFF0000WAVEsynthetic".as_slice(),
+            ),
+        ];
+        let prepared = Submission {
+            payloads: media
+                .iter()
+                .map(|(kind, name, mime, body)| Payload {
+                    kind: *kind,
+                    filename: (*name).into(),
+                    mime_type: (*mime).into(),
+                    sha256: "b".repeat(64),
+                    body: body.to_vec(),
+                })
+                .collect(),
+            skills: vec![],
+        }
+        .prepare(root.path())
+        .unwrap();
+        let mut paths = vec![];
+        for (i, (_, _, _, body)) in media.iter().enumerate() {
+            assert_eq!(
+                prepared.items[i]["type"],
+                if i == 0 { "localImage" } else { "localAudio" }
+            );
+            let path = PathBuf::from(prepared.items[i]["path"].as_str().unwrap());
+            assert_eq!(std::fs::read(&path).unwrap(), *body);
+            assert!(path.starts_with(root.path().canonicalize().unwrap()));
+            paths.push(path);
+        }
+        drop(prepared);
+        assert!(paths.iter().all(|p| !p.exists()));
     }
     #[test]
     fn completion_skills_require_exact_current_workspace_enabled_catalog_record() {

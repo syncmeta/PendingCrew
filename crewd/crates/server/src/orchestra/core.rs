@@ -1487,7 +1487,7 @@ impl<P: Port> Core<P> {
                 .map_err(ControlError::from_port)?
         {
             return Err(ControlError::Invalid(
-                Refusal::new(Code::ResourceInvalid).arg("field", "codex.forkUnconfirmed"),
+                Refusal::new(Code::ResourceInvalid).arg("field", "codex.nativeHistoryUnavailableOrUnknown"),
             ));
         }
         let exec = self

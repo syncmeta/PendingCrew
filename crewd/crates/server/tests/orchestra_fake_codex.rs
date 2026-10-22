@@ -1348,3 +1348,78 @@ async fn completion_public_native_input_profile_and_history_have_one_real_callab
     assert!(c.call("session.get",json!({"sessionId":sid})).await.is_ok(),"PCW session survives native delete");
     stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
 }
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn completion_lost_history_ack_reopens_original_unknown_without_native_replay(){
+    let f=Fixture::new();let mut sid=String::new();let mut original_identity=Value::Null;let mut request=String::new();
+    for round in 0..2 {
+        let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
+        o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion,history_exit".into())]);
+        let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
+        let mut c=Client::connect(&f.data).await;
+        if round==0 {
+            original_identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
+            let crew=c.call("crew.create",json!({"title":"Original uncertain history","workingDirectory":f.work})).await.unwrap();
+            let session=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","title":"Original history","brief":"","isolation":false})).await.unwrap();sid=session["id"].as_str().unwrap().to_owned();
+            wait("original empty runtime ready",||native_calls(&f,"thread/start").len()==1).await;
+            c.call("session.stop",json!({"sessionId":sid,"reason":"explicit native history"})).await.unwrap();c.stopped(&sid).await;
+            request=uuid::Uuid::new_v4().to_string();let target=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
+            let original=json!({"requestId":request,"dbId":original_identity["dbId"],"runtimeBindingId":original_identity["runtimeBindingId"],"command":{"operation":"session.codex.archive","params":{"target":target}}});
+            c.call("command.submit",original.clone()).await.unwrap();let receipt=completion_receipt(&mut c,&original_identity,&request).await;assert_eq!(receipt["phase"],"unknown","{receipt}");
+            assert_eq!(native_calls(&f,"thread/archive").len(),1);
+            assert_eq!(c.call("command.submit",original.clone()).await.unwrap()["phase"],"unknown");
+            assert_eq!(native_calls(&f,"thread/archive").len(),1);
+            // Uncertain native history affects this source's mutation only; crew catalogs remain usable.
+            assert!(c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.is_ok());
+        } else {
+            assert!(c.call("session.resume",json!({"sessionId":sid})).await.is_err());
+            let receipt=c.call("command.lookup",json!({"dbId":original_identity["dbId"],"requestId":request})).await.unwrap();assert_eq!(receipt["phase"],"unknown");assert_eq!(receipt["historical"],true);
+            let inspection=c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap();assert_eq!(inspection["nativeHistory"]["status"],"unknown");assert_eq!(inspection["running"],false);
+        }
+        assert_eq!(native_calls(&f,"thread/resume").len(),0);assert_eq!(native_calls(&f,"turn/start").len(),0);
+        stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+    }
+    assert_eq!(native_calls(&f,"thread/start").len(),1);assert_eq!(native_calls(&f,"thread/archive").len(),1);
+}
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+#[ignore="requires exact approved immutable old19 helper path and hash"]
+async fn completion_exact_old19_writer_refuses20_before_spawn_and_preserves_owned_inputs(){
+    use base64::{Engine,engine::general_purpose::STANDARD};
+    use crewd_proto::codex_inputs::*;
+    let binary=std::path::PathBuf::from(std::env::var("PCW_CODEX_OLD19_CORE").unwrap());let expected=std::env::var("PCW_CODEX_OLD19_SHA256").unwrap();
+    assert_eq!(crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),expected);
+    let f=Fixture::new();std::fs::create_dir_all(&f.data).unwrap();
+    let mut store=crewd_store::Store::open_data_dir(&f.data).unwrap();
+    store.conn().execute("INSERT INTO crews(id,title,working_directory,created_at,updated_at)VALUES('crew','Old writer controlled source',?1,'t','t')",[f.work.to_string_lossy().as_ref()]).unwrap();
+    store.conn().execute("INSERT INTO sessions(id,crew_id,role,executor,agent_session_id,working_directory,desired,updated_at)VALUES('original-session','crew','worker','codex','original-native-thread',?1,'stopped','t')",[f.work.to_string_lossy().as_ref()]).unwrap();
+    let owner=crewd_store::codex_inputs::Owner{db_id:crewd_store::meta_get(store.conn(),"dbId").unwrap().unwrap(),principal:format!("local-human:{}",unsafe{libc::geteuid()})};
+    let body=b"Durable original owned input";let request=uuid::Uuid::new_v4().to_string();
+    let params=CodexInputPrepareParams{request_id:request.clone(),crew_id:"crew".into(),session_id:Some("original-session".into()),kind:CodexInputKind::Text,filename:"original.txt".into(),mime_type:"text/plain".into(),sha256:crewd_store::codex_inputs::hash(body),bytes_base64:STANDARD.encode(body)};
+    let prepared=store.with_tx(|c|crewd_store::codex_inputs::prepare(c,&owner,&params,body,"t")).unwrap();
+    let before_meta=crewd_store::meta_get(store.conn(),"codex.controls.v1/original-session").unwrap().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&before_meta).unwrap()["version"],2);drop(store);
+    let log=std::fs::File::create(f.root.path().join("old19-terminal.log")).unwrap();
+    let mut old=tokio::process::Command::new(&binary).arg("--data-dir").arg(&f.data).arg("serve").arg("--codex").arg(artifact("fake_codex")).arg("--codex-env").arg(format!("FAKE_CODEX_LOG={}",f.log.display())).stdout(log.try_clone().unwrap()).stderr(log).kill_on_drop(true).spawn().unwrap();
+    let status=tokio::time::timeout(Duration::from_secs(10),old.wait()).await.unwrap().unwrap();
+    assert!(!status.success(),"old19 must refuse20 before socket or native startup");
+    let terminal=std::fs::read_to_string(f.root.path().join("old19-terminal.log")).unwrap();assert!(terminal.contains("20")&&terminal.contains("19"),"{terminal}");
+    assert!(!f.data.join("crewd.sock").exists());
+    assert_eq!(native_calls(&f,"initialize").len(),0);assert_eq!(native_calls(&f,"thread/resume").len(),0);assert_eq!(native_calls(&f,"turn/start").len(),0);
+    let store=crewd_store::Store::open_data_dir(&f.data).unwrap();assert_eq!(crewd_store::meta_get(store.conn(),"codex.controls.v1/original-session").unwrap().unwrap(),before_meta);
+    assert_eq!(crewd_store::codex_inputs::lookup(store.conn(),&owner,&CodexInputLookupParams{crew_id:"crew".into(),request_id:request}).unwrap(),CodexInputLookup::Known{result:prepared});
+    assert_eq!(store.conn().query_row("SELECT body FROM codex_native_inputs",[],|r|r.get::<_,Vec<u8>>(0)).unwrap(),body);
+    assert_eq!(store.conn().query_row("SELECT agent_session_id FROM sessions WHERE id='original-session'",[],|r|r.get::<_,String>(0)).unwrap(),"original-native-thread");
+    assert_eq!(crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),expected);
+    println!("PASS exact old19 refused20 before all native spawn/input, original binding/metadata/input/receipt unchanged");
+}
+
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn completion_crew_profile_result_cannot_be_laundered_into_tools_shape(){
+    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion,profile_wrong_shape".into())]);
+    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));let mut c=Client::connect(&f.data).await;
+    let crew=c.call("crew.create",json!({"title":"Closed catalog projection","workingDirectory":f.work})).await.unwrap();
+    assert!(c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.is_err(),"profile request must not accept a tools-shaped native response");
+    let tools=c.call("session.codex.tools",json!({"crewId":crew["id"]})).await.unwrap();assert!(tools["skills"].is_array());assert!(tools.get("items").is_none());assert!(native_calls(&f,"thread/start").is_empty());assert!(native_calls(&f,"turn/start").is_empty());
+    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+}

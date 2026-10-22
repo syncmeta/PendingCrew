@@ -349,7 +349,10 @@ impl Fake {
                         self.complete(&turn, "interrupted", Value::Null);
                     }
                 }
-                "permissionProfile/list"=>self.emit(json!({"id":id,"result":{"data":[{"id":"synthetic-profile","allowed":!self.has("profile_disabled"),"description":"Synthetic qualified profile"}],"nextCursor":null}})),
+                "permissionProfile/list"=>{
+                    if self.has("profile_wrong_shape"){self.emit(json!({"id":id,"result":{"mcpServers":{"data":[]},"skills":{"data":[]}}}));}
+                    else{self.emit(json!({"id":id,"result":{"data":[{"id":"synthetic-profile","allowed":!self.has("profile_disabled"),"description":"Synthetic qualified profile"}],"nextCursor":null}}));}
+                },
                 "thread/archive"|"thread/unarchive"|"thread/delete"|"thread/revert"=>{
                     if self.has("history_exit"){std::process::exit(9);}
                     if self.has("history_reject"){self.emit(json!({"id":id,"error":{"code":-32602,"message":"synthetic history rejection"}}));continue;}

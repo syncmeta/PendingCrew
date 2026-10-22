@@ -4,7 +4,7 @@ use crewd_proto::codex_inputs::*;
 use ring::digest::{SHA256, digest};
 use rusqlite::{Connection, OptionalExtension, params};
 
-const DDL: &str = "CREATE TABLE IF NOT EXISTS codex_native_inputs(id TEXT PRIMARY KEY,db_id TEXT NOT NULL,principal TEXT NOT NULL,crew_id TEXT NOT NULL,origin_session_id TEXT,bound_session_id TEXT,kind TEXT NOT NULL,filename TEXT NOT NULL,mime_type TEXT NOT NULL,sha256 TEXT NOT NULL,body BLOB,state TEXT NOT NULL CHECK(state IN('prepared','consumed','discarded')),consumed_request TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS codex_input_requests(request_id TEXT PRIMARY KEY,db_id TEXT NOT NULL,principal TEXT NOT NULL,crew_id TEXT NOT NULL,operation TEXT NOT NULL,digest TEXT NOT NULL,result TEXT NOT NULL CHECK(json_valid(result)));";
+pub(crate) const DDL: &str = "CREATE TABLE IF NOT EXISTS codex_native_inputs(id TEXT PRIMARY KEY,db_id TEXT NOT NULL,principal TEXT NOT NULL,crew_id TEXT NOT NULL,origin_session_id TEXT,bound_session_id TEXT,kind TEXT NOT NULL,filename TEXT NOT NULL,mime_type TEXT NOT NULL,sha256 TEXT NOT NULL,body BLOB,invalidated INTEGER NOT NULL DEFAULT 0 CHECK(invalidated IN(0,1)),state TEXT NOT NULL CHECK(state IN('prepared','consumed','discarded')),consumed_request TEXT,created_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS codex_input_requests(request_id TEXT PRIMARY KEY,db_id TEXT NOT NULL,principal TEXT NOT NULL,crew_id TEXT NOT NULL,operation TEXT NOT NULL,digest TEXT NOT NULL,result TEXT NOT NULL CHECK(json_valid(result)));";
 #[derive(Debug, Clone)]
 pub struct Owner {
     pub db_id: String,
@@ -57,10 +57,12 @@ fn transaction(c: &Connection) -> Result<()> {
 }
 fn activate(c: &Connection) -> Result<()> {
     transaction(c)?;
-    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? != 19 {
+    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? != 20 {
         return Err(invalid());
     }
-    c.execute_batch(DDL)?;
+    if !exists(c)? {
+        return Err(invalid());
+    }
     Ok(())
 }
 fn extension(c: &Connection, session: &str) -> Result<()> {
@@ -236,7 +238,7 @@ fn payload(
     crew: &str,
     reference: &CodexInputRef,
 ) -> Result<(Payload, String, Option<String>, Option<String>)> {
-    let row:Option<(String,String,String,String,Vec<u8>,String,Option<String>,Option<String>)>=c.query_row("SELECT kind,filename,mime_type,sha256,body,state,bound_session_id,consumed_request FROM codex_native_inputs WHERE id=?1 AND db_id=?2 AND principal=?3 AND crew_id=?4 AND body IS NOT NULL",params![reference.input_id,owner.db_id,owner.principal,crew],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
+    let row:Option<(String,String,String,String,Vec<u8>,String,Option<String>,Option<String>)>=c.query_row("SELECT kind,filename,mime_type,sha256,body,CASE WHEN invalidated=1 THEN 'restore_unconfirmed' ELSE state END,bound_session_id,consumed_request FROM codex_native_inputs WHERE id=?1 AND db_id=?2 AND principal=?3 AND crew_id=?4 AND body IS NOT NULL",params![reference.input_id,owner.db_id,owner.principal,crew],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
     let Some((kind, filename, mime_type, sha, body, state, bound, request)) = row else {
         return Err(invalid());
     };
@@ -370,6 +372,17 @@ pub fn discard(
     Ok(result)
 }
 
+/// Original restore TX: retain immutable bytes/result, invalidate all source refs.
+/// A restored snapshot cannot prove that an older prepared row was never submitted.
+pub fn restored(c: &Connection) -> Result<()> {
+    transaction(c)?;
+    if !exists(c)? {
+        return Ok(());
+    }
+    c.execute("UPDATE codex_native_inputs SET invalidated=1", [])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,7 +427,13 @@ mod tests {
             .unwrap(),
             CodexInputLookup::NotFound
         ));
-        assert!(!exists(s.conn()).unwrap());
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM codex_native_inputs", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         let result = s.with_tx(|c| prepare(c, &owner, &p, &body, "t")).unwrap();
         assert_eq!(
             s.with_tx(|c| prepare(c, &owner, &p, &body, "t")).unwrap(),
@@ -568,6 +587,107 @@ mod tests {
         .unwrap();
     }
     #[test]
+    fn rejected_content_and_foreign_database_never_create_staging_or_receipt() {
+        let (mut s, owner) = database();
+        let (base, original) = input();
+        let cases = [
+            (CodexInputKind::Text, "text/plain", "notes.txt", vec![0xff]),
+            (
+                CodexInputKind::Text,
+                "text/plain",
+                "notes.txt",
+                vec![b'x'; MAX_TEXT_FILE_BYTES + 1],
+            ),
+            (
+                CodexInputKind::Text,
+                "text/plain",
+                "../notes.txt",
+                original.clone(),
+            ),
+            (
+                CodexInputKind::Text,
+                "text/plain",
+                "notes.txt",
+                b"hidden\0text".to_vec(),
+            ),
+            (
+                CodexInputKind::Image,
+                "image/png",
+                "x.png",
+                b"not a PNG".to_vec(),
+            ),
+            (
+                CodexInputKind::Audio,
+                "audio/wav",
+                "x.wav",
+                b"not a WAV".to_vec(),
+            ),
+            (
+                CodexInputKind::Audio,
+                "audio/wav",
+                "x.wav",
+                vec![0; MAX_MEDIA_BYTES + 1],
+            ),
+        ];
+        for (kind, mime, filename, body) in cases {
+            let mut p = base.clone();
+            p.kind = kind;
+            p.mime_type = mime.into();
+            p.filename = filename.into();
+            p.sha256 = hash(&body);
+            assert!(s.with_tx(|c| prepare(c, &owner, &p, &body, "t")).is_err());
+        }
+        let mut wrong_hash = base.clone();
+        wrong_hash.sha256 = "0".repeat(64);
+        assert!(
+            s.with_tx(|c| prepare(c, &owner, &wrong_hash, &original, "t"))
+                .is_err()
+        );
+        let other_db = Owner {
+            db_id: "different-core".into(),
+            ..owner.clone()
+        };
+        assert!(
+            s.with_tx(|c| prepare(c, &other_db, &base, &original, "t"))
+                .is_err()
+        );
+        for table in ["codex_native_inputs", "codex_input_requests"] {
+            assert_eq!(
+                s.conn()
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        // Real supported magic is admitted; codec validity remains the provider's job.
+        for (kind, mime, filename, body) in [
+            (
+                CodexInputKind::Image,
+                "image/png",
+                "x.png",
+                b"\x89PNG\r\n\x1a\nsynthetic".as_slice(),
+            ),
+            (
+                CodexInputKind::Audio,
+                "audio/wav",
+                "x.wav",
+                b"RIFF0000WAVEsynthetic".as_slice(),
+            ),
+        ] {
+            let mut p = base.clone();
+            p.request_id = uuid::Uuid::new_v4().to_string();
+            p.kind = kind;
+            p.mime_type = mime.into();
+            p.filename = filename.into();
+            p.sha256 = hash(body);
+            assert!(matches!(
+                s.with_tx(|c| prepare(c, &owner, &p, body, "t")).unwrap(),
+                CodexInputResult::Prepared { .. }
+            ));
+        }
+    }
+    #[test]
     fn unused_discard_keeps_original_receipt_but_never_exposes_bytes() {
         let (mut s, owner) = database();
         let (p, body) = input();
@@ -632,5 +752,317 @@ mod tests {
             !crate::codex_controls::native_ready(s.conn(), "session", Some(A::Unarchive)).unwrap()
         );
         assert!(crate::sessions::get(s.conn(), "session").unwrap().is_some());
+        s.with_tx(|c| crate::codex_controls::restored(c)).unwrap();
+        assert_eq!(
+            crate::codex_controls::get(s.conn(), "session")
+                .unwrap()
+                .native_history
+                .unwrap()
+                .status,
+            crewd_proto::codex::CodexNativeHistoryStatus::Deleted
+        );
+    }
+    #[test]
+    #[ignore = "requires approved exact old19 helper path and hash"]
+    fn completion_exact_old19_restore_cannot_reenable_consumed_input_after_snapshot() {
+        let binary = std::path::PathBuf::from(std::env::var("PCW_CODEX_OLD19_CORE").unwrap());
+        let expected = std::env::var("PCW_CODEX_OLD19_SHA256").unwrap();
+        assert_eq!(hash(&std::fs::read(&binary).unwrap()), expected);
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut store = crate::Store::open_data_dir(&data).unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Restore probe','t','t');INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('session','crew','worker','codex','t')").unwrap();
+        let owner = Owner {
+            db_id: crate::meta_get(store.conn(), "dbId").unwrap().unwrap(),
+            principal: "owned-human".into(),
+        };
+        let (p, body) = input();
+        let CodexInputResult::Prepared { input } = store
+            .with_tx(|c| prepare(c, &owner, &p, &body, "t"))
+            .unwrap()
+        else {
+            panic!()
+        };
+        let backup = root.path().join("prepared-before-original-submit.db");
+        crate::backup::backup_db(&data.join(crate::DB_FILE), &backup).unwrap();
+        let selection = CodexInputSelection {
+            inputs: vec![input],
+            skills: vec![],
+        };
+        let original = uuid::Uuid::new_v4().to_string();
+        store
+            .with_tx(|c| consume(c, &owner, "crew", "session", &original, &selection))
+            .unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT state FROM codex_native_inputs", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "consumed"
+        );
+        drop(store);
+        let image = |root: &std::path::Path| {
+            [
+                crate::DB_FILE,
+                "crewd.db-wal",
+                "crewd.db-shm",
+                crate::ID_FILE,
+            ]
+            .map(|name| (name.to_owned(), std::fs::read(root.join(name)).ok()))
+        };
+        let before = image(&data);
+        let source_before = std::fs::read(&backup).unwrap();
+        let result = std::process::Command::new(&binary)
+            .arg("--data-dir")
+            .arg(&data)
+            .arg("restore")
+            .arg("--from")
+            .arg(&backup)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("20"));
+        assert_eq!(image(&data), before);
+        assert_eq!(std::fs::read(&backup).unwrap(), source_before);
+        // Exact current19 schema fixture: remove only the two20 private tables.
+        // It contains no knowledge workspace and does not simulate account authority.
+        let source19 = root.path().join("standalone-source19.db");
+        let source = crate::Store::open(&source19).unwrap();
+        source.conn().execute_batch("DROP TABLE codex_native_inputs;DROP TABLE codex_input_requests;PRAGMA user_version=19").unwrap();
+        drop(source);
+        let source19_before = std::fs::read(&source19).unwrap();
+        let target_refusal = std::process::Command::new(&binary)
+            .arg("--data-dir")
+            .arg(&data)
+            .arg("restore")
+            .arg("--from")
+            .arg(&source19)
+            .output()
+            .unwrap();
+        println!(
+            "exact old19 target20 refusal status={} stderr={}",
+            target_refusal.status,
+            String::from_utf8_lossy(&target_refusal.stderr)
+        );
+        assert!(!target_refusal.status.success());
+        assert!(String::from_utf8_lossy(&target_refusal.stderr).contains("20"));
+        assert_eq!(image(&data), before);
+        assert_eq!(std::fs::read(&source19).unwrap(), source19_before);
+        println!(
+            "exact old19 restore status={} stderr={}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let mut store = crate::Store::open_data_dir(&data).unwrap();
+        let second = uuid::Uuid::new_v4().to_string();
+        let allowed = store
+            .with_tx(|c| consume(c, &owner, "crew", "session", &second, &selection))
+            .is_ok();
+        assert!(
+            !allowed,
+            "accurate old19 restore rolled consumed input back to prepared and permitted a new-UUID native submission"
+        );
+        assert_eq!(hash(&std::fs::read(&binary).unwrap()), expected);
+    }
+
+    #[test]
+    fn current20_restore_invalidates_references_keeps_bytes_receipts_and_blocks_only_native_source()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut store = crate::Store::open_data_dir(&data).unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Restore original','t','t');INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('session','crew','worker','codex','t')").unwrap();
+        let owner = Owner {
+            db_id: crate::meta_get(store.conn(), "dbId").unwrap().unwrap(),
+            principal: "owned-human".into(),
+        };
+        let (p, body) = input();
+        let original = store
+            .with_tx(|c| prepare(c, &owner, &p, &body, "t"))
+            .unwrap();
+        let CodexInputResult::Prepared { input } = original.clone() else {
+            panic!()
+        };
+        let backup = root.path().join("original-pre-submit20.db");
+        crate::backup::backup_db(&data.join(crate::DB_FILE), &backup).unwrap();
+        let selection = CodexInputSelection {
+            inputs: vec![input],
+            skills: vec![],
+        };
+        store
+            .with_tx(|c| {
+                consume(
+                    c,
+                    &owner,
+                    "crew",
+                    "session",
+                    &uuid::Uuid::new_v4().to_string(),
+                    &selection,
+                )
+            })
+            .unwrap();
+        drop(store);
+        crate::backup::restore(&data, &backup).unwrap();
+        let mut restored = crate::Store::open_data_dir(&data).unwrap();
+        assert!(
+            restored
+                .with_tx(|c| consume(
+                    c,
+                    &owner,
+                    "crew",
+                    "session",
+                    &uuid::Uuid::new_v4().to_string(),
+                    &selection
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            lookup(
+                restored.conn(),
+                &owner,
+                &CodexInputLookupParams {
+                    crew_id: "crew".into(),
+                    request_id: p.request_id
+                }
+            )
+            .unwrap(),
+            CodexInputLookup::Known { result: original }
+        );
+        assert_eq!(
+            restored
+                .conn()
+                .query_row("SELECT body FROM codex_native_inputs", [], |r| r
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            body
+        );
+        assert!(
+            crate::codex_controls::get(restored.conn(), "session")
+                .unwrap()
+                .restore_unconfirmed
+        );
+        assert!(!crate::codex_controls::native_ready(restored.conn(), "session", None).unwrap());
+        assert_eq!(
+            crate::sessions::get(restored.conn(), "session")
+                .unwrap()
+                .unwrap()
+                .crew_id,
+            "crew"
+        );
+        // Another newly registered source is not globally frozen by the restored source.
+        restored.conn().execute_batch("INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('new-explicit-session','crew','worker','codex','t')").unwrap();
+        assert!(
+            crate::codex_controls::native_ready(restored.conn(), "new-explicit-session", None)
+                .unwrap()
+        );
+    }
+    #[test]
+    fn native20_current19_upgrade_is_protected_and_preserves_business_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Original19 business row','t','t');DROP TABLE codex_native_inputs;DROP TABLE codex_input_requests;PRAGMA user_version=19").unwrap();
+        drop(s);
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        assert_eq!(
+            s.conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            20
+        );
+        assert_eq!(
+            s.conn()
+                .query_row("SELECT title FROM crews WHERE id='crew'", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "Original19 business row"
+        );
+        assert!(exists(s.conn()).unwrap());
+        let backups = std::fs::read_dir(data.join("backups"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("crewd-v19-pre-v20-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let old = crate::backup::open_read_only(&backups[0]).unwrap();
+        assert_eq!(
+            old.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            19
+        );
+        assert!(!exists(&old).unwrap());
+    }
+
+    #[test]
+    fn restored_new_session_input_is_invalid_even_for_a_fresh_explicit_source() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut store = crate::Store::open_data_dir(&data).unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Unbound original input','t','t')").unwrap();
+        let owner = Owner {
+            db_id: crate::meta_get(store.conn(), "dbId").unwrap().unwrap(),
+            principal: "owned-human".into(),
+        };
+        let (mut p, body) = input();
+        p.session_id = None;
+        let prepared = store
+            .with_tx(|c| prepare(c, &owner, &p, &body, "t"))
+            .unwrap();
+        let CodexInputResult::Prepared { input } = prepared.clone() else {
+            panic!()
+        };
+        let backup = root.path().join("before-first-session20.db");
+        crate::backup::backup_db(&data.join(crate::DB_FILE), &backup).unwrap();
+        drop(store);
+        crate::backup::restore(&data, &backup).unwrap();
+        let mut store = crate::Store::open_data_dir(&data).unwrap();
+        store.conn().execute_batch("INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('fresh-explicit','crew','worker','codex','t')").unwrap();
+        assert!(crate::codex_controls::native_ready(store.conn(), "fresh-explicit", None).unwrap());
+        assert!(
+            store
+                .with_tx(|c| consume(
+                    c,
+                    &owner,
+                    "crew",
+                    "fresh-explicit",
+                    &uuid::Uuid::new_v4().to_string(),
+                    &CodexInputSelection {
+                        inputs: vec![input],
+                        skills: vec![]
+                    }
+                ))
+                .is_err(),
+            "restored reference must not bypass its own invalidation via a new source"
+        );
+        assert_eq!(
+            lookup(
+                store.conn(),
+                &owner,
+                &CodexInputLookupParams {
+                    crew_id: "crew".into(),
+                    request_id: p.request_id
+                }
+            )
+            .unwrap(),
+            CodexInputLookup::Known { result: prepared }
+        );
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT body FROM codex_native_inputs", [], |r| r
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            body
+        );
     }
 }

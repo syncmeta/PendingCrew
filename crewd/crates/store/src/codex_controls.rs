@@ -16,6 +16,8 @@ pub struct State {
     pub native_history: Option<CodexNativeHistoryState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_previous: Option<CodexNativeHistoryState>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restore_unconfirmed:bool,
 
     #[serde(default)]
     pub title_attempted: bool,
@@ -197,7 +199,7 @@ pub fn configure_intent(
 /// A v2 row is a per-session old-writer barrier, not new execution permission.
 pub fn native_ready(c: &Connection, session: &str, action: Option<CodexHistoryAction>) -> Result<bool> {
     let state=get(c,session)?;
-    if state.fork_pending {return Ok(false)}
+    if state.fork_pending || state.restore_unconfirmed {return Ok(false)}
     Ok(match state.native_history.as_ref().map(|h|h.status) {
         Some(CodexNativeHistoryStatus::Unknown | CodexNativeHistoryStatus::Deleted)=>false,
         Some(CodexNativeHistoryStatus::Archived)=>matches!(action,Some(CodexHistoryAction::Unarchive|CodexHistoryAction::Delete)),
@@ -229,4 +231,22 @@ pub fn settle_history(c:&Connection,session:&str,request:&str,phase:crewd_proto:
         _=>{},
     }
     put(c,session,&state)
+}
+
+/// A restore cannot establish the current native timeline from an old snapshot.
+/// Keep original bindings and lifecycle facts, but never synthesize an operation UUID.
+pub fn restored(c:&Connection)->Result<()> {
+    if c.is_autocommit(){return Err(StoreError::Invalid("Codex restore requires original transaction".into()))}
+    // An old snapshot predating the new lifecycle cannot prove that its native
+    // thread was not subsequently reverted/deleted/submitted. Every restored
+    // Codex row is historical; fresh explicit rows remain independent.
+    let mut stmt=c.prepare("SELECT id FROM sessions WHERE executor='codex'")?;
+    let sessions=stmt.query_map([],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;drop(stmt);
+    for session in sessions {
+        let mut state=get(c,&session)?;
+        state.version=2;
+        state.restore_unconfirmed=true;
+        put(c,&session,&state)?;
+    }
+    Ok(())
 }
