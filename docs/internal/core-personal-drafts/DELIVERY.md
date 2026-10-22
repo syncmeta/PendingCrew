@@ -1,0 +1,25 @@
+# Core personal drafts — source and local protocol delivery
+
+This module adds an optional private Core projection to the existing personal Draft owner. It preserves full text, staged mentions and reply data, independent device branches and permanent retirement. It never sends a message, starts/resumes a session, grants an execution permission, logs into a provider or changes B enrollment.
+
+The authoritative consumer contract is CONTRACT.md and the exact typed source is crewd/crates/proto/src/personal_drafts.rs. API3 has149 methods: the prior144 method entries remain unchanged. Five direct methods include four reads and the durable negative-control requestFence; five SQL-only commands use the original command.submit/lookup journal. No new hello flag or account identity is inferred. The true-rootFD typed equivalent permits only the two owner controls and their original lookup/fence; it never becomes an App writer.
+
+## Production paths
+
+The original connection dispatcher rejects attached Agents before parsing personal data, captures real Local Human or current mTLS grant authority, then routes the five commands to server/personal_drafts.rs. Its private captured request enters the existing DB FIFO. Authorization, exact original receipt reservation, effect and committed receipt share one SQLite transaction. Existing reservations return only the original result, including a negative terminal. A request captured before the negative fence cannot apply afterward. The control CLI persists its original owner envelope before its one RPC; lookup/fence never resends it.
+
+Store personal_drafts.rs persists one current private space and archived restore spaces in existing protected Core metadata. Explicit owner approval of a live exact grant and device opt-in are separate. Member/writer IDs define stable ownership; CAS revisions do not change the client namespace. Current crew/destination ACL applies to writes, reads and disclosure. The original event bus emits a body-free hint and rechecks current private membership before forwarding. Catalog pagination retains membership/order cuts, while facts carry current observedAt. Partial pages are never complete snapshots.
+
+Fresh format21 and protected20→21 initialize the private restore stamp; original restore staging rotates it. Judgment configuration and witnesses are byte unchanged. The exact old20 restore counterexample actually restored an old opted-in scope and committed a late checkpoint. Therefore a necessary single writer barrier uses original source/destination version_guard, backup and rollback protection. Current restore retains original archived bytes, rejects prior scopes/owner epochs/cursors/receipts as current authority, and requires explicit creation of a new empty space with no inherited consent.
+
+The installer/packager format qualification is21. Existing normal build recorder, verifier and managed-host recipes remain unchanged. The historical Linux controller still pins its original accepted source/API qualification and must be aligned once to the next accepted combined source before a future dispatch. No CI job, Linux install, service or publication is part of this delivery.
+
+## Affected verification
+
+Exact argv, source hashes, test artifacts and immutable old20 helper/backup identities are in the ignored core-personal-drafts-20261023 delivery bundle. Only this module's affected seams run: protected Store migration/restore and old-writer guards; original public-command authority/receipt/FIFO and five-command negative-fence matrix; original root-admin permit whitelist; actual private loopback mTLS two-writer/consent/merge/restart/revoke flow; attached-Agent refusal; original installer controls and package format. No stable A/B/Codex/APNs suite is rerun.
+
+Original RED records are retained: the unimplemented original public route, ordinary remote-CAS rotating the rejected judgment-derived epoch, and exact old20 restoring stale private authority. A sealed test-only mutation deliberately applies an Existing receipt and is rejected by the capture-before-FIFO state-preservation assertion; the correct product source is restored afterward. Historical zero-test and fixture-parameter/epoch failures remain explicitly unqualified, never counted as passes. Final counts and exact source attribution come from the final source-freeze and verification artifacts, not this narrative.
+
+## Remaining delivery layers
+
+This is source/local synthetic protocol qualification until independent quality accepts the complete frozen bundle. It is not production-fresh normal provenance, integrated main, installed Mac/iOS, real multi-device GUI, actual Linux/rootFD deployment or Cloud qualification. Frontend retains sole ownership of the existing shared Draft service/composer and explicit opt-in/Unknown gates. A natural combined candidate receives one accurate normal and packaging gate after integration. Native16 remains inactive; no model, SDK, Apple credential, Keychain, Cloud, public listener, VPS or private transcript is accessed.

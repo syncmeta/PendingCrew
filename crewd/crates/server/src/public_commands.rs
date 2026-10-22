@@ -517,29 +517,27 @@ pub(crate) async fn list_unknown(
     }
     let own_state = state.clone();
     let own_actor = actor.clone();
-    let mut records = state
+    let (records, next_after) = state
         .db
         .call(move |s| -> collab::Result<_> {
-            let rows =
-                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
-            let rows:Vec<_>=rows.into_iter().filter(|r|crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).is_ok()).collect();
+            let mut rows = receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
+            // Keep the original bounded ledger cursor even when a private scope
+            // became unavailable. Otherwise hidden rows would terminate traversal
+            // before unrelated original command receipts can be reached.
+            let more = rows.len() > usize::from(limit);
+            rows.truncate(usize::from(limit));
+            let next = if more { rows.last().map(|r|r.request_id.clone()) } else { None };
+            rows.retain(|r|crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).is_ok());
             for r in &rows {
                 for method in r.command.authorized_methods() {
                     own_actor.authorize_tx(&own_state, s.conn(), method)?;
                 }
             }
-            Ok(rows)
+            Ok((rows,next))
         })
         .await
         .map_err(dispatch::internal)?
         .map_err(dispatch::collab_err)?;
-    let more = records.len() > usize::from(limit);
-    records.truncate(usize::from(limit));
-    let next_after = if more {
-        records.last().map(|r| r.request_id.clone())
-    } else {
-        None
-    };
     let items = records
         .into_iter()
         .map(|r| CommandSummary {
@@ -558,9 +556,9 @@ pub(crate) async fn list_unknown(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    async fn state_actor() -> (Arc<AppState>, Actor, String) {
+    pub(crate) async fn state_actor() -> (Arc<AppState>, Actor, String) {
         let store = crewd_store::Store::open_in_memory().unwrap();
         let db = crewd_store::meta_get(store.conn(), "dbId")
             .unwrap()
@@ -576,7 +574,7 @@ mod tests {
     async fn core_personal_draft_owner_uses_original_receipt_and_real_local_authority() {
         let(state,actor,db)=state_actor().await;
         let request=uuid::Uuid::new_v4().to_string();
-        let p=CommandSubmitParams{request_id:request.clone(),db_id:db.clone(),runtime_binding_id:state.runtime_binding_id.clone(),command:PublicCommand::PersonalDraftOwner(crewd_proto::personal_drafts::PersonalDraftOwnerParams{owner_epoch:state.db.call(|s|crewd_store::judgment_state::epoch(s.conn())).await.unwrap().unwrap(),expected_space_id:None,expected_space_revision:"0".into(),local_enabled:true,acknowledge_restore:false})};
+        let p=CommandSubmitParams{request_id:request.clone(),db_id:db.clone(),runtime_binding_id:state.runtime_binding_id.clone(),command:PublicCommand::PersonalDraftOwner(crewd_proto::personal_drafts::PersonalDraftOwnerParams{owner_epoch:state.db.call(|s|crewd_store::personal_drafts::epoch(s.conn())).await.unwrap().unwrap(),expected_space_id:None,expected_space_revision:"0".into(),local_enabled:true,acknowledge_restore:false})};
         let result=submit(&state,&actor,p.clone()).await;
         assert!(result.is_ok(),"real original command route must commit the new personal-space fact and receipt: {result:?}");
         let r=result.unwrap();assert_eq!(r["phase"],"committed");assert_eq!(r["requestId"],request);

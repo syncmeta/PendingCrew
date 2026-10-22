@@ -5,6 +5,38 @@ use crewd_proto::{commands::PublicCommand, personal_drafts::*};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 const KEY: &str = "personalDraft.spaces.v1";
+const RESTORE_KEY: &str = "personalDraft.restoreStamp.v1";
+/// Initialized only by the protected schema transaction; never by a read.
+#[cfg(test)]
+pub(crate) fn initialize(c: &Connection) -> Result<()> {
+    if c.is_autocommit() {
+        return Err(bad());
+    }
+    match crate::meta_get(c, RESTORE_KEY)? {
+        None => crate::meta_set(c, RESTORE_KEY, &id()),
+        Some(v) => uuid(&v),
+    }
+}
+pub fn epoch(c: &Connection) -> Result<String> {
+    let v = crate::meta_get(c, RESTORE_KEY)?.ok_or_else(bad)?;
+    uuid(&v)?;
+    Ok(v)
+}
+pub(crate) fn initialize_new_format(c: &Connection) -> Result<()> {
+    if c.is_autocommit() {
+        return Err(bad());
+    }
+    crate::meta_set(c, RESTORE_KEY, &id())
+}
+pub(crate) fn restored(c: &Connection) -> Result<()> {
+    // Supported pre21 backups acquire their first qualified stamp only in the
+    // original protected21 migration, never by preserving an old writer's key.
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 21 {
+        return Ok(());
+    }
+    initialize_new_format(c)
+}
 const TOTAL_LIMIT: usize = 64 * 1024 * 1024;
 fn bad() -> StoreError {
     StoreError::Invalid("personal draft scope, authority, CAS or capacity conflict".into())
@@ -140,7 +172,7 @@ fn current_mut(s: &mut State) -> Result<&mut Space> {
     s.spaces.iter_mut().find(|x| x.id == id).ok_or_else(bad)
 }
 fn live(c: &Connection, s: &Space) -> Result<()> {
-    if s.epoch != crate::judgment_state::epoch(c)? {
+    if s.epoch != epoch(c)? {
         return Err(bad());
     }
     Ok(())
@@ -254,8 +286,7 @@ pub fn status(c: &Connection, who: &Identity) -> Result<PersonalDraftStatus> {
     who.check(c)?;
     let state = load(c)?;
     let space = current(&state);
-    let is_live =
-        space.is_some_and(|s| crate::judgment_state::epoch(c).is_ok_and(|e| e == s.epoch));
+    let is_live = space.is_some_and(|s| epoch(c).is_ok_and(|e| e == s.epoch));
     let own = space.and_then(|s| {
         s.members
             .iter()
@@ -281,7 +312,7 @@ pub fn status(c: &Connection, who: &Identity) -> Result<PersonalDraftStatus> {
         db_id: crate::meta_get(c, "dbId")?.ok_or_else(bad)?,
         owner: who.local_owner,
         owner_epoch: if who.local_owner {
-            Some(crate::judgment_state::epoch(c)?)
+            Some(epoch(c)?)
         } else {
             None
         },
@@ -361,7 +392,7 @@ pub fn authorize_command(
         }
         match command {
             PublicCommand::PersonalDraftOwner(p) => {
-                if p.owner_epoch != crate::judgment_state::epoch(c)? {
+                if p.owner_epoch != epoch(c)? {
                     return Err(bad());
                 }
             }
@@ -445,7 +476,7 @@ pub fn apply(
             {
                 return Err(bad());
             }
-            let epoch = crate::judgment_state::epoch(c)?;
+            let epoch = epoch(c)?;
             let restored = before.is_some_and(|s| s.epoch != epoch);
             if restored && !p.acknowledge_restore {
                 return Err(bad());
@@ -884,18 +915,501 @@ pub fn fence(
 
 #[cfg(test)]
 mod tests {
- use super::*;
- fn owner()->Identity{Identity{principal:"local-human:1000".into(),local_owner:true,local_writer:true,remote:None}}
- fn fixture()->crate::Store{let s=crate::Store::open_in_memory().unwrap();s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('draft-crew','synthetic','now','now');INSERT INTO channels(id,crew_id,kind,name,created_by,created_at)VALUES('draft-crew/lobby','draft-crew','lobby','lobby','human','now');").unwrap();s}
- fn configure(s:&mut crate::Store)->PersonalDraftMutationResult{let p=PublicCommand::PersonalDraftOwner(PersonalDraftOwnerParams{owner_epoch:crate::judgment_state::epoch(s.conn()).unwrap(),expected_space_id:None,expected_space_revision:"0".into(),local_enabled:true,acknowledge_restore:false});s.with_tx(|c|apply(c,&owner(),&p)).unwrap()}
- fn scope(s:&crate::Store)->PersonalDraftScope{let status=status(s.conn(),&owner()).unwrap();let m=status.member.unwrap();PersonalDraftScope{space_id:status.space_id.unwrap(),space_epoch:status.space_epoch.unwrap(),member_id:m.member_id,member_revision:m.revision}}
- fn key(s:&crate::Store)->PersonalDraftKey{let db=crate::meta_get(s.conn(),"dbId").unwrap().unwrap();PersonalDraftKey{authority_id:db.clone(),db_id:db,crew_id:"draft-crew".into(),destination:PersonalDraftDestination::Channel("draft-crew/lobby".into()),kind:PersonalDraftKind::ChannelMessage}}
- fn body(text:&str)->PersonalDraftPayload{PersonalDraftPayload{text:text.into(),staged_mentions:vec![PersonalDraftStagedMention{token:"@synthetic".into(),mention:PersonalDraftMention{kind:"human".into(),target_id:None}}],reply_target:Some(PersonalDraftReply{mention:None,reply_to_id:"synthetic-message".into(),quoted_sender:"synthetic".into(),quoted_snippet:"exact 原文".into()})}}
- fn checkpoint(s:&crate::Store,branch:&str,expected:&str,revision:&str,text:&str)->PublicCommand{PublicCommand::PersonalDraftCheckpoint(PersonalDraftCheckpointParams{scope:scope(s),branch_id:branch.into(),key:key(s),expected_revision:expected.into(),revision:revision.into(),payload:body(text)})}
- #[test]
- fn core_draft_normal_remote_configuration_does_not_rotate_personal_namespace(){let mut s=fixture();let _=configure(&mut s);let before=status(s.conn(),&owner()).unwrap();assert!(before.available);s.with_tx(|c|{assert!(crate::remote::configure(c,1,false,"127.0.0.1",7423)?);Ok(())}).unwrap();let after=status(s.conn(),&owner()).unwrap();assert!(after.available,"ordinary remote CAS must not become restoreRequired: {after:?}");assert_eq!(after.space_epoch,before.space_epoch);assert_eq!(after.member.unwrap().writer_id,before.member.unwrap().writer_id);}
- #[test]
- fn core_draft_exact_payload_cas_send_clear_and_permanent_tombstone(){let mut s=fixture();configure(&mut s);let branch=id();let p=checkpoint(&s,&branch,"0","2","exact\n原文");s.with_tx(|c|apply(c,&owner(),&p)).unwrap();let stale=checkpoint(&s,&branch,"0","3","must not replace");assert!(s.with_tx(|c|apply(c,&owner(),&stale)).is_err());let clear=checkpoint(&s,&branch,"2","4","");s.with_tx(|c|apply(c,&owner(),&clear)).unwrap();let page=branches(s.conn(),&owner(),&PersonalDraftBranchesParams{scope:scope(&s),key:key(&s),cursor:None,limit:None}).unwrap();assert_eq!(page.branches[0].payload,Some(body("")));let fresh=id();let r=PublicCommand::PersonalDraftResolve(PersonalDraftResolveParams{scope:scope(&s),key:key(&s),retiring:vec![PersonalDraftRetire{branch_id:branch.clone(),revision:"4".into()}],replacement:Some(PersonalDraftReplacement{branch_id:fresh,revision:"1".into(),payload:body("explicit merged original")})});let result=s.with_tx(|c|apply(c,&owner(),&r)).unwrap();assert_eq!(result.retired[0].revision,"4");let late=checkpoint(&s,&branch,"4","999","late offline 原文");assert!(s.with_tx(|c|apply(c,&owner(),&late)).is_err());let page=branches(s.conn(),&owner(),&PersonalDraftBranchesParams{scope:scope(&s),key:key(&s),cursor:None,limit:Some(1)}).unwrap();assert!(!page.complete);assert!(page.branches[0].retired);assert!(page.branches[0].payload.is_none());}
- #[test]
- fn core_draft_negative_fence_uses_original_receipt_and_never_executes_late_packet(){use crate::command_receipts::{self as receipts,Reserved};let mut s=fixture();configure(&mut s);let command=checkpoint(&s,&id(),"0","1","must stay only local");let original=crewd_proto::commands::CommandSubmitParams{request_id:id(),db_id:crate::meta_get(s.conn(),"dbId").unwrap().unwrap(),runtime_binding_id:id(),command:command.clone()};let result=s.with_tx(|c|fence(c,&owner(),&PersonalDraftRequestFenceParams{original:original.clone()})).unwrap();assert_eq!(result.state,PersonalDraftFenceState::MissingFenced);assert_eq!(result.receipt.phase,crewd_proto::commands::CommandPhase::Rejected);s.with_tx(|c|{let r=receipts::reserve(c,&owner().principal,&original,"late")?;assert!(matches!(r,Reserved::Existing(_)));Ok(())}).unwrap();assert!(load(s.conn()).unwrap().spaces[0].branches.is_empty());let mut changed=original.clone();if let PublicCommand::PersonalDraftCheckpoint(p)=&mut changed.command{p.payload.text="different".into()}assert!(s.with_tx(|c|fence(c,&owner(),&PersonalDraftRequestFenceParams{original:changed})).is_err());let again=s.with_tx(|c|fence(c,&owner(),&PersonalDraftRequestFenceParams{original})).unwrap();assert_eq!(again.state,PersonalDraftFenceState::ExistingTerminal);}
+    use super::*;
+    fn owner() -> Identity {
+        Identity {
+            principal: "local-human:1000".into(),
+            local_owner: true,
+            local_writer: true,
+            remote: None,
+        }
+    }
+    fn fixture() -> crate::Store {
+        let s = crate::Store::open_in_memory().unwrap();
+        let tx = s.conn().unchecked_transaction().unwrap();
+        initialize(&tx).unwrap();
+        tx.commit().unwrap();
+        s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('draft-crew','synthetic','now','now');INSERT INTO channels(id,crew_id,kind,name,created_by,created_at)VALUES('draft-crew/lobby','draft-crew','lobby','lobby','human','now');").unwrap();
+        s
+    }
+    fn configure(s: &mut crate::Store) -> PersonalDraftMutationResult {
+        let p = PublicCommand::PersonalDraftOwner(PersonalDraftOwnerParams {
+            owner_epoch: epoch(s.conn()).unwrap(),
+            expected_space_id: None,
+            expected_space_revision: "0".into(),
+            local_enabled: true,
+            acknowledge_restore: false,
+        });
+        s.with_tx(|c| apply(c, &owner(), &p)).unwrap()
+    }
+    fn scope(s: &crate::Store) -> PersonalDraftScope {
+        let status = status(s.conn(), &owner()).unwrap();
+        let m = status.member.unwrap();
+        PersonalDraftScope {
+            space_id: status.space_id.unwrap(),
+            space_epoch: status.space_epoch.unwrap(),
+            member_id: m.member_id,
+            member_revision: m.revision,
+        }
+    }
+    fn key(s: &crate::Store) -> PersonalDraftKey {
+        let db = crate::meta_get(s.conn(), "dbId").unwrap().unwrap();
+        PersonalDraftKey {
+            authority_id: db.clone(),
+            db_id: db,
+            crew_id: "draft-crew".into(),
+            destination: PersonalDraftDestination::Channel("draft-crew/lobby".into()),
+            kind: PersonalDraftKind::ChannelMessage,
+        }
+    }
+    fn body(text: &str) -> PersonalDraftPayload {
+        PersonalDraftPayload {
+            text: text.into(),
+            staged_mentions: vec![PersonalDraftStagedMention {
+                token: "@synthetic".into(),
+                mention: PersonalDraftMention {
+                    kind: "human".into(),
+                    target_id: None,
+                },
+            }],
+            reply_target: Some(PersonalDraftReply {
+                mention: None,
+                reply_to_id: "synthetic-message".into(),
+                quoted_sender: "synthetic".into(),
+                quoted_snippet: "exact 原文".into(),
+            }),
+        }
+    }
+    fn checkpoint(
+        s: &crate::Store,
+        branch: &str,
+        expected: &str,
+        revision: &str,
+        text: &str,
+    ) -> PublicCommand {
+        PublicCommand::PersonalDraftCheckpoint(PersonalDraftCheckpointParams {
+            scope: scope(s),
+            branch_id: branch.into(),
+            key: key(s),
+            expected_revision: expected.into(),
+            revision: revision.into(),
+            payload: body(text),
+        })
+    }
+    #[test]
+    fn core_draft_normal_remote_configuration_does_not_rotate_personal_namespace() {
+        let mut s = fixture();
+        let _ = configure(&mut s);
+        let before = status(s.conn(), &owner()).unwrap();
+        assert!(before.available);
+        s.with_tx(|c| {
+            assert!(crate::remote::configure(c, 1, false, "127.0.0.1", 7423)?);
+            Ok(())
+        })
+        .unwrap();
+        let after = status(s.conn(), &owner()).unwrap();
+        assert!(
+            after.available,
+            "ordinary remote CAS must not become restoreRequired: {after:?}"
+        );
+        assert_eq!(after.space_epoch, before.space_epoch);
+        assert_eq!(
+            after.member.unwrap().writer_id,
+            before.member.unwrap().writer_id
+        );
+    }
+    #[test]
+    fn core_draft_exact_payload_cas_send_clear_and_permanent_tombstone() {
+        let mut s = fixture();
+        configure(&mut s);
+        let branch = id();
+        let p = checkpoint(&s, &branch, "0", "2", "exact\n原文");
+        s.with_tx(|c| apply(c, &owner(), &p)).unwrap();
+        let stale = checkpoint(&s, &branch, "0", "3", "must not replace");
+        assert!(s.with_tx(|c| apply(c, &owner(), &stale)).is_err());
+        let mut clear = checkpoint(&s, &branch, "2", "4", "");
+        let empty = PersonalDraftPayload {
+            text: String::new(),
+            staged_mentions: vec![],
+            reply_target: None,
+        };
+        if let PublicCommand::PersonalDraftCheckpoint(p) = &mut clear {
+            p.payload = empty.clone();
+        }
+        s.with_tx(|c| apply(c, &owner(), &clear)).unwrap();
+        let page = branches(
+            s.conn(),
+            &owner(),
+            &PersonalDraftBranchesParams {
+                scope: scope(&s),
+                key: key(&s),
+                cursor: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.branches[0].payload, Some(empty.clone()));
+        let mut same = clear.clone();
+        if let PublicCommand::PersonalDraftCheckpoint(p) = &mut same {
+            p.expected_revision = "4".into();
+            p.revision = "5".into();
+        }
+        s.with_tx(|c| apply(c, &owner(), &same)).unwrap();
+        let fresh = id();
+        let r = PublicCommand::PersonalDraftResolve(PersonalDraftResolveParams {
+            scope: scope(&s),
+            key: key(&s),
+            retiring: vec![PersonalDraftRetire {
+                branch_id: branch.clone(),
+                revision: "5".into(),
+            }],
+            replacement: Some(PersonalDraftReplacement {
+                branch_id: fresh,
+                revision: "1".into(),
+                payload: body("explicit merged original"),
+            }),
+        });
+        let result = s.with_tx(|c| apply(c, &owner(), &r)).unwrap();
+        assert_eq!(result.retired[0].revision, "5");
+        let late = checkpoint(&s, &branch, "5", "999", "late offline 原文");
+        assert!(s.with_tx(|c| apply(c, &owner(), &late)).is_err());
+        let page = branches(
+            s.conn(),
+            &owner(),
+            &PersonalDraftBranchesParams {
+                scope: scope(&s),
+                key: key(&s),
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .unwrap();
+        assert!(!page.complete);
+        assert!(page.branches[0].retired);
+        assert!(page.branches[0].payload.is_none());
+    }
+    #[test]
+    fn core_draft_catalog_cut_scope_payload_bounds_and_restore_stamp_fences() {
+        let mut s = fixture();
+        configure(&mut s);
+        for (channel, text) in [("aaa", "first"), ("bbb", "second")] {
+            s.conn().execute("INSERT INTO channels(id,crew_id,kind,name,created_by,created_at)VALUES(?1,'draft-crew','topic',?1,'human','now')",[channel]).unwrap();
+            let mut p = checkpoint(&s, &id(), "0", "1", text);
+            if let PublicCommand::PersonalDraftCheckpoint(p) = &mut p {
+                p.key.destination = PersonalDraftDestination::Channel(channel.into());
+            }
+            s.with_tx(|c| apply(c, &owner(), &p)).unwrap();
+        }
+        let mut query = PersonalDraftCatalogParams {
+            scope: scope(&s),
+            cursor: None,
+            limit: Some(1),
+        };
+        let first = catalog(s.conn(), &owner(), &query).unwrap();
+        assert!(!first.complete);
+        let cut = first.membership_cut.clone();
+        query.cursor = first.next_cursor;
+        let later = checkpoint(&s, &id(), "0", "1", "new after cut");
+        s.with_tx(|c| apply(c, &owner(), &later)).unwrap();
+        let second = catalog(s.conn(), &owner(), &query).unwrap();
+        assert!(second.complete);
+        assert_eq!(second.membership_cut, cut);
+        assert_eq!(second.entries.len(), 1);
+        let mut foreign = query.clone();
+        foreign.scope.member_id = id();
+        assert!(catalog(s.conn(), &owner(), &foreign).is_err());
+        let mut oversize = checkpoint(&s, &id(), "0", "1", "");
+        if let PublicCommand::PersonalDraftCheckpoint(p) = &mut oversize {
+            p.payload.text = "x".repeat(MAX_PAYLOAD_BYTES + 1);
+        }
+        let before = crate::meta_get(s.conn(), KEY).unwrap();
+        assert!(s.with_tx(|c| apply(c, &owner(), &oversize)).is_err());
+        assert_eq!(crate::meta_get(s.conn(), KEY).unwrap(), before);
+        let mut foreign_key = checkpoint(&s, &id(), "0", "1", "wrong authority");
+        if let PublicCommand::PersonalDraftCheckpoint(p) = &mut foreign_key {
+            p.key.db_id = "another-core".into();
+        }
+        assert!(s.with_tx(|c| apply(c, &owner(), &foreign_key)).is_err());
+        s.with_tx(|c| restored(c)).unwrap();
+        assert!(catalog(s.conn(), &owner(), &query).is_err());
+        assert_eq!(
+            crate::meta_get(s.conn(), KEY).unwrap(),
+            before,
+            "restore invalidates scope without changing archived originals"
+        );
+    }
+    #[test]
+    fn core_draft_negative_fence_uses_original_receipt_and_never_executes_late_packet() {
+        use crate::command_receipts::{self as receipts, Reserved};
+        let mut s = fixture();
+        configure(&mut s);
+        let command = checkpoint(&s, &id(), "0", "1", "must stay only local");
+        let original = crewd_proto::commands::CommandSubmitParams {
+            request_id: id(),
+            db_id: crate::meta_get(s.conn(), "dbId").unwrap().unwrap(),
+            runtime_binding_id: id(),
+            command: command.clone(),
+        };
+        let result = s
+            .with_tx(|c| {
+                fence(
+                    c,
+                    &owner(),
+                    &PersonalDraftRequestFenceParams {
+                        original: original.clone(),
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(result.state, PersonalDraftFenceState::MissingFenced);
+        assert_eq!(
+            result.receipt.phase,
+            crewd_proto::commands::CommandPhase::Rejected
+        );
+        s.with_tx(|c| {
+            let r = receipts::reserve(c, &owner().principal, &original, "late")?;
+            assert!(matches!(r, Reserved::Existing(_)));
+            Ok(())
+        })
+        .unwrap();
+        assert!(load(s.conn()).unwrap().spaces[0].branches.is_empty());
+        let mut changed = original.clone();
+        if let PublicCommand::PersonalDraftCheckpoint(p) = &mut changed.command {
+            p.payload.text = "different".into()
+        }
+        assert!(
+            s.with_tx(|c| fence(
+                c,
+                &owner(),
+                &PersonalDraftRequestFenceParams { original: changed }
+            ))
+            .is_err()
+        );
+        let again = s
+            .with_tx(|c| fence(c, &owner(), &PersonalDraftRequestFenceParams { original }))
+            .unwrap();
+        assert_eq!(again.state, PersonalDraftFenceState::ExistingTerminal);
+    }
+}
+#[cfg(test)]
+mod writer_restore_tests {
+    use super::*;
+    fn bytes(path: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(path)
+            .unwrap()
+            .filter_map(|x| {
+                let p = x.unwrap().path();
+                p.file_name()
+                    .unwrap()
+                    .to_str()
+                    .filter(|n| n.starts_with("crewd.db"))
+                    .map(|n| (n.to_owned(), std::fs::read(&p).unwrap()))
+            })
+            .collect()
+    }
+    #[test]
+    #[ignore = "requires approved exact preserved old20 helper and original private backup/hash"]
+    fn core_draft_old20_source_destination_guards_and_current21_restore_retire_old_scope() {
+        let helper = std::path::PathBuf::from(std::env::var("PCW_DRAFT_OLD20_CORE").unwrap());
+        let helper_bytes = std::fs::read(&helper).unwrap();
+        assert_eq!(
+            crate::notifications::hash(&helper_bytes),
+            std::env::var("PCW_DRAFT_OLD20_SHA256").unwrap()
+        );
+        let old_backup = std::path::PathBuf::from(std::env::var("PCW_DRAFT_OLD20_BACKUP").unwrap());
+        let old_bytes = std::fs::read(&old_backup).unwrap();
+        assert_eq!(
+            crate::notifications::hash(&old_bytes),
+            std::env::var("PCW_DRAFT_OLD20_BACKUP_SHA256").unwrap()
+        );
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("new21");
+        std::fs::create_dir(&data).unwrap();
+        let mut s = crate::Store::open_data_dir(&data).unwrap();
+        assert_eq!(
+            s.conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            21
+        );
+        let who = Identity {
+            principal: "local-human:1000".into(),
+            local_owner: true,
+            local_writer: true,
+            remote: None,
+        };
+        let old_epoch = epoch(s.conn()).unwrap();
+        let setup = PublicCommand::PersonalDraftOwner(PersonalDraftOwnerParams {
+            owner_epoch: old_epoch.clone(),
+            expected_space_id: None,
+            expected_space_revision: "0".into(),
+            local_enabled: true,
+            acknowledge_restore: false,
+        });
+        let created = s.with_tx(|c| apply(c, &who, &setup)).unwrap();
+        let raw = crate::meta_get(s.conn(), KEY).unwrap().unwrap();
+        let backup = root.path().join("original21.db");
+        crate::backup::backup_db(&data.join(crate::DB_FILE), &backup).unwrap();
+        let backup_bytes = std::fs::read(&backup).unwrap();
+        drop(s);
+        let before = bytes(&data);
+        let rejected = std::process::Command::new(&helper)
+            .arg("--data-dir")
+            .arg(&data)
+            .arg("restore")
+            .arg("--from")
+            .arg(&old_backup)
+            .output()
+            .unwrap();
+        assert!(
+            !rejected.status.success(),
+            "old20 must reject21 destination"
+        );
+        assert_eq!(
+            bytes(&data),
+            before,
+            "old writer must not touch destination database/sidecars/id"
+        );
+        eprintln!(
+            "old20 destination rejected: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        let old_dest = root.path().join("old20-destination");
+        std::fs::create_dir(&old_dest).unwrap();
+        std::fs::copy(&old_backup, old_dest.join(crate::DB_FILE)).unwrap();
+        let before_old = bytes(&old_dest);
+        let rejected = std::process::Command::new(&helper)
+            .arg("--data-dir")
+            .arg(&old_dest)
+            .arg("restore")
+            .arg("--from")
+            .arg(&backup)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success(), "old20 must reject21 source");
+        assert_eq!(bytes(&old_dest), before_old);
+        assert_eq!(std::fs::read(&backup).unwrap(), backup_bytes);
+        assert_eq!(std::fs::read(&old_backup).unwrap(), old_bytes);
+        assert_eq!(std::fs::read(&helper).unwrap(), helper_bytes);
+        eprintln!(
+            "old20 source rejected: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        crate::backup::restore(&data, &backup).unwrap();
+        let mut s = crate::Store::open_data_dir(&data).unwrap();
+        assert_ne!(epoch(s.conn()).unwrap(), old_epoch);
+        assert_eq!(
+            crate::meta_get(s.conn(), KEY).unwrap().as_deref(),
+            Some(raw.as_str())
+        );
+        let observed = status(s.conn(), &who).unwrap();
+        assert!(!observed.available);
+        assert_eq!(observed.reason.as_deref(), Some("restoreRequired"));
+        assert!(s.with_tx(|c| apply(c, &who, &setup)).is_err());
+        let ack = PublicCommand::PersonalDraftOwner(PersonalDraftOwnerParams {
+            owner_epoch: epoch(s.conn()).unwrap(),
+            expected_space_id: Some(created.space_id.clone()),
+            expected_space_revision: created.space_revision,
+            local_enabled: false,
+            acknowledge_restore: true,
+        });
+        let renewed = s.with_tx(|c| apply(c, &who, &ack)).unwrap();
+        assert_ne!(renewed.space_id, created.space_id);
+        assert!(!status(s.conn(), &who).unwrap().available);
+        assert!(
+            s.with_tx(|c| fence(
+                c,
+                &who,
+                &PersonalDraftRequestFenceParams {
+                    original: crewd_proto::commands::CommandSubmitParams {
+                        request_id: id(),
+                        db_id: crate::meta_get(c, "dbId")?.unwrap(),
+                        runtime_binding_id: id(),
+                        command: setup.clone()
+                    }
+                }
+            ))
+            .is_err()
+        );
+        let all = load(s.conn()).unwrap();
+        assert_eq!(all.spaces.len(), 2);
+        assert_eq!(
+            json(&all.spaces[0]).unwrap(),
+            json(&serde_json::from_str::<State>(&raw).unwrap().spaces[0]).unwrap()
+        );
+    }
+    #[test]
+    #[ignore = "requires original preserved Store20 backup/hash"]
+    fn core_draft_protected20_to21_preserves_bytes_invalidates_experimental_scope_and_rolls_back_on_snapshot_failure()
+     {
+        let old_backup = std::path::PathBuf::from(std::env::var("PCW_DRAFT_OLD20_BACKUP").unwrap());
+        let original = std::fs::read(&old_backup).unwrap();
+        assert_eq!(
+            crate::notifications::hash(&original),
+            std::env::var("PCW_DRAFT_OLD20_BACKUP_SHA256").unwrap()
+        );
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::copy(&old_backup, data.join(crate::DB_FILE)).unwrap();
+        let before = rusqlite::Connection::open_with_flags(
+            data.join(crate::DB_FILE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let old_epoch = epoch(&before).unwrap();
+        let old_raw = crate::meta_get(&before, KEY).unwrap().unwrap();
+        drop(before);
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        assert_eq!(
+            s.conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            21
+        );
+        assert_ne!(epoch(s.conn()).unwrap(), old_epoch);
+        assert_eq!(
+            crate::meta_get(s.conn(), KEY).unwrap().as_deref(),
+            Some(old_raw.as_str())
+        );
+        let backups: Vec<_> = std::fs::read_dir(data.join(crate::backup::BACKUPS_DIR))
+            .unwrap()
+            .map(|x| x.unwrap().path())
+            .collect();
+        assert!(backups.iter().any(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("crewd-v20-pre-v21-")
+        }));
+        drop(s);
+        let fail = root.path().join("failed");
+        std::fs::create_dir(&fail).unwrap();
+        std::fs::copy(&old_backup, fail.join(crate::DB_FILE)).unwrap();
+        std::fs::write(
+            fail.join(crate::backup::BACKUPS_DIR),
+            b"synthetic blocking file",
+        )
+        .unwrap();
+        assert!(matches!(
+            crate::Store::open_data_dir(&fail),
+            Err(crate::StoreError::MigrationRefused { from: 20, .. })
+        ));
+        let c = rusqlite::Connection::open_with_flags(
+            fail.join(crate::DB_FILE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            20
+        );
+        assert_eq!(epoch(&c).unwrap(), old_epoch);
+        assert_eq!(
+            crate::meta_get(&c, KEY).unwrap().as_deref(),
+            Some(old_raw.as_str())
+        );
+        assert_eq!(std::fs::read(&old_backup).unwrap(), original);
+    }
 }

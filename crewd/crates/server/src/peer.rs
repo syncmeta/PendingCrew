@@ -1806,6 +1806,100 @@ mod host_admin_controls {
         })
     }
     #[tokio::test]
+    async fn core_draft_rootfd_owner_fence_lookup_and_write_whitelist_preserve_original_floor() {
+        let store = crewd_store::Store::open_in_memory().unwrap();
+        let db = crewd_store::meta_get(store.conn(), "dbId")
+            .unwrap()
+            .unwrap();
+        let state = Arc::new(crate::AppState::new(crewd_store::Db::spawn(store).unwrap()));
+        let policy = Arc::new(PeerPolicy::new(None).unwrap());
+        let permit = synthetic_permit(policy.clone(), 0);
+        let status = crate::host_admin::route(&state, &permit, "host.personalDraftStatus", "{}")
+            .await
+            .unwrap();
+        assert!(status["status"]["ownerEpoch"].is_string());
+        let params = serde_json::json!({"ownerEpoch":status["status"]["ownerEpoch"],"expectedSpaceId":null,"expectedSpaceRevision":"0","localEnabled":false,"acknowledgeRestore":false});
+        let original = serde_json::json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":db,"runtimeBindingId":state.runtime_binding_id,"command":{"operation":"personalDraft.ownerConfigure","params":params}});
+        let fenced = crate::host_admin::route(
+            &state,
+            &permit,
+            "host.personalDraftRequestFence",
+            &serde_json::json!({"original":original}).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fenced["state"], "missingFenced");
+        let submit = serde_json::json!({"requestId":original["requestId"],"dbId":db,"runtimeBindingId":state.runtime_binding_id,"params":params});
+        let late = crate::host_admin::route(
+            &state,
+            &permit,
+            "host.personalDraftOwnerConfigure",
+            &submit.to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(late, fenced["receipt"]);
+        let lookup = crate::host_admin::route(
+            &state,
+            &permit,
+            "host.personalDraftRequestLookup",
+            &serde_json::json!({"requestId":original["requestId"],"dbId":db}).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(lookup, late);
+        let status = crate::host_admin::route(&state, &permit, "host.personalDraftStatus", "{}")
+            .await
+            .unwrap();
+        assert!(
+            status["status"]["spaceId"].is_null(),
+            "negative fence must not create any space or writer"
+        );
+        let mut new = submit;
+        new["requestId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+        let committed = crate::host_admin::route(
+            &state,
+            &permit,
+            "host.personalDraftOwnerConfigure",
+            &new.to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(committed["phase"], "committed");
+        assert!(
+            committed["result"]["member"].is_null(),
+            "root admin never manufactures an App local writer"
+        );
+        let bad = serde_json::json!({"original":{"requestId":uuid::Uuid::new_v4().to_string(),"dbId":db,"runtimeBindingId":state.runtime_binding_id,"command":{"operation":"session.resume","params":{"sessionId":"synthetic","generation":"synthetic","controlRevision":"0","turnId":null}}}});
+        assert!(
+            crate::host_admin::route(
+                &state,
+                &permit,
+                "host.personalDraftRequestFence",
+                &bad.to_string()
+            )
+            .await
+            .is_err()
+        );
+        let nonroot = synthetic_permit(policy, 1000);
+        assert!(
+            crate::host_admin::route(&state, &nonroot, "host.personalDraftStatus", "{}")
+                .await
+                .is_err()
+        );
+        permit.close();
+        assert!(
+            crate::host_admin::route(
+                &state,
+                &permit,
+                "host.personalDraftRequestLookup",
+                &serde_json::json!({"requestId":original["requestId"],"dbId":db}).to_string()
+            )
+            .await
+            .is_err()
+        );
+    }
+    #[tokio::test]
     async fn notification_rootfd_typed_configuration_and_original_lookup_keep_floor_and_secret_boundary()
      {
         use base64::Engine;

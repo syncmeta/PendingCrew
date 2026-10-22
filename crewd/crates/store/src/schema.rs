@@ -2,8 +2,8 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-/// Knowledge files have an independent SQLite schema; native input/history restore writer barrier is Core20.
-pub const SCHEMA_VERSION: i64 = 20;
+/// Knowledge files have an independent SQLite schema; personal draft restore writer barrier is Core21.
+pub const SCHEMA_VERSION: i64 = 21;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
@@ -896,6 +896,14 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         if experimental{return Err(StoreError::Invalid("experimental pre20 Codex inputs are not a supported production authority".into()))}
         tx.execute_batch(crate::codex_inputs::DDL)?;
         tx.execute_batch("PRAGMA user_version=20;")?;
+        tx.commit()?;
+    }
+    if v < 21 {
+        let tx=conn.unchecked_transaction()?;
+        // Old20 restore cannot invalidate the independent private Draft stamp.
+        // Never inherit experimental pre21 membership authority on upgrade.
+        crate::personal_drafts::initialize_new_format(&tx)?;
+        tx.execute_batch("PRAGMA user_version=21;")?;
         tx.commit()?;
     }
     Ok(())
