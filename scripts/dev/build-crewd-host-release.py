@@ -3,10 +3,10 @@
 import hashlib, importlib.util, json, os, pathlib, re, subprocess, sys
 sys.dont_write_bytecode = True
 
-# Final complete source qualification is bound once after root supplies S.
-# None deliberately refuses every build during source-only preparation.
+# Exact accepted natural source qualification; no arbitrary same-tree source.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_RUST_TREE = None
+QUALIFIED_SOURCE_SHA = 'eb3f0d29965f1092f61df0ef1ad30e8d9057edad'
+QUALIFIED_RUST_TREE = '0a10ccb9785ba2552d8a101665b44998edf27cdb'
 QUALIFIED_METHOD_COUNT = 149
 QUALIFIED_STORE_VERSION = 21
 SOURCE_RECIPES = [
@@ -45,7 +45,7 @@ def inventory(root, ref):
 def binding(controller, source, controller_sha, source_sha):
     assert all(re.fullmatch('[0-9a-f]{40}', ref) for ref in [controller_sha, source_sha])
     assert controller_sha == os.environ['GITHUB_SHA'], 'controller input must equal actual run SHA'
-    assert isinstance(QUALIFIED_RUST_TREE, str) and re.fullmatch('[0-9a-f]{40}', QUALIFIED_RUST_TREE), 'final root-frozen Rust/source qualification is not bound; do not dispatch'
+    assert source_sha == QUALIFIED_SOURCE_SHA, 'source input differs from the exact root-frozen combined source'
     before = {'controllerSha': controller_sha, 'sourceSha': source_sha,
               'controllerInputs': inventory(controller, controller_sha),
               'sourceInputs': inventory(source, source_sha)}
