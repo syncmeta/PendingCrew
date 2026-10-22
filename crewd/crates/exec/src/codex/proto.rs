@@ -42,6 +42,10 @@ pub fn initialize_params(version: &str) -> Value {
 /// （人的原话：「codex 本身的默认模型是什么逻辑就用什么逻辑」），实际值从回包里读。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadOptions {
+    pub title: Option<String>,
+    pub initial_settings: Option<crewd_proto::codex::CodexSettingsPatch>,
+    /// Internal production selection; never populated from provider JSON.
+    pub strict_resume: bool,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// `Some(true)` → `serviceTier: "fast"`，`Some(false)` → `"default"`，`None` 不传。
@@ -90,6 +94,23 @@ pub fn thread_start_params(cwd: &Path, o: &ThreadOptions) -> Value {
 /// （不带历史回合：长 thread 的整段历史是一行几 MB 的 JSON，Swift 吃过超时的亏）。
 pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> Value {
     let mut p = thread_start_params(cwd, o);
+    if o.strict_resume {
+        // Native resume loads the stored thread. Reopening is not a request to
+        // reset its permissions or retry a previously uncertain settings patch.
+        let object = p.as_object_mut().expect("thread params object");
+        for key in [
+            "model",
+            "serviceTier",
+            "approvalPolicy",
+            "approvalsReviewer",
+            "sandbox",
+        ] {
+            object.remove(key);
+        }
+        if let Some(config) = object.get_mut("config").and_then(Value::as_object_mut) {
+            config.remove("model_reasoning_effort");
+        }
+    }
     p["threadId"] = json!(thread_id);
     p["excludeTurns"] = json!(true);
     p
@@ -475,6 +496,7 @@ mod tests {
                 &PathBuf::from("/opt/crewd"),
                 &["mcp".into(), "--agent".into(), "codex".into()],
             )),
+            ..Default::default()
         }
     }
 

@@ -1376,6 +1376,861 @@
       ],
       "type": "object"
     },
+    "CodexApprovalPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CodexSimpleApproval"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "granular": {
+              "$ref": "#/$defs/CodexGranularApproval"
+            }
+          },
+          "required": [
+            "granular"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodexApprovalsReviewer": {
+      "enum": [
+        "user",
+        "autoReview"
+      ],
+      "type": "string"
+    },
+    "CodexCapability": {
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/CodexCapabilityAvailability"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/CodexProtocol"
+        }
+      },
+      "required": [
+        "id",
+        "availability",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "CodexCapabilityAvailability": {
+      "enum": [
+        "available",
+        "requiresRunning",
+        "providerRejected",
+        "pcwNotImplemented",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "CodexCollaborationMode": {
+      "enum": [
+        "default",
+        "plan"
+      ],
+      "type": "string"
+    },
+    "CodexConfigureParams": {
+      "additionalProperties": false,
+      "properties": {
+        "patch": {
+          "$ref": "#/$defs/CodexSettingsPatch"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "patch"
+      ],
+      "type": "object"
+    },
+    "CodexForkParams": {
+      "additionalProperties": false,
+      "properties": {
+        "lastTurnId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "CodexGranularApproval": {
+      "additionalProperties": false,
+      "properties": {
+        "mcpElicitations": {
+          "type": "boolean"
+        },
+        "requestPermissions": {
+          "type": "boolean"
+        },
+        "rules": {
+          "type": "boolean"
+        },
+        "sandboxApproval": {
+          "type": "boolean"
+        },
+        "skillApproval": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcpElicitations",
+        "requestPermissions",
+        "rules",
+        "sandboxApproval",
+        "skillApproval"
+      ],
+      "type": "object"
+    },
+    "CodexHistoryItems": {
+      "enum": [
+        "notLoaded",
+        "summary",
+        "full"
+      ],
+      "type": "string"
+    },
+    "CodexHistoryPage": {
+      "properties": {
+        "backwardsCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "items": true,
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "threadId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "CodexHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "itemsView": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexHistoryItems"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexSortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "CodexModel": {
+      "properties": {
+        "defaultReasoningEffort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputModalities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "supportedReasoningEfforts": {
+          "items": {
+            "$ref": "#/$defs/CodexReasoningEffort"
+          },
+          "type": "array"
+        },
+        "supportsPersonality": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "model",
+        "displayName",
+        "isDefault",
+        "supportedReasoningEfforts"
+      ],
+      "type": "object"
+    },
+    "CodexModels": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CodexModel"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CodexObservedSettings": {
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexApprovalPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collaborationMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexCollaborationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fast": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelProvider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissionProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CodexProtocol": {
+      "enum": [
+        "stable",
+        "experimental"
+      ],
+      "type": "string"
+    },
+    "CodexReasoningEffort": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reasoningEffort",
+        "description"
+      ],
+      "type": "object"
+    },
+    "CodexReasoningSummary": {
+      "enum": [
+        "auto",
+        "concise",
+        "detailed",
+        "none"
+      ],
+      "type": "string"
+    },
+    "CodexReviewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "reviewTarget": {
+          "$ref": "#/$defs/CodexReviewTarget"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "reviewTarget"
+      ],
+      "type": "object"
+    },
+    "CodexReviewTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "uncommittedChanges",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "type": {
+              "const": "baseBranch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "branch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sha": {
+              "type": "string"
+            },
+            "title": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "commit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sha"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "type": "string"
+            },
+            "type": {
+              "const": "custom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "instructions"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodexSandboxPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "networkAccess": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "readOnly",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "networkAccess"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "networkAccess": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "workspaceWrite",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "networkAccess"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "dangerFullAccess",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodexSessionInspection": {
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/CodexCapability"
+          },
+          "type": "array"
+        },
+        "desiredSettings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexSettingsPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "historical": {
+          "type": "boolean"
+        },
+        "pendingRequest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunnerRequestView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queuedInputs": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexObservedSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settingsObservedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settingsStatus": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/CodexTitleState"
+        },
+        "working": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sessionId",
+        "target",
+        "running",
+        "working",
+        "queuedInputs",
+        "historical",
+        "title",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "CodexSettingsPatch": {
+      "additionalProperties": false,
+      "properties": {
+        "approvalPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexApprovalPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collaborationMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexCollaborationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fast": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexSandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CodexSimpleApproval": {
+      "enum": [
+        "untrusted",
+        "onRequest",
+        "never"
+      ],
+      "type": "string"
+    },
+    "CodexSortDirection": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
+    },
+    "CodexTargetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "CodexTextParams": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CodexTitleParams": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "title"
+      ],
+      "type": "object"
+    },
+    "CodexTitleSource": {
+      "enum": [
+        "human",
+        "task"
+      ],
+      "type": "string"
+    },
+    "CodexTitleState": {
+      "properties": {
+        "desired": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "native": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/CodexTitleSource"
+        },
+        "status": {
+          "$ref": "#/$defs/CodexTitleStatus"
+        }
+      },
+      "required": [
+        "source",
+        "status"
+      ],
+      "type": "object"
+    },
+    "CodexTitleStatus": {
+      "enum": [
+        "pending",
+        "synced",
+        "unknown",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "CodexTools": {
+      "properties": {
+        "mcpServers": {
+          "items": true,
+          "type": "array"
+        },
+        "skills": {
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "mcpServers",
+        "skills"
+      ],
+      "type": "object"
+    },
     "CommandListUnknownParams": {
       "additionalProperties": false,
       "properties": {
@@ -6986,6 +7841,125 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "session.codex.configure",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexConfigureParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.compact",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTargetParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.steer",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTextParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.queue",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTextParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.review",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexReviewParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.titleSet",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexTitleParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "session.codex.fork",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/CodexForkParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.stop",
               "type": "string"
             },
@@ -8567,6 +9541,16 @@
       "properties": {
         "brief": {
           "type": "string"
+        },
+        "codexOptions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexSettingsPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "crewId": {
           "type": "string"
@@ -11736,6 +12720,38 @@
       },
       "result": {
         "$ref": "#/$defs/SessionAnswerResult"
+      }
+    },
+    "session.codex.history": {
+      "params": {
+        "$ref": "#/$defs/CodexHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexHistoryPage"
+      }
+    },
+    "session.codex.inspect": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexSessionInspection"
+      }
+    },
+    "session.codex.models": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexModels"
+      }
+    },
+    "session.codex.tools": {
+      "params": {
+        "$ref": "#/$defs/SessionIdParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CodexTools"
       }
     },
     "session.controlTarget": {

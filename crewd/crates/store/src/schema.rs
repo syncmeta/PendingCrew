@@ -3,7 +3,7 @@ use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent SQLite schema; Core remains version 15.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 pub(crate) const V1: &str = r#"
@@ -876,13 +876,24 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         migrate_v15(conn)?;
     }
     if v < 17 {
-        migrate_v17(conn)?;
+        migrate_resource17(conn, 18)?;
+    } else if v < 18 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("PRAGMA user_version=18;")?;
+        tx.commit()?;
     }
     Ok(())
 }
 
 /// Resource scopes and Human source facts. Deliberately skips experimental Native16.
+#[cfg(test)]
 pub(crate) fn migrate_v17(conn: &Connection) -> Result<()> {
+    migrate_resource17(conn, 17)
+}
+
+// Store18 adds only a writer barrier: old writers cannot ignore durable Codex Unknown/fork state.
+// For pre-17 stores the resource rebuild and barrier commit in the same transaction.
+fn migrate_resource17(conn: &Connection, target: i64) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(r#"
 ALTER TABLE view_folder_assignments RENAME TO view_folder_assignments_v15;
@@ -913,8 +924,8 @@ CREATE TABLE todo_attribute_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,object_
 CREATE TABLE resource_mutation_requests(request_id TEXT PRIMARY KEY,operation TEXT NOT NULL CHECK(operation IN ('todo.assign','todo.setState','humanTask.create','channel.workTagsSet','channel.knowledgeLink','channel.knowledgeUnlink')),crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,channel_id TEXT NOT NULL,object_kind TEXT NOT NULL CHECK(object_kind IN ('requirement','humanTask','knowledgeView')),object_id TEXT NOT NULL,payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32),result TEXT NOT NULL CHECK(json_valid(result)),at TEXT NOT NULL);
 CREATE TABLE channel_knowledge_links(channel_id TEXT NOT NULL REFERENCES channel_work_scopes(channel_id) ON DELETE CASCADE,source_key TEXT NOT NULL,source_crew_id TEXT NOT NULL REFERENCES crews(id),source TEXT NOT NULL CHECK(json_valid(source)),PRIMARY KEY(channel_id,source_key));
 CREATE INDEX channel_knowledge_source_refs ON channel_knowledge_links(source_crew_id,channel_id);
-PRAGMA user_version=17;
 "#)?;
+    tx.pragma_update(None, "user_version", target)?;
     tx.commit()?;
     Ok(())
 }
@@ -2904,7 +2915,7 @@ mod resource17_tests {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            17
+            18
         );
         assert_eq!(
             c.query_row(
@@ -2969,6 +2980,140 @@ mod resource17_tests {
             0
         );
     }
+    #[test]
+    fn store18_original17_protected_writer_barrier_preserves_schema_and_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original17.db");
+        let c = Connection::open(&path).unwrap();
+        original15(&c);
+        seed(&c);
+        migrate_v17(&c).unwrap();
+        let schema: String = c
+            .query_row(
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        migrate_guarded(&c, Some(&dir.path().join("backups"))).unwrap();
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            18
+        );
+        let after: String = c
+            .query_row(
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(schema, after);
+        assert_eq!(
+            c.query_row(
+                "SELECT name FROM view_folders WHERE id='retained-folder'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "retained"
+        );
+        let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let old = Connection::open(&backups[0]).unwrap();
+        assert_eq!(
+            old.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            17
+        );
+        assert_eq!(
+            old.query_row(
+                "SELECT name FROM view_folders WHERE id='retained-folder'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "retained"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the exact preserved normal Store17 writer supplied by the acceptance owner"]
+    fn store18_saved_writer17_refuses_before_modifying_store() {
+        use std::{
+            collections::BTreeMap,
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let old = std::env::var_os("CREWD_TEST_OLD_WRITER")
+            .expect("exact preserved writer path required");
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::Store::open_data_dir(dir.path()).unwrap();
+        store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('retained18','writer barrier','now','now')").unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            18
+        );
+        drop(store);
+        let snapshot = || {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| {
+                    let e = e.unwrap();
+                    (e.file_name(), std::fs::read(e.path()).unwrap())
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = snapshot();
+        let mut child = Command::new(old)
+            .args(["--data-dir"])
+            .arg(dir.path())
+            .args(["serve", "--claude", "/usr/bin/false"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("saved old writer did not refuse within bound");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "saved Store17 writer status={} stderr={stderr}",
+            output.status
+        );
+        assert!(!output.status.success());
+        assert!(
+            stderr.contains("18") && stderr.contains("17") && stderr.contains("拒绝"),
+            "{stderr}"
+        );
+        let mut after = snapshot();
+        assert_eq!(
+            after.remove(std::ffi::OsStr::new("crewd.lock")),
+            Some(Vec::new()),
+            "ordinary serve may create only its empty standard lease file"
+        );
+        assert!(
+            after == before,
+            "actual fresh18 DB, identity and all SQLite sidecars must remain byte-identical"
+        );
+    }
+
     #[test]
     fn resource17_reserved16_refused_before_original_file_open() {
         let dir = tempfile::tempdir().unwrap();

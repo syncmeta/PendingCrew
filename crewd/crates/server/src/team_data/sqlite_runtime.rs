@@ -1476,8 +1476,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            schema, 17,
-            "resource17 deliberately skips the unrelated Native16 development format"
+            schema, 18,
+            "Store18 writer barrier retains resource17 and skips experimental Native16"
         );
         assert!(
             f.state

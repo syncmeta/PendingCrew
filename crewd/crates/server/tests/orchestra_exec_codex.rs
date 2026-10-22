@@ -34,6 +34,9 @@ fn executor(root: &std::path::Path, program: CodexProgram) -> CodexExecutor {
 }
 fn request(root: &std::path::Path, ledger: Arc<MemoryLedger>) -> LaunchRequest {
     LaunchRequest {
+        codex_options: None,
+        title: None,
+
         session_id: "synthetic-worker".into(),
         crew_id: "crew-a".into(),
         workdir: root.into(),

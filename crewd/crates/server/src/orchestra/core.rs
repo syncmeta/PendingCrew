@@ -267,6 +267,12 @@ pub enum Input {
         reply: Reply<SessionRow>,
         result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     },
+    PublicCodexDone {
+        call: crate::public_execution::PublicExecution,
+        target: crewd_proto::commands::CommandRuntimeTarget,
+        thread: String,
+        outcome: crewd_exec::codex::control::CodexOutcome,
+    },
     PublicAnswerDone {
         call: crate::public_execution::PublicExecution,
         outcome: Result<AnswerReport, ControlError>,
@@ -332,6 +338,7 @@ pub struct StartSession {
     pub effort: Option<String>,
     /// 控制者裁定 C8：true = 在机组工作目录里新建 git worktree 并在那里起；false = 机组共享目录。
     pub isolation: bool,
+    pub codex_options: Option<crewd_proto::codex::CodexSettingsPatch>,
 }
 
 /// collab 规则拒绝的类别（同 `CollabError` 的四个规则变体）：RPC 错误号按它定。
@@ -953,6 +960,16 @@ impl<P: Port> Core<P> {
                 self.on_worktree_ready(req, reply, result).await;
                 Ok(())
             }
+            Input::PublicCodexDone {
+                call,
+                target,
+                thread,
+                outcome,
+            } => {
+                self.finish_public_codex(call, target, thread, outcome)
+                    .await;
+                Ok(())
+            }
             Input::PublicAnswerDone { call, outcome } => {
                 self.settle_public_answer(call, outcome).await;
                 Ok(())
@@ -1050,6 +1067,9 @@ impl<P: Port> Core<P> {
                     crewd_proto::commands::PublicCommand::Hibernate(_)
                 ) {
                     self.execute_public_hibernate(call, reply).await;
+                } else if super::codex_control::is_command(&call.request.command) {
+                    let result = self.execute_public_codex(call).await;
+                    let _ = reply.send(result);
                 } else {
                     let result = self.execute_public_control(call).await;
                     let _ = reply.send(result);
@@ -1288,6 +1308,24 @@ impl<P: Port> Core<P> {
         if origin == Origin::Agent && self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Err(ControlError::ShuttingDown);
         }
+        if let Some(patch) = &req.codex_options {
+            if req.executor != "codex" {
+                return Err(ControlError::Invalid(
+                    Refusal::new(Code::ResourceInvalid).arg("field", "codexOptions.executor"),
+                ));
+            }
+            patch.validate().map_err(|e| {
+                ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field", e))
+            })?;
+            if (req.model.is_some() && patch.model.is_some())
+                || (req.effort.is_some() && patch.effort.is_some())
+            {
+                return Err(ControlError::Invalid(
+                    Refusal::new(Code::ResourceInvalid)
+                        .arg("field", "codexOptions.duplicateProfile"),
+                ));
+            }
+        }
         let exec = self
             .execs
             .get(&req.executor)
@@ -1391,6 +1429,7 @@ impl<P: Port> Core<P> {
                 executor: req.executor,
                 brief: req.brief,
                 title: req.title,
+                codex_options: req.codex_options,
                 model: req.model,
                 effort: req.effort,
                 worktree: worktree.clone(),
@@ -1431,6 +1470,17 @@ impl<P: Port> Core<P> {
             .ok_or_else(|| ControlError::NotFound(session.into()))?;
         if row.crew_removed {
             return Err(ControlError::CrewRemoved(row.crew_id));
+        }
+        if row.executor == "codex"
+            && !self
+                .port
+                .codex_resume_ready(session)
+                .await
+                .map_err(ControlError::from_port)?
+        {
+            return Err(ControlError::Invalid(
+                Refusal::new(Code::ResourceInvalid).arg("field", "codex.forkUnconfirmed"),
+            ));
         }
         let exec = self
             .execs
@@ -1480,11 +1530,15 @@ impl<P: Port> Core<P> {
             .human_stop(session)
             .await
             .map_err(ControlError::from_port)?;
+        self.revoke_codex_metadata(session);
         if !pending.is_empty() {
             self.port.publish(wake_changed(session, &pending));
         }
         if let Some(a) = &self.cfg.admission {
             a.revoke(session);
+        }
+        if let Some(l) = self.live.get(session) {
+            l.handle.fence_inputs();
         }
         self.held.remove(session);
         if let Some(l) = self.live.get_mut(session) {
@@ -1944,7 +1998,10 @@ impl<P: Port> Core<P> {
             self.settle_terminal(batch, Settle::Requeue).await?;
             return Err(error);
         }
+        let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
         let req = LaunchRequest {
+            title,
+            codex_options,
             session_id: row.id.clone(),
             crew_id: row.crew_id.clone(),
             workdir,
@@ -2461,6 +2518,15 @@ impl<P: Port> Core<P> {
             .get_mut(session)
             .expect("validated current generation");
         match event {
+            SessionEvent::CodexObservation {
+                settings,
+                title,
+                accepted,
+            } => {
+                self.port
+                    .codex_observe(session, settings, title, accepted)
+                    .await?;
+            }
             SessionEvent::Spawned {
                 agent_session_id, ..
             } => {
@@ -3261,6 +3327,8 @@ mod tests {
 
     fn start(executor: &str) -> StartSession {
         StartSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain: false,
             executor: executor.into(),
@@ -3665,6 +3733,8 @@ mod tests {
         let release = rig.worktrees.hold_next();
         let (tx, mut slow) = oneshot::channel();
         let req = StartSession {
+            codex_options: None,
+
             captain: true,
             isolation: true,
             ..start("claude")
@@ -3688,6 +3758,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, ControlError::AtCap { max: 1 }, "建着的那个也占名额");
         let req = StartSession {
+            codex_options: None,
+
             captain: true,
             ..start("claude")
         };
@@ -3799,6 +3871,8 @@ mod tests {
         let mut rig = Rig::new().await;
         rig.crew("c1", "cap");
         let req = StartSession {
+            codex_options: None,
+
             captain: true,
             isolation: true,
             ..start("claude")
@@ -4193,6 +4267,9 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            codex_options: None,
+            title: None,
+
             delivery_observer: None,
             session_id: "cap".into(),
             crew_id: "c1".into(),

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -51,6 +51,10 @@ pub struct CodexProcessSpec {
 }
 
 pub enum WriterMessage {
+    ControlledLine {
+        line: String,
+        permit: crate::driver::ManualWritePermit,
+    },
     Line(String),
     /// Completes after all preceding lines have been written and flushed.
     Barrier(tokio::sync::oneshot::Sender<()>),
@@ -71,6 +75,7 @@ impl From<&str> for WriterMessage {
 pub struct CodexProcess {
     pub child: Child,
     pub pid: u32,
+    pub write_fence: Arc<Mutex<bool>>,
     pub stdout: LineReader<tokio::io::BufReader<ChildStdout>>,
     /// 往 stdin 写一行（不含换行）。写任务按顺序写，写失败就停。
     pub writer: mpsc::UnboundedSender<WriterMessage>,
@@ -116,18 +121,70 @@ pub fn spawn_codex(spec: &CodexProcessSpec) -> io::Result<CodexProcess> {
     let stdout = child.stdout.take().expect("stdout 是 piped");
     let mut stderr = child.stderr.take().expect("stderr 是 piped");
 
+    let write_fence = Arc::new(Mutex::new(true));
+    let writer_fence = write_fence.clone();
     let (writer, mut lines) = mpsc::unbounded_channel::<WriterMessage>();
     let writer_task = tokio::spawn(async move {
         while let Some(message) = lines.recv().await {
-            let mut line = match message {
-                WriterMessage::Line(line) => line,
+            let (mut line, permit) = match message {
+                WriterMessage::Line(line) => (line, None),
+                WriterMessage::ControlledLine { line, permit } => (line, Some(permit)),
                 WriterMessage::Barrier(reply) => {
                     let _ = reply.send(());
                     continue;
                 }
             };
             line.push('\n');
-            if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+            let bytes = line.as_bytes();
+            let mut written = 0;
+            let mut failed = false;
+            let mut revoked_before_write = false;
+            while written < bytes.len() {
+                let result = std::future::poll_fn(|cx| {
+                    let fence = writer_fence.lock();
+                    if !matches!(fence,Ok(ref live) if **live) {
+                        return std::task::Poll::Ready((
+                            Err(io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "Codex runtime input fenced",
+                            )),
+                            true,
+                        ));
+                    }
+                    let mut attempted = false;
+                    let mut poll = || {
+                        attempted = true;
+                        std::pin::Pin::new(&mut stdin).poll_write(cx, &bytes[written..])
+                    };
+                    let result = match &permit {
+                        Some(p) => p.poll_controlled(poll),
+                        None => poll(),
+                    };
+                    result.map(|result| (result, !attempted))
+                })
+                .await;
+                match result.0 {
+                    Ok(0) | Err(_) => {
+                        revoked_before_write = result.1;
+                        failed = true;
+                        break;
+                    }
+                    Ok(n) => written += n,
+                }
+            }
+            if failed {
+                // A revoked per-request permit before its first byte does not
+                // corrupt the stream or fence other independently owned input.
+                if written == 0
+                    && revoked_before_write
+                    && permit.is_some()
+                    && writer_fence.lock().is_ok_and(|live| *live)
+                {
+                    continue;
+                }
+                break;
+            }
+            if stdin.flush().await.is_err() {
                 break;
             }
         }
@@ -148,6 +205,7 @@ pub fn spawn_codex(spec: &CodexProcessSpec) -> io::Result<CodexProcess> {
     Ok(CodexProcess {
         child,
         pid,
+        write_fence,
         stdout: LineReader::new(tokio::io::BufReader::new(stdout), MAX_LINE_BYTES),
         writer,
         writer_task,
@@ -478,5 +536,48 @@ mod tests {
             .expect("必须报错");
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(err.to_string().contains("工作目录"));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn controls_revoked_connection_cannot_write_queued_line_and_does_not_poison_other_input()
+    {
+        let mut p = spawn_codex(&sh("head -n 1", std::env::temp_dir())).unwrap();
+        let connection = Arc::new(Mutex::new(true));
+        let permit = crate::driver::ManualWritePermit::for_connection_lifetime(connection.clone());
+        p.writer
+            .send(WriterMessage::ControlledLine {
+                line: "FORBIDDEN_OLD_REQUEST".into(),
+                permit,
+            })
+            .unwrap();
+        *connection.lock().unwrap() = false;
+        p.writer.send("INDEPENDENT_ALLOWED_INPUT".into()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), p.stdout.next_line())
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(Line::Text("INDEPENDENT_ALLOWED_INPUT".into()))
+        );
+        tokio::time::timeout(Duration::from_secs(3), p.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn controls_stop_fence_cuts_plain_line_already_in_writer_mailbox() {
+        let mut p = spawn_codex(&sh("head -n 1", std::env::temp_dir())).unwrap();
+        p.writer.send("FORBIDDEN_AFTER_STOP".into()).unwrap();
+        *p.write_fence.lock().unwrap() = false;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), p.stdout.next_line())
+                .await
+                .unwrap()
+                .unwrap(),
+            None
+        );
+        tokio::time::timeout(Duration::from_secs(3), p.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

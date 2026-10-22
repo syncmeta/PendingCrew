@@ -130,6 +130,7 @@ fn event_op(e: &SessionEvent) -> Op {
         SessionEvent::Item { .. } => Op::Item,
         SessionEvent::TurnEnded { .. } => Op::TurnEnded,
         SessionEvent::Notice(_) => Op::Notice,
+        SessionEvent::CodexObservation { .. } => Op::Profile,
         SessionEvent::Profile(_) => Op::Profile,
         SessionEvent::Usage(_) => Op::UsageSnapshot,
         SessionEvent::Exited(info) => match (info.stopped_by_user, info.hit_limit) {
@@ -1400,6 +1401,8 @@ impl Walk {
             Op::Start => {
                 self.command(r, "Cmd::Start".into(), |reply| Cmd::Start {
                     req: StartSession {
+                        codex_options: None,
+
                         crew_id: "c".into(),
                         captain: false,
                         executor: "claude".into(),

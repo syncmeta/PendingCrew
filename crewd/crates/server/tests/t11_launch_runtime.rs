@@ -46,6 +46,9 @@ async fn generated_launch_files_and_token_use_the_external_private_runtime() {
     });
     let (handle, mut events) = exec
         .launch(LaunchRequest {
+            codex_options: None,
+            title: None,
+
             delivery_observer: None,
             session_id: "synthetic-session".into(),
             crew_id: "synthetic-crew".into(),

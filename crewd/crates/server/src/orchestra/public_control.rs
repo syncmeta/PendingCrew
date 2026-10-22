@@ -5,6 +5,11 @@ use super::port::Port;
 use crewd_exec::session::SessionEvent;
 use crewd_proto::commands::CommandRuntimeTarget;
 
+pub(crate) struct PendingMetadataControl {
+    pub request_id: String,
+    pub permit: crewd_exec::driver::ManualWritePermit,
+    pub revoked: bool,
+}
 #[derive(Default)]
 pub(crate) struct RuntimeFence {
     pub generation: u64,
@@ -13,6 +18,7 @@ pub(crate) struct RuntimeFence {
     pub turn_id: Option<String>,
     pub birth: Option<crewd_exec::registry::ProcessIdentity>,
     pub manual: bool,
+    pub metadata: Option<PendingMetadataControl>,
 }
 
 pub(crate) struct PendingPhysicalControl {
@@ -321,6 +327,17 @@ impl<P: Port> Core<P> {
     ) -> Result<serde_json::Value, crewd_proto::RpcError> {
         use crate::public_execution::Admission;
         use crewd_proto::commands::{CommandPhase, PublicCommand};
+        if let PublicCommand::SessionInterrupt(target) = &call.request.command {
+            if self
+                .port
+                .session(&target.session_id)
+                .await
+                .map_err(crate::dispatch::internal)?
+                .is_some_and(|row| row.executor == "codex")
+            {
+                return self.execute_public_codex(call).await;
+            }
+        }
         if matches!(
             &call.request.command,
             PublicCommand::TerminalClaim(_)
@@ -381,6 +398,12 @@ impl<P: Port> Core<P> {
             return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
         }
         let dispatched = call.dispatch().await?;
+        if matches!(call.request.command, PublicCommand::SessionStop(_)) {
+            self.revoke_codex_metadata(&target.session_id);
+            if let Some(l) = self.live.get(&target.session_id) {
+                l.handle.fence_inputs();
+            }
+        }
         let previous_generator = self.live.get(&target.session_id).map(|l| l.generator);
         let previous_birth = self
             .public_fences
@@ -603,6 +626,7 @@ impl<P: Port> Core<P> {
             executor: params.executor.clone(),
             brief: params.brief.clone(),
             title: params.title.clone(),
+            codex_options: params.codex_options.clone(),
             model: params.model.clone(),
             effort: params.effort.clone(),
             isolation: params.isolation,
@@ -666,6 +690,8 @@ impl<P: Port> Core<P> {
             .port
             .insert_public_session(
                 super::port::NewSession {
+                    codex_options: None,
+
                     crew_id: req.crew_id,
                     captain: req.captain,
                     executor: req.executor,
@@ -864,6 +890,16 @@ impl<P: Port> Core<P> {
         }
     }
 
+    pub(crate) fn revoke_codex_metadata(&mut self, session: &str) {
+        if let Some(pending) = self
+            .public_fences
+            .get_mut(session)
+            .and_then(|f| f.metadata.as_mut())
+        {
+            pending.revoked = true;
+            pending.permit.revoke();
+        }
+    }
     pub(crate) fn advance_public_control(&mut self, session: &str) {
         let fence = self.public_fences.entry(session.into()).or_default();
         // Exhaustion is fail-closed. There is no wrapping value a delayed
@@ -874,6 +910,7 @@ impl<P: Port> Core<P> {
             .expect("public control revision exhausted");
     }
     pub(crate) fn observe_public_runtime(&mut self, session: &str, generation: u64) {
+        self.revoke_codex_metadata(session);
         self.advance_public_control(session);
         let fence = self.public_fences.get_mut(session).expect("advanced fence");
         fence.generation = generation;

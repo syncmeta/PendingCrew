@@ -256,7 +256,9 @@ impl Port for DbPort {
         let session = self
             .write(move |tx| {
                 // 标题与 brief 原样交给 collab（§26.7：标题必填或从 brief 派生，拒绝原样上抛）。
-                collab::sessions::register(
+                let options = s.codex_options.clone();
+                let human_title = s.title.is_some();
+                let session = collab::sessions::register(
                     tx,
                     collab::sessions::NewSession {
                         crew_id: s.crew_id,
@@ -273,7 +275,9 @@ impl Port for DbPort {
                         worktree: s.worktree.map(|p| p.display().to_string()),
                         ..Default::default()
                     },
-                )
+                )?;
+                crewd_store::codex_controls::initial(tx.conn(), &session.id, options, human_title)?;
+                Ok(session)
             })
             .await?;
         self.read(move |c| row_of(c, session)).await
@@ -287,6 +291,8 @@ impl Port for DbPort {
         let owner = self.state.clone();
         self.write(move |tx| {
             call.authorize_registration(&owner, tx, &s)?;
+            let options = s.codex_options.clone();
+            let human_title = s.title.is_some();
             let session = collab::sessions::register(
                 tx,
                 collab::sessions::NewSession {
@@ -305,6 +311,7 @@ impl Port for DbPort {
                     ..Default::default()
                 },
             )?;
+            crewd_store::codex_controls::initial(tx.conn(), &session.id, options, human_title)?;
             call.record_registration(tx, &session.id)?;
             row_of(tx.conn(), session)
         })
@@ -378,6 +385,82 @@ impl Port for DbPort {
         .await
     }
 
+    async fn codex_resume_ready(&self, session: &str) -> Result<bool> {
+        let session = session.to_string();
+        self.read(move |c| Ok(!crewd_store::codex_controls::get(c, &session)?.fork_pending))
+            .await
+    }
+    async fn codex_launch_options(
+        &self,
+        session: &str,
+    ) -> Result<(
+        Option<String>,
+        Option<crewd_proto::codex::CodexSettingsPatch>,
+    )> {
+        let session = session.to_string();
+        self.write(move |tx| {
+            let row = collab::sessions::get(tx.conn(), &session)?;
+            if row.executor != "codex" {
+                return Ok((None, None));
+            }
+            let mut s = crewd_store::codex_controls::get(tx.conn(), &session)?;
+            if s.fork_pending {
+                return Err(crewd_collab::CollabError::Invalid(
+                    crewd_collab::refusal::Refusal::new(
+                        crewd_collab::refusal::Code::ResourceInvalid,
+                    )
+                    .arg("field", "codex.forkUnconfirmed"),
+                ));
+            }
+            // These are at-most-once initialization intents. A restart/manual
+            // resume inherits native settings, never retries an Unknown control.
+            let title = (!s.title_attempted)
+                .then(|| s.title.desired.clone())
+                .flatten();
+            let options = (!s.settings_attempted)
+                .then(|| s.desired_settings.clone())
+                .flatten();
+            if title.is_some() {
+                s.title_attempted = true;
+                s.title.status = crewd_proto::codex::CodexTitleStatus::Unknown;
+            }
+            if options.is_some() {
+                s.settings_attempted = true;
+                s.settings_status = Some("unknown".into());
+            }
+            crewd_store::codex_controls::put(tx.conn(), &session, &s)?;
+            Ok((title, options))
+        })
+        .await
+    }
+    async fn codex_observe(
+        &self,
+        session: &str,
+        settings: Option<serde_json::Value>,
+        title: Option<crewd_proto::codex::CodexTitleState>,
+        accepted: Option<crewd_proto::codex::CodexSettingsPatch>,
+    ) -> Result<()> {
+        let session = session.to_string();
+        let binding = self.state.runtime_binding_id.clone();
+        let event_session = session.clone();
+        self.write(move |tx| {
+            crewd_store::codex_controls::observe(
+                tx.conn(),
+                &session,
+                settings,
+                title,
+                accepted,
+                &binding,
+            )?;
+            Ok(())
+        })
+        .await?;
+        self.state.hub.publish(crewd_proto::Event {
+            event: crewd_proto::codex::CHANGED.into(),
+            data: serde_json::json!({"sessionId":event_session}),
+        });
+        Ok(())
+    }
     fn ledger(&self, session: &str) -> Arc<dyn AgentIdLedger> {
         Arc::new(DbLedger::new(self.state.db.clone(), session))
     }

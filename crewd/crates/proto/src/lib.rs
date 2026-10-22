@@ -148,6 +148,10 @@ pub mod methods {
         crate::commands::COMMAND_LOOKUP,
         crate::commands::COMMAND_LIST_UNKNOWN,
         crate::commands::SESSION_CONTROL_TARGET,
+        crate::codex::INSPECT,
+        crate::codex::HISTORY,
+        crate::codex::MODELS,
+        crate::codex::TOOLS,
         crate::commands::SESSION_TERMINAL_INSPECT,
         crate::commands::SESSION_TERMINAL_WATCH,
         HELLO,
@@ -953,6 +957,34 @@ pub fn api_schema() -> Value {
             m(sub::<WorkHistoryParams>(g), sub::<WorkHistoryPage>(g)),
         ),
         (
+            codex::INSPECT,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexSessionInspection>(g),
+            ),
+        ),
+        (
+            codex::HISTORY,
+            m(
+                sub::<codex::CodexHistoryParams>(g),
+                sub::<codex::CodexHistoryPage>(g),
+            ),
+        ),
+        (
+            codex::MODELS,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexModels>(g),
+            ),
+        ),
+        (
+            codex::TOOLS,
+            m(
+                sub::<orchestra::SessionIdParams>(g),
+                sub::<codex::CodexTools>(g),
+            ),
+        ),
+        (
             methods::SESSION_USAGE,
             m(sub::<RunnerUsageParams>(g), sub::<RunnerUsagePage>(g)),
         ),
@@ -1524,15 +1556,37 @@ mod tests {
         assert_eq!(s["apiVersion"], 3);
     }
 
-    /// 不做审批了（人 2026-10-07）：契约里不剩任何审批方法 / 事件 / 主题 / 类型（不分大小写，`$defs` 的类型名也算）。
+    /// Legacy PCW approval workflow stays removed. Native Codex policy/structured
+    /// decisions are the explicitly requested session surface, not that workflow.
     #[test]
-    fn there_is_no_approval_surface_left() {
-        let schema = serde_json::to_string(&api_schema()).unwrap().to_lowercase();
-        assert!(
-            !schema.contains("approval"),
-            "契约里不能再有任何审批方法 / 事件 / 类型"
-        );
+    fn there_is_no_legacy_approval_workflow() {
+        let schema = api_schema();
+        for method in schema["methods"].as_object().unwrap().keys() {
+            assert!(
+                !method.starts_with("approval."),
+                "legacy approval RPC must stay absent"
+            );
+        }
         assert_eq!(API_VERSION, 3);
+    }
+
+    #[test]
+    fn api3_start_without_options_preserves_the_original_command_envelope() {
+        let original = json!({"operation":"session.start","params":{"crewId":"crew-original","role":"captain","executor":"codex","brief":"Original task exactly","title":null,"model":null,"effort":null,"isolation":false}});
+        let command: commands::PublicCommand = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&command).unwrap(),
+            original,
+            "an absent additive field must not change the preexisting API3 envelope"
+        );
+        let mut configured = original;
+        configured["params"]["codexOptions"] = json!({"fast":false});
+        let command: commands::PublicCommand = serde_json::from_value(configured.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(command).unwrap(),
+            configured,
+            "actual options retain their exact command identity"
+        );
     }
 
     #[test]
@@ -1783,3 +1837,5 @@ pub mod team_data;
 pub mod team_data_api;
 
 pub mod lifecycle;
+
+pub mod codex;

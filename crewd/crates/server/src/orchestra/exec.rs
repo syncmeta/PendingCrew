@@ -23,6 +23,8 @@ pub struct LaunchRequest {
     pub session_id: String,
     pub crew_id: String,
     pub workdir: PathBuf,
+    pub title: Option<String>,
+    pub codex_options: Option<crewd_proto::codex::CodexSettingsPatch>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// 世界观（`collab::worldview::render`）。
@@ -63,6 +65,13 @@ impl std::error::Error for LaunchError {}
 pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
 
 pub trait Executor: Send + Sync {
+    fn codex_metadata(
+        &self,
+        _req: crewd_exec::codex::metadata::MetadataRequest,
+    ) -> BoxFut<'_, crewd_exec::codex::control::CodexOutcome> {
+        Box::pin(async { crewd_exec::codex::control::CodexOutcome::unsupported() })
+    }
+
     /// Pure configuration/filesystem metadata. Never initialize a provider here.
     fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
         None
@@ -128,6 +137,59 @@ pub type AnswerSteps = Vec<(Vec<u8>, Option<usize>)>;
 
 /// §13 Q12 的窄接口（启动之外）。
 pub trait ExecHandle: Send + Sync {
+    fn fence_inputs(&self) {}
+    fn control_controlled(
+        &self,
+        _op: crewd_exec::driver::Control,
+        _permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::driver::ControlOutcome, Closed>> {
+        Box::pin(async {
+            Ok(crewd_exec::driver::ControlOutcome::Unsupported(
+                "PCW controlled adapter unavailable".into(),
+            ))
+        })
+    }
+    fn codex_controlled(
+        &self,
+        _op: crewd_exec::codex::control::CodexOperation,
+        _permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
+    }
+    fn codex_queue_controlled(
+        &self,
+        _text: String,
+        _request_id: String,
+        _permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
+    }
+
+    fn codex_queue(
+        &self,
+        _text: String,
+        _request_id: String,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
+    }
+
+    fn codex(
+        &self,
+        _op: crewd_exec::codex::control::CodexOperation,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
+    }
+    fn control(
+        &self,
+        _op: crewd_exec::driver::Control,
+    ) -> BoxFut<'_, Result<crewd_exec::driver::ControlOutcome, Closed>> {
+        Box::pin(async {
+            Ok(crewd_exec::driver::ControlOutcome::Unsupported(
+                "PCW adapter has no typed control".into(),
+            ))
+        })
+    }
+
     /// `context` 只能在 `accepts_context()` 为真时非空，否则回 `ContextUnsupported`（见 [`check_context`]）。
     fn send(&self, text: String, context: &Context) -> Result<u64, ExecSendError>;
     fn send_bound(

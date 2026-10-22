@@ -148,6 +148,8 @@ impl LostActorRig {
         let owner = h
             .start(
                 StartSession {
+                    codex_options: None,
+
                     crew_id: f.crew.clone(),
                     captain: true,
                     executor: "claude".into(),

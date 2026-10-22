@@ -112,6 +112,9 @@ impl<P: Port> Core<P> {
         };
         // 停机闸：从此刻起不投、不拉起、不起 / 恢复会话（同停机，C4：闸不随回执打开）。
         self.shutting_down = true;
+        for session in self.public_fences.keys().cloned().collect::<Vec<_>>() {
+            self.revoke_codex_metadata(&session);
+        }
         let mut tracked = BTreeMap::new();
         let mut entries = Vec::new();
         for (s, l) in &self.live {
@@ -1133,6 +1136,8 @@ mod tests {
             }
         );
         let req = StartSession {
+            codex_options: None,
+
             crew_id: "c1".into(),
             captain: false,
             executor: "claude".into(),

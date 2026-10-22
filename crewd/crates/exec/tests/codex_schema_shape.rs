@@ -1,4 +1,4 @@
-//! Offline shape contract extracted from the installed 0.162.1 CLI's
+//! Offline shape contract extracted from the installed 0.163.0 CLI (with the0.162.1 fixture retained historically)'s
 //! generate-json-schema --experimental output. No model or credentials involved.
 use crewd_exec::{
     codex::proto::{self, ThreadOptions},
@@ -10,8 +10,11 @@ use std::path::Path;
 #[test]
 fn outbound_methods_and_fields_match_the_native_experimental_contract() {
     let schema: Value =
-        serde_json::from_str(include_str!("fixtures/codex-0.162.1-client-shape.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/codex-0.163.0-client-shape.json")).unwrap();
     let options = ThreadOptions {
+        title: None,
+        initial_settings: None,
+        strict_resume: false,
         model: Some("synthetic-model".into()),
         effort: Some("high".into()),
         fast: Some(true),

@@ -89,6 +89,7 @@ impl PublicExecution {
             || original.title != session.title
             || original.model != session.model
             || original.effort != session.effort
+            || original.codex_options != session.codex_options
             || original.isolation != session.worktree.is_some()
         {
             return Err(crewd_store::StoreError::Invalid(
@@ -197,7 +198,30 @@ impl PublicExecution {
                 for method in call.request.command.authorized_methods() {
                     call.actor.authorize_tx(&owner, tx.conn(), method)?;
                 }
-                let result=if let PublicCommand::SessionStop(params)=&call.request.command {
+                if let PublicCommand::CodexConfigure(p)=&call.request.command {
+                    crewd_store::codex_controls::configure_intent(tx.conn(),&p.target.session_id,&p.patch,&call.request.request_id)?;
+                }
+                if let PublicCommand::CodexTitleSet(p)=&call.request.command {
+                    let title=crewd_collab::sessions::resolve_title(Some(&p.title),None)?;
+                    let mut m=crewd_store::codex_controls::get(tx.conn(),&p.target.session_id)?;
+                    m.title.desired=Some(title.clone());m.title.source=crewd_proto::codex::CodexTitleSource::Human;
+                    m.title.status=crewd_proto::codex::CodexTitleStatus::Pending;m.title_attempted=true;m.title_intent_observation=m.name_revision;m.title_request=Some(call.request.request_id.clone());
+                    crewd_store::codex_controls::put(tx.conn(),&p.target.session_id,&m)?;
+                    tx.conn().execute("UPDATE sessions SET title=?2,updated_at=?3 WHERE id=?1",rusqlite::params![p.target.session_id,title,tx.now_ts()])?;
+                    tx.note(crewd_collab::Change::SessionChanged{session_id:p.target.session_id.clone()});
+                }
+                let result=if let PublicCommand::CodexFork(p)=&call.request.command {
+                    let original=crewd_collab::sessions::get(tx.conn(),&p.target.session_id)?;
+                    let fork=crewd_collab::sessions::register(tx,crewd_collab::sessions::NewSession{
+                        crew_id:original.crew_id,role:crewd_proto::Role::Worker,executor:"codex".into(),
+                        title:p.title.clone().or(original.title),brief:Some("Explicit conversation fork; no task submitted".into()),
+                        working_directory:original.worktree.or(original.working_directory),model:original.model,effort:original.effort,..Default::default()
+                    })?;
+                    crewd_store::codex_controls::initial(tx.conn(),&fork.id,None,p.title.is_some())?;
+                    let mut m=crewd_store::codex_controls::get(tx.conn(),&fork.id)?;m.fork_pending=true;crewd_store::codex_controls::put(tx.conn(),&fork.id,&m)?;
+                    crewd_collab::wakes::human_stop(tx,&fork.id)?;
+                    Some(serde_json::json!({"newSessionId":fork.id}))
+                } else if let PublicCommand::SessionStop(params)=&call.request.command {
                     // Stop intent/floor and receipt dispatch are ONE authority
                     // transaction. A failed floor cannot admit an OS stop.
                     crewd_collab::wakes::human_stop(tx,&params.target.session_id)?;
@@ -274,6 +298,62 @@ impl PublicExecution {
                     for (key, value) in previous {
                         next.entry(key).or_insert(value);
                     }
+                }
+                if let PublicCommand::CodexConfigure(p) = &call.request.command {
+                    let mut m = crewd_store::codex_controls::get(tx.conn(), &p.target.session_id)?;
+                    if m.intent_request.as_deref() == Some(call.request.request_id.as_str()) {
+                        m.settings_status = Some(
+                            if to == CommandPhase::Confirmed {
+                                "accepted"
+                            } else if to == CommandPhase::Rejected {
+                                "rejected"
+                            } else {
+                                "unknown"
+                            }
+                            .into(),
+                        );
+                        crewd_store::codex_controls::put(tx.conn(), &p.target.session_id, &m)?;
+                    }
+                }
+                if let PublicCommand::CodexTitleSet(p) = &call.request.command {
+                    let mut m = crewd_store::codex_controls::get(tx.conn(), &p.target.session_id)?;
+                    if m.title_request.as_deref() == Some(call.request.request_id.as_str()) {
+                        m.title.status = if to == CommandPhase::Confirmed {
+                            crewd_proto::codex::CodexTitleStatus::Synced
+                        } else if to == CommandPhase::Rejected {
+                            crewd_proto::codex::CodexTitleStatus::Rejected
+                        } else {
+                            crewd_proto::codex::CodexTitleStatus::Unknown
+                        };
+                        if to == CommandPhase::Confirmed {
+                            if m.name_revision == m.title_intent_observation {
+                                m.title.native = m.title.desired.clone();
+                            } else if m.title.native != m.title.desired {
+                                m.title.status = crewd_proto::codex::CodexTitleStatus::Unknown;
+                            }
+                        }
+                        crewd_store::codex_controls::put(tx.conn(), &p.target.session_id, &m)?;
+                    }
+                }
+                if matches!(call.request.command, PublicCommand::CodexFork(_))
+                    && to == CommandPhase::Confirmed
+                {
+                    let id = result
+                        .get("newSessionId")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            crewd_store::StoreError::Invalid("fork Core identity absent".into())
+                        })?;
+                    let thread = result
+                        .get("nativeThreadId")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            crewd_store::StoreError::Invalid("fork native identity absent".into())
+                        })?;
+                    crewd_store::sessions::set_agent_session_id(tx.conn(), id, thread)?;
+                    let mut m = crewd_store::codex_controls::get(tx.conn(), id)?;
+                    m.fork_pending = false;
+                    crewd_store::codex_controls::put(tx.conn(), id, &m)?;
                 }
                 Ok(receipts::transition(
                     tx.conn(),

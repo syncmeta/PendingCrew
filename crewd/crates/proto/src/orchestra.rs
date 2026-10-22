@@ -59,6 +59,7 @@ pub const CAPABILITIES: &[&str] = &[
     "orchestra",
     "session.answer",
     "session.respondRunnerRequest",
+    "session.codex",
     "crewd.hibernate",
     "wake.explain",
     "message.receipts",
@@ -166,6 +167,8 @@ pub struct SessionStartParams {
     /// `claude` / `codex` / `acp:<id>`（M3c 里只有 claude 起得来）。
     pub executor: String,
     pub brief: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_options: Option<crate::codex::CodexSettingsPatch>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
