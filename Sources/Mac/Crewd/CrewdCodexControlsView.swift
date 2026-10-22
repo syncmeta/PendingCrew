@@ -71,7 +71,12 @@ private struct CrewdCodexControlPanel:View {
     let sessionID:String
     @Environment(\.dismiss) private var dismiss
     @State private var settings=CrewdCodexSettingsDraft()
-    @State private var title="",bodyText="",reviewKind="uncommittedChanges",reviewValue="",forkTurn="",forkTitle=""
+    @State private var title=""
+    @State private var bodyText=""
+    @State private var reviewKind="uncommittedChanges"
+    @State private var reviewValue=""
+    @State private var forkTurn=""
+    @State private var forkTitle=""
     @State private var localError:String?
     @State private var confirmationTarget:CrewdCommandTarget?
     @State private var confirmation:String?

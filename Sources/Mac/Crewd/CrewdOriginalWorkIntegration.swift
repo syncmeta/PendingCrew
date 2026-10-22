@@ -32,7 +32,7 @@ struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
     var openSession: ((String) -> Void)? = nil
     func body(content: Content) -> some View {
-        if let workspace { CrewdOriginalCrewContent(workspace: workspace, openSession: openSession) { content } }
+        if let workspace { CrewdOriginalCrewContent(workspace: workspace, content: { content }, openSession: openSession) }
         else { content }
     }
 }
