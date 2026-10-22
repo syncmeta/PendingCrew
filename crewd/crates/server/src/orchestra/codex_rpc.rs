@@ -275,12 +275,13 @@ async fn read_crew_catalog(h:&Handle,state:&AppState,crew_id:String,profiles:Opt
     }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
     let workdir=tokio::task::spawn_blocking(move||std::fs::canonicalize(work)).await.map_err(dispatch::internal)?.map_err(|_|RpcError::new(RpcError::CONFLICT,"original crew workspace unavailable"))?;
     if !workdir.is_dir(){return Err(RpcError::new(RpcError::CONFLICT,"original crew workspace is not a directory"))}
+    let requested_profiles=profiles.is_some();
     let operation=match profiles {Some(p)=>Op::PermissionProfiles(p),None=>Op::Tools};
     let outcome=h.codex_metadata(crewd_exec::codex::metadata::MetadataRequest{session_id:format!("crew-catalog/{crew_id}"),thread_id:String::new(),workdir,operation,permit:None}).await;
     let native=match outcome{Out::Observed(v)=>v,Out::Rejected(e)=>return Err(RpcError::new(RpcError::CONFLICT,e).with_refusal("codex.provider_rejected")),Out::Unknown{detail,..}=>return Err(RpcError::new(RpcError::CONFLICT,detail).with_refusal("codex.read_unconfirmed"))};
     if serde_json::to_vec(&native).map_err(dispatch::internal)?.len()>4*1024*1024{return Err(RpcError::new(RpcError::CONFLICT,"native catalog exceeds bounded response"))}
     let native=native.get("providerResult").unwrap_or(&native);
-    if native.get("skills").is_some(){
+    if !requested_profiles{
         let servers=native.pointer("/mcpServers/data").and_then(Value::as_array).ok_or_else(||RpcError::new(RpcError::CONFLICT,"native MCP catalog shape differs"))?;
         let skills=native.pointer("/skills/data").and_then(Value::as_array).ok_or_else(||RpcError::new(RpcError::CONFLICT,"native skill catalog shape differs"))?;
         Ok(json!({"mcpServers":servers,"skills":skills}))
