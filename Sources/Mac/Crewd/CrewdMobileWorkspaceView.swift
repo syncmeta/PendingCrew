@@ -146,7 +146,7 @@ private struct CrewdMobileConversation: View {
     @State private var showTodo = false
     @State private var showMembers = false
     private var context: CrewdDrafts.Context { .message(crew: workspace.crewID, channel: workspace.channelID, session: workspace.sessionID) }
-    private var input: Binding<String> { Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.messageDrafts.set($0, for: context) }) }
+    private var input: Binding<String> { Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.setPersonalInput($0,context:context) }) }
     var body: some View {
         Group {
             if expectedChannel.isEmpty { Text("选择一个会话").foregroundStyle(.secondary) }
@@ -156,6 +156,7 @@ private struct CrewdMobileConversation: View {
     }
     private var conversation: some View {
         VStack(spacing: 8) {
+            CrewPersonalDraftControls(workspace:workspace,context:context,payload:Binding(get:{.init(text:input.wrappedValue)},set:{input.wrappedValue=$0.text}))
             HStack {
                 CrewdFolderAssignmentButton(store: workspace.resources, drafts: $workspace.resourceDrafts, view: .messages, object: CrewdFolderFilter.object("channel", workspace.channelID))
                 Spacer()

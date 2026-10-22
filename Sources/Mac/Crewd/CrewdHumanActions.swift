@@ -329,11 +329,12 @@ struct CrewdSessionStartView: View {
     @State private var reading = false
     private var unknown: [CrewdDrafts.Snapshot] { workspace.uncertainSessionStarts.filter { $0.context.crew == workspace.crewID } }
     private var context: CrewdDrafts.Context { .initialTask(crew: workspace.crewID, session: workspace.sessionID) }
-    private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); reviewedUnknown = false }) }
+    private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context); reviewedUnknown = false }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)
             TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(2...6)
+            CrewPersonalDraftControls(workspace:workspace,context:context,payload:Binding(get:{.init(text:input.wrappedValue)},set:{input.wrappedValue=$0.text}))
             Toggle("使用独立工作树", isOn: $isolation)
             Text(isolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。").font(.caption).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
@@ -350,11 +351,12 @@ struct CrewdSessionStartView: View {
             }
             Button("启动所选成员") {
                 let snapshot = drafts.snapshot(for: context), owner = workspace
+                let personal=owner.personalInputSnapshot(snapshot)
                 let role = owner.sessions.contains(where: { $0["role"].string == "captain" }) ? "worker" : "captain"
                 let fields: CrewdValue = .object(["crewId": .string(snapshot.context.crew), "role": .string(role), "executor": .string(owner.selectedExecutor), "brief": .string(snapshot.text), "isolation": .bool(isolation)])
                 failure = nil; readUnknown = false; reviewedUnknown = false
                 Task {
-                    do { _ = try await owner.performValue("session.start", fields); drafts.clearIfUnchanged(snapshot) }
+                    do { _ = try await owner.performValue("session.start", fields); owner.clearPersonalInput(snapshot,personal:personal) }
                     catch {
                         owner.recordUncertainSessionStart(snapshot, error: error)
                         if owner.crewID == snapshot.context.crew { failure = error.localizedDescription }

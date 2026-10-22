@@ -224,6 +224,7 @@ struct CrewChatView: View {
         // 切 crew 视图整个重建（macOS/iPad 都带 `.id(crewId)`），所以未发出的草稿不能只
         // 活在 @State 里 —— 进屏取回、变动存回，切走再切回来原样在。
         .onAppear { restoreDraft() }
+        .task(id: draftStorageKey) { await restorePersonalDraft() }
         .onChange(of: replyTarget) { _, _ in saveDraft() }
         // File importer — .fileImporter is available on iOS 14+ and macOS 11+.
         // On iOS the system presents a document picker; on macOS a Finder sheet.
@@ -411,6 +412,9 @@ struct CrewChatView: View {
 
     @ViewBuilder
     private var errorBar: some View {
+        if let workspace=appModel.crewdBackend?.workspace {
+            CrewPersonalDraftControls(workspace:workspace,context:.message(crew:crewId,channel:crewdChannelID,session:""),payload:Binding(get:{.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget)},set:{value in draft=value.text;replyTarget=value.replyTarget;stagedMentions=value.stagedMentions;saveDraft()})).padding(.horizontal,14).padding(.top,4)
+        }
         if let errorText = loadError ?? composerDraftStore.storageError {
             Text(errorText)
                 .font(Theme.Fonts.caption)
@@ -518,6 +522,7 @@ struct CrewChatView: View {
     }
 
     private func restoreDraft() {
+        guard draft.isEmpty,stagedMentions.isEmpty,replyTarget == nil else{return}
         var saved = composerDraftStore.draft(for: draftStorageKey)
         // Earlier original-front drafts were crew/lobby scoped. Retain them
         // only for that exact authority/lobby, never another conversation.
@@ -532,6 +537,13 @@ struct CrewChatView: View {
         stagedMentions = saved.stagedMentions
     }
 
+    @MainActor private func restorePersonalDraft()async {
+        guard draft.isEmpty,stagedMentions.isEmpty,replyTarget == nil,let workspace=appModel.crewdBackend?.workspace else{return}
+        let route=draftStorageKey
+        let context=CrewdDrafts.Context.message(crew:crewId,channel:crewdChannelID,session:"")
+        guard let key=workspace.personalDraftKey(context),let payload=await workspace.personalDrafts.restoreOwn(key),draftStorageKey == route,draft.isEmpty,stagedMentions.isEmpty,replyTarget == nil else{return}
+        draft=payload.text;replyTarget=payload.replyTarget;stagedMentions=payload.stagedMentions
+    }
     /// 存回去（草稿一动就存；发送成功后由 `send()` 清）。
     private func saveDraft() {
         if let workspace = appModel.crewdBackend?.workspace {
@@ -540,6 +552,7 @@ struct CrewChatView: View {
         composerDraftStore.save(
             .init(text: draft, stagedMentions: stagedMentions, replyTarget: replyTarget),
             for: draftStorageKey, crew: crewId, channel: crewdChannelID)
+        appModel.crewdBackend?.workspace.checkpointComposer(.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget),crew:crewId,channel:crewdChannelID)
     }
 
     /// The roster member id that represents "me" (skipped from the candidate
@@ -1729,8 +1742,10 @@ struct CrewChatView: View {
         guard !text.isEmpty || !toUpload.isEmpty,
               let backend = appModel.backend else { return }
         saveDraft()
+        let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         sending = true
         defer { sending = false }
         do {
@@ -1771,6 +1786,7 @@ struct CrewChatView: View {
             // 「我要回到现场」的明确意图。
             bottomPin.didSendOwnMessage()
             let cleared = sentStore.clearIfUnchanged(sentDraft)
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared, draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }
@@ -1804,8 +1820,10 @@ struct CrewChatView: View {
                 allImages: toUpload.allSatisfy(\.isImage)),
               let backend = appModel.backend else { return }
         saveDraft()
+        let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         sending = true
         defer { sending = false }
         do {
@@ -1819,6 +1837,7 @@ struct CrewChatView: View {
             // 建 Todo 也会往群里发一条「To do +1: #N」—— 同样是自己说话（Todo #47）。
             bottomPin.didSendOwnMessage()
             let cleared = sentStore.clearIfUnchanged(sentDraft)
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared, draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }
@@ -1859,8 +1878,10 @@ struct CrewChatView: View {
             loadError = "原会话已切换；请回到原连接核对，不会跨会话提交。"; return
         }
         saveDraft()
+        let sentPersonalKey=appModel.crewdBackend?.workspace.personalDraftKey(.message(crew:crewId,channel:crewdChannelID,session:""))
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
+        let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft)}
         let epoch = workspace.observationGeneration
         sending = true; defer { sending = false }
         do {
@@ -1870,8 +1891,9 @@ struct CrewChatView: View {
                   workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel else { return }
             requirementReceipt = "已创建本群需求 " + (result["requirementId"].string ?? "（请核对 Todo）")
             if result["channelAssociation"]["linked"] == .bool(false) { requirementReceipt = "需求已创建，但原会话关联已解除；不会重新关联。" }
-            if sentDraft.draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == snapshot.text,
-               sentStore.clearIfUnchanged(sentDraft), draftStorageKey == sentDraft.key {
+            let cleared=sentDraft.draft.text.trimmingCharacters(in:.whitespacesAndNewlines) == snapshot.text && sentStore.clearIfUnchanged(sentDraft)
+            if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
+            if cleared,draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
             }
             loadError = nil

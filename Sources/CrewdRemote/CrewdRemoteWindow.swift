@@ -146,6 +146,10 @@ import Combine
         if selected==id,selectedReceipt==receipt,let current=workspace {
             await connectSelected(current);return
         }
+        if let computer=computers.first(where:{$0.id == id}) {
+            var address=URLComponents();address.scheme="tls";address.host=computer.endpoint.host;address.port=Int(computer.endpoint.port)
+            if let url=address.url,let hint=try? ApplePortableHost(displayName:computer.name,endpoint:url,transportAuthorityID:receipt.authorityId,databaseID:receipt.dbId,verifiedSPKI:receipt.serverSpkiSha256){await CrewPersonalDraftService.shared.rememberHost(hint)}
+        }
         retireCurrent();selected=id;selectedReceipt=receipt
         let next=CrewdWorkspace(authorityRecordID:id,connect:CrewdRemoteTransport.connector(id:id,pairing:pairing))
         install(next);await connectSelected(next)

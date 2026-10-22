@@ -80,6 +80,11 @@ struct CrewSessionWindowView: View {
         }
         // 填满 inspector 栏 —— 内容是弹性的，跟随固定列宽布局，不溢出。
         .frame(maxWidth: .infinity)
+        .safeAreaInset(edge:.bottom){
+            if presentation == .conversation,let owner=presentedDraftOwner,let context=presentedDraftContext {
+                CrewPersonalDraftControls(workspace:owner,context:context,payload:Binding(get:{.init(text:draft)},set:{sessionDraftBinding.wrappedValue=$0.text})).padding(.horizontal,12).padding(.vertical,5)
+            }
+        }
         // 无 navigationTitle —— 这是 inspector 内容,标题会漏到主窗标题栏(显成
         // "Session" 盖掉 crew 名)。窗标题由中栏 toolbar 的 crew 名负责。
         // 成员列表模式要的白板/roster 数据 —— 事件驱动订阅（去 3s 轮询，与中栏各订各的）。
@@ -184,7 +189,7 @@ struct CrewSessionWindowView: View {
             guard value != draft else { return }
             draftEditRevision = UUID(); draft = value
             if presentation == .conversation, let context = presentedDraftContext {
-                presentedDraftOwner?.messageDrafts.set(value, for: context)
+                presentedDraftOwner?.setPersonalInput(value,context:context)
             }
         })
     }
@@ -202,10 +207,12 @@ struct CrewSessionWindowView: View {
             ? .initialTask(crew: crew, session: "original-composer")
             : .message(crew: crew, channel: crew + "/lobby", session: current?.sessionId ?? "")
         guard presentedDraftOwner !== owner || presentedDraftContext != next else { return }
-        if let old = presentedDraftContext { presentedDraftOwner?.messageDrafts.set(draft, for: old) }
+        if let old = presentedDraftContext { presentedDraftOwner?.setPersonalInput(draft,context:old) }
         presentedDraftOwner = owner; presentedDraftContext = next
         draftEditRevision = UUID()
         draft = owner.messageDrafts.text(for: next)
+        let revision=draftEditRevision
+        Task{await owner.restorePersonalInput(next);guard presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision,draft.isEmpty else{return};draft=owner.messageDrafts.text(for:next)}
     }
 
     // MARK: - 终端模式（切换条 + 终端 + composer）
@@ -1153,7 +1160,7 @@ struct CrewSessionWindowView: View {
             if isContinuing, let run = sessionRunner.current {
                 guard run.crewId == detail.crew.id else { throw CrewdClientError(message: "会话已切换，未发送。", kind: .notSubmitted) }
                 let context = CrewdDrafts.Context.message(crew: detail.crew.id, channel: detail.crew.id + "/lobby", session: run.sessionId)
-                workspace.messageDrafts.set(originalDraft, for: context)
+                workspace.setPersonalInput(originalDraft,context:context)
                 _ = try await workspace.submitOriginalText(.object([
                     "channelId": .string(detail.crew.id + "/lobby"), "text": .string(text),
                     "mentions": .array([.object(["kind": .string("session"), "targetId": .string(run.sessionId)])])]), snapshot: workspace.messageDrafts.snapshot(for: context))
@@ -1164,15 +1171,16 @@ struct CrewSessionWindowView: View {
                 guard !workspace.hasOriginalUnknown(method: "session.start", crew: detail.crew.id), !workspace.uncertainSessionStarts.contains(where: { $0.context == context }) else {
                     throw CrewdClientError(message: "原启动结果未确认；请核对同一机组会话，不会再次启动。", kind: .notSubmitted)
                 }
-                workspace.messageDrafts.set(originalDraft, for: context)
+                workspace.setPersonalInput(originalDraft,context:context)
                 let snapshot = workspace.messageDrafts.snapshot(for: context)
+                let personal=workspace.personalInputSnapshot(snapshot)
                 let result: CrewdValue
                 do {
                     result = try await workspace.performValue("session.start", .object([
                         "crewId": .string(detail.crew.id), "role": .string(startsAsCaptain ? "captain" : "worker"),
                         "executor": .string(executor), "brief": .string(text), "isolation": .bool(crewdIsolation)]))
                     guard let id = result["id"].string else { throw CrewdClientError(message: "创建结果未确认，须核对原连接。") }
-                    workspace.messageDrafts.clearIfUnchanged(snapshot)
+                    workspace.clearPersonalInput(snapshot,personal:personal)
                     if stillPresentingSubmission() { workspace.selectSession(id) }
                 } catch {
                     workspace.recordUncertainSessionStart(snapshot, error: error)
