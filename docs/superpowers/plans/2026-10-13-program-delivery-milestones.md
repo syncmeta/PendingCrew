@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 当前准确候选及源戳故障关闭
+
+完整CoreDraft已在M=eb3f0d29965f1092f61df0ef1ad30e8d9057edad整合并推送；1942/478完整输入的fresh normal经13b22270独验。普通Mac单次73424实际archive编译0，但旧stamp脚本忽略明示source，从无.git归档向上吸primary C4，故在签名前被原guard拒绝。原失败archive保留，未签名、安装、重试，M iOS未运行。本次只接最小源修7ef1bcec：真实PlistBuddy接缝3实红，修后8mode及sh-n经80ff93d7独验；明确40hex优先，缺省仅真实Git根fallback；原5f06配方、guard、Swift工程、Rust和五Linuxrecipe未变。下一Mac/iOS须用含该修订的新完整输入做准确normal及同源签包，旧M证明不改标，稳定业务不重跑。本节为最新状态，下节保留此前时点。
+
+Linux最终C4c4c2f8d0已独验d68f8ddc、整合推送并精确绑定M/Rust0a/149/21。唯一新run39870803043已实际terminal success，正下载原artifact，完整ELF/tar/source-after仍待独验，不冒部署或发布。15分钟硬限，无重试；此前两job保守11，本次项目上界26，历史“至少30分钟”不冒当前余额。Mac-onlystamp修不变Linux输入，不再为此开Linux job，产物永久标实际M来源。本轮只读PS仍实见App93537/Core93539及日用0.1.44/20748.58461；不强退，正常退出问题待答，其他工作继续。
+
 ## 2026-10-23 当前完整候选与并行模块
 
 完整 Codex 后台及共享 Mac/iOS 消费者已独立准入并整合为产品源码 `6c5fdb30fadba68deac90dc3de733325047d8b68`（S）。该完整输入的新 production normal、普通 Developer ID Mac 包和普通 iOS Simulator 包也已通过独立成套产物门。Mac 为 **0.1.44 / 20748.73718**，iOS 实际为 **0.1.43 / 1**；两端源码同 S，版本字段按实际记录。Rust树 `232239060a0851997f1863e2877b1af2629fab63`，Store20/API3/schema141，Native16 inactive，Cloud/APNs 真实资格 nil/off。
