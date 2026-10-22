@@ -25,7 +25,19 @@ struct CrewdFolderSnapshot {
         }
         return children(nil,0)
     }
-    func folder(for object:CrewdValue)->String? {assignments.first(where:{$0["object"] == object})?["folderId"].string}
+    static func objectIdentity(_ object:CrewdValue)->String? {
+        guard let kind=object["kind"].string,let id=object["id"].string,!id.isEmpty else{return nil}
+        if kind != "knowledgeView"{return kind+":"+id}
+        let source=object["knowledge"],c=source["context"],ref=source["reference"]
+        guard ref["kind"] == .string("view"),ref["id"] == .string(id),ref["namespace"] == c["namespace"],c["generation"].string?.isEmpty == false else{return nil}
+        let parts=[c["authorityId"],c["dbId"],c["restoreEpoch"],c["crewId"],c["namespace"],ref["namespace"],ref["kind"],ref["id"]].compactMap(\.string)
+        guard parts.count == 8,parts.allSatisfy({!$0.isEmpty}) else{return nil}
+        return "knowledgeView:"+parts.map{"\($0.utf8.count):\($0)"}.joined()
+    }
+    func folder(for object:CrewdValue)->String? {
+        guard let key=Self.objectIdentity(object) else{return nil}
+        return assignments.first(where:{Self.objectIdentity($0["object"]) == key})?["folderId"].string
+    }
 }
 
 /// Read caches only. All content and folder state is owned by the crewd authority.
@@ -69,7 +81,7 @@ struct CrewdFolderSnapshot {
             if capabilities.contains("viewFolders"){_ = try await refreshFolders(view)}
             try check(token)
             guard activationQuery == query else{throw CancellationError()}
-            if view == .documents,capabilities.contains("documents"){try await refreshDocuments()}
+            if view == .documents,channel.isEmpty,capabilities.contains("documents"){try await refreshDocuments()}
             try check(token)
             guard activationQuery == query else{throw CancellationError()}
         } catch {
@@ -119,36 +131,10 @@ struct CrewdFolderSnapshot {
         }else{documents[incoming.id]=incoming}
     }
     func refreshDocuments()async throws{
-        try require("documents");let token=generation,query=UUID(),scope=crew;listQuery=query
+        try require("documents")
+        guard channel.isEmpty else{throw CrewdClientError(message:"群文档使用SQLite知识对象，不能读取旧文档表。",kind:.notSubmitted)}
+        let token=generation,query=UUID(),scope=crew;listQuery=query
         do{
-            if !channel.isEmpty {
-                let currentChannel=channel
-                var ids:[String]=[],cursor:String?,seen=Set<String>(),cursors=Set<String>(),links:String?,source:String?
-                repeat {
-                    var params:[String:CrewdValue]=["channelId":.string(currentChannel),"kinds":.array([.string("document")]),"limit":.integer(100)]
-                    if let cursor{params["after"] = .string(cursor)}
-                    let page=try await call("channel.workList",.object(params));try check(token)
-                    guard listQuery == query,channel == currentChannel else{throw CancellationError()}
-                    guard page["channelId"] == .string(currentChannel),case .array = page["items"],page["items"].array.count <= 100,
-                          let link=page["linkRevision"].string,let cut=page["sourceRevision"].string,
-                          links == nil || links == link,source == nil || source == cut else{throw CrewdClientError(message:"群文档列表范围或分页版本不符。")}
-                    links=link;source=cut
-                    for item in page["items"].array {
-                        guard item["object"]["kind"] == .string("document"),let id=item["object"]["id"].string,uuid(id),seen.insert(id).inserted else{throw CrewdClientError(message:"群文档引用无效或重复。")}
-                        let value=try await call("document.get",.object(["id":.string(id)]));try check(token)
-                        guard listQuery == query else{throw CancellationError()}
-                        var doc=try parseDocument(value)
-                        guard doc.id == id,doc.summary["crewId"] == item["crewId"] else{throw CrewdClientError(message:"群文档来源身份不符。")}
-                        doc.body=value["body"].string;adopt(doc)
-                        if !doc.deleted{ids.append(id)}
-                    }
-                    guard page["next"] == .null || page["next"].string != nil else{throw CrewdClientError(message:"群文档分页游标无效。")}
-                    cursor=page["next"].string
-                    if let cursor{guard !cursor.isEmpty,cursor.utf8.count <= 4096,cursors.insert(cursor).inserted else{throw CrewdClientError(message:"群文档分页循环。")}}
-                } while cursor != nil
-                try check(token);guard listQuery == query else{throw CancellationError()}
-                documentIDs=ids;documentListLoaded=true;failure=nil;return
-            }
             var ids:[String]=[],cursor:String?,seen=Set<String>(),cursors=Set<String>()
             repeat{
                 var params:[String:CrewdValue]=["crewId":.string(scope),"limit":.integer(100)]
@@ -169,11 +155,12 @@ struct CrewdFolderSnapshot {
         let value=try await call("document.get",.object(["id":.string(id)]));try check(token)
         guard detailQueries[id] == query else{throw CancellationError()}
         var doc=try parseDocument(value)
-        guard doc.id == id,(channel.isEmpty ? doc.summary["crewId"] == .string(crew) : documentIDs.contains(id)),let body=value["body"].string,body.utf8.count == value["bodyLength"].int else{throw CrewdClientError(message:"文档详情对象或正文长度不符。")}
+        guard doc.id == id,doc.summary["crewId"] == .string(crew),let body=value["body"].string,body.utf8.count == value["bodyLength"].int else{throw CrewdClientError(message:"文档详情对象或正文长度不符。")}
         doc.body=body;adopt(doc)
         guard let cached=documents[id],cached.revision == doc.revision,cached.body != nil else{throw CrewdClientError(message:"文档在读取时已更新，请重新读取当前正文。",code:-32009)}
         return cached
     }
+    private static func validFolderObjectIdentity(_ object:CrewdValue)->String?{CrewdFolderSnapshot.objectIdentity(object)}
     private func parseFolders(_ value:CrewdValue,_ view:CrewdResourceView)throws->CrewdFolderSnapshot {
         guard value["crewId"] == .string(crew),(value["channelId"].string ?? "") == channel,value["view"] == .string(view.rawValue),revision(value["treeRevision"],zero:true),case .array(let items)=value["folders"],case .array(let assignments)=value["assignments"],items.count <= 256,assignments.count <= 4096 else{throw CrewdClientError(message:"文件夹快照范围、版本或大小无效。")}
         var byID:[String:CrewdValue]=[:]
@@ -184,9 +171,9 @@ struct CrewdFolderSnapshot {
         }
         var objects=Set<String>()
         for item in assignments {
-            let object=item["object"];guard let kind=object["kind"].string,let id=object["id"].string,let folder=item["folderId"].string,byID[folder] != nil,objects.insert(kind+":"+id).inserted else{throw CrewdClientError(message:"分类引用重复或不存在。")}
+            let object=item["object"];guard let kind=object["kind"].string,let id=object["id"].string,let folder=item["folderId"].string,byID[folder] != nil,Self.validFolderObjectIdentity(object).map({objects.insert($0).inserted}) == true else{throw CrewdClientError(message:"分类引用重复或不存在。")}
             let valid:Bool
-            switch view {case .messages:valid=kind == (channel.isEmpty ? "channel":"message") && !id.isEmpty;case .documents:valid=kind == "document" && uuid(id);case .progress:valid=kind == "work" && CrewdWorkID(id,kind:.plan) != nil;case .todo:valid=(kind == "work" && CrewdWorkID(id,kind:.plan) != nil) || (kind == "requirement" && CrewdWorkID(id,kind:.requirement) != nil) || (kind == "humanTask" && CrewdWorkID(id,kind:.human) != nil)}
+            switch view {case .messages:valid=kind == (channel.isEmpty ? "channel":"message") && !id.isEmpty;case .documents:valid=channel.isEmpty ? (kind == "document" && uuid(id)):(kind == "knowledgeView" && CrewdFolderSnapshot.objectIdentity(object) != nil);case .progress:valid=kind == "work" && CrewdWorkID(id,kind:.plan) != nil;case .todo:valid=(kind == "work" && CrewdWorkID(id,kind:.plan) != nil) || (kind == "requirement" && CrewdWorkID(id,kind:.requirement) != nil) || (kind == "humanTask" && CrewdWorkID(id,kind:.human) != nil)}
             guard valid else{throw CrewdClientError(message:"分类对象类型与当前视图不符。")}
         }
         return CrewdFolderSnapshot(value:value)
@@ -208,27 +195,22 @@ struct CrewdFolderSnapshot {
         catch{if token == generation,!(error is CancellationError){failure=(error as? CrewdClientError) ?? CrewdClientError(message:error.localizedDescription)};throw error}
     }
     @discardableResult func createDocument(request:UUID,title:String,body:String)async throws->CrewdValue {
+        guard channel.isEmpty else{throw CrewdClientError(message:"群文档使用SQLite知识对象，不能写入旧文档表。",kind:.notSubmitted)}
         try validate(title,body);let scope=crew
-        var params:[String:CrewdValue]=["requestId":.string(request.uuidString.lowercased()),"crewId":.string(scope),"title":.string(title),"body":.string(body)]
-        let targetChannel=channel
-        if !targetChannel.isEmpty{params["channelId"] = .string(targetChannel)}
-        let receipt=try await mutate("document.create",.object(params))
+        let receipt=try await mutate("document.create",.object(["requestId":.string(request.uuidString.lowercased()),"crewId":.string(scope),"title":.string(title),"body":.string(body)]))
         let doc=try parseDocument(receipt["document"])
         guard receipt["requestId"].string.flatMap(UUID.init(uuidString:)) == request,case .bool = receipt["reused"],doc.summary["crewId"] == .string(scope) else{throw CrewdClientError(message:"文档创建回执与原始请求不符。")}
-        if !targetChannel.isEmpty {
-            guard receipt["channelAssociation"]["channelId"] == .string(targetChannel),case .bool = receipt["channelAssociation"]["linked"] else{throw CrewdClientError(message:"群文档创建回执缺少原关联身份。")}
-        }
         adopt(doc);try? await refreshDocuments();return receipt
     }
     private func validate(_ title:String,_ body:String)throws{guard !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,title.utf8.count <= 512,body.utf8.count <= 1024*1024 else{throw CrewdClientError(message:"标题须为1至512字节，正文最多1MiB。",kind:.notSubmitted)}}
     @discardableResult func updateDocument(id:String,revision:String,title:String,body:String)async throws->CrewdDocument {
         try validate(title,body)
         let value=try await mutate("document.update",.object(["id":.string(id),"expectedRevision":.string(revision),"title":.string(title),"body":.string(body)]));let doc=try parseDocument(value)
-        guard doc.id == id,(channel.isEmpty ? doc.summary["crewId"] == .string(crew) : documentIDs.contains(id)) else{throw CrewdClientError(message:"文档更新回执对象不符。")};adopt(doc);try? await refreshDocuments();return doc
+        guard doc.id == id,doc.summary["crewId"] == .string(crew) else{throw CrewdClientError(message:"文档更新回执对象不符。")};adopt(doc);try? await refreshDocuments();return doc
     }
     @discardableResult func deleteDocument(id:String,revision:String)async throws->CrewdDocument {
         let value=try await mutate("document.delete",.object(["id":.string(id),"expectedRevision":.string(revision)]));let doc=try parseDocument(value)
-        guard doc.id == id,doc.deleted,(channel.isEmpty ? doc.summary["crewId"] == .string(crew) : documentIDs.contains(id)) else{throw CrewdClientError(message:"文档删除回执对象或状态不符。")};adopt(doc);try? await refreshDocuments();return doc
+        guard doc.id == id,doc.deleted,doc.summary["crewId"] == .string(crew) else{throw CrewdClientError(message:"文档删除回执对象或状态不符。")};adopt(doc);try? await refreshDocuments();return doc
     }
     @discardableResult func changeFolder(_ method:String,view:CrewdResourceView,fields:[String:CrewdValue])async throws->CrewdFolderSnapshot {
         guard ["viewFolder.create","viewFolder.update","viewFolder.delete","viewFolder.assign"].contains(method) else{throw CrewdClientError(message:"不支持的分组操作。",kind:.notSubmitted)}

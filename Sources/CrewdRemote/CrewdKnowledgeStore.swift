@@ -137,6 +137,14 @@ import CryptoKit
             status = "已读取当前数据视图；未改动数据。"
         } catch { if current(o, token) { status = "读取未完成或权限拒绝；未初始化或切换数据来源。" } }
     }
+    func loadAllViews()async {
+        await refresh()
+        var seen:Set<String>=[]
+        while let next=nextObjectPage {
+            guard !Task.isCancelled,seen.insert(next).inserted else{return}
+            await list(objectType:"view",after:next)
+        }
+    }
     func list(objectType: String, after: String? = nil, includeArchived: Bool = false) async {
         await read { context in
             let page: CrewdDataObjectPage = try await self.call("data.object.list", CrewdDataObjectListParams(context: context, objectType: objectType, after: after, limit: 50, atRevision: nil, includeArchived: includeArchived))
@@ -288,9 +296,9 @@ import CryptoKit
         status = response.phase == .unknown ? (response.resolvedByRequest == nil ? "写入结果未知；请仅查询原请求，或在原生版本控制面明确处理。" : "原执行结果仍未知，已有明确人工处置记录；未重放。") : "已观察到后台结果；请重新读取当前 数据代次。"
     }
     /// Only native controls call this with an explicitly confirmed change. The JS path below allows Apply only.
-    func submitFromNativeHost(_ change: CrewdDataChange) async {
+    @discardableResult func submitFromNativeHost(_ change: CrewdDataChange) async -> CrewdDataChangeResult? {
         let o: Origin, token: UUID
-        do { (o, token) = try begin() } catch { return }
+        do { (o, token) = try begin() } catch { return nil }
         defer { finish(o, token) }
         do {
             guard let info = workspace else { throw Failure.unavailable }
@@ -299,9 +307,11 @@ import CryptoKit
             let ledger = try journal()
             let response: CrewdDataChangeResult = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
             try observe(response, intent:intent, record:record, ledger:ledger)
-            guard current(o, token) else { return }
+            guard current(o, token) else { return origin() == o ? response:nil }
             applyObservation(response, intent:intent)
+            return response
         } catch { if current(o,token) { renderer.revoke(); status = "未获得完整提交结果；保留原 UUID，不自动重试。" } }
+        return nil
     }
     func lookup(_ id: UUID) async {
         let o: Origin, token: UUID
@@ -460,4 +470,86 @@ extension CrewdDataObject {
     var revision: String { switch self {case .block(_,let r,_,_,_,_),.view(_,let r,_,_,_,_),.relation(_,let r,_,_,_,_,_,_):return r} }
     var displayTitle: String { switch self {case .view(_,_,let title,_,_,_):return title;case .block(let id,_,let type,_,_,_):return type+" · "+id;case .relation(_,_,_,let predicate,_,_,_,_):return predicate} }
     var objectKind: String {switch self {case .view:return "view";case .block:return "block";case .relation:return "relation"}}
+}
+
+/// A read projection of Core's real channel placements. The content store is
+/// unchanged; linking a view never copies blocks or submits content again.
+@MainActor final class CrewdChannelKnowledgeStore:ObservableObject {
+    typealias Call=(String,CrewdValue)async throws->CrewdValue
+    @Published private(set) var crew=""
+    @Published private(set) var channel=""
+    @Published private(set) var items:[CrewdChannelKnowledgeItem]=[]
+    @Published private(set) var linkRevision:String?
+    @Published private(set) var loaded=false
+    @Published private(set) var loading=false
+    @Published private(set) var writing=false
+    @Published private(set) var failure:String?
+    @Published private(set) var activationEpoch=UUID()
+    private var generation=UUID(),query=UUID()
+    private var owners:Set<UUID>=[]
+    private var refreshTask:Task<Void,Never>?
+    private let call:Call
+    init(call:@escaping Call){self.call=call}
+    func selectChannel(crew:String,channel:String){
+        guard self.crew != crew || self.channel != channel else{return}
+        generation=UUID();query=UUID();refreshTask?.cancel();self.crew=crew;self.channel=channel;items=[];linkRevision=nil;loaded=false;loading=false;failure=nil
+    }
+    func invalidate(){generation=UUID();query=UUID();refreshTask?.cancel();items=[];loaded=false;loading=false;linkRevision=nil;activationEpoch=UUID()}
+    func setActive(_ active:Bool,owner:UUID){if active{owners.insert(owner)}else{owners.remove(owner)};if owners.isEmpty{refreshTask?.cancel()}}
+    private func check(_ token:UUID,_ request:UUID?=nil)throws{guard token == generation,!Task.isCancelled,request == nil || query == request else{throw CancellationError()}}
+    func handleEvent(_ name:String,_ value:CrewdValue){
+        guard !owners.isEmpty,!channel.isEmpty else{return}
+        if name == "channel.workChanged" {guard value["channelId"] == .string(channel) else{return}}
+        else if name == "data.changed" {guard value["crewId"] == .string(crew) || items.contains(where:{.string($0.source.context.crewId) == value["crewId"]}) else{return}}
+        else if name != "events.lagged"{return}
+        refreshTask?.cancel();let token=generation
+        refreshTask=Task{[weak self] in try? await Task.sleep(for:.milliseconds(150));guard let self,!Task.isCancelled,self.generation == token else{return};try? await self.refresh()}
+    }
+    func refresh()async throws {
+        guard !channel.isEmpty else{throw CrewdClientError(message:"请先选择群。",kind:.notSubmitted)}
+        let token=generation,request=UUID(),scope=channel;query=request;loading=true
+        defer{if query == request{loading=false}}
+        do {
+            var result:[CrewdChannelKnowledgeItem]=[],seen:Set<String>=[],cursors:Set<String>=[],cursor:String?,links:String?,source:String?
+            repeat {
+                var p:[String:CrewdValue]=["channelId":.string(scope),"limit":.integer(100)];if let cursor{p["after"] = .string(cursor)}
+                let raw=try await call("channel.knowledgeList",.object(p));try check(token,request)
+                let page=try CrewdKnowledgeStore.decode(raw,CrewdChannelKnowledgePage.self)
+                guard page.channelId == scope,!page.linkRevision.isEmpty,!page.sourceRevision.isEmpty,page.items.count <= 100,
+                      links == nil || links == page.linkRevision,source == nil || source == page.sourceRevision else{throw CrewdClientError(message:"群知识引用范围或分页版本不符。")}
+                links=page.linkRevision;source=page.sourceRevision
+                for item in page.items {
+                    guard item.source.valid,["ready","contextChanged","unavailable"].contains(item.state),seen.insert(item.id).inserted,
+                          item.state != "ready" || (item.title != nil && item.revision != nil && item.archived != nil) else{throw CrewdClientError(message:"群知识引用身份、状态或元数据无效。")}
+                    result.append(item)
+                }
+                cursor=page.next
+                if let cursor{guard !cursor.isEmpty,cursor.utf8.count <= 4096,cursors.insert(cursor).inserted else{throw CrewdClientError(message:"群知识引用分页无效。")}}
+            }while cursor != nil
+            try check(token,request);items=result;linkRevision=links;loaded=true;failure=nil
+        }catch{if token == generation,query == request,!(error is CancellationError){failure=error.localizedDescription};throw error}
+    }
+    @discardableResult func submit(_ snapshot:CrewdChannelKnowledgeDrafts.Snapshot)async throws->CrewdChannelKnowledgeReceipt {
+        guard snapshot.crew == crew,snapshot.channel == channel,!writing,snapshot.source.valid else{throw CrewdClientError(message:"知识引用的原群已切换或正在提交。",kind:.notSubmitted)}
+        writing=true;let token=generation;defer{writing=false}
+        let params=CrewdValue.object(["requestId":.string(snapshot.id.uuidString.lowercased()),"channelId":.string(snapshot.channel),"expectedLinkRevision":.string(snapshot.revision),"source":try CrewdKnowledgeStore.encode(snapshot.source)])
+        let result=try await call(snapshot.operation,params);try check(token)
+        let receipt=try validate(result,snapshot:snapshot)
+        do{try await refresh()}catch{}
+        return receipt
+    }
+    func lookup(_ snapshot:CrewdChannelKnowledgeDrafts.Snapshot)async throws->CrewdChannelKnowledgeReceipt? {
+        guard snapshot.crew == crew,snapshot.channel == channel else{throw CancellationError()}
+        let token=generation
+        let value=try await call("resource.requestLookup",.object(["requestId":.string(snapshot.id.uuidString.lowercased())]));try check(token)
+        guard value["requestId"].string.flatMap(UUID.init(uuidString:)) == snapshot.id else{throw CrewdClientError(message:"原知识引用请求身份不符。")}
+        if value["status"] == .string("notFound") {guard value["operation"] == .null,value["result"] == .null else{throw CrewdClientError(message:"未找到知识引用请求却附带结果。")};return nil}
+        guard value["status"] == .string("committed"),value["operation"] == .string(snapshot.operation) else{throw CrewdClientError(message:"原知识引用请求状态或操作不符。")}
+        let receipt=try validate(value["result"],snapshot:snapshot);do{try await refresh()}catch{};return receipt
+    }
+    private func validate(_ value:CrewdValue,snapshot:CrewdChannelKnowledgeDrafts.Snapshot)throws->CrewdChannelKnowledgeReceipt {
+        let result=try CrewdKnowledgeStore.decode(value,CrewdChannelKnowledgeReceipt.self)
+        guard result.channelId == snapshot.channel,result.source == snapshot.source,result.linked == snapshot.linked,!result.linkRevision.isEmpty else{throw CrewdClientError(message:"原知识引用回执与原输入不符。")}
+        return result
+    }
 }

@@ -116,7 +116,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
         return CrewdChannelTodoView(group: workspace.channelWork, work: workspace.workStore,
             linkDrafts: $workspace.channelLinkDrafts, requirementDrafts: $workspace.requirementDrafts,
             planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-            members: workspace.sessions, crews: workspace.crews,
+            members: workspace.sessions.filter { session in workspace.selectedMembers.contains { $0["kind"] == .string("session") && $0["id"] == session["id"] } }, crews: workspace.crews,
             openCrew: { crewStore.selectCrew($0) }, showTodoKinds: true, humanOnly: human,
             externalQuery: Binding(get: { todoQueries[key] ?? "" }, set: { todoQueries[key] = $0 }),
             externalTag: Binding(get: { todoTags[key] ?? "" }, set: { todoTags[key] = $0 }),

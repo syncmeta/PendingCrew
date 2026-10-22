@@ -749,3 +749,63 @@ struct CrewdDataSnapshot: Codable, Equatable { var id: String; var createdAt: St
 struct CrewdDataSnapshots: Codable, Equatable { var context: CrewdDataContext; var items: [CrewdDataSnapshot] }
 
 struct CrewdDataPreviewGetParams: Codable { var context: CrewdDataContext; var token: String }
+
+/// Original SQLite knowledge identity; generation is an observation, not a new
+/// placement identity. No UUID is minted to represent an existing view.
+struct CrewdChannelKnowledgeReference:Codable,Equatable {
+    var context:CrewdDataContext
+    var reference:CrewdDataRef
+    var identity:String {
+        [context.authorityId,context.dbId,context.restoreEpoch,context.crewId,context.namespace,reference.namespace,reference.kind,reference.id]
+            .map{"\($0.utf8.count):\($0)"}.joined()
+    }
+    var valid:Bool {
+        reference.kind == "view" && reference.namespace == context.namespace &&
+        [context.dbId,context.authorityId,context.restoreEpoch,context.crewId,context.namespace,context.generation,reference.id].allSatisfy{!$0.isEmpty}
+    }
+}
+struct CrewdChannelKnowledgeItem:Codable,Equatable,Identifiable {
+    var source:CrewdChannelKnowledgeReference
+    var state:String
+    var title:String?
+    var revision:String?
+    var archived:Bool?
+    var viewKind:String?
+    var id:String{source.identity}
+}
+struct CrewdChannelKnowledgePage:Codable,Equatable {
+    var channelId:String
+    var linkRevision:String
+    var sourceRevision:String
+    var items:[CrewdChannelKnowledgeItem]
+    var next:String?
+}
+struct CrewdChannelKnowledgeReceipt:Codable,Equatable {
+    var channelId:String
+    var linkRevision:String
+    var source:CrewdChannelKnowledgeReference
+    var linked:Bool
+}
+struct CrewdChannelKnowledgeDrafts {
+    struct Snapshot:Equatable,Identifiable {
+        let id:UUID
+        let crew:String
+        let channel:String
+        let source:CrewdChannelKnowledgeReference
+        let revision:String
+        let linked:Bool
+        var operation:String{linked ? "channel.knowledgeLink":"channel.knowledgeUnlink"}
+    }
+    private(set) var pending:[Snapshot]=[]
+    private(set) var unknown:[Snapshot]=[]
+    mutating func begin(crew:String,channel:String,source:CrewdChannelKnowledgeReference,revision:String,linked:Bool)->Snapshot? {
+        guard !pending.contains(where:{$0.crew == crew && $0.channel == channel}),!unknown.contains(where:{$0.crew == crew && $0.channel == channel && $0.source.identity == source.identity}) else{return nil}
+        let snapshot=Snapshot(id:UUID(),crew:crew,channel:channel,source:source,revision:revision,linked:linked);pending.append(snapshot);return snapshot
+    }
+    mutating func finish(_ snapshot:Snapshot,accepted:Bool,uncertain:Bool=false){
+        pending.removeAll{$0.id == snapshot.id}
+        if uncertain,!unknown.contains(snapshot){unknown.append(snapshot)}
+        if accepted{unknown.removeAll{$0.id == snapshot.id}}
+    }
+    mutating func acknowledge(_ id:UUID){unknown.removeAll{$0.id == id}}
+}

@@ -109,6 +109,35 @@ func page(_ items:[CrewdValue],channel:String="group-a",links:String="1",source:
         store.handleEvent("events.lagged",.object(["dropped":.integer(2)]));try await Task.sleep(nanoseconds:250_000_000)
         precondition(peer.calls.count == allHidden,"all views hidden must issue zero event-driven reads")
         #endif
+        // New source attributes and group tags must retain exact original
+        // UUID/payload through Unknown; fresh state is not a commit receipt.
+        store.selectChannel(crew:"a",channel:"group-a")
+        var mutations=CrewdTodoMutationDrafts()
+        let tagKey=CrewdTodoMutationDrafts.Key(crew:"a",channel:"group-a",object:"#1",operation:"channel.workTagsSet")
+        var desired=CrewdTodoMutationDrafts.Fields();desired.tags=["前端","紧急"];desired.revision="9007199254740993"
+        mutations.edit(tagKey,desired);let frozen=mutations.begin(tagKey)!
+        mutations.finish(frozen,accepted:false,uncertain:true)
+        desired.tags=["后端"];mutations.edit(tagKey,desired)
+        precondition(mutations.begin(tagKey) == nil,"Unknown must block resending even after an edit")
+        let originalTags=try frozen.parameters()
+        precondition(originalTags["tags"] == .array([.string("前端"),.string("紧急")]) && originalTags["expectedLinkRevision"] == .string("9007199254740993"))
+        peer.receipt = .object(["requestId":.string(frozen.requestID.uuidString.lowercased()),"status":.string("notFound")])
+        let beforeLookup=peer.calls.count
+        let missing=try await store.lookup(frozen);precondition(missing == nil)
+        precondition(peer.calls.count == beforeLookup+1 && peer.calls.last!.0 == "resource.requestLookup" && peer.calls.last!.1["requestId"] == originalTags["requestId"])
+        precondition(mutations.begin(tagKey) == nil,"notFound never grants resend")
+        peer.receipt = .object(["requestId":originalTags["requestId"]!,"operation":.string("todo.assign"),"status":.string("committed"),"result":.null])
+        await rejects{_ = try await store.lookup(frozen)}
+        let tagsResult=CrewdValue.object(["channelId":.string("group-a"),"linkRevision":.string("9007199254740994"),"object":frozen.object,"tags":originalTags["tags"]!])
+        peer.receipt = .object(["requestId":originalTags["requestId"]!,"operation":.string("channel.workTagsSet"),"status":.string("committed"),"result":tagsResult])
+        peer.pages=[page([],links:"9007199254740994",source:"opaque-source-digest")]
+        let committed=try await store.lookup(frozen);precondition(committed == tagsResult)
+        mutations.finish(frozen,accepted:true)
+        precondition(mutations.fields(tagKey).tags == ["后端"],"receipt for original version cannot erase newer input")
+        precondition(store.sourceRevision == "opaque-source-digest","source revision is opaque, never parsed as a counter")
+        let countBeforeForeign=peer.calls.count;store.selectChannel(crew:"a",channel:"group-b")
+        await rejects{_ = try await store.lookup(frozen)}
+        precondition(peer.calls.count == countBeforeForeign,"foreign channel cannot query original mutation through the new scope")
         let beforeReconnect=peer.calls.count;store.invalidateConnection();await rejects{try await store.refresh()};precondition(peer.calls.count == beforeReconnect)
         print("PASS: channel projection full-page authority/two revision bounds/capability/scope+late-link/no replay and exact per-channel uncertain request payloads; offline only")
     }

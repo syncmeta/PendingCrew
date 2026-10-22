@@ -46,6 +46,28 @@ import Foundation
         precondition(rpc.submitted == 1 && reopened.pending.isEmpty)
         await reopened.restoreSnapshot("snapshot")
         precondition(reopened.pending.isEmpty && reopened.result?.context.restoreEpoch == "restored-epoch")
+        var links=CrewdChannelKnowledgeDrafts()
+        let source=CrewdChannelKnowledgeReference(context:rpc.context,reference:.init(namespace:rpc.context.namespace,kind:"view",id:"original-view"))
+        let link=links.begin(crew:"crew",channel:"group",source:source,revision:"0",linked:true)!
+        links.finish(link,accepted:false,uncertain:true)
+        precondition(links.begin(crew:"crew",channel:"group",source:source,revision:"1",linked:true) == nil,"Unknown link retains exact original UUID, not a replacement")
+        var groupCalls:[String]=[],lookupResult=CrewdValue.object(["requestId":.string(link.id.uuidString.lowercased()),"status":.string("notFound")])
+        let group=CrewdChannelKnowledgeStore(call:{method,params in
+            groupCalls.append(method)
+            if method == "resource.requestLookup"{precondition(params["requestId"] == .string(link.id.uuidString.lowercased()));return lookupResult}
+            if method == "channel.knowledgeList"{return try CrewdKnowledgeStore.encode(CrewdChannelKnowledgePage(channelId:"group",linkRevision:"1",sourceRevision:"opaque-source",items:[],next:nil))}
+            preconditionFailure("lookup attempted a write or content recreation")
+        })
+        group.selectChannel(crew:"crew",channel:"group")
+        let absent=try await group.lookup(link);precondition(absent == nil && groupCalls == ["resource.requestLookup"])
+        let result=CrewdChannelKnowledgeReceipt(channelId:"group",linkRevision:"1",source:source,linked:true)
+        lookupResult = .object(["requestId":.string(link.id.uuidString.lowercased()),"status":.string("committed"),"operation":.string("channel.knowledgeLink"),"result":try CrewdKnowledgeStore.encode(result)])
+        let found=try await group.lookup(link);precondition(found == result)
+        precondition(!groupCalls.contains("data.submit") && !groupCalls.contains("channel.knowledgeLink"),"joining an already saved source must not recreate content or resend Unknown")
+        group.selectChannel(crew:"crew",channel:"other")
+        let before=groupCalls.count
+        do{_ = try await group.lookup(link);preconditionFailure("foreign group lookup accepted")}catch is CancellationError{}
+        precondition(groupCalls.count == before)
         print("PASS real journal/store: lost reply retains original UUID across reopening; new writes blocked; lookup never resubmits; restoreEpoch transition observed")
     }
 }

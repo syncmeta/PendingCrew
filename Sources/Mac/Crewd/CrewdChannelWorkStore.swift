@@ -40,7 +40,6 @@ import Combine
     }
     nonisolated static func referenceKey(_ object:CrewdValue)->String? {
         if let id=workID(object){return id.raw}
-        if object["kind"] == .string("document"),let id=object["id"].string,UUID(uuidString:id) != nil{return "document:"+id}
         return nil
     }
     nonisolated static func validTags(_ tags:[String])->Bool {
@@ -55,7 +54,7 @@ import Combine
         return value["manualState"] == .null || ["open","done"].contains(value["manualState"].string ?? "")
     }
     func handleEvent(_ name:String,_ value:CrewdValue){
-        guard name == "events.lagged" || (name == "channel.workChanged" && value["channelId"] == .string(channel)) || name.hasPrefix("work.") || name.hasPrefix("ask.") || name == "todo.attributesChanged" || name == "document.changed" else{return}
+        guard name == "events.lagged" || (name == "channel.workChanged" && value["channelId"] == .string(channel)) || name.hasPrefix("work.") || name.hasPrefix("ask.") || name == "todo.attributesChanged" else{return}
         guard !activeOwners.isEmpty,capabilities.contains("channelWork"),!channel.isEmpty else{return}
         refreshTask?.cancel();let token=generation
         refreshTask=Task{[weak self] in try? await Task.sleep(for:.milliseconds(150));guard let self,!Task.isCancelled,self.generation == token else{return};do{try await self.refresh()}catch{}}
@@ -110,7 +109,7 @@ import Combine
         }catch{if token == generation,query == request,!(error is CancellationError){failure=(error as? CrewdClientError) ?? CrewdClientError(message:error.localizedDescription)};throw error}
     }
     @discardableResult func changeLink(object:CrewdValue,expectedRevision:String,linked:Bool)async throws->CrewdValue{
-        try require();guard Self.referenceKey(object) != nil else{throw CrewdClientError(message:"只能关联公共需求、计划、人待办或文档。",kind:.notSubmitted)}
+        try require();guard Self.referenceKey(object) != nil else{throw CrewdClientError(message:"只能关联公共需求、计划或人待办。",kind:.notSubmitted)}
         guard !writing else{throw CrewdClientError(message:"会话关联正在提交。",kind:.notSubmitted)}
         writing=true;let token=generation,scope=channel;defer{writing=false}
         do{
