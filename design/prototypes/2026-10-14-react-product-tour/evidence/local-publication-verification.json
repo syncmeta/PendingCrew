@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "url": "http://127.0.0.1:8794/crewdemo/",
+  "checks": [
+    "path redirect and runtime asset load",
+    "three header links",
+    "current progress and four future discussion groups",
+    "four collaboration questions",
+    "five knowledge groups and interactive data view",
+    "mobile layout",
+    "published HTML matches build"
+  ],
+  "errors": []
+}

@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "contentRevision": 16,
+  "messages": [
+    "Mac端单机可用",
+    "自己已经用了一段时间了",
+    "Todo系统已经做好",
+    "前后端分离正在推进",
+    "Codex和Claude Code Session已经能在单机版协作，前后端分离版暂时只支持Codex",
+    "文档和数据这一块还在推进"
+  ],
+  "checks": [
+    "single file exact six messages",
+    "old cache updated; draft retained",
+    "six structured progress records",
+    "document synchronized"
+  ]
+}

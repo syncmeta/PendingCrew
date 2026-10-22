@@ -7,3 +7,6 @@ portable/
 # Generated delivery archives; rebuild from source.
 *.zip
 *.tgz
+
+deploy/site/
+deploy/.wrangler/

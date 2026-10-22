@@ -1,5 +1,5 @@
 import { useTour } from "../state/TourContext";
-import { statusLabels } from "../domain/types";
+import { requestStatus } from "../domain/todoModel";
 import { Avatar, Button } from "./primitives";
 import { ResizeHandle } from "./ResizeHandle";
 export function Inspector() {
@@ -10,6 +10,17 @@ export function Inspector() {
     dispatch,
     reference,
   } = useTour();
+  const members = db.conversations.find((c) => c.id === ui.conv)?.members
+    ? db.conversations
+        .find((c) => c.id === ui.conv)!
+        .members!.map((m) => [m.name, m.detail, m.glyph])
+    : state.sceneId === "self-introduction"
+      ? [["人", "个人介绍", "👤"]]
+      : [
+          ["机长", "Codex Session", "🦉"],
+          ["Todo介绍", "Claude Code Session", "🦊"],
+          ["人", "人类", "👤"],
+        ];
   return (
     <aside
       className={"inspector " + (ui.inspector ? "force-visible" : "hidden")}
@@ -28,7 +39,14 @@ export function Inspector() {
               onClick={() =>
                 setUi({
                   tab: "todo",
-                  kind: state.sceneId === "website" ? "requests" : "asks",
+                  kind:
+                    state.sceneId === "website"
+                      ? "requests"
+                      : db.asks.some((a) =>
+                            ["open", "later"].includes(a.status),
+                          )
+                        ? "asks"
+                        : "plans",
                   selectedFolders: { ...ui.selectedFolders, todo: "all" },
                 })
               }
@@ -46,71 +64,11 @@ export function Inspector() {
           </span>
         </div>
         <div className="panel-content">
-          <div className="quiet">同一账本的相关事项</div>
-          {state.sceneId === "website" ? (
-            db.requests.map((request) => (
-              <Button
-                key={request.id}
-                action="reference"
-                data-id={request.id}
-                className="mini-todo"
-                onClick={() => reference(request.id)}
-              >
-                <span className="todo-number">
-                  <span className="state-ring" />
-                  {request.code}
-                </span>
-                <span className="todo-body">
-                  {request.text}
-                  <span className="sub">原始需求</span>
-                  <span className="todo-detail">放大看</span>
-                </span>
-              </Button>
-            ))
-          ) : (
-            <>
-              {db.asks
-                .filter((a) => ["open", "later"].includes(a.status))
-                .map((a) => (
-                  <Button
-                    key={a.id}
-                    action="reference"
-                    data-id={a.id}
-                    className="mini-todo"
-                    onClick={() => reference(a.id)}
-                  >
-                    <span className="state-ring blocked" />
-                    <span>
-                      {a.id} {a.question}
-                      <div className="sub">
-                        待人类处理 ·{" "}
-                        {a.status === "later" ? "已稍后" : "等你答复"}
-                      </div>
-                    </span>
-                  </Button>
-                ))}
-              {db.plans
-                .filter((p) => !p.parent || p.parent === db.plans[0].id)
-                .slice(0, 3)
-                .map((p) => (
-                  <Button
-                    key={p.id}
-                    action="reference"
-                    data-id={p.id}
-                    className="mini-todo"
-                    onClick={() => reference(p.id)}
-                  >
-                    <span className={"state-ring " + p.status} />
-                    <span>
-                      {p.code} {p.title}
-                      <div className="sub">
-                        {statusLabels[p.status]} · {p.owner}
-                      </div>
-                    </span>
-                  </Button>
-                ))}
-            </>
-          )}
+          <h4 className="inspector-todo-section">给真人 <span>{db.asks.filter((a)=>["open","later"].includes(a.status)).length}</span></h4>
+          {db.asks.filter((a)=>["open","later"].includes(a.status)).map((ask)=><Button key={ask.id} className="mini-todo" onClick={()=>reference(ask.id)}><span className="todo-status-label human">待答复</span><span>{ask.question}</span></Button>)}
+          {!db.asks.some((a)=>["open","later"].includes(a.status)) && <p className="inspector-empty">暂无待处理事项</p>}
+          <h4 className="inspector-todo-section">给 AI <span>{db.requests.filter((r)=>!["done","dropped"].includes(requestStatus(db,r))).length}</span></h4>
+          {db.requests.map((request)=><Button key={request.id} action="reference" data-id={request.id} className="mini-todo" onClick={()=>reference(request.id)}><span className={"state-ring "+requestStatus(db,request)}/><span><span className="todo-number">{request.code}</span>{request.text}<span className="sub">负责人：{request.owner ?? db.plans.find((p)=>p.sources.includes(request.id))?.owner ?? "机长"}</span></span></Button>)}
         </div>
       </div>
       <ResizeHandle name="todo-height" />
@@ -123,15 +81,11 @@ export function Inspector() {
             onClick={() => setUi({ membersClosed: !ui.membersClosed })}
           >
             <span className="chevron">{ui.membersClosed ? "▸" : "▾"}</span>{" "}
-            本群成员 3
+            本群成员 {members.length}
           </Button>
         </div>
         <div className="panel-content">
-          {[
-            ["机长", "Codex Session", "🦉"],
-            ["Todo介绍", "Claude Code Session", "🦊"],
-            ["人", "人类", "👤"],
-          ].map(([name, sub, glyph]) => (
+          {members.map(([name, sub, glyph]) => (
             <Button
               key={name}
               action="member"

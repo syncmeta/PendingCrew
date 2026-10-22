@@ -62,7 +62,7 @@ export function Chat() {
             >
               <Icon name="arrow" />
             </Button>
-            <h3 style={{ display: "inline" }}>{conv.title}</h3>
+            <h3 title={conv.title}>{conv.title}</h3>
           </div>
           <div className="chat-toolbar">
             <div className="chat-options">
@@ -88,7 +88,7 @@ export function Chat() {
                 仅@你
               </Button>
             </div>
-            {state.sceneId !== "website" && (
+            {state.sceneId !== "website" && db.plans.length > 0 && (
               <>
                 <Button
                   action="simulate"
@@ -138,7 +138,11 @@ export function Chat() {
                 ) && (
                   <Avatar
                     seed={m.sender}
-                    glyph={m.sender === scene.agent ? scene.glyph : "🦉"}
+                    glyph={
+                      conv.members?.find((member) => member.name === m.sender)
+                        ?.glyph ??
+                      (m.sender === scene.agent ? scene.glyph : "🦉")
+                    }
                   />
                 )}
               <div className="message-body">

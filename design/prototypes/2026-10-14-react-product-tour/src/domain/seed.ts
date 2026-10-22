@@ -1,3 +1,4 @@
+import { presentTopicCrew } from "./topicCrews";
 import {
   installDocumentLibrary,
   refreshDocumentLibrary,
@@ -5,7 +6,7 @@ import {
 import content from "../content.json";
 import fixtures from "../fixtures.json";
 import type { Ledger, Scene, SceneState, TourState, GroupWork } from "./types";
-export const initialScenes: Scene[] = content;
+export const initialScenes: Scene[] = content as Scene[];
 export function freshScene(
   scene: Scene,
   desktop = true,
@@ -15,7 +16,7 @@ export function freshScene(
     data ?? scene.initialLedger ?? fixtures[scene.id as keyof typeof fixtures],
   ) as Ledger;
   const result: SceneState = {
-    groups: initialGroupWork(scene, db),
+    groups: structuredClone(scene.initialGroups ?? initialGroupWork(scene, db)),
     db,
     ui: {
       tab: "message",
@@ -45,6 +46,7 @@ export function freshScene(
     },
   };
   installDocumentLibrary(scene, result);
+  presentTopicCrew(scene, result);
   return result;
 }
 export function initialState(
@@ -52,7 +54,7 @@ export function initialState(
   initialScene = "website",
 ): TourState {
   return refreshDocumentLibrary({
-    contentRevision: 7,
+    contentRevision: 16,
     sceneId: initialScenes.some((s) => s.id === initialScene)
       ? initialScene
       : "website",
@@ -113,6 +115,11 @@ export function initialGroupWork(
         "\n\n" +
         (db.messages[conv.id]?.[0]?.text ?? "围绕当前群的工作持续协作。"),
     }));
+    if (["trip", "research", "administration"].includes(scene.id)) {
+      work.docs = [];
+      work.requests = [];
+      for (const plan of work.plans) plan.sources = [];
+    }
     result[conv.id] = work;
   }
   return result;

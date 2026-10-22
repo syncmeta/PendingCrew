@@ -1,3 +1,4 @@
+import { refreshHumanContext } from "./humanContext";
 import catalog from "../documentLibrary.json";
 import type {
   DocumentRecord,
@@ -31,7 +32,17 @@ export function installDocumentLibrary(
     const conv = scene.id + "-" + item.conversation;
     const work = conv === record.ui.conv ? record.db : record.groups?.[conv];
     if (!work) continue;
-    const existing = work.docs.find((d) => d.catalogKey === item.key);
+    let existing = work.docs.find((d) => d.catalogKey === item.key);
+    if (!existing) {
+      for (const [, old] of workEntries(record)) {
+        if (old === work) continue;
+        const index = old.docs.findIndex((d) => d.catalogKey === item.key);
+        if (index < 0) continue;
+        [existing] = old.docs.splice(index, 1);
+        work.docs.push(existing);
+        break;
+      }
+    }
     if (existing) {
       ids.set(item.key, existing.id);
       continue;
@@ -49,7 +60,7 @@ export function installDocumentLibrary(
       catalogKey: item.key,
       title: item.title,
       body: item.body,
-      author: "机长",
+      author: scene.agent,
       folder: item.folder,
       summary: item.summary,
       kind: item.kind as DocumentRecord["kind"],
@@ -77,7 +88,12 @@ export function installDocumentLibrary(
     if (work.plans[0] && !work.plans[0].evidence)
       work.plans[0].evidence = first.id;
     // Preserve the exact introductory conversation; topical groups expose their own reading entry.
-    if (conv === scene.id + "-main") continue;
+    if (
+      scene.id !== "website" ||
+      conv === scene.id + "-main" ||
+      conv === "website-todo"
+    )
+      continue;
     const messageId = "library-" + conv;
     if (!record.db.messages[conv]?.some((m) => m.id === messageId))
       record.db.messages[conv]?.push({
@@ -103,5 +119,5 @@ export function refreshDocumentLibrary(state: TourState): TourState {
   for (const scene of next.scenes)
     installDocumentLibrary(scene, next.cache[scene.id], used, resolved);
   next.contentRevision = 7;
-  return next;
+  return refreshHumanContext(next);
 }

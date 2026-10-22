@@ -23,7 +23,7 @@ test("authored overview refresh retains visitor content and avoids Todo ID colli
   );
   assert.equal(
     db.messages["website-main"].filter((m) => m.sender === "机长").length,
-    3,
+    5,
   );
   assert(db.messages["website-main"].some((m) => m.text === "访客追加的内容"));
   assert.equal(after.cache.website.ui.drafts["website-main"], "保留草稿");
@@ -54,7 +54,7 @@ test("product feature refresh preserves visitor documents, edits and stable IDs"
   db.plans[2].owner = "你";
   const after = refreshContent(before),
     updated = after.cache.website.db;
-  assert.equal(after.contentRevision, 7);
+  assert.equal(after.contentRevision, 16);
   assert(updated.docs.some((d) => d.id === "D103" && d.body === "不能覆盖"));
   assert(
     updated.docs.some(

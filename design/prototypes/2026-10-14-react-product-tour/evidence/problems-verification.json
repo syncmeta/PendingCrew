@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "checks": [
+    "plain links and compact sidebar ordering",
+    "three source-backed problem groups with live document references",
+    "old cache gains groups without losing drafts; mobile fits"
+  ],
+  "errors": []
+}

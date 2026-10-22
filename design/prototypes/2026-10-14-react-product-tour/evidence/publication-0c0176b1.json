@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "url": "https://pendingname.com/crewdemo",
+  "checkedConversations": [
+    "knowledge-main",
+    "knowledge-slicing",
+    "knowledge-database",
+    "knowledge-memory",
+    "knowledge-views",
+    "future-five-days-main",
+    "future-five-days-needs",
+    "future-five-days-purpose",
+    "future-five-days-users",
+    "current-progress-main"
+  ],
+  "checks": [
+    "exact latest knowledge/future/current-progress copy",
+    "friction message and last update times",
+    "conversation footer removed",
+    "interactive data view",
+    "mobile width",
+    "runtime errors and build assets"
+  ],
+  "errors": [],
+  "worker": "pendingcrew-demo",
+  "versionId": "0c0176b1-8a89-4f12-a67e-87cf5aff8eaf",
+  "deploymentId": "73af297e-2dbd-44e3-8388-e3d57ebd53bc",
+  "contentRevision": 16,
+  "presentationRevision": 6,
+  "isolatedBuild": true,
+  "concurrentDeploymentCheck": "unchanged before activation",
+  "sharedBuildOutputsModified": false,
+  "homepageUnchanged": true,
+  "homepageSha256": "ca25464979781d0e7e04f11f730fbccc2795ce3d13e1c4e5f0c36fec3d5e9bdc"
+}

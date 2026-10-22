@@ -26,11 +26,14 @@ export function FolderSelect({ scope }: { scope: Scope }) {
 }
 export function FolderRail() {
   const {
+    state,
+    selectScene,
     data: { db, ui },
     setUi,
     setModal,
   } = useTour();
   const scope = ui.tab;
+  if(scope === "progress" && ["website","current-progress"].includes(state.sceneId) && ui.conv.endsWith("-main")) return <aside className="folder-rail"><div className="folder-head">计划</div><Button className="folder-button selected" onClick={()=>setUi({selectedFolders:{...ui.selectedFolders,progress:"all"}})}><Icon name="folder"/>全部计划/进展</Button><Button className="folder-button" onClick={()=>{selectScene("website");setUi({conv:"website-program",tab:"progress",query:"",selectedFolders:{...ui.selectedFolders,progress:"all"}});}}><Icon name="folder"/>大工程</Button></aside>;
   return (
     <aside className="folder-rail">
       <div className="folder-head">

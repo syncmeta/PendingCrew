@@ -1,3 +1,4 @@
+import { requestStatus } from "./todoModel";
 import { validDataView } from "./dataViews";
 import { refreshDocumentLibrary } from "./documentLibrary";
 import { freshScene } from "./seed";
@@ -22,7 +23,8 @@ function nextId(state: TourState, prefix: string): string {
       0,
       ...ids
         .filter((id) => id.startsWith(prefix))
-        .map((id) => Number(id.slice(1))),
+        .map((id) => Number(id.slice(1)))
+        .filter(Number.isFinite),
     ) +
       1)
   );
@@ -32,6 +34,13 @@ function showNotice(state: TourState, text: string) {
 }
 export function reducer(previous: TourState, command: Command): TourState {
   if (command.type === "restore") return command.state;
+  if (command.type === "toggleCrew" || command.type === "toggleSidebar") {
+    const next=structuredClone(previous);
+    next.navigation ??= {collapsedCrews:[],sidebarCollapsed:false};
+    if(command.type === "toggleSidebar") next.navigation.sidebarCollapsed=!next.navigation.sidebarCollapsed;
+    else next.navigation.collapsedCrews=next.navigation.collapsedCrews.includes(command.id)?next.navigation.collapsedCrews.filter((id)=>id!==command.id):[...next.navigation.collapsedCrews,command.id];
+    return next;
+  }
   if (
     command.type === "ui" &&
     command.patch.conv &&
@@ -132,8 +141,8 @@ export function reducer(previous: TourState, command: Command): TourState {
         }
         message("你", command.text, ask.id);
         message(
-          "机长",
-          "收到。" + ask.item + " 的等待已解除，其他计划和进展也已同步。",
+          scene.agent,
+          ask.item ? "收到。" + ask.item + " 的等待已解除，其他计划和进展也已同步。" : "收到，真人 Todo 已更新。",
           ask.item,
         );
         record("你回答了 " + ask.id + "；关联计划恢复推进。");
@@ -230,6 +239,33 @@ export function reducer(previous: TourState, command: Command): TourState {
         db.placements[command.scope + ":" + command.id] = command.folder;
         showNotice(state, "已移动，原编号和引用保持不变。");
         break;
+      case "assignTodo": {
+        const item = [...db.requests,...db.asks].find((item)=>item.id===command.id);
+        if (!item || !command.owner.trim()) throw Error("请选择负责人。");
+        item.owner=command.owner.trim();
+        break;
+      }
+      case "tagTodo": {
+        const item = [...db.requests, ...db.asks].find((item) => item.id === command.id);
+        const tag = command.tag.trim();
+        if (!item || !tag) throw Error("Todo 或标签不存在。");
+        item.tags = item.tags?.includes(tag) ? item.tags.filter((t) => t !== tag) : [...(item.tags ?? []), tag];
+        break;
+      }
+      case "completeTodo": {
+        const item = db.requests.find((item) => item.id === command.id);
+        if (!item) throw Error("Todo 不存在。");
+        item.status = requestStatus(db, item) === "done" ? "open" : "done";
+        break;
+      }
+      case "newHumanTodo": {
+        if (!command.text.trim()) throw Error("请写下需要真人处理的事项。");
+        const id=nextId(state,"H");
+        db.asks.unshift({id,question:command.text.trim(),owner:"你",context:"",recommendation:"处理后更新状态。",options:["已处理","需要补充说明"],status:"open",answer:"",item:"",tags:[]});
+        message(scene.agent,command.text,id);
+        ui.tab="todo";ui.kind="asks";ui.todoTag="all";
+        break;
+      }
       case "newRequest": {
         if (!command.text.trim()) throw Error("先写下你的需求。");
         const id = nextId(state, "N");
@@ -237,12 +273,14 @@ export function reducer(previous: TourState, command: Command): TourState {
           id,
           code: "#" + id.slice(1),
           text: command.text.trim(),
-          folder: db.folders.todo[0],
+          tags: [],
+          status: "open",
         });
         message("你", command.text, id);
         ui.tab = "todo";
         ui.kind = "requests";
         ui.selectedFolders.todo = "all";
+        ui.todoTag = "all";
         showNotice(state, "原文已保存，尚未生成计划。");
         break;
       }
@@ -287,11 +325,12 @@ export function reducer(previous: TourState, command: Command): TourState {
         });
         const offset =
           Math.max(
+            0,
             ...Object.values(state.cache).flatMap((s) =>
               crewLedgers(s).flatMap(([, db]) =>
                 db.plans.map((p) => Number(p.id.slice(1))),
               ),
-            ),
+            ).filter(Number.isFinite),
           ) + 100;
         const original = freshScene(state.scenes[2], true).db;
         const data = JSON.parse(
@@ -332,10 +371,8 @@ export function reducer(previous: TourState, command: Command): TourState {
           showNotice(state, "你是这个机组中的人类成员。");
           break;
         }
-        switchConversation(
-          current(state),
-          scene.id + (command.name === "Todo介绍" ? "-todo" : "-agent"),
-        );
+        const conversation=db.conversations.find((c)=>c.kind==="dm" && c.members?.some((member)=>member.name===command.name));
+        if(conversation){switchConversation(current(state),conversation.id);current(state).ui.tab="message";}else showNotice(state,command.name+"：本群的产品资料与设计说明。");
         break;
       case "simulate": {
         const p = db.plans.find(
@@ -361,7 +398,11 @@ export function reducer(previous: TourState, command: Command): TourState {
       case "reset":
         state.cache[scene.id] = freshScene(scene, ui.inspector);
         showNotice(state, "已恢复预置产品介绍。");
+        current(state).updatedAt = new Date().toISOString();
         return refreshDocumentLibrary(state);
+    }
+    if (["newHumanTodo", "assignTodo", "tagTodo", "completeTodo", "send", "shareReference", "answer", "askLater", "askWithdraw", "savePlan", "saveFolder", "move", "newRequest", "saveDataView", "newDocument", "newCrew", "simulate"].includes(command.type)) {
+      current(state).updatedAt = new Date().toISOString();
     }
     return state;
   } catch (error) {

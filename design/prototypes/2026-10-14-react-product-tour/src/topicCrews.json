@@ -1,0 +1,98 @@
+{
+  "trip": [
+    {
+      "id": "main",
+      "title": "工作跟进",
+      "host": "工作跟进",
+      "documents": []
+    },
+    {
+      "id": "agent",
+      "title": "跨机组协作",
+      "host": "协作协调",
+      "documents": ["cross-crew"]
+    },
+    {
+      "id": "todo",
+      "title": "依赖与卡点",
+      "host": "计划跟进",
+      "documents": ["blocked-item"]
+    },
+    {
+      "id": "planning",
+      "title": "检查点",
+      "host": "持续跟进",
+      "documents": ["checks"]
+    },
+    {
+      "id": "development",
+      "title": "稳定编号",
+      "host": "工作记录",
+      "documents": ["stable-ids"]
+    }
+  ],
+  "research": [
+    {
+      "id": "main",
+      "title": "组织与沟通",
+      "host": "组织设计",
+      "documents": []
+    },
+    {
+      "id": "agent",
+      "title": "机组结构",
+      "host": "组织关系",
+      "documents": ["organization"]
+    },
+    {
+      "id": "todo",
+      "title": "会话与成员",
+      "host": "会话管理",
+      "documents": ["session-members"]
+    },
+    {
+      "id": "planning",
+      "title": "消息与注意力",
+      "host": "消息调度",
+      "documents": ["channels-attention"]
+    },
+    {
+      "id": "development",
+      "title": "文档与分类",
+      "host": "资料整理",
+      "documents": ["document-lifecycle"]
+    }
+  ],
+  "administration": [
+    {
+      "id": "main",
+      "title": "行政总览",
+      "host": "行政",
+      "documents": []
+    },
+    {
+      "id": "agent",
+      "title": "业务与行政",
+      "host": "组织协调",
+      "documents": ["admin-split"]
+    },
+    {
+      "id": "todo",
+      "title": "督办与异常",
+      "host": "督办",
+      "documents": ["admin-followup"]
+    },
+    {
+      "id": "planning",
+      "title": "档案与版本",
+      "host": "档案整理",
+      "documents": ["archive-evidence", "version-history"]
+    },
+    {
+      "id": "development",
+      "title": "决定与判断",
+      "host": "知识整理",
+      "documents": ["decision-records", "judgment-service"]
+    }
+  ]
+}

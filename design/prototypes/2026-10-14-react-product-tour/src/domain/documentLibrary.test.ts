@@ -53,7 +53,7 @@ test("catalog migration preserves all existing work, visitor content, drafts and
   state.cache.website.db.plans[0].note = "我的下一步";
   const next = refreshContent(state),
     docs = records(next);
-  assert.equal(next.contentRevision, 7);
+  assert.equal(next.contentRevision, 16);
   assert.equal(docs.find((d) => d.id === "D800001")?.body, "不覆盖");
   assert.notEqual(docs.find((d) => d.catalogKey === "position")?.id, "D800001");
   assert.equal(new Set(docs.map((d) => d.id)).size, docs.length);

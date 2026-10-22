@@ -13,7 +13,7 @@ export function ConversationList() {
     <aside className="conversation-list">
       <div className="list-filter">会话</div>
       <div className="conv-scroll">
-        {db.conversations.map((c) => (
+        {db.conversations.filter((c)=>!c.id.includes("-session-")||c.id===ui.conv||db.messages[c.id]?.some((m)=>m.id.startsWith("message-"))).map((c) => (
           <Button
             key={c.id}
             action="conversation"
@@ -24,7 +24,7 @@ export function ConversationList() {
             <Avatar
               seed={c.id}
               group={c.kind === "group"}
-              glyph={scene.glyph}
+              glyph={c.members?.find((member)=>member.name===c.title)?.glyph ?? scene.glyph}
             />
             <span className="conv-content">
               <span className="conv-name">
@@ -32,13 +32,14 @@ export function ConversationList() {
                 <small>{c.id === conv.id ? "13:20" : "13:10"}</small>
               </span>
               <span className="conv-sub">
-                {db.messages[c.id]?.at(-1)?.text ?? c.subtitle}
+                {(db.messages[c.id]?.at(-1)?.text ?? c.subtitle)
+                  .replace(/\*\*/g, "")
+                  .replace(/\n+/g, " ")}
               </span>
             </span>
           </Button>
         ))}
       </div>
-      <div className="conv-bottom">当前机组的群聊与单聊</div>
       <ResizeHandle name="conversation" />
     </aside>
   );

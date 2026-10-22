@@ -1,18 +1,24 @@
 {
   "status": "PASS",
   "typecheck": "strict",
-  "contentRevision": 7,
-  "domainTests": 20,
-  "browserChecks": 51,
+  "contentRevision": 14,
+  "domainTests": 24,
+  "browserChecks": 57,
   "artifacts": {
-    "PendingCrew-React-Portable.zip": "74b3f1e9113f29c3cceed58ea047d85d988743b214a1d2cb8b5035ad4dc43e19",
-    "PendingCrew-React-Source.zip": "87c5c10100bab605ded0a4bced7f221616e8f4deacd757a4b97e2f8f7a329a96",
-    "PendingCrew-React-Website.zip": "b16fb67c7962a1c414a92c0267b5202f6879b15f2e5301ac85e087a4c934e330",
-    "PendingCrew-React-Component.zip": "539731ca3627de0258e128e58ad29d638a3827b244b78c86148571f820139d62",
-    "pendingname-pendingcrew-product-tour-0.1.0.tgz": "66e23884b06005db30c595eff0c2bc6a949d4c36b36fed3ee0635c8ce1d23606"
+    "PendingCrew-React-Portable.zip": "a6c5e7c8174809f089879d68ed833e5632f26a47b56dd75c768f5f24a1c7a129",
+    "PendingCrew-React-Source.zip": "a6fdadaf0094fe5964618f8b97f7f0842f04e9069f40b90d7d3a2d2287f4c4cf",
+    "PendingCrew-React-Website.zip": "03aaf72c75c61c28e0a0558dd3ec5b30f4d3800463aad8196b899f3bcfcb1a4a",
+    "PendingCrew-React-Component.zip": "e1a2b60e3262efda79800cc21a5627352595ee7b10be108f10b02db3ba70dfa8",
+    "pendingname-pendingcrew-product-tour-0.1.0.tgz": "2dae58661239c4834ae3e27c7638230c790a1bd9268bb55878ac4b2a07460c76"
   },
-  "published": false,
+  "published": true,
   "modifiedProductSources": false,
   "catalogDocuments": 45,
-  "interactiveDataViews": 3
+  "interactiveDataViews": 6,
+  "problemGroups": 3,
+  "publicationUrl": "https://pendingname.com/crewdemo/",
+  "knowledgeGroups": 5,
+  "roadmapGroups": 4,
+  "publishedContentRevision": 16,
+  "publishedVersionId": "476a5129-8744-4cc0-a104-a10f87140ea2"
 }

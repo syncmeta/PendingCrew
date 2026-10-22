@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "url": "https://pendingname.com/crewdemo/",
+  "htmlSha256": "b4225b4bc6a6df401de6f05428624a2f257d3b6e87e1b26e6bde7fc49b0ccbda",
+  "homepageUnchanged": true,
+  "checks": [
+    "HTML matches build after excluding Cloudflare analytics injection; runtime JS/CSS hashes match",
+    "crew rename and hierarchy",
+    "removed captain and network entries",
+    "merged 15 AI and 2 human Todo",
+    "owner persistence after reload",
+    "human decision updates linked plan",
+    "collapsible plan",
+    "searchable related data",
+    "all 11 overview members",
+    "mobile layout and links"
+  ],
+  "errors": [],
+  "worker": "pendingcrew-demo",
+  "versionId": "1ea00c32-0388-41ac-b2aa-5ba37fe2fd61",
+  "routes": [
+    "pendingname.com/crewdemo",
+    "pendingname.com/crewdemo/*"
+  ],
+  "homepageSha256": "ca25464979781d0e7e04f11f730fbccc2795ce3d13e1c4e5f0c36fec3d5e9bdc"
+}

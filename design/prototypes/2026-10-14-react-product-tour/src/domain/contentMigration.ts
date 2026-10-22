@@ -1,9 +1,12 @@
+import { applyPresentationUpdates } from "./presentationUpdates";
+import { refreshHumanContext } from "./humanContext";
 import { refreshDocumentLibrary } from "./documentLibrary";
 import { freshScene, initialScenes, initialGroupWork } from "./seed";
 import type { TourState } from "./types";
 /** Replace obsolete authored introduction, retaining visitor-created records and drafts. */
 export function refreshContent(state: TourState): TourState {
-  if ((state.contentRevision ?? 0) >= 7) return state;
+  if ((state.contentRevision ?? 0) >= 16) return applyPresentationUpdates(state);
+  if ((state.contentRevision ?? 0) >= 7) return refreshHumanContext(state);
   if ((state.contentRevision ?? 0) >= 5) return refreshDocumentLibrary(state);
   if ((state.contentRevision ?? 0) >= 4) return migrateGroups(state);
   if ((state.contentRevision ?? 0) >= 3) return unifyProductCopy(state);

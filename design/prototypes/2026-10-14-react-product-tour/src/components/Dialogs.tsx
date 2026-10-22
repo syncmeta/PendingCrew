@@ -1,3 +1,4 @@
+import { TodoOwner } from "./TodoOwner";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTour } from "../state/TourContext";
 import { findReference, referenceLabel } from "../domain/selectors";
@@ -10,6 +11,7 @@ import {
   type Scope,
 } from "../domain/types";
 import { Button, Icon, Reference } from "./primitives";
+import { TodoTags } from "./TodoTags";
 import { AskCard } from "./Workspace";
 function Dialog({
   title,
@@ -87,12 +89,12 @@ function PlanDialog({ plan }: { plan: Plan }) {
           <Button
             action="move"
             data-id={plan.id}
-            data-scope={ui.tab === "todo" ? "todo" : "progress"}
+            data-scope="progress"
             onClick={() =>
               setModal({
                 kind: "move",
                 id: plan.id,
-                scope: ui.tab === "todo" ? "todo" : "progress",
+                scope: "progress",
               })
             }
           >
@@ -115,7 +117,7 @@ function PlanDialog({ plan }: { plan: Plan }) {
       }
     >
       <div className="quiet" style={{ fontSize: 11 }}>
-        稳定编号 {plan.id} · 与 Todo／进展引用同一份记录
+        稳定编号 {plan.id} · 计划与进展使用同一份记录
       </div>
       <div className="dialog-fields" style={{ marginTop: 16 }}>
         <label>
@@ -146,7 +148,14 @@ function PlanDialog({ plan }: { plan: Plan }) {
             value={owner}
             onChange={(e) => setOwner(e.target.value)}
           >
-            {["机长", scene.agent].map((o) => (
+            {[
+              ...new Set([
+                plan.owner,
+                ...(db.conversations
+                  .find((c) => c.id === ui.conv)
+                  ?.members?.map((m) => m.name) ?? [scene.agent, "你"]),
+              ]),
+            ].map((o) => (
               <option key={o}>{o}</option>
             ))}
           </select>
@@ -234,7 +243,7 @@ function SearchDialog() {
       kind: "待人类处理",
     })),
     ...db.docs.map((d) => ({ id: d.id, title: d.title, kind: "文档" })),
-    ...db.requests.map((r) => ({ id: r.id, title: r.text, kind: "原始需求" })),
+    ...db.requests.map((r) => ({ id: r.id, title: r.text, kind: "Todo" })),
   ];
   return (
     <Dialog title="搜索当前机组">
@@ -269,7 +278,8 @@ function SearchDialog() {
   );
 }
 function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
-  const { commit, setModal } = useTour();
+  const { commit, setModal, data:{ui} } = useTour();
+  const humanTodo = kind === "newRequest" && ui.kind === "asks";
   const [title, setTitle] = useState(""),
     [body, setBody] = useState("");
   const save = () => {
@@ -282,7 +292,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
             id: "custom-" + crypto.randomUUID(),
           }
         : kind === "newRequest"
-          ? { type: "newRequest", text: body }
+          ? humanTodo ? {type:"newHumanTodo",text:body} : { type: "newRequest", text: body }
           : { type: "newDocument", title, body },
     );
     if (ok) setModal(null);
@@ -293,7 +303,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
         kind === "newCrew"
           ? "新建机组"
           : kind === "newRequest"
-            ? "新建原始需求"
+            ? humanTodo ? "新建真人 Todo" : "新建 AI Todo"
             : "新建文档"
       }
       actions={
@@ -311,7 +321,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
           {kind === "newCrew"
             ? "创建机组"
             : kind === "newRequest"
-              ? "保存原始需求"
+              ? "保存Todo"
               : "保存文档"}
         </Button>
       }
@@ -343,7 +353,7 @@ function CreateDialog({ kind }: { kind: "newCrew" | "newRequest" | "newDoc" }) {
           <p className="quiet">保留你交代的原文，计划通过引用关联到这里。</p>
           <textarea
             id="request-text"
-            aria-label="原始需求内容"
+            aria-label="Todo内容"
             placeholder="你想让团队做什么？"
             value={body}
             onChange={(e) => setBody(e.target.value)}
@@ -387,8 +397,9 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
       const ref = findReference(state, modal.id);
       return ref?.kind === "request" ? (
         <Dialog title={ref.record.code + " · Todo详情"}>
-          <h4>原始需求</h4>
+          <h4>给 AI 的 Todo</h4>
           <p>{ref.record.text}</p>
+          <TodoOwner item={ref.record}/><TodoTags item={ref.record} edit/>
           <p className="quiet">
             这里保留需求原文。你可以持续添加
             Todo，相关计划和回复仍引用同一条记录。
@@ -578,7 +589,7 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
           <p className="quiet">{scene.brief}</p>
           {[
             [
-              "原始需求",
+              "Todo",
               "群里的 Todo 持续承接任务流，原文保留下来，工作随时可以追溯。",
             ],
             [
@@ -603,7 +614,7 @@ function ModalContent({ modal }: { modal: NonNullable<ModalState> }) {
             </div>
           ))}
           <p className="quiet" style={{ marginTop: 16 }}>
-            消息、Todo、文档、进展各有自己的文件夹。操作保存在这个浏览器里，可以随时重置。
+            Todo 用多标签分类；消息、文档和计划/进展可以独立分组。操作保存在这个浏览器里，可以随时重置。
           </p>
         </Dialog>
       );

@@ -1,0 +1,57 @@
+[
+  {
+    "text": "输入框的placeholder换成：发群消息/新建 Todo 就这几个字 不要加新的 另外 输入中文的时候 还是候选字母的时候 placeholder就应该消失了 现状是没有消失",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json",
+    "number": 2
+  },
+  {
+    "text": "当session的终端没有开启的时候 底下那个输入框 样式应该换成和群聊这边一样的样式",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json",
+    "number": 3
+  },
+  {
+    "text": "#105 查重放：量清投递面与游标账（只量不修）",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 2
+  },
+  {
+    "text": "#104 群聊消息折叠：方案定稿并实现（渲染层自动折 + details 手动标）",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 3
+  },
+  {
+    "text": "#105 重放：四条修法落地（④+① / ③ / ②）",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 4
+  },
+  {
+    "text": "B3 漏投：重启把「留待重投」变成「作废」——已量完，等 4-1 定排位",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 5
+  },
+  {
+    "text": "#115 分条发送：一次调用发多条，每条各带分类和 Todo 号",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 6
+  },
+  {
+    "text": "待审批 vs Todo 讲清楚 + 修「读不出来」被读成「有东西等你」（4-1 计划 #72）",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 7
+  },
+  {
+    "text": "#132+#133 群聊引用可点：Todo #N / 消息 / session / 机组 四类，从字段来不从正文认",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 8
+  },
+  {
+    "text": "待人类装版后一次性亲验：标错分类会不会真污染驾驶舱、那条「建了 #N」撤不撤得掉、折叠 UI、侧栏黄色数字胶囊",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 9
+  },
+  {
+    "text": "#144 翻历史时新消息让位置乱跳：纯判定已造红（8d683ed），等 main 解冻 + CrewChatView 红线解除再接线",
+    "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json",
+    "number": 10
+  }
+]

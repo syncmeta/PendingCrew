@@ -39,6 +39,7 @@ export function Icon({ name }: { name: string }) {
         <path d="M10 2v12" />
       </>
     ),
+    tag: <><path d="M2 2h6l6 6-6 6-6-6z" /><circle cx="5" cy="5" r="1" /></>,
     folder: <path d="M1.5 4V13h13V5H8L6 3H2z" />,
     file: <path d="M3 1.5h7l3 3V14H3zM10 2v3h3M5 8h6M5 11h6" />,
     menu: <path d="M2 4h12M2 8h12M2 12h12" />,
@@ -224,6 +225,7 @@ export function crewChain(id: string) {
     trip: "crew-product",
     research: "trip",
     administration: "crew-product",
+    "self-introduction": "crew-product",
   };
   const chain = [id],
     seen = new Set(chain);
@@ -237,22 +239,12 @@ export function crewChain(id: string) {
   return chain;
 }
 export function Lineage({ id }: { id: string }) {
-  const chain = crewChain(id);
-  let left = 100,
-    start = 0;
-  const stops = chain.map((c, i) => {
-    const size = i === chain.length - 1 ? left : left / 2,
-      stop = crewColor(c) + " " + start + "% " + (start + size) + "%";
-    left -= size;
-    start += size;
-    return stop;
-  });
   return (
     <span
       className="lineage"
       data-crew-color={id}
       style={{
-        background: "linear-gradient(to bottom," + stops.join(",") + ")",
+        background: crewColor(id),
       }}
     />
   );

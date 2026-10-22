@@ -12,7 +12,7 @@ const docs = (s: ReturnType<typeof initialState>) =>
 test("table examples and shared document blocks have valid typed structures", () => {
   const state = initialState(),
     views = docs(state).filter((d) => d.dataView);
-  assert.equal(views.length, 3);
+  assert.equal(views.length, 10);
   for (const d of views) assert(validDataView(d.dataView));
   assert(
     !validDataView({

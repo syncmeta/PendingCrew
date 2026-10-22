@@ -8,9 +8,7 @@
         "parent": null,
         "status": "active",
         "owner": "机长",
-        "sources": [
-          "N101"
-        ],
+        "sources": ["N101"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "今天 15:00",
@@ -27,9 +25,7 @@
         "parent": "W101",
         "status": "done",
         "owner": "机长",
-        "sources": [
-          "N101"
-        ],
+        "sources": ["N101"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "—",
@@ -46,12 +42,8 @@
         "parent": "W101",
         "status": "active",
         "owner": "机长",
-        "sources": [
-          "N101"
-        ],
-        "dependsOn": [
-          "W102"
-        ],
+        "sources": ["N101"],
+        "dependsOn": ["W102"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "最多三层拆解；层级表示包含，依赖表示先后。",
@@ -66,12 +58,8 @@
         "parent": "W103",
         "status": "open",
         "owner": "机长",
-        "sources": [
-          "N101"
-        ],
-        "dependsOn": [
-          "W102"
-        ],
+        "sources": ["N101"],
+        "dependsOn": ["W102"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "点击标题可修改状态、负责人和备注，Todo 同步更新。",
@@ -86,12 +74,8 @@
         "parent": "W101",
         "status": "open",
         "owner": "机长",
-        "sources": [
-          "N101"
-        ],
-        "dependsOn": [
-          "W102"
-        ],
+        "sources": ["N101"],
+        "dependsOn": ["W102"],
         "blockedOn": [],
         "nextCheck": "今天 15:00",
         "note": "需要人的事项带上上下文和推荐选项。",
@@ -161,7 +145,7 @@
         "id": "website-todo",
         "title": "Todo介绍",
         "kind": "group",
-        "subtitle": "原始需求、计划和人的事项。"
+        "subtitle": "Todo系统是在给人脑做上下文工程"
       },
       {
         "id": "website-planning",
@@ -205,6 +189,12 @@
           "sender": "你",
           "text": "右侧是Todo和群成员。每一个群成员是你电脑上的一个Codex/Claude Code Session。",
           "folder": "产品介绍"
+        },
+        {
+          "id": "website-main-4",
+          "sender": "机长",
+          "text": "可以把 PendingCrew 理解为：把企业微信里的同事换成 Agent 会话。",
+          "folder": "产品介绍"
         }
       ],
       "website-agent": [
@@ -218,7 +208,12 @@
         {
           "id": "website-todo-0",
           "sender": "机长",
-          "text": "Todo 保留原始需求、计划和待人类处理事项。持续变化的任务流，有一份可以跟进的账本。"
+          "text": "Todo系统是在给人脑做上下文工程"
+        },
+        {
+          "id": "website-todo-1",
+          "sender": "机长",
+          "text": "与飞书/企业微信/钉钉的任务跟进相关功能也一样"
         }
       ],
       "website-planning": [
@@ -237,22 +232,10 @@
       ]
     },
     "folders": {
-      "message": [
-        "产品介绍",
-        "协作交流"
-      ],
-      "todo": [
-        "原始需求",
-        "持续跟进"
-      ],
-      "document": [
-        "产品说明",
-        "功能关系"
-      ],
-      "progress": [
-        "持续协作",
-        "人类参与"
-      ]
+      "message": ["产品介绍", "协作交流"],
+      "todo": ["原始需求", "持续跟进"],
+      "document": ["产品说明", "功能关系"],
+      "progress": ["持续协作", "人类参与"]
     },
     "placements": {},
     "history": [
@@ -270,10 +253,8 @@
         "title": "从任务流到可跟进的工作",
         "parent": null,
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N201"
-        ],
+        "owner": "工作跟进",
+        "sources": ["N201"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "今天 15:00",
@@ -289,10 +270,8 @@
         "title": "原始需求保持原文",
         "parent": "W201",
         "status": "done",
-        "owner": "机长",
-        "sources": [
-          "N201"
-        ],
+        "owner": "工作跟进",
+        "sources": ["N201"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "—",
@@ -308,13 +287,9 @@
         "title": "计划承接分工和拆解",
         "parent": "W201",
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N201"
-        ],
-        "dependsOn": [
-          "W202"
-        ],
+        "owner": "工作跟进",
+        "sources": ["N201"],
+        "dependsOn": ["W202"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "父子关系表达拆解，不代替依赖。",
@@ -328,13 +303,9 @@
         "title": "下一步、依赖与产物都有位置",
         "parent": "W203",
         "status": "open",
-        "owner": "机长",
-        "sources": [
-          "N201"
-        ],
-        "dependsOn": [
-          "W202"
-        ],
+        "owner": "工作跟进",
+        "sources": ["N201"],
+        "dependsOn": ["W202"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "负责人、状态、备注是可编辑的数据。",
@@ -348,16 +319,10 @@
         "title": "卡点进入人的收件箱",
         "parent": "W201",
         "status": "blocked",
-        "owner": "机长",
-        "sources": [
-          "N201"
-        ],
-        "dependsOn": [
-          "W202"
-        ],
-        "blockedOn": [
-          "H201"
-        ],
+        "owner": "工作跟进",
+        "sources": ["N201"],
+        "dependsOn": ["W202"],
+        "blockedOn": ["H201"],
         "nextCheck": "等待你的答复",
         "note": "这个事项等待人的判断，其他事项仍可推进。",
         "folder": "判断与卡点",
@@ -378,10 +343,7 @@
         "id": "H201",
         "question": "这项工作优先保证完整覆盖，还是优先推进关键事项？",
         "recommendation": "先推进关键事项，其他需求保留在账本里",
-        "options": [
-          "先推进关键事项",
-          "先整理完整任务范围"
-        ],
+        "options": ["先推进关键事项", "先整理完整任务范围"],
         "status": "open",
         "answer": "",
         "item": "W205",
@@ -394,54 +356,114 @@
         "id": "D201",
         "title": "Todo：需求、计划与人的事项.md",
         "body": "Todo 用一本账连接三类记录：原始需求、计划、待人类处理。\n\n你可以持续往群里喂 Todo，机长承接海量而琐碎的需求。原始需求保留文字，计划记录执行结构，人的事项保留需要判断的上下文。\n\n稳定编号让消息、文档和进展可以引用同一条事项。",
-        "author": "机长",
+        "author": "工作跟进",
         "folder": "产品说明"
       },
       {
         "id": "D202",
         "title": "进展：同一份计划的另一种视图.md",
         "body": "进展不是额外的一份报告，而是计划数据的可交互视图。\n\n展开箭头查看最多三层结构；点击标题查看目标、验收标准、负责人、下一步、依赖与产物。你可以编辑状态和备注，Todo 会同步变化。\n\n拆解关系和依赖关系分别记录。一个事项遇到卡点，不必让整棵计划都停下来。",
-        "author": "机长",
+        "author": "工作跟进",
         "folder": "功能关系"
       },
       {
         "id": "D203",
         "title": "人的判断有上下文.md",
         "body": "需要你判断的事项进入全组织唯一的收件箱，同时保留所属机组和关联计划。\n\n每条问题包含背景、推荐方案和可选答复。回答后相关等待解除，稍后处理则保留卡点，撤回结束对应部分。",
-        "author": "机长",
+        "author": "工作跟进",
         "folder": "功能关系"
       }
     ],
     "conversations": [
       {
         "id": "trip-main",
-        "title": "总群",
+        "title": "工作跟进",
         "kind": "group",
-        "subtitle": "任务不断进入，工作有可查看的结构。"
+        "subtitle": "从原始需求到计划，再到需要人判断的事项。",
+        "members": [
+          {
+            "name": "工作跟进",
+            "detail": "产品资料 · 工作跟进",
+            "glyph": "🦊"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "trip-agent",
-        "title": "机长",
-        "kind": "dm",
-        "subtitle": "围绕目标、任务和判断持续协作。"
+        "title": "跨机组协作",
+        "kind": "group",
+        "subtitle": "工作可以跨机组关联，身份、权限和状态仍保持清楚。",
+        "members": [
+          {
+            "name": "协作协调",
+            "detail": "产品资料 · 跨机组协作",
+            "glyph": "🦊"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "trip-todo",
-        "title": "Todo介绍",
+        "title": "依赖与卡点",
         "kind": "group",
-        "subtitle": "原始需求、计划和人的事项。"
+        "subtitle": "等待人或依赖时，把可推进的部分拆出来。",
+        "members": [
+          {
+            "name": "计划跟进",
+            "detail": "产品资料 · 依赖与卡点",
+            "glyph": "🦊"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "trip-planning",
-        "title": "演示策划",
+        "title": "检查点",
         "kind": "group",
-        "subtitle": "用 PendingCrew 自己介绍自己。"
+        "subtitle": "负责人、下一步与下一次检查把长期工作连起来。",
+        "members": [
+          {
+            "name": "持续跟进",
+            "detail": "产品资料 · 检查点",
+            "glyph": "🦊"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "trip-development",
-        "title": "Demo开发",
+        "title": "稳定编号",
         "kind": "group",
-        "subtitle": "React + TypeScript，可交互、可嵌入。"
+        "subtitle": "位置、分类和可读代号可以变，身份不能随之丢失。",
+        "members": [
+          {
+            "name": "工作记录",
+            "detail": "产品资料 · 稳定编号",
+            "glyph": "🦊"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       }
     ],
     "messages": {
@@ -498,22 +520,10 @@
       ]
     },
     "folders": {
-      "message": [
-        "工作结构",
-        "人的判断"
-      ],
-      "todo": [
-        "任务流",
-        "判断与卡点"
-      ],
-      "document": [
-        "产品说明",
-        "功能关系"
-      ],
-      "progress": [
-        "工作结构",
-        "判断与卡点"
-      ]
+      "message": ["工作结构", "人的判断"],
+      "todo": ["任务流", "判断与卡点"],
+      "document": ["产品说明", "功能关系"],
+      "progress": ["工作结构", "判断与卡点"]
     },
     "placements": {},
     "history": [
@@ -531,10 +541,8 @@
         "title": "组织多个 agent 的协作空间",
         "parent": null,
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N301"
-        ],
+        "owner": "组织设计",
+        "sources": ["N301"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "今天 15:00",
@@ -550,10 +558,8 @@
         "title": "机组连接长期工作的上下文",
         "parent": "W301",
         "status": "done",
-        "owner": "机长",
-        "sources": [
-          "N301"
-        ],
+        "owner": "组织设计",
+        "sources": ["N301"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "—",
@@ -569,13 +575,9 @@
         "title": "群聊与单聊放在同一个列表",
         "parent": "W301",
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N301"
-        ],
-        "dependsOn": [
-          "W302"
-        ],
+        "owner": "组织设计",
+        "sources": ["N301"],
+        "dependsOn": ["W302"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "切换会话，仍处于同一个机组工作空间。",
@@ -589,13 +591,9 @@
         "title": "消息、文档与进展各自整理",
         "parent": "W303",
         "status": "open",
-        "owner": "机长",
-        "sources": [
-          "N301"
-        ],
-        "dependsOn": [
-          "W302"
-        ],
+        "owner": "组织设计",
+        "sources": ["N301"],
+        "dependsOn": ["W302"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "文件夹独立分类，引用连接相关记录。",
@@ -609,16 +607,10 @@
         "title": "人在协作中保持认知参与",
         "parent": "W301",
         "status": "blocked",
-        "owner": "机长",
-        "sources": [
-          "N301"
-        ],
-        "dependsOn": [
-          "W302"
-        ],
-        "blockedOn": [
-          "H301"
-        ],
+        "owner": "组织设计",
+        "sources": ["N301"],
+        "dependsOn": ["W302"],
+        "blockedOn": ["H301"],
         "nextCheck": "等待你的答复",
         "note": "关键选择保留背景与推荐方案。",
         "folder": "内容与判断",
@@ -639,10 +631,7 @@
         "id": "H301",
         "question": "这项判断需要由机长协调，还是由你直接参与？",
         "recommendation": "机长先整理上下文，再交给你判断",
-        "options": [
-          "机长整理后交给我判断",
-          "由我直接参与讨论"
-        ],
+        "options": ["机长整理后交给我判断", "由我直接参与讨论"],
         "status": "open",
         "answer": "",
         "item": "W305",
@@ -655,54 +644,114 @@
         "id": "D301",
         "title": "机组：组织持续协作.md",
         "body": "机组围绕一件持续推进的事组织人和 agent，承接目标、沟通、工作记录与成果。\n\n机组可以有父子结构，也可以有多个父引用。侧栏通讯录展示组织关系，消息视图展示机组内的群聊和单聊。",
-        "author": "机长",
+        "author": "组织设计",
         "folder": "产品说明"
       },
       {
         "id": "D302",
         "title": "聊天：熟悉的协作入口.md",
         "body": "群聊与单聊出现在同一个会话列表。右侧聊天区保留消息，上方可以选择人类沟通或完整记录，也可以仅查看与你有关的消息。\n\n聊天右侧上方是相关 Todo，下方是成员列表，两部分都可以折叠。输入框旁的 Todo 模式让一次发送直接成为一条原始需求。",
-        "author": "机长",
+        "author": "组织设计",
         "folder": "功能关系"
       },
       {
         "id": "D303",
         "title": "文档：把成果留在工作里.md",
         "body": "文档保存产品说明、工作笔记、方案与成果，而不是把每次交流都压缩成聊天记录。\n\n点击文档阅读全文，可以移动到独立的文件夹，也可以把文档引用发回群聊。消息与计划保留稳定引用，讨论和成果能够互相找到。",
-        "author": "机长",
+        "author": "组织设计",
         "folder": "功能关系"
       }
     ],
     "conversations": [
       {
         "id": "research-main",
-        "title": "总群",
+        "title": "组织与沟通",
         "kind": "group",
-        "subtitle": "用熟悉的通讯录和聊天组织长期协作。"
+        "subtitle": "机组连接长期工作，群聊与单聊承接沟通，文件夹独立组织内容。",
+        "members": [
+          {
+            "name": "组织设计",
+            "detail": "产品资料 · 组织与沟通",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "research-agent",
-        "title": "机长",
-        "kind": "dm",
-        "subtitle": "围绕目标、任务和判断持续协作。"
+        "title": "机组结构",
+        "kind": "group",
+        "subtitle": "层级组织工作，一个机组可以被多个父机组引用。",
+        "members": [
+          {
+            "name": "组织关系",
+            "detail": "产品资料 · 机组结构",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "research-todo",
-        "title": "Todo介绍",
+        "title": "会话与成员",
         "kind": "group",
-        "subtitle": "原始需求、计划和人的事项。"
+        "subtitle": "agent 成员对应电脑上的 Codex 或 Claude Code 会话。",
+        "members": [
+          {
+            "name": "会话管理",
+            "detail": "产品资料 · 会话与成员",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "research-planning",
-        "title": "演示策划",
+        "title": "消息与注意力",
         "kind": "group",
-        "subtitle": "用 PendingCrew 自己介绍自己。"
+        "subtitle": "可见范围与通知、上下文注入不是同一件事。",
+        "members": [
+          {
+            "name": "消息调度",
+            "detail": "产品资料 · 消息与注意力",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "research-development",
-        "title": "Demo开发",
+        "title": "文档与分类",
         "kind": "group",
-        "subtitle": "React + TypeScript，可交互、可嵌入。"
+        "subtitle": "共同编辑保留版本依据，删除分类不删除内容。",
+        "members": [
+          {
+            "name": "资料整理",
+            "detail": "产品资料 · 文档与分类",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       }
     ],
     "messages": {
@@ -759,22 +808,10 @@
       ]
     },
     "folders": {
-      "message": [
-        "组织与沟通",
-        "人的判断"
-      ],
-      "todo": [
-        "协作空间",
-        "关键判断"
-      ],
-      "document": [
-        "产品说明",
-        "功能关系"
-      ],
-      "progress": [
-        "组织与沟通",
-        "内容与判断"
-      ]
+      "message": ["组织与沟通", "人的判断"],
+      "todo": ["协作空间", "关键判断"],
+      "document": ["产品说明", "功能关系"],
+      "progress": ["组织与沟通", "内容与判断"]
     },
     "placements": {},
     "history": [
@@ -789,13 +826,11 @@
       {
         "id": "W401",
         "code": "P1",
-        "title": "组织多个 agent 的协作空间",
+        "title": "行政承接组织运转",
         "parent": null,
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N401"
-        ],
+        "owner": "行政",
+        "sources": ["N401"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "今天 15:00",
@@ -808,13 +843,11 @@
       {
         "id": "W402",
         "code": "P1-1",
-        "title": "机组连接长期工作的上下文",
+        "title": "业务与行政各自负责",
         "parent": "W401",
         "status": "done",
-        "owner": "机长",
-        "sources": [
-          "N401"
-        ],
+        "owner": "行政",
+        "sources": ["N401"],
         "dependsOn": [],
         "blockedOn": [],
         "nextCheck": "—",
@@ -827,16 +860,12 @@
       {
         "id": "W403",
         "code": "P1-2",
-        "title": "群聊与单聊放在同一个列表",
+        "title": "督办检查点与异常",
         "parent": "W401",
         "status": "active",
-        "owner": "机长",
-        "sources": [
-          "N401"
-        ],
-        "dependsOn": [
-          "W402"
-        ],
+        "owner": "行政",
+        "sources": ["N401"],
+        "dependsOn": ["W402"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "切换会话，仍处于同一个机组工作空间。",
@@ -847,16 +876,12 @@
       {
         "id": "W404",
         "code": "P1-2-1",
-        "title": "消息、文档与进展各自整理",
+        "title": "决定、教训和风险形成可引用的知识",
         "parent": "W403",
         "status": "open",
-        "owner": "机长",
-        "sources": [
-          "N401"
-        ],
-        "dependsOn": [
-          "W402"
-        ],
+        "owner": "行政",
+        "sources": ["N401"],
+        "dependsOn": ["W402"],
         "blockedOn": [],
         "nextCheck": "今天 14:30",
         "note": "文件夹独立分类，引用连接相关记录。",
@@ -867,16 +892,12 @@
       {
         "id": "W405",
         "code": "P1-3",
-        "title": "人在协作中保持认知参与",
+        "title": "档案保留决定与依据",
         "parent": "W401",
         "status": "open",
-        "owner": "机长",
-        "sources": [
-          "N401"
-        ],
-        "dependsOn": [
-          "W402"
-        ],
+        "owner": "行政",
+        "sources": ["N401"],
+        "dependsOn": ["W402"],
         "blockedOn": [],
         "nextCheck": "等待你的答复",
         "note": "关键选择保留背景与推荐方案。",
@@ -897,56 +918,116 @@
     "docs": [
       {
         "id": "D401",
-        "title": "机组：组织持续协作.md",
-        "body": "机组围绕一件持续推进的事组织人和 agent，承接目标、沟通、工作记录与成果。\n\n机组可以有父子结构，也可以有多个父引用。侧栏通讯录展示组织关系，消息视图展示机组内的群聊和单聊。",
-        "author": "机长",
+        "title": "行政：组织运转与业务分工.md",
+        "body": "行政承接组织协调、督办和档案。业务方向与验收仍由业务机长和负责人判断。\n\n督办发现无人跟进、检查过期或需要协调的工作；档案保留讨论、决定、产物和版本依据。\n\n决定、教训、风险与小判断服务是资料中提出的信息组织方向，具体范围以各份设计文档的状态为准。",
+        "author": "行政",
         "folder": "产品说明"
       },
       {
         "id": "D402",
-        "title": "聊天：熟悉的协作入口.md",
-        "body": "群聊与单聊出现在同一个会话列表。右侧聊天区保留消息，上方可以选择人类沟通或完整记录，也可以仅查看与你有关的消息。\n\n聊天右侧上方是相关 Todo，下方是成员列表，两部分都可以折叠。输入框旁的 Todo 模式让一次发送直接成为一条原始需求。",
-        "author": "机长",
+        "title": "决定与资料的来源.md",
+        "body": "档案记录讨论、决定与产物的引用；版本记录修改依据。决定、教训与风险可以沉淀为可关联的信息。\n\n产品说明、已敲定设计和规划设想分别保留状态，不将规划当成已经交付的功能。",
+        "author": "行政",
         "folder": "功能关系"
       },
       {
         "id": "D403",
         "title": "文档：把成果留在工作里.md",
         "body": "文档保存产品说明、工作笔记、方案与成果，而不是把每次交流都压缩成聊天记录。\n\n点击文档阅读全文，可以移动到独立的文件夹，也可以把文档引用发回群聊。消息与计划保留稳定引用，讨论和成果能够互相找到。",
-        "author": "机长",
+        "author": "行政",
         "folder": "功能关系"
       }
     ],
     "conversations": [
       {
         "id": "administration-main",
-        "title": "总群",
+        "title": "行政总览",
         "kind": "group",
-        "subtitle": "协调人员、任务与工作记录。"
+        "subtitle": "行政机组承接团队协调与日常工作。",
+        "members": [
+          {
+            "name": "行政",
+            "detail": "产品资料 · 行政总览",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "administration-agent",
-        "title": "机长",
-        "kind": "dm",
-        "subtitle": "围绕目标、任务和判断持续协作。"
+        "title": "业务与行政",
+        "kind": "group",
+        "subtitle": "机长决定业务方向，行政负责组织运转。",
+        "members": [
+          {
+            "name": "组织协调",
+            "detail": "产品资料 · 业务与行政",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "administration-todo",
-        "title": "Todo介绍",
+        "title": "督办与异常",
         "kind": "group",
-        "subtitle": "原始需求、计划和人的事项。"
+        "subtitle": "找出无人跟进、检查过期或需要协调的工作。",
+        "members": [
+          {
+            "name": "督办",
+            "detail": "产品资料 · 督办与异常",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "administration-planning",
-        "title": "演示策划",
+        "title": "档案与版本",
         "kind": "group",
-        "subtitle": "用 PendingCrew 自己介绍自己。"
+        "subtitle": "讨论、决定与产物留下引用，结论有据可查。",
+        "members": [
+          {
+            "name": "档案整理",
+            "detail": "产品资料 · 档案与版本",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       },
       {
         "id": "administration-development",
-        "title": "Demo开发",
+        "title": "决定与判断",
         "kind": "group",
-        "subtitle": "React + TypeScript，可交互、可嵌入。"
+        "subtitle": "把有价值的经验沉淀成可关联的对象。",
+        "members": [
+          {
+            "name": "知识整理",
+            "detail": "产品资料 · 决定与判断",
+            "glyph": "🐼"
+          },
+          {
+            "name": "人",
+            "detail": "人类",
+            "glyph": "👤"
+          }
+        ]
       }
     ],
     "messages": {
@@ -1003,22 +1084,10 @@
       ]
     },
     "folders": {
-      "message": [
-        "组织与沟通",
-        "人的判断"
-      ],
-      "todo": [
-        "协作空间",
-        "关键判断"
-      ],
-      "document": [
-        "产品说明",
-        "功能关系"
-      ],
-      "progress": [
-        "组织与沟通",
-        "内容与判断"
-      ]
+      "message": ["组织与沟通", "人的判断"],
+      "todo": ["协作空间", "关键判断"],
+      "document": ["产品说明", "功能关系"],
+      "progress": ["组织与沟通", "内容与判断"]
     },
     "placements": {},
     "history": [

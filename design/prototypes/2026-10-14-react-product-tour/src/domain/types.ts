@@ -22,10 +22,12 @@ export interface Scene {
   note: string;
   intro: string;
   initialLedger?: Ledger;
+  initialGroups?: Record<string, GroupWork>;
 }
 export interface Classified {
   id: string;
   folder?: string;
+  tags?: string[];
 }
 export interface Plan extends Classified {
   code: string;
@@ -44,10 +46,15 @@ export interface Plan extends Classified {
   evidence?: string;
 }
 export interface Request extends Classified {
+  status?: Status;
+  source?: string;
+  sourceLabel?: string;
+  owner?: string;
   code: string;
   text: string;
 }
 export interface HumanAsk extends Classified {
+  owner?: string;
   question: string;
   recommendation: string;
   options: string[];
@@ -76,6 +83,10 @@ export interface CompositionDataView {
 }
 export type DataView = TableDataView | CompositionDataView;
 export interface DocumentRecord extends Classified {
+  archived?: boolean;
+  siteSource?: string;
+  siteAssets?: Record<string,string>;
+  sourceSha256?: string;
   dataView?: DataView;
   catalogKey?: string;
   summary?: string;
@@ -91,6 +102,7 @@ export interface Conversation {
   title: string;
   kind: "group" | "dm";
   subtitle: string;
+  members?: { name: string; detail: string; glyph: string }[];
 }
 export interface Message extends Classified {
   sender: string;
@@ -111,6 +123,8 @@ export interface Ledger {
   history: { text: string; time: string }[];
 }
 export interface UiState {
+  todoFilters?: Partial<Record<"requests" | "asks", {tag:string;query:string}>>;
+  todoTag?: string;
   tab: Scope;
   kind: TodoKind;
   conv: string;
@@ -135,12 +149,22 @@ export type GroupWork = Pick<
   Ledger,
   "plans" | "requests" | "asks" | "docs" | "folders" | "placements" | "history"
 >;
+export interface CrewSession {id:string;name:string;detail:string;glyph:string;}
 export interface SceneState {
+  sessions?: CrewSession[];
+  updatedAt?: string;
   groups?: Record<string, GroupWork>;
   db: Ledger;
   ui: UiState;
 }
 export interface TourState {
+  contentCompletionRevision?: number;
+  captainDemoSeed?: {work:GroupWork;messages:Message[]};
+  interfaceRevision?: number;
+  navigation?: {collapsedCrews:string[];sidebarCollapsed:boolean};
+  developmentRevision?: number;
+  workspaceRevision?: number;
+  presentationRevision?: number;
   contentRevision?: number;
   sceneId: string;
   scenes: Scene[];
@@ -184,7 +208,13 @@ export type Command =
     }
   | { type: "saveFolder"; scope: Scope; name: string; old?: string }
   | { type: "move"; id: string; scope: Scope; folder: string }
+  | { type: "toggleCrew"; id:string }
+  | { type: "toggleSidebar" }
+  | { type: "newHumanTodo"; text:string }
   | { type: "newRequest"; text: string }
+  | { type: "assignTodo"; id: string; owner: string }
+  | { type: "tagTodo"; id: string; tag: string }
+  | { type: "completeTodo"; id: string }
   | { type: "newDocument"; title: string; body: string }
   | { type: "saveDataView"; id: string; dataView: DataView }
   | { type: "newCrew"; name: string; brief: string; id: string }
@@ -195,7 +225,7 @@ export const scopeNames: Record<Scope, string> = {
   message: "消息",
   todo: "Todo",
   document: "文档/数据",
-  progress: "进展",
+  progress: "计划/进展",
 };
 export const statusLabels: Record<Status, string> = {
   open: "待开始",

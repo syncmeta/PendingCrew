@@ -1,0 +1,20 @@
+{
+  "name": "pendingcrew-demo",
+  "compatibility_date": "2026-08-27",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "pendingname.com/crewdemo",
+      "zone_name": "pendingname.com"
+    },
+    {
+      "pattern": "pendingname.com/crewdemo/*",
+      "zone_name": "pendingname.com"
+    }
+  ],
+  "assets": {
+    "directory": "./site",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  }
+}

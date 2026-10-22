@@ -3,15 +3,15 @@
     "id": "@pendingname/pendingcrew-product-tour@0.1.0",
     "name": "@pendingname/pendingcrew-product-tour",
     "version": "0.1.0",
-    "size": 171584,
-    "unpackedSize": 578579,
-    "shasum": "1d1c82c126b08284a29502a9706be8dd8b8c1c01",
-    "integrity": "sha512-XYD41JbEFz0x5zW+Vz/3SU8XP2Ty0pH+9NfZrPIn5XEfJv7yqgG0PzP06X681H4OMCSqPCOBEFCft25bWkAkpA==",
+    "size": 200150,
+    "unpackedSize": 700401,
+    "shasum": "f8532dbd8148b233d103d90b87c367bc781e1dc4",
+    "integrity": "sha512-0iiTsjQO2X1cOMCnxYB7Y7Hqqua/Q7VTSmOAMJe2MMQOf07Dcq5qxERIqCQS+0ihjoRjAzN3s0So7DrB+L8Dew==",
     "filename": "pendingname-pendingcrew-product-tour-0.1.0.tgz",
     "files": [
       {
         "path": "README.md",
-        "size": 15587,
+        "size": 19737,
         "mode": 420
       },
       {
@@ -95,6 +95,11 @@
         "mode": 420
       },
       {
+        "path": "lib/domain/humanContext.d.ts",
+        "size": 248,
+        "mode": 420
+      },
+      {
         "path": "lib/domain/reducer.d.ts",
         "size": 184,
         "mode": 420
@@ -110,8 +115,13 @@
         "mode": 420
       },
       {
+        "path": "lib/domain/topicCrews.d.ts",
+        "size": 215,
+        "mode": 420
+      },
+      {
         "path": "lib/domain/types.d.ts",
-        "size": 5775,
+        "size": 5916,
         "mode": 420
       },
       {
@@ -126,17 +136,17 @@
       },
       {
         "path": "lib/pendingcrew-tour.css",
-        "size": 34219,
+        "size": 35755,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js",
-        "size": 222218,
+        "size": 311265,
         "mode": 420
       },
       {
         "path": "lib/pendingcrew-tour.js.map",
-        "size": 270373,
+        "size": 296858,
         "mode": 420
       },
       {
@@ -160,7 +170,7 @@
         "mode": 420
       }
     ],
-    "entryCount": 30,
+    "entryCount": 32,
     "bundled": []
   }
 ]

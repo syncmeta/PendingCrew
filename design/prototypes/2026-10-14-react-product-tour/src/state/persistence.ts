@@ -32,7 +32,6 @@ function validLedger(v: unknown): v is Ledger {
   )
     return false;
   return (
-    v.plans.length > 0 &&
     v.plans.every(
       (p) =>
         ["code", "title", "owner", "note", "nextCheck"].every(

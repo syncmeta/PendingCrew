@@ -1,7 +1,6 @@
-import appIcon from "./assets/app-icon.png";
 import type { CSSProperties } from "react";
 import { TourProvider, useTour } from "./state/TourContext";
-import { scopeNames, type Scope } from "./domain/types";
+import { type Scope } from "./domain/types";
 import { Button, Icon } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { ConversationList } from "./components/ConversationList";
@@ -22,6 +21,8 @@ export interface PendingCrewTourProps {
 }
 function MacWindow() {
   const {
+    state,
+    dispatch,
     data: { ui },
     scene,
     setUi,
@@ -31,7 +32,7 @@ function MacWindow() {
   } = useTour();
   return (
     <main
-      className={"mac-window " + (sidebarOpen ? "show-sidebar" : "")}
+      className={"mac-window " + (sidebarOpen ? "show-sidebar " : "") + (state.navigation?.sidebarCollapsed ? "sidebar-collapsed" : "")}
       id="app"
       aria-label="PendingCrew Mac 网页介绍"
     >
@@ -45,17 +46,16 @@ function MacWindow() {
       <section className="detail">
         <div className="titlebar">
           <Button
-            action="mobile-menu"
-            className="icon-button mobile-menu"
-            aria-label="显示机组列表"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            action="toggle-sidebar"
+            className="icon-button sidebar-toggle"
+            aria-label={state.navigation?.sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+            onClick={() => window.innerWidth <= 760 ? setSidebarOpen(!sidebarOpen) : dispatch({type:"toggleSidebar"})}
           >
-            <Icon name="menu" />
+            <Icon name="panel" />
           </Button>
-          <img className="product-icon" src={appIcon} alt="PendingCrew 图标" />
-          <h2>PendingCrew</h2>
+          <h2>{scene.crew}</h2>
           <span className="path" data-current-crew={scene.crew}>
-            {scene.crew} / 本机
+            本机
           </span>
           <span className="app-notice">交互介绍</span>
           <label className="search">
@@ -80,8 +80,8 @@ function MacWindow() {
             <Button
               action="folder-manager"
               className="icon-button"
-              aria-label="管理分组"
-              onClick={() => setModal({ kind: "folders", scope: ui.tab })}
+              aria-label={ui.tab === "todo" ? "Todo 标签" : "管理分组"}
+              onClick={() => ui.tab === "todo" ? setUi({ tab: "todo", todoTag: "all" }) : setModal({ kind: "folders", scope: ui.tab })}
             >
               <Icon name="more" />
             </Button>
@@ -91,20 +91,18 @@ function MacWindow() {
           <ConversationList />
           <div className="group-detail">
             <nav className="view-tabs" aria-label="当前群内容">
-              {(Object.entries(scopeNames) as [Scope, string][]).map(
-                ([tab, label]) => (
-                  <Button
-                    key={tab}
-                    action="tab"
-                    data-tab={tab}
-                    className={ui.tab === tab ? "active" : ""}
-                    aria-pressed={ui.tab === tab}
-                    onClick={() => setUi({ tab, query: "", doc: null })}
-                  >
-                    {label}
-                  </Button>
-                ),
-              )}
+              {([
+                ["message","消息"],["human-todo","真人Todo"],["ai-todo","AI Todo"],["document","文档/数据"],["progress","计划/进展"]
+              ] as const).map(([key,label]) => {
+                const todo=key==="human-todo"||key==="ai-todo";
+                const kind=key==="human-todo"?"asks":"requests";
+                const active=todo?ui.tab==="todo"&&(ui.kind==="asks"?"asks":"requests")===kind:ui.tab===key;
+                return <Button key={key} action="tab" data-tab={key} className={active?"active":""} aria-pressed={active} onClick={()=>{
+                  const filters={...ui.todoFilters};
+                  if(ui.tab==="todo") filters[ui.kind==="asks"?"asks":"requests"]={tag:ui.todoTag??"all",query:ui.query};
+                  setUi(todo?{tab:"todo",kind,todoTag:filters[kind]?.tag??"all",query:filters[kind]?.query??"",todoFilters:filters,doc:null}:{tab:key as Scope,query:"",doc:null,todoFilters:filters});
+                }}>{label}</Button>;
+              })}
             </nav>
             <section
               className={"view " + (ui.mobileChat ? "mobile-chat" : "")}
@@ -137,6 +135,11 @@ function TourView({
     >
       <MacWindow />
       <footer className="demo-footer">
+        <nav className="web-product-links" aria-label="产品链接">
+          <a href="https://github.com/syncmeta/PendingCrew" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://docs.pendingname.com/pendingcrew/" target="_blank" rel="noopener noreferrer">文档</a>
+          <a href="https://pending.name" target="_blank" rel="noopener noreferrer">个人网站</a>
+        </nav>
         <Button
           id="reset"
           className="footer-right"

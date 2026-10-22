@@ -157,8 +157,8 @@
     "title": "一本账，三种记录.md",
     "folder": "工作模型",
     "kind": "已敲定设计",
-    "summary": "原始需求、计划、待人类处理互相引用。",
-    "body": "## 原始需求\n\n保留人交代的原文，用稳定编号记录。需求如何推进，通过关联计划体现。\n\n## 计划\n\n计划回答怎样推进：目标、负责人、状态、依赖、下一步、检查时间和成果。可以按最多三层组织拆解。\n\n## 待人类处理\n\n把需要人判断的事项连同上下文和推荐选项一起记录。回答、稍后和撤回分别表达不同动作。\n\n**一本账不等于所有人拥有同样权限。** 稳定引用连接工作，具体操作仍按角色和范围约束。",
+    "summary": "把需求、计划和待判断事项留在眼前，帮助人和 AI 接上同一条思路。",
+    "body": "## 给人的大脑保留上下文\n\n群聊保留讨论的来龙去脉，通讯录让组织与分工清楚，Todo 把需求、进展、卡点和待判断事项留在眼前。\n\n不用把所有事都记在脑子里，也不用每次切换会话都重新理一遍：为什么做、谁在跟进、推进到哪里、下一步需要你判断什么，都有地方可以找到。\n\nPendingCrew 的根本目标是让人与 AI 高效协同、保持清晰思绪，不做“一句话搞定”的产品。\n\n## 原始需求\n\n保留人交代的原文，用稳定编号记录。需求如何推进，通过关联计划体现。\n\n## 计划\n\n计划回答怎样推进：目标、负责人、状态、依赖、下一步、检查时间和成果。可以按最多三层组织拆解。\n\n## 待人类处理\n\n把需要人判断的事项连同上下文和推荐选项一起记录。回答、稍后和撤回分别表达不同动作。\n\n**一本账不等于所有人拥有同样权限。** 稳定引用连接工作，具体操作仍按角色和范围约束。",
     "sources": [
       {
         "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
@@ -456,7 +456,7 @@
   {
     "key": "cross-crew",
     "scene": "trip",
-    "conversation": "main",
+    "conversation": "agent",
     "title": "跨机组协作与统一工作账.md",
     "folder": "协作规则",
     "kind": "已敲定设计",
@@ -477,7 +477,7 @@
   {
     "key": "blocked-item",
     "scene": "trip",
-    "conversation": "main",
+    "conversation": "todo",
     "title": "卡住一件，不停下全部.md",
     "folder": "协作规则",
     "kind": "已敲定设计",
@@ -498,7 +498,7 @@
   {
     "key": "checks",
     "scene": "trip",
-    "conversation": "main",
+    "conversation": "planning",
     "title": "检查点与持续跟进.md",
     "folder": "协作规则",
     "kind": "已敲定设计",
@@ -519,7 +519,7 @@
   {
     "key": "stable-ids",
     "scene": "trip",
-    "conversation": "main",
+    "conversation": "development",
     "title": "稳定编号与可追溯引用.md",
     "folder": "协作规则",
     "kind": "已敲定设计",
@@ -544,7 +544,7 @@
   {
     "key": "organization",
     "scene": "research",
-    "conversation": "main",
+    "conversation": "agent",
     "title": "组织结构与多父机组.md",
     "folder": "组织与成员",
     "kind": "已敲定设计",
@@ -565,7 +565,7 @@
   {
     "key": "session-members",
     "scene": "research",
-    "conversation": "main",
+    "conversation": "todo",
     "title": "群成员与本机 Session.md",
     "folder": "组织与成员",
     "kind": "产品说明",
@@ -586,7 +586,7 @@
   {
     "key": "channels-attention",
     "scene": "research",
-    "conversation": "main",
+    "conversation": "planning",
     "title": "读得到、收到消息与叫醒.md",
     "folder": "组织与成员",
     "kind": "已敲定设计",
@@ -603,7 +603,7 @@
   {
     "key": "document-lifecycle",
     "scene": "research",
-    "conversation": "main",
+    "conversation": "development",
     "title": "文档的编辑、分类与归档.md",
     "folder": "资料与成果",
     "kind": "已敲定设计",
@@ -624,7 +624,7 @@
   {
     "key": "admin-split",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "agent",
     "title": "行政与业务的分工.md",
     "folder": "行政职能",
     "kind": "已敲定设计",
@@ -641,7 +641,7 @@
   {
     "key": "admin-followup",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "todo",
     "title": "督办与异常协调.md",
     "folder": "行政职能",
     "kind": "已敲定设计",
@@ -658,7 +658,7 @@
   {
     "key": "archive-evidence",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "planning",
     "title": "档案与完成依据.md",
     "folder": "资料与成果",
     "kind": "已敲定设计",
@@ -679,7 +679,7 @@
   {
     "key": "decision-records",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "development",
     "title": "决定、教训与风险.md",
     "folder": "组织知识",
     "kind": "规划设想",
@@ -717,7 +717,7 @@
   {
     "key": "version-history",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "planning",
     "title": "版本、分支与来源.md",
     "folder": "组织知识",
     "kind": "规划设想",
@@ -772,7 +772,7 @@
   {
     "key": "judgment-service",
     "scene": "administration",
-    "conversation": "main",
+    "conversation": "development",
     "title": "小判断服务与人的判断.md",
     "folder": "行政职能",
     "kind": "规划设想",

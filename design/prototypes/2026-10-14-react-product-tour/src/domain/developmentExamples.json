@@ -1,0 +1,605 @@
+[
+  {
+    "id": "website-development-practice",
+    "title": "实际开发演示",
+    "subtitle": "PendingCrew 自己的任务、分工和开发过程。",
+    "members": [
+      {
+        "name": "机长",
+        "detail": "Codex Session · 演示分工",
+        "glyph": "🦉"
+      },
+      {
+        "name": "Todo入口改造",
+        "detail": "Claude Code Session · 演示分工",
+        "glyph": "🛠️"
+      },
+      {
+        "name": "你",
+        "detail": "人类",
+        "glyph": "👤"
+      }
+    ],
+    "work": {
+      "requests": [
+        {
+          "id": "N92001",
+          "code": "#92001",
+          "text": "输入框 placeholder 换成「发群消息/新建 Todo」；中文候选态也应该立即消失。",
+          "owner": "机长",
+          "tags": [
+            "前端",
+            "小工程"
+          ],
+          "status": "done",
+          "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+        },
+        {
+          "id": "N92002",
+          "code": "#92002",
+          "text": "Session 终端没有开启时，输入框换成与群聊一致的样式。",
+          "owner": "Todo入口改造",
+          "tags": [
+            "前端",
+            "小工程"
+          ],
+          "status": "done",
+          "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+        },
+        {
+          "id": "N92003",
+          "code": "#92003",
+          "text": "翻历史时，新消息不要让当前阅读位置乱跳。",
+          "owner": "机长",
+          "tags": [
+            "前端",
+            "紧急"
+          ],
+          "status": "active",
+          "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+        },
+        {
+          "id": "N92004",
+          "code": "#92004",
+          "text": "侧栏额度改成品牌标识和额度环，悬停查看百分比与重置时间。",
+          "owner": "Todo入口改造",
+          "tags": [
+            "前端",
+            "小工程"
+          ],
+          "status": "done",
+          "source": "Sources/Mac/Views/QuotaRingsFooter.swift"
+        }
+      ],
+      "plans": [
+        {
+          "id": "W92001",
+          "code": "P92001",
+          "title": "统一输入框文案与中文候选态",
+          "owner": "机长",
+          "sources": [
+            "N92001"
+          ],
+          "status": "done",
+          "note": "历史 Todo #2 的回应记录列出了两处实现；真机候选态手感另有验收边界。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D92001"
+        },
+        {
+          "id": "W92002",
+          "code": "P92002",
+          "title": "复用群聊 Composer 的视觉与行为",
+          "owner": "Todo入口改造",
+          "sources": [
+            "N92002"
+          ],
+          "status": "done",
+          "note": "历史 Todo #3 记录已合入的输入框样式修订。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D92001"
+        },
+        {
+          "id": "W92003",
+          "code": "P92003",
+          "title": "保持翻历史时的阅读锚点",
+          "owner": "机长",
+          "sources": [
+            "N92003"
+          ],
+          "status": "active",
+          "note": "9 月 13 日快照：纯判定已造红，等待接线；此处演示继续跟进。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D92002"
+        },
+        {
+          "id": "W92004",
+          "code": "P92004",
+          "title": "复刻侧栏额度环",
+          "owner": "Todo入口改造",
+          "sources": [
+            "N92004"
+          ],
+          "status": "done",
+          "note": "对照当前仓库的 QuotaRingsFooter：Claude 三环、Codex 周环、悬停和刷新行。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D92003"
+        },
+        {
+          "id": "W92101",
+          "code": "P92101",
+          "title": "先验证判定，再连接滚动界面",
+          "owner": "机长",
+          "sources": [
+            "N92003"
+          ],
+          "status": "open",
+          "note": "先证明失败场景能被捕获，再检查真实滚动行为。",
+          "parent": "W92003",
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录"
+        }
+      ],
+      "asks": [],
+      "docs": [
+        {
+          "id": "D92001",
+          "title": "输入体验：两条小 Todo 怎样落地",
+          "body": "历史记录日期：2026-07-18（9 月快照收录）。\n\n人类连续提出了两条很小的需求：输入框文案和候选态的占位文字、终端没开时的输入框样式。它们并不是一个完整的产品 PRD，但同样需要记录、认领、实现、回复和后续验收。\n\nTodo #2 的回应记录了 placeholder 统一和 NSTextView 的 hasMarkedText 判定；Todo #3 的回应记录了复用群聊 ComposerView。历史回应同时把真机手感留作独立验收，没有把代码合入等同于界面实测。\n\n本群的负责人是用于交互演示的角色分工；任务文字和过程依据来自真实历史。你可以在 Todo 卡片中换负责人，在计划/进展中修改同一项工作的状态。",
+          "author": "机长",
+          "folder": "开发记录",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "历史 Todo 与回应",
+              "path": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+            }
+          ]
+        },
+        {
+          "id": "D92002",
+          "title": "翻历史时的新消息：从红测到界面接线",
+          "body": "历史记录日期：2026-09-13。\n\n计划 #10 对应 Todo #144：翻历史时新消息让位置乱跳。记录写明纯判定已造红，等待 main 解冻以及 CrewChatView 的修改窗口，再接入界面。\n\n这里值得保留的不是一句「已经修了」，而是这件事当时停在哪一层：失败判定已被测试捕获，界面连接和真实滚动行为还有下一步。这就是计划/进展需要结构化的原因。\n\n此处沿用快照的进行中状态来演示跟进，不代表当前产品仍有这个缺口。",
+          "author": "机长",
+          "folder": "开发记录",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "历史计划 #10",
+              "path": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+            }
+          ]
+        },
+        {
+          "id": "D92003",
+          "title": "额度环：按 Mac 端自己的交互呈现",
+          "body": "依据：当前仓库 Sources/Mac/Views/QuotaRingsFooter.swift 与 Sources/Support/QuotaRingLayout.swift。\n\n每家一行，品牌图标后放额度环。Claude Code 显示 5h、周和当前模型；Codex 显示周额度。环平时写窗口名称，悬停显示已用百分比，下面一行变成该窗口的重置时间。刷新按钮固定在行首，避免文案变化时左右跳动。\n\n网页复用原品牌图标、33px 圆环和 54px 模型长环。这里的额度是明确标注的演示数据，不连接访问者账户。",
+          "author": "机长",
+          "folder": "开发记录",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "Mac 原生额度视图",
+              "path": "Sources/Mac/Views/QuotaRingsFooter.swift"
+            },
+            {
+              "label": "额度布局规则",
+              "path": "Sources/Support/QuotaRingLayout.swift"
+            }
+          ]
+        },
+        {
+          "id": "D92004",
+          "title": "开发任务数据：任务、负责人、计划与证据",
+          "body": "同一批开发任务可以从聊天进入，也可以按负责人或标签查看。下表保留真实任务依据，演示怎样把文字任务变为可筛选的结构化记录。",
+          "author": "机长",
+          "folder": "数据与验收",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "历史 Todo",
+              "path": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+            },
+            {
+              "label": "历史计划",
+              "path": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+            }
+          ],
+          "dataView": {
+            "kind": "table",
+            "primaryKey": "todo",
+            "description": "任务来源为真实记录；负责人和可编辑状态是演示分工，不是当前项目实时账本。",
+            "schema": "CREATE TABLE development_tasks (todo TEXT PRIMARY KEY, title TEXT, owner TEXT, tags TEXT, plan TEXT, evidence TEXT);",
+            "columns": [
+              {
+                "key": "todo",
+                "label": "Todo",
+                "type": "TEXT"
+              },
+              {
+                "key": "title",
+                "label": "任务",
+                "type": "TEXT"
+              },
+              {
+                "key": "owner",
+                "label": "负责人",
+                "type": "TEXT"
+              },
+              {
+                "key": "tags",
+                "label": "标签",
+                "type": "TEXT"
+              },
+              {
+                "key": "plan",
+                "label": "计划",
+                "type": "TEXT"
+              },
+              {
+                "key": "evidence",
+                "label": "依据",
+                "type": "TEXT"
+              }
+            ],
+            "rows": [
+              {
+                "todo": "N92001",
+                "title": "输入框文案与候选态",
+                "owner": "机长",
+                "tags": "前端 / 小工程",
+                "plan": "W92001",
+                "evidence": "历史 Todo #2"
+              },
+              {
+                "todo": "N92002",
+                "title": "复用群聊输入框",
+                "owner": "Todo入口改造",
+                "tags": "前端 / 小工程",
+                "plan": "W92002",
+                "evidence": "历史 Todo #3"
+              },
+              {
+                "todo": "N92003",
+                "title": "保持历史消息阅读位置",
+                "owner": "机长",
+                "tags": "前端 / 紧急",
+                "plan": "W92003",
+                "evidence": "历史计划 #10"
+              }
+            ]
+          }
+        }
+      ],
+      "folders": {
+        "message": [
+          "开发沟通"
+        ],
+        "todo": [],
+        "document": [
+          "开发记录",
+          "经验与复盘",
+          "数据与验收"
+        ],
+        "progress": [
+          "工作计划"
+        ]
+      },
+      "placements": {},
+      "history": []
+    },
+    "messages": [
+      {
+        "id": "development-example-1",
+        "sender": "你",
+        "text": "输入框 placeholder 换成「发群消息/新建 Todo」；中文候选态也应该立即消失。",
+        "ref": "N92001"
+      },
+      {
+        "id": "development-example-2",
+        "sender": "你",
+        "text": "Session 终端没有开启时，输入框换成与群聊一致的样式。",
+        "ref": "N92002"
+      },
+      {
+        "id": "development-example-3",
+        "sender": "机长",
+        "text": "这是 PendingCrew 真实历史里连续丢进来的两条小任务。文案、输入法候选态和样式复用需要分开跟进，不能只写一句“输入体验已优化”。",
+        "ref": "D92001"
+      },
+      {
+        "id": "development-example-4",
+        "sender": "Todo入口改造",
+        "text": "我负责输入框样式；任务卡上保留负责人，计划里保留实现和验收记录。你可以改负责人、打多个标签，再打开计划/进展看同一条工作。",
+        "ref": "W92002"
+      },
+      {
+        "id": "development-example-5",
+        "sender": "机长",
+        "text": "还有翻历史时阅读位置乱跳、额度环的悬停和刷新。相关任务、数据表和来源文档都放在本群，不需要切去另一本账。",
+        "ref": "D92004"
+      }
+    ]
+  },
+  {
+    "id": "website-development-lessons",
+    "title": "经验与复盘",
+    "subtitle": "把开发中的经验、数据与验收边界留下来。",
+    "members": [
+      {
+        "name": "机长",
+        "detail": "Codex Session · 演示分工",
+        "glyph": "🦉"
+      },
+      {
+        "name": "搜索核验",
+        "detail": "Codex Session · 演示分工",
+        "glyph": "🔎"
+      },
+      {
+        "name": "你",
+        "detail": "人类",
+        "glyph": "👤"
+      }
+    ],
+    "work": {
+      "requests": [
+        {
+          "id": "N93001",
+          "code": "#93001",
+          "text": "读取账本失败时保留 errno 和路径，不把「读不到」显示成「不存在」。",
+          "owner": "机长",
+          "tags": [
+            "后端",
+            "小工程"
+          ],
+          "status": "done",
+          "source": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+        },
+        {
+          "id": "N93002",
+          "code": "#93002",
+          "text": "复核搜索修复的真实提交和覆盖范围，分清 Mac、iOS 和 Agent 工具。",
+          "owner": "搜索核验",
+          "tags": [
+            "后端",
+            "大工程"
+          ],
+          "status": "open",
+          "source": "docs/internal/2026-09-07-todo-49-search-closeout.md"
+        }
+      ],
+      "plans": [
+        {
+          "id": "W93001",
+          "code": "P93001",
+          "title": "保留故障诊断的原始上下文",
+          "owner": "机长",
+          "sources": [
+            "N93001"
+          ],
+          "status": "done",
+          "note": "9 月 8 日记录：错误上下文修订已测；EPERM 触发者仍未直接查清。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D93001"
+        },
+        {
+          "id": "W93002",
+          "code": "P93002",
+          "title": "核实搜索实现与遗漏的入口",
+          "owner": "搜索核验",
+          "sources": [
+            "N93002"
+          ],
+          "status": "active",
+          "note": "以 9 月 7 日记录演示：将已合入实现、缺失界面和不同查询路径逐项核对。",
+          "parent": null,
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录",
+          "evidence": "D93002"
+        },
+        {
+          "id": "W93101",
+          "code": "P93101",
+          "title": "核对可解析的提交与实际代码",
+          "owner": "搜索核验",
+          "sources": [
+            "N93002"
+          ],
+          "status": "done",
+          "note": "不能用群聊中报出的 commit 字符串代替 Git 对象。",
+          "parent": "W93002",
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录"
+        },
+        {
+          "id": "W93102",
+          "code": "P93102",
+          "title": "区分各端入口和工具查询语义",
+          "owner": "搜索核验",
+          "sources": [
+            "N93002"
+          ],
+          "status": "open",
+          "note": "用户搜索与 Agent 工具可能走不同实现，需要分别验证。",
+          "parent": "W93002",
+          "dependsOn": [],
+          "blockedOn": [],
+          "nextCheck": "查看关联记录"
+        }
+      ],
+      "asks": [],
+      "docs": [
+        {
+          "id": "D93001",
+          "title": "真实经验：别在错误提示里丢掉诊断线索",
+          "body": "记录日期：2026-09-08。\n\n账本读取失败的提示丢掉了错误对象里已有的 errno 和绝对路径。后果是每个接手的人都要从猜测开始，甚至把「读不到」误判成「不存在」。\n\n这次修订保留了诊断上下文，并通过测试和变异验证。但报告明确区分了另一个问题：EPERM 是谁触发的，仍没有直接观测到。修好提示并不等于查清系统权限根因。\n\n可复用的经验：保存原始错误；区分观察、代码事实和推论；把没核到的部分留在下一步，而不是把整件事笼统标为完成。",
+          "author": "机长",
+          "folder": "经验与复盘",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "原始诊断与证据",
+              "path": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+            }
+          ]
+        },
+        {
+          "id": "D93002",
+          "title": "真实经验：先核事实，再接着做",
+          "body": "记录日期：2026-09-07。\n\n聊天记录搜索的收尾核对发现：用户搜索、Agent 工具搜索、Mac 和 iOS 入口不是同一条链路。一条「修好了」的消息不能替代具体代码和有效 Git 提交。\n\n报告逐项列出已合入的搜索实现、当时仍缺失的入口和查询语义，还记下了一个无法解析的旧提交号。这些结论只代表该日记录，不能当成今天的产品状态。\n\n可复用的经验：接手前核现状；共享纯逻辑，减少各端语义漂移；先造能失败的中文回归，再修工具查询。",
+          "author": "机长",
+          "folder": "经验与复盘",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "搜索收尾核对",
+              "path": "docs/internal/2026-09-07-todo-49-search-closeout.md"
+            }
+          ]
+        },
+        {
+          "id": "D93003",
+          "title": "故障样本：原始命中与系统警示要分开",
+          "body": "记录日期：2026-09-08。下表摘录原诊断报告中的统计口径，可以筛选、排序并打开行详情。不同口径不能直接相互替代。",
+          "author": "机长",
+          "folder": "数据与验收",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "故障统计原表",
+              "path": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+            }
+          ],
+          "dataView": {
+            "kind": "table",
+            "primaryKey": "scope",
+            "description": "这是历史排查的数据切片，不是当前运行监控。",
+            "schema": "CREATE TABLE failure_counts (scope TEXT PRIMARY KEY, count INTEGER, explanation TEXT, captured_on TEXT);",
+            "columns": [
+              {
+                "key": "scope",
+                "label": "口径",
+                "type": "TEXT"
+              },
+              {
+                "key": "count",
+                "label": "数量",
+                "type": "TEXT"
+              },
+              {
+                "key": "explanation",
+                "label": "说明",
+                "type": "TEXT"
+              },
+              {
+                "key": "captured_on",
+                "label": "记录日期",
+                "type": "TEXT"
+              }
+            ],
+            "rows": [
+              {
+                "scope": "原始文本命中",
+                "count": "18",
+                "explanation": "包含排查任务 brief 中的两次提及",
+                "captured_on": "2026-09-08"
+              },
+              {
+                "scope": "白板与账本命中",
+                "count": "16",
+                "explanation": "18 减去 brief 中的两次提及",
+                "captured_on": "2026-09-08"
+              },
+              {
+                "scope": "真正系统警示",
+                "count": "10",
+                "explanation": "9 条 approvals + 1 条 todos",
+                "captured_on": "2026-09-08"
+              },
+              {
+                "scope": "涉及机组",
+                "count": "7",
+                "explanation": "与其他报告的计数差异保留待复核",
+                "captured_on": "2026-09-08"
+              }
+            ]
+          }
+        },
+        {
+          "id": "D93004",
+          "title": "验收经验：代码、测试、安装与 GUI 分开记录",
+          "body": "记录日期：2026-09-27。前后端分离复核同时写了源码、运行探针、测试和安装态的证据边界。\n\n当时全量 macOS 测试记录为 2931 tests / 4 skips / 1 failure；唯一失败涉及真实 helper 生命周期，不能改写成全量通过。报告还区分了恢复提示的源码回归和安装态点击恢复的完整链路。\n\n在 PendingCrew 的计划/进展里，这些可以成为不同子项：代码实现、自动回归、安装验证、真人界面验收。它们共享一个目标，却有各自的状态和证据。",
+          "author": "机长",
+          "folder": "经验与复盘",
+          "kind": "工程说明",
+          "sources": [
+            {
+              "label": "前后端分离验收记录",
+              "path": "docs/internal/2026-09-27-todo-84-main-audit.md"
+            }
+          ]
+        }
+      ],
+      "folders": {
+        "message": [
+          "开发沟通"
+        ],
+        "todo": [],
+        "document": [
+          "开发记录",
+          "经验与复盘",
+          "数据与验收"
+        ],
+        "progress": [
+          "工作计划"
+        ]
+      },
+      "placements": {},
+      "history": []
+    },
+    "messages": [
+      {
+        "id": "lessons-example-1",
+        "sender": "机长",
+        "text": "有一次读取账本失败，提示把 errno 和路径丢了。之后每个接手的人都从猜测开始。我们把这件事留下来：别让错误信息自己变成信息黑洞。",
+        "ref": "D93001"
+      },
+      {
+        "id": "lessons-example-2",
+        "sender": "搜索核验",
+        "text": "另一份搜索复核提醒了我们：用户搜索和 Agent 工具、Mac 入口和 iOS 入口，必须分开核对。“已经修好”需要对应真实提交和具体测试。",
+        "ref": "D93002"
+      },
+      {
+        "id": "lessons-example-3",
+        "sender": "机长",
+        "text": "原始命中有 18 次，真正系统警示是 10 次，涉及 7 个机组。把统计口径保留成数据，下一次可以继续计算，而不是只留下一个结论。",
+        "ref": "D93003"
+      },
+      {
+        "id": "lessons-example-4",
+        "sender": "机长",
+        "text": "这些是注明日期的真实历史经验。任务、负责人、计划、数据和文档在本群互相引用；后续接手的人可以顺着证据继续，而不必重新猜一遍。",
+        "ref": "D93004"
+      }
+    ]
+  }
+]

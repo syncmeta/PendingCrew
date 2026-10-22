@@ -1,10 +1,15 @@
+import siteDocuments from "../domain/siteDocuments.json";
+import { programWork } from "../domain/nativeDemo";
+import { TodoOwner } from "./TodoOwner";
 import { DataViewPanel } from "./DataViewPanel";
 import { DocumentContent } from "./DocumentContent";
 import { Fragment } from "react";
 import { useTour } from "../state/TourContext";
-import { filtered, folderOf, crewLedgers } from "../domain/selectors";
-import type { HumanAsk, Plan, TodoKind } from "../domain/types";
+import { filtered, folderOf } from "../domain/selectors";
+import type { HumanAsk, Plan } from "../domain/types";
 import { Button, Icon, Reference, StatusBadge } from "./primitives";
+import { TodoRail, TodoTags } from "./TodoTags";
+import { requestStatus, tagsOf } from "../domain/todoModel";
 import { FolderRail } from "./FolderControls";
 export function PlanTable({
   progress = false,
@@ -13,8 +18,9 @@ export function PlanTable({
   progress?: boolean;
   source?: string;
 }) {
-  const { data, dispatch, reference } = useTour();
-  let plans = data.db.plans.filter(
+  const { state, data, dispatch, reference } = useTour();
+  const shared=progress && ["website","current-progress"].includes(state.sceneId) && data.ui.conv.endsWith("-main") ? programWork(state) : undefined;
+  let plans = (shared??data.db).plans.filter(
     (p) => !source || p.sources.includes(source),
   );
   if (!source) plans = filtered(data, plans, progress ? "progress" : "todo");
@@ -83,12 +89,13 @@ export function PlanTable({
       </>
     );
   }
-  if (!plans.length) return <div className="empty">这个文件夹还没有计划。</div>;
+  if (!plans.length) return <div className="empty">这里还没有计划。</div>;
   return (
     <>
       {progress && (
         <div className="progress-summary">
           <strong>工作结构</strong>
+          {plans.some((p)=>p.id==="W94001") && <span className="snapshot-date">2026-10-22 大工程快照</span>}
           <span>{plans.length} 个计划项</span>
           <span>
             {plans.filter((p) => p.status === "active").length} 进行中
@@ -121,7 +128,7 @@ export function PlanTable({
         </div>
       )}
       <div className="table-wrap">
-        <table className="plan-table">
+        <table className={"plan-table " + (progress ? "with-progress" : "")}>
           <thead>
             <tr>
               <th>计划 · 最多三层</th>
@@ -146,11 +153,6 @@ export function PlanTable({
           </tbody>
         </table>
       </div>
-      <p className="table-caption">
-        {progress
-          ? "点击标题查看目标、完成层级、验收标准和产物；这里与 Todo 的计划共用一份数据。"
-          : "层级表示拆解，依赖单独显示。文件夹只负责分类。"}
-      </p>
     </>
   );
 }
@@ -180,8 +182,9 @@ export function AskCard({ ask, origin }: { ask: HumanAsk; origin?: string }) {
               : "已撤回"}
       </span>
       <h4>{ask.question}</h4>
+      <TodoOwner item={ask} human/>
       <p>{ask.context}</p>
-      <Reference id={ask.item} />
+      {ask.item && <Reference id={ask.item} />}
       {["open", "later"].includes(ask.status) ? (
         <>
           <p style={{ marginTop: 12 }}>推荐：{ask.recommendation}</p>
@@ -226,129 +229,31 @@ export function AskCard({ ask, origin }: { ask: HumanAsk; origin?: string }) {
   );
 }
 function Todos() {
-  const {
-    state,
-    data: { db, ui },
-    data,
-    setUi,
-    setModal,
-    reference,
-  } = useTour();
-  return (
-    <>
-      <div className="segmented todo-kind">
-        {(
-          [
-            ["requests", "原始需求"],
-            ["plans", "计划"],
-            ["asks", "待人类处理"],
-          ] as [TodoKind, string][]
-        ).map(([kind, label]) => (
-          <Button
-            key={kind}
-            action="todo-kind"
-            data-kind={kind}
-            className={ui.kind === kind ? "active" : ""}
-            onClick={() => setUi({ kind })}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
-      {ui.kind === "plans" ? (
-        <PlanTable />
-      ) : ui.kind === "asks" ? (
-        <>
-          <div className="segmented todo-kind">
-            {(["crew", "all"] as const).map((scope) => (
-              <Button
-                key={scope}
-                action="ask-scope"
-                data-scope={scope}
-                className={ui.askScope === scope ? "active" : ""}
-                onClick={() => setUi({ askScope: scope })}
-              >
-                {scope === "crew" ? "当前机组" : "全部机组 · 唯一收件箱"}
-              </Button>
-            ))}
-          </div>
-          {ui.askScope === "all"
-            ? state.scenes.flatMap((s) =>
-                crewLedgers(state.cache[s.id])
-                  .flatMap(([, db]) => db.asks)
-                  .filter((a) => ["open", "later"].includes(a.status))
-                  .map((a) => (
-                    <div key={a.id}>
-                      <p
-                        className="quiet"
-                        style={{ fontSize: 11, margin: "12px 0 7px" }}
-                      >
-                        来源：{s.crew}
-                      </p>
-                      <AskCard ask={a} origin={s.id} />
-                    </div>
-                  )),
-              )
-            : filtered(data, db.asks, "todo").map((a) => (
-                <AskCard key={a.id} ask={a} />
-              ))}
-        </>
-      ) : (
-        filtered(data, db.requests, "todo").map((request) => {
-          const roots = db.plans.filter(
-            (p) => p.sources.includes(request.id) && !p.parent,
-          );
-          return (
-            <section key={request.id} className="request-card">
-              <div className="request-top">
-                <strong>{request.code} 原始需求</strong>
-                <StatusBadge
-                  status={
-                    roots.length
-                      ? roots.every((p) => p.status === "done")
-                        ? "done"
-                        : "active"
-                      : "open"
-                  }
-                />
-              </div>
-              <Button
-                action="reference"
-                data-id={request.id}
-                className="original-text request-open"
-                onClick={() => reference(request.id)}
-              >
-                {request.text}
-              </Button>
-              {roots.map((p) => (
-                <Reference key={p.id} id={p.id} />
-              ))}
-              <details open>
-                <summary>关联计划 · 展开三层</summary>
-                <PlanTable source={request.id} />
-              </details>
-              <div style={{ marginTop: 10 }}>
-                <Button
-                  action="move"
-                  data-id={request.id}
-                  data-scope="todo"
-                  onClick={() =>
-                    setModal({ kind: "move", id: request.id, scope: "todo" })
-                  }
-                >
-                  移动到文件夹
-                </Button>
-              </div>
-            </section>
-          );
-        })
-      )}
-    </>
-  );
+  const {data:{db,ui},reference,dispatch} = useTour();
+  const visible = (item: {tags?: string[]}) => ((ui.todoTag??"all") === "all" || tagsOf({id:"",...item}).includes(ui.todoTag!)) && (!ui.query || JSON.stringify(item).toLowerCase().includes(ui.query.toLowerCase()));
+  const requests = db.requests.filter(visible);
+  const asks = db.asks.filter(visible);
+  return <div className="todo-streams">
+    {ui.kind === "asks" ? <section className="todo-stream human-stream">
+      {asks.length ? asks.map((ask)=><div key={ask.id}><AskCard ask={ask}/><TodoTags item={ask} edit/></div>) : <p className="empty">暂时没有需要真人处理的事项。</p>}
+    </section> : <section className="todo-stream ai-stream">
+      {requests.length ? requests.map((request)=>{
+        const status=requestStatus(db,request);
+        return <section key={request.id} className={"request-card stream-todo "+status} data-todo={request.id}>
+          <div className="stream-todo-top"><Button className={"state-ring "+status} aria-label={(status==="done"?"重新打开":"完成")+request.code} onClick={()=>dispatch({type:"completeTodo",id:request.id})}>{status==="done"?"✓":""}</Button><span>{request.code}</span><StatusBadge status={status}/></div>
+          <Button className="request-open original-text" action="reference" data-id={request.id} onClick={()=>reference(request.id)}>{request.text}</Button>
+          <TodoOwner item={request}/><TodoTags item={request} edit/>
+          {request.source && <span className="todo-provenance">{request.sourceLabel??"PendingCrew 历史任务 · 状态为演示"}</span>}
+          {db.plans.some((p)=>p.sources.includes(request.id)) && <details><summary>关联计划/进展</summary>{db.plans.filter((p)=>p.sources.includes(request.id)&&!p.parent).map((p)=><Reference key={p.id} id={p.id}/>)}</details>}
+        </section>;
+      }) : <p className="empty">暂时没有给 AI 的 Todo。</p>}
+    </section>}
+  </div>;
 }
 function Documents() {
   const { data, state, setUi, setModal, reference, dispatch } = useTour();
-  const d = data.db.docs.find((d) => d.id === data.ui.doc);
+  const selected = data.db.docs.find((d) => d.id === data.ui.doc);
+  const d = selected?.archived ? data.db.docs.find((doc)=>doc.siteSource&&!doc.archived) ?? selected : selected;
   return d ? (
     <div className="doc-reader">
       <Button action="back-documents" onClick={() => setUi({ doc: null })}>
@@ -375,7 +280,7 @@ function Documents() {
           后续方向或契约草案，当前网页仅展示说明。
         </p>
       )}
-      <DocumentContent body={d.body} />
+      <DocumentContent body={d.body} assets={d.siteAssets ?? siteDocuments.find((doc)=>doc.siteSource===d.siteSource)?.assets} />
       {d.dataView && (
         <DataViewPanel
           key={d.id}
@@ -400,8 +305,10 @@ function Documents() {
             <a
               key={source.path}
               href={
-                "https://github.com/syncmeta/PendingCrew/blob/main/" +
-                source.path.split("/").map(encodeURIComponent).join("/")
+                /^https:\/\//.test(source.path)
+                  ? source.path
+                  : "https://github.com/syncmeta/PendingCrew/blob/main/" +
+                    source.path.split("/").map(encodeURIComponent).join("/")
               }
               target="_blank"
               rel="noopener noreferrer"
@@ -430,7 +337,7 @@ function Documents() {
           </a>
         </p>
       )}
-      <Reference id={data.db.plans[0].id} />
+      {data.db.plans[0] && <Reference id={data.db.plans[0].id} />}
       <Button
         action="share-document"
         className="link-pill"
@@ -452,11 +359,7 @@ function Documents() {
     </div>
   ) : (
     <>
-      <div className="document-library-note">
-        本群文档/数据 · {filtered(data, data.db.docs, "document").length} 份
-        <span>说明文档、结构化数据与组合视图</span>
-      </div>
-      {filtered(data, data.db.docs, "document").map((d) => (
+      {filtered(data, data.db.docs, "document").filter((doc)=>!doc.archived).map((d) => (
         <Button
           key={d.id}
           action="reference"
@@ -486,37 +389,18 @@ export function Workspace() {
     data: { ui },
     setModal,
   } = useTour();
-  const title =
-    ui.selectedFolders[ui.tab] === "all"
-      ? {
-          message: "消息",
-          todo: "Todo",
-          document: "本群文档/数据",
-          progress: "本群进展",
-        }[ui.tab]
-      : ui.selectedFolders[ui.tab];
   return (
     <>
-      <FolderRail />
+      {ui.tab === "todo" ? <TodoRail /> : <FolderRail />}
       <article className="workspace">
         <header className="workspace-head">
-          <div>
-            <h3>{title}</h3>
-            <p>
-              {ui.tab === "progress"
-                ? "同一份计划的进展视图 · 三层可折叠"
-                : ui.tab === "todo"
-                  ? "一本账 · 原始需求、计划、待人类处理"
-                  : "说明、业务数据与内容视图"}
-            </p>
-          </div>
           <div>
             {ui.tab === "todo" ? (
               <Button
                 action="new-request"
                 onClick={() => setModal({ kind: "newRequest" })}
               >
-                ＋ 原始需求
+                {ui.kind === "asks" ? "＋ 真人 Todo" : "＋ AI Todo"}
               </Button>
             ) : ui.tab === "progress" ? (
               <Button

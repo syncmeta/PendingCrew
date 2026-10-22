@@ -1,0 +1,364 @@
+{
+  "asOf": "2026-10-22",
+  "source": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+  "sourceSha256": "46dd13a75b412cf8034a3dd0e25a8c279dd2ca4641bfe5a3e80865f4823cee35",
+  "plans": [
+    {
+      "id": "W94001",
+      "code": "P1",
+      "title": "PendingCrew 大工程：可靠协作与多端交付",
+      "parent": null,
+      "status": "active",
+      "owner": "机长",
+      "note": "按 2026-10-22 总计划整理；只把具有对应证据的模块标为完成。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94010",
+      "code": "P2",
+      "title": "本机工作、文档与知识闭环",
+      "parent": "W94001",
+      "status": "done",
+      "owner": "Core/持久化",
+      "note": "本机统一工作与主要业务闭环已有分层证据。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94011",
+      "code": "P3",
+      "title": "统一 Todo、计划与工作账",
+      "parent": "W94010",
+      "status": "done",
+      "owner": "Core/持久化",
+      "note": "复用公共身份和事务，保持任务与计划的关联。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94012",
+      "code": "P4",
+      "title": "文档、知识块、视图与恢复",
+      "parent": "W94010",
+      "status": "done",
+      "owner": "Core/持久化",
+      "note": "知识与视图保存、原 UUID 和恢复流程已有验收记录。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94020",
+      "code": "P5",
+      "title": "原生 Mac 日用版交付",
+      "parent": "W94001",
+      "status": "done",
+      "owner": "原生客户端",
+      "note": "最新记录已完成准确来源构建、签名核对和安装。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94021",
+      "code": "P6",
+      "title": "完整普通配置构建与产物来源",
+      "parent": "W94020",
+      "status": "done",
+      "owner": "原生客户端",
+      "note": "实际源码、后台和 App 产物分别核对，不能用旧包改标新来源。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94022",
+      "code": "P7",
+      "title": "安装完整候选并保留回退",
+      "parent": "W94020",
+      "status": "done",
+      "owner": "原生客户端",
+      "note": "10 月 22 日记录确认完整候选已安装；安装本身不替代远程配对验收。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94030",
+      "code": "P8",
+      "title": "Linux 受管崩溃恢复",
+      "parent": "W94001",
+      "status": "done",
+      "owner": "Core/持久化",
+      "note": "10 月 22 日独立实际验收闭合，非新常驻部署。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94031",
+      "code": "P9",
+      "title": "崩溃后恢复 WAL、Todo、知识与视图",
+      "parent": "W94030",
+      "status": "done",
+      "owner": "Core/持久化",
+      "note": "真实进程故障后验证原身份和数据；重开不自动启动任务。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94032",
+      "code": "P10",
+      "title": "损坏 WAL 与未来版本拒绝改写",
+      "parent": "W94030",
+      "status": "done",
+      "owner": "独立质量",
+      "note": "失败路径保持原数据与权限不变，未知结果不自动重发。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94040",
+      "code": "P11",
+      "title": "iOS ↔ VPS 持久配对与使用",
+      "parent": "W94001",
+      "status": "active",
+      "owner": "远程与配对",
+      "note": "当前完整推进单元：三阶段交换、持久保存、重开手动连接、业务读写与撤权。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94041",
+      "code": "P12",
+      "title": "系统文件选择与长码表单",
+      "parent": "W94040",
+      "status": "done",
+      "owner": "原生客户端",
+      "note": "10 月 22 日原系统 picker 和本地过期核对已实测，长码不再遮挡核对按钮。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94042",
+      "code": "P13",
+      "title": "三阶段文件交换与持久保存",
+      "parent": "W94040",
+      "status": "active",
+      "owner": "远程与配对",
+      "note": "复用既有生产入口继续，不把邀请页面实测算作完整持久配对。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94043",
+      "code": "P14",
+      "title": "重开后手动连接、读写、撤销与移除",
+      "parent": "W94040",
+      "status": "open",
+      "owner": "远程与配对",
+      "note": "保持零自动连接/任务，并验证真实业务链和撤销效果。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94050",
+      "code": "P15",
+      "title": "跨厂商 PTY / ACP 完整执行",
+      "parent": "W94001",
+      "status": "blocked",
+      "owner": "跨厂商执行",
+      "note": "正式 ACP 合同和完整历史边界尚未闭合。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94051",
+      "code": "P16",
+      "title": "复用已验证的基础组件",
+      "parent": "W94050",
+      "status": "done",
+      "owner": "跨厂商执行",
+      "note": "组件与部分接线证据保留，不冒称完整执行生命周期完成。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94052",
+      "code": "P17",
+      "title": "正式合同、历史、取消和故障恢复",
+      "parent": "W94050",
+      "status": "blocked",
+      "owner": "跨厂商执行",
+      "note": "等待受支持合同；保留未知结果边界，不重复执行未知操作。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94060",
+      "code": "P18",
+      "title": "事实驱动跟进与行政闭环",
+      "parent": "W94001",
+      "status": "open",
+      "owner": "跟进与调度",
+      "note": "后续完整范围，不能用持续唤醒代替有效跟进。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94070",
+      "code": "P19",
+      "title": "独立质量与完整用户流程验收",
+      "parent": "W94001",
+      "status": "active",
+      "owner": "独立质量",
+      "note": "按完整流程核对权限、恢复、未知结果和真实产物来源。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94071",
+      "code": "P20",
+      "title": "Linux 恢复与 iOS 表单独立复核",
+      "parent": "W94070",
+      "status": "done",
+      "owner": "独立质量",
+      "note": "已接受 10 月 22 日对应模块原始运行证据。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    },
+    {
+      "id": "W94072",
+      "code": "P21",
+      "title": "持久远程流程完整端到端验收",
+      "parent": "W94070",
+      "status": "open",
+      "owner": "独立质量",
+      "note": "依赖三阶段真实配对和业务链，尚未整体完成。",
+      "sources": [
+        "N94001"
+      ],
+      "dependsOn": [],
+      "blockedOn": [],
+      "nextCheck": "检查关联模块的验收证据",
+      "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+      "folder": "大工程"
+    }
+  ]
+}

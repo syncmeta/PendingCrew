@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "windowsNativeTested": false,
+  "results": [
+    {
+      "browser": "Chrome",
+      "version": "154.0.8037.99",
+      "host": "macOS",
+      "offline": true,
+      "isolatedSingleFile": true,
+      "externalRequests": 0,
+      "reloadPersistence": true,
+      "requestedCopy": true
+    },
+    {
+      "browser": "Edge",
+      "version": "155.0.4283.62",
+      "host": "macOS",
+      "offline": true,
+      "isolatedSingleFile": true,
+      "externalRequests": 0,
+      "reloadPersistence": true,
+      "requestedCopy": true
+    }
+  ]
+}

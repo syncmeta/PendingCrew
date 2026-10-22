@@ -8,7 +8,7 @@ await build({
   target: "es2022",
   outfile: "portable/app.js",
   minify: true,
-  loader: { ".png": "dataurl" },
+  loader: { ".png": "dataurl", ".svg": "dataurl" },
   define: { "process.env.NODE_ENV": '"production"' },
 });
 await writeFile(

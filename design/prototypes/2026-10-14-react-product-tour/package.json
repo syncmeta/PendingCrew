@@ -12,7 +12,8 @@
     "test:browser": "node scripts/browser-tests.mjs",
     "test": "npm run test:domain && npm run test:browser",
     "verify": "npm run build && npm test",
-    "format": "prettier --write src examples scripts *.json *.ts index.html"
+    "format": "prettier --write src examples scripts *.json *.ts index.html",
+    "build:single": "npm run build && node scripts/build-single-html.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",

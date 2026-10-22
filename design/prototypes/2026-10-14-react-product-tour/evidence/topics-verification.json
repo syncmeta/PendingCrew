@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "checks": [
+    "trip: topical groups, distinct members, full source content and working document references",
+    "research: topical groups, distinct members, full source content and working document references",
+    "administration: topical groups, distinct members, full source content and working document references"
+  ],
+  "errors": []
+}

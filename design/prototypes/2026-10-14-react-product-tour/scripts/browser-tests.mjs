@@ -24,6 +24,8 @@ try {
   await run("verify-copy.cjs");
   await run("verify-groups.cjs");
   await run("verify-library.cjs");
+  await run("verify-topics.cjs");
+  await run("verify-problems.cjs");
   await run("verify-data.cjs");
   await run("verify-react.cjs");
 } finally {
