@@ -30,6 +30,7 @@ struct IPadShell: View {
     @State private var didReadComputerList = false
     @State private var showingRecovery = false
     @State private var showingRetainedInputs = false
+    @State private var showingOfflineDrafts = false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
 
@@ -45,6 +46,7 @@ struct IPadShell: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("连接电脑", systemImage: "link") { showingPairing = true }
+                        Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
                         if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
                             Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
                         }
@@ -75,6 +77,9 @@ struct IPadShell: View {
             crewStore.retireOriginalAuthorityPresentation()
             selectedCrewId = nil; selectedRemoteSessionID = nil
             Task { await crewStore.refreshList() }
+        }
+        .sheet(isPresented: $showingOfflineDrafts) {
+            IOSOfflineComposerDrafts(dataDirectory: appModel.crewdDirectory)
         }
         .sheet(isPresented: $showingRetainedInputs) {
             NavigationStack {
@@ -187,4 +192,69 @@ struct MobileComputerIntroduction: View {
         }
     }
 }
+/// This surface never creates a workspace or returns input to a live composer.
+private struct IOSOfflineComposerDrafts: View {
+    let dataDirectory: URL?
+    @Environment(\.dismiss) private var dismiss
+    @State private var readback: CrewOfflineComposerDrafts.Readback?
+    @State private var reading = false
+    @State private var epoch = UUID()
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("本机历史输入，不代表电脑当前服务授权或后台回执。这里不会连接电脑、恢复任务或重新发送。")
+                    Button("读取本机已保存草稿") { read() }.disabled(reading)
+                    if reading { ProgressView("正在只读读取") }
+                }
+                if let readback {
+                    if !readback.issues.isEmpty {
+                        Section("未完整读取，原文件保留") {
+                            ForEach(Array(readback.issues.enumerated()), id: \.offset) { _, issue in Text(issue).foregroundStyle(.red) }
+                        }
+                    }
+                    if readback.items.isEmpty, readback.complete {
+                        Text("没有本机已保存的草稿。")
+                    }
+                    ForEach(readback.items) { item in
+                        NavigationLink {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("仅本机历史输入，不代表当前授权或后台成功回执。")
+                                        .foregroundStyle(.secondary)
+                                    Text("原本地记录：" + item.record).font(.caption)
+                                    Text("原作用域：" + item.namespace).font(.caption)
+                                    Text("原机组：" + (item.crew ?? "未记录") + "\n原群聊：" + (item.channel ?? "未记录")).font(.caption)
+                                    Text(item.text).textSelection(.enabled)
+                                    if !item.mentionTokens.isEmpty { Text("原提及：" + item.mentionTokens.joined(separator: " · ")).textSelection(.enabled) }
+                                    if let reply = item.reply { Text("原回复引用：\n" + reply).textSelection(.enabled) }
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                            }.navigationTitle("已保存草稿")
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text((item.crew ?? "原机组") + " · " + (item.channel ?? "原群聊"))
+                                Text(item.text.isEmpty ? "已保存提及或回复引用" : item.text).lineLimit(2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }.navigationTitle("本机已保存草稿")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { epoch = UUID(); dismiss() } } }
+        }.onDisappear { epoch = UUID(); reading = false }
+    }
+    private func read() {
+        guard !reading else { return }
+        guard let dataDirectory else {
+            readback = .init(issues: ["未完整读取，原文件保留：本 App 数据目录未能确定。"]); return
+        }
+        reading = true
+        let token = epoch
+        Task {
+            let snapshot = await Task.detached(priority: .userInitiated) { CrewOfflineComposerDrafts.read(dataDirectory: dataDirectory) }.value
+            guard epoch == token else { return }
+            readback = snapshot; reading = false
+        }
+    }
+}
+
 #endif
