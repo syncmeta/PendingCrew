@@ -55,15 +55,8 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     private var sectionHeader:some View {
         VStack(spacing:0){
             HStack(spacing:12){
-                ScrollView(.horizontal,showsIndicators:false){
-                    Picker("工作区内容",selection:$workspace.originalSection){
-                        Text("消息").tag("消息")
-                        Text("人待办").tag("真人Todo")
-                        Text("AI待办").tag("Todo")
-                        Text("文档/数据").tag("文档")
-                        Text("计划/进展").tag("进展")
-                    }.pickerStyle(.segmented).labelsHidden().fixedSize(horizontal:true,vertical:false)
-                }.frame(maxWidth:.infinity,alignment:.leading)
+                CrewdGlassWorkspaceTabs(selection:$workspace.originalSection)
+                    .frame(maxWidth:.infinity,alignment:.leading)
                 Menu {Button("机组工作总账"){showingCrewLedger=true}}label:{Image(systemName:"ellipsis")}
                     .frame(minWidth:CrewdType.target,minHeight:CrewdType.target).fixedSize().help("机组共享工作与全组织收件箱")
             }.padding(.horizontal,14).padding(.vertical,8)

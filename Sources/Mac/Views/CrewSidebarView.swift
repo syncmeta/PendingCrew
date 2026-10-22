@@ -42,6 +42,7 @@ struct CrewSidebarView: View {
         VStack(spacing: 0) {
             viewModePicker
             List {
+                if model.usesCrewdAuthority { activeHostHeader }
                 if let draft = crewStore.pendingCrew {
                     Button {
                         crewStore.selectCrew(draft.id)
@@ -68,7 +69,13 @@ struct CrewSidebarView: View {
                     }.padding(.vertical, 14).listRowSeparator(.hidden)
                 }
                 if !visibleCrews.isEmpty {
-                switch viewMode {
+                if model.usesCrewdAuthority {
+                    switch viewMode {
+                    case .hierarchy: CrewDAGTreeView(crews:visibleCrews,childCrewTarget:$childCrewTarget)
+                    case .timeline: CrewTimelineListView(crews:visibleCrews,childCrewTarget:$childCrewTarget)
+                    case .chief: CrewChiefListView(crews:visibleCrews,childCrewTarget:$childCrewTarget,arrangement:arrangement)
+                    }
+                }else {switch viewMode {
                 case .hierarchy:
                     ForEach(machineGroups) { group in
                         Section {
@@ -86,6 +93,7 @@ struct CrewSidebarView: View {
                         arrangement: arrangement)
                 }
                 }
+                }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -96,19 +104,9 @@ struct CrewSidebarView: View {
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             if !crewStore.usesCrewdAuthority { quotaFooterLine }
-            else {CrewdProviderStatusFooter()}
             // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
             identityFooter
-            if model.usesCrewdAuthority {
-                Divider()
-                if let workspace=model.crewdBackend?.workspace {CrewdOriginalConnectionStatus(workspace:workspace)}
-                else {
-                    VStack(alignment:.leading,spacing:6){
-                        Text(model.connectingAuthority ? "正在连接后台":model.backendConfigurationError ?? "后台尚未连接").font(.caption).foregroundStyle(.secondary)
-                        if !model.connectingAuthority {Button("重试连接"){Task{await model.connectCrewdAuthority()}}}
-                    }.padding(12)
-                }
-            }
+
         }.frame(maxHeight:.infinity)
         // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
         // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
@@ -178,6 +176,25 @@ struct CrewSidebarView: View {
                  + "子 crew 不会被提到顶层显示 —— 那会让侧栏的组织架构和实际汇报线对不上。"
                  + "取回这个群时，它们一起回来。")
         }
+    }
+
+    @ViewBuilder private var activeHostHeader:some View {
+        if let workspace=model.crewdWindow.workspace {
+            CrewdOriginalConnectionStatus(workspace:workspace,machineName:activeHostName)
+                .listRowInsets(EdgeInsets(top:6,leading:2,bottom:8,trailing:2))
+                .listRowSeparator(.hidden)
+        }else {
+            HStack(spacing:7){
+                Circle().fill(model.connectingAuthority ? Color.orange:Color.secondary.opacity(0.5)).frame(width:7,height:7)
+                Text(activeHostName).lineLimit(1)
+                Text(model.connectingAuthority ? "正在连接":"未连接").font(.caption).foregroundStyle(.secondary)
+            }.accessibilityElement(children:.combine)
+        }
+    }
+    private var activeHostName:String {
+        let window=model.crewdWindow
+        if let selected=window.selected,selected == window.workspace?.authorityRecordID,let computer=window.computers.first(where:{$0.id == selected}) {return computer.name}
+        return window.workspace?.dataDirectory == nil && window.workspace != nil ? "当前电脑":"本机"
     }
 
     // MARK: - 视图切换（层级 / 时间流）

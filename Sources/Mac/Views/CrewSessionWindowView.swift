@@ -407,7 +407,7 @@ struct CrewSessionWindowView: View {
                                           crewName: crewStore.selectedDetail?.crew.title)
                         }
                     }
-                    .background(CrewTodoPagePalette.background)
+                    .background(appModel.usesCrewdAuthority ? Color.clear:CrewTodoPagePalette.background)
                     .frame(minHeight: 100, idealHeight: 240, maxHeight: .infinity)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {

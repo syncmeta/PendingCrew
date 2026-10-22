@@ -2,6 +2,8 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+最新待交完整单元：用户在已装d486基础上要求全App毛玻璃/Liquid Glass、顶部原生胶囊玻璃切换，左下角恢复并保留旧版额度/身份区，不再加连接footer；连接只在sidebar对应机器名称前以真实绿点表示。完整源码0924a8dd从main acd09782承接，11路径经独立净核43e22f09通过、作者Mac/iOS全目标均0/388输入前后同；下一准确候选尚未交付。单根系统Material与26+胶囊Glass/旧系统回退、整高sidebar/原聊天挂载及手机44pt/当前选中滚入均源准入，实际透明与手机视觉另验。旧footer回原!usesCrewd额度环条件和26头像人，当前Core无订阅额度DTO，不伪环或恢复旧探针。机器绿点取同authority已完成认证/订阅的ready，非owner/可写要求，只读连接亦绿；未握手橙/断连灰，原Unknown独立保原UUID入口，不引B目录/授信。当前安装仍d486；旧移动包无写入/运行，仅inventory核已有runtime/type，等待本完整模块。
+
 最新原生前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.52908，准确完整输入d4866cb705abbf3c5c65d039c4404d19a0df0d4f，ordinary Release/product与标准bundle ID。按用户最新裁定完成整高原生sidebar/去浮卡、状态footer、整个会话workspace顶部原生切换、系统聊天背景及两端原生搜索，同批整理文件夹、inspector、草稿次级操作和人/AI工作工具/真实空态。demo只参考信息组织。原生源cd4经独立净核后整合d486；当前源码记录后续提交不改包来源。
 
 本轮准确normal、两Mac与普通iOS Simulator三候选均独立准入；1869源输入、3878依赖与11pins前后同，沿原aeh暖缓存/原guard，不新增CI或复验稳定业务全套。Mac有内容及五域/成员表单共6张1440实图，经根与独立设计复核达到本轮主要原生布局/主次要求；原请求UUID及内容只读可见，没有重发false首启或原Todo保存。工具noWindowsAvailable使900/1100恢复、搜索互动及长表单底部仍未验，非空工作/文档/计划与新移动运行也未验，不能称全GUI通过。iOS准确d486仅普通Debug Simulator构建/产物通过，版本仍0.1.43/1，尚未新运行。

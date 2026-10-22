@@ -118,6 +118,7 @@ struct MacThreePaneView: View {
             sessionHost.begin(model: model, crewStore: crewStore)
             Task { await crewStore.refreshList() }
         }
+        .modifier(CrewdWindowMaterial())
         .background(WindowSeparatorRemover(tick: crewStore.selectedCrewId ?? ""))
         .modifier(CrewdOriginalConnectionIntegration())
         .task {

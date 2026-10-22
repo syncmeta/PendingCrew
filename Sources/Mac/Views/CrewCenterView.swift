@@ -225,7 +225,7 @@ struct CrewCenterView: View {
     private var chatTitleBacking: some View {
         if crewStore.selectedCrewId != nil {
             GeometryReader { geometry in
-                Theme.Palette.canvas
+                Color.clear
                     .frame(height: geometry.safeAreaInsets.top)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .offset(y: -geometry.safeAreaInsets.top)
