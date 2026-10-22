@@ -208,6 +208,6 @@ struct IOSRemotePairingView:View {
             }message:{computer in Text(computer.name+" · "+computer.endpoint.host+":"+String(computer.endpoint.port)+"\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。")}
         }
     }
-    private func choose(_ id:UUID){Task{await appModel.crewdWindow.select(id);await appModel.connectCrewdAuthority();await crewStore.refreshList();dismiss()}}
+    private func choose(_ id:UUID){Task{await appModel.connectCrewdAuthority(computerID:id);if appModel.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()};dismiss()}}
 }
 #endif

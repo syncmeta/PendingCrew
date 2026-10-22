@@ -30,7 +30,7 @@ struct CrewdEnrollmentView:View {
                         Text(p.server.spkiSha256).font(.caption.monospaced()).textSelection(.enabled)
                         Text("请与电脑上的指纹核对。链接只授权这台设备，不会启动任务。")
                         TextField("本设备名称",text:$label).disabled(operation.busy)
-                        Button("身份无误，开始配对"){run{try await CrewdEnrollment.shared.confirm(p,deviceLabel:label)}}.disabled(operation.busy || label.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                        Button("身份无误，开始配对"){run{try await CrewdEnrollment.shared.confirm(p,deviceLabel:label)}}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(operation.busy || label.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
                     }
                 }
                 Section("原配对操作") {
@@ -40,17 +40,18 @@ struct CrewdEnrollmentView:View {
                     ForEach(attempts){a in
                         VStack(alignment:.leading,spacing:8) {
                             Text(a.name).font(.headline)
+                            Text("本设备："+a.deviceLabel).font(.caption).foregroundStyle(.secondary)
                             Text("\(a.endpoint.host):\(a.endpoint.port)")
                             Text(a.pin).font(.caption.monospaced()).textSelection(.enabled)
                             Text(message(a.phase)).foregroundStyle(a.phase == .accepted ? Color.secondary : Color.primary)
                             if a.phase == .prepared {
-                                Button("提交已确认的原配对请求"){run{try await CrewdEnrollment.shared.begin(a.id).summary}}
+                                Button("提交已确认的原配对请求"){run{try await CrewdEnrollment.shared.begin(a.id).summary}}.buttonStyle(CrewdPrimaryButtonStyle())
                             } else if a.phase == .challengeReady {
-                                Button("确认原挑战并完成配对"){run{try await CrewdEnrollment.shared.confirmChallenge(a.id)}}
+                                Button("确认原挑战并完成配对"){run{try await CrewdEnrollment.shared.confirmChallenge(a.id)}}.buttonStyle(CrewdPrimaryButtonStyle())
                             }
                             Button("查询原请求结果"){run{try await CrewdEnrollment.shared.queryOriginal(a.id)}}
                             if a.phase == .accepted {
-                                Button("连接这台电脑"){completed(a.id)}
+                                Button("连接这台电脑"){completed(a.id)}.buttonStyle(CrewdPrimaryButtonStyle())
                             }
                             DisclosureGroup("原请求编号"){Text(a.requestId).font(.caption.monospaced()).textSelection(.enabled)}
                         }.disabled(operation.busy)
@@ -61,7 +62,7 @@ struct CrewdEnrollmentView:View {
             .navigationTitle("添加电脑")
             .toolbar{ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}}}
         }
-        .modifier(CrewdAdaptiveFormFrame(width:580,height:600))
+        .modifier(CrewdAdaptiveFormFrame(width:580,height:600,scrolls:false))
         .onAppear{if input.isEmpty && !initialText.isEmpty{input=initialText;inspect()}}
         .onDisappear{operation.invalidate()}
     }

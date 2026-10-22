@@ -36,7 +36,9 @@ struct CrewdRemoteManagementView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                                 if admin.mayIssueEnrollment {
                                     HStack {
-                                        Button("生成配对链接"){Task{await admin.createEnrollment()}}
+                                        Button(admin.enrollment?.link == nil ? "生成配对链接":"为另一台设备生成新链接"){Task{await admin.createEnrollment()}}
+                                            .buttonStyle(CrewdPrimaryButtonStyle())
+                                            .disabled(admin.enrollment?.unknown == true || admin.enrollment?.prepared == true || !status.listening)
                                         Button("读取原链接请求"){Task{await admin.readEnrollment()}}
                                     }
                                     if let original=admin.enrollment {

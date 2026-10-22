@@ -74,7 +74,7 @@ import Combine
         busy=true;defer{busy=false}
         let client=workspace.client,epoch=client.connectionEpoch
         do {
-            let value=try await CrewdEnrollment.shared.createHostLink(server:identity,endpoint:.init(host:host,port:current.configuration.port),label:computerLabel,send:{method,bytes in
+            let value=try await CrewdEnrollment.shared.createHostLink(server:identity,endpoint:.init(host:host,port:current.configuration.port),label:computerLabel,renewConfirmed:enrollment?.link != nil,send:{method,bytes in
                 try await Self.enrollmentCall(client,epoch:epoch,method:method,bytes:bytes)
             })
             guard mayIssueEnrollment,client.connectionEpoch==epoch,status?.identity==current.identity else{return};enrollment=value;error=nil

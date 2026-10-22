@@ -168,11 +168,15 @@ extension CrewdEnrollment {
         let current=records.first{a in a.created.flatMap{CrewdRemoteText.date($0.expiresAt)}.map{$0>Date()} ?? !a.submitted}
         return try (unresolved ?? current).map{try issuerSummary($0)}
     }
-    func createHostLink(server:CrewdRemotePublicIdentity,endpoint:CrewdRemoteEndpoint,label:String,
+    func createHostLink(server:CrewdRemotePublicIdentity,endpoint:CrewdRemoteEndpoint,label:String,renewConfirmed:Bool=false,
                         send:@Sendable (String,Data)async throws->Data)async throws->IssuerSummary {
         // Current Local Human, capability and managed floor are independently
         // checked by the original server. UI callers also fence current scope.
-        if let original=try issuerOriginal(server:server){return original}
+        if let original=try issuerOriginal(server:server){
+            // A deliberate second-device link may replace a known creation in
+            // the presentation, never a prepared/Unknown original mutation.
+            if !renewConfirmed || original.link==nil{return original}
+        }
         guard endpoint.valid,!label.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,label.utf8.count<=256,
               !CrewdRemoteText.containsControlScalar(label) else{throw CrewdRemoteError.invalidExchange}
         var token=Data(count:32)
@@ -216,12 +220,12 @@ extension CrewdEnrollment {
 }
 
 struct CrewdEnrollmentSummary:Identifiable,Sendable {
-    let id:UUID;let name:String;let endpoint:CrewdRemoteEndpoint;let pin:String
+    let id:UUID;let name:String;let deviceLabel:String;let endpoint:CrewdRemoteEndpoint;let pin:String
     let phase:CrewdEnrollmentAttempt.Phase
     var requestId:String{id.uuidString.lowercased()}
 }
 extension CrewdEnrollmentAttempt {
-    var summary:CrewdEnrollmentSummary{.init(id:id,name:link.computerLabel,endpoint:link.endpoint,pin:link.server.spkiSha256,phase:phase)}
+    var summary:CrewdEnrollmentSummary{.init(id:id,name:link.computerLabel,deviceLabel:deviceLabel,endpoint:link.endpoint,pin:link.server.spkiSha256,phase:phase)}
 }
 extension CrewdEnrollment {
     func summaries()throws->[CrewdEnrollmentSummary]{try attempts().map(\.summary)}

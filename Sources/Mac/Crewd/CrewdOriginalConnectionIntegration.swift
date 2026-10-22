@@ -10,6 +10,7 @@ struct CrewdOriginalConnectionIntegration: ViewModifier {
     }
 }
 private struct CrewdOriginalConnectionControls: ViewModifier {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var window: CrewdRemoteWindow
     let directory: URL
     @EnvironmentObject private var crewStore: CrewStore
@@ -33,7 +34,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
                 #else
-                Button("管理远程电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
+                Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
                 switch window.computerListState {
                 case .notLoaded:
                     Text("已存电脑尚未读取")
@@ -91,7 +92,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
             .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
+                    adding = false; Task { await model.connectCrewdAuthority(computerID:id);if model.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()} }
                 }
             }
             .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in

@@ -70,6 +70,29 @@ actor EnrollmentFixtureServer {
         let (key,identity)=try serverIdentity()
         let link=CrewdEnrollmentLink(version:1,enrollmentId:UUID().uuidString.lowercased(),server:identity,endpoint:.init(host:"154.36.143.228",port:7423),expiresAt:ISO8601DateFormatter().string(from:Date().addingTimeInterval(300)),computerLabel:"synthetic",token:CrewdEnrollmentLink.url64(Data(repeating:7,count:32)))
         _ = try CrewdEnrollment.preview(link.encoded())
+        if CommandLine.arguments.contains("--renew") {
+            let vault=CrewdEnrollmentVault(service:nil,memory:true)
+            let issuer=EnrollmentFixtureIssuer(server:identity)
+            let service=CrewdEnrollment(vault:vault,pairing:CrewdRemotePairing(credentials:CrewdRemoteMemoryCredentials()),call:{_,_,_ in throw CrewdRemoteError.invalidExchange})
+            do{_ = try await service.createHostLink(server:identity,endpoint:link.endpoint,label:"first",send:{try await issuer.call($0,$1)})}catch{}
+            let original=try service.issuerOriginal(server:identity)!
+            let known=try await service.lookupHostLink(original.id,server:identity,send:{try await issuer.call($0,$1)})
+            precondition(known.link != nil)
+            #if ENROLLMENT_FIXED_KNOWN_LINK
+            do{_ = try await service.createHostLink(server:identity,endpoint:link.endpoint,label:"second",renewConfirmed:true,send:{try await issuer.call($0,$1)})}catch{}
+            #else
+            do{_ = try await service.createHostLink(server:identity,endpoint:link.endpoint,label:"second",send:{try await issuer.call($0,$1)})}catch{}
+            #endif
+            let next=try service.issuerOriginal(server:identity)!
+            precondition(next.id != known.id && next.unknown,"confirmed one-use link was reused instead of an explicit new device link")
+            #if ENROLLMENT_FIXED_KNOWN_LINK
+            let unresolved=try await service.createHostLink(server:identity,endpoint:link.endpoint,label:"third",renewConfirmed:true,send:{try await issuer.call($0,$1)})
+            precondition(unresolved.id==next.id && unresolved.unknown)
+            let count=await issuer.creations;precondition(count==2,"renewal replayed an unresolved issuer mutation")
+            #endif
+            print("PASS explicit new link after confirmed receipt, unresolved replacement forbidden")
+            return
+        }
         for mode in ["normal","beginLoss","commitLoss","mismatch","notFound","badReceipt","revoked"] {
             let vault=CrewdEnrollmentVault(service:nil,memory:true)
             let credentials=CrewdRemoteMemoryCredentials()
