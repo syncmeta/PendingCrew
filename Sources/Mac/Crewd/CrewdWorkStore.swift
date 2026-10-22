@@ -174,6 +174,13 @@ final class CrewdWorkStore: ObservableObject {
         guard id.kind == .human,!crew.isEmpty,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CrewdClientError(message:"请填写公共问题编号与答复或撤回理由。",code:-32602)}
         return try await mutate(withdraw ? "ask.withdraw":"ask.answer",.object(["crewId":.string(crew),"ask":.string(id.raw),withdraw ? "reason":"text":.string(text)]))
     }
+    func humanTodoAttributes(_ id:CrewdWorkID)async throws->CrewdValue {
+        let token=generation
+        let value=try await call("todo.attributesGet",.object(["object":.object(["kind":.string("humanTask"),"id":.string(id.raw)])]))
+        try check(token)
+        guard value["object"]["id"] == .string(id.raw),value["object"]["kind"] == .string("humanTask") else{throw CrewdClientError(message:"人待办源属性身份不符。")}
+        return value
+    }
     func humanDetail(_ id:CrewdWorkID,crew:String)async throws->CrewdValue {
         guard id.kind == .human,capabilities.contains("channelWork") else{throw CrewdClientError(message:"配套后台尚未开放公共人类事项详情。",kind:.notSubmitted)}
         let token=generation

@@ -19,6 +19,7 @@ struct CrewdPublicRecoveryView: View {
             Text("原请求核对").font(.headline)
             Text("保留原数据库、请求身份与内容。此处仅查找；不会重新发送、补写终端字节或启动成员。")
                 .font(.caption).foregroundStyle(.secondary)
+            CrewdResourceRecoveryView(workspace:workspace)
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
             ForEach(records, id: \.id) { record in
                 let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:))
@@ -79,5 +80,36 @@ struct CrewdPublicRecoveryView: View {
     private func acknowledge(_ record: CrewdPresentationJournal.Prepared, _ receipt: CrewdPublicReceipt) {
         do { try workspace.acknowledgeOriginalCommand(record, receipt: receipt); found.removeValue(forKey: receipt.requestID) }
         catch { failure = error.localizedDescription }
+    }
+}
+
+private struct CrewdResourceRecoveryView:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    @State private var receipts:[UUID:CrewdValue]=[:]
+    @State private var checking:Set<UUID>=[]
+    @State private var failure:String?
+    var body:some View {
+        VStack(alignment:.leading,spacing:12){
+            ForEach(workspace.durableUnknown.filter{CrewdWorkspace.resourceMutationMethods.contains($0.method)},id:\.id){record in
+                VStack(alignment:.leading,spacing:8){
+                    Text(record.method).font(.headline)
+                    Text(record.params["requestId"].string ?? "缺少原请求身份").font(.caption).textSelection(.enabled)
+                    DisclosureGroup("原输入与作用域"){Text(record.params.pretty).font(.caption).textSelection(.enabled)}
+                    if let value=receipts[record.id] {
+                        if value["status"] == .string("committed") {
+                            DisclosureGroup("原提交回执"){Text(value["result"].pretty).font(.caption).textSelection(.enabled)}
+                            Button("已核对原回执，结束待确认"){do{try workspace.acknowledgeOriginalResource(record,receipt:value);receipts[record.id]=nil}catch{failure=error.localizedDescription}}
+                        }else{Text("当前未找到已提交回执；原输入保留，不会自动重新发送。").font(.caption).foregroundStyle(.orange)}
+                    }
+                    Button("只读查询原请求"){inspect(record)}.disabled(checking.contains(record.id) || !workspace.client.connected || workspace.isRetired)
+                }.padding(10).background(.quaternary.opacity(0.2),in:RoundedRectangle(cornerRadius:8))
+            }
+            if let failure{Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
+        }.onChange(of:workspace.observationGeneration){_,_ in receipts=[:];failure=nil}
+    }
+    private func inspect(_ record:CrewdPresentationJournal.Prepared){
+        guard checking.insert(record.id).inserted else{return}
+        let epoch=workspace.observationGeneration
+        Task{defer{checking.remove(record.id)};do{let receipt=try await workspace.lookupOriginalResource(record);guard workspace.acceptsObservation(epoch) else{return};receipts[record.id]=receipt;failure=nil}catch{if workspace.acceptsObservation(epoch){failure=error.localizedDescription}}}
     }
 }

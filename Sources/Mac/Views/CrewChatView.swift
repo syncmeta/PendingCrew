@@ -15,6 +15,7 @@ import UIKit
 /// 详细 IO（stdout/stderr/工具日志）不在这——那在右栏 session 窗口（§9.3）。
 struct CrewChatView: View {
     @Environment(\.crewdOriginalChannelID) private var crewdChannelID
+    @Environment(\.crewdMessageFolders) private var messageFolders
     let crewId: String
     let crewTitle: String
     /// macOS:点 session(右侧成员行 / session 气泡)时打开 inspector 并选中。
@@ -214,6 +215,7 @@ struct CrewChatView: View {
         .overlay { dropHighlight }
         .animation(.easeOut(duration: 0.12), value: isDropTargeted)
         .task(id: crewId) { await subscribe() }
+        .onChange(of:searchTargetMessageId?.wrappedValue){_,target in if target != nil{messageFolders.clear?()}}
         // Todo #69：@-候选浮层的限高要跟着窗口走，所以这两把尺在这里收口。
         // 只在窗口改尺寸 / composer 行数变化时各写一次 @State —— 浮层自己不在被
         // 量的子树里，所以不会「越算越矮」地自激（见 composerCoreHeight）。
@@ -970,7 +972,8 @@ struct CrewChatView: View {
         timelineFilterCache.entries(for: CrewTimelineFilter.Inputs(
             entries: entries, onlyMentions: onlyMentions, roster: mentionRoster,
             localUserId: localUserId, searchText: searchText,
-            crewId: crewId, crewTitle: crewTitle, communicationView: currentCommunicationView))
+            crewId: crewId, crewTitle: crewTitle, communicationView: currentCommunicationView,
+            messageFolder: messageFolders.filter))
     }
 
     /// 时间线的一行：消息本体 + 「它上面要不要插一条时间分隔」。
@@ -1354,7 +1357,8 @@ struct CrewChatView: View {
             // BubbleView 自己的内层 contextMenu，外层菜单会被它优先命中。
             menu: { CrewMessageContextMenuContent(
                 text: msg.content,
-                onReply: { beginReply(to: entry) }
+                onReply: { beginReply(to: entry) },
+                onClassify: messageFolders.classify.map { action in { action(entry.id) } }
             ) }
         )
         // #443 病根 3：文本选中只给指针底下那一条 —— 常开会让窗口内每段文字都挂
@@ -1594,7 +1598,10 @@ struct CrewChatView: View {
                   : (onlyMentions ? "at.circle" : "bubble.left.and.bubble.right"))
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
-            if isSearching {
+            if messageFolders.filter != .all {
+                Text("当前分类没有匹配消息").font(Theme.Fonts.caption).foregroundStyle(.tertiary)
+                Button("查看全部消息"){messageFolders.clear?()}.buttonStyle(.bordered)
+            } else if isSearching {
                 Text("当前群没有找到匹配消息")
                     .font(Theme.Fonts.caption)
                     .foregroundStyle(.tertiary)
@@ -2295,8 +2302,10 @@ private struct ChatScrollAnchor: ViewModifier {
 private struct CrewMessageContextMenuContent: View {
     let text: String
     let onReply: () -> Void
+    var onClassify:(()->Void)? = nil
 
     var body: some View {
+        if let onClassify {Button("归入本群分类",systemImage:"folder",action:onClassify)}
         Button {
             CrewMessageClipboard.copy(text)
         } label: {

@@ -13,6 +13,14 @@ struct CrewdWorkPanels: View {
     var progressOnly = false
     var compact = false
     var openTodo: (() -> Void)? = nil
+    var visiblePlanIDs: Set<String>? = nil
+    private var visibleProgress: [CrewdPlan] {
+        guard let visiblePlanIDs else { return store.progress }
+        return visiblePlanIDs.sorted().compactMap { raw in
+            guard let id = CrewdWorkID(raw, kind: .plan) else { return nil }
+            return store.plans[id]
+        }
+    }
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
     @State private var failure:String?
@@ -22,7 +30,7 @@ struct CrewdWorkPanels: View {
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
     private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
-    private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView)},set:{resourceDrafts.select(resources.crew,folderView,$0)})}
+    private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView,channel:resources.channel)},set:{resourceDrafts.select(resources.crew,folderView,$0,channel:resources.channel)})}
     private func includes(_ kind:String,_ id:String)->Bool {compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
@@ -38,15 +46,15 @@ struct CrewdWorkPanels: View {
             if store.loading {ProgressView().controlSize(.small)}
             ScrollView {
                 VStack(alignment:.leading,spacing:10) {
-                    if progressOnly && !compact && !store.progress.isEmpty {
+                    if progressOnly && !compact && !visibleProgress.isEmpty {
                         HStack {
                             Text("工作计划").font(.system(size: 14, weight: .semibold))
                             Spacer()
                             Button("全部展开") { collapsed.removeAll() }
-                            Button("收起层级") { collapsed = Set(store.progress.map { $0.id.raw }) }
+                            Button("收起层级") { collapsed = Set(visibleProgress.map { $0.id.raw }) }
                         }.font(.caption).padding(.bottom, 4)
                     }
-                    if progressOnly && store.progress.isEmpty && !store.loading && store.lastFailure == nil {
+                    if progressOnly && visibleProgress.isEmpty && !store.loading && store.lastFailure == nil {
                         CrewdEmptySurface(title: "把工作展开成计划", detail: "从 Todo 中记录的需求开始，计划、负责人和进展会整理在这里。",
                                           symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 Todo", action: openTodo)
                             .frame(minHeight: 200)
@@ -75,7 +83,7 @@ struct CrewdWorkPanels: View {
                         }
                         Text("计划").font(.headline)
                     }
-                    ForEach(CrewdNavigation.planTree(store.progress.filter{includes("work",$0.id.raw)},collapsed:collapsed)) {row in
+                    ForEach(CrewdNavigation.planTree(visibleProgress.filter{includes("work",$0.id.raw)},collapsed:collapsed)) {row in
                         if let id=CrewdWorkID(row.object,kind:.plan),let plan=store.plans[id] {
                             VStack(alignment:.leading,spacing:4) {
                                 HStack(alignment:.top) {
@@ -120,7 +128,7 @@ struct CrewdWorkPanels: View {
                             HStack(alignment:.top) {Image(systemName:"questionmark.circle"); Text("\(id.raw)  \(store.humanTasks[id]?["ask"]["question"].string ?? "")").font(.caption).lineLimit(2)}
                         }
                     }
-                    if store.planIDs.isEmpty {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
+                    if visibleProgress.isEmpty && !progressOnly {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                     if !progressOnly && !compact {
                         Divider(); Text("待人类处理 · 全组织收件箱").font(.headline)
                         ForEach(store.humanTasks.keys.filter{store.humanTasks[$0]?["ask"]["crewId"].string != resources.crew || includes("humanTask",$0.raw)}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in

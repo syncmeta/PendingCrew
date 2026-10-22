@@ -219,7 +219,7 @@ final class CrewdClient: ObservableObject {
         }
         var reachedBackend = false
         do {
-            try await withCheckedThrowingContinuation { continuation in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 ready = continuation
                 c.start(queue: DispatchQueue(label: "pendingcrew.crewd.client"))
             }
@@ -270,7 +270,7 @@ final class CrewdClient: ObservableObject {
         version = hello["version"].string ?? "未知"
         capabilities = Set(hello["capabilities"].array.compactMap(\.string))
         qualifiedForWork = true
-        let topics = ["crew", "session", "message", "channel", "ask", "work", "restart", "system"]
+        let topics = ["crew", "session", "message", "channel", "ask", "work", "todo", "restart", "system"]
             + ["documents", "viewFolders", "data"].filter { capabilities.contains($0) }
         _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
         guard generation == current, !Task.isCancelled else { throw CancellationError() }
@@ -290,7 +290,7 @@ final class CrewdClient: ObservableObject {
         data.append(10)
         let current = generation
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CrewdValue, Error>) in
             guard !Task.isCancelled else {
                 continuation.resume(throwing: CrewdClientError(message: "请求已取消，尚未提交。", kind: .notSubmitted))
                 return

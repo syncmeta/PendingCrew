@@ -26,15 +26,15 @@ struct CrewdFolderControls:View {
         VStack(alignment:.leading,spacing:4){HStack{
             if store.capabilities.contains("viewFolders"){
                 Picker("文件夹",selection:$selection){Text("全部").tag("all");Text("未分类").tag("none");ForEach(store.folders[view]?.rows ?? []){row in Text(String(repeating:"　",count:row.depth)+(row.value["name"].string ?? "文件夹")).tag(row.id)}}.frame(maxWidth:220)
-                Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help("管理本机组共用分类")
+                Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help(store.channel.isEmpty ? "管理机组资料库分类":"管理本群分类")
                 if object != nil {Button("归入文件夹"){classifying=true}}
             }else{Text("文件夹 · 配套后台待开放").font(.caption).foregroundStyle(.secondary)}
             Spacer()
-        };if store.capabilities.contains("viewFolders"){Text("本机组共用分类").font(.caption).foregroundStyle(.secondary)
+        };if store.capabilities.contains("viewFolders"){Text(store.channel.isEmpty ? "机组资料库分类":"本群分类").font(.caption).foregroundStyle(.secondary)
             if let snapshot=store.folders[view],selection != "all",selection != "none",!snapshot.folders.contains(where:{$0["id"] == .string(selection)}){Text("所选文件夹已不在当前目录，请重新选择。").font(.caption).foregroundStyle(.orange)}
-        }}.onChange(of:store.crew){_,_ in managing=false;classifying=false}.sheet(isPresented:$managing){CrewdFolderEditor(store:store,drafts:$drafts,view:view)}
+        }}.onChange(of:store.crew+store.channel){_,_ in managing=false;classifying=false}.sheet(isPresented:$managing){CrewdFolderEditor(store:store,drafts:$drafts,view:view)}
         .sheet(isPresented:$classifying){if let object{CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}}
-        .task(id:store.crew+view.rawValue+store.capabilities.sorted().joined(separator:",")+store.activationEpoch.uuidString){await store.activate(view)}
+        .task(id:store.crew+store.channel+view.rawValue+store.capabilities.sorted().joined(separator:",")+store.activationEpoch.uuidString){await store.activate(view)}
     }
 }
 struct CrewdFolderAssignmentButton:View {
@@ -43,7 +43,7 @@ struct CrewdFolderAssignmentButton:View {
     let view:CrewdResourceView
     let object:CrewdValue
     @State private var editing=false
-    var body:some View {if store.capabilities.contains("viewFolders"){Button("分类",systemImage:"folder"){editing=true}.font(.caption).sheet(isPresented:$editing){CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}.onChange(of:store.crew){_,_ in editing=false}}}
+    var body:some View {if store.capabilities.contains("viewFolders"){Button("分类",systemImage:"folder"){editing=true}.font(.caption).sheet(isPresented:$editing){CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}.onChange(of:store.crew+store.channel){_,_ in editing=false}}}
 }
 struct CrewdFolderEditor:View {
     @ObservedObject var store:CrewdResources
@@ -57,14 +57,14 @@ struct CrewdFolderEditor:View {
     @State private var reading=false
     @State private var confirmDelete=false
     @State private var submitting=false
-    private var key:CrewdResourceDrafts.Key{.init(crew:store.crew,view:view,object:object?["id"].string ?? (operation == "create" ? "":selected),operation:object == nil ? operation:"assign",domain:.folder)}
+    private var key:CrewdResourceDrafts.Key{.init(crew:store.crew,view:view,object:object?["id"].string ?? (operation == "create" ? "":selected),operation:object == nil ? operation:"assign",domain:.folder,channel:store.channel)}
     private var fields:CrewdResourceDrafts.Fields{drafts.fields(key)}
     private var snapshot:CrewdFolderSnapshot?{store.folders[view]}
     private func bind<T>(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,T>)->Binding<T>{Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View{
         VStack(alignment:.leading,spacing:12){
             Text(object == nil ? "管理文件夹":"归入文件夹").font(.title2)
-            Text("本机组共用分类，独立于计划层级；仅改变展示位置。").font(.caption).foregroundStyle(.secondary)
+            Text(store.channel.isEmpty ? "机组资料库分类，独立于计划层级；仅改变展示位置。":"本群独立分类，只改变此处展示位置；共享原文与状态不变。").font(.caption).foregroundStyle(.secondary)
             if object == nil{
                 Picker("操作",selection:$operation){Text("新建").tag("create");Text("修改 / 移动 / 重排").tag("update");Text("解散").tag("delete")}.pickerStyle(.segmented).disabled(store.writing || submitting)
                 if operation != "create"{Picker("文件夹",selection:$selected){Text("请选择").tag("");ForEach(snapshot?.rows ?? []){row in Text(String(repeating:"　",count:row.depth)+(row.value["name"].string ?? "")).tag(row.id)}}.disabled(store.writing || submitting)}
@@ -104,9 +104,9 @@ struct CrewdFolderEditor:View {
             defer{submitting=false}
             var attempted=false
             do{
-                guard store.crew == draft.key.crew else{throw CancellationError()}
+                guard store.crew == draft.key.crew && store.channel == draft.key.channel else{throw CancellationError()}
                 let latest=try await store.refreshFolders(view)
-                guard store.crew == draft.key.crew else{throw CancellationError()}
+                guard store.crew == draft.key.crew && store.channel == draft.key.channel else{throw CancellationError()}
                 if !reuse {guard latest.revision == draft.fields.revision else{throw CrewdClientError(message:"目录版本已变化，请核对后再决定。",code:-32009,data:.object(["currentTreeRevision":.string(latest.revision)]))}}
                 var params:[String:CrewdValue]=["expectedTreeRevision":.string(draft.fields.revision)]
                 switch draft.key.operation{
@@ -120,7 +120,7 @@ struct CrewdFolderEditor:View {
                 attempted=true
                 _ = try await store.changeFolder("viewFolder."+draft.key.operation,view:view,fields:params)
                 drafts.finish(draft,accepted:true);if key == draft.key{dismiss()}
-            }catch{drafts.finish(draft,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error));if store.crew == draft.key.crew{failure=describe(error)}}
+            }catch{drafts.finish(draft,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error));if store.crew == draft.key.crew && store.channel == draft.key.channel{failure=describe(error)}}
         }
     }
 }

@@ -35,6 +35,12 @@ enum CrewTimelineFilter {
     /// 一次筛选的全部输入。**缓存键就是它本身**（逐字段 `==`），不是什么指纹或条数 ——
     /// 指纹那种便宜代理平时都对，只在「条数没变但内容变了」（撤回一条又来一条、
     /// 订阅重放）那一下错，而那一下正是缓存必须失效的时刻。
+    enum MessageFolder:Equatable {
+        case all, include(Set<String>), exclude(Set<String>)
+        func includes(_ id:String)->Bool {
+            switch self {case .all:return true;case .include(let ids):return ids.contains(id);case .exclude(let ids):return !ids.contains(id)}
+        }
+    }
     struct Inputs: Equatable {
         let entries: [CrewWhiteboardEntry]
         /// 「只看 @ 我的」开关。
@@ -48,12 +54,14 @@ enum CrewTimelineFilter {
         let crewId: String
         let crewTitle: String
         let communicationView: CommunicationView
+        let messageFolder: MessageFolder
 
         init(
             entries: [CrewWhiteboardEntry], onlyMentions: Bool,
             roster: CrewMentionFilter.Roster, localUserId: String?,
             searchText: String, crewId: String, crewTitle: String,
-            communicationView: CommunicationView = .human
+            communicationView: CommunicationView = .human,
+            messageFolder: MessageFolder = .all
         ) {
             self.entries = entries
             self.onlyMentions = onlyMentions
@@ -63,6 +71,7 @@ enum CrewTimelineFilter {
             self.crewId = crewId
             self.crewTitle = crewTitle
             self.communicationView = communicationView
+            self.messageFolder = messageFolder
         }
     }
 
@@ -71,10 +80,11 @@ enum CrewTimelineFilter {
         CrewChatCostCounters.note(.timelineFilterRun)
         let communicationEntries = inputs.communicationView == .human
             ? humanEntries(inputs.entries) : inputs.entries
+        let classified = communicationEntries.filter { inputs.messageFolder.includes($0.id) }
         let mentionFiltered = inputs.onlyMentions
             ? CrewMentionFilter.onlyHumanMentions(
-                communicationEntries, roster: inputs.roster, includingFrom: inputs.localUserId)
-            : communicationEntries
+                classified, roster: inputs.roster, includingFrom: inputs.localUserId)
+            : classified
         guard !inputs.searchText.isEmpty else { return mentionFiltered }
 
         // 核心统一按「最新优先、最多 200」选出结果；聊天时间线仍按原来的时间正序

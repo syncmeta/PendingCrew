@@ -116,6 +116,18 @@ func folder(_ id:String=folderID,parent:String?=nil)->CrewdValue {.object(["id":
         try await Task.sleep(nanoseconds:350_000_000)
         precondition(store.documents[documentID]!.revision == "5" && store.folders[.documents]!.revision == "3","global lagged event with no crewId must restore the current active resource facts")
         precondition(peer.calls.dropFirst(beforeLag).map{$0.0}.sorted() == ["document.list","viewFolder.list"],"two lagged events should coalesce one bounded read-only active view refresh without mutations")
+        let groupedPeer=ResourcePeer(),grouped=CrewdResources(call:{try await groupedPeer.call($0,$1)})
+        grouped.configureCapabilities(["documents","viewFolders"]);grouped.selectScope(crew:"a",channel:"group-a")
+        func groupTree(_ channel:String)->CrewdValue{.object(["crewId":.string("a"),"channelId":.string(channel),"view":.string("documents"),"treeRevision":.string("0"),"folders":.array([]),"assignments":.array([])])}
+        groupedPeer.snapshot=groupTree("group-b")
+        await rejects{_ = try await grouped.refreshFolders(.documents)}
+        precondition(grouped.folders[.documents] == nil,"another group's tree must not be adopted")
+        groupedPeer.snapshot=groupTree("group-a");await grouped.activate(.documents)
+        precondition(groupedPeer.calls.allSatisfy{$0.0 == "viewFolder.list" && $0.1["channelId"] == .string("group-a")},"group documents must never fall back to document.*")
+        func knowledgeObject(_ generation:String,_ database:String)->CrewdValue{.object(["kind":.string("knowledgeView"),"id":.string("view-id"),"knowledge":.object(["context":.object(["authorityId":.string(database),"dbId":.string(database),"restoreEpoch":.string("restore"),"crewId":.string("source"),"namespace":.string("namespace"),"generation":.string(generation)]),"reference":.object(["namespace":.string("namespace"),"kind":.string("view"),"id":.string("view-id")])])])}
+        let oldRef=knowledgeObject("1","db-a"),newRef=knowledgeObject("2","db-a"),otherDB=knowledgeObject("2","db-b")
+        precondition(CrewdFolderSnapshot.objectIdentity(oldRef) == CrewdFolderSnapshot.objectIdentity(newRef),"knowledge generation refresh retains the original placement")
+        precondition(CrewdFolderSnapshot.objectIdentity(oldRef) != CrewdFolderSnapshot.objectIdentity(otherDB),"same view ID in another authority/database is not the same content")
         let count=peer.calls.count;store.invalidateConnection();await rejects{_ = try await store.document(documentID)};precondition(peer.calls.count == count,"disconnect clears capabilities, no implicit reads/writes")
         print("PASS: resource exact bytes/current-metadata idempotency/capability/metadata-CAS/folder boundaries/scope generation/window drafts; synthetic only")
     }

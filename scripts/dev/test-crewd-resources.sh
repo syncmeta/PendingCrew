@@ -8,5 +8,5 @@ mkdir -p "$fixture/source"
 for file in CrewdClient.swift CrewdLocalIPC.swift CrewdWorkStore.swift CrewdResources.swift CrewdResourceDrafts.swift; do cp "$root/Sources/Mac/Crewd/$file" "$fixture/source/$file"; done
 cp "$root/scripts/dev/fixtures/crewd-resources.swift" "$fixture/source/fixture.swift"
 shasum -a 256 "$fixture"/source/*.swift > "$fixture/source-sha256.txt"
-xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library "$fixture"/source/*.swift -o "$fixture/test"
+xcrun swiftc -module-cache-path "${PENDINGCREW_QA_MODULE_CACHE:-$fixture/cache}" -parse-as-library "$fixture"/source/*.swift -o "$fixture/test"
 "$fixture/test"

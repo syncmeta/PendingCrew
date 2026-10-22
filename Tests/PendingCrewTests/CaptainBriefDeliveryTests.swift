@@ -12,10 +12,19 @@ final class CaptainBriefDeliveryTests: XCTestCase {
         XCTAssertEqual(request.brief, "检查机长自知力并落地修复")
         let prompt = CaptainBriefDelivery.openingPrompt(
             brief: request.brief, wakeText: nil)
-        XCTAssertTrue(prompt.contains("父机长交给你的开场任务"))
-        XCTAssertTrue(prompt.contains("检查机长自知力并落地修复"))
+        XCTAssertEqual(prompt, "检查机长自知力并落地修复")
         XCTAssertFalse(prompt.contains("先用 post_to_crew"))
         XCTAssertFalse(prompt.contains("有人在群里 @ 你"))
+    }
+
+    func testTaskAndWakeOriginalBytesStayAheadOfAutomaticInstructions() {
+        let task="  检查 Todo #42，保留原任务。\n"
+        let wake="\n@机长 请核对原文  "
+        XCTAssertEqual(CaptainBriefDelivery.openingPrompt(brief:task,wakeText:nil),task)
+        XCTAssertEqual(CaptainBriefDelivery.openingPrompt(brief:task,wakeText:wake),task+"\n群聊消息：\n"+wake)
+        XCTAssertEqual(CaptainBriefDelivery.openingPrompt(brief:nil,wakeText:wake),wake)
+        XCTAssertEqual(CaptainBriefDelivery.openingPrompt(brief:"你是用户手写的原任务",wakeText:nil),"你是用户手写的原任务")
+        XCTAssertFalse(CaptainBriefDelivery.openingPrompt(brief:nil,wakeText:nil).hasPrefix("你是"))
     }
 
     func testNonemptyBriefStartFailureProducesParentReceipt() {

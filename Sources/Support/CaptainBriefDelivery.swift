@@ -37,19 +37,14 @@ struct CaptainAutostartRequest: Equatable, Identifiable {
 /// brief / @ 唤醒文本到机长首轮 prompt 的单一拼装口，供两种 runner 共用。
 enum CaptainBriefDelivery {
     static func openingPrompt(brief: String?, wakeText: String?) -> String {
-        let task = brief?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wake = wakeText?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let task, !task.isEmpty {
-            var prompt = "你是本 crew 的机长。父机长交给你的开场任务如下：\n\(task)"
-            if let wake, !wake.isEmpty {
-                prompt += "\n群聊消息：\(wake)"
+        if let brief, !brief.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+            var prompt=brief
+            if let wakeText,!wakeText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                prompt += "\n群聊消息：\n" + wakeText
             }
             return prompt
         }
-        if let wake, !wake.isEmpty {
-            return "你是本 crew 的机长。群聊消息：\(wake)"
-        }
-        return "你是本 crew 的机长。"
+        if let wakeText,!wakeText.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{return wakeText}
+        return "读取本机组群聊与待办，回应人类需求；没有任务时待命。"
     }
 }
