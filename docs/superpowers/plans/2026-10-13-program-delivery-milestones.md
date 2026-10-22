@@ -2,6 +2,8 @@
 
 ## 当前交付总览（2026-10-22；下方逐日记录保留为历史证据）
 
+最新玻璃模块正在冻结准确修复输入：2feb三候选来源/配置/签封独验后，真实1440与900窗口发现材质变亮而旧浅色前景低对比，GLASS-CONTRAST-01使该包未安装。900消息换行、inspector折叠和原UUID可达已有实际证据；一次恢复观测仍900，不冒恢复通过。唯一作者保全B checkpoint b8413bf9，另从2feb完成d8dad890整块修复：统一Mac公开windowBackground/behindWindow与SwiftUI scheme，iOS regularMaterial，阅读改真正primary/secondary；原气泡、selection、旧footer和对应机器绿点保持。独立净源f1b25a5d通过，作者Mac/iOS全目标均0、388输入前后同；仍须新准确normal与候选宽窄实图关闭视觉阻点后，再沿既有授权更新。当前日用仍d486。Linux控制器bb033独立源门269b通过，唯一Linux构建仍等完整B客户端、后端及最新UI输入，不先跑中间版。
+
 最新待交完整单元：用户在已装d486基础上要求全App毛玻璃/Liquid Glass、顶部原生胶囊玻璃切换，左下角恢复并保留旧版额度/身份区，不再加连接footer；连接只在sidebar对应机器名称前以真实绿点表示。完整源码0924a8dd从main acd09782承接，11路径经独立净核43e22f09通过、作者Mac/iOS全目标均0/388输入前后同；下一准确候选尚未交付。单根系统Material与26+胶囊Glass/旧系统回退、整高sidebar/原聊天挂载及手机44pt/当前选中滚入均源准入，实际透明与手机视觉另验。旧footer回原!usesCrewd额度环条件和26头像人，当前Core无订阅额度DTO，不伪环或恢复旧探针。机器绿点取同authority已完成认证/订阅的ready，非owner/可写要求，只读连接亦绿；未握手橙/断连灰，原Unknown独立保原UUID入口，不引B目录/授信。当前安装仍d486；旧移动包无写入/运行，仅inventory核已有runtime/type，等待本完整模块。
 
 最新原生前端标准 Mac 产品已安装并正常打开：`/Applications/PendingCrew.app`，0.1.44/build20748.52908，准确完整输入d4866cb705abbf3c5c65d039c4404d19a0df0d4f，ordinary Release/product与标准bundle ID。按用户最新裁定完成整高原生sidebar/去浮卡、状态footer、整个会话workspace顶部原生切换、系统聊天背景及两端原生搜索，同批整理文件夹、inspector、草稿次级操作和人/AI工作工具/真实空态。demo只参考信息组织。原生源cd4经独立净核后整合d486；当前源码记录后续提交不改包来源。

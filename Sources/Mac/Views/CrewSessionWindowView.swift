@@ -237,7 +237,7 @@ struct CrewSessionWindowView: View {
             Button { sessionRunner.viewingTerminal = false } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .padding(.vertical, 10)
@@ -253,7 +253,7 @@ struct CrewSessionWindowView: View {
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .foregroundStyle(.secondary)
                             .frame(width: 34, height: 34)
                             .overlay(
                                 Circle().strokeBorder(
@@ -442,7 +442,7 @@ struct CrewSessionWindowView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("本群成员 \(memberRowItems.count)")
                 .font(Theme.Fonts.caption.weight(.semibold))
-                .foregroundStyle(Theme.Palette.inkMuted)
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
             LazyVStack(spacing: 2) {
@@ -650,7 +650,7 @@ struct CrewSessionWindowView: View {
                     .background(Circle().fill(Theme.Palette.accentBg))
                 Text("新成员会话")
                     .font(Theme.Fonts.callout)
-                    .foregroundStyle(Theme.Palette.ink)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -669,7 +669,7 @@ struct CrewSessionWindowView: View {
             CrewAvatarBadges(sender: sender, size: 30)
             Text(sender.displayName)
                 .font(Theme.Fonts.callout)
-                .foregroundStyle(Theme.Palette.ink)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -689,7 +689,7 @@ struct CrewSessionWindowView: View {
                 HStack(spacing: 5) {
                     Text(run.displayName)
                         .font(Theme.Fonts.callout)
-                        .foregroundStyle(Theme.Palette.ink)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     SessionBellHintView(run: run)
                 }
@@ -698,7 +698,7 @@ struct CrewSessionWindowView: View {
                 HStack(spacing: 6) {
                     Text(latestStep(for: run))
                         .font(Theme.Fonts.caption)
-                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     SessionProfileReadonlyPill(run: run)
@@ -1046,7 +1046,7 @@ struct CrewSessionWindowView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("执行成员")
                 .font(.caption)
-                .foregroundStyle(Theme.Palette.inkMuted)
+                .foregroundStyle(.secondary)
             VStack(spacing: 8) {
                 if appModel.usesCrewdAuthority, let workspace = appModel.crewdBackend?.workspace {
                     CrewdExecutorChoiceView(workspace: workspace, executor: Binding(
@@ -1063,7 +1063,7 @@ struct CrewSessionWindowView: View {
                 Toggle("使用独立工作树", isOn: $crewdIsolation)
                     .toggleStyle(.checkbox)
                 Text(crewdIsolation ? "需要已提交的 Git 仓库；创建失败不会改用共享目录。" : "使用机组的共享工作目录，适合知识整理及普通文件。")
-                    .font(.caption).foregroundStyle(Theme.Palette.inkMuted)
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Toggle("设为机长", isOn: $startsAsCaptain)
                 .toggleStyle(.checkbox)
@@ -1072,7 +1072,7 @@ struct CrewSessionWindowView: View {
             if startsAsCaptain && hasRunningCaptain {
                 Text("启动后会停止当前机长，由这个新 session 接任。")
                     .font(.caption)
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1603,10 +1603,10 @@ private struct SessionRunContentView: View {
             if let pending = run.pendingProfile {
                 Text("切换至 \(pending)…")
                     .font(Theme.Fonts.caption2)
-                    .foregroundStyle(Theme.Palette.inkMuted)
+                    .foregroundStyle(.secondary)
             }
         }
-        .foregroundStyle(Theme.Palette.ink)
+        .foregroundStyle(.primary)
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(Color.adaptive(light: 0xFAFAF8, dark: 0x1C1B18))
@@ -1686,7 +1686,7 @@ private struct SessionRunContentView: View {
             }
         }
         .font(Theme.Fonts.caption2)
-        .foregroundStyle(Theme.Palette.inkMuted)
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -1798,7 +1798,7 @@ private struct CodexWorkspaceFooter: View {
                 .truncationMode(.middle)
         }
         .font(Theme.Fonts.caption2)
-        .foregroundStyle(Theme.Palette.inkMuted)
+        .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .task(id: run.workingDirectory) {
             branch = nil
@@ -1829,7 +1829,7 @@ private struct CodexControlPillLabel: View {
         Text(title)
             .font(Theme.Fonts.caption2)
             .lineLimit(1)
-            .foregroundStyle(Theme.Palette.inkMuted)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(Theme.Palette.surface, in: Capsule())

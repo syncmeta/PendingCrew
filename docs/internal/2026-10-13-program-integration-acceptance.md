@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-22 玻璃实窗发现对比阻点，完整材质修复接受；新准确包待交
+
+2feb准确normal与三候选通过独立来源、配置、签封和zip门（normal QA88aa3003、候选QA3d8bd67e）。原私域、双false、原f931身份及正常AppKit上下文实开后，1440和900图都出现灰亮材质与旧浅色前景低对比；根亲看宽窄图，独立设计同结论，GLASS-CONTRAST-01为交付阻点，2feb未安装。对应机器绿点、独立Unknown、旧footer、消息换行及窄窗inspector折叠符合；原UUID只读展开未lookup或重放。一次恢复工具成功但图仍900，不冒恢复通过。GUI终态eaf0b4ea：原App77657/Core77667正常owner安全暂停，exec55161实际0、精确ps空、socketgone，退出后无App观察或意外重启。日用d486未动。原件保frontend-glass-2feb1b77-candidates-20261022，不改旧PASS为渲染PASS。
+
+作者保全独立B分支b8413bf9后，从2feb冻结d8dad8902f2621e80e5b32bb5f2caffc530eca49，五既有Swift加一修复说明。Mac14+统一公开windowBackground/behindWindow，仅将SwiftUI resolved scheme投影材质view的make/update，不改系统、NSApp/window appearance或铺整块实底；iOS regularMaterial同scheme。阅读role改真正HierarchicalShapeStyle primary/secondary，同批覆盖五域、会话摘要、reply工具、右侧成员和工作说明。原气泡与selection填色、状态、禁用条件、Unknown/UUID、旧footer/host ready、挂载、权限及草稿保存无业务diff，B/Cloud/APNs未混。独立净源报告f1b25a5dfd328b827caf5cfff5066a5267b7b3fd3474ad40653f6801afbec73b，根亲读交接、报告和完整target记录。MANIFEST68ced5c8、full report8aecf1aa，388输入前后同且冻结核同，作者Mac/iOS完整target均0；历史2feb/f043 helper仅型验。原验证与独验保frontend-glass-appearance-source-freeze-d8dad890-20261022及frontend-glass-appearance-independent-review-d8dad890-20261022。下一准确完整输入与新候选仅补既定宽窄材质/可读性门，不重测稳定业务，未据源审关闭runtime阻点。
+
+并行Linux控制器bb033e651537532b4ff2313779b2a93c143e5a3a源码准备接受，独验269b5c055033c808851dbe6ab36f8e52586e0207e6b3d80a63491446438b81bb。根亲读三文件和报告：463 Rust树2186d009、原B20c五witness/packager/installer字节未改；1876冻结blob核同，Python、四shell及heredoc静态检查通过。双SHA C/S、单手动job、30分钟、一次fetch、单artifact及失败不重试边界接受。未合入本UI、未push/dispatch或构建Linux包、发布、安装服务。唯一构建仍等完整B前端、后端与最新UI的S，旧582来源保持。
+
 ## 2026-10-22 用户新增玻璃与机器状态裁定；独立完整模块待交
 
 在d486标准版实际交付后，用户继续要求全App毛玻璃/Liquid Glass、workspace顶部原生胶囊玻璃切换；左下角恢复旧版额度/身份原设计、删除新增连接footer；连接仅sidebar对应机器名绿点。以此覆盖前一轮footer裁定，不回滚其余整高sidebar/原生搜索/内容工具收敛或更改事务/权限。唯一Swift作者从main acd09782承接完整模块，独立设计核公开原生API/availability与旧footer实际来源；没有新源码准入、构建或安装事实。全window共享原生材质，不重加sidebar浮卡/chat独立底板；机器绿点必须匹配当前已验证连接，不能把paired存在当在线，不引B目录/新授信。原Unknown原文与UUID/只读核对仍可达。iOS旧d486无boot/install/新Pad/launch副作用，已暂停等待新外观，库存查询仅必要只读，不恢复旧后台轮询/自动会话或新增真实SDK/模型调用。后续完整冻结与新准确候选沿原暖缓存，GUI从已确认正常AppKit执行上下文开始，禁止退出后App观察自动重启。

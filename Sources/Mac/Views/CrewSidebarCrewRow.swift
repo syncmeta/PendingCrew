@@ -124,7 +124,7 @@ struct CrewSidebarCrewRow: View {
                 Button { expansion.wrappedValue.toggle() } label: {
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Theme.Palette.inkMuted)
+                        .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expansion.wrappedValue ? 90 : 0))
                 }
                 .buttonStyle(.plain)
@@ -172,7 +172,7 @@ struct CrewSidebarCrewRow: View {
                         TimelineView(.everyMinute) { _ in
                             Text(date.formatted(.relative(presentation: .numeric)))
                                 .font(Theme.Fonts.caption2)
-                                .foregroundStyle(Theme.Palette.inkMuted)
+                                .foregroundStyle(.secondary)
                                 // 同 PendingBot 会话行：加了黄字标注后横向变紧，
                                 // 不钉住的话相对时间会折行把整行撑高。该让位的是黄字。
                                 .lineLimit(1)
@@ -198,7 +198,7 @@ struct CrewSidebarCrewRow: View {
                     } else {
                         Text(CrewSidebarCrewRow.preview(of: last))
                             .font(Theme.Fonts.caption)
-                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -206,7 +206,7 @@ struct CrewSidebarCrewRow: View {
                         Spacer(minLength: 6)
                         Image(systemName: "arrow.triangle.branch")
                             .font(Theme.Fonts.caption2)
-                            .foregroundStyle(Theme.Palette.inkMuted)
+                            .foregroundStyle(.secondary)
                             .help("此 crew 挂在多个父 crew 之下,在每个父下都会出现")
                     }
                 }
@@ -220,7 +220,7 @@ struct CrewSidebarCrewRow: View {
                             .truncationMode(.tail)
                     }
                     .font(Theme.Fonts.caption2)
-                    .foregroundStyle(Theme.Palette.inkMuted.opacity(0.75))
+                    .foregroundStyle(.secondary)
                     .help("挂在 \(lineageLine) 之下")
                 }
             }
