@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9D400000000000000000102 /* CrewdClaudeHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D400000000000000000002 /* CrewdClaudeHistoryView.swift */; };
+		A9D400000000000000000202 /* CrewdClaudeHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D400000000000000000002 /* CrewdClaudeHistoryView.swift */; };
+		A9D400000000000000000101 /* CrewdClaudeHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D400000000000000000001 /* CrewdClaudeHistoryStore.swift */; };
+		A9D400000000000000000201 /* CrewdClaudeHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D400000000000000000001 /* CrewdClaudeHistoryStore.swift */; };
 		A9D300000000000000000102 /* CrewdCodexInputViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000002 /* CrewdCodexInputViews.swift */; };
 		A9D300000000000000000202 /* CrewdCodexInputViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000002 /* CrewdCodexInputViews.swift */; };
 		A9D300000000000000000101 /* CrewdCodexInputStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D300000000000000000001 /* CrewdCodexInputStore.swift */; };
@@ -959,6 +963,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A9D400000000000000000002 /* CrewdClaudeHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdClaudeHistoryView.swift; sourceTree = "<group>"; };
+		A9D400000000000000000001 /* CrewdClaudeHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdClaudeHistoryStore.swift; sourceTree = "<group>"; };
 		A9D300000000000000000002 /* CrewdCodexInputViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexInputViews.swift; sourceTree = "<group>"; };
 		A9D300000000000000000001 /* CrewdCodexInputStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexInputStore.swift; sourceTree = "<group>"; };
 		A9D200000000000000000001 /* CrewdNotificationWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdNotificationWire.swift; sourceTree = "<group>"; };
@@ -2040,6 +2046,8 @@
 				9ED1364BB456C51758515468 /* CrewdClient.swift */,
 				A9158DAB3E93656A8F6C6A28 /* CrewdCodexControlsView.swift */,
 				A9D300000000000000000001 /* CrewdCodexInputStore.swift */,
+				A9D400000000000000000002 /* CrewdClaudeHistoryView.swift */,
+				A9D400000000000000000001 /* CrewdClaudeHistoryStore.swift */,
 				A9D300000000000000000002 /* CrewdCodexInputViews.swift */,
 				6A2A43D1FE3D510FCFDC731A /* CrewdCodexSessionStore.swift */,
 				A8D36E110707731F04B85E30 /* CrewdCodexWire.swift */,
@@ -2932,6 +2940,8 @@
 				4931675C8C5E6114A69A73B7 /* CrewdClient.swift in Sources */,
 				198F37D5CAA3B779CEEEA411 /* CrewdCodexControlsView.swift in Sources */,
 				A9D300000000000000000101 /* CrewdCodexInputStore.swift in Sources */,
+				A9D400000000000000000102 /* CrewdClaudeHistoryView.swift in Sources */,
+				A9D400000000000000000101 /* CrewdClaudeHistoryStore.swift in Sources */,
 				A9D300000000000000000102 /* CrewdCodexInputViews.swift in Sources */,
 				6BA51FB4182F4A4457F5496B /* CrewdCodexSessionStore.swift in Sources */,
 				757D2D51947C83A45E06C4D5 /* CrewdCodexWire.swift in Sources */,
@@ -3391,6 +3401,8 @@
 				80CECC65D0B02715A4D31BFB /* CrewdClient.swift in Sources */,
 				030242F5F8DA96E5897E05ED /* CrewdCodexControlsView.swift in Sources */,
 				A9D300000000000000000201 /* CrewdCodexInputStore.swift in Sources */,
+				A9D400000000000000000202 /* CrewdClaudeHistoryView.swift in Sources */,
+				A9D400000000000000000201 /* CrewdClaudeHistoryStore.swift in Sources */,
 				A9D300000000000000000202 /* CrewdCodexInputViews.swift in Sources */,
 				817A9AA362C4BCD02AEF3885 /* CrewdCodexSessionStore.swift in Sources */,
 				E6C61FAC534252AC54FCF33C /* CrewdCodexWire.swift in Sources */,
