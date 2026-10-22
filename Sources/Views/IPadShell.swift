@@ -29,6 +29,7 @@ struct IPadShell: View {
     @State private var showingPairing = false
     @State private var didReadComputerList = false
     @State private var showingRecovery = false
+    @State private var showingRetainedInputs = false
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
 
@@ -44,6 +45,9 @@ struct IPadShell: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("连接电脑", systemImage: "link") { showingPairing = true }
+                        if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
+                            Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
+                        }
                         if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true {
                             Button("原请求核对") { showingRecovery = true }
                         }
@@ -71,6 +75,22 @@ struct IPadShell: View {
             crewStore.retireOriginalAuthorityPresentation()
             selectedCrewId = nil; selectedRemoteSessionID = nil
             Task { await crewStore.refreshList() }
+        }
+        .sheet(isPresented: $showingRetainedInputs) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("以下只供查看原连接的输入，不会从此处提交或连接。")
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(appModel.crewdWindow.inputReviewWorkspaces.enumerated()), id: \.offset) { _, workspace in
+                            CrewdRemoteRetainedInputs(workspace: workspace)
+                                .id(ObjectIdentifier(workspace))
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding()
+                }
+                .navigationTitle("原连接的输入")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingRetainedInputs = false } } }
+            }
         }
         .sheet(isPresented: $showingRecovery) {
             if let workspace = appModel.crewdBackend?.workspace {
