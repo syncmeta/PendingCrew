@@ -39,8 +39,9 @@ extension EnvironmentValues{
 struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
     var openSession: ((String) -> Void)? = nil
+    var searchControl: AnyView? = nil
     func body(content: Content) -> some View {
-        if let workspace { CrewdOriginalCrewContent(workspace: workspace, content: { content }, openSession: openSession) }
+        if let workspace { CrewdOriginalCrewContent(workspace: workspace, content: { content }, openSession: openSession, searchControl: searchControl) }
         else { content }
     }
 }
@@ -50,6 +51,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder let content: () -> Content
     var openSession: ((String) -> Void)? = nil
+    var searchControl: AnyView? = nil
     @State private var workScopes:[String:String]=[:]
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
@@ -64,7 +66,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             HStack(spacing:12){
                 CrewdGlassWorkspaceTabs(selection:$workspace.originalSection)
                     .frame(maxWidth:.infinity,alignment:.leading)
-
+                if let searchControl { searchControl }
             }.padding(.horizontal,14).padding(.vertical,8)
             Divider()
         }
