@@ -6,6 +6,7 @@ import Security
 /// exact key, request and phase are durable. Reopen never resumes a mutation.
 @CrewdCredentialActor final class CrewdEnrollment {
     nonisolated static let shared=CrewdEnrollment()
+    typealias RecoveryScope = @Sendable () async -> Bool
     typealias Call = @Sendable (String,Data,CrewdEnrollmentLink) async throws -> Data
     private var injectedVault:CrewdEnrollmentStoring?
     private var vault:CrewdEnrollmentStoring {if let injectedVault{return injectedVault};let v=CrewdEnrollmentVault.application();injectedVault=v;return v}
@@ -54,30 +55,62 @@ import Security
     private func read(_ id:UUID)throws->CrewdEnrollmentAttempt {
         guard case .recipient(let value)=try vault.read(id) else{throw CrewdRemoteError.wrongIdentity};return value
     }
-    func begin(_ id:UUID)async throws->CrewdEnrollmentAttempt {
+    func begin(_ id:UUID,canRestore:@escaping RecoveryScope = {false})async throws->CrewdEnrollmentAttempt {
         guard running.insert(id).inserted else{throw CrewdRemoteError.invalidExchange};defer{running.remove(id)}
         var a=try read(id);guard a.phase == .prepared else{return a}
         guard let expiry=CrewdRemoteText.date(a.link.expiresAt),expiry>Date() else{throw CrewdRemoteError.expiredInvitation}
         let params=CrewdEnrollmentBegin(enrollmentId:a.link.enrollmentId,requestId:a.requestId,token:a.link.token,clientCertificateDerBase64:a.clientCertificate.base64EncodedString(),clientSpkiSha256:a.clientPin,deviceLabel:a.deviceLabel)
         let bytes=try JSONEncoder().encode(params)
         a.phase = .beginUnknown;try vault.save(.recipient(a))
-        let result=try JSONDecoder().decode(CrewdEnrollmentBegan.self,from:await call("enrollment.begin",bytes,a.link))
-        guard result.requestId==a.requestId else{throw CrewdRemoteError.wrongIdentity}
-        try adoptChallenge(result.invitation,into:&a)
-        try vault.save(.recipient(a));return a
+        do {
+            let result=try JSONDecoder().decode(CrewdEnrollmentBegan.self,from:await call("enrollment.begin",bytes,a.link))
+            guard result.requestId==a.requestId else{throw CrewdRemoteError.wrongIdentity}
+            try adoptChallenge(result.invitation,into:&a)
+            try vault.save(.recipient(a));return a
+        } catch {
+            // Only this transport's proof of no handoff permits manual reuse.
+            // Closing/switching the UI, cancellation alone, or a newer record does not.
+            if let failure=error as? CrewdEnrollmentTransportFailure,
+               failure.request == .begin,!failure.requestWasHandedToSend,await canRestore(),
+               let current=try? read(id),current.phase == .beginUnknown,
+               current.requestId==a.requestId,current.link==a.link,
+               current.privateKey==a.privateKey,current.clientCertificate==a.clientCertificate,
+               current.clientPin==a.clientPin,current.invitation==a.invitation,
+               current.response==a.response,current.commitAttempted==a.commitAttempted {
+                a.phase = .prepared
+                try vault.save(.recipient(a))
+            }
+            throw error
+        }
     }
     /// Only an explicit confirmation of an already durable, verified challenge
     /// reaches commit. Unknown commit is never submitted a second time.
-    func commit(_ id:UUID)async throws->CrewdEnrollmentAttempt {
+    func commit(_ id:UUID,canRestore:@escaping RecoveryScope = {false})async throws->CrewdEnrollmentAttempt {
         guard running.insert(id).inserted else{throw CrewdRemoteError.invalidExchange};defer{running.remove(id)}
         var a=try read(id)
         guard a.phase == .challengeReady,!a.commitAttempted,let response=a.response else{return a}
         a.phase = .commitUnknown;a.commitAttempted=true
         let bytes=try JSONEncoder().encode(CrewdEnrollmentCommit(enrollmentId:a.link.enrollmentId,requestId:a.requestId,responseEnvelope:response))
         try vault.save(.recipient(a))
-        let result=try JSONDecoder().decode(CrewdRemoteAcceptResult.self,from:await call("enrollment.commit",bytes,a.link))
-        try accept(result,into:&a,currentGrant:result.grant)
-        try vault.save(.recipient(a));return a
+        do {
+            let result=try JSONDecoder().decode(CrewdRemoteAcceptResult.self,from:await call("enrollment.commit",bytes,a.link))
+            try accept(result,into:&a,currentGrant:result.grant)
+            try vault.save(.recipient(a));return a
+        } catch {
+            // Only this transport's proof of no handoff permits manual reuse.
+            // Closing/switching the UI, cancellation alone, or a newer record does not.
+            if let failure=error as? CrewdEnrollmentTransportFailure,
+               failure.request == .commit,!failure.requestWasHandedToSend,await canRestore(),
+               let current=try? read(id),current.phase == .commitUnknown,
+               current.requestId==a.requestId,current.link==a.link,
+               current.privateKey==a.privateKey,current.clientCertificate==a.clientCertificate,
+               current.clientPin==a.clientPin,current.invitation==a.invitation,
+               current.response==a.response,current.commitAttempted==a.commitAttempted {
+                a.phase = .challengeReady;a.commitAttempted=false
+                try vault.save(.recipient(a))
+            }
+            throw error
+        }
     }
     func lookup(_ id:UUID)async throws->CrewdEnrollmentAttempt {
         guard running.insert(id).inserted else{throw CrewdRemoteError.invalidExchange};defer{running.remove(id)}
@@ -229,10 +262,10 @@ extension CrewdEnrollmentAttempt {
 }
 extension CrewdEnrollment {
     func summaries()throws->[CrewdEnrollmentSummary]{try attempts().map(\.summary)}
-    func confirm(_ link:CrewdEnrollmentLink,deviceLabel:String)async throws->CrewdEnrollmentSummary{
+    func confirm(_ link:CrewdEnrollmentLink,deviceLabel:String,canRestore:@escaping RecoveryScope = {false})async throws->CrewdEnrollmentSummary{
         let original=try prepare(link,deviceLabel:deviceLabel)
-        return try await begin(original.id).summary
+        return try await begin(original.id,canRestore:canRestore).summary
     }
-    func confirmChallenge(_ id:UUID)async throws->CrewdEnrollmentSummary{try await commit(id).summary}
+    func confirmChallenge(_ id:UUID,canRestore:@escaping RecoveryScope = {false})async throws->CrewdEnrollmentSummary{try await commit(id,canRestore:canRestore).summary}
     func queryOriginal(_ id:UUID)async throws->CrewdEnrollmentSummary{try await lookup(id).summary}
 }

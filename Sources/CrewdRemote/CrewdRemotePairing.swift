@@ -195,6 +195,11 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     @Published private(set) var busy = false
     private var epoch = UUID()
     func invalidate() { epoch = UUID() }
+    func recoveryScope() -> @Sendable () async -> Bool {
+        let token=epoch
+        return { [weak self] in await self?.matches(token) == true }
+    }
+    private func matches(_ token:UUID)->Bool { epoch == token }
     @discardableResult func run<Value: Sendable>(
         _ operation: @escaping @MainActor () async throws -> Value,
         apply: @escaping @MainActor (Value) -> Void,
