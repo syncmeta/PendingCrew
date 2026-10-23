@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Prepare/build the existing macOS target for optional InjectionNext development.
-Never installs or launches any application. No normal project/config is rewritten.
+prepare/build never launch an application; run explicitly starts the private developer scope.
+No normal project/config is rewritten.
 """
 import argparse
+import hashlib
+import os
+import plistlib
+import re
+import time
+import uuid
 import json
 import pathlib
 import shutil
@@ -86,15 +93,108 @@ def prepare():
     return project
 
 
+
+def running(executable):
+    result = subprocess.run(['pgrep', '-f', '^' + re.escape(str(executable)) + '( |$)'],
+                            text=True, stdout=subprocess.PIPE)
+    pids = result.stdout.split()
+    if len(pids) > 1:
+        raise SystemExit('Multiple matching developer processes; inspect owners before running again.')
+    return int(pids[0]) if pids else None
+
+
+def run_private(args, dd):
+    app = dd / 'Build/Products/Debug/PendingCrewHotReload.app'
+    executable = app / 'Contents/MacOS/PendingCrewHotReload'
+    if pid := running(executable):
+        print('Developer App already running, PID', pid, '; no build or duplicate launch.')
+        print('Save production views under:', ROOT / 'Sources')
+        print('For structure/configuration changes, normally quit this developer App first, then run again.')
+        return
+    tool = args.injection_app.expanduser().resolve()
+    info = plistlib.loads((tool / 'Contents/Info.plist').read_bytes())
+    if info.get('CFBundleShortVersionString') != '2.0.1':
+        raise SystemExit('Use the verified official InjectionNext 2.0.1 App.')
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(tool)], check=True)
+    signature = subprocess.run(['codesign', '-dv', str(tool)], text=True, capture_output=True, check=True).stderr
+    if 'TeamIdentifier=9V5A8WE85E' not in signature:
+        raise SystemExit('InjectionNext developer identity differs from the verified official release.')
+    # Normal build action is reused; never rebuild/overwrite a live developer App.
+    subprocess.run([sys.executable, str(Path(__file__).resolve()), 'build', '--derived-data', str(dd)], check=True)
+    backend = args.backend_input.expanduser().resolve()
+    subprocess.run(['codesign', '--verify', '--strict', str(backend)], check=True)
+    core_bytes = backend.read_bytes()
+    helper = app / 'Contents/Helpers/crewd'
+    helper.parent.mkdir(exist_ok=True)
+    if helper.is_symlink():
+        raise SystemExit('Refusing a symlinked developer helper.')
+    shutil.copy2(backend, helper)
+    subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(app)], check=True)
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+    assert helper.read_bytes() == core_bytes  # Outer signing must preserve the original Core signature.
+    runtime = args.runtime_root.expanduser()
+    if not str(runtime).startswith('/private/tmp/') or runtime.is_symlink():
+        raise SystemExit('Runtime root must be an explicit private /private/tmp directory.')
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    for name in ('frontend', 'authority'):
+        directory = runtime / name
+        if directory.is_symlink():
+            raise SystemExit('Refusing a symlinked runtime directory.')
+        directory.mkdir(mode=0o700, exist_ok=True)
+    device_file = runtime / 'developer-device-id'
+    if not device_file.exists():
+        device_file.write_text(str(uuid.uuid4()) + '\n')
+    device_id = str(uuid.UUID(device_file.read_text().strip()))
+    tool_exe = tool / 'Contents/MacOS/InjectionNext'
+    tool_pid = running(tool_exe)
+    if tool_pid is None:
+        if subprocess.run(['pgrep', '-x', 'InjectionNext'], stdout=subprocess.DEVNULL).returncode == 0:
+            raise SystemExit('Another InjectionNext is running; select its verified App path with --injection-app. Nothing was stopped.')
+        env = os.environ.copy()
+        env.update(INJECTION_DIRECTORIES=str(ROOT / 'Sources'), NSUnbufferedIO='YES')
+        logs = dd / 'Logs/Build'
+        recent = max(logs.glob('*.xcactivitylog'), key=lambda path: path.stat().st_mtime)
+        with (runtime / 'tool-run.log').open('ab') as log:
+            child = subprocess.Popen([str(tool_exe), '-devicesEnabled', 'NO', '-mcpServer', 'NO',
+                                      '-autoLaunchXcode', 'NO', '-hideXcodeAlert', 'YES',
+                                      '-HotReloadingBuildLogsDir', str(recent)],
+                                     env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        time.sleep(1)
+        if child.poll() is not None:
+            raise SystemExit('Official tool exited; inspect tool-run.log before continuing.')
+        tool_pid = child.pid
+    env = os.environ.copy()
+    env.update(PENDINGCREW_HOTRELOAD_PRIVATE_RUNTIME_REVIEWED='1',
+               PENDINGCREW_DATA_DIR=str(runtime / 'frontend'), PENDINGCREW_CREWD_DATA_DIR=str(runtime / 'authority'),
+               PENDINGCREW_HOTRELOAD_INJECTION_RESOURCES=str(tool / 'Contents/Resources'),
+               PENDINGCREW_HOTRELOAD_DEVICE_ID=device_id, PENDINGCREW_ISOLATED_CREDENTIALS='memory',
+               PENDINGCREW_CODEX_PROGRAM='/usr/bin/false', PENDINGCREW_CLAUDE_PROGRAM='/usr/bin/false',
+               INJECTION_PROJECT_ROOT=str(ROOT / 'Sources'), INJECTION_HOST='127.0.0.1', NSUnbufferedIO='YES')
+    with (runtime / 'app-run.log').open('ab') as log:
+        child = subprocess.Popen([str(executable)], env=env, stdout=log,
+                                 stderr=subprocess.STDOUT, start_new_session=True)
+    receipt = dict(appPID=child.pid, toolPID=tool_pid, sourceRoot=str(ROOT), app=str(app),
+                   runtimeRoot=str(runtime), coreSHA256=hashlib.sha256(core_bytes).hexdigest())
+    (runtime / 'run.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print(json.dumps(receipt, indent=2))
+    print('Edit production SwiftUI under', ROOT / 'Sources', 'and save. This scope cannot call real model providers.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'build'])
+    parser.add_argument('action', choices=['prepare', 'build', 'run'])
     parser.add_argument('--derived-data', type=pathlib.Path, default=DEFAULT_DD)
+    parser.add_argument('--injection-app', type=pathlib.Path, default=pathlib.Path('/private/tmp/pcw-injectionnext-runtime-2.0.1-20261023/InjectionNext.app'))
+    parser.add_argument('--backend-input', type=pathlib.Path, default=pathlib.Path('/Applications/PendingCrew.app/Contents/Helpers/crewd'))
+    parser.add_argument('--runtime-root', type=pathlib.Path, default=pathlib.Path('/private/tmp/pendingcrew-hotreload-runtime-20261023'))
     args = parser.parse_args()
     project = prepare()
     dd = args.derived_data.expanduser().resolve()
     if not dd.is_dir() or not (dd / 'SourcePackages').is_dir():
         raise SystemExit('Use an existing coordinated warm DerivedData with SourcePackages; no cold cache is created.')
+    if args.action == 'run':
+        run_private(args, dd)
+        return
     print('Project:', project)
     print('Warm DerivedData:', dd)
     print('InjectionNext 2.0.1 source:', INJECTIONNEXT_REVISION)
@@ -103,11 +203,16 @@ def main():
     if args.action == 'build':
         if shutil.disk_usage(dd).free < 4 * 1024**3:
             raise SystemExit('Less than 4 GiB free: coordinate disk space; this entry never deletes caches.')
+        build_env = os.environ.copy()
+        config_index = int(build_env.get('GIT_CONFIG_COUNT', '0'))
+        build_env.update({'GIT_CONFIG_COUNT': str(config_index + 1),
+                          'GIT_CONFIG_KEY_' + str(config_index): 'http.version',
+                          'GIT_CONFIG_VALUE_' + str(config_index): 'HTTP/1.1'})
         subprocess.run(['xcodebuild', '-project', str(project), '-scheme', 'PendingCrew',
                         '-configuration', 'Debug', '-destination', 'platform=macOS',
                         '-derivedDataPath', str(dd), '-clonedSourcePackagesDirPath', str(dd / 'SourcePackages'),
                         '-skipPackageUpdates', '-onlyUsePackageVersionsFromResolvedFile',
-                        'build'], cwd=ROOT, check=True)
+                        'build'], cwd=ROOT, env=build_env, check=True)
 
 
 if __name__ == '__main__':
