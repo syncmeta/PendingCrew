@@ -1,5 +1,21 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 P 移动交付整块准入、iPad 真实修复与手机安装运输未知
+
+根全文读源冻结c491aa4de126a5471046d5732bbeb755295a959f47d73a8a0eece596a27f2ce9、HANDOFF、实际提交与P-COMBINATION，接受完整移动输入 P=`497e419935bd2917612a610dfec887355a73d234`，base4f0c72b1，三presentation Swift+一交接。源/Simulator独验 **76017e4fcfdfcff008fcaeed7398e9067a21de71d8808b2bcf9dd9a04608223b** 核1944完整Git/404目标/3878SPM、原50907实际0、76文件/ZIP、P stamp、独立strictdeep0及xcent==Mach-O；root staged全树逐字同P，Rust/工程无差异。Mac共享plus的原默认行为不变；没有为iOS-only展示变更重建Mac/Rust或冒P新normal。
+
+本轮先接受 N 普通 unsigned iPhoneOS owner62027实际0及独验 **0835f95b04499e2abe61814f4536cdb076294a549c87b2a6cf2b1af10c08986c**，51文件、device platform2、无签名/ent、原1943/404/3878及旧2696不变，ZIP782f692c；不是可安装签名包。独立新iPhone/iPad四次首开/OS冷重开及实际窄/宽frame报告 **e089ae07c97e8ce3abc1372549417100e3a34819436e13d25e914927d447ac5d**，原console均0/精确PIDgone/两设备Shutdown保留。根亲看原两图，iPad重复完整介绍与CTA列为真实展示缺陷，不将启动成功当精装全部通过。
+
+P复用既有私有iPad更新，原首次same-container-path断言失败是OS重新分配数据目录UUID，不是App错误/权限拒绝。根纠正该额外条件，质量仅查两个已知本scope目录的opaque名/size/hash：旧目录不在、新目录13文件，缺安装前hash，故N→P数据保留未证明，也不推断丢失。随后P实际首开85066/60429、OS冷重开85122/84668、两1640×2360 frame、两handle0/PIDgone/Shutdown0，报告 **d6226f86bea8d5cd252bf891b4ec1cfff146ca7a16e708b1c79197c2ad58d959**。根全文读并亲看修后图：左短提示、右唯一glass＋，重复卡片消失；此视觉P2仅在该regular空态观察范围关闭。无touch/配对/草稿/600秒/物理设备冒验，compact复用未变源与原N实际图。
+
+P Development完整产物独验 **8d4f581e34d96c2711b3c8cfc7f19e042d6f714dab1d6991c7ff130dc7e52203** 由根全文受领。314项manifest d3cdda6ec8b40dff0de97060fbe1172f8ad75b7330c510f5c6648e43212c6c47、COMBINATION99910bafe63c39d817f6447d57bc007b6d8d9df17e18800d85ad4ec9f5f96127；实际1944Git/404/SPM3878与单独overlay **90a949052f54247bbf0ced8d799a52b8388401231e5d32f5b9b40c36591c52ba** 前后实核，不能只把Git称完整构建配置。App-owned Local配置避免泄漏，89实际SPM PIF无App私有字段、全局CLI无私有selector。首次N37819/Xcode65为全局App相对ent路径误传23依赖，P25219/65为Xcode-managed a081与根所限Manual冲突；均未签名前失败原样保留，无权限拒绝证据。根依据实际xcodebuild help纠正为本地Automatic、无allowProvisioningUpdates/注册/authKey；未改profile managed位或原ent，也未生成新资源。
+
+实际P44492 Xcode0；原后处理driver1是可选公开证书extractprefix参数语法，原日志保留，修只读query与后处理0，没有重建/重签。独立正常context strictdeep0，实际Apple Development BF947A3B314A09428419892ADDAF8E8BDA8984BF/M42，原a081 profile/c1d11原bytes及目标membership/期限/platform核准；原完整双groups、AppID/team/get-task-allow逐值同generated xcent，arm64/platform2/P stamp准确，版本0.1.43/1。53文件App逐byte等ZIP **63386b4dcaf067a114953fddfb1406234379447ca9224e84d81637f4b29ee1d9** 及Development IPA Payload **8a91c7967612d6419ea533e4fddff7e8d3022aa92710485cbfcb5cee1e5b9b97**。此为用户既有M42开发资格，不借MacDirect或Simulator ent；Cloud/APNs nil/off，无物理运行/商店/发布声明。
+
+手机前提实际只读0c6648e1及原own-bundle6ff9d274已记录。根全文审install-only具体方案ac3dd259及最终产物后，沿已授权iOS测试仅放行同一已配对iPhone15Pro的必要完整App metadata本地过滤与一次精确App安装，不启动。完整App目录查询实际0，default/hidden/internal/removable全true，本bundle零行，其余元数据仅本机私有0600、不输出名称；fresh53文件/profile/leaf/strictdeep核同。唯一原devicectl安装 **exit1/outcome failed/Network.NWError60/Operation timed out**，无成功receipt，最终报告 **27f64c929be436d74302f0eedc72ec29f8951c1c25ac8cb79c499380b1230d16** 已根全文读。命令很快返回不能证明零副作用；未发后置查询/重装/换通道/显式connect/配对/解锁/权限/首开/结束进程/卸载/回滚/容器或Keychain操作，当前安装/部分结果未知，不补造成功或缺失。该运输失败非自动审批拒绝或已证签名/profile拒绝，未来只在当前状态明确后裁恢复，不重发原动作。
+
+全部作者/质量执行句柄已终态。根将P已验源码并同两统筹记录整合保存；Mac精确N0.1.44/20748.85010、Linux精确M及全部旧证据不改来源，Mac仍待用户正常退出与解锁，最新PS085410仅证原93537/93539仍在，不冒任务账本。新手机真实UI/配对、双端Core草稿业务、Apple云/推送、VPS正式服务和完整Claude后续仍未完成，目标不标完成。旧043/184/1ef/c4、数据/源码/日志/二进制/SDK对象及构建证明不读删重放，无新CI/模型/冷缓存。
+
 ## 2026-10-23 完整 N Mac/iOS 成套产物与 Linux M 独验接受
 
 根全文读取 N normal交接/独验 `f8df9c315d3df99ac43b93186ba027b1f81d728ce130517e4feb9ea9f1354b5a`、具体manifest/plan/guards及计划独验 `a2deec933566722b70ec7447bb5c32ca081e62c53de86f31e587c5cd1a8e568c` 后，放行原5f06配方的一次准确N执行。N=`158e347942207d0ce4d4f892e11ee340dab7b96e`，1943全输入/478Rust、Store21/API3/schema149，helper `2a64ecc8c7591d72392d85f8d996f6fad79a04ad2f958107fd8688f16b8f13db`、witness `64d1178058a0a7d9aeef21ebce68217dc52b18bd33d66d28150ffc78d70d989e`；原 require_fresh 的12 owning/13 raw、默认Debug/features[]、实际compileenv158e34794220/dirtyfalse、纯schema149及完整siblings均独核。M normal与原失败73424没有改标或重试。

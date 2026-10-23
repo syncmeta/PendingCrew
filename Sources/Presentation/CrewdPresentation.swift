@@ -287,10 +287,11 @@ struct CrewdHostConnectionLabel:View {
 
 /// A single action for an empty workspace; no decorative canvas or message.
 struct CrewdGlassAddButton:View {
+    var title = "新建机组"
     let action:()->Void
     var body:some View {
         Button(action:action){Image(systemName:"plus").font(.system(size:22,weight:.medium)).frame(width:52,height:52).contentShape(Circle())}
-            .buttonStyle(.plain).modifier(CrewdAddGlass()).accessibilityLabel("新建机组").help("新建机组")
+            .buttonStyle(.plain).modifier(CrewdAddGlass()).accessibilityLabel(title).help(title)
     }
 }
 private struct CrewdAddGlass:ViewModifier {

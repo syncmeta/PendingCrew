@@ -46,6 +46,7 @@ struct IPadShell: View {
             CrewListView(connectComputer: canChooseComputer ? { showingPairing = true } : nil,
                          hasPairedComputer: hasPairedComputer,
                          readingComputers: !didReadComputerList || appModel.connectingAuthority,
+                         showsComputerIntroduction: isCompact,
                          selection: $selectedCrewId)
                 .navigationTitle("机组")
                 .toolbar {
@@ -171,8 +172,12 @@ struct IPadShell: View {
                 }
         } else {
             if canChooseComputer {
-                MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
-                                           connect: { showingPairing = true })
+                if isCompact {
+                    MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
+                                               connect: { showingPairing = true })
+                } else {
+                    emptyWorkspaceAction
+                }
             } else if !didReadComputerList || crewStore.loadingList || appModel.connectingAuthority {
                 ProgressView("正在读取机组")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -185,11 +190,22 @@ struct IPadShell: View {
                     Button("连接电脑") { showingPairing = true }
                     Button("重试") { Task { await crewStore.refreshList() } }
                 }
+            } else if !isCompact {
+                emptyWorkspaceAction
             } else {
                 ContentUnavailableView("选择一个机组", systemImage: "bubble.left.and.bubble.right",
                                        description: Text("从左侧选择机组，继续查看消息、待办工作和资料。"))
             }
         }
+    }
+
+    private var emptyWorkspaceAction: some View {
+        let connected = appModel.crewdBackend?.workspace.client.readyForWork == true
+        return CrewdGlassAddButton(title: connected ? "新建机组" : hasPairedComputer ? "选择电脑" : "连接电脑") {
+            if connected { showingNewCrew = true }
+            else { showingPairing = true }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // Observe the original startup read before classifying an empty list. This

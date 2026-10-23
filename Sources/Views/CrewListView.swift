@@ -14,6 +14,7 @@ struct CrewListView: View {
     var connectComputer: (() -> Void)? = nil
     var hasPairedComputer = false
     var readingComputers = false
+    var showsComputerIntroduction = true
     #endif
     /// 当前选中的 crew id；nil = 无选中。
     @Binding var selection: String?
@@ -32,7 +33,7 @@ struct CrewListView: View {
             #endif
         }
         .overlay {
-            if crewStore.crews.isEmpty {
+            if crewStore.crews.isEmpty, needsEmptyOverlay {
                 emptyOverlay
             }
         }
@@ -48,6 +49,15 @@ struct CrewListView: View {
 
     // MARK: - Empty state
 
+    private var needsEmptyOverlay: Bool {
+        #if os(iOS)
+        // Keep the regular sidebar's real host row visible even with no crews.
+        if !showsComputerIntroduction, crewStore.crewdWorkspace != nil,
+           !awaitingList, connectionFailure == nil { return false }
+        #endif
+        return true
+    }
+
     @ViewBuilder
     private var emptyOverlay: some View {
         if awaitingList {
@@ -55,8 +65,15 @@ struct CrewListView: View {
         } else {
             #if os(iOS)
             if let connectComputer {
-                MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
-                                           connect: connectComputer)
+                if showsComputerIntroduction {
+                    MobileComputerIntroduction(hasPairedComputer: hasPairedComputer,
+                                               connect: connectComputer)
+                } else {
+                    Text(hasPairedComputer ? "选择电脑后，机组会显示在这里。" : "连接电脑后，机组会显示在这里。")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .padding(20)
+                }
             } else {
                 unavailableOrEmpty
             }
@@ -133,6 +150,10 @@ private struct CrewMobileDirectory: View {
                     CrewdHostConnectionLabel(client:workspace.client,name:activeHostName,connecting:appModel.connectingAuthority || workspace.status == "正在连接",hasUnfinishedOperation:workspace.error != nil || !workspace.durableUnknown.isEmpty)
                         .frame(minHeight:44,alignment:.leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                if crews.isEmpty {
+                    Text("这台电脑还没有可显示的机组。")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 if mode == .contacts {
                     ForEach(CrewdNavigation.directory(visible, collapsed: collapsed)) { row in
                         if let crew = crews.first(where: { $0.id == row.object }) {

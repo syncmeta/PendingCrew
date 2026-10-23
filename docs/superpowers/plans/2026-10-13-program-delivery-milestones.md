@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 移动端整块产物与 iPad 实图接受，手机安装未获成功回执
+
+本节为当前状态，以下 N/M/S 段落保留各自发生时点。Mac 待交付包仍准确来源 N=`158e347942207d0ce4d4f892e11ee340dab7b96e`、**0.1.44/20748.85010**；本轮不因移动布局改动重建 Mac/Rust，不延后其既有安装授权。移动端完整来源为 P=`497e419935bd2917612a610dfec887355a73d234`，在 main4f0c72b1 基础上只改三处展示 Swift 及交接；Rust/API3/schema149/Store21 与 N 不变，不能把 N 后台或 Mac 来源改标 P。
+
+N 普通 iPhoneOS unsigned 目标已真实构建并独验0835f95b；独立 iPhone/iPad 首开、OS冷重开、真实 framebuffer 和收尾报告e089ae07也已受领。实际 iPad 双栏重复连接介绍/按钮是新发现的展示缺陷，作者在 P 收敛为左目录/右唯一原生玻璃加号，保 compact 原介绍、原连接/建群 sheet、错误/Unknown及 Mac 默认加号行为。P 源与普通 Simulator 独验76017e4f通过，更新原私有 iPad 后的两次实际画面和收尾d6226f86通过，重复空态在观察范围关闭。没有 touch、配对、草稿或业务同步冒验；OS更新数据目录UUID改变不等于业务身份变化，原过强路径断言保留，未补造 N→P 数据保留证明。
+
+P 同源普通 Debug/arm64 iPhoneOS Development 包已实际签名并整块独验 **8d4f581e34d96c2711b3c8cfc7f19e042d6f714dab1d6991c7ff130dc7e52203**。1944 Git/404目标/3878SPM及单独显式 App Local 配置overlay90a94905均实核；现有M42/BF947/a081 profile支持已登记目标，完整双keychain groups不删。Automatic仅使用本地现有资格，无allowProvisioningUpdates、设备注册或新Apple资源。53文件App、ZIP、Development IPA逐entry同字节，实际版本仍 **0.1.43/1**；此为设备开发包，不是商店/公开分发或真机运行验收。根此前Manual限定与Xcode-managed profile冲突，已纠正；原N全局ent泄漏、P Manual失败及一次只读postprocess语法错误均保原层，无抹签/改profile/重编掩盖。
+
+手机交付已推进至一次真实安装尝试：完整类别元数据查询成功，精确本bundle零匹配；经fresh53文件/签封核对后，唯一原devicectl安装命令返回 **Network.NWError60/Operation timed out**，没有成功回执，报告 **27f64c929be436d74302f0eedc72ec29f8951c1c25ac8cb79c499380b1230d16**。没有重装、换路径、首开、终止用户进程、权限/配对/解锁或容器/Keychain操作；当前安装存在态/部分结果未知，不声称已装或完全未发生。原操作保留，待真实设备状态可确认后再裁恢复，不自动重发。该失败不影响已接受源码、模拟器、签名包与 iPad 视觉结果。
+
+剩余完整交付仍是：Mac正常退出/解锁后的备份整包替换及首开600秒/影响GUI；真实手机交付与UI；Mac/iOS同Core配对、草稿版本/退出重开/撤权；VPS供应商自行安装登录后正常部署/分发；真实Cloud/APNs及完整Claude供应商/ACP后续。源与产物完成不冒这些运行层已完成。根统筹整合，frontend唯一Swift/工程/构建写者，quality独立实际流程，backend保唯一Rust/schema及VPS前提职责；旧043/184/1ef/c4和所有源码、数据、失败、包、SDK/缓存来源证据继续保留，无新CI或真实模型。
+
 ## 2026-10-23 当前完整候选已封存，转入实际交付
 
 当前唯一 Mac/iOS 产品输入为 `158e347942207d0ce4d4f892e11ee340dab7b96e`（N），含完整 Codex 控制、Claude 受管历史与显式恢复、Core 个人草稿和原生界面修整。准确 N 的 fresh normal、具体生产计划与两端成套产物均已独验接受，最终报告 `c3884039ed21a5720d1a239efadc2fb654e8d6500d054e9a1a9db5f04c43eae8`。Mac 为 **0.1.44 / 20748.85010**，普通 Release、M42 Developer ID/hardened；后台是已准确记录的默认 Debug normal。iOS 为普通 arm64 Simulator Debug，实际 **0.1.43 / 1**。1943 完整源码、404 目标输入、3878 SPM 输入前后一致；此后统筹记录提交不改变产品来源，也不触发重建。
