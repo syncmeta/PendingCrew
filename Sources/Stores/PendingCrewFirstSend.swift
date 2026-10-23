@@ -150,6 +150,7 @@ struct PendingCrewRecoveryStore {
         let text: String
         var crewId: String?
         var workingDirectory: String?
+        var executor: String? = nil // Old records retain the original Codex default.
     }
 
     let file: URL

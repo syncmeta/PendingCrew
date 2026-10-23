@@ -23,11 +23,11 @@ python3 scripts/dev/swiftui-hot-reload.py prepare
 python3 scripts/dev/swiftui-hot-reload.py build
 ```
 
-生成工程在 gitignored `.hotreload/PendingCrew.xcodeproj`，只有现有 target 的 macOS Debug 配置，直接引用生产 Sources。正常 `project.yml` / pbxproj / Release / profile / 正式 entitlements 不改。开发配置启用 `-Onone`、`-Xlinker -interposable`、`EMIT_FRONTEND_COMMAND_LINES=YES`，仅这里关闭 compilation cache。Git HTTP/1.1 只作用于构建子进程，不改全局配置。构建前要求至少 3 GiB 可用空间，不会删除缓存；这是针对既有 target/依赖/SDK 全暖的保守门槛，本轮现有 target 中间物与 App 合计约 426 MiB，并非历史构建净耗盘测量。
+生成工程在 gitignored `.hotreload/PendingCrew.xcodeproj`，只有现有 target 的 macOS Debug 配置，直接引用生产 Sources。正常 `project.yml` / pbxproj / Release / profile / 正式 entitlements 不改。开发配置启用 `-Onone`、`-Xlinker -interposable`、`EMIT_FRONTEND_COMMAND_LINES=YES`，仅这里关闭 compilation cache。Git HTTP/1.1 只作用于构建子进程，不改全局配置。构建前要求至少 2 GiB 可用空间，不会删除缓存；这是针对既有 target/依赖/SDK 全暖的保守门槛，本轮现有 target 中间物与 App 合计约 426 MiB，并非历史构建净耗盘测量。
 
 ## 使用范围
 
-已按官方方式接线的真实生产 View：`MacThreePaneView`、`CrewSidebarView`、`CrewCenterView`、`CrewdGlassWorkspaceTabs`。各自使用 `@ObserveInjection` 与 body 末尾 `.enableInjection()`，观察注入通知并作 `AnyView` 类型擦除；条件为 `DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)`。普通 Debug/iOS/Release 不导入 Inject。
+已按官方方式接线的真实生产 View：`MacThreePaneView`、`CrewSidebarView`、`CrewCenterView`、`CrewdGlassWorkspaceTabs`、`PendingCrewChatView`、`CrewdMachinePicker`。各自使用 `@ObserveInjection` 与 body 末尾 `.enableInjection()`，观察注入通知并作 `AnyView` 类型擦除；条件为 `DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)`。普通 Debug/iOS/Release 不导入 Inject。
 
 函数/body 内文案、颜色、间距及 ABI 不变的实现可尝试保存注入。添加/删除/重排存储属性、更改类型/函数签名、非 final class 方法布局、资源/依赖/编译条件变化仍须正常退出开发进程并暖增量 Build & Run。父 View 有 hook 不保证所有后代自行刷新；修改其他 View 时只给实际要迭代的生产 View 加同样官方 hook，不另写 demo。Previews 只作尺寸/组件检查辅助。
 
@@ -46,4 +46,14 @@ python3 scripts/dev/swiftui-hot-reload.py build
 3. 首次入口因 Foundation 对已存在 `/private/tmp` 目录返回 `/tmp` 而误拒；改为 native `realpath` 后，实际现有两根正例及日用路径/穿越/symlink 负例通过，真实原窗口成功打开、本机空库连接正常。
 4. 首轮保存“通讯录→热更新”在同一 App/工具 TCP 已连接时失败，界面仍是原文。官方固定 [LogParser](https://github.com/johnno1962/InjectionLite/blob/20dd8459d058a6012ea156eecdeef586260ad90d/Sources/InjectionLite/LogParser.swift) 的 `-primary-file` 查找无匹配后，fallback 用执行文件名匹配 `-module-name`；实际日志模块是被多余 override 固定的 `PendingCrew`，执行文件却是 `PendingCrewHotReload`。已移除 override，临时文案原字节恢复。该首轮失败证据保留；之后已重新构建修正并完成下述成功验证。
 5. 正常退出开发窗口曾被自动审批拒绝，当时立即停止且保留现场；用户随后明确授权本轮私有开发窗口退出、重开和验证。QA 正常退出旧开发 App/Core 后，`run` 暖构建成功，新 App PID `76659`，原工具 PID `53720` 保持，Core SHA256 仍为 `09b4b0c6eb04f41c825bc400ee21c3e8cc386cbcdd7c1d9e4bfdf41f7f70276f`。
-6. UTC 12:06:14.377910 保存生产 `CrewSidebarView.swift` 的“通讯录→热更新”，客户端实际编译 1409 ms，热替换 3 个符号。QA 于 12:06:46.549–.721 在同一窗口确认“热更新”可见、“消息”仍选中。12:07:13.453865 原字节保存恢复，客户端编译 1118 ms 并再次替换 3 个符号；QA 于 12:07:34.279–.459 确认“通讯录”恢复、“消息”仍选中。全程 App PID `76659` / 私有 Core PID `76666` 保持，私有库的 session/receipt 均为 0，工具仅监听 `127.0.0.1:8887`。这里的毫秒是工具报告的编译耗时；GUI 观察有取证间隔，未精确测量保存到屏幕的完整延迟。结构变更仍须重建；本轮未用结构修改破坏运行窗口来测试。
+6. UTC 12:06:14.377910 保存生产 `CrewSidebarView.swift` 的“通讯录→热更新”，客户端实际编译 1409 ms，热替换 3 个符号。QA 于 12:06:46.549–.721 在同一窗口确认“热更新”可见、“消息”仍选中。12:07:13.453865 原字节保存恢复，客户端编译 1118 ms 并再次替换 3 个符号；QA 于 12:07:34.279–.459 确认“通讯录”恢复、“消息”仍选中。全程 App PID `76659` / 私有 Core PID `76666` 保持，私有库的 session/receipt 均为 0，工具仅监听 `127.0.0.1:8887`。这里的毫秒是工具报告的编译耗时；GUI 观察有取证间隔，未精确测量保存到屏幕的完整延迟。结构变更仍须重建；此次文案验证没有修改结构，后续开发的实际注入事故见下文。
+
+仅全暖开发构建使用 2 GiB 空间门槛，约为现有中间物与 App 合计 426 MiB 的 4.8 倍；这是保守估计，不是历史峰值测量。低于门槛或实际 ENOSPC 时停止，不自动重试、继续降低门槛或删除缓存。
+
+后续聊天式新建开发曾在旧开发 App `76659` 活跃时误保存存储布局变更，官方 watcher 尝试结构注入后旧进程发生 SIGSEGV。日志和崩溃报告已保留，这不是正常退出。QA 确认旧 App/Core 真正消失后，完整暖构建新结构并重开成功。**以后修改存储布局、类型或函数签名前，先正常退出开发 App，再保存结构源码并执行 `run`；不要先保存结构再等待退出。**函数/body 编辑仍按保存热更新使用。
+
+新建页后续外观注入中，开发 App `87228` 在两次 body 注入完成后于 20:38:49 发生 SIGBUS；栈顶为 `swift_release → SwiftUI destroy for HelpView`，日志没有类型尺寸警告，不能据此断言唯一原因。新共享机器组件已补上自身官方 hook，并在确认旧 App/Core 消失后完整暖构建。这里没有把这轮外观注入称为成功，稳定 UI 以完整构建后的实窗验收为准。
+
+新建机组现在使用正常聊天画布和原 `ComposerView`，目录、机组名称、coding agent、机器、父机组在输入框上方随宽度换行。侧栏加号只打开内存草稿；切到别的机组后再次点击加号可回到原输入。机器控件与侧栏底部共用原可信连接源，以现有 authority UUID 确定稳定 emoji，不读取硬件标识。跨连接的原草稿保留在原连接输入核对中，父机组只取当前后台可读列表，远程目录只接受远程路径。
+
+只有人类点击发送，才走原创建及首 Human 消息事务，确认后尝试启动明确所选 Codex 或 Claude Code，不隐式换厂商。新增选择以原首发快照冻结；可核对的原 journal 仅增加本地可选 executor 字段，正式命令参数未变，旧缺字段记录按原 Codex 语义核对且不自动启动。已有机组的首条消息被明确拒绝时，可只重试原消息；Unknown 继续只读核对，不重建、不重发。

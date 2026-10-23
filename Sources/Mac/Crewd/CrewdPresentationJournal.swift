@@ -22,6 +22,7 @@ final class CrewdPresentationJournal {
         let params: CrewdValue
         let crew: String
         let preparedAt: Date
+        var firstMessageExecutor: String? = nil // Local input metadata, never part of the wire command.
     }
     struct Outcome: Codable {
         let format: Int
@@ -132,8 +133,8 @@ final class CrewdPresentationJournal {
         guard fsync(parent) == 0 else { throw StorageError.refused("前端历史目录同步失败；未提交后台操作。") }
     }
     nonisolated private static func hash(_ bytes: Data) -> String { CryptoKit.SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
-    func prepare(method: String, params: CrewdValue, crew: String) throws -> Prepared {
-        let record = Prepared(format: 1, id: UUID(), scope: scope, method: method, params: params, crew: crew, preparedAt: Date())
+    func prepare(method: String, params: CrewdValue, crew: String, firstMessageExecutor: String? = nil) throws -> Prepared {
+        let record = Prepared(format: 1, id: UUID(), scope: scope, method: method, params: params, crew: crew, preparedAt: Date(), firstMessageExecutor: firstMessageExecutor)
         try Self.immutableWrite(encoder.encode(record), to: directory.appendingPathComponent("prepared").appendingPathComponent(record.id.uuidString.lowercased() + ".json"))
         return record
     }

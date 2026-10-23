@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 新建聊天及机器选择完整模块接受
+
+最终源码 `c4b87253d6b37ce17ee43f026752a8f0ddcbea82`（基于1cc4664d，13路径）clean 冻结。独立 SOURCE-QA、CREATION-SEAM-QA 与 GUI-QA 受领；原生产切片16断言 compile/run0，覆盖原首消息事务、选定执行器/快照、旧记录解码、Unknown 不重发、拒绝后原消息重试、同 authority 父机组、草稿保留及目录/机器身份。普通 Debug iOS Simulator arm64 BUILD SUCCEEDED/exit0；后续 c4b87253 相对 cf2942e6 仅删除 macOS 顶部 Text(draft.title)，共享结果复用。Rust、schema、普通 project/构建配置零净变更。
+
+最终暖 Mac 构建0，质量线正常退出旧私有90727/Core90732后，新App93515实际画面通过。根亲看 `final-title-fixed.png`：精确两行侧栏提示、无待发送占位、原聊天Composer、五项自适应配置、页内与左下角固定 emoji 机器菜单、无顶部重复名称；Send disabled，未发送任务。实际本地菜单证明不等于真实跨机器切换；生产切片不等于 GUI Send 或真实模型。报告均在 `docs/private/preserved-delivery-artifacts/creation-chat-ui-independent-qa-20261023/`。保留最终开发窗口，日用32881/Core32904与F2来源不变；不为此重做normal、Release封包、签名或安装。
+
+私有开发期间两次注入异常原证据保留，最终接受来自正常退出后的完整暖构建，不宣称 hook 已唯一解决崩溃或所有 body 改动兼容。结构修改必须先结束被watch的私有App；实际开发源仍为 m6-client-20261014 树，整合不会迁移运行进程。稳定业务与 iOS 未影响范围按原证据复用，其余大工程门仍未完成。
+
 ## 2026-10-23 可选热更新完整模块实际接受
 
 最终净源码 `4a2d1de662fae5643cfd1e33011ed10cf8c9c7ac`、11路径。原d243源码门与eb9入口6项隔离检查复用，最终只增加根裁定的暖开发3GiB门槛及准确运行文档，不重跑稳定业务。独立 `swiftui-hotreload-independent-qa-20261023/RUNTIME-QA.json` 接受真实生产View保存与恢复，根全文受领并亲看 `module-fixed-after-save.png` / `module-fixed-after-restore.png`：同App76659/Core76666，消息selected1保持，文案实际来回更新；工具编译1409/1118ms及Rebound3成立，不冒精确屏幕总延迟。真实run端到端0，第二次run实际复用当前实例0，无新build或duplicate。最终源码clean，临时文案逐字恢复，已具备整个可选开发模块的整合资格。

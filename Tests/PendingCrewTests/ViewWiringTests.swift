@@ -13,6 +13,41 @@ import XCTest
 /// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
 final class ViewWiringTests: XCTestCase {
 
+    func testFirstSendRecoveryReadsOldRecordAndPreservesChosenExecutor() throws {
+        let old = Data(#"{"draftId":"pending-old","title":"原名称","text":"首条具体事项"}"#.utf8)
+        let oldRecord = try JSONDecoder().decode(PendingCrewRecoveryStore.Record.self, from: old)
+        XCTAssertNil(oldRecord.executor)
+        XCTAssertEqual(oldRecord.text, "首条具体事项")
+        var chosen = oldRecord
+        chosen.executor = "claude"
+        let reopened = try JSONDecoder().decode(PendingCrewRecoveryStore.Record.self, from: JSONEncoder().encode(chosen))
+        XCTAssertEqual(reopened.executor, "claude")
+        XCTAssertEqual(reopened.title, oldRecord.title)
+        XCTAssertEqual(reopened.text, oldRecord.text)
+    }
+
+    @MainActor
+    func testFirstMessageJournalMetadataSurvivesReopenWithoutChangingWire() throws {
+        let params: CrewdValue = .object(["command": .object([
+            "operation": .string("crew.createFirstMessage"),
+            "params": .object(["crew": .object(["title": .string("原名称"), "parentId": .string("parent-a"), "workingDirectory": .string("/work/a")]), "text": .string("首条具体事项")])])])
+        let scope = CrewdPresentationJournal.Scope(namespace: UUID(), localDirectory: nil,
+            authorityID: "authority-a", databaseID: "db-a", grantID: "grant-a", grantRevision: "1")
+        let record = CrewdPresentationJournal.Prepared(format: 1, id: UUID(), scope: scope,
+            method: "command.submit", params: params, crew: "", preparedAt: Date(), firstMessageExecutor: "claude")
+        let encoded = try JSONEncoder().encode(record)
+        let reopened = try JSONDecoder().decode(CrewdPresentationJournal.Prepared.self, from: encoded)
+        XCTAssertEqual(reopened.firstMessageExecutor, "claude")
+        XCTAssertEqual(reopened.params, params)
+        XCTAssertEqual(reopened.scope, scope)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "firstMessageExecutor")
+        let old = try JSONDecoder().decode(CrewdPresentationJournal.Prepared.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(old.firstMessageExecutor)
+        XCTAssertEqual(old.params, params)
+    }
+
+
     func testAdmissionRecoveryIsReachableInBothInspectorModes() throws {
         let window = try Self.text(of: "CrewSessionWindowView.swift")
         func section(_ start: String, before end: String) throws -> String {
@@ -246,8 +281,8 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("private var pendingRollbackGuard = PendingCrewRollbackGuard()"))
         XCTAssertTrue(store.contains("pendingRollbackGuard.record(error)"))
         XCTAssertTrue(store.contains("if pendingRollbackGuard.isBlocked"))
-        XCTAssertTrue(store.contains("guard !pendingRollbackGuard.isBlocked else { return }"))
-        XCTAssertTrue(store.contains("pendingCrewDelivery == nil && !pendingRollbackGuard.isBlocked"))
+        XCTAssertTrue(store.contains("pendingCrewRollbackError != nil || pendingRollbackGuard.isBlocked"))
+        XCTAssertTrue(store.contains("guard !pendingCrewConfigurationLocked else { return }"))
     }
 
     func testCrewStoreRestoresDurableFirstMessageOutboxAfterRestart() throws {
@@ -501,7 +536,9 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertFalse(beginBody.contains("createDirectory(at:"))
         XCTAssertFalse(beginBody.contains("postCrewMessage("))
         XCTAssertTrue(beginBody.contains("func discardPendingCrew()"))
-        XCTAssertTrue(store.contains("if let pendingCrew, id != pendingCrew.id, !pendingCrewSending"))
+        let selection = try Self.requiredSection(store, "func selectCrew(", "/// Repeated clicks")
+        XCTAssertFalse(selection.contains("self.pendingCrew = nil"), "Unsent text must survive navigation; plus returns to the same draft.")
+        XCTAssertTrue(store.contains("crewdWorkspace?.originalPendingCrewDraft = draft"))
         XCTAssertTrue(store.contains("pendingFirstSend = PendingCrewFirstSend()"))
         XCTAssertTrue(store.contains("machineId: nil,"),
                       "Mac 本地草稿应使用本机机器，旧跨机器入口不应偷偷继承")

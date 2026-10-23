@@ -2,12 +2,6 @@ import Foundation
 import SwiftUI
 import Combine
 
-struct PendingCrewDraft: Equatable {
-    let id: String
-    let title: String
-    let parentCrewId: String?
-    var workingDirectory: String?
-}
 
 private enum PendingCrewCommitError: LocalizedError {
     case noSubject
@@ -227,6 +221,7 @@ final class CrewStore: ObservableObject {
         lastWhiteboardMessages = [:]; humanTodoAttention = [:]
         // Unknown payloads belong to their retained workspace/journal, not the new authority.
         pendingCrew = nil; pendingCrewSending = false; pendingCrewDelivery = nil
+        // The old workspace retains its input for read-only original-connection review.
     }
 
     var usesCrewdAuthority: Bool { appModel.usesCrewdAuthority }
@@ -250,11 +245,7 @@ final class CrewStore: ObservableObject {
     // MARK: - Selection
 
     func selectCrew(_ id: String?) {
-        if let pendingCrew, id != pendingCrew.id, !pendingCrewSending,
-           pendingCrewDelivery == nil && !pendingRollbackGuard.isBlocked {
-            self.pendingCrew = nil
-            pendingFirstSend = PendingCrewFirstSend()
-        }
+        // Leaving an unsent chat keeps its input; the plus returns to this draft.
         // 人自己换群 = 他走开了 —— 那条返回路作废（见 `CrewChatReturnTrail.clear`）。
         // **引用胶囊的跳转走的也是这个方法**，所以要一个显式的「这次是跳转」标记：
         // 分不开的话，第一次跳转就会把自己刚压上去的那一层清掉，返回件当场消失。
@@ -286,6 +277,18 @@ final class CrewStore: ObservableObject {
             return
         }
         if pendingCrewRollbackError != nil { return }
+        if pendingCrew == nil, let workspace = crewdWorkspace {
+            // Only explicit plus-navigation can recover unsent input from an exact
+            // same authority/database/grant scope. Uncertain originals stay read-only.
+            if workspace.originalPendingCrewDraft == nil, let scope = workspace.presentationScope,
+               let old = appModel.crewdWindow.retainedWorkspaces.reversed().first(where: {
+                   $0.presentationScope == scope && $0.originalPendingCrewDraft != nil
+                       && $0.originalFirstMessages.isEmpty && !$0.hasOriginalUnknown(method: "crew.create", crew: "")
+               }) {
+                workspace.originalPendingCrewDraft = old.originalPendingCrewDraft
+            }
+            pendingCrew = workspace.originalPendingCrewDraft
+        }
         if let pendingCrew {
             selectedCrewId = pendingCrew.id
             return
@@ -307,19 +310,31 @@ final class CrewStore: ObservableObject {
         pendingDeliveryOutcome = nil
         pendingDeliveryText = nil
         pendingCrew = draft
+        crewdWorkspace?.originalPendingCrewDraft = draft
         selectedCrewId = draft.id
     }
 
+    var pendingCrewConfigurationLocked: Bool {
+        if pendingCrewSending || pendingCrewDelivery != nil || pendingCrewRollbackError != nil || pendingRollbackGuard.isBlocked { return true }
+        guard let draft = pendingCrew, let workspace = crewdWorkspace else { return false }
+        return workspace.originalFirstMessages.contains { $0.draftID == draft.id && ($0.phase != .refused || $0.crewID != nil) }
+    }
+
+    func editPendingCrew(_ edit: (inout PendingCrewDraft) -> Void) {
+        guard var draft = pendingCrew, !pendingCrewConfigurationLocked else { return }
+        edit(&draft)
+        pendingCrew = draft
+        crewdWorkspace?.originalPendingCrewDraft = draft
+    }
+
     func setPendingWorkingDirectory(_ path: String?) {
-        guard var pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil,
-              !pendingRollbackGuard.isBlocked else { return }
-        pendingCrew.workingDirectory = path
-        self.pendingCrew = pendingCrew
+        editPendingCrew { $0.workingDirectory = path?.isEmpty == false ? path : nil }
     }
 
     func discardPendingCrew() {
-        guard !pendingRollbackGuard.isBlocked else { return }
+        guard !pendingCrewConfigurationLocked else { return }
         guard let pendingCrew, !pendingCrewSending, pendingCrewDelivery == nil else { return }
+        if crewdWorkspace?.originalPendingCrewDraft?.id == pendingCrew.id { crewdWorkspace?.originalPendingCrewDraft = nil }
         self.pendingCrew = nil
         pendingFirstSend = PendingCrewFirstSend()
         if selectedCrewId == pendingCrew.id { selectedCrewId = nil }
@@ -331,20 +346,33 @@ final class CrewStore: ObservableObject {
     /// start its captain only after qualifying the actual confirmed new crew.
     private func commitCrewdPendingCrew(_ text: String, draftID: String) async throws {
         guard let draft = pendingCrew, draft.id == draftID, !pendingCrewSending,
-              let workspace = crewdWorkspace else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
+              let workspace = crewdWorkspace, workspace.originalPendingCrewDraft?.id == draftID else { throw CrewdClientError(message: "尚未连接原后台。", kind: .notSubmitted) }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CrewdClientError(message: "请填写机组名称。", kind: .notSubmitted)
+        }
+        if let parent = draft.parentCrewId, !crews.contains(where: { $0.id == parent }) {
+            throw CrewdClientError(message: "父机组不在当前电脑的可读列表中，请重新选择。", kind: .notSubmitted)
+        }
         guard let directory = draft.workingDirectory, !directory.isEmpty else {
             throw CrewdClientError(message: "请先选择这个机组的实际工作目录。", kind: .notSubmitted)
         }
         if workspace.hasOriginalUnknown(method: "crew.create", crew: "") || workspace.originalFirstMessages.contains(where: { $0.draftID == draftID && $0.phase == .unknown }) {
             throw CrewdClientError(message: "此前创建或首条消息结果未确认。请只读核对原连接；不会自动重发或删除机组。", kind: .notSubmitted)
         }
-        pendingCrewSending = true; defer { pendingCrewSending = false }
         let existing = workspace.originalFirstMessages.last { $0.draftID == draftID && $0.phase == .refused && $0.crewID != nil }
+        if let original = existing {
+            guard original.title == draft.title, original.directory == directory,
+                  original.parentCrewId == draft.parentCrewId, original.executor == draft.executor,
+                  original.text == text else {
+                throw CrewdClientError(message: "只能重试原机组的原首条消息；原名称、目录、父机组和 coding agent 已冻结。", kind: .notSubmitted)
+            }
+        }
+        pendingCrewSending = true; defer { pendingCrewSending = false }
         let recordID = UUID()
         workspace.originalFirstMessages.append(.init(id: recordID, draftID: draftID, title: draft.title,
-            directory: directory, text: text, crewID: existing?.crewID, phase: .creating))
+            directory: directory, text: text, parentCrewId: draft.parentCrewId, executor: draft.executor, crewID: existing?.crewID, phase: .creating))
         func update(_ phase: CrewdWorkspace.OriginalFirstMessage.Phase, crew: String? = nil, failure: String? = nil) {
             guard let index = workspace.originalFirstMessages.firstIndex(where: { $0.id == recordID }) else { return }
             workspace.originalFirstMessages[index].phase = phase
@@ -353,7 +381,7 @@ final class CrewStore: ObservableObject {
         }
         do {
             let crewID: String
-            if workspace.client.capabilities.contains("command.receipts") {
+            if workspace.client.capabilities.contains("command.receipts"), existing == nil {
                 var fields: [String: CrewdValue] = ["title": .string(draft.title), "workingDirectory": .string(directory)]
                 if let parent = draft.parentCrewId { fields["parentId"] = .string(parent) }
                 let receipt = try await workspace.submitPublicCommand(.firstMessage,
@@ -366,9 +394,9 @@ final class CrewStore: ObservableObject {
                 }
                 update(.accepted, crew: actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-                await workspace.startCaptainForCreatedCrew(actual, executor: "codex")
+                await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-                pendingCrew = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
+                pendingCrew = nil; workspace.originalPendingCrewDraft = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
                 await refreshList(); await refreshDetail(actual)
                 return
             }
@@ -384,9 +412,9 @@ final class CrewStore: ObservableObject {
             _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
             update(.accepted)
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-            await workspace.startCaptainForCreatedCrew(crewID, executor: "codex")
+            await workspace.startCaptainForCreatedCrew(crewID, executor: draft.executor)
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-            pendingCrew = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
+            pendingCrew = nil; workspace.originalPendingCrewDraft = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
             await refreshList(); await refreshDetail(crewID)
         } catch {
             update(CrewdClientError.isUncertainSubmission(error) ? .unknown : .refused, failure: error.localizedDescription)
@@ -415,15 +443,16 @@ final class CrewStore: ObservableObject {
         guard pendingCrew?.id == draft.id else { throw CancellationError() }
         guard let subjectId = subjects.first?.id else { throw PendingCrewCommitError.noSubject }
 
-        let savedKind = UserDefaults.standard.string(forKey: "pendingcrew.lastCaptainAgentKind")
-        let captainKind = ["codex", "claude_code"].contains(savedKind ?? "")
-            ? savedKind! : "codex"
+        guard ["codex", "claude"].contains(draft.executor) else {
+            throw PendingCrewBackendError.invalidConfig("此连接不支持所选 coding agent；不会切换到其他执行器。")
+        }
+        let captainKind = draft.executor == "claude" ? "claude_code" : "codex"
         let root = Self.defaultCrewGroundRoot
         var recovery = PendingCrewRecoveryStore.Record(
             draftId: draft.id, title: draft.title, parentCrewId: draft.parentCrewId,
             selectedDirectory: draft.workingDirectory,
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
-            crewId: nil, workingDirectory: nil)
+            crewId: nil, workingDirectory: nil, executor: draft.executor)
         do {
             try pendingRecovery.save(recovery)
             let outcome = try await pendingFirstSend.commit(
@@ -551,7 +580,8 @@ final class CrewStore: ObservableObject {
             let draft = PendingCrewDraft(
                 id: record.draftId, title: record.title,
                 parentCrewId: record.parentCrewId,
-                workingDirectory: record.selectedDirectory)
+                workingDirectory: record.selectedDirectory,
+                executor: record.executor ?? "codex", firstMessage: record.text)
             pendingCrew = draft
             selectedCrewId = draft.id
             if let crewId = record.crewId,

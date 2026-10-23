@@ -14,6 +14,10 @@ struct CrewdRemoteRetainedInputs: View {
     @State private var showing: CrewdRetainedInput?
     private var inputs: [CrewdRetainedInput] {
         var rows: [CrewdRetainedInput] = []
+        if let draft = workspace.originalPendingCrewDraft {
+            rows.append(.init(id: "new-chat-" + draft.id, title: "新机组草稿 · " + draft.title,
+                text: "原作用域：" + workspace.presentationNamespace + "\n名称：" + draft.title + "\n工作目录：" + (draft.workingDirectory ?? "尚未选择") + "\n父机组：" + (draft.parentCrewId ?? "无") + "\ncoding agent：" + draft.executor + "\n\n" + draft.firstMessage))
+        }
         for unknown in workspace.durableUnknown {
             rows.append(.init(id: "durable-" + unknown.id.uuidString,
                 title: unknown.method + " · 原提交结果待确认",

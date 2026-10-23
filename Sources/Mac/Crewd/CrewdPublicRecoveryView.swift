@@ -28,6 +28,9 @@ struct CrewdPublicRecoveryView: View {
                     Text(record.params["requestId"].string ?? "缺少请求身份").font(.caption).textSelection(.enabled)
                     DisclosureGroup("原作用域与内容") {
                         Text(record.params.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        if record.params["command"]["operation"].string == "crew.createFirstMessage" {
+                            Text("原选 coding agent：" + (record.firstMessageExecutor ?? "codex") + "（仅供核对，不自动启动）").font(.caption)
+                        }
                     }
                     if let id, let receipt = found[id] {
                         Text("后台阶段：\(receipt.phase.rawValue)\(receipt.historical ? " · 历史实例" : "")")
