@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 聊天与文档去噪开发界面接受
+
+产品源 `b9d38dd9d8091a7dc2a51621a091691397127408`，4 文件 23增/15删。独立净源复核仅发现刷新保留 loaded 旧值时可能过早显示空结论，已最窄排除 loading/reading/两处 failure；原权限、Unknown、非空正文/滚动、Save/Join 闭包与 iOS 标题路径不变。单次原暖 Debug 构建 owner65965/exit0，复用准确 e1 normal helper，正常打开同私域 C App64638/Core64640。`ui-refinement-review-20261024-2/FINAL-VISUAL-QA.json` 接受 900 点浅色聊天/文档实图与范围/类型菜单开闭，根全文读并亲看前后图，C 留在消息页。未注入其他 client、未改日用、未重建 Rust/普通包/iOS或重跑稳定业务，也不扩大为其他尺寸/业务写入通过。
+
+Linux 构建配方源码另存 `90888477`：3 项原有离线控制、13 拒绝场景独验通过，实际 Actions/ELF/当前 Linux 产物均未执行或验收。实际交付仍为 Mac e1/20749.74290、手机 cce/20749.76893；手机首开锁屏与其他外部前提沿原事实保留。
+
 ## 2026-10-24 cce 当前真机候选及实际安装接受，首开未通过
 
 候选源 `cce3204d38dae7d7b76c903387f993a07045917c`，iPhoneOS27/arm64/DEBUG，M42 BF947 Development及a081 profile含原登记设备。实际 **0.1.44/20749.76893**，1953Git/blob/mode、404目标与3878依赖精确，53App/ZIP/IPA字节相同，94最终封存及14外部绑定独验接受。COMBINATION SHA `e82f2161143a24ec7478a1602d360eebf8b9bd17ab430f308b33afb09ed782e8`，manifest SHA `3ba11dabae187da67161924faa1cf7bdb0ab88e57bb21b0ce2ebbe39598707f2`。根完整读取最终独验与具体动作。原Local恢复0644、三旧wholeZIP与C114项均保全；无内嵌crewd、不重normal/Mac/稳定业务，未将旧P或e1证明改标。版本优先级已知红证据95024保留，实际90564与一次build83444通过，两非签名CLI的SPM资源版本影响入证。
