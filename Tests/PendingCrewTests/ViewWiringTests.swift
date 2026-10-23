@@ -13,6 +13,38 @@ import XCTest
 /// 加新零件时的规矩：如果它是「用户能看见的东西的入口」，在下面 `wirings` 里加一行。
 final class ViewWiringTests: XCTestCase {
 
+    func testPendingDirectoryNamePreservesTheOriginalAuthorityPath() {
+        var draft = PendingCrewDraft(id: "pending-path", title: "", parentCrewId: nil,
+            workingDirectory: "/srv/remote/home/CrewGround/Oslo/")
+        XCTAssertEqual(draft.directoryName, "Oslo")
+        XCTAssertEqual(draft.workingDirectory, "/srv/remote/home/CrewGround/Oslo/")
+        draft.workingDirectory = "/srv/../other/work folder"
+        XCTAssertEqual(draft.directoryName, "work folder")
+        XCTAssertEqual(draft.workingDirectory, "/srv/../other/work folder")
+        draft.workingDirectory = "/"
+        XCTAssertEqual(draft.directoryName, "/")
+        draft.workingDirectory = nil
+        XCTAssertEqual(draft.directoryName, "")
+        XCTAssertTrue(draft.title.isEmpty)
+    }
+
+    func testOnlyFirstMessageAcceptsAnUnspecifiedWorkingDirectory() throws {
+        let binding: CrewdValue = .object(["dbId": .string("db-default"), "runtimeBindingId": .string(UUID().uuidString)])
+        let crew: CrewdValue = .object(["title": .string("Oslo")])
+        let original = try CrewdPublicCommandEnvelope(request: UUID(), binding: binding,
+            operation: .firstMessage, params: .object(["crew": crew, "text": .string("具体事项")]))
+        XCTAssertEqual(original.params["crew"]["workingDirectory"], .null)
+        XCTAssertEqual(original.params["crew"]["parentId"], .null)
+        XCTAssertEqual(original.params["crew"]["title"], .string("Oslo"))
+        XCTAssertThrowsError(try CrewdPublicCommandEnvelope(request: UUID(), binding: binding,
+            operation: .crewCreate, params: crew))
+        let explicit: CrewdValue = .object(["title": .string("Custom"), "workingDirectory": .string("/remote/work folder")])
+        let selected = try CrewdPublicCommandEnvelope(request: UUID(), binding: binding,
+            operation: .firstMessage, params: .object(["crew": explicit, "text": .string("原文")]))
+        XCTAssertEqual(selected.params["crew"]["workingDirectory"], .string("/remote/work folder"))
+    }
+
+
     func testFirstSendRecoveryReadsOldRecordAndPreservesChosenExecutor() throws {
         let old = Data(#"{"draftId":"pending-old","title":"原名称","text":"首条具体事项"}"#.utf8)
         let oldRecord = try JSONDecoder().decode(PendingCrewRecoveryStore.Record.self, from: old)

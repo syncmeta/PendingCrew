@@ -53,4 +53,10 @@ struct PendingCrewDraft: Equatable {
     var workingDirectory: String?
     var executor: String = "codex"
     var firstMessage: String = ""
+
+    /// Paths on a remote authority stay opaque strings, never local filesystem URLs.
+    var directoryName: String {
+        guard let path = workingDirectory, !path.isEmpty else { return "" }
+        return path.split(separator: "/").last.map(String.init) ?? "/"
+    }
 }

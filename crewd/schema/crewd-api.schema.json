@@ -6733,11 +6733,37 @@
       ],
       "type": "string"
     },
+    "FirstMessageCrewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "parentId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "workingDirectory": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
     "FirstMessageParams": {
       "additionalProperties": false,
       "properties": {
         "crew": {
-          "$ref": "#/$defs/CrewCreateParams"
+          "$ref": "#/$defs/FirstMessageCrewParams"
         },
         "text": {
           "type": "string"

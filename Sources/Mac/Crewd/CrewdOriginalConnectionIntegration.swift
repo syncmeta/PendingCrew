@@ -306,9 +306,6 @@ struct CrewdMachinePicker: View {
             .first { $0.dataDirectory != nil }
         return "computer/" + (local?.authorityRecordID.uuidString.lowercased() ?? "local-unconnected")
     }
-    private func emoji(_ seed: String) -> String {
-        CrewColorHash.emoji(for: seed + "/first") + CrewColorHash.emoji(for: seed + "/second")
-    }
     private var localSelected: Bool { window.workspace?.dataDirectory != nil }
     private var currentName: String {
         if localSelected { return "本机" }
@@ -316,43 +313,91 @@ struct CrewdMachinePicker: View {
         return "尚未连接"
     }
     private var currentSeed: String { localSelected || window.selected == nil ? localSeed : "computer/" + window.selected!.uuidString.lowercased() }
-    private var connected: Bool { window.workspace?.client.readyForWork == true }
-
+    // Preserve the existing SwiftUI avatar as an original-colour native button image.
+    private var machineAvatar: NSImage {
+        let renderer = ImageRenderer(content: BotAvatar(seed: currentSeed, size: 26))
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage ?? NSImage(size: NSSize(width: 26, height: 26))
+    }
     var body: some View {
-        Menu {
-            Button(emoji(localSeed) + " 本机" + (localSelected ? (connected ? " · 已连接" : " · 已选，未连接") : " · 本地工作区")) {
-                Task { await model.connectCrewdAuthority() }
-            }
-            .disabled(model.connectingAuthority || crewStore.pendingCrewSending)
-            ForEach(window.computers.filter(\.paired)) { computer in
-                Button(emoji("computer/" + computer.id.uuidString.lowercased()) + " " + computer.name
-                    + (window.selected == computer.id ? (connected ? " · 已连接" : " · 已选，未连接") : " · 已配对")) {
-                    Task { await model.connectCrewdAuthority(computerID: computer.id) }
-                }.disabled(model.connectingAuthority || crewStore.pendingCrewSending || window.credentialBusy)
-            }
-            Divider()
-            switch window.computerListState {
-            case .notLoaded: Text("已存电脑尚未读取")
-            case .loaded: if window.computers.filter(\.paired).isEmpty { Text("没有已配对的远程电脑") }
-            case .failed: Text("已存电脑读取失败；未切换连接")
-            }
-            Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy || model.connectingAuthority)
-            Button("电脑与连接设置…") { window.showingConnectionSettings = true }
-        } label: {
-            HStack(spacing: 8) {
-                Text(emoji(currentSeed)).font(.system(size: 20))
-                Text(currentName).lineLimit(1)
-                Spacer(minLength: 2)
-                if model.connectingAuthority { ProgressView().controlSize(.mini) }
-                else { Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .accessibilityLabel("机器：" + currentName + (connected ? "，已连接" : "，未连接"))
-        .help("选择当前工作电脑；配对与连接管理在设置中。")
+        CrewdMachineMenuButton(name: currentName, avatar: machineAvatar,
+            ready: window.workspace?.client.readyForWork == true && !model.connectingAuthority,
+            enabled: !model.connectingAuthority && !crewStore.pendingCrewSending,
+            choices: [.init(name: "本机", enabled: true, action: { Task { await model.connectCrewdAuthority() } })]
+                + window.computers.filter(\.paired).map { computer in
+                    .init(name: computer.name, enabled: !window.credentialBusy,
+                          action: { Task { await model.connectCrewdAuthority(computerID: computer.id) } })
+                })
+        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
+        .task { if window.computerListState == .notLoaded { await window.refresh() } }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
+    }
+}
+
+/// The visible native button owns the entire row and opens the native names-only
+/// menu. AppKit's borderless Menu style otherwise centres and compresses its label.
+private struct CrewdMachineMenuButton: NSViewRepresentable {
+    struct Choice {
+        let name: String
+        let enabled: Bool
+        let action: () -> Void
+    }
+    let name: String
+    let avatar: NSImage
+    let ready: Bool
+    let enabled: Bool
+    let choices: [Choice]
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.setButtonType(.momentaryPushIn)
+        button.isBordered = false
+        button.imagePosition = .imageLeft
+        button.imageHugsTitle = false
+        button.imageScaling = .scaleNone
+        button.alignment = .left
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.openMenu(_:))
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.choices = choices
+        button.image = avatar
+        button.isEnabled = enabled
+        let title = NSMutableAttributedString(string: "   " + name,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor])
+        title.append(NSAttributedString(string: "    ⌄  ",
+            attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor]))
+        title.append(NSAttributedString(string: "●",
+            attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: ready ? NSColor.systemGreen : NSColor.systemRed]))
+        button.attributedTitle = title
+        button.setAccessibilityLabel("机器：" + name)
+        button.setAccessibilityValue(ready ? "已连接" : "未连接")
+        button.toolTip = name + (ready ? " · 已连接" : " · 未连接")
+    }
+    final class Coordinator: NSObject {
+        var choices: [Choice] = []
+        private var menuChoices: [Choice] = []
+        @objc func openMenu(_ button: NSButton) {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            menuChoices = choices
+            for (index, choice) in menuChoices.enumerated() {
+                let item = NSMenuItem(title: choice.name, action: #selector(selectMachine(_:)), keyEquivalent: "")
+                item.target = self; item.tag = index; item.isEnabled = choice.enabled
+                menu.addItem(item)
+            }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+        }
+        @objc func selectMachine(_ item: NSMenuItem) {
+            guard menuChoices.indices.contains(item.tag), menuChoices[item.tag].enabled else { return }
+            menuChoices[item.tag].action()
+        }
     }
 }
 

@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 默认目录、机器栏和演示最终接受
+
+产品源 `2a1d0022c20d770a68dbc6e87f61fbc453256efc` clean；默认11+none2生产切片、后端7+wire1目标门接受，原已验业务不重跑。最后两轮只有头像 palette/原生机器按钮与顶部重复状态行净变更，Mac暖构建0，ROOT亲看 avatar-final.png 与 footer-final.png，独立 FOOTER-FINAL-QA 绑定最终源。App21596/Core21604实际左排浅圆单emoji/加宽间距/稍粗名称/箭头后ready绿点，顶部重复机标无；名称-only菜单正常开闭。断连红色及 client变更转发仅源核，不称实际断连。目录 basename/focus完整路径、空值及占位文字已有原实图，复用不重复。
+
+新开发 Core 冻源1708629e，116427696B、SHA `6ea58be4064e0ca3d1af6f5e75a903daa94c5d3c089afb44f1c683ec8947e7ea`；compiler准确绑定、strict签名0、pure schema全JSON==checked且空stderr。最终组合crewd字节同该源，普通API3/149/Store21；仅Debug开发输入，未冒完整产品normal/Release/iOS新验收或安装。run记录精确不可变输入与SHA，实际无参复用原实例0。日用32881/Core32904、工具53720保留。
+
+正式演示crew-354ac858ff3d408c818bd2c9575086d9、“PendingCrew 功能演示”，实际cwd `~/CrewGround/PendingCrew-Demo`；唯一firstMessage committed、Human说明1条、三条human work链接事件，重开后sessions0/native receipts0。文件导览与manifest独立存在；原生文档未初始化/保存disabled，未创建，不冒静态文件为数据库文档。旧首消息保留，后来的文案净修改只更新文件导览，不重放原请求。最终数据门与截图在原 creation-chat-ui-independent-qa-20261023/，本地文件最终清单在 firstmessage-default-workspace-20261023/DEMO-FILES-FINAL.json。
+
+三批7个旧Rust增量缓存仅按明确清单删除，三份receipt累计观察增量4,636,672,000B；原源/二进制/证明哈希不变，DD/SPM/SDK未动。另核机长整理为旧前端未接新版：旧算法是活动基础序+机长覆盖序，不分类/不改层级；新crewd已删除该工具且请求入口拒绝，故本轮不称智能整理已应用，排序源码未改。
+
 ## 2026-10-23 新建聊天及机器选择完整模块接受
 
 最终源码 `c4b87253d6b37ce17ee43f026752a8f0ddcbea82`（基于1cc4664d，13路径）clean 冻结。独立 SOURCE-QA、CREATION-SEAM-QA 与 GUI-QA 受领；原生产切片16断言 compile/run0，覆盖原首消息事务、选定执行器/快照、旧记录解码、Unknown 不重发、拒绝后原消息重试、同 authority 父机组、草稿保留及目录/机器身份。普通 Debug iOS Simulator arm64 BUILD SUCCEEDED/exit0；后续 c4b87253 相对 cf2942e6 仅删除 macOS 顶部 Text(draft.title)，共享结果复用。Rust、schema、普通 project/构建配置零净变更。

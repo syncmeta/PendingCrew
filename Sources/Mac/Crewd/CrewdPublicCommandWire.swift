@@ -240,7 +240,13 @@ private enum CrewdPublicParameters {
         case .crewCreate: required = ["title", "workingDirectory"]; defaults = ["parentId": .null]
         case .firstMessage:
             required = ["crew", "text"]
-            fields["crew"] = try canonical(.crewCreate, fields["crew"] ?? .null)
+            guard case .object(var crew) = fields["crew"], crew["title"] != nil,
+                  Set(crew.keys).isSubset(of: ["title", "workingDirectory", "parentId"]) else { throw CrewdPublicWire.invalid() }
+            if crew["workingDirectory"] == nil || crew["workingDirectory"] == .null {
+                crew["workingDirectory"] = .null
+                if crew["parentId"] == nil { crew["parentId"] = .null }
+                fields["crew"] = .object(crew)
+            } else { fields["crew"] = try canonical(.crewCreate, .object(crew)) }
         case .messagePost:
             required = ["channelId", "text"]; defaults = ["inReplyTo": .null, "mentions": .array([]), "attachments": .array([])]
             if let mentions = fields["mentions"] {

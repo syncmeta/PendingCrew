@@ -38,7 +38,8 @@ enum ColorHash {
     /// rather than competing with the brand accent.
     static func softBackground(for seed: String) -> Color {
         let h = hue(for: seed)
-        return Color(hue: h, saturation: 0.22, brightness: 0.94)
+        // PendingCrew palette difference lives in the adapter, not the vendored identity algorithm.
+        return CrewAvatarPalette.softBackground(hue: h)
     }
 
     static func initial(for name: String) -> String {

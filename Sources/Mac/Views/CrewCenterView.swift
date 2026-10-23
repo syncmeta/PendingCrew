@@ -207,6 +207,7 @@ private struct PendingCrewChatView: View {
     @Environment(\.colorScheme) private var scheme
     let draft: PendingCrewDraft
     @State private var error: String?
+    @FocusState private var editingDirectory: Bool
 
     private func input(_ key: WritableKeyPath<PendingCrewDraft, String>) -> Binding<String> {
         Binding(get: {
@@ -221,7 +222,6 @@ private struct PendingCrewChatView: View {
     private var locked: Bool { crewStore.pendingCrewConfigurationLocked }
     private var canSend: Bool {
         !locked && !draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -242,7 +242,7 @@ private struct PendingCrewChatView: View {
                     photoItems: .constant([]), cameraImage: .constant(nil),
                     showFileImporter: .constant(false), showPhotoPicker: .constant(false), showCamera: .constant(false),
                     canSend: canSend, onSend: send,
-                    showsAttachments: false, placeholder: "发消息以开始")
+                    showsAttachments: false, placeholder: "发消息以新建机组")
                     .disabled(locked)
                     .accessibilityIdentifier("pending-crew-composer")
             }
@@ -258,9 +258,11 @@ private struct PendingCrewChatView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) {
             field("目录") {
                 HStack(spacing: 4) {
-                    TextField(crewStore.usesCrewdAuthority ? "完整工作目录" : "~/CrewGround/\(draft.title)", text: Binding(
-                        get: { draft.workingDirectory ?? "" }, set: { crewStore.setPendingWorkingDirectory($0) }))
-                        .textFieldStyle(.plain).help(draft.workingDirectory ?? "所连接电脑上的完整工作目录")
+                    TextField("未指定", text: Binding(
+                        get: { editingDirectory ? (draft.workingDirectory ?? "") : draft.directoryName },
+                        set: { if editingDirectory { crewStore.setPendingWorkingDirectory($0) } }))
+                        .focused($editingDirectory).onSubmit { editingDirectory = false }
+                        .textFieldStyle(.plain).help(draft.workingDirectory ?? "未指定")
                         .accessibilityLabel("工作目录")
                     if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
                         Button { chooseDirectory() } label: { Image(systemName: "folder") }
@@ -268,11 +270,12 @@ private struct PendingCrewChatView: View {
                     }
                 }
             }
-            field("机组名称") { TextField("机组名称", text: input(\.title)).textFieldStyle(.plain).accessibilityLabel("机组名称") }
+            field("机组名称") { TextField("未指定", text: input(\.title)).textFieldStyle(.plain).accessibilityLabel("机组名称") }
             field("coding agent") {
                 Picker("coding agent", selection: input(\.executor)) {
                     Text("Codex").tag("codex")
                     Text("Claude Code").tag("claude")
+                    Text("暂不启动，稍后添加").tag("none")
                 }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
             }
             field("机器") {
@@ -287,7 +290,9 @@ private struct PendingCrewChatView: View {
                     }
                 }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.disabled(locked).padding(.horizontal, 18).padding(.top, 10)
+        }.disabled(locked)
+            .tint(Color(nsColor: .controlAccentColor)).foregroundStyle(.primary)
+            .padding(.horizontal, 18).padding(.top, 10)
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
