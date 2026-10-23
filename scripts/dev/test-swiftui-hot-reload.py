@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-GATE = ROOT / 'Sources/Development/PendingCrewHotReload.swift'
+GATE = ROOT / 'Development/PendingCrewHotReload.swift'
 with tempfile.TemporaryDirectory(prefix='pcw-hotreload-test-', dir='/private/tmp') as temporary:
     work = pathlib.Path(temporary)
     runner = work / 'main.swift'
@@ -47,6 +47,7 @@ spec = json.loads((ROOT / '.hotreload/project.json').read_text())
 assert spec['configs'] == {'Debug': 'debug'}
 assert list(spec['targets']) == ['PendingCrew']
 target = spec['targets']['PendingCrew']
+assert {'path': 'Development/PendingCrewHotReload.swift'} in target['sources']
 settings = target['settings']['configs']['Debug']
 assert settings['PRODUCT_BUNDLE_IDENTIFIER'] == 'com.pendingname.pendingcrew.hotreload'
 assert settings['CODE_SIGN_ENTITLEMENTS'] == ''

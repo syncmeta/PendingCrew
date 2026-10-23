@@ -29,6 +29,8 @@ def prepare():
     spec['configFiles'] = {'Debug': spec['configFiles']['Debug']}
     target = spec['targets']['PendingCrew']
     spec['targets'] = {'PendingCrew': target}
+    # Keep developer-only entry code outside the normal Sources auto-scan.
+    target['sources'].append({'path': 'Development/PendingCrewHotReload.swift'})
     spec['schemes'] = {'PendingCrew': {
         'build': {'targets': {'PendingCrew': 'all'}},
         'run': {'config': 'Debug', 'environmentVariables': {}},
