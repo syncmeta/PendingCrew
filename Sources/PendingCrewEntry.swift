@@ -40,6 +40,9 @@ struct PendingCrewEntry {
             return
         }
         #endif
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        guard MainActor.assumeIsolated({ PendingCrewHotReload.configureRuntime() }) else { return }
+        #endif
         #if os(iOS)
         #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC
         CrewdFrontendIsolation.prepare()
