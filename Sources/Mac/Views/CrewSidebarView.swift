@@ -47,7 +47,6 @@ struct CrewSidebarView: View {
         VStack(spacing: 0) {
             viewModePicker
             List {
-                if model.usesCrewdAuthority { activeHostHeader }
                 if let viewer = sessionHost.viewer {
                     BackendSidebarConnectionStatus(
                         client: viewer, decision: sessionHost.orchestrationDecision)
@@ -137,25 +136,6 @@ struct CrewSidebarView: View {
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
-    }
-
-    @ViewBuilder private var activeHostHeader:some View {
-        if let workspace=model.crewdWindow.workspace {
-            CrewdOriginalConnectionStatus(workspace:workspace,machineName:activeHostName)
-                .listRowInsets(EdgeInsets(top:6,leading:2,bottom:8,trailing:2))
-                .listRowSeparator(.hidden)
-        }else {
-            HStack(spacing:7){
-                Circle().fill(model.connectingAuthority ? Color.orange:Color.secondary.opacity(0.5)).frame(width:7,height:7)
-                Text(activeHostName).lineLimit(1)
-                Text(model.connectingAuthority ? "正在连接":"未连接").font(.caption).foregroundStyle(.secondary)
-            }.accessibilityElement(children:.combine)
-        }
-    }
-    private var activeHostName:String {
-        let window=model.crewdWindow
-        if let selected=window.selected,selected == window.workspace?.authorityRecordID,let computer=window.computers.first(where:{$0.id == selected}) {return computer.name}
-        return window.workspace?.dataDirectory == nil && window.workspace != nil ? "当前电脑":"本机"
     }
 
     // MARK: - 视图切换（层级 / 时间流）
