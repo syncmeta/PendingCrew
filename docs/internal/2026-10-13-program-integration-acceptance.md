@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 同排搜索按钮受影响范围接受
+
+冻源 `fd9b8f3854e96939422b9c291a2da1d9807d6fdb` clean，仅 `CrewCenterView` 与 `CrewdOriginalWorkIntegration` 两处 Mac UI 改动；原胶囊 Tab 与搜索按钮同排，常驻搜索框删除，范围/输入收进弹层。原查询/结果定位实现与后端未变。最终暖构建 exit0，App35247；根亲看900点同排图，独立实际当前群输入、全局静态结果、重复⌘F仍打开聚焦通过。最终一次结果点击无错误但未取得弹层关闭/原定位成功证据，保留为本轮未验证范围，不以观察限制确认产品缺陷；没有追加测试工具或重复全量业务。报告与截图沿原 `creation-chat-ui-independent-qa-20261023/`。
+
+本次没有业务写入或模型任务；日用App32881/Core32904与原InjectionNext53720保留。准确开发Core1708629e/SHA6ea58be4…947e7ea复用，不称新normal、Release、iOS运行或安装。磁盘不足仅按精确三目录清单回收旧incremental，实际增加1,152,503,808B，源码/保护二进制证明不变，未碰暖DD/SPM或降低构建门；原receipt保留。
+
 ## 2026-10-23 默认目录、机器栏和演示最终接受
 
 产品源 `2a1d0022c20d770a68dbc6e87f61fbc453256efc` clean；默认11+none2生产切片、后端7+wire1目标门接受，原已验业务不重跑。最后两轮只有头像 palette/原生机器按钮与顶部重复状态行净变更，Mac暖构建0，ROOT亲看 avatar-final.png 与 footer-final.png，独立 FOOTER-FINAL-QA 绑定最终源。App21596/Core21604实际左排浅圆单emoji/加宽间距/稍粗名称/箭头后ready绿点，顶部重复机标无；名称-only菜单正常开闭。断连红色及 client变更转发仅源核，不称实际断连。目录 basename/focus完整路径、空值及占位文字已有原实图，复用不重复。

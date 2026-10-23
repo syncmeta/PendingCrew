@@ -24,8 +24,23 @@ struct CrewCenterView: View {
     @State private var searchScope = CrewSearchScope.current
     @State private var searchQuery = ""
     @State private var searchTargetMessageId: String?
+    @State private var showingSearch = false
+    @FocusState private var searchFocused: Bool
 
+    private var hasWorkspaceHeader: Bool {
+        let editingDraft = crewStore.pendingCrew.map { crewStore.selectedCrewId == $0.id } ?? false
+        return !editingDraft && crewStore.selectedDetail != nil && model.crewdBackend?.workspace != nil
+    }
     var body: some View {
+        VStack(spacing: 0) {
+            if !hasWorkspaceHeader {
+                VStack(spacing: 0) {
+                    HStack { Spacer(minLength: 0); searchButton }
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .frame(minHeight: 54)
+                    Divider()
+                }
+            }
         Group {
             if let draft = crewStore.pendingCrew, crewStore.selectedCrewId == draft.id {
                 PendingCrewChatView(draft: draft).id(draft.id)
@@ -43,7 +58,7 @@ struct CrewCenterView: View {
                     },
                     showOnlyHumanMentions: $onlyMentions,
                     communicationView: $communicationView,
-                    searchQuery: $searchQuery,
+                    searchQuery: Binding(get: { searchScope == .current ? searchQuery : "" }, set: { searchQuery = $0 }),
                     searchTargetMessageId: $searchTargetMessageId,
                     // 引用胶囊的跳转（人类 Todo #132/#133）。真正动 store 的那几行
                     // 在这里 —— 中栏本来就订阅着它，群聊那棵子树不该为此被拉进订阅。
@@ -61,7 +76,8 @@ struct CrewCenterView: View {
                 // 掐掉草稿/回复目标跨群残留（在 A 群打一半的字出现在 B 群、可能误发）——
                 // 未发出的草稿由 `CrewComposerDraftStore` 按 crew 记着，切回来原样在。
                 .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id + "/" + personalService.projectionID.uuidString)
-                .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace))
+                .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace,
+                    searchControl: AnyView(searchButton)))
             } else if let id = crewStore.selectedCrewId, crewStore.loadingDetailIds.contains(id) {
                 ProgressView("正在读取机组…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -70,6 +86,7 @@ struct CrewCenterView: View {
             } else {
                 placeholder
             }
+        }
         }
         // 窗口使用透明 titlebar + fullSizeContentView。只给中栏标题后面铺一层
         // 与聊天画布相同的不透明底色，挡住滚到标题下面的消息；不改变整窗 toolbar
@@ -105,17 +122,6 @@ struct CrewCenterView: View {
         }
         .navigationTitle("")
 
-        .opacity(searchScope == .all ? 0:1)
-        .allowsHitTesting(searchScope != .all)
-        .accessibilityHidden(searchScope == .all)
-        .overlay {
-            if searchScope == .all {CrewGlobalSearchResults(query:searchQuery){searchScope = .current}}
-        }
-        .searchable(text:$searchQuery,placement:.toolbar,prompt:"搜索")
-        .searchScopes($searchScope){
-            Text("当前群").tag(CrewSearchScope.current)
-            Text("全局 · 当前电脑").tag(CrewSearchScope.all)
-        }
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
@@ -175,6 +181,42 @@ struct CrewCenterView: View {
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
+    }
+
+    private var searchButton: some View {
+        Button {
+            if crewStore.selectedDetail == nil { searchScope = .all }
+            showingSearch = true
+            searchFocused = true
+        } label: {
+            Image(systemName: searchScope == .current && !searchQuery.isEmpty ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(searchQuery.isEmpty ? "搜索" : "搜索 · " + searchScope.rawValue + "：" + searchQuery)
+        .accessibilityLabel("搜索")
+        .keyboardShortcut("f", modifiers: .command)
+        .popover(isPresented: $showingSearch, arrowEdge: .top) {
+            VStack(spacing: 12) {
+                Picker("搜索范围", selection: $searchScope) {
+                    Text("当前群").tag(CrewSearchScope.current)
+                    Text("全局 · 当前电脑").tag(CrewSearchScope.all)
+                }.pickerStyle(.segmented)
+                TextField("搜索", text: $searchQuery)
+                    .textFieldStyle(.roundedBorder).focused($searchFocused)
+                    .accessibilityLabel("搜索消息")
+                if searchScope == .all {
+                    CrewGlobalSearchResults(query: searchQuery) {
+                        searchScope = .current
+                        showingSearch = false
+                    }.frame(height: 360)
+                }
+            }
+            .padding(14).frame(width: 420)
+            .onAppear { searchFocused = true }
+        }
     }
 
     private func empty(_ text: String) -> some View {
