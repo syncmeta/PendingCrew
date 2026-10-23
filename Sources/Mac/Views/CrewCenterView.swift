@@ -275,6 +275,7 @@ private struct PendingCrewChatView: View {
                 Picker("coding agent", selection: input(\.executor)) {
                     Text("Codex").tag("codex")
                     Text("Claude Code").tag("claude")
+                    Text("暂不启动，稍后添加").tag("none")
                 }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
             }
             field("机器") {

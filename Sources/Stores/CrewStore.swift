@@ -388,7 +388,9 @@ final class CrewStore: ObservableObject {
                 }
                 update(.accepted, crew: actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-                await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor)
+                if draft.executor != "none" {
+                    await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor)
+                }
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 pendingCrew = nil; workspace.originalPendingCrewDraft = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
                 await refreshList(); await refreshDetail(actual)
@@ -406,7 +408,9 @@ final class CrewStore: ObservableObject {
             _ = try await workspace.performValue("message.post", .object(["channelId": .string(crewID + "/lobby"), "text": .string(text)]))
             update(.accepted)
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
-            await workspace.startCaptainForCreatedCrew(crewID, executor: draft.executor)
+            if draft.executor != "none" {
+                await workspace.startCaptainForCreatedCrew(crewID, executor: draft.executor)
+            }
             guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
             pendingCrew = nil; workspace.originalPendingCrewDraft = nil; workspace.selectCrew(crewID); workspace.selectChannel(crewID + "/lobby"); selectedCrewId = crewID
             await refreshList(); await refreshDetail(crewID)
