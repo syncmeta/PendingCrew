@@ -46,7 +46,6 @@ def prepare():
     debug.update({
         'PRODUCT_BUNDLE_IDENTIFIER': 'com.pendingname.pendingcrew.hotreload',
         'PRODUCT_NAME': 'PendingCrewHotReload',
-        'PRODUCT_MODULE_NAME': 'PendingCrew',
         'INFOPLIST_FILE[sdk=macosx*]': str(ROOT / 'Config/Mac-Info.plist'),
         'CODE_SIGN_STYLE': 'Manual', 'CODE_SIGN_IDENTITY': '-',
         'CODE_SIGN_IDENTITY[sdk=macosx*]': '-', 'DEVELOPMENT_TEAM': '',

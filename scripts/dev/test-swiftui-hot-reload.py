@@ -3,6 +3,7 @@
 import json
 import pathlib
 import subprocess
+import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -27,6 +28,17 @@ with tempfile.TemporaryDirectory(prefix='pcw-hotreload-test-', dir='/private/tmp
         precondition(!PendingCrewHotReload.allowEntry(environment: env, bundleID: id))
         env["PENDINGCREW_DATA_DIR"] = base + "/alias"
         precondition(!PendingCrewHotReload.allowEntry(environment: env, bundleID: id))
+        if CommandLine.arguments.count > 2 {
+            let actual = CommandLine.arguments[2]
+            for name in ["frontend", "authority"] {
+                let path = actual + "/" + name
+                print("Actual root raw=\(path) standardized=\(URL(fileURLWithPath:path).standardizedFileURL.path) resolved=\(URL(fileURLWithPath:path).resolvingSymlinksInPath().path)")
+            }
+            env["PENDINGCREW_DATA_DIR"] = actual + "/frontend"
+            env["PENDINGCREW_CREWD_DATA_DIR"] = actual + "/authority"
+            precondition(PendingCrewHotReload.allowEntry(environment: env, bundleID: id))
+            print("Existing actual private runtime roots accepted.")
+        }
         print("Runtime gate: absent opt-in, daily identity/path, traversal and symlink rejected; explicit private roots accepted.")
     }
 }
@@ -37,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='pcw-hotreload-test-', dir='/private/tmp
     executable = work / 'gate-tests'
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-D', 'DEBUG', '-D', 'PENDINGCREW_HOTRELOAD',
                     str(GATE), str(runner), '-o', str(executable)], check=True)
-    subprocess.run([str(executable), str(work)], check=True)
+    subprocess.run([str(executable), str(work)] + sys.argv[1:], check=True)
     ordinary = work / 'ordinary.o'
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-emit-object', str(GATE), '-o', str(ordinary)], check=True)
     symbols = subprocess.check_output(['nm', str(ordinary)], text=True)
