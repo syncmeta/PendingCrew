@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 视觉精修已交付普通 Mac 日用版
+
+完整冻结输入 `e1be3f4de798b9a8bb0b7c47bdd118bdd2ea2aff` 已完成准确 normal、普通 Mac Release/M42 签名与同源普通 iOS Simulator 构建、独立整包核验及组合终封；2706项封存、1953完整 Git 输入、478项 Rust 与3878依赖准确对应。复用8a四项实窗视觉和未变业务证据，未重跑稳定全套、all-features或GitHub CI，未把开发Core或旧normal改标。候选证据集中在 `cumulative-e1be3f4d-normal-20261024/`、`complete-e1be3f4d-production-20261024/`。
+
+Mac **0.1.44/20749.74290** 已整包替换并唯一正常首开。旧9381临近无新工作核查后正常菜单退出/安全暂停，App/Core真gone；原三阶段备份、stage和排他替换全部0。实际新App56349/Core56364，本机已连接与绿点、原侧栏自然延续通过；sessions1/stopped1/public receipts5/native执行三表0/wakes1/provider子进程空，首开前后相等，支持本次零自动启动/恢复。根全文读 `complete-e1be3f4d-update-prepared-20261024/DAILY-E1-UPDATE-QA.json` 并亲看934×688实图。旧wholeApp及完整ZIP保留，未迁移或回退数据库。准备清单漏kind的已知预检失败先保全，QA仅核元数据补正后续原流程，候选和installer逻辑未变，不另算工程阶段。
+
+iOS同源e1普通Simulator包只完成构建/静态封存，未覆盖现有52F。该私有模拟器实际已安装并打开普通9381；C按正常UI配置一次真实私有LAN、产生唯一邀请，但输入工具未能完整输入链接，未到begin/commit或个人草稿阶段，邀请已知过期。C监听正常关闭并有原回执revision3/disabled及无LISTEN证据，不能据此推断网络缺陷或双端同步通过。覆盖主机剪贴板并Send Clipboard的后续动作被自动审批实际拒绝，原因是可能不可恢复地丢失当前内容；动作未执行，明确授权问题待人类回答，不换路线重试。原A/B Unknown、C、52F及工具身份保留。
+
+本轮新构建前先保全C完整ZIP；构建后原C114项与备份仍精确相同，旧A磁盘产物此前已缺失的事实不改写。仅按冻结清单回收10处终态Rust incremental，实际可用空间观察增加2,644,426,752B，19项受保护哈希不变，暖DD/SPM/SDK、源码、数据库、日志和实际二进制保留。全工程目标仍active；实际多端草稿、VPS服务、Apple云/推送、真机和供应商剩余资格各自保留，不为局部输入等待暂停已授权独立工作。
+
 ## 2026-10-24 聊天与文档视觉精修开发窗口接受
 
 产品修改 `8a1e096e4c6245cbf1c152a6b4467e7e86d47db9`，5文件34+/20-，保留原Tab/单搜索/背景/footer，集中调整会话列宽与工具间距、中性轻选中、聊天/草稿辅助层级、文档选项和操作区的自适应同排。动作、Binding、UUID、权限与数据合同未改；净源独验接受，不重跑稳定业务。原暖DD/SPM一次Debug构建0，产物位于 `/private/tmp/pendingcrew-ui-refinement-c-20261024/Products/Debug/PendingCrewHotReload.app`。构建时两份统筹记录未提交，产品5源均为8a；本开发包不称完整不可变生产候选。

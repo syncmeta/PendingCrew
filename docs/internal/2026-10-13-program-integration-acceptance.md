@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 e1 视觉精修普通日用交付接受
+
+冻结源 `e1be3f4de798b9a8bb0b7c47bdd118bdd2ea2aff`，视觉产品8a、Rust tree233d。准确新normal默认Debug/features[]、显式CARGO_INCREMENTAL=0、fresh图、149方法/Store21独验接受，helper SHA `f5c220fbf0fe7d29c94142fccdcc1e404ccf7c5b0565b61d7cdefba108ca7564`。同源Mac Release **0.1.44/20749.74290**（M42 hardened/51文件）与普通iOS Debug arm64 Simulator（Info0.1.43/1、76文件）全目标实际0；1953完整输入、404目标输入、3878依赖及2706项组合封存独验接受。组合SHA `ddb1f27b43e0b6959eb4c5b99cd47cf4a2b44bf41b22bdb270d1404b9705460b`，manifest SHA `72741c177ba520bb329479273754a2f01af64bdb45ebd04b7063c173cc69dbd7`。稳定业务和8a实际900深色精修证据复用，不冒新iOS运行资格。
+
+准确旧9381先fresh核无新用户工作，正常退出并安全暂停，App/Core确认结束。原三阶段安装全0，完整旧whole及ZIP均留存，新安装inventory与候选相同。安装receipt SHA `6f65736f1b798b33a8f2e3774b3c6a8a3f0747eab880e6a635830aebc1d6af96`，旧ZIP SHA `0a40d2f166ae76f7fc1a31d66e69a759a307d842b1f046f5e378d6c94adde7dc`。唯一正常首开App56349/Core56364，本机ready与绿点、原侧栏自然保留，聚合sessions1/stopped1/receipts5/native0/wakes1/children[]前后相等；未选择恢复、发送、页面JS或模型，支持本次零自动启动/恢复。根全文读最终报告并亲看934×688实际图，日用留运行。目录 `complete-e1be3f4d-update-prepared-20261024/`、`complete-e1be3f4d-install-20261024/`。known预检清单kind遗漏与仅元数据补正已保全，不改installer/候选或扩大重验。
+
+C完整包先ZIP保全，构建后114项与备份仍精确，旧A磁盘包缺失的历史限制保留。精确10处终态Rust incremental回收，观察增加2,644,426,752B且19受保护哈希不变，未清暖DD/SPM或实际程序。52F实际普通9381安装/打开与C正常私有LAN邀请已做，但因输入工具未能完整输入链接，未到begin/commit/grant/个人草稿，邀请已知过期，C监听已正常关闭rev3/disabled。后续覆盖主机剪贴板/Send Clipboard自动审批实际拒绝且未执行，明确人类授权待答；无重邀、重放或换路，不认定LAN产品故障。原A/B Unknown、C、52F/tool均保留，e1iOS未安装，多端/云/推送/VPS/真机等剩余交付未冒称通过。
+
 ## 2026-10-24 8a 聊天/文档有限视觉范围接受
 
 产品净修改 `8a1e096e4c6245cbf1c152a6b4467e7e86d47db9`：5文件34+/20-，仅布局/样式/会话列宽，原动作、Binding、UUID和权限合同不变。一次原暖DD/SPM Debug构建0，独立C私域实际App35969/Core35983，900×688暗色下会话工具/选中、聊天/草稿辅助层级及文档自适应控件均通过。none静态首消息一次、sessions0，原草稿菜单开/ESC关闭通过；根全文读 `hotreload-visual-followup-20261024/C-FINAL-VISUAL-QA.json` 并亲看聊天/文档实图，C保留。仅开发验证，构建时根两份记录dirty；未新normal/Release/iOS、未新安装或称全业务通过，日用仍准确9381/20749.69802。
