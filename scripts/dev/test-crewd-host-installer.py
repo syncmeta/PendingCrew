@@ -190,4 +190,51 @@ class InstallerControls(unittest.TestCase):
             call.assert_called_once_with('host.enrollmentLookup', {'requestId':'r','enrollmentId':'e'})
             fresh.assert_not_called()
 
+class ReviewedBuildBindingControls(unittest.TestCase):
+    """Offline controls with temporary Git inputs, never a real Actions receipt."""
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('reviewed_host_build', repo/'scripts/dev/build-crewd-host-release.py')
+        self.build = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.build)
+        self.temporary = tempfile.TemporaryDirectory(); self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name)
+        for name in set(self.build.SOURCE_RECIPES + self.build.CONTROLLER_RECIPES + ['crewd/schema/crewd-api.schema.json','crewd/crates/store/src/schema.rs']):
+            target = self.root/name; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((repo/name).read_bytes())
+        for args in [['init','-q'],['add','.'],['-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','offline binding fixture']]:
+            subprocess.run(['git','-C',str(self.root),*args],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        self.ref = self.build.git(self.root,'rev-parse','HEAD').decode().strip()
+        self.tree = self.build.git(self.root,'rev-parse','HEAD:crewd').decode().strip()
+        self.environment = {'SOURCE_SHA':self.ref,'EXPECTED_RUST_TREE':self.tree,'GITHUB_SHA':self.ref,
+                            'GITHUB_ACTIONS':'true','GITHUB_EVENT_NAME':'workflow_dispatch',
+                            'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1','CARGO_INCREMENTAL':'0'}
+
+    def test_exact_manual_source_tree_and_full_inputs_are_bound(self):
+        with mock.patch.dict(os.environ,self.environment,clear=True):
+            result = self.build.binding(self.root,self.root,self.ref,self.ref)
+        self.assertEqual(result['sourceSha'],self.ref)
+        self.assertEqual(result['rustTree'],self.tree)
+        self.assertEqual(result['runId'],'123')
+        self.assertEqual(result['sourceInputs'],result['controllerInputs'])
+
+    def test_missing_or_changed_review_and_execution_context_are_refused(self):
+        for key, value in [('SOURCE_SHA',None),('SOURCE_SHA','f'*40),('EXPECTED_RUST_TREE',None),
+                           ('EXPECTED_RUST_TREE','bad'),('EXPECTED_RUST_TREE','f'*40),
+                           ('GITHUB_SHA','f'*40),('GITHUB_ACTIONS','false'),
+                           ('GITHUB_EVENT_NAME','push'),('GITHUB_RUN_ID',''),
+                           ('GITHUB_RUN_ATTEMPT','0'),('CARGO_INCREMENTAL','1'),
+                           ('CC','/unexpected/compiler'),('CFLAGS','-unexpected-flag')]:
+            with self.subTest(key=key,value=value):
+                environment = dict(self.environment)
+                if value is None: environment.pop(key)
+                else: environment[key] = value
+                with mock.patch.dict(os.environ,environment,clear=True):
+                    with self.assertRaises((AssertionError,KeyError)):
+                        self.build.binding(self.root,self.root,self.ref,self.ref)
+
+    def test_changed_source_bytes_cannot_pass_matching_reviewed_ids(self):
+        (self.root/'crewd/schema/crewd-api.schema.json').write_text('{}')
+        with mock.patch.dict(os.environ,self.environment,clear=True):
+            with self.assertRaises(AssertionError):
+                self.build.binding(self.root,self.root,self.ref,self.ref)
+
 if __name__ == '__main__': unittest.main()

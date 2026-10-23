@@ -3,12 +3,12 @@
 import hashlib, importlib.util, json, os, pathlib, re, subprocess, sys
 sys.dont_write_bytecode = True
 
-# Exact accepted natural source qualification; no arbitrary same-tree source.
+# Exact manual review inputs avoid a self-referential committed source SHA.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_SOURCE_SHA = 'eb3f0d29965f1092f61df0ef1ad30e8d9057edad'
-QUALIFIED_RUST_TREE = '0a10ccb9785ba2552d8a101665b44998edf27cdb'
 QUALIFIED_METHOD_COUNT = 149
 QUALIFIED_STORE_VERSION = 21
+COMPILER_ENVIRONMENT = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
+                        'RUSTC_WORKSPACE_WRAPPER', 'CARGO_INCREMENTAL', 'CC', 'CFLAGS']
 SOURCE_RECIPES = [
     'scripts/dev/record-crewd-build.py',
     'scripts/dev/write-codex-first-provenance.py',
@@ -43,23 +43,30 @@ def inventory(root, ref):
 
 
 def binding(controller, source, controller_sha, source_sha):
-    assert all(re.fullmatch('[0-9a-f]{40}', ref) for ref in [controller_sha, source_sha])
+    expected_source = os.environ['SOURCE_SHA']
+    expected_tree = os.environ['EXPECTED_RUST_TREE']
+    assert all(re.fullmatch('[0-9a-f]{40}', ref) for ref in [controller_sha, source_sha, expected_source, expected_tree])
+    assert os.environ['GITHUB_ACTIONS'] == 'true', 'actual Actions execution required'
+    assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch', 'reviewed manual execution required'
+    assert all(re.fullmatch('[1-9][0-9]*', os.environ[key]) for key in ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']), 'actual positive run identity required'
     assert controller_sha == os.environ['GITHUB_SHA'], 'controller input must equal actual run SHA'
-    assert source_sha == QUALIFIED_SOURCE_SHA, 'source input differs from the exact root-frozen combined source'
+    assert source_sha == expected_source, 'source input differs from the exact reviewed source'
+    assert os.environ['CARGO_INCREMENTAL'] == '0', 'reviewed normal build disables incremental cache'
     before = {'controllerSha': controller_sha, 'sourceSha': source_sha,
               'controllerInputs': inventory(controller, controller_sha),
               'sourceInputs': inventory(source, source_sha)}
-    assert git(source, 'rev-parse', source_sha + ':crewd').decode().strip() == QUALIFIED_RUST_TREE, 'qualified Rust tree changed; review a new controller before dispatch'
-    assert git(controller, 'rev-parse', controller_sha + ':crewd').decode().strip() == QUALIFIED_RUST_TREE
+    assert git(source, 'rev-parse', source_sha + ':crewd').decode().strip() == expected_tree, 'reviewed source Rust tree differs'
+    assert git(controller, 'rev-parse', controller_sha + ':crewd').decode().strip() == expected_tree, 'reviewed controller Rust tree differs'
     for path in SOURCE_RECIPES:
         assert (source / path).read_bytes() == (controller / path).read_bytes(), 'reviewed source recipe changed: ' + path
     qualify_schema(json.loads((source/'crewd/schema/crewd-api.schema.json').read_bytes()))
     version_source = (source/'crewd/crates/store/src/schema.rs').read_text()
     assert re.search(r'pub const SCHEMA_VERSION: i64 = ([0-9]+);', version_source).group(1) == str(QUALIFIED_STORE_VERSION)
     for key in ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
-                'CARGO_BUILD_TARGET', 'CREWD_GIT_SHA', 'CREWD_GIT_DIRTY']:
+                'CARGO_BUILD_TARGET', 'CREWD_GIT_SHA', 'CREWD_GIT_DIRTY', 'CC', 'CFLAGS']:
         assert not os.environ.get(key), 'undeclared compiler override: ' + key
-    before.update(rustTree=QUALIFIED_RUST_TREE,
+    before.update(rustTree=expected_tree,
+                  compilerEnvironment={key: os.environ.get(key) for key in COMPILER_ENVIRONMENT},
                   controllerRecipeHashes={p: sha(controller/p) for p in CONTROLLER_RECIPES},
                   sourceRecipeHashes={p: sha(source/p) for p in SOURCE_RECIPES},
                   runId=os.environ['GITHUB_RUN_ID'], runAttempt=os.environ['GITHUB_RUN_ATTEMPT'])
@@ -145,7 +152,8 @@ def main():
     proof = importlib.util.module_from_spec(spec); spec.loader.exec_module(proof)
     w = json.loads(witness.read_text())
     expected = {'target':'x86_64-unknown-linux-gnu', 'profile':'release',
-                'defaultFeatures':True, 'allFeatures':False, 'features':[]}
+                'defaultFeatures':True, 'allFeatures':False, 'features':[],
+                'compilerEnvironment':current['compilerEnvironment']}
     verified, evidence = proof.verify_witness(witness, binary, w['rustInputDigest'], expected, require_fresh=True)
     assert verified['sourceRef'] == s
     bound_rust = [{'path':r['path'], 'sha256':r['sha256']} for r in current['sourceInputs'] if r['path'].startswith('crewd/')]
@@ -171,6 +179,18 @@ def main():
     assert code == 0 and not (out/'schema.stderr').read_bytes() and schema == json.loads(checked.read_bytes())
     qualify_schema(schema)
     assert sha(binary) == digest
+    # Only the platform delta since Linux M: original directory/receipt and wire controls.
+    # Their cfg(test) artifacts never replace the separately verified normal ELF.
+    affected = [
+        ('crewd-server', 'first_message_default_directory_', 5),
+        ('crewd-proto', 'first_message_default_directory_wire_', 1),
+    ]
+    for package, selector, count in affected:
+        log = out/(package + '-default-directory.log')
+        command(['cargo', 'test', '--offline', '--locked', '--release', '-p', package,
+                 '--lib', selector, '--', '--nocapture'], source/'crewd', log)
+        assert re.search(r'test result: ok\. ' + str(count) + r' passed; 0 failed;', log.read_text()), 'affected platform tests missing or wrong count'
+    assert sha(binary) == digest, 'affected tests changed the retained normal ELF'
     # Project only after original graph/fresh-source verification; keep original witness.
     save(out/'build-proof.json', {'sourceCommit':s, 'sourceClean':True, 'defaultFeatures':True,
                                  'features':[], 'test':False, 'binarySha256':digest,
@@ -183,9 +203,10 @@ def main():
     after = binding(controller, source, c, s)
     assert current == after
     save(out/'source-after.json', after)
-    save(out/'result.json', {'controllerSha':c, 'sourceSha':s, 'rustTree':QUALIFIED_RUST_TREE,
+    save(out/'result.json', {'controllerSha':c, 'sourceSha':s, 'rustTree':current['rustTree'],
                             'binarySha256':digest, 'originalWitnessSha256':sha(witness),
                             'schemaExitCode':code, 'schemaEqualsChecked':True, 'methodCount':QUALIFIED_METHOD_COUNT,
+                            'affectedDefaultDirectoryTests':6,
                             'storeVersion':QUALIFIED_STORE_VERSION,
                             'sourceBeforeAfterEqual':True, 'published':False, 'installed':False,
                             'providerExecuted':False, 'runtimeQualified':False,
