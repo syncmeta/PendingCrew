@@ -37,7 +37,8 @@ struct CrewPersonalDraftControls:View {
                     if let key,service.usingCore{Button("保存当前内容为新版本"){guard let expected=service.snapshot(key,payload:payload,scope:scope) else{failure="原输入已变化，请重新核对。";return};Task{do{try await service.saveCurrentAsNewVersion(key,payload:payload,expected:expected)}catch{failure=error.localizedDescription}}}}
                     Button("个人同步与保留原文"){settings=true}
                     Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload,scope:scope)};recoveredExport=key.flatMap{service.staleExportTicket($0,payload:payload,scope:scope)};exporting=true}catch{failure=error.localizedDescription}}
-                }label:{Label("草稿",systemImage:"doc.text")}.font(.caption)
+                }label:{Label("草稿",systemImage:"doc.text")}
+                    .font(.caption2).foregroundStyle(.secondary).buttonStyle(.plain).controlSize(.mini).tint(.gray)
             }
             if let issue=key.flatMap({service.errors[$0]}) ?? service.initializationError ?? failure{Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
             if key == nil{Text("来源身份尚未核对；原输入仍按本机草稿保留。").font(.caption2).foregroundStyle(.secondary)}

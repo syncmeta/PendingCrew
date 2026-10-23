@@ -392,10 +392,10 @@ struct CrewChatView: View {
                 communicationControls(compact:false)
                 communicationControls(compact:true)
             }.fixedSize(horizontal:false,vertical:true)
-        }.padding(.horizontal,14).padding(.vertical,6).tint(Theme.Palette.accent)
+        }.padding(.horizontal,14).frame(minHeight:36).tint(.gray)
     }
     private func communicationControls(compact:Bool)->some View {
-        HStack(spacing:8){
+        HStack(spacing:6){
             if let communicationView {
                 if compact {
                     Picker("沟通范围",selection:communicationView){
@@ -411,7 +411,7 @@ struct CrewChatView: View {
                 Toggle("仅@你",isOn:showOnlyHumanMentions).toggleStyle(.button).controlSize(.small)
                     .help("只显示 @ 你的消息和你发出的消息")
             }
-        }
+        }.font(.caption).controlSize(.small)
     }
     @ViewBuilder
     private var timelineWithTopEdge: some View {
@@ -426,7 +426,7 @@ struct CrewChatView: View {
     @ViewBuilder
     private var errorBar: some View {
         if let workspace=appModel.crewdBackend?.workspace {
-            CrewPersonalDraftControls(workspace:workspace,context:.message(crew:crewId,channel:crewdChannelID,session:""),payload:Binding(get:{.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget)},set:{value in draft=value.text;replyTarget=value.replyTarget;stagedMentions=value.stagedMentions;saveDraft()})).padding(.horizontal,14).padding(.top,4)
+            CrewPersonalDraftControls(workspace:workspace,context:.message(crew:crewId,channel:crewdChannelID,session:""),payload:Binding(get:{.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget)},set:{value in draft=value.text;replyTarget=value.replyTarget;stagedMentions=value.stagedMentions;saveDraft()})).padding(.horizontal,14).padding(.vertical,2)
         }
         if let errorText = loadError ?? composerDraftStore.storageError {
             Text(errorText)

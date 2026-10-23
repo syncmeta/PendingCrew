@@ -15,7 +15,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
     var body:some View {
         VStack(spacing:0){
             ViewThatFits(in:.horizontal){
-                HStack(spacing:14){scopePicker;collectionPicker;Spacer(minLength:0)}
+                HStack(spacing:12){scopePicker;collectionPicker}
                 VStack(alignment:.leading,spacing:8){scopePicker;collectionPicker}
             }
             .font(.caption).controlSize(.small)
@@ -31,8 +31,8 @@ struct CrewdKnowledgeDocumentsEntry: View {
         .enableInjection()
         #endif
     }
-    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).frame(maxWidth:180).accessibilityLabel("资料范围")}
-    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).frame(maxWidth:220).accessibilityLabel("资料类型")}
+    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围")}
+    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
 
 }
 
@@ -297,10 +297,11 @@ private struct CrewdGroupKnowledgeView:View {
     private var readKey:String{(chosen?.id ?? "")+"/"+(chosen?.source.context.generation ?? "")+"/"+(chosen?.revision ?? "")+"/"+retry.uuidString}
     var body:some View {
         VStack(spacing:0){
-            HStack{Button("引用已有资料",systemImage:"link"){linking=true};if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}};Spacer();Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}}.font(.caption).padding(.horizontal,14).padding(.vertical,8)
-            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:folder,view:.documents,compact:true)
-                .font(.caption).padding(.horizontal,14).padding(.bottom,8)
-                .help("本群资料分类，只改变展示位置，不改变共享原文")
+            ViewThatFits(in:.horizontal){
+                HStack(spacing:8){documentActions;documentFolders.fixedSize(horizontal:true,vertical:false)}
+                VStack(alignment:.leading,spacing:6){documentActions;documentFolders}
+            }.font(.caption).frame(maxWidth:.infinity,alignment:.leading)
+                .padding(.horizontal,14).padding(.top,4).padding(.bottom,8)
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
             ViewThatFits(in:.horizontal){
@@ -320,6 +321,17 @@ private struct CrewdGroupKnowledgeView:View {
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
+    }
+    private var documentActions:some View {
+        HStack(spacing:8){
+            Button("引用已有资料",systemImage:"link"){linking=true}
+            if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}}
+            Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}
+        }.fixedSize(horizontal:true,vertical:false)
+    }
+    private var documentFolders:some View {
+        CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:folder,view:.documents,compact:true)
+            .help("本群资料分类，只改变展示位置，不改变共享原文")
     }
     private var list:some View {
         ScrollView{LazyVStack(alignment:.leading,spacing:4){

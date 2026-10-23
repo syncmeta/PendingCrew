@@ -346,7 +346,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
         GeometryReader { geometry in
         HStack(spacing: 0) {
             if geometry.size.width >= 600 && conversationListVisible {
-                conversationList.frame(width: min(208, geometry.size.width * 0.30))
+                conversationList.frame(width: min(196, max(180, geometry.size.width * 0.26)))
                 Divider()
             }
             VStack(spacing: 0) {
@@ -540,16 +540,17 @@ private struct CrewdOriginalMessages<Content: View>: View {
     #if os(macOS)
     private var conversationList: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("会话").font(.system(size: 11, weight: .medium))
-                Spacer()
-                messageFolderMenu
+            HStack(spacing: 4) {
+                messageFolderMenu.menuIndicator(.hidden)
+                Spacer(minLength: 0)
                 Button{showingMembers=true}label:{Image(systemName:"person.2")}.buttonStyle(CrewdToolButtonStyle()).help("本群成员与工作")
                 Button{conversationListVisible=false}label:{Image(systemName:"sidebar.left")}
                     .buttonStyle(CrewdToolButtonStyle()).help("收起会话列表").accessibilityLabel("收起会话列表")
                 Button { workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }
-                    .buttonStyle(.plain).help("新建成员会话")
-            }.foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal, 12).frame(height: 36)
+                    .buttonStyle(CrewdToolButtonStyle()).help("新建成员会话").accessibilityLabel("新建成员会话")
+            }.font(.system(size: 12)).controlSize(.small).tint(.gray)
+                .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal, 10).frame(height: 36)
+                .accessibilityLabel("会话工具")
             ScrollView {
                 VStack(spacing: 3) {
                     ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in

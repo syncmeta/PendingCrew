@@ -16,7 +16,7 @@ enum CrewdChatStyle {
     static func bubble(_ scheme:ColorScheme)->Color {color(0xFFFFFF,0x201E1A,scheme)}
     static func accent(_ scheme:ColorScheme)->Color {color(0x044735,0x57B690,scheme)}
     static func line(_ scheme:ColorScheme)->Color {color(0xE2E0D7,0x383530,scheme)}
-    static func listSelection(_ scheme:ColorScheme)->Color {color(0xEFEEE9,0x33312D,scheme)}
+    static func listSelection(_ scheme:ColorScheme)->Color {Color.primary.opacity(scheme == .dark ? 0.07:0.045)}
     static func canvas(_ scheme:ColorScheme)->Color {
         // Inherit the shared window material; never add a chat-only plate.
         Color.clear
