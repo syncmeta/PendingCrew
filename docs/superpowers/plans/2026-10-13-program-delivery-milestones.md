@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 日用 N 已安装；按真实画面修正原生界面，B 暂缓
+
+用户确认正常退出后，quality 实证旧 App/Core 均 gone 且桌面可用；frontend 沿原授权完成 N158e3479、0.1.44/20748.85010 的整包替换，installed receipt cc96b111、14项执行清单910fd607。旧9a整包及停态两root持久数据已保全；legacy daemon.sock 是唯一不可复制Unix socket，原ditto exit1保留，未删原socket，全部持久项前后/备份相同。quality 唯一普通首开88719/88739，原handle9025实际600.04秒、13采样同进程且未见provider子进程；不冒全局账本零任务。五域只读交互后因用户反馈停止，未做sidebar/resize或执行B。
+
+实际N画面显示灰侧栏/白内容的强分块，五域仍为自绘按钮组；根此前将界面调整当作符合用户设计不准确。本轮完整源码0eb41efb在c678基础上净3 Swift+交接：真正系统Picker(.segmented)、Mac15+实际window容器thinMaterial/Mac14公开幂等fallback、iOS导航列透明继承与隐藏List默认底。原五域tag/挂载、footer/机器绿点/侧栏加号/原生搜索/唯一电脑入口及业务权限不变。暖缓存Mac/iOS目标0/0、404输入一致，独验8efb4a6f整块源码准入；历史N helper只是内部编译输入，未改标新候选。
+
+下一准确输入为本次整合源码，必须先绑定新完整normal证明，再同源Mac/iOS封包并实际看宽窄、明暗、原生切换与缩放；源码准入和编译0不冒视觉交付。Rust0a/API3/149/Store21及Linux recipes不变，不开新Linux CI。新私域N/P B+CoreDraft动作3b843208仅准备，因当前UI修正优先尚未执行；旧184/1ef/c4及手机安装Unknown仍原样保留。全工程未完成，Cloud/APNs/Claude/VPS等原实际资格门继续分别记录。
+
 ## 2026-10-23 移动端整块产物与 iPad 实图接受，手机安装未获成功回执
 
 本节为当前状态，以下 N/M/S 段落保留各自发生时点。Mac 待交付包仍准确来源 N=`158e347942207d0ce4d4f892e11ee340dab7b96e`、**0.1.44/20748.85010**；本轮不因移动布局改动重建 Mac/Rust，不延后其既有安装授权。移动端完整来源为 P=`497e419935bd2917612a610dfec887355a73d234`，在 main4f0c72b1 基础上只改三处展示 Swift 及交接；Rust/API3/schema149/Store21 与 N 不变，不能把 N 后台或 Mac 来源改标 P。

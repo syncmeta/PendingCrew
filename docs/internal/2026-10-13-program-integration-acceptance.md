@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 N 实际安装及600秒证据；原生界面源码接受、视觉待新包
+
+N158e3479（0.1.44/20748.85010）已实际安装到 /Applications/PendingCrew.app，51文件/strictdeep0与封存包一致。installed receipt SHA256 cc96b111582f09209d9df52d164d9b8f7e7ead105e6ac99e822d4ecdc7b19c05，执行manifest910fd60770dc2bce1b9a7c08afc647cc4eb8d2823726bed62a37a60c885b60d6。旧9a整包保全，停态Core74项/legacy6735持久项前后稳定且copy相同；准确daemon.sock不持久化，原ditto1及完整失败保留，不冒整个原ditto0。
+
+真实首次普通打开App88719/Core88739；原闲置handle9025 exit0、600.04秒/13原样本同二进程、无观察到provider后代。此非全局账本零任务或新模型验收。UI比较与闲置报告f3acd80a87c2542b9c3c559801e52234c672a6fc230c6431e603b492188452cb及原实图受领；用户指出设计未落实后，sidebar/menu/resize与B均未执行，整体GUI WITHHOLD。根亲看当前实图，承认自绘Tab与分块外观不能视为用户要求已完成。
+
+完整净源0eb41efbac73974a3284ce0616be9e1087da2c7d（3 Swift+交接）独验8efb4a6f77d7f99bafb8dc0ab14b894cdb6428f536667552744668de4f8117c6通过；根全文受领handoff/freeze/净diff/独验。SOURCE-FREEZE e3fe4888、14项manifest4a10038f，原暖Mac/iOS完整目标均0，404输入前后/当前同；只做源码准入，不重复稳定业务/旧600秒或将历史N helper叫新源候选。真实Picker保原五tag，公开window/navigation材质及availability/幂等守卫已核，下一完整整合输入仍须新准确normal、Mac/iOS包及宽窄/明暗/切换/缩放真实画面。Rust/schema/Store/project/recipe无改，Linux M与手机P旧证明保原身份；新B动作3b843208准备但未执行，旧Unknown未触。
+
 ## 2026-10-23 P 移动交付整块准入、iPad 真实修复与手机安装运输未知
 
 根全文读源冻结c491aa4de126a5471046d5732bbeb755295a959f47d73a8a0eece596a27f2ce9、HANDOFF、实际提交与P-COMBINATION，接受完整移动输入 P=`497e419935bd2917612a610dfec887355a73d234`，base4f0c72b1，三presentation Swift+一交接。源/Simulator独验 **76017e4fcfdfcff008fcaeed7398e9067a21de71d8808b2bcf9dd9a04608223b** 核1944完整Git/404目标/3878SPM、原50907实际0、76文件/ZIP、P stamp、独立strictdeep0及xcent==Mach-O；root staged全树逐字同P，Rust/工程无差异。Mac共享plus的原默认行为不变；没有为iOS-only展示变更重建Mac/Rust或冒P新normal。

@@ -48,6 +48,7 @@ struct IPadShell: View {
                          readingComputers: !didReadComputerList || appModel.connectingAuthority,
                          showsComputerIntroduction: isCompact,
                          selection: $selectedCrewId)
+                .modifier(CrewdNavigationMaterial())
                 .navigationTitle("机组")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -71,7 +72,7 @@ struct IPadShell: View {
                     }
                 }
         } detail: {
-            detail
+            detail.modifier(CrewdNavigationMaterial())
         }
         .modifier(CrewdWindowMaterial())
         .onChange(of: selectedCrewId) { _, id in

@@ -188,10 +188,16 @@ struct CrewdWindowMaterial:ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder func body(content:Content)->some View {
         #if os(macOS)
-        // One native semantic material on every supported Mac version. The
-        // view's appearance is projected from the same SwiftUI scheme as text,
-        // not inferred separately by a window-container background host.
-        content.background(CrewdWindowVisualEffect(scheme:scheme).ignoresSafeArea())
+        if #available(macOS 15.0,*) {
+            // A window container background participates in the system's split
+            // view/hosting surfaces. A background behind the split alone does
+            // not replace its opaque ordinary window backing.
+            content.containerBackground(for:.window) {
+                Rectangle().fill(.thinMaterial).environment(\.colorScheme,scheme)
+            }
+        }else {
+            content.background(CrewdWindowVisualEffect(scheme:scheme).ignoresSafeArea())
+        }
         #else
         if #available(iOS 18.0,*) {
             content.containerBackground(for:.navigationSplitView){
@@ -211,7 +217,7 @@ private struct CrewdWindowVisualEffect:NSViewRepresentable {
     }
     func updateNSView(_ view:NSVisualEffectView,context:Context){configure(view)}
     private func configure(_ view:NSVisualEffectView){
-        if view.material != .windowBackground { view.material = .windowBackground }
+        if view.material != .underWindowBackground { view.material = .underWindowBackground }
         if view.blendingMode != .behindWindow { view.blendingMode = .behindWindow }
         if view.state != .followsWindowActiveState { view.state = .followsWindowActiveState }
         let name:NSAppearance.Name = scheme == .dark ? .darkAqua:.aqua
@@ -228,42 +234,37 @@ private final class CrewdBehindWindowMaterialView:NSVisualEffectView {
     }
 }
 #endif
-/// Native SwiftUI buttons retain the original five-domain binding. Only this
-/// navigation capsule uses Liquid Glass; long content and messages do not.
+/// The system segmented picker owns selection rendering, keyboard behaviour
+/// and Liquid Glass adaptation; the original five-domain binding is unchanged.
 struct CrewdGlassWorkspaceTabs:View {
     @Binding var selection:String
-    #if os(macOS)
-    @ScaledMetric(relativeTo:.caption) private var tabHeight:CGFloat=28
-    #else
-    @ScaledMetric(relativeTo:.subheadline) private var tabHeight:CGFloat=44
-    #endif
-    private let items=[("消息","消息"),("人待办","真人Todo"),("AI待办","Todo"),("文档/数据","文档"),("计划/进展","进展")]
+    private let items=[("消息","消息"),("人待办","真人Todo"),("AI待办","Todo"),("文档","文档"),("进展","进展")]
     var body:some View {
-        ScrollViewReader {proxy in
-            ScrollView(.horizontal,showsIndicators:false){capsule.padding(1)}
-                .onChange(of:selection){_,value in proxy.scrollTo(value,anchor:.center)}
-                .onAppear{proxy.scrollTo(selection,anchor:.center)}
-        }.frame(height:max(CrewdType.target,tabHeight)+10)
-            .accessibilityElement(children:.contain).accessibilityLabel("工作区内容")
+        Picker("工作区内容",selection:$selection) {
+            ForEach(items,id:\.1){item in Text(item.0).tag(item.1)}
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.large)
+        .frame(maxWidth:520)
+        #if os(iOS)
+        .frame(minHeight:44)
+        #endif
+        .accessibilityLabel("工作区内容")
     }
-    @ViewBuilder private var capsule:some View {
-        if #available(macOS 26.0,iOS 26.0,*) {
-            buttons.glassEffect(.regular,in:Capsule())
-        }else {buttons.background(.regularMaterial,in:Capsule())}
-    }
-    private var buttons:some View {
-        HStack(spacing:2){
-            ForEach(items,id:\.1){item in
-                Button {selection=item.1}label:{
-                    Text(item.0).font(CrewdType.label.weight(selection == item.1 ? .semibold:.regular))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1).padding(.horizontal,13).frame(minHeight:max(CrewdType.target,tabHeight))
-                        .background(selection == item.1 ? Theme.Palette.accent.opacity(0.13):Color.clear,in:Capsule())
-                        .contentShape(Capsule())
-                }.buttonStyle(.plain).id(item.1)
-                    .accessibilityAddTraits(selection == item.1 ? .isSelected:[])
-            }
-        }.padding(4).fixedSize(horizontal:true,vertical:false)
+}
+
+/// Each iOS navigation column inherits the one split-view material instead of
+/// inserting an opaque default navigation background in front of it.
+struct CrewdNavigationMaterial:ViewModifier {
+    @ViewBuilder func body(content:Content)->some View {
+        #if os(iOS)
+        if #available(iOS 18.0,*) {
+            content.containerBackground(.clear,for:.navigation)
+        }else {content}
+        #else
+        content
+        #endif
     }
 }
 /// Green means the current hello/subscription/authority-qualified connection,
