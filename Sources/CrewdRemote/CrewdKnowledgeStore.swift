@@ -37,6 +37,10 @@ import CryptoKit
     private(set) var detailIsSnapshot = false
     private(set) var detailReference: CrewdDataRef?
     var canEditDetail: Bool { !detailIsSnapshot && detailReference?.namespace == workspace?.context.namespace }
+    var canSaveNativeDocument: Bool {
+        guard let active, origin() == active, let info = workspace else { return false }
+        return info.state == "ready" || info.state == "uninitialized"
+    }
     var hasBlockingPending: Bool {
         guard let context = workspace?.context else { return !pending.isEmpty }
         return pending.contains { sameAuthority($0.context, context) }
@@ -330,6 +334,7 @@ import CryptoKit
     /// or process lifetime. Reopening can only adopt/lookup the same save UUID.
     func submitNativeDocument(title:String,body:String,channel:String)async->CrewdDataChangeResult? {
         do {
+            guard canSaveNativeDocument, !busy, !hasBlockingPending else { throw Failure.unavailable }
             guard let o=active,origin() == o,let context=workspace?.context else{throw Failure.stale}
             let ledger=try journal()
             let stage=try ledger.prepareDocumentStage(crew:o.crew,channel:channel,title:title,body:body,context:Self.encode(context))
@@ -338,7 +343,7 @@ import CryptoKit
             try ledger.markDocumentStageAttempted(stage)
             let change=CrewdDataChange.apply(message:"创建文档",edits:[
                 .createBlock(alias:"body",contentType:"text/plain",content:.string(stage.body),sources:[],attributes:.object([:])),
-                .createView(alias:"document",title:stage.title,definition:.document(placements:[.set(id:nil,alias:nil,block:.created(alias:"body"),atRevision:nil,layout:.object([:]))],layout:.object([:])),sources:[],attributes:.object([:]))])
+                .createView(alias:"document",title:stage.title,definition:.document(placements:[.set(id:nil,alias:"bodyPlacement",block:.created(alias:"body"),atRevision:nil,layout:.object([:]))],layout:.object([:])),sources:[],attributes:.object([:]))])
             let response=await submitFromNativeHost(change,requestID:stage.id)
             if let response,[.committed,.rejected,.conflicted].contains(response.phase){try ledger.recordDocumentStageResult(Self.encode(response),stage:stage)}
             return response

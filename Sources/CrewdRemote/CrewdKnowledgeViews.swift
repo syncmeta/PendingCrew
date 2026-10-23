@@ -424,7 +424,7 @@ private struct CrewdNativeDocumentCreation:View {
             if saved != nil{Button("仅保留已保存原文，结束本次新建"){finishDraft()}}
             }.padding(20)}
             Divider()
-            HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || store.busy || store.hasBlockingPending || store.workspace?.state != "ready" || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button(group.writing ? "正在加入…":"加入本群"){join()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || group.writing || store.busy)}}.padding(16)
+            HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || store.busy || store.hasBlockingPending || !store.canSaveNativeDocument || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button(group.writing ? "正在加入…":"加入本群"){join()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || group.writing || store.busy)}}.padding(16)
         }.modifier(CrewdAdaptiveFormFrame(width:600,height:680,scrolls:false))
         .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();restoreStage();try? await group.refresh()}
     }
@@ -441,8 +441,16 @@ private struct CrewdNativeDocumentCreation:View {
         }catch{failure="原文档保存阶段尚未可靠读取，不能再创建正文："+error.localizedDescription;submission=UUID()}
     }
     private func save(){
-        let title=fields.title,body=fields.body
-        Task{_ = await store.submitNativeDocument(title:title,body:body,channel:channel);restoreStage()}
+        let title=fields.title,body=fields.body,origin=workspace.presentationScope
+        Task{
+            _ = await store.submitNativeDocument(title:title,body:body,channel:channel)
+            guard current,workspace.presentationScope == origin else{return}
+            // data.changed can invalidate the read model before the original
+            // commit reply. Restore that model, then read the same durable stage.
+            await store.refresh()
+            guard current,workspace.presentationScope == origin else{return}
+            restoreStage()
+        }
     }
     private func reviseRefusedDraft(){
         guard current,refused,let stage else{return}
