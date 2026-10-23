@@ -32,7 +32,6 @@ struct CrewListView: View {
             flatList
             #endif
         }
-        .scrollContentBackground(.hidden)
         .overlay {
             if crewStore.crews.isEmpty, needsEmptyOverlay {
                 emptyOverlay

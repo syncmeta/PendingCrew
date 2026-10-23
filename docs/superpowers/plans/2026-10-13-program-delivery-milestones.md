@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 最新外观裁定：恢复原胶囊 Tab，背景更白
+
+用户最新明确要求“tab切换换成原来的样子。背景再白一点，不要这么灰”，覆盖此前原生 segmented Picker/统一灰材质的外观要求。作者在 c326e6b6 上保存净源码 a60ce428：仅三个展示 Swift 文件逐字恢复 c678 的胶囊 Tab、windowBackground 与原导航/列表背景，其他功能、退出策略、权限、Rust/API3/schema149/Store21 不变。源码和已验目标输入可按准确恢复关系复用，不重复编译或稳定业务全套。
+
+S=c326e6b6 已完成准确 normal、Mac/iOS 成套封包、整包安装和一次普通首开；这些是实际产物/运行证据，不代表用户接受 S 的外观。即时交付采用保留的准确 N=158e3479、0.1.44/20748.85010 完整签名包，其与 S 除三处展示外无产品差异，保持当前 Store21 数据，不恢复旧数据库。根已受领具体返回方案009da175：quality 正常停 S，frontend 独占当前停态数据备份、保留 S 与整包返回，quality 唯一首开核胶囊 Tab/白内容区。原 N 来源不改标 a60 或新 main；不为外观恢复重建后台/签包，不再重复600秒或已稳全套。
+
+整包返回已实际 owner54147 终态0，receipt f803b280、12项manifest ebb49a06：日用位置准确 N51文件/strictdeep0，当前 Local90/legacy6735 持久项停态前后及备份同，唯一准确 daemon.sock 的原 ditto1保留。S整包保存在 /Applications/.PendingCrew-c326e6b6-before-return-158e3479.app，N原备份及所有旧现场保持。quality 唯一普通首开实际0，N App96516/Core96525；实际截图 returned-N-actual.png 经根亲看：原胶囊五域 Tab、白会话/主内容区恢复，原内容、footer 与机器绿点保持。App 保持可用；不重复闲置/稳定业务，不发送或恢复任务。B/CoreDraft 双端实际流程暂缓；手机安装 Unknown、VPS 供应商准备、Cloud/APNs 实际资格及 Claude 后续各自原门保留，全工程不标完成。
+
 ## 2026-10-23 日用 N 已安装；按真实画面修正原生界面，B 暂缓
 
 用户确认正常退出后，quality 实证旧 App/Core 均 gone 且桌面可用；frontend 沿原授权完成 N158e3479、0.1.44/20748.85010 的整包替换，installed receipt cc96b111、14项执行清单910fd607。旧9a整包及停态两root持久数据已保全；legacy daemon.sock 是唯一不可复制Unix socket，原ditto exit1保留，未删原socket，全部持久项前后/备份相同。quality 唯一普通首开88719/88739，原handle9025实际600.04秒、13采样同进程且未见provider子进程；不冒全局账本零任务。五域只读交互后因用户反馈停止，未做sidebar/resize或执行B。

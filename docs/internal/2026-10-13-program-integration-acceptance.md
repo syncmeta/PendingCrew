@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 用户最新外观要求与准确 N 返回
+
+当前裁定恢复原胶囊 Tab 与更白背景；之前原生 Picker/灰材质目标已被用户最新要求覆盖。净源 a60ce4281cba78528dd29828d0d5ba0c7e8eaf62 从 c326e6b6 仅恢复三个展示文件，逐字同 c678，其余 tracked 文件不变。source freeze101ef146、7项manifest51752355；404目标输入同已验 P497e。只复用明确同输入证据，不称新编译或把旧产品改标新源。
+
+S=c326 的 normal 与成套产物独验分别474b43f6/a55ab46c，实际安装receipt8c9cc2b5，quality 一次普通首开94904/Core94930，当前外观不标接受。返回具体方案SHA009da1754a0ae59262ab6b5942bdf2f0f1d8eaafc5e2996a80b30218c0d0b2ef已全文受领：保留完整 S 和当前停止后两root数据，使用已验 N158e、0.1.44/20748.85010 整包，原 N51文件/严格签封核同。两包 Rust0a/API3/149/Store21、所有其他 Sources/工程/资源/entitlements 相同；不恢复旧DB、不运行旧Store18 helper。quality 唯一正常退出与首开，frontend 唯一文件系统作者。
+
+quality 一次正常CmdQ→Ask安全暂停后未再AX；原ps-only cell357在turn中断后丢失，不冒其成功。根另一次独立只读ps chunk270f4c实际0、准确原PID及同安装路径全[]，作者 fresh门再次[]后连续执行。返回 owner54147 实际终态0，根全文读receipt **f803b28074b3ebef7cac8c822084173f956a634e935794115cb703580d83e6ea**、12项manifest **ebb49a06a9dadce32b7e80ab6da052f14424a35205430b7d03f1d566940459b9**；完整S备份和N原备份保持，安装N51/strictdeep0。当前 Local90/legacy6735持久项before/after/copy同，legacy仅lstat精确Unix daemon.sock例外，原ditto1未掩盖。作者未launch；当前数据从未还原/降级，准确N产品不改标a60。
+
+quality 唯一普通 open chunk114030实际0，fresh ps准确App96516/Core96525parent96516及birth、Info158e/0.1.44-20748.85010。实际截图 `native-ui-c326e6b6-production-20261023/N-RETURN-EXECUTION-01/returned-N-actual.png` 经根亲看：五域胶囊标签恢复，会话与主内容白底，原Qincheng/会话/消息/休眠提示、footer及机器绿点可见。当前外观要求在此观察范围接受，App保持供用户使用；没有OS提示、模型/新session/配对/恢复/设置更改，不重跑600秒或已稳定业务。a60仅源码恢复保存，实际日用永远标N准确身份。
+
 ## 2026-10-23 N 实际安装及600秒证据；原生界面源码接受、视觉待新包
 
 N158e3479（0.1.44/20748.85010）已实际安装到 /Applications/PendingCrew.app，51文件/strictdeep0与封存包一致。installed receipt SHA256 cc96b111582f09209d9df52d164d9b8f7e7ead105e6ac99e822d4ecdc7b19c05，执行manifest910fd60770dc2bce1b9a7c08afc647cc4eb8d2823726bed62a37a60c885b60d6。旧9a整包保全，停态Core74项/legacy6735持久项前后稳定且copy相同；准确daemon.sock不持久化，原ditto1及完整失败保留，不冒整个原ditto0。
