@@ -1,5 +1,21 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 聊天与文档视觉精修开发窗口接受
+
+产品修改 `8a1e096e4c6245cbf1c152a6b4467e7e86d47db9`，5文件34+/20-，保留原Tab/单搜索/背景/footer，集中调整会话列宽与工具间距、中性轻选中、聊天/草稿辅助层级、文档选项和操作区的自适应同排。动作、Binding、UUID、权限与数据合同未改；净源独验接受，不重跑稳定业务。原暖DD/SPM一次Debug构建0，产物位于 `/private/tmp/pendingcrew-ui-refinement-c-20261024/Products/Debug/PendingCrewHotReload.app`。构建时两份统筹记录未提交，产品5源均为8a；本开发包不称完整不可变生产候选。
+
+实际C App35969/Core35983/window27937，独立私域、memory身份、falseproviders、Cloudnil且无LAN。正常UI以none创建“界面精修样例”及一条静态Human消息，sessions0。质量线在900×688/系统暗色实见四项改善、文档控件无裁切，草稿菜单打开与ESC关闭通过；根全文读 `hotreload-visual-followup-20261024/C-FINAL-VISUAL-QA.json` 并亲看两张实图，C留运行。未新建文档或重验正文保存，未验其他尺寸/外观/iOS，本轮未替换9381日用版。
+
+真实构建意外：同target改 `CONFIGURATION_BUILD_DIR` 仍触发Xcode stale cleanup，原DD的A开发App路径已被清理；“独立输出会保全原包”的假设撤回。原A/B/Core、数据根及日用进程仍在，未强退或用不同字节恢复旧路径，原A目前不能从旧路径重开。原日志和 `C-STALE-OUTPUT-FACTS.json` 保留，后续构建必须先保全会被清理的实际旧产物。InjectionNext会广播全部client；本轮源码均在C启动前冻结，之后没有保存或注入，实际日志只见原m6 watch、无Recompiling/Rebound，不冒称逐PID隔离。m6保持7e39，不自行ff或重启原Unknown现场。
+
+## 2026-10-24 配对错误生命周期修复已交到日用版
+
+产品源 `9381b8b2a1df43db7e1ae58fa820db65e01f76a4` 已完成受影响离线独验、准确新 normal、同源 Mac/iOS 全目标与整包核验。客户端区分连接、发送交接与等待回复：只有实际证明未调用发送的新请求，才保留原 UUID/密钥并恢复人工入口；已经发送或证据不足仍为 Unknown，旧查询失败不清除原 Unknown。错误说明只在明确系统证据下标注本地网络权限，不猜测故障原因。1953项完整输入、478项 Rust、normal 默认配置及显式 `CARGO_INCREMENTAL=0` 均留证；未重跑未变稳定业务或 GitHub CI。
+
+普通 Mac **0.1.44/20749.69802** 已整包安装并唯一正常首开。实际 App29882/Core29894、本机就绪与绿点可见；原 sidebar 自然保留，stopped1/public receipts5、native runtime/receipt/input0及无provider子进程，支持本次零自动启动/恢复结论。旧edcc wholeApp和完整ZIP保留，未迁移或回退数据库。根全文读 `enrollment-connection-lifecycle-20261024/DAILY-9381-UPDATE-QA.json` 并亲看实际934×688图。同源普通 iOS Simulator包仅完成静态构建/封存，不冒称连接界面或真机通过。
+
+原双App配对 Unknown 与实际 LAN 握手未解决；有限诊断 `9ba54736` 只作本地WIP保留，不合入主线或反复追加探针。VPS一次只读SSH成功，但指定debian自然PATH及四个已知路径未见Codex/Claude，PendingCrew服务未安装；未读取登录凭据或部署，资格仍待实际安装登录。证据为 `vps-current-readonly-20261024/RESULT.json`。最新UI请求沿既有人工方向对实际开发窗口细修；共享注入不得影响原B身份与Unknown现场，其余工程目标继续active。
+
 ## 2026-10-24 累计界面优化已交到普通 Mac 日用版
 
 完整输入 `edcc894eade6f0959368c013ab97515f58d0d683` 已完成准确新 normal、普通 Mac Release/M42 签名、独立整包核验及实际安装，日用为 **0.1.44/20749.65747**。它集中交付聊天式新建、默认目录/名称、机器栏与浅色头像、同排胶囊 Tab/单搜索，以及原生文档首次保存与本轮文档区精修。旧 F2 经临近无任务核查后正常菜单退出、安全暂停并确认 App/Core 结束；原三阶段整包更新成功，旧 wholeApp 与完整 ZIP 均保留，未迁移或回退数据库。

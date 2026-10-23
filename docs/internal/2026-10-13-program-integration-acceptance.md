@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 8a 聊天/文档有限视觉范围接受
+
+产品净修改 `8a1e096e4c6245cbf1c152a6b4467e7e86d47db9`：5文件34+/20-，仅布局/样式/会话列宽，原动作、Binding、UUID和权限合同不变。一次原暖DD/SPM Debug构建0，独立C私域实际App35969/Core35983，900×688暗色下会话工具/选中、聊天/草稿辅助层级及文档自适应控件均通过。none静态首消息一次、sessions0，原草稿菜单开/ESC关闭通过；根全文读 `hotreload-visual-followup-20261024/C-FINAL-VISUAL-QA.json` 并亲看聊天/文档实图，C保留。仅开发验证，构建时根两份记录dirty；未新normal/Release/iOS、未新安装或称全业务通过，日用仍准确9381/20749.69802。
+
+实际限制必须保留：Xcode同target输出override清理了原DD的A App，不能宣称旧实际产物已保全或旧路径可重开；原A/B进程与数据根未动，没有不同字节恢复或重build。原 `C-STALE-OUTPUT-FACTS.json` 保存完整86条stale记录。官方注入广播边界未变，本轮所有Sources在C启动前冻结，之后未保存/注入，实际日志无Recompiling/Rebound；不称逐client隔离。未验更多尺寸/浅色模式、文档正文/保存或iOS，不重复稳定证据。
+
+## 2026-10-24 9381 准确组合与日用首开接受
+
+产品 `9381b8b2a1df43db7e1ae58fa820db65e01f76a4`：受影响 begin/commit33项与Operation5项独验通过；实际Network/View编译门通过，旧lookup主体不变。准确新normal1953完整输入/478Rust，默认Debug/features[]、显式 `CARGO_INCREMENTAL=0`、fresh门及149方法/Store21通过；原normal证明没有改标。Mac Release/M42 hardened与普通iOS Simulator全目标均0，同源2708项封存逐字核验通过，报告 `enrollment-connection-lifecycle-20261024/CANDIDATE-9381-STATIC-QA.json`。
+
+日用安装为 **0.1.44/20749.69802**。旧edcc正常菜单退出、安全暂停并确认结束；原三阶段安装0，51文件等于候选，旧整包与ZIP均留存。质量线唯一正常首开 App29882/Core29894，实际版本/来源、原sidebar、本机就绪与绿点通过；前后stopped1/public receipts5、native runtime/receipt/input0、无provider子进程，支持零自动启动/恢复。根全文读 `DAILY-9381-UPDATE-QA.json` 并亲看934×688实际图。未选会话、发送、运行页面代码或模型，未迁移/回退数据库；不扩大为完整正文对比、真实错误路径或连接iOS通过。
+
+原LAN握手及原B配对Unknown仍未解决，有限CLI诊断仅本地WIP `9ba54736`，不合主线。VPS一次只读SSH0，在原debian精确范围缺CLI路径、原服务未安装，未读凭据或改服务；现有安装器与合格Linux旧包字节复核相同，不重做工具或CI。原A/B/工具、真机Unknown及Apple资格边界保留。当前热重载UI精修独立继续，全工程仍active。
+
 ## 2026-10-24 edcc 普通 Mac 日用安装与首开接受
 
 准确完整输入 `edcc894eade6f0959368c013ab97515f58d0d683`，1950完整输入/478Rust；新normal默认Debug/features[]、149方法/Store21独验接受，helper SHA `b9263f2e2641a41e7ac5f82323746a75fb974e3649ab8c98def92fab11e5e25f`。同源普通Mac Release/M42 hardened、无Injection，2598项封存与ZIP/51产品文件逐字相等独验接受，实际版本0.1.44/20749.65747。旧1708开发helper和756f候选均未改标；新iOS不在本轮范围。
