@@ -1,10 +1,16 @@
 #if os(macOS)
 import SwiftUI
+#if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+import Inject
+#endif
 import AppKit
 
 /// Daily native shell: crew sidebar and one work surface. Members and controls
 /// live inside the work surface while the original chat stays mounted.
 struct MacThreePaneView: View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     /// 长期职责的唯一所有者（spec §6）—— app 级持有，视图只观察不创建。
@@ -52,6 +58,9 @@ struct MacThreePaneView: View {
             // refreshMachines 负责（它包着 MacThreePaneView，首屏即跑）——
             // 这里不重复。
         }
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
 }
 

@@ -50,3 +50,6 @@ docs/private/
 
 # crewd 构建产物
 crewd/target/
+
+# Optional local SwiftUI injection project (normal project stays unchanged).
+.hotreload/

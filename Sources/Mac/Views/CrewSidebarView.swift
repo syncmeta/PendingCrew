@@ -1,5 +1,8 @@
 #if os(macOS)
 import SwiftUI
+#if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+import Inject
+#endif
 import Combine
 
 /// 左栏：crew 列表 + toolbar（新建 / 刷新）。
@@ -8,6 +11,9 @@ import Combine
 /// `runtimeLocation` 用一个 systemImage + 缩写标签提示用户这是 local /
 /// peer / fly。
 struct CrewSidebarView: View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var model:AppModel
     @Environment(\.colorScheme) private var scheme
@@ -145,6 +151,9 @@ struct CrewSidebarView: View {
                  + "子 crew 不会被提到顶层显示 —— 那会让侧栏的组织架构和实际汇报线对不上。"
                  + "取回这个群时，它们一起回来。")
         }
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
 
     @ViewBuilder private var activeHostHeader:some View {

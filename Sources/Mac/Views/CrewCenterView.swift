@@ -1,10 +1,16 @@
 #if os(macOS)
 import SwiftUI
+#if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+import Inject
+#endif
 
 /// 中栏（spec v2 §9）：选中 crew 的**群聊会话页**（白板 + 沟通渠道）。
 ///
 /// 机组详情从侧栏右键打开；成员和会话控制在同一工作区内展示。
 struct CrewCenterView: View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @ObservedObject private var personalService=CrewPersonalDraftService.shared
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
@@ -166,6 +172,9 @@ struct CrewCenterView: View {
                 }
             }
         }
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
 
     private func empty(_ text: String) -> some View {

@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 真实生产视图保存热更新已交付
+
+完整可选开发模块 `4a2d1de662fae5643cfd1e33011ed10cf8c9c7ac` 已 clean 冻结并独立接受。人类明确授权后正常退出旧私有开发 App/Core；单条 `run` 暖构建成功并打开真实生产 Root，新 App76659/Core76666、原 InjectionNext53720 保持。实际生产 `CrewSidebarView` 文案“通讯录→热更新→通讯录”两次保存均在同一窗口更新，“消息”选择保持；编译日志为1409/1118ms，未将其冒作精确保存到屏幕延迟。根全文读 RUNTIME-QA 并亲看修改及恢复两张截图。开发窗口已留给用户使用，日用 F2 的 App32881/Core32904及数据未动，私域没有session或执行receipt。
+
+当前运行窗口实际 watch `/Users/hey/.codex/worktrees/m6-client-20261014/PendingCrew/Sources`；复用入口为该树的 `python3 scripts/dev/swiftui-hot-reload.py run`，已实际重复调用确认复用原实例、不重建或重复启动。整合主线不会自动把现有进程迁移到另一个checkout，后续改界面须由唯一作者在真实watch树保存。可选开发配置保留原target/暖DerivedData/SPM，普通工程、iOS、Release与日用签包不变；不为这次开发工具交付重建normal或候选。当前仅验证一次真实body文案及反向恢复，不泛称任意SwiftUI修改均兼容；结构、签名、依赖和资源变化仍需正常退出开发进程并暖增量构建。细节见 `docs/development/swiftui-hot-reload.md`。
+
+原目录校验、模块名失败及退出审批拒绝均保留历史，人类新授权已实际完成该次退出/重开，不再作为当前阻断。暖开发入口空间检查改为3GiB，基于本轮全暖target+App约426MiB；仅先前明确两处非当前incremental回收，未碰当前暖缓存或降低正式构建质量。全工程其余VPS实际服务、Apple云/推送/设备与供应商资格门保持原范围，开发流程完成不冒全工程完成。
+
 ## 2026-10-23 热更新当前事实与无人值守续接
 
 日用版仍为已交付的 F2 `6e1a5375`、0.1.44/20749.31740；main/整合树为 `10c81563`。本次只读复核实际日用 App32881/Core32904、InjectionNext53720、开发 App54955/Core54963 仍运行，不退出、覆盖或接管其中任何进程。

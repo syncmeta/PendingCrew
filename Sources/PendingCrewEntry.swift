@@ -19,6 +19,10 @@ import AppKit
 @main
 struct PendingCrewEntry {
     static func main() {
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        // No ordinary GUI/Core initialization before the private-runtime gate.
+        guard PendingCrewHotReload.allowEntry() else { return }
+        #endif
         #if PENDINGCREW_KNOWLEDGE_VALIDATION
         // Candidate isolation is prepared before any UI singleton. No legacy import.
         CrewdFrontendIsolation.prepare()
@@ -35,6 +39,9 @@ struct PendingCrewEntry {
             fputs(CrewdDeliveryValidation.startupDiagnostic(error, entryArgumentsEmpty: validationArguments.dropFirst().isEmpty), stderr)
             return
         }
+        #endif
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        guard MainActor.assumeIsolated({ PendingCrewHotReload.configureRuntime() }) else { return }
         #endif
         #if os(iOS)
         #if !PENDINGCREW_KNOWLEDGE_VALIDATION && !PENDINGCREW_LOCAL_MAC

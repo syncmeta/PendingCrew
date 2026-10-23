@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 可选热更新完整模块实际接受
+
+最终净源码 `4a2d1de662fae5643cfd1e33011ed10cf8c9c7ac`、11路径。原d243源码门与eb9入口6项隔离检查复用，最终只增加根裁定的暖开发3GiB门槛及准确运行文档，不重跑稳定业务。独立 `swiftui-hotreload-independent-qa-20261023/RUNTIME-QA.json` 接受真实生产View保存与恢复，根全文受领并亲看 `module-fixed-after-save.png` / `module-fixed-after-restore.png`：同App76659/Core76666，消息selected1保持，文案实际来回更新；工具编译1409/1118ms及Rebound3成立，不冒精确屏幕总延迟。真实run端到端0，第二次run实际复用当前实例0，无新build或duplicate。最终源码clean，临时文案逐字恢复，已具备整个可选开发模块的整合资格。
+
+新明确授权后的私有正常退出已成功，原54955/54963真gone；工具53720、日用32881/32904的原birth/parent保持。新Core仍为F2原签名helper `09b4b0c6eb04f41c825bc400ee21c3e8cc386cbcdd7c1d9e4bfdf41f7f70276f`，私有session/public/native receipt全0，工具仅127.0.0.1:8887。开发包沿真实生产UI、内存身份和假provider执行路径，是工作树热更新环境，不称新Release或不可变产品候选。正常工程/签名配置及Rust均无变化；不新做normal、生产封包/安装、模型、Apple或设备验收。当前运行watch仍为作者树 `/Users/hey/.codex/worktrees/m6-client-20261014/PendingCrew/Sources`，入口/限制已记入开发文档，整合后继续从该树视觉迭代。
+
 ## 2026-10-23 热更新与剩余完整模块的实际边界
 
 F2 日用交付资格及 main `10c81563` 不变；本轮未新装 App、未改运行数据、未调用模型或重新构建后台。InjectionNext2.0.1 与真实开发 App 已运行，本机 TCP 已连接；首轮保存实际失败而非成功，开发模块名/执行文件名不一致的源码修正已准备，运行产物尚未应用。当前开发源码冻结 `eb9ea57a` clean，一条 `python3 scripts/dev/swiftui-hot-reload.py run` 入口与文档已准备，入口的进程查询未知、跨 checkout 误报和路径检查缺陷已修；独立质量净入口6项隔离检查通过，报告 `swiftui-hotreload-independent-qa-20261023/RUN-ENTRY-QA.json`、脚本SHA256 `6ccf9189c396b19f635beb8c55d040ff1fd73385d46a2e78dab296ba09cf1291`，根全文受领。正路在真实 build 前截断，未执行 run 正端到端，未取得同 PID 保存刷新、状态保持或延迟证据，不能作为热更新可用交付；实际门完成前保留在作者分支，不把源码准备冒成主线完整模块。
