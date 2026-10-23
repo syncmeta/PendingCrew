@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 文档区视觉与实际保存热更新接受
+
+`3af3492a` clean冻源，仅 `Sources/CrewdRemote/CrewdKnowledgeViews.swift` 36增/18删。紧凑中性范围/类型、说明Help与单行分类、按数量有上限的列表及标题/正文间距，保原业务闭包与权限/UUID。两处官方Inject hook严格限定 `DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)`。旧A经实际可见正常退出询问、安全暂停并确认App/Core退出后才改存储结构；原暖Debug构建0。旧B同注入源的首次尝试因无编译命令失败，无Compiled/Rebound；B随后正常退出，后续唯一保存只面向新A。
+
+独立 `hotreload-visual-refinement-20261024/VISUAL-QA.json` 接受900点/深色实际画面及同App85326/window27795的10→8点保存热刷新。根亲看最终图，正文空间改善明确；局部selected文档在注入后重置nil，正常重选后正文读回，不能称状态全保或数据丢失。其他宽度/浅色未扩大验收。本轮无Send、模型、知识变更、配对、生产签包或安装；原756f普通包保准确旧来源。开发窗口保留，普通日用未动。
+
 ## 2026-10-24 756f 同源 normal、普通 Mac Release 与 iOS Simulator 接受
 
 准确冻结源 `756fdfda52011082de893d43b1f5d817d51930f6`。normal独验 `cumulative-756f-normal-20261024/NORMAL-QA.json`：501材料、1950完整Git输入及模式、478Rust、构建前后相同，原require_fresh显式Debug配置通过，纯schema完整JSON与149方法一致，Store21；helper SHA `03cc9c69…6dc3af39`。已有创建、默认值、头像/机器栏、搜索及文档Save/Join/reopen业务证据复用，不重审或重跑稳定范围。

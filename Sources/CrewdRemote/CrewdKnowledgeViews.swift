@@ -1,29 +1,38 @@
 import SwiftUI
+#if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+import Inject
+#endif
 
 /// Product surface: Agent-authored pages inside the original application layout.
 /// Reading/reopening this surface never sends a prompt or resumes an Agent.
 struct CrewdKnowledgeDocumentsEntry: View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @ObservedObject var workspace:CrewdWorkspace
     @State private var library=false
     @State private var collection=CrewdKnowledgeCollection.documents
     var body:some View {
         VStack(spacing:0){
-            VStack(alignment:.leading,spacing:8){
-                ViewThatFits(in:.horizontal){
-                    HStack(spacing:16){scopePicker;collectionPicker}
-                    VStack(alignment:.leading,spacing:10){scopePicker;collectionPicker}
-                }
-                Text(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
-                    .font(CrewdType.caption).foregroundStyle(.secondary)
-            }.frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,14).padding(.vertical,10)
-            Divider()
+            ViewThatFits(in:.horizontal){
+                HStack(spacing:14){scopePicker;collectionPicker;Spacer(minLength:0)}
+                VStack(alignment:.leading,spacing:8){scopePicker;collectionPicker}
+            }
+            .font(.caption).controlSize(.small)
+            .frame(maxWidth:.infinity,alignment:.leading)
+            .padding(.horizontal,14).padding(.vertical,8)
+            .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if library {
                 CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection).id(collection)
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
         }
+        .tint(.gray)
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
-    private var scopePicker:some View{Picker("资料范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.segmented).frame(maxWidth:280)}
-    private var collectionPicker:some View{Picker("资料类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.segmented).frame(maxWidth:340)}
+    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).frame(maxWidth:180).accessibilityLabel("资料范围")}
+    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).frame(maxWidth:220).accessibilityLabel("资料类型")}
 
 }
 
@@ -260,6 +269,9 @@ private struct CrewdKnowledgeObjectSurface:View {
 }
 
 private struct CrewdGroupKnowledgeView:View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @ObservedObject var workspace:CrewdWorkspace
     @ObservedObject var group:CrewdChannelKnowledgeStore
     @ObservedObject var resources:CrewdResources
@@ -285,13 +297,15 @@ private struct CrewdGroupKnowledgeView:View {
     private var readKey:String{(chosen?.id ?? "")+"/"+(chosen?.source.context.generation ?? "")+"/"+(chosen?.revision ?? "")+"/"+retry.uuidString}
     var body:some View {
         VStack(spacing:0){
-            HStack{Button("引用已有资料",systemImage:"link"){linking=true};if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}};Spacer();Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}}.font(.caption).padding(12)
-            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:folder,view:.documents).padding(.horizontal,12)
+            HStack{Button("引用已有资料",systemImage:"link"){linking=true};if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}};Spacer();Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}}.font(.caption).padding(.horizontal,14).padding(.vertical,8)
+            CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:folder,view:.documents,compact:true)
+                .font(.caption).padding(.horizontal,14).padding(.bottom,8)
+                .help("本群资料分类，只改变展示位置，不改变共享原文")
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
             ViewThatFits(in:.horizontal){
                 HStack(alignment:.top,spacing:0){list.frame(width:200);Divider();detail.frame(minWidth:280)}
-                VStack(spacing:0){list.frame(maxHeight:180);Divider();detail}
+                VStack(spacing:0){list.frame(height:min(180,CGFloat(max(1,rows.count))*60+8));Divider();detail}
             }
         }
         .onAppear{group.setActive(true,owner:owner)}.onDisappear{group.setActive(false,owner:owner);content.renderer.revoke()}
@@ -302,25 +316,29 @@ private struct CrewdGroupKnowledgeView:View {
         .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;failure=nil}
         .onChange(of:collection){_,_ in selected=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
+        .controlSize(.small).tint(.gray)
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
     private var list:some View {
         ScrollView{LazyVStack(alignment:.leading,spacing:4){
             if group.loaded,rows.isEmpty{Text("本群尚无此类资料引用").font(.caption).foregroundStyle(.secondary).padding(12)}
             ForEach(rows){item in
-                Button{selected=item.id}label:{VStack(alignment:.leading,spacing:4){Text(item.title ?? "知识资料").font(CrewdType.body.weight(.medium));Text(item.state == "ready" ? "共享原文 · 本群引用":item.state == "contextChanged" ? "来源上下文已变化":"原内容当前不可用").font(.caption).foregroundStyle(.secondary)}.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(selected == item.id ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
+                Button{selected=item.id}label:{VStack(alignment:.leading,spacing:4){Text(item.title ?? "知识资料").font(CrewdType.body.weight(.medium));Text(item.state == "ready" ? "共享原文 · 本群引用":item.state == "contextChanged" ? "来源上下文已变化":"原内容当前不可用").font(.caption).foregroundStyle(.secondary)}.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(selected == item.id ? Color.primary.opacity(0.06):Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
             }
         }}
     }
     @ViewBuilder private var detail:some View {
         if let chosen {
             VStack(alignment:.leading,spacing:8){
-                HStack{Text(chosen.title ?? "知识引用").font(.headline);Spacer();CrewdFolderAssignmentButton(store:resources,drafts:$workspace.resourceDrafts,view:.documents,object:folderObject(chosen.source))}.padding(.horizontal,12)
-                DisclosureGroup("来源信息"){Text("原机组："+chosen.source.context.crewId).textSelection(.enabled);Text(chosen.source.reference.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,12)
+                HStack{Text(chosen.title ?? "知识引用").font(.headline);Spacer();CrewdFolderAssignmentButton(store:resources,drafts:$workspace.resourceDrafts,view:.documents,object:folderObject(chosen.source))}.padding(.horizontal,14)
+                DisclosureGroup("来源信息"){Text("原机组："+chosen.source.context.crewId).textSelection(.enabled);Text(chosen.source.reference.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,14)
                 if chosen.state == "ready",let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
                 }else{CrewdEmptySurface(title:"原内容尚不可读",detail:chosen.state == "contextChanged" ? "原知识上下文已变化，引用保留；不会把历史对象当作当前正文。":"请核对当前权限与源机组状态。",symbol:"doc.questionmark")}
-                Button("解除本群引用"){unlink(chosen)}.font(.caption).padding(12).disabled(group.writing)
+                Button("解除本群引用"){unlink(chosen)}.font(.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.vertical,8).disabled(group.writing)
                 ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == group.channel && $0.source.identity == chosen.id}){snapshot in
                     Button("查询原引用请求结果"){lookup(snapshot)}.font(.caption).padding(.horizontal,12)
                 }
