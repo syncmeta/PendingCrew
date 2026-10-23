@@ -44,3 +44,13 @@ struct CrewdDrafts {
         return true
     }
 }
+
+/// New-chat input belongs to its original authority; no backend action until Send.
+struct PendingCrewDraft: Equatable {
+    let id: String
+    var title: String
+    var parentCrewId: String?
+    var workingDirectory: String?
+    var executor: String = "codex"
+    var firstMessage: String = ""
+}

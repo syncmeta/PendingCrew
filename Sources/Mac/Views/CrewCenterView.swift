@@ -28,7 +28,7 @@ struct CrewCenterView: View {
     var body: some View {
         Group {
             if let draft = crewStore.pendingCrew, crewStore.selectedCrewId == draft.id {
-                PendingCrewChatView(draft: draft)
+                PendingCrewChatView(draft: draft).id(draft.id)
             } else if let detail = crewStore.selectedDetail {
                 CrewChatView(
                     crewId: detail.crew.id,
@@ -196,122 +196,145 @@ struct CrewCenterView: View {
     }
 }
 
-/// The new crew has no whiteboard, directory, or sessions until Send succeeds.
+/// A new chat uses the same bottom composer as an existing conversation.
+/// No crew, directory, message or session is created before explicit Send.
 private struct PendingCrewChatView: View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @EnvironmentObject private var crewStore: CrewStore
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var scheme
     let draft: PendingCrewDraft
-    @State private var message = ""
     @State private var error: String?
 
+    private func input(_ key: WritableKeyPath<PendingCrewDraft, String>) -> Binding<String> {
+        Binding(get: {
+                    if let current = crewStore.pendingCrew, current.id == draft.id { return current[keyPath: key] }
+                    return draft[keyPath: key]
+                },
+                set: { value in
+                    guard crewStore.pendingCrew?.id == draft.id else { return }
+                    crewStore.editPendingCrew { $0[keyPath: key] = value }
+                })
+    }
+    private var locked: Bool { crewStore.pendingCrewConfigurationLocked }
+    private var canSend: Bool {
+        !locked && !draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
-        ScrollView {
-        VStack(alignment:.leading,spacing:20) {
-            CrewdPanelHeader(title:"开始一件具体的事",detail:"机组："+draft.title+" · 发送第一条消息后创建",symbol:"bubble.left.and.bubble.right")
-            Text("工作目录").font(CrewdType.label.weight(.semibold))
-            HStack(spacing: 8) {
-                Image(systemName: "folder")
-                Group {
-                if crewStore.usesCrewdAuthority, crewStore.crewdWorkspace?.dataDirectory == nil {
-                    TextField("所连接电脑上的完整工作目录", text: Binding(
-                        get: { draft.workingDirectory ?? "" },
-                        set: { crewStore.setPendingWorkingDirectory($0) }))
-                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil)
-                } else {
-                    Text(draft.workingDirectory ?? (crewStore.usesCrewdAuthority ? "请明确选择工作目录" : "~/CrewGround/\(draft.title)"))
-                }
-                }.lineLimit(1).truncationMode(.middle)
-                Spacer()
-                if draft.workingDirectory != nil {
-                    Button(crewStore.usesCrewdAuthority ? "清除选择" : "恢复默认") { crewStore.setPendingWorkingDirectory(nil) }
-                        .disabled(crewStore.pendingCrewDelivery != nil
-                                  || crewStore.pendingCrewRollbackError != nil)
-                }
-                if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
-                    Button("选择目录…") { chooseDirectory() }
-                        .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil
-                                  || crewStore.pendingCrewRollbackError != nil)
-                }
-            }
-            .font(.callout)
-            .padding(.horizontal, 18)
-            if crewStore.usesCrewdAuthority {
-                Text("发送会创建机组并保存首条消息，再按新机组的实际执行能力启动 Codex 机长；不可用时保留机组和消息，机长不会启动。")
-                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 18)
-            }
-            Text("第一条任务").font(CrewdType.label.weight(.semibold))
-            Text("直接写下希望完成的事情，原文将作为新会话的首条任务。").font(CrewdType.caption).foregroundStyle(.secondary)
-            TextEditor(text: $message)
-                .disabled(crewStore.pendingCrewDelivery != nil
-                          || crewStore.pendingCrewRollbackError != nil)
-                .frame(minHeight: 72, maxHeight: 110)
-                .padding(8)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-                .padding(.horizontal, 18)
-            if let error {
-                Text(error).foregroundStyle(.red).font(.caption)
-                    .padding(.horizontal, 18)
-            }
-            if let rollbackError = crewStore.pendingCrewRollbackError {
-                Text(rollbackError).foregroundStyle(.red).font(.caption)
-                    .padding(.horizontal, 18)
-            }
-            if let original = crewStore.pendingCrewRecoveryMessage {
-                Text("原首条消息：\(original)")
-                    .font(.caption)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 18)
-            }
-            if let pending = crewStore.pendingCrewDelivery {
-                HStack {
-                    Text(pending).foregroundStyle(.orange).font(.caption)
-                    Spacer()
-                    Button("检查送达") {
-                        Task {
-                            do {
-                                try await crewStore.checkPendingCrewDelivery()
-                                self.error = nil
-                            } catch {
-                                self.error = error.localizedDescription
-                            }
-                        }
-                    }
-                    .disabled(crewStore.pendingCrewSending)
-                }
-                .padding(.horizontal, 18)
-            }
+        VStack(spacing: 0) {
             HStack {
-                Button("取消") { crewStore.discardPendingCrew() }
-                    .disabled(crewStore.pendingCrewDelivery != nil
-                              || crewStore.pendingCrewRollbackError != nil)
+                Text(draft.title).font(.headline).lineLimit(1)
                 Spacer()
-                Button {
-                    let text = message
-                    Task {
-                        do {
-                            try await crewStore.commitPendingCrew(text, draftId: draft.id)
-                            self.error = nil
-                        } catch {
-                            self.error = error.localizedDescription
-                        }
-                    }
-                } label: {
-                    if crewStore.pendingCrewSending { ProgressView().controlSize(.small) }
-                    else if crewStore.pendingCrewDelivery != nil { Text("等待送达") }
-                    else { Text("发送并创建") }
-                }
-                .buttonStyle(CrewdPrimaryButtonStyle())
-                .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                          || crewStore.pendingCrewSending
-                          || crewStore.pendingCrewDelivery != nil
-                          || crewStore.pendingCrewRollbackError != nil)
+                Button("取消") { crewStore.discardPendingCrew() }.disabled(locked)
+            }.padding(.horizontal, 18).frame(minHeight: 44)
+            Divider()
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                configuration
+                notices
+                ComposerView(
+                    input: input(\.firstMessage), pending: .constant([]),
+                    photoItems: .constant([]), cameraImage: .constant(nil),
+                    showFileImporter: .constant(false), showPhotoPicker: .constant(false), showCamera: .constant(false),
+                    canSend: canSend, onSend: send,
+                    showsAttachments: false, placeholder: "发消息以开始")
+                    .disabled(locked)
+                    .accessibilityIdentifier("pending-crew-composer")
             }
-            .padding(18)
-        }.padding(24).frame(maxWidth:660,alignment:.leading)
-            .background(Theme.Palette.surface,in:RoundedRectangle(cornerRadius:16))
-            .overlay(RoundedRectangle(cornerRadius:16).strokeBorder(Theme.Palette.hairline.opacity(0.65),lineWidth:0.7))
-            .padding(24).frame(maxWidth:.infinity)
-        }.background(Theme.Palette.surfaceMuted.opacity(0.25))
-        .navigationTitle("新机组")
+            .background(CrewdChatStyle.canvas(scheme))
+        }
+        .background(CrewdChatStyle.canvas(scheme))
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
+    }
+
+    private var configuration: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) {
+            field("目录") {
+                HStack(spacing: 4) {
+                    TextField(crewStore.usesCrewdAuthority ? "完整工作目录" : "~/CrewGround/\(draft.title)", text: Binding(
+                        get: { draft.workingDirectory ?? "" }, set: { crewStore.setPendingWorkingDirectory($0) }))
+                        .textFieldStyle(.plain).help(draft.workingDirectory ?? "所连接电脑上的完整工作目录")
+                        .accessibilityLabel("工作目录")
+                    if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
+                        Button { chooseDirectory() } label: { Image(systemName: "folder") }
+                            .buttonStyle(.plain).help("选择目录").accessibilityLabel("选择目录")
+                    }
+                }
+            }
+            field("机组名称") { TextField("机组名称", text: input(\.title)).textFieldStyle(.plain).accessibilityLabel("机组名称") }
+            field("coding agent") {
+                Picker("coding agent", selection: input(\.executor)) {
+                    Text("Codex").tag("codex")
+                    Text("Claude Code").tag("claude")
+                }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            field("机器") {
+                CrewdMachinePicker(window: model.crewdWindow)
+            }
+            field("父机组") {
+                Picker("父机组", selection: Binding(get: { draft.parentCrewId ?? "" }, set: { value in crewStore.editPendingCrew { $0.parentCrewId = value.isEmpty ? nil : value } })) {
+                    Text("无").tag("")
+                    ForEach(crewStore.crews) { crew in Text(crew.title).tag(crew.id) }
+                    if let parent = draft.parentCrewId, !crewStore.crews.contains(where: { $0.id == parent }) {
+                        Text("原父机组（待确认）").tag(parent)
+                    }
+                }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.disabled(locked).padding(.horizontal, 18).padding(.top, 10)
+    }
+
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            content().font(.callout).frame(minHeight: 24, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var notices: some View {
+        if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 18) }
+        if let failure = crewStore.pendingCrewRollbackError { Text(failure).font(.caption).foregroundStyle(.red).padding(.horizontal, 18) }
+        if let original = crewStore.pendingCrewRecoveryMessage { Text("原首条消息：\(original)").font(.caption).textSelection(.enabled).padding(.horizontal, 18) }
+        if let pending = crewStore.pendingCrewDelivery {
+            HStack {
+                Text(pending).font(.caption).foregroundStyle(.orange)
+                Spacer()
+                Button("检查送达") {
+                    Task { do { try await crewStore.checkPendingCrewDelivery(); error = nil } catch { self.error = error.localizedDescription } }
+                }.disabled(crewStore.pendingCrewSending)
+            }.padding(.horizontal, 18)
+        }
+        if let workspace = crewStore.crewdWorkspace,
+           let original = workspace.originalFirstMessages.last(where: { $0.draftID == draft.id }),
+           original.phase == .refused, original.crewID != nil,
+           !workspace.hasOriginalUnknown(method: "crew.create", crew: ""),
+           !workspace.originalFirstMessages.contains(where: { $0.draftID == draft.id && $0.phase == .unknown }) {
+            Button("重试原首条消息") {
+                Task {
+                    do { try await crewStore.commitPendingCrew(draft.firstMessage, draftId: draft.id); error = nil }
+                    catch { self.error = error.localizedDescription }
+                }
+            }
+            .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil || crewStore.pendingCrewRollbackError != nil)
+            .font(.caption).padding(.horizontal, 18)
+        }
+        if crewStore.pendingCrewSending { ProgressView("正在发送…").controlSize(.small).padding(.horizontal, 18) }
+    }
+
+    private func send() {
+        guard canSend else { return }
+        let text = draft.firstMessage
+        Task {
+            do { try await crewStore.commitPendingCrew(text, draftId: draft.id); error = nil }
+            catch { self.error = error.localizedDescription }
+        }
     }
 
     private func chooseDirectory() {

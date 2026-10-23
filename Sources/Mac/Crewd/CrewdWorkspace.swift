@@ -46,7 +46,17 @@ final class CrewdWorkspace: ObservableObject {
         prepare: { [weak self] envelope, crew in
             guard let journal = self?.originalJournal else { throw CrewdClientError(message: "原命令历史尚未就绪，未发送。", kind: .notSubmitted) }
             try journal.validateUnusedCodexInputs(envelope.command)
-            let record=try journal.prepare(method: "command.submit", params: envelope.value, crew: crew)
+            var firstMessageExecutor: String?
+            if envelope.operation == .firstMessage, let draft = self?.originalPendingCrewDraft {
+                guard envelope.params["crew"]["title"].string == draft.title,
+                      envelope.params["crew"]["workingDirectory"].string == draft.workingDirectory,
+                      envelope.params["crew"]["parentId"].string == draft.parentCrewId,
+                      envelope.params["text"].string == draft.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                    throw CrewdClientError(message: "首发输入已变化，尚未提交；原草稿仍保留。", kind: .notSubmitted)
+                }
+                firstMessageExecutor = draft.executor
+            }
+            let record=try journal.prepare(method: "command.submit", params: envelope.value, crew: crew, firstMessageExecutor: firstMessageExecutor)
             if envelope.params["codexInputs"] != .null || envelope.params["inputs"] != .null{self?.codexInputs.refreshProjection()}
             return record
         },
@@ -245,11 +255,14 @@ final class CrewdWorkspace: ObservableObject {
         let title: String
         let directory: String
         let text: String
+        var parentCrewId: String? = nil
+        var executor: String = "codex"
         var crewID: String?
         var phase: Phase
         var failure: String?
     }
     @Published var originalFirstMessages: [OriginalFirstMessage] = []
+    @Published var originalPendingCrewDraft: PendingCrewDraft?
     @Published var crewCreationDrafts = CrewdCrewCreationDrafts()
     @Published var messageDrafts = CrewdDrafts()
     private var personalProjectionObserver:AnyCancellable?

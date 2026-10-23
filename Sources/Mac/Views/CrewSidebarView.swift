@@ -48,28 +48,19 @@ struct CrewSidebarView: View {
             viewModePicker
             List {
                 if model.usesCrewdAuthority { activeHostHeader }
-                if let draft = crewStore.pendingCrew {
-                    Button {
-                        crewStore.selectCrew(draft.id)
-                    } label: {
-                        Label("新机组 · 待发送", systemImage: "bubble.left")
-                    }
-                    .buttonStyle(.plain)
-                }
                 if let viewer = sessionHost.viewer {
                     BackendSidebarConnectionStatus(
                         client: viewer, decision: sessionHost.orchestrationDecision)
                 }
-                if visibleCrews.isEmpty && crewStore.pendingCrew == nil {
+                if visibleCrews.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         if crewStore.loadingList {
                             ProgressView("正在读取机组").controlSize(.small)
                         } else {
-                            Label("从一个机组开始", systemImage: "person.3").font(.headline)
-                            Text("建立机组，把消息、Todo 和资料放在同一个工作空间。")
+                            Text("点右边那个孤独的加号\n新建机组以开始。")
                                 .font(.caption).foregroundStyle(.secondary)
-                            Button("新建机组") { crewStore.beginPendingCrew() }
-                                .buttonStyle(.borderedProminent).tint(Theme.Palette.accent)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }.padding(.vertical, 14).listRowSeparator(.hidden)
                 }
@@ -109,7 +100,7 @@ struct CrewSidebarView: View {
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             if !crewStore.usesCrewdAuthority { quotaFooterLine }
-            // 本机身份。#63 之后不登录到任何地方,这一行只是展示。
+            // Stable emoji machine picker, sharing the existing connection source.
             identityFooter
 
         }.frame(maxHeight:.infinity)
@@ -438,25 +429,11 @@ struct CrewSidebarView: View {
             lastViewed: viewed.snapshot)
     }
 
-    /// Sidebar 底部固定条：「人」+ 随机头像 —— 与成员列表里那个「人」**同一张脸**
-    /// (同一 seed `LocalWhiteboardStore.localUserId` 喂同一套 `BotAvatar`)。
-    ///
-    /// #63:PendingCrew 不登录到任何地方,原来那条「点「人」开登录面板」的入口
-    /// 和已登录态的 subject/签出菜单一并删掉 —— 这一行现在纯展示,不可点。
-    ///
-    /// 人类 Todo #131:头像旁边那行「今日 CC / Codex token 用量」去掉 ——
-    /// **去掉的只是这一行**,上面那块订阅额度环(`quotaFooterLine`)照旧。
+    /// The footer selects the same trusted authority used by new-chat settings.
     private var identityFooter: some View {
-        HStack(spacing: 10) {
-            BotAvatar(seed: LocalWhiteboardStore.localUserId, size: 26)
-                .frame(width: 26)
-            Text("人")
-                .font(.callout.weight(.medium))
-            Spacer(minLength: 4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        CrewdMachinePicker(window: model.crewdWindow)
+            .font(.callout.weight(.medium))
+            .padding(.horizontal, 12).padding(.vertical, 10)
     }
     /// 订阅额度显示（两家都拿不到时整块隐藏）。Todo #8/#10 把原来的文字表格
     /// 换成了圆环 —— 视图实现在 `QuotaRingsFooter`，判定在 `QuotaRingLayout`。
