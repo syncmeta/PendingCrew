@@ -96,19 +96,40 @@ def prepare():
 
 def running(executable):
     result = subprocess.run(['pgrep', '-f', '^' + re.escape(str(executable)) + '( |$)'],
-                            text=True, stdout=subprocess.PIPE)
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 1:
+        return None
+    if result.returncode != 0:
+        raise SystemExit('Process ownership query failed; no build or launch was attempted.')
     pids = result.stdout.split()
-    if len(pids) > 1:
+    if len(pids) != 1 or not pids[0].isdigit():
         raise SystemExit('Multiple matching developer processes; inspect owners before running again.')
-    return int(pids[0]) if pids else None
+    return int(pids[0])
+
+
+def private_runtime_root(path):
+    path = path.expanduser()
+    if not str(path).startswith('/private/tmp/') or os.path.realpath(path) != str(path):
+        raise SystemExit('Runtime root must be canonical under /private/tmp, without parent traversal or symlinks.')
+    for name in ('frontend', 'authority'):
+        if os.path.realpath(path / name) != str(path / name):
+            raise SystemExit('Runtime child directories must be canonical and not symlinked.')
+    return path
 
 
 def run_private(args, dd):
+    runtime = private_runtime_root(args.runtime_root)
     app = dd / 'Build/Products/Debug/PendingCrewHotReload.app'
     executable = app / 'Contents/MacOS/PendingCrewHotReload'
     if pid := running(executable):
+        try:
+            owner = json.loads((runtime / 'run.json').read_text())
+        except (OSError, ValueError):
+            owner = {}
+        if owner.get('appPID') != pid or owner.get('app') != str(app) or owner.get('sourceRoot') != str(ROOT):
+            raise SystemExit('A developer App is running but its source checkout is not verified for this command. No build or launch was attempted; use its original checkout or normally quit it first.')
         print('Developer App already running, PID', pid, '; no build or duplicate launch.')
-        print('Save production views under:', ROOT / 'Sources')
+        print('Recorded production source checkout:', ROOT / 'Sources')
         print('For structure/configuration changes, normally quit this developer App first, then run again.')
         return
     tool = args.injection_app.expanduser().resolve()
@@ -120,7 +141,7 @@ def run_private(args, dd):
     if 'TeamIdentifier=9V5A8WE85E' not in signature:
         raise SystemExit('InjectionNext developer identity differs from the verified official release.')
     # Normal build action is reused; never rebuild/overwrite a live developer App.
-    subprocess.run([sys.executable, str(Path(__file__).resolve()), 'build', '--derived-data', str(dd)], check=True)
+    subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), 'build', '--derived-data', str(dd)], check=True)
     backend = args.backend_input.expanduser().resolve()
     subprocess.run(['codesign', '--verify', '--strict', str(backend)], check=True)
     core_bytes = backend.read_bytes()
@@ -132,9 +153,6 @@ def run_private(args, dd):
     subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none', str(app)], check=True)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     assert helper.read_bytes() == core_bytes  # Outer signing must preserve the original Core signature.
-    runtime = args.runtime_root.expanduser()
-    if not str(runtime).startswith('/private/tmp/') or runtime.is_symlink():
-        raise SystemExit('Runtime root must be an explicit private /private/tmp directory.')
     runtime.mkdir(mode=0o700, exist_ok=True)
     for name in ('frontend', 'authority'):
         directory = runtime / name
@@ -148,8 +166,11 @@ def run_private(args, dd):
     tool_exe = tool / 'Contents/MacOS/InjectionNext'
     tool_pid = running(tool_exe)
     if tool_pid is None:
-        if subprocess.run(['pgrep', '-x', 'InjectionNext'], stdout=subprocess.DEVNULL).returncode == 0:
+        existing_tool = subprocess.run(['pgrep', '-x', 'InjectionNext'], stdout=subprocess.DEVNULL)
+        if existing_tool.returncode == 0:
             raise SystemExit('Another InjectionNext is running; select its verified App path with --injection-app. Nothing was stopped.')
+        if existing_tool.returncode != 1:
+            raise SystemExit('Tool process query failed; no new process was launched.')
         env = os.environ.copy()
         env.update(INJECTION_DIRECTORIES=str(ROOT / 'Sources'), NSUnbufferedIO='YES')
         logs = dd / 'Logs/Build'

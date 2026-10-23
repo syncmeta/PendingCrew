@@ -10,7 +10,7 @@
 python3 scripts/dev/swiftui-hot-reload.py run
 ```
 
-`run` 尚待这轮端到端实测。它复用既有 PendingCrew target / 暖 DerivedData / SourcePackages；首次构建，复制已安装 App 的 Core 到独立开发包（保留 Core 原字节和签名，仅签开发外层），使用独立偏好域与 `/private/tmp` 数据根，准备内存开发身份，然后启动或复用已验证的 InjectionNext，打开真实 `PendingCrewApp → RootView → MacThreePaneView`。不会安装到 `/Applications`，不会退出任何现有进程。若开发 App 已运行，只打印当前 PID 和源目录，不重复启动或覆盖产物。
+`run` 尚待这轮端到端实测。它复用既有 PendingCrew target / 暖 DerivedData / SourcePackages；首次构建，复制已安装 App 的 Core 到独立开发包（保留 Core 原字节和签名，仅签开发外层），使用独立偏好域与 `/private/tmp` 数据根，准备内存开发身份，然后启动或复用已验证的 InjectionNext，打开真实 `PendingCrewApp → RootView → MacThreePaneView`。不会安装到 `/Applications`，不会退出任何现有进程。若开发 App 已运行，仅在已有运行记录的 PID、产物与源码工作树都匹配时显示该来源；来源缺失或不同 checkout 时明确拒绝继续，不冒称当前目录可热改，也不重复启动或覆盖产物。
 
 本机默认沿用已经准备的官方工具、暖缓存和私有运行根；其他位置可用 `--injection-app`、`--derived-data`、`--backend-input`、`--runtime-root` 指定。工具须是官方签名的 2.0.1。`run` 自动配置环境，无需手填多个变量。真实 Core 的 Codex/Claude 程序均明确设为 `/usr/bin/false`，远程凭据使用现有 memory seam，个人草稿使用现有 `owned(root:deviceIdentity:configuration:nil)` 接口，不创建 Keychain 身份或连接 CloudKit。这是 UI 开发组合，不是新签发的完整产品候选。
 
