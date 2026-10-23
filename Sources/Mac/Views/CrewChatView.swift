@@ -384,8 +384,8 @@ struct CrewChatView: View {
         return crewTitle
     }
     private var conversationHeader:some View {
-        HStack(spacing:10){
-            Text(conversationTitle).font(CrewdType.label.weight(.semibold)).lineLimit(1)
+        HStack(spacing:8){
+            Text(conversationTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
             Spacer(minLength:2)
             ViewThatFits(in:.horizontal){

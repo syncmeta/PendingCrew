@@ -20,7 +20,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
             }
             .font(.caption).controlSize(.small)
             .frame(maxWidth:.infinity,alignment:.leading)
-            .padding(.horizontal,14).padding(.vertical,8)
+            .padding(.horizontal,14).padding(.vertical,6)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if library {
                 CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection).id(collection)
@@ -31,8 +31,8 @@ struct CrewdKnowledgeDocumentsEntry: View {
         .enableInjection()
         #endif
     }
-    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围")}
-    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
+    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围")}
+    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档/知识切片").tag(CrewdKnowledgeCollection.documents);Text("Agent自由页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
 
 }
 
@@ -301,12 +301,17 @@ private struct CrewdGroupKnowledgeView:View {
                 HStack(spacing:8){documentActions;documentFolders.fixedSize(horizontal:true,vertical:false)}
                 VStack(alignment:.leading,spacing:6){documentActions;documentFolders}
             }.font(.caption).frame(maxWidth:.infinity,alignment:.leading)
-                .padding(.horizontal,14).padding(.top,4).padding(.bottom,8)
+                .padding(.horizontal,14).padding(.bottom,6)
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
-            ViewThatFits(in:.horizontal){
-                HStack(alignment:.top,spacing:0){list.frame(width:200);Divider();detail.frame(minWidth:280)}
-                VStack(spacing:0){list.frame(height:min(180,CGFloat(max(1,rows.count))*60+8));Divider();detail}
+            if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty {
+                Text("暂无资料").font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth:.infinity,maxHeight:.infinity)
+            }else{
+                ViewThatFits(in:.horizontal){
+                    HStack(alignment:.top,spacing:0){list.frame(width:200);Divider();detail.frame(minWidth:280)}
+                    VStack(spacing:0){list.frame(height:min(180,CGFloat(max(1,rows.count))*60+8));Divider();detail}
+                }
             }
         }
         .onAppear{group.setActive(true,owner:owner)}.onDisappear{group.setActive(false,owner:owner);content.renderer.revoke()}
@@ -327,6 +332,7 @@ private struct CrewdGroupKnowledgeView:View {
             Button("引用已有资料",systemImage:"link"){linking=true}
             if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}}
             Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}
+                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal,4)
         }.fixedSize(horizontal:true,vertical:false)
     }
     private var documentFolders:some View {
@@ -335,7 +341,6 @@ private struct CrewdGroupKnowledgeView:View {
     }
     private var list:some View {
         ScrollView{LazyVStack(alignment:.leading,spacing:4){
-            if group.loaded,rows.isEmpty{Text("本群尚无此类资料引用").font(.caption).foregroundStyle(.secondary).padding(12)}
             ForEach(rows){item in
                 Button{selected=item.id}label:{VStack(alignment:.leading,spacing:4){Text(item.title ?? "知识资料").font(CrewdType.body.weight(.medium));Text(item.state == "ready" ? "共享原文 · 本群引用":item.state == "contextChanged" ? "来源上下文已变化":"原内容当前不可用").font(.caption).foregroundStyle(.secondary)}.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(selected == item.id ? Color.primary.opacity(0.06):Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
             }
@@ -355,7 +360,7 @@ private struct CrewdGroupKnowledgeView:View {
                     Button("查询原引用请求结果"){lookup(snapshot)}.font(.caption).padding(.horizontal,12)
                 }
             }
-        }else{CrewdEmptySurface(title:"选择一份资料",detail:"本群只显示实际引用；机组资料库中的原文可在多个群复用。",symbol:"doc.on.doc")}
+        }else{Text("选择资料查看内容").font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)}
     }
     private func unlink(_ item:CrewdChannelKnowledgeItem){
         guard let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}

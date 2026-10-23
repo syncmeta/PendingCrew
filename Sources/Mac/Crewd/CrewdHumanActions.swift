@@ -43,11 +43,13 @@ struct CrewdConversationRow<Avatar: View>: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(CrewdType.body.weight(selected ? .semibold:.medium)).lineLimit(1)
                         .foregroundStyle(CrewdChatStyle.ink(scheme))
-                    Text(subtitle).font(CrewdType.caption).lineLimit(1)
-                        .foregroundStyle(CrewdChatStyle.muted(scheme))
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(CrewdType.caption).lineLimit(1)
+                            .foregroundStyle(CrewdChatStyle.muted(scheme))
+                    }
                 }
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 10).padding(.vertical, 11)
+            }.padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(selected ? CrewdChatStyle.listSelection(scheme) : .clear, in: RoundedRectangle(cornerRadius: 7))
                 .contentShape(Rectangle())

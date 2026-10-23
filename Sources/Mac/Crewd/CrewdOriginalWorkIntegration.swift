@@ -555,7 +555,8 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 VStack(spacing: 3) {
                     ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in
                         if let row = workspace.channels.first(where: { $0["id"].string == id }) {
-                            CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: conversationSubtitle(row),
+                            let subtitle = conversationSubtitle(row)
+                            CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: subtitle == "机组群聊" ? "" : subtitle,
                                 selected: !visibleSession && workspace.channelID == id,
                                 action: { workspace.selectConversation(id); runner.viewingTerminal = false; showConversationPopover = false }) {
                                 CrewdAttentionAvatar(group:workspace.channelWork,crew:workspace.crewID,channel:id){
