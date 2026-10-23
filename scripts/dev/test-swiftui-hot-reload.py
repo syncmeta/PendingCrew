@@ -31,6 +31,8 @@ with tempfile.TemporaryDirectory(prefix='pcw-hotreload-test-', dir='/private/tmp
     }
 }
 ''')
+    (work / 'frontend').mkdir(mode=0o700)
+    (work / 'authority').mkdir(mode=0o700)
     (work / 'alias').symlink_to(pathlib.Path.home(), target_is_directory=True)
     executable = work / 'gate-tests'
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-D', 'DEBUG', '-D', 'PENDINGCREW_HOTRELOAD',
