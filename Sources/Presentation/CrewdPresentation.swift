@@ -1,4 +1,7 @@
 import SwiftUI
+#if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+import Inject
+#endif
 #if os(macOS)
 import AppKit
 #endif
@@ -231,6 +234,9 @@ private final class CrewdBehindWindowMaterialView:NSVisualEffectView {
 /// Native SwiftUI buttons retain the original five-domain binding. Only this
 /// navigation capsule uses Liquid Glass; long content and messages do not.
 struct CrewdGlassWorkspaceTabs:View {
+    #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+    @ObserveInjection private var injection
+    #endif
     @Binding var selection:String
     #if os(macOS)
     @ScaledMetric(relativeTo:.caption) private var tabHeight:CGFloat=28
@@ -245,6 +251,9 @@ struct CrewdGlassWorkspaceTabs:View {
                 .onAppear{proxy.scrollTo(selection,anchor:.center)}
         }.frame(height:max(CrewdType.target,tabHeight)+10)
             .accessibilityElement(children:.contain).accessibilityLabel("工作区内容")
+        #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
+        .enableInjection()
+        #endif
     }
     @ViewBuilder private var capsule:some View {
         if #available(macOS 26.0,iOS 26.0,*) {
