@@ -223,6 +223,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             }
             if state.runtime_identity.get().is_some() {
                 capabilities.push("command.receipts".into());
+                capabilities.push("crew.defaultWorkingDirectory".into());
             }
             if state.orchestra.get().is_some()
                 && state.native_helpers.get().is_some()

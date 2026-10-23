@@ -49,8 +49,17 @@ pub struct CommandRuntimeTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FirstMessageCrewParams {
+    pub title: String,
+    #[serde(default)]
+    pub working_directory: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FirstMessageParams {
-    pub crew: CrewCreateParams,
+    pub crew: FirstMessageCrewParams,
     pub text: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -423,4 +432,41 @@ pub struct TerminalWatchEvent {
     pub watch_id: String,
     pub output: TerminalOutput,
     pub closed: bool,
+}
+
+#[cfg(test)]
+mod first_message_default_directory_tests {
+    use super::*;
+
+    #[test]
+    fn first_message_default_directory_wire_is_optional_without_relaxing_regular_create() {
+        for crew in [
+            serde_json::json!({"title":"Reykjavik"}),
+            serde_json::json!({"title":"Reykjavik","workingDirectory":null}),
+        ] {
+            let parsed = serde_json::from_value::<FirstMessageParams>(
+                serde_json::json!({"crew":crew,"text":"first human message"}),
+            );
+            assert!(
+                parsed.is_ok(),
+                "firstMessage must accept an authority-local default: {parsed:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(parsed.unwrap()).unwrap()["crew"]["workingDirectory"],
+                serde_json::Value::Null
+            );
+        }
+        assert!(
+            serde_json::from_value::<CrewCreateParams>(
+                serde_json::json!({"title":"ordinary create"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CrewCreateParams>(
+                serde_json::json!({"title":"ordinary create","workingDirectory":null})
+            )
+            .is_err()
+        );
+    }
 }
