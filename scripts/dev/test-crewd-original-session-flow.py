@@ -10,6 +10,7 @@ def main():
     a.add_argument('--derived-data', required=True)
     a.add_argument('--output')
     a.add_argument('--configuration', choices=['Debug','NativeCandidate'], default='NativeCandidate')
+    a.add_argument('--scenarios', nargs='+', help='Run only named affected scenarios; default keeps the complete suite')
     args = a.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
     dd = pathlib.Path(args.derived_data).resolve()
@@ -30,7 +31,9 @@ def main():
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    for scenario in ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']:
+    scenarios = ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']
+    assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
+    for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')
         listener = socket.socket(socket.AF_UNIX); listener.bind(str(path)); listener.listen(1)
         calls = []; problems = []; state = {'running': scenario == 'running', 'captain': False}
@@ -89,7 +92,7 @@ def main():
             thread.join(timeout=3)
             assert not problems, problems
             methods = [r['method'] for r in calls]
-            assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click'] else 0), methods
+            assert methods.count('session.resume') == 0, methods
             assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') else 0), methods
             assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')

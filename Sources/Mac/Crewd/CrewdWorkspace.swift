@@ -752,30 +752,6 @@ final class CrewdWorkspace: ObservableObject {
     }
     var selectedMembers: [CrewdValue] { channelSummaries.first(where: {$0["channel"]["id"].string == channelID})?["members"].array ?? [] }
     func selectSession(_ id: String) { guard sessionID != id else { return }; selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
-    private var openingSessions = Set<String>()
-    /// Only an explicit user click invokes this path. Refresh live state first;
-    /// never infer a stopped runner from an uninitialized display projection.
-    func restoreOpenedSession(_ id: String, crew: String) async {
-        let epoch = observationGeneration, route = selection, connection = client.connectionEpoch
-        guard crewID == crew, sessionID == id, !openingSessions.contains(id) else { return }
-        openingSessions.insert(id); defer { openingSessions.remove(id) }
-        do {
-            let live = try await readValue("session.live", .object(["sessionId": .string(id)]))
-            guard acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id else { return }
-            guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
-                throw CrewdClientError(message: "原会话运行状态未能确认，未提交恢复。", kind: .notSubmitted)
-            }
-            if !running {
-                guard !hasOriginalUnknown(method: "session.resume", crew: crew) else {
-                    throw CrewdClientError(message: "原恢复请求结果未确认，请先核对原请求。", kind: .notSubmitted)
-                }
-                _ = try await performValue("session.resume", .object(["sessionId": .string(id)]))
-            }
-        } catch {
-            if acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
-        }
-    }
-
     /// Called once after an explicitly created crew has a confirmed identity.
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.

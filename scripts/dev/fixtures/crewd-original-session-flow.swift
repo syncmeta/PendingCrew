@@ -40,6 +40,17 @@ import Foundation
             do { try workspace.requireExecutor("codex", crew: "crew-a"); fatalError("missing/unavailable profile accepted") } catch {}
             print("PASS actual App profile refusal: " + scenario); return
         }
+        // Use the same presentation runner/member-open path as the original UI.
+        let runner = CrewSessionRunner(presentationOnly: true, observePowerNotifications: false)
+        let backend = CrewdOriginalSessionBackend(workspace: workspace, crewID: "crew-a", sessionID: "session-a", kind: .codex)
+        let run = CrewSessionRun(crewId: "crew-a", sessionId: "session-a", kind: .codex,
+                                 taskBrief: "", workingDirectory: root, backend: backend)
+        runner.installCrewdProjection([run], workspace: workspace)
+        func viewOriginal() async {
+            runner.openSession(run.runID)
+            await Task.yield()
+            precondition(runner.selectedRunId == run.runID && runner.viewingTerminal && workspace.sessionID == "session-a")
+        }
         if scenario == "legacy-text" || scenario == "legacy-resume" {
             workspace.originalJournalRequired = true
             await workspace.prepareOriginalJournal(root: root.appendingPathComponent("original-journal"))
@@ -54,7 +65,7 @@ import Foundation
             } catch {}
             precondition(workspace.durableUnknown.count == 1)
             await workspace.refreshExecutorProfiles()
-            if scenario == "legacy-resume" { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
+            if scenario == "legacy-resume" { await viewOriginal() }
             print("PASS actual App public legacy command: " + scenario + "; unknown retained, no automatic retry"); return
         }
         switch scenario {
@@ -67,19 +78,19 @@ import Foundation
             let result = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(result == nil && workspace.error?.contains("机组及已有消息仍保留") == true)
         case "switch", "switch-return":
-            let task = Task { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
+            let task = Task { await viewOriginal() }
             try await Task.sleep(for: .milliseconds(50))
             if scenario == "switch-return" { workspace.selectSession("session-b"); workspace.selectSession("session-a") }
             else { workspace.sessionID = "session-b" }
             await task.value
         case "double-click":
-            let first = Task { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
-            let second = Task { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
+            let first = Task { await viewOriginal() }
+            let second = Task { await viewOriginal() }
             await first.value; await second.value
         default:
-            await workspace.restoreOpenedSession("session-a", crew: "crew-a")
-            if scenario == "malformed" { precondition(workspace.error?.contains("未能确认") == true) }
-            if scenario == "stopped" { await workspace.restoreOpenedSession("session-a", crew: "crew-a") }
+            await viewOriginal()
+            if scenario == "malformed" { precondition(workspace.error == nil, "viewing must not interpret execution liveness as a resume decision") }
+            if scenario == "stopped" { await viewOriginal() }
         }
         print("PASS actual App session flow: " + scenario)
     }

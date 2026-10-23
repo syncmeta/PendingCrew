@@ -429,14 +429,11 @@ final class CrewSessionRunner: ObservableObject {
         if let session = runs.first(where: { $0.runID == runId })?.sessionId { crewdProjectionWorkspace?.selectSession(session) }
     }
 
-    /// An explicit avatar/conversation click opens the original identity. Merely
-    /// projecting or selecting a run during refresh never launches a process.
+    /// Opens the original conversation for viewing. Resuming execution requires
+    /// the separate explicit resume control.
     func openSession(_ runId: UUID) {
         select(runId)
         viewingTerminal = true
-        guard let workspace = crewdProjectionWorkspace,
-              let run = runs.first(where: { $0.runID == runId }) else { return }
-        Task { await workspace.restoreOpenedSession(run.sessionId, crew: run.crewId) }
     }
 
     /// 进入「新建 session」态（composer 显零配置启动面）。
