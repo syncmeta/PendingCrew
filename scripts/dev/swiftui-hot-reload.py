@@ -222,8 +222,8 @@ def main():
     print('Inject 1.6.0 source:', INJECT_REVISION)
     print('No application was installed or launched. Runtime is disabled in the generated scheme.')
     if args.action == 'build':
-        if shutil.disk_usage(dd).free < 4 * 1024**3:
-            raise SystemExit('Less than 4 GiB free: coordinate disk space; this entry never deletes caches.')
+        if shutil.disk_usage(dd).free < 3 * 1024**3:
+            raise SystemExit('Less than 3 GiB free: coordinate disk space; this entry never deletes caches.')
         build_env = os.environ.copy()
         config_index = int(build_env.get('GIT_CONFIG_COUNT', '0'))
         build_env.update({'GIT_CONFIG_COUNT': str(config_index + 1),
