@@ -10,7 +10,7 @@
 python3 scripts/dev/swiftui-hot-reload.py run
 ```
 
-`run` 已完成本机暖构建、复用既有工具并打开真实窗口的端到端实测。它复用既有 PendingCrew target / 暖 DerivedData / SourcePackages；首次构建，复制已安装 App 的 Core 到独立开发包（保留 Core 原字节和签名，仅签开发外层），使用独立偏好域与 `/private/tmp` 数据根，准备内存开发身份，然后启动或复用已验证的 InjectionNext，打开真实 `PendingCrewApp → RootView → MacThreePaneView`。不会安装到 `/Applications`，不会退出任何现有进程。若开发 App 已运行，仅在已有运行记录的 PID、产物与源码工作树都匹配时显示该来源；来源缺失或不同 checkout 时明确拒绝继续，不冒称当前目录可热改，也不重复启动或覆盖产物。
+`run` 已完成本机暖构建、复用既有工具并打开真实窗口的端到端实测。它复用既有 PendingCrew target / 暖 DerivedData / SourcePackages；首次构建，复制已协调的冻结开发 Core 到独立开发包（保留 Core 原字节和签名，仅签开发外层），使用独立偏好域与 `/private/tmp` 数据根，准备内存开发身份，然后启动或复用已验证的 InjectionNext，打开真实 `PendingCrewApp → RootView → MacThreePaneView`。不会安装到 `/Applications`，不会退出任何现有进程。若开发 App 已运行，仅在已有运行记录的 PID、产物与源码工作树都匹配时显示该来源；来源缺失或不同 checkout 时明确拒绝继续，不冒称当前目录可热改，也不重复启动或覆盖产物。
 
 本机默认沿用已经准备的官方工具、暖缓存和私有运行根；其他位置可用 `--injection-app`、`--derived-data`、`--backend-input`、`--runtime-root` 指定。工具须是官方签名的 2.0.1。`run` 自动配置环境，无需手填多个变量。真实 Core 的 Codex/Claude 程序均明确设为 `/usr/bin/false`，远程凭据使用现有 memory seam，个人草稿使用现有 `owned(root:deviceIdentity:configuration:nil)` 接口，不创建 Keychain 身份或连接 CloudKit。这是 UI 开发组合，不是新签发的完整产品候选。
 
@@ -59,3 +59,5 @@ python3 scripts/dev/swiftui-hot-reload.py build
 只有人类点击发送，才走原创建及首 Human 消息事务，确认后尝试启动明确所选 Codex 或 Claude Code，不隐式换厂商。新增选择以原首发快照冻结；可核对的原 journal 仅增加本地可选 executor 字段，正式命令参数未变，旧缺字段记录按原 Codex 语义核对且不自动启动。已有机组的首条消息被明确拒绝时，可只重试原消息；Unknown 继续只读核对，不重建、不重发。
 
 后续未指定字段合同：打开或编辑新建页时，名称和目录均为空并显示“未指定”，输入框占位为“发消息以新建机组”。只有首次明确发送才选定地名并冻结原草稿；缺省目录以原首发命令的 `workingDirectory: null` 表示，由所选 authority 的服务账号在 `HOME/CrewGround/名称` 独占创建，绝不取前端本机 HOME 代替远端。它要求后台声明 `crew.defaultWorkingDirectory`，旧后台未具备此能力时需明确指定目录，不能隐式补路径。普通 `crew.create` 仍要求显式目录，原显式路径保持不变。实际绝对目录须在原首发回执中确认，之后才尝试启动所选 agent；Unknown 不重新挑名或重发。目录平时仅显示最后一级文件夹名，编辑与悬停保留完整路径，远端路径只作字符串拆分。机器菜单仅列机器名称，页内与底部共用原浅色圆底单 emoji 头像及可信连接源。
+
+开发 Core 的首次切换由协调构建动作显式传入 `--backend-input` 冻结路径；既有 `run.json` 保存该输入的实际路径与 SHA256。之后无参 `run` 仅复用此输入，缺失或摘要变化时在构建/启动前明确停止，不回退到日用 F2。旧无输入记录需要明确指定一次合格输入；活开发窗口仍优先按原 PID/源码记录复用，不在运行中切换 Core。

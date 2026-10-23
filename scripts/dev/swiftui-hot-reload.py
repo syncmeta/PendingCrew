@@ -132,6 +132,18 @@ def run_private(args, dd):
         print('Recorded production source checkout:', ROOT / 'Sources')
         print('For structure/configuration changes, normally quit this developer App first, then run again.')
         return
+    if args.backend_input is None:
+        try:
+            previous = json.loads((runtime / 'run.json').read_text())
+            backend = pathlib.Path(previous['backendInput']).expanduser().resolve()
+        except (OSError, ValueError, KeyError, TypeError):
+            raise SystemExit('No verified Core input is recorded. Use --backend-input with the coordinated frozen developer Core once.')
+        if not backend.is_file() or hashlib.sha256(backend.read_bytes()).hexdigest() != previous.get('coreSHA256'):
+            raise SystemExit('Recorded Core input is missing or changed; no build or launch was attempted. Select a verified input explicitly.')
+    else:
+        backend = args.backend_input.expanduser().resolve()
+    subprocess.run(['codesign', '--verify', '--strict', str(backend)], check=True)
+    core_bytes = backend.read_bytes()
     tool = args.injection_app.expanduser().resolve()
     info = plistlib.loads((tool / 'Contents/Info.plist').read_bytes())
     if info.get('CFBundleShortVersionString') != '2.0.1':
@@ -142,9 +154,6 @@ def run_private(args, dd):
         raise SystemExit('InjectionNext developer identity differs from the verified official release.')
     # Normal build action is reused; never rebuild/overwrite a live developer App.
     subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), 'build', '--derived-data', str(dd)], check=True)
-    backend = args.backend_input.expanduser().resolve()
-    subprocess.run(['codesign', '--verify', '--strict', str(backend)], check=True)
-    core_bytes = backend.read_bytes()
     helper = app / 'Contents/Helpers/crewd'
     helper.parent.mkdir(exist_ok=True)
     if helper.is_symlink():
@@ -195,7 +204,7 @@ def run_private(args, dd):
         child = subprocess.Popen([str(executable)], env=env, stdout=log,
                                  stderr=subprocess.STDOUT, start_new_session=True)
     receipt = dict(appPID=child.pid, toolPID=tool_pid, sourceRoot=str(ROOT), app=str(app),
-                   runtimeRoot=str(runtime), coreSHA256=hashlib.sha256(core_bytes).hexdigest())
+                   runtimeRoot=str(runtime), backendInput=str(backend), coreSHA256=hashlib.sha256(core_bytes).hexdigest())
     (runtime / 'run.json').write_text(json.dumps(receipt, indent=2) + '\n')
     print(json.dumps(receipt, indent=2))
     print('Edit production SwiftUI under', ROOT / 'Sources', 'and save. This scope cannot call real model providers.')
@@ -206,7 +215,7 @@ def main():
     parser.add_argument('action', choices=['prepare', 'build', 'run'])
     parser.add_argument('--derived-data', type=pathlib.Path, default=DEFAULT_DD)
     parser.add_argument('--injection-app', type=pathlib.Path, default=pathlib.Path('/private/tmp/pcw-injectionnext-runtime-2.0.1-20261023/InjectionNext.app'))
-    parser.add_argument('--backend-input', type=pathlib.Path, default=pathlib.Path('/Applications/PendingCrew.app/Contents/Helpers/crewd'))
+    parser.add_argument('--backend-input', type=pathlib.Path, help='Explicit verified frozen Core input; later runs reuse its recorded path and SHA256.')
     parser.add_argument('--runtime-root', type=pathlib.Path, default=pathlib.Path('/private/tmp/pendingcrew-hotreload-runtime-20261023'))
     args = parser.parse_args()
     project = prepare()
