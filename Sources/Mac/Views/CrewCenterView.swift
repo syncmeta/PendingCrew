@@ -3,26 +3,19 @@ import SwiftUI
 
 /// 中栏（spec v2 §9）：选中 crew 的**群聊会话页**（白板 + 沟通渠道）。
 ///
-/// crew 元数据 / 机长 / DAG / 责任比例从这里搬到了 `CrewDetailInspector`
-/// (顶栏 ⓘ 打开)。session 终端不再常驻,收进按需 inspector（`CrewSessionWindowView`,
-/// 由 MacThreePaneView 挂在 .inspector），从 toolbar 终端开关弹出。
+/// 机组详情从侧栏右键打开；成员和会话控制在同一工作区内展示。
 struct CrewCenterView: View {
     @ObservedObject private var personalService=CrewPersonalDraftService.shared
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
-    /// 驾驶舱开关位的**写句柄**（人类 Todo #96）。`@Environment` 取一个 class 值
-    /// **不订阅**它的 `objectWillChange` —— 中栏只按按钮，不需要知道驾驶舱开着没有。
-    /// 换成 `@EnvironmentObject` 会让开关驾驶舱重新把整条中栏（连着群聊）作废。
-    @Environment(\.cockpitPresentation) private var cockpitPresentation
-    @State private var showingDetail = false
-    @Environment(\.crewdShowInspector) private var showInspector
     /// 「只看 @ 我的消息」（Todo #61 立、#155 改成默认不点亮）。开关钮在 toolbar 上，
     /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
     /// toolbar 驱动它。切 crew 时下面显式归位（筛选状态不跨群带走）。
     @State private var onlyMentions = CrewMentionFilter.defaultOnlyMentions
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
+    @State private var searchScope = CrewSearchScope.current
     @State private var searchQuery = ""
     @State private var searchTargetMessageId: String?
 
@@ -37,12 +30,10 @@ struct CrewCenterView: View {
                     onOpenSession: { runId in
                         // 右栏常驻；点 session 头像只切到「终端」模式 + 选中该 run。
                         sessionRunner.openSession(runId)
-                        showInspector?()
                     },
                     onNewSession: {
                         sessionRunner.composeNew()
                         sessionRunner.viewingTerminal = true
-                        showInspector?()
                     },
                     showOnlyHumanMentions: $onlyMentions,
                     communicationView: $communicationView,
@@ -108,56 +99,21 @@ struct CrewCenterView: View {
         }
         .navigationTitle("")
 
-        .searchable(text:$searchQuery,placement:.toolbar,prompt:"搜索当前群")
+        .opacity(searchScope == .all ? 0:1)
+        .allowsHitTesting(searchScope != .all)
+        .accessibilityHidden(searchScope == .all)
+        .overlay {
+            if searchScope == .all {CrewGlobalSearchResults(query:searchQuery){searchScope = .current}}
+        }
+        .searchable(text:$searchQuery,placement:.toolbar,prompt:"搜索")
+        .searchScopes($searchScope){
+            Text("当前群").tag(CrewSearchScope.current)
+            Text("全局 · 当前电脑").tag(CrewSearchScope.all)
+        }
         // 灰线/无缝由 WindowSeparatorRemover(标题栏透明 + 内容铺满到顶)统一处理。
         // **不能**在这里 .toolbarBackground 刷色：那是窗口级的，会连 sidebar 那半截 toolbar
         // 一起刷白，把侧栏顶部的半透明材质盖住（"toolbar 挡住 sidebar"）。透明标题栏让
         // sidebar 透出自己的侧栏材质、detail 透出白 canvas，两边各自对，互不打架。
-        .toolbar {
-            if let crewId = crewStore.selectedCrewId,
-               crewId != crewStore.pendingCrew?.id {
-                ToolbarItem {
-                    Button { showingDetail = true } label: {
-                        Label("机组详情", systemImage: "info.circle")
-                    }.labelStyle(.iconOnly).help("机组详情")
-                        .disabled(crewStore.selectedDetail == nil)
-                }
-                ToolbarItem {
-                    Menu {
-
-                    // 驾驶舱 = 叠在群聊之上的临时窗口（#542）；群聊这一栏不卸载，
-                    // 关掉驾驶舱回来草稿和滚动位置原样在。关闭在驾驶舱左上角圆形叉。
-                    //
-                    // 原来旁边还有个「Todo」按钮直达 Todo 段（Todo #12）——Todo 已并进
-                    // 任务段、右栏又常驻 Todo 面板，两个按钮开同一扇门，删掉一个。
-                    Button {
-                        if model.usesCrewdAuthority { model.crewdBackend?.workspace.originalSection = "进展" }
-                        else { cockpitPresentation.open() }
-                    } label: {
-                        Label("驾驶舱", systemImage: "speedometer")
-                    }
-                    .disabled(crewStore.selectedDetail == nil)
-
-
-                    Button { Task { await crewStore.refreshDetail(crewId) } } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    } label: { Label("机组操作", systemImage: "ellipsis.circle") }
-                        .labelStyle(.iconOnly).help("机组操作")
-                }
-                // 「Session 终端」开关已去掉 —— 右栏(成员/终端)在原生三栏里常驻;
-                // 成员列表 ↔ 终端 的切换由右栏内部(viewingTerminal / 点 session)管。
-            }
-        }
-        .sheet(isPresented: $showingDetail) {
-            if let detail = crewStore.selectedDetail {
-                CrewDetailInspector(detail: detail)
-                    .environmentObject(crewStore)
-                    // 「更改工作目录」要读在跑的 session（在跑就拒绝迁）。sheet 不继承
-                    // 父视图的 environmentObject，得显式再喂一次。
-                    .environmentObject(sessionRunner)
-            }
-        }
         // chunk2 T5：captain 唤醒 = app 注入。常驻中栏**事件驱动**订阅待决策（去 2s
         // 轮询）：app 侧答复 + helper 跨进程 raise(目录监听)都推一个 tick,有新的(非
         // captain 自己 raise 的)就把提示注入在跑的 captain PTY。不依赖 inspector 是否打开。
@@ -176,7 +132,7 @@ struct CrewCenterView: View {
         // **动这里之前先确认那条出路还在**，手动打开筛选后仍需要它。
         .onChange(of: crewStore.selectedCrewId) { _, _ in
             onlyMentions = CrewMentionFilter.defaultOnlyMentions
-            communicationView = .human
+            if crewStore.chatSearchRequest == nil{communicationView = .human}
             // 跨群结果的 request 会在下面紧接着重新填回查询/定位；普通切群则归零。
             if crewStore.chatSearchRequest == nil {
                 searchQuery = ""
@@ -192,6 +148,7 @@ struct CrewCenterView: View {
             guard let request else { return }
             // 每个跨群搜索/引用请求都带具体消息 id；定位时打开完整记录。
             communicationView = .agents
+            sessionRunner.viewingTerminal=false
             // **落到某一条消息 = 「把这条给我看」，筛选一律让路。**
             // 搜索那条老路是靠下面 `onChange(of: searchQuery)` 顺带收掉筛选的，
             // 而引用胶囊的定位 `query` 是空的 —— 走不到那一条。少了这一行，点一颗

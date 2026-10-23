@@ -13,6 +13,7 @@ struct CrewMessageSearchDocument: Identifiable, Equatable, Sendable {
     let senderId: String?
     let createdAt: String
     let attachmentMetadata: [String]
+    var channelId: String? = nil
 
     var id: String { "\(crewId):\(messageId)" }
 }

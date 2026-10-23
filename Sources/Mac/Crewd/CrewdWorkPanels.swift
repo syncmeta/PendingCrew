@@ -1,5 +1,7 @@
 import SwiftUI
 
+enum CrewdWorkPanelDomain:Equatable { case all, requirements, human }
+
 struct CrewdWorkPanels: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: CrewdWorkStore
@@ -10,6 +12,8 @@ struct CrewdWorkPanels: View {
     @Binding var humanDrafts: CrewdHumanDrafts
     var members:[CrewdValue]
     var crews:[CrewdValue]=[]
+    var domain = CrewdWorkPanelDomain.all
+    var humanCrewOnly = false
     var progressOnly = false
     var compact = false
     var openTodo: (() -> Void)? = nil
@@ -59,7 +63,7 @@ struct CrewdWorkPanels: View {
                                           symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 AI 待办", action: openTodo)
                             .frame(minHeight: 200)
                     }
-                    if !progressOnly && !compact {
+                    if !progressOnly && !compact && domain != .human {
                         Text("原始需求").font(.system(size: 14, weight: .semibold))
                         requirementComposer
                         ForEach(store.requirementIDs.filter{includes("requirement",$0.raw)},id:\.self) {id in
@@ -81,8 +85,9 @@ struct CrewdWorkPanels: View {
                                 .background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:10))
                                 .overlay(RoundedRectangle(cornerRadius:10).stroke(CrewdChatStyle.line(colorScheme),lineWidth:0.6))
                         }
-                        Text("计划").font(.headline)
+                        if domain == .all{Text("计划").font(.headline)}
                     }
+                    if domain == .all {
                     ForEach(CrewdNavigation.planTree(visibleProgress.filter{includes("work",$0.id.raw)},collapsed:collapsed)) {row in
                         if let id=CrewdWorkID(row.object,kind:.plan),let plan=store.plans[id] {
                             VStack(alignment:.leading,spacing:4) {
@@ -129,15 +134,16 @@ struct CrewdWorkPanels: View {
                                 .padding(.leading,CGFloat(min(row.depth,3))*12)
                         }
                     }
+                    }
                     if compact {
                         ForEach(store.humanTasks.keys.filter {store.humanTasks[$0]?["ask"]["crewId"].string == store.selectedCrew}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
                             HStack(alignment:.top) {Image(systemName:"questionmark.circle"); Text("\(id.raw)  \(store.humanTasks[id]?["ask"]["question"].string ?? "")").font(.caption).lineLimit(2)}
                         }
                     }
-                    if visibleProgress.isEmpty && !progressOnly {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
-                    if !progressOnly && !compact {
-                        Divider(); Text("待人类处理 · 全组织收件箱").font(.headline)
-                        ForEach(store.humanTasks.keys.filter{store.humanTasks[$0]?["ask"]["crewId"].string != resources.crew || includes("humanTask",$0.raw)}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
+                    if domain == .all && visibleProgress.isEmpty && !progressOnly {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
+                    if !progressOnly && !compact && domain != .requirements {
+                        Divider(); Text(humanCrewOnly ? "本机组待人处理":"所有可访问机组 · 待人处理").font(.headline)
+                        ForEach(store.humanTasks.keys.filter{(!humanCrewOnly || store.humanTasks[$0]?["ask"]["crewId"].string == store.selectedCrew) && (store.humanTasks[$0]?["ask"]["crewId"].string != resources.crew || includes("humanTask",$0.raw))}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
                             let ask=store.humanTasks[id]?["ask"] ?? .null
                             Text("\(id.raw)  \(ask["question"].string ?? "")").textSelection(.enabled)
                             Text(ask["item"].string.map{"关联计划："+$0} ?? ("所属机组："+(crews.first(where:{$0["id"] == ask["crewId"]})?["title"].string ?? "机组资料尚未加载"))).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))

@@ -82,6 +82,7 @@ struct CrewSidebarCrewRow: View {
     /// session 状态源（isWorking/health/退出）—— 状态点聚合用。由 `MacRootView`
     /// 注入 sidebar（与中/右栏同一实例，才看得到同一批 run）。
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    @State private var showingDetails = false
     @State private var isDropTargeted = false
 
     /// 此刻拖着的那个 crew 能不能落到本行上（非法目标不高亮、也不接受）。
@@ -92,7 +93,7 @@ struct CrewSidebarCrewRow: View {
         Group {
             if allowsReparentDrag {
                 rowCore
-                    .contextMenu { if showsContextMenu { menuItems } }
+                    .contextMenu { menuItems }
                     // 拖起：负载带上「哪个 crew + 当前这条父边」，落地时才知道该摘哪条边。
                     .draggable(CrewDragDropLogic.encode(crewId: crew.id, parentId: parentId)) {
                         Text(crew.title)
@@ -107,13 +108,18 @@ struct CrewSidebarCrewRow: View {
             } else {
                 // 整理用的视图：右键菜单照旧（建子 crew / 藏起来都不改隶属关系），
                 // 但**没有** draggable / dropDestination —— 改汇报线在这里根本没有入口。
-                rowCore.contextMenu { if showsContextMenu { menuItems } }
+                rowCore.contextMenu { menuItems }
             }
         }
         // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
         // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
         // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
         .padding(.bottom, 6)
+        .sheet(isPresented:$showingDetails){
+            if let detail=crewStore.details[crew.id]{CrewDetailInspector(detail:detail).environmentObject(crewStore).environmentObject(sessionRunner)}
+            else{ProgressView("正在读取机组详情…").padding(30)}
+        }
+
     }
 
     private var rowCore: some View {
@@ -251,6 +257,12 @@ struct CrewSidebarCrewRow: View {
     /// 只整理不改结构的地方照样挂得上。
     @ViewBuilder
     private var menuItems: some View {
+        Button("详情",systemImage:"info.circle"){
+            showingDetails=true
+            Task{await crewStore.refreshDetail(crew.id)}
+        }
+        if showsContextMenu {
+        Divider()
         Button {
             childCrewTarget = .forRow(crew)
         } label: {
@@ -264,6 +276,7 @@ struct CrewSidebarCrewRow: View {
             requestHide()
         } label: {
             Label("藏起来", systemImage: "eye.slash")
+        }
         }
     }
 

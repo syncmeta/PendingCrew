@@ -28,6 +28,14 @@ extension EnvironmentValues {
     }
 }
 
+private struct CrewdMessageSearchTargetKey:EnvironmentKey{static let defaultValue:String?=nil}
+extension EnvironmentValues{
+    var crewdMessageSearchTarget:String?{
+        get{self[CrewdMessageSearchTargetKey.self]}
+        set{self[CrewdMessageSearchTargetKey.self]=newValue}
+    }
+}
+
 struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
     var openSession: ((String) -> Void)? = nil
@@ -42,7 +50,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder let content: () -> Content
     var openSession: ((String) -> Void)? = nil
-    @State private var showingCrewLedger = false
+    @State private var workScopes:[String:String]=[:]
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
     var body: some View {
@@ -56,8 +64,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             HStack(spacing:12){
                 CrewdGlassWorkspaceTabs(selection:$workspace.originalSection)
                     .frame(maxWidth:.infinity,alignment:.leading)
-                Menu {Button("机组工作总账"){showingCrewLedger=true}}label:{Image(systemName:"ellipsis")}
-                    .frame(minWidth:CrewdType.target,minHeight:CrewdType.target).fixedSize().help("机组共享工作与全组织收件箱")
+
             }.padding(.horizontal,14).padding(.vertical,8)
             Divider()
         }
@@ -74,27 +81,42 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     .disabled(workspace.originalSection != "消息")
                     .accessibilityHidden(workspace.originalSection != "消息")
                 if workspace.originalSection == "Todo" || workspace.originalSection == "真人Todo" {
-                    channelTodo(human: workspace.originalSection == "真人Todo").padding(14)
+                    scopedTodo(human: workspace.originalSection == "真人Todo").padding(14)
                 } else if workspace.originalSection == "文档" {
                     CrewdKnowledgeDocumentsEntry(workspace: workspace)
                 } else if workspace.originalSection == "进展" {
-                    CrewdOriginalChannelProgress(workspace: workspace)
+                    scopedProgress
                 }
 
             }
         }
-        .sheet(isPresented: $showingCrewLedger) {
-            VStack(spacing: 0) {
-                HStack { Text("机组工作总账 · 全组织真人收件箱").font(.headline); Spacer(); Button("完成") { showingCrewLedger = false } }.padding(16)
-                Divider()
-                CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
-                    resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
-                    planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                    members: workspace.sessions, crews: workspace.crews)
-            }
-            #if os(macOS)
-            .frame(minWidth: 540, minHeight: 480)
-            #endif
+    }
+    private func scope(_ section:String,default value:String)->Binding<String>{
+        Binding(get:{workScopes[section] ?? value},set:{workScopes[section]=$0})
+    }
+    private func ledger(domain:CrewdWorkPanelDomain,progress:Bool=false,humanCrewOnly:Bool=false)->some View{
+        CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,
+            resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,
+            planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,
+            members:workspace.sessions,crews:workspace.crews,domain:domain,humanCrewOnly:humanCrewOnly,progressOnly:progress)
+    }
+    private func scopedTodo(human:Bool)->some View {
+        let selection=scope(human ? "human":"ai",default:human ? "crew":"channel")
+        return VStack(alignment:.leading,spacing:8){
+            Picker("范围",selection:selection){
+                Text("当前群").tag("channel");Text("机组全部").tag("crew")
+                if human{Text("所有可访问待人处理").tag("inbox")}
+            }.pickerStyle(.menu).fixedSize()
+            if selection.wrappedValue == "channel"{channelTodo(human:human)}
+            else{ledger(domain:human ? .human:.requirements,humanCrewOnly:selection.wrappedValue=="crew")}
+        }
+    }
+    private var scopedProgress:some View {
+        let selection=scope("progress",default:"crew")
+        return VStack(alignment:.leading,spacing:8){
+            Picker("计划范围",selection:selection){Text("当前群").tag("channel");Text("机组全部").tag("crew")}.pickerStyle(.menu).fixedSize().padding(.horizontal,14)
+            if selection.wrappedValue=="channel"{CrewdOriginalChannelProgress(workspace:workspace)}
+            else{ledger(domain:.all,progress:true)}
         }
     }
     private func channelTodo(human: Bool) -> some View {
@@ -301,12 +323,14 @@ private struct CrewdOriginalMessages<Content: View>: View {
     }
     @Environment(\.colorScheme) private var scheme
     #if os(iOS)
+    @Environment(\.crewdMessageSearchTarget) private var messageSearchTarget
     @State private var mobileChat = false
     @State private var showingNewMember = false
     @State private var showingMobileInspector = false
     #endif
     #if os(macOS)
     @EnvironmentObject private var runner: CrewSessionRunner
+    @State private var showingMembers = false
     @State private var openedSession = false
     @State private var showConversationPopover = false
     @State private var conversationListVisible = true
@@ -329,6 +353,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                         Button { if geometry.size.width>=600 {conversationListVisible=true} else {showConversationPopover=true} } label: {
                             Label("群聊与会话", systemImage: "bubble.left.and.bubble.right")
                         }.buttonStyle(.plain).font(.system(size: 12))
+                        Button("成员",systemImage:"person.2"){showingMembers=true}.buttonStyle(.plain)
                         Spacer()
                         if showingSession {
                             Button("返回群聊") { runner.viewingTerminal = false }
@@ -374,6 +399,17 @@ private struct CrewdOriginalMessages<Content: View>: View {
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }.frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .opacity(showingMembers ? 0:1).allowsHitTesting(!showingMembers).accessibilityHidden(showingMembers)
+        .overlay {
+            if showingMembers {
+                VStack(spacing:0){
+                    HStack{Button("返回会话",systemImage:"chevron.left"){showingMembers=false};Spacer();Text("本群成员与工作")}.padding(12)
+                    Divider();CrewSessionWindowView(presentation:.inspector)
+                }.background(Theme.Palette.canvas)
+            }
+        }
+        .onChange(of:workspace.crewID){_,_ in showingMembers=false}
+        .onChange(of:workspace.originalSection){_,_ in showingMembers=false}
         .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (showingSession ? runner.selectedRunId?.uuidString ?? "new" : "channel")))
         .onChange(of: showingSession) { _, value in if value { openedSession = true } }
         .task(id: workspace.originalSection + resources.activationEpoch.uuidString) {
@@ -404,34 +440,26 @@ private struct CrewdOriginalMessages<Content: View>: View {
             }
         }
         .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (mobileChat ? "detail" : "list")))
-        .sheet(isPresented:$showingMobileInspector) {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment:.leading,spacing:20){
-                        CrewdOriginalTodoSummary(group:workspace.channelWork,currentCrew:workspace.crewID,showDetails:{human in
-                            workspace.originalSection=human ? "真人Todo":"Todo";mobileChat=true;showingMobileInspector=false
-                        })
-                        CrewdFormSection(title:"本群成员") {
-                            if workspace.selectedMembers.isEmpty{Text("尚未读取本群成员").font(CrewdType.label).foregroundStyle(.secondary)}
-                            ForEach(workspace.selectedMembers.indices,id:\.self){index in
-                                let member=workspace.selectedMembers[index]
-                                let id=member["id"].string ?? ""
-                                HStack(spacing:10){
-                                    CrewdMemberAvatar(seed:CrewdAvatarIdentity.seed(member) ?? id,colorSeed:workspace.channelID)
-                                    if member["kind"].string == "human" {Text("你")}
-                                    else {
-                                        Button(workspace.knownSessions[id]?["displayName"].string ?? "成员资料尚未加载"){
-                                            workspace.selectSession(id);showingMobileInspector=false;openSession?(id)
-                                        }.disabled(openSession == nil || id.isEmpty)
-                                    }
-                                }.font(CrewdType.body).frame(minHeight:44)
-                            }
+        .opacity(showingMobileInspector ? 0:1).allowsHitTesting(!showingMobileInspector).accessibilityHidden(showingMobileInspector)
+        .overlay {
+            if showingMobileInspector {
+                VStack(spacing:0){
+                    HStack{Button("返回会话",systemImage:"chevron.left"){showingMobileInspector=false};Spacer();Text("本群成员")}.padding(12)
+                    ScrollView{VStack(alignment:.leading,spacing:18){
+                        CrewdOriginalTodoSummary(group:workspace.channelWork,currentCrew:workspace.crewID,showDetails:{human in workspace.originalSection=human ? "真人Todo":"Todo";mobileChat=true;showingMobileInspector=false})
+                        ForEach(workspace.selectedMembers.indices,id:\.self){index in
+                            let member=workspace.selectedMembers[index];let id=member["id"].string ?? ""
+                            HStack{CrewdMemberAvatar(seed:CrewdAvatarIdentity.seed(member) ?? id,colorSeed:workspace.channelID)
+                                if member["kind"].string=="human"{Text("你")}
+                                else{Button(workspace.knownSessions[id]?["displayName"].string ?? "成员资料尚未加载"){workspace.selectSession(id);showingMobileInspector=false;openSession?(id)}.disabled(openSession==nil || id.isEmpty)}
+                            }.frame(minHeight:44)
                         }
-                    }.padding(16)
-                }.navigationTitle("待办工作与成员").navigationBarTitleDisplayMode(.inline)
-                    .toolbar{ToolbarItem(placement:.cancellationAction){Button("完成"){showingMobileInspector=false}}}
+                    }.padding(16)}
+                }.background(Theme.Palette.canvas)
             }
         }
+        .onChange(of:workspace.originalSection){_,_ in showingMobileInspector=false}
+        .onChange(of:messageSearchTarget,initial:true){_,id in if id != nil{mobileChat=true;showingMobileInspector=false}}
         .sheet(isPresented:$showingNewMember) {
             NavigationStack {
                 ScrollView {CrewdSessionStartView(workspace:workspace,drafts:$workspace.messageDrafts).padding(20)}
@@ -514,6 +542,7 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 Text("会话").font(.system(size: 11, weight: .medium))
                 Spacer()
                 messageFolderMenu
+                Button{showingMembers=true}label:{Image(systemName:"person.2")}.buttonStyle(CrewdToolButtonStyle()).help("本群成员与工作")
                 Button{conversationListVisible=false}label:{Image(systemName:"sidebar.left")}
                     .buttonStyle(CrewdToolButtonStyle()).help("收起会话列表").accessibilityLabel("收起会话列表")
                 Button { workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }

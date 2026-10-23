@@ -129,6 +129,8 @@ struct CrewListView: View {
 
 #if os(iOS)
 private struct CrewMobileDirectory: View {
+    @EnvironmentObject private var crewStore:CrewStore
+    @State private var detailID:String?
     @EnvironmentObject private var appModel:AppModel
     @ObservedObject var workspace: CrewdWorkspace
     let crews: [CrewSummary]
@@ -176,6 +178,19 @@ private struct CrewMobileDirectory: View {
             }.listStyle(.sidebar).scrollContentBackground(.hidden)
 
         }.sheet(isPresented:$showingStatus){CrewMobileConnectionReadback(workspace:workspace)}
+        .sheet(isPresented:Binding(get:{detailID != nil},set:{if !$0{detailID=nil}})){
+            NavigationStack{
+                Group{
+                    if let id=detailID,let detail=crewStore.details[id]{
+                        Form{
+                            Section("机组"){Text(detail.crew.title);Text(detail.crew.workingDirectory ?? "未设置工作目录").textSelection(.enabled)}
+                            Section("上级机组"){ForEach(detail.parents,id:\.crewId){Text($0.title)}}
+                            Section("下级机组"){ForEach(detail.children,id:\.crewId){Text($0.title)}}
+                        }
+                    }else{VStack{ProgressView("正在读取机组详情…");if let error=crewStore.error{Text(error).foregroundStyle(.orange)}}}
+                }.navigationTitle("机组详情").toolbar{ToolbarItem(placement:.confirmationAction){Button("完成"){detailID=nil}}}
+            }
+        }
     }
     private var activeHostName:String {
         let window=appModel.crewdWindow
@@ -194,6 +209,7 @@ private struct CrewMobileDirectory: View {
             }
             Spacer(minLength: 0)
         }.padding(.vertical, 5)
+            .contextMenu{Button("详情",systemImage:"info.circle"){detailID=crew.id;Task{await crewStore.refreshDetail(crew.id)}}}
     }
 }
 /// Read-only status remains reachable from the phone's global menu when its
