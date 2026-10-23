@@ -227,7 +227,6 @@ private struct PendingCrewChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(draft.title).font(.headline).lineLimit(1)
                 Spacer()
                 Button("取消") { crewStore.discardPendingCrew() }.disabled(locked)
             }.padding(.horizontal, 18).frame(minHeight: 44)
