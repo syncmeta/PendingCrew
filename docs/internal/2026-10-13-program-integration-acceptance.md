@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 756f 同源 normal、普通 Mac Release 与 iOS Simulator 接受
+
+准确冻结源 `756fdfda52011082de893d43b1f5d817d51930f6`。normal独验 `cumulative-756f-normal-20261024/NORMAL-QA.json`：501材料、1950完整Git输入及模式、478Rust、构建前后相同，原require_fresh显式Debug配置通过，纯schema完整JSON与149方法一致，Store21；helper SHA `03cc9c69…6dc3af39`。已有创建、默认值、头像/机器栏、搜索及文档Save/Join/reopen业务证据复用，不重审或重跑稳定范围。
+
+`complete-756fdfda-production-20261024/MAC-ARTIFACT-QA.json` 接受普通Release **0.1.44/20749.60179**：准确源、51包文件、3878依赖前后同、M42严格签名/权限、加载闭包与签封等价、无Inject均成立。`IOS-ARTIFACT-QA.json` 接受同源普通Debug arm64 Simulator **0.1.43/1**：1950源/3878依赖/76包文件、实际平台与模拟器entitlements核实。两端构建成功不等于已安装或运行；本轮无模型、模拟器启动、日用替换、公证或发布。
+
+真实双App个人草稿仅完成A/B路径区分；`core-personal-drafts-runtime-preparation-20261023/APP-FLOW-GUI-BLOCK.json` 记录设置导航后native pipe关闭、磁盘ENOSPC及恢复空间后仍无法只读重连。一次公开JS重置也未恢复，未换工具、重放业务或造harness。无listener/invite/owner/member/consent/draft事务。8+30处明确旧incremental清理的实际receipt保存在原 `rust-old-incremental-cleanup-20261023/`，源码/保护程序指纹不变。日用仍为F2，安装及最小首开待正常窗口通道恢复；不扩大为双端草稿、iCloud/APNs、真机或全工程通过。
+
+最终组合独验 `core-personal-drafts-runtime-preparation-20261023/CANDIDATE-756F-STATIC-QA.json` 接受2702项封存，两ZIP逐文件与签包一致；COMBINATION SHA `0bcaebe3…51dfb3f4`，manifest SHA `86243ebc…74a6944`。根已读完整结论、两端报告和具体安装方案；安装方案仅准备，无在途构建。后续统筹文档提交不改标候选756f的准确来源。
+
 ## 2026-10-23 原生文档首次保存、加入与重开接受
 
 产品源 `fb5a7cff2763443f51e4dce9ed3f970d22494d3e` clean，三路径。两处产品Swift修正首次Save准入、placement identity及提交后原scope只读恢复；原fixture新增必要模式但未独跑。14项实际生产切片compile/run0，覆盖uninitialized、拒绝/Unknown/原UUID和event-before-response；不冒全fixture或未变Rust重验。最终暖Mac build0，准确开发Core1708629e/SHA6ea58be4…947e7ea复用。
