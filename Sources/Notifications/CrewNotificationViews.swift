@@ -5,18 +5,9 @@ struct CrewNotificationEntry:ViewModifier {
     @EnvironmentObject private var model:AppModel
     @EnvironmentObject private var crewStore:CrewStore
     @ObservedObject private var native=CrewNativeNotifications.shared
-    @State private var showing=false
     @State private var unavailable=false
     func body(content:Content)->some View {
-        content.toolbar{
-            if model.usesCrewdAuthority {
-                Button{showing=true}label:{Label("通知",systemImage:"bell")}.help("原生通知、设备注册与原请求核对")
-            }
-        }
-        .sheet(isPresented:$showing){
-            if let workspace=model.crewdBackend?.workspace{CrewNotificationSettings(workspace:workspace)}
-            else{VStack(spacing:16){Text("连接电脑后可查看通知状态");Text("通知不会自动连接电脑。").font(.caption).foregroundStyle(.secondary);Button("关闭"){showing=false}}.padding(24)}
-        }
+        content
         .onChange(of:native.hint){_,hint in
             guard let hint,native.hint==hint else{return};native.consume(hint)
             guard let workspace=model.crewdBackend?.workspace else{unavailable=true;return}
@@ -84,19 +75,20 @@ private struct CrewNotificationOpenedScope:ViewModifier {
         }.onChange(of:workspace.client.connectionEpoch){_,_ in store.opened=nil}
     }
 }
-private struct CrewNotificationSettings:View {
+struct CrewNotificationSettings:View {
     @ObservedObject var workspace:CrewdWorkspace
     @ObservedObject private var store:CrewdNotificationStore
     @ObservedObject private var native=CrewNativeNotifications.shared
     @Environment(\.dismiss) private var dismiss
+    var embedded=false
     @State private var crews=Set<String>()
     @State private var kinds=Set(CrewdNotificationWire.Kind.allCases)
     @State private var failure:String?
     @State private var confirming=false
-    init(workspace:CrewdWorkspace){self.workspace=workspace;store=workspace.notifications}
+    init(workspace:CrewdWorkspace,embedded:Bool=false){self.workspace=workspace;self.embedded=embedded;store=workspace.notifications}
     var body:some View {
         VStack(alignment:.leading,spacing:12){
-            HStack{Text("原生通知").font(.headline);Spacer();Button("关闭"){dismiss()}}
+            HStack{Text("任务与工作通知").font(.headline);Spacer();if !embedded{Button("关闭"){dismiss()}}}
             ScrollView{VStack(alignment:.leading,spacing:14){
                 Text("只通知你明确选择的机组。通知不包含任务正文；点击仅查看原授权内容，不会连接电脑、启动或恢复会话。").font(.caption).foregroundStyle(.secondary)
                 if !workspace.client.capabilities.contains("notification.nativeApns"){Text("当前后台尚未接入原生通知。").font(.callout)}
@@ -135,9 +127,14 @@ private struct CrewNotificationSettings:View {
                     if store.nextDelivery != nil{Button("更多通知记录"){run{try await store.readDeliveries(more:true)}}.disabled(store.busy)}
                 }
             }}
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:600,height:650))
+        }.padding(20).modifier(CrewdNotificationSettingsFrame(embedded:embedded))
         .task{await store.refresh();if let origin=store.currentOrigin,let value=store.subscriptions(for:origin){crews=Set(value.0);kinds=Set(value.1)}else if !workspace.crewID.isEmpty{crews=[workspace.crewID]}}
         .confirmationDialog("允许这台设备接收所选机组的系统通知？",isPresented:$confirming,titleVisibility:.visible){Button("继续核对系统通知权限"){Task{await native.enable(store:store,crews:crews.sorted(),kinds:CrewdNotificationWire.Kind.allCases.filter{kinds.contains($0)},ask:true)}};Button("取消",role:.cancel){}}message:{Text("系统授权后，仅向当前已验证电脑提交本设备 token。不会上传到个人云目录，也不会启动任务。")}
     }
     private func run(_ action:@escaping @MainActor ()async throws->Void){Task{do{try await action();failure=nil}catch{failure="通知操作未完成；保留原请求和当前输入，请核对。"}}}
+}
+
+private struct CrewdNotificationSettingsFrame:ViewModifier {
+    let embedded:Bool
+    @ViewBuilder func body(content:Content)->some View{if embedded{content}else{content.modifier(CrewdAdaptiveFormFrame(width:600,height:650))}}
 }

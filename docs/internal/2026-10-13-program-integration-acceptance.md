@@ -1,5 +1,43 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 续接：完成入口收敛，关闭查看会话隐式恢复
+
+用户更新 Codex 后明确继续。实际 main 与整合树仍为 `907932d8`，主仓仅本计划及整合验收记录未提交；作者树为 `codex/navigation-readonly-session-fix-20261023`、HEAD `edd49266`。保留暂停点与所有原始证据，三条执行线重新接续，根仅负责裁决、整合与交付。
+
+本轮交付边界：右上角只保留搜索，入口内选当前群或全局；通知、电脑状态与连接归设置；机组详情走右键；成员与工作回主区；移除驾驶舱及重复总账入口，保留原胶囊 Tab、白底与 sidebar footer。完整 F 已做源码、Mac/iOS 产物独验并装至日用位置 `0.1.44/20749.21892`；上述搜索、设置和导航的实际结果按原证据复用。
+
+整轮实际 GUI 仍暂不接受：点击成员查看既有会话触发了正式 `session.resume`。已确认源码 `openSession → restoreOpenedSession` 在未运行时隐式恢复，目标 `captain-2b02b7bcb876`、回执 `ad159518-39a4-4a9f-90a8-6948b80049ab`。新进程为 `codex app-server`，不能据此宣称发生了模型轮次。旧源实际切片 compile0、不得隐式恢复断言红 -5 已保留；作者仅删除查看副作用，保留显式恢复原合同。暂停前正常 Stop 的结果未报告，先核现有证据及当前状态，不重放旧命令。
+
+| 职责 | 当前工作与完整完成判据 |
+| --- | --- |
+| 前端作者 | 原真实缝最小修复、绿回归、净源冻结；准确新输入暖 Mac/iOS 包；正常停态后的整包替换 |
+| 后端作者 | 当前现场只读核对；唯一共享 Rust 编译所有者，为新完整输入封存准确 normal，不复测未变稳定业务 |
+| 独立质量 | 核未确认 Stop 原结果、净源和新包来源；新包只复验查看不恢复及显式恢复入口保留，不调用模型 |
+| 根统筹 | 受领整块结论、唯一主仓整合/普通推送、两份记录与交付检查点；不兼任产品实现或 GUI |
+
+真实模型/SDK、凭据变更、旧 Unknown 重放不在本轮；日用更新沿已有授权，发现新用户工作则等待，不强停。旧 F 的后台证明不可冒称新源。SQLite/API3/schema149/Store21、Linux及旧全套业务不因本次 Swift 净修重复验收。全工程仍有双端实际同步、真实 Apple 云/推送、VPS 正式服务和 Claude 后续等独立交付项，不因本轮导航完成而标全工程完成。
+
+### F2 完整源码、准确后台与整包准入
+
+最终产品输入 `6e1a5375555c2869b64ea7aa3fcf5567e96fdf5d` 保留完整入口收敛，仅另改两处产品源及两处既有受影响测试。独立源码报告 SOURCE-QA-F2 接受：原 F 精准红 -5，F2 生产切片12断言绿；准确暖 Debug 的实际 App 7个受影响场景全部通过，查看零 start/resume，原显式 Unknown 不自动重放。1945完整输入清单已用 NUL 路径读取修正非ASCII遗漏，源码未因证据清单修正改变。
+
+准确 F2 normal 单次44.45秒编译0、封存0，原12own/13raw、默认Debug/features[]、478Rust、完整1945前后一致；独立 NORMAL-QA-F2 核502材料及纯schema149/二进制稳定，helper f1c206fcc5e2efcb0f9509198b78b0b4f7f390d6e471b93a1af4757dc45ff637。原5f06配方 Mac Release与iOS Simulator各0，ARTIFACT-QA-F2独核2693材料、Mac51/iOS76/ZIP、1945/404/SPM3878、实际签封/entitlements/加载与等价。Mac为0.1.44/20749.31740，iOS为0.1.43/1；永久来源F2，不改标之后根文档合并。
+
+原意外恢复会话的正常停止曾被自动审批拒绝，原拒绝保留。用户随后明确授权该精确测试会话，正式 stop receipt `2e6186d3-6ad2-4dd5-94f5-65dab39774a9` 已confirmed、physicalExitConfirmed=true，target desired=stopped、原provider8087已退出，App/Core保留。现按既定日用替换授权正常退出、停态备份与整包替换；实际安装和查看不恢复运行门尚未宣称完成。无新真实模型、凭据操作或Linux CI。
+
+
+## 2026-10-23 统一搜索、设置与主区工作导航完整源码准入
+
+完整F=`edd492666e805aed20b4f80df8e2edc9509ea084` 基于main907932d8，17条Swift净源，1945全Git输入；Rust/工程/版本/API3/schema149/Store21不变。根全文受领 HANDOFF44c5ef1a1a08e6be09faee1cc559d928e10b5114bf9b70ba00f749d71cab8ad9、SOURCE-FREEZE3e4a7d6941c81d755ae849f48910a57a13f5cad95fcfb912de682c64ab65bd35及最终独验 **1896f56b1dfd6e4f15b950025076e9e07ce084eb84cdf2b8400e3215ec28146e**。quality复用两份WIP快照，最终仅核末尾3路径与46项物料；最终404 target before/after/current==Git F、Mac/iOS实际0/0。原调用base907且旧N helper仅型验层，未冒F候选；3个生产切片逐字，独跑20断言0，原去lifetimeguard mutation在cancelQuery精准红-5。
+
+源层接受范围：只一处搜索，当前群及当前验证电脑的授权crew/channel全局消息，严格外层/唯一ID/归属、有界1000/200、query/view/connection/selection变更取消，精确channel/message定位并退出旧terminal/destination展示；通知配置入设置且Root Opened/Lifecycle常驻；电脑配置入设置而原Root admin/retained/Unknown仍存、失败原因与手动重试可达；机组详情按右键/长按行ID；原始需求/未关联channel计划/跨crew人工收件箱回原三Tab，原操作target保留；成员总览内联，聊天挂载、胶囊/白底/footer/机器绿点保留。独立驾驶舱浮层与额外总账入口移除，不删旧持久模型/API。
+
+候选永久F，后续根文档合并不改标产品来源。backend已准备准确1945/478输入与原recorder（PREPARATION5a32819f），根在上述源准入后放行唯一defaultDebug[]/12fresh/纯schema149 normal；frontend再沿原配方同F Mac/iOS封包。当前不冒新包/GUI/安装，实际设置尺寸、弹层顺序、主toolbar及宽窄搜索/成员仍待准确候选观察；日用N不接管，未执行模型/配对/凭据变更/稳定B等复跑。
+
+上述后续已实际完成至产物门：准确F normal helper5ce4a6ff/witnesse0a1a05e，原build88538/seal36115均0，502manifest41d38e53，独验 **55d4960f72fb9c2c601a73f545659819a4cd897b21201c32ff1f1471837dabab** 经根全文读。原1945/478输入、12own/13raw fresh=false、Fdirtyfalse/defaultDebug[]及纯149全JSON/无stderr/二进制稳定独核，无mutable target依赖。原5f06配方、manifest0a1cb622/noexecute5fa89584/guards62bb812c经根全文读，引用独验1d012ab5；实际Mac81481/iOS83707均0。COMBINATIONb34f7d9a、2695manifest4532542d及整包独验 **fcc710bd55531fd202dc6a99cb39486c5460509ed19118b972f11506ebf91248** 经根全文读，1945/404/3878前后/current/Git、Mac51/iOS76及archive/ZIP逐字、source F、签封/ent/profile/runtime/load/seal equivalence全核。Mac0.1.44/20749.21892/mainb9bfaed5/签后helperdeebb7d5，普通Release/remote-overlay+LocalCore guards/M42；iOS普通Debug Simulator0.1.43/1，实际签名字典{}与main MachO `__TEXT/__entitlements`分别检查，后者等原xcent/单自有group/platform7，不把signature空dict误判缺失。QA CLI语法与aggregate字段读取纠正保原，无重签或重复业务门。
+
+具体日用替换方案 **07c162726f1f274795b4c0a48dcdcde8814dc8b57779611d116ba68361f382c5** 已全文受领并准连续正常转场：quality唯一fresh无新工作/正常Quit/ps-only真gone，frontend唯一停态数据保全与整包rename，quality唯一普通首开联做本次GUI；新用户工作则只停安装依赖。当前未冒已安装/视觉可用，原N及043/9a/S、数据/日志/真实二进制/SDK证明全保留，无公证上传/模型/新配对/原Unknown重放。
+
 ## 2026-10-23 用户最新外观要求与准确 N 返回
 
 当前裁定恢复原胶囊 Tab 与更白背景；之前原生 Picker/灰材质目标已被用户最新要求覆盖。净源 a60ce4281cba78528dd29828d0d5ba0c7e8eaf62 从 c326e6b6 仅恢复三个展示文件，逐字同 c678，其余 tracked 文件不变。source freeze101ef146、7项manifest51752355；404目标输入同已验 P497e。只复用明确同输入证据，不称新编译或把旧产品改标新源。

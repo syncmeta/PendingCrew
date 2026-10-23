@@ -26,57 +26,14 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
     @State private var trusting = false
     @State private var pending: CrewdRemotePairSummary?
     @State private var removing: CrewdRemotePairSummary?
+    @State private var settingsNext:(()->Void)?
     func body(content: Content) -> some View {
         content
-.toolbar {
-            Menu {
-            if window.workspace != nil { Button("当前电脑状态与原请求",systemImage:"info.circle"){statusDetails=true} }
-            Button("个人主机目录与同步状态"){personalDirectory=true}
-            Menu("电脑") {
-                Button("本机") { Task { await chooseLocal() } }
-                #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
-                Text("当前使用本机工作区")
-                #else
-                Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
-                switch window.computerListState {
-                case .notLoaded:
-                    Text("已存电脑尚未读取")
-                case .loaded:
-                    if window.computers.isEmpty { Text("没有已存的远程电脑") }
-                    ForEach(window.computers) { computer in
-                        Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
-                            if computer.paired { Task { await window.select(computer.id) } }
-                            else { pending = computer }
-                        }
-                    }
-                case .failed(let message):
-                    Text("已存电脑读取失败")
-                    Text(message)
-                }
-                Divider()
-                Button("添加电脑") {
-                    Task { if await window.refresh() { adding = true } }
-                }
-                Menu("移除已存电脑") {
-                    ForEach(window.computers) { computer in
-                        Button(computer.name, role: .destructive) { removing = computer }
-                    }
-                }.disabled(window.computerListState != .loaded || window.computers.isEmpty)
-                #endif
-            }
-            Button("本机Codex原输入"){localCodexInputs=true}
-            if !window.inputReviewWorkspaces.isEmpty || !previousAdmins.isEmpty {
-                Button("原连接的输入") { reviewing = true }
-            }
-            if let current = window.workspace, current.client.capabilities.contains("command.receipts") {
-                Button("原请求核对") { recovering = true }
-                if current.dataDirectory != nil { Button("本机重连授权") { trusting = true } }
-            }
-            #if !PENDINGCREW_KNOWLEDGE_VALIDATION && (!PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT)
-            Button("设备连接") { managing = true }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
-            #endif
-            } label: { Label("电脑与连接", systemImage: "desktopcomputer") }
-                .labelStyle(.iconOnly).help("电脑选择、添加与原请求核对").accessibilityLabel("电脑与连接")
+.sheet(isPresented:$window.showingConnectionSettings,onDismiss:{let action=settingsNext;settingsNext=nil;action?()}){
+            VStack(alignment:.leading,spacing:14){
+                HStack{Text("电脑与连接设置").font(.headline);Spacer();Button("完成"){window.showingConnectionSettings=false}}
+                Form { settingsItems }.formStyle(.grouped)
+            }.padding(16).frame(width:560,height:560)
         }.sheet(isPresented:$localCodexInputs){CrewdCodexLocalInputs(directory:directory)}
         .sheet(isPresented:$statusDetails){
             if let current=window.workspace {
@@ -121,6 +78,65 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             }
             .onAppear { synchronizeAdministration() }
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }
+    }
+    @ViewBuilder private var settingsItems:some View {
+            if model.connectingAuthority {ProgressView("正在连接电脑…")}
+            if let failure=model.backendConfigurationError {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
+            if window.workspace == nil {
+                Text("后台尚未连接").foregroundStyle(.secondary)
+                Button("重试连接"){Task{await model.connectCrewdAuthority()}}.disabled(model.connectingAuthority)
+            }
+
+
+            if window.workspace != nil { Button("当前电脑状态与原请求",systemImage:"info.circle"){fromSettings{statusDetails=true}} }
+            Button("个人主机目录与同步状态"){fromSettings{personalDirectory=true}}
+            Menu("电脑") {
+                Button("本机") { Task { await chooseLocal() } }
+                #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
+                Text("当前使用本机工作区")
+                #else
+                Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy)
+                switch window.computerListState {
+                case .notLoaded:
+                    Text("已存电脑尚未读取")
+                case .loaded:
+                    if window.computers.isEmpty { Text("没有已存的远程电脑") }
+                    ForEach(window.computers) { computer in
+                        Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
+                            if computer.paired { Task { await window.select(computer.id) } }
+                            else { fromSettings{pending = computer} }
+                        }
+                    }
+                case .failed(let message):
+                    Text("已存电脑读取失败")
+                    Text(message)
+                }
+                Divider()
+                Button("添加电脑") {
+                    Task { if await window.refresh() { fromSettings{adding = true} } }
+                }
+                Menu("移除已存电脑") {
+                    ForEach(window.computers) { computer in
+                        Button(computer.name, role: .destructive) { removing = computer }
+                    }
+                }.disabled(window.computerListState != .loaded || window.computers.isEmpty)
+                #endif
+            }
+            Button("本机Codex原输入"){fromSettings{localCodexInputs=true}}
+            if !window.inputReviewWorkspaces.isEmpty || !previousAdmins.isEmpty {
+                Button("原连接的输入") { fromSettings{reviewing = true} }
+            }
+            if let current = window.workspace, current.client.capabilities.contains("command.receipts") {
+                Button("原请求核对") { fromSettings{recovering = true} }
+                if current.dataDirectory != nil { Button("本机重连授权") { fromSettings{trusting = true} } }
+            }
+            #if !PENDINGCREW_KNOWLEDGE_VALIDATION && (!PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT)
+            Button("设备连接") { fromSettings{managing = true} }.disabled(window.workspace?.dataDirectory == nil || window.workspace?.client.connected != true || admin?.workspace !== window.workspace)
+            #endif
+    }
+    private func fromSettings(_ action:@escaping ()->Void){
+        settingsNext=action
+        window.showingConnectionSettings=false
     }
     private func chooseLocal() async {
         await window.selectLocal(directory: directory)

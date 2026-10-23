@@ -38,6 +38,9 @@ struct IPadShell: View {
     @State private var selectedRemoteSessionID: String?
     @State private var communicationView: CrewTimelineFilter.CommunicationView = .human
     @State private var searchQuery=""
+    @State private var searchScope = CrewSearchScope.current
+    @State private var searchTargetMessageId:String?
+    @State private var showingSettings=false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -49,41 +52,41 @@ struct IPadShell: View {
                          showsComputerIntroduction: isCompact,
                          selection: $selectedCrewId)
                 .navigationTitle("机组")
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Menu {
-                            if appModel.crewdBackend?.workspace != nil {
-                                Button("新建机组", systemImage: "plus") { showingNewCrew = true }
-                            }
-                            Button("连接状态与未完成操作",systemImage:"info.circle"){showingConnectionStatus=true}
-                            Button("连接电脑", systemImage: "link") { showingPairing = true }
-                            Button("本机Codex原输入",systemImage:"paperclip"){showingLocalCodexInputs=true}
-                            Button("本机已保存草稿", systemImage: "doc.text") { showingOfflineDrafts = true }
-                            if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty {
-                                Button("原连接的输入", systemImage: "tray.full") { showingRetainedInputs = true }
-                            }
-                            if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true {
-                                Button("原请求核对") { showingRecovery = true }
-                            }
-                        } label: {
-                            Label("电脑与草稿", systemImage: "ellipsis.circle")
-                        }.accessibilityLabel("电脑与草稿")
-                    }
+                .safeAreaInset(edge:.bottom){
+                    HStack{
+                        Button("设置",systemImage:"gearshape"){showingSettings=true}
+                        Spacer()
+                        if appModel.crewdBackend?.workspace != nil{Button("新建机组",systemImage:"plus"){showingNewCrew=true}}
+                    }.padding(12)
                 }
+
         } detail: {
             detail
+                .opacity(searchScope == .all ? 0:1)
+                .allowsHitTesting(searchScope != .all)
+                .accessibilityHidden(searchScope == .all)
+                .overlay{if searchScope == .all{CrewGlobalSearchResults(query:searchQuery){searchScope = .current}}}
         }
+        .searchable(text:$searchQuery,placement:.automatic,prompt:"搜索")
+        .searchScopes($searchScope){Text("当前群").tag(CrewSearchScope.current);Text("全局 · 当前电脑").tag(CrewSearchScope.all)}
+        .sheet(isPresented:$showingSettings,onDismiss:{let action=pendingSettingsAction;pendingSettingsAction=nil;action?()}){mobileSettings}
         .modifier(CrewdWindowMaterial())
         .onChange(of: selectedCrewId) { _, id in
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
-            communicationView = .human
-            searchQuery=""
+            if crewStore.chatSearchRequest == nil{communicationView = .human;searchQuery="";searchTargetMessageId=nil}
             if let id, id != crewStore.pendingCrew?.id, let workspace = appModel.crewdBackend?.workspace {
                 workspace.selectCrew(id)
             }
         }
         .onChange(of: crewStore.selectedCrewId) { _, id in
             if selectedCrewId != id { selectedCrewId = id; selectedRemoteSessionID = nil }
+        }
+        .onChange(of:crewStore.chatSearchRequest){_,request in
+            guard let request else{return}
+            selectedRemoteSessionID=nil
+            communicationView = .agents
+            searchQuery=request.query;searchTargetMessageId=request.messageId
+            Task{@MainActor in await Task.yield();if crewStore.chatSearchRequest?.id == request.id{crewStore.chatSearchRequest=nil}}
         }
         .task {
             await appModel.connectCrewdAuthority()
@@ -147,26 +150,16 @@ struct IPadShell: View {
             CrewChatView(
                 crewId: id, crewTitle: title,
                 onOpenRemoteSession: { selectedRemoteSessionID = $0 },
-                communicationView:$communicationView,searchQuery:$searchQuery)
+                communicationView:$communicationView,searchQuery:$searchQuery,searchTargetMessageId:$searchTargetMessageId)
                 .modifier(CrewdOriginalWorkIntegration(workspace: crewStore.crewdWorkspace,
                     openSession: { selectedRemoteSessionID = $0 }))
+                .environment(\.crewdMessageSearchTarget,searchTargetMessageId)
                 .id((appModel.crewdBackend?.workspace.presentationNamespace ?? "unconnected") + "/" + id + "/" + personalService.projectionID.uuidString)
                 // compact 下这一屏是被推上来的，得有标题；regular 下留空
                 // 标题 = 与改动前一致（别动 iPad）。不碰 .toolbar 可见性 ——
                 // iPad detail 列那条导航条上挂着系统的侧栏开关，隐了就没了。
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
-                .searchable(text:$searchQuery,placement:.navigationBarDrawer(displayMode:.automatic),prompt:"搜索当前群")
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Picker("沟通视图", selection: $communicationView) {
-                            ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { view in
-                                Text(view.title).tag(view)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-                }
                 .navigationDestination(item: $selectedRemoteSessionID) { sessionID in
                     IOSRemoteSessionView(crewID: id, sessionID: sessionID)
                 }
@@ -196,6 +189,34 @@ struct IPadShell: View {
                 ContentUnavailableView("选择一个机组", systemImage: "bubble.left.and.bubble.right",
                                        description: Text("从左侧选择机组，继续查看消息、待办工作和资料。"))
             }
+        }
+    }
+
+    private func settingsAction(_ action:@escaping ()->Void){
+        showingSettings=false
+        // The original root owns every operation sheet and its retained state.
+        // Present only after Settings has completed dismissal.
+        pendingSettingsAction=action
+    }
+    @State private var pendingSettingsAction:(()->Void)?
+    private var mobileSettings:some View {
+        NavigationStack{
+            List{
+                Section("电脑与连接"){
+                    Button("连接状态与未完成操作"){settingsAction{showingConnectionStatus=true}}
+                    Button("连接或添加电脑"){settingsAction{showingPairing=true}}
+                    if let workspace=appModel.crewdBackend?.workspace{
+                        NavigationLink("任务与工作通知"){CrewNotificationSettings(workspace:workspace,embedded:true)}
+                    }else{Text("连接后可查看任务与工作通知设置").foregroundStyle(.secondary)}
+                }
+                Section("本机输入与原请求"){
+                    Button("本机 Codex 原输入"){settingsAction{showingLocalCodexInputs=true}}
+                    Button("本机已保存草稿"){settingsAction{showingOfflineDrafts=true}}
+                    if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty{Button("原连接的输入"){settingsAction{showingRetainedInputs=true}}}
+                    if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true{Button("原请求核对"){settingsAction{showingRecovery=true}}}
+                }
+            }.navigationTitle("设置")
+                .toolbar{ToolbarItem(placement:.confirmationAction){Button("完成"){showingSettings=false}}}
         }
     }
 

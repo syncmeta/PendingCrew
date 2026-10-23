@@ -352,6 +352,14 @@ struct CrewChatView: View {
             .measuringChatColumnHeight()
         #else
         VStack(spacing: 0) {
+            if let communicationView {
+                HStack{
+                    Picker("沟通范围",selection:communicationView){
+                        ForEach(CrewTimelineFilter.CommunicationView.allCases,id:\.self){Text($0.title).tag($0)}
+                    }.pickerStyle(.menu)
+                    Spacer()
+                }.font(.caption).padding(.horizontal,14).frame(minHeight:44)
+            }
             if !members.isEmpty {
                 CrewRosterBar(
                     members: members, captainBotId: captainBotId,

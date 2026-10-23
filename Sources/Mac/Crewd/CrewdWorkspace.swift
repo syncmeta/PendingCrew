@@ -752,30 +752,6 @@ final class CrewdWorkspace: ObservableObject {
     }
     var selectedMembers: [CrewdValue] { channelSummaries.first(where: {$0["channel"]["id"].string == channelID})?["members"].array ?? [] }
     func selectSession(_ id: String) { guard sessionID != id else { return }; selection = UUID(); sessionID = id; inspection = .null; runnerItems = []; history = ""; scheduleSync(recoverHistory: true) }
-    private var openingSessions = Set<String>()
-    /// Only an explicit user click invokes this path. Refresh live state first;
-    /// never infer a stopped runner from an uninitialized display projection.
-    func restoreOpenedSession(_ id: String, crew: String) async {
-        let epoch = observationGeneration, route = selection, connection = client.connectionEpoch
-        guard crewID == crew, sessionID == id, !openingSessions.contains(id) else { return }
-        openingSessions.insert(id); defer { openingSessions.remove(id) }
-        do {
-            let live = try await readValue("session.live", .object(["sessionId": .string(id)]))
-            guard acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id else { return }
-            guard live["sessionId"].string == id, case .bool(let running) = live["running"] else {
-                throw CrewdClientError(message: "原会话运行状态未能确认，未提交恢复。", kind: .notSubmitted)
-            }
-            if !running {
-                guard !hasOriginalUnknown(method: "session.resume", crew: crew) else {
-                    throw CrewdClientError(message: "原恢复请求结果未确认，请先核对原请求。", kind: .notSubmitted)
-                }
-                _ = try await performValue("session.resume", .object(["sessionId": .string(id)]))
-            }
-        } catch {
-            if acceptsObservation(epoch), selection == route, connection == client.connectionEpoch, crewID == crew, sessionID == id { self.error = "恢复原会话失败：" + error.localizedDescription }
-        }
-    }
-
     /// Called once after an explicitly created crew has a confirmed identity.
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.
@@ -1261,6 +1237,18 @@ final class CrewdWorkspace: ObservableObject {
     /// Explicit read-only receipt recovery. Historical SQL acceptance alone
     /// cannot prove current presence; verify both current crew/channel before
     /// changing only presentation selection. Never submit the command again.
+    /// Explicit search navigation rechecks current ACL/ownership before selecting.
+    func openSearchMessage(crew:String,channel:String,message:String,stillCurrent:()->Bool)async throws {
+        let epoch=observationGeneration,route=selection,connection=client.connectionEpoch,origin=presentationScope
+        func valid()->Bool{stillCurrent() && acceptsObservation(epoch) && selection==route && client.connectionEpoch==connection && presentationScope==origin && !Task.isCancelled}
+        let crews=try await readValue("crew.list")
+        guard valid(),try CrewSearchWire.rows(crews,id:{$0["id"].string}).contains(where:{$0["id"].string==crew}) else{throw CrewdPublicWire.invalid()}
+        let channels=try await readValue("channel.list",.object(["crewId":.string(crew)]))
+        guard valid(),try CrewSearchWire.rows(channels,id:{$0["channel"]["id"].string}).contains(where:{$0["channel"]["id"].string==channel && $0["channel"]["crewId"].string==crew}) else{throw CrewdPublicWire.invalid()}
+        let messages=try await readValue("message.list",.object(["channelId":.string(channel),"limit":.integer(1000)]))
+        guard valid(),try CrewSearchWire.rows(messages,id:{$0["id"].string}).contains(where:{$0["id"].string==message && $0["channelId"].string==channel}) else{throw CrewdClientError(message:"该搜索结果当前不可访问，请重新搜索。",kind:.notSubmitted)}
+        selectCrew(crew);selectChannel(channel)
+    }
     func openOriginalFirstMessage(_ record: CrewdPresentationJournal.Prepared, receipt: CrewdPublicReceipt) async throws -> String {
         let epoch = observationGeneration, selected = selection
         guard record.scope == presentationScope, receipt.phase == .committed,

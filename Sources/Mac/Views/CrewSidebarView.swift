@@ -11,7 +11,6 @@ struct CrewSidebarView: View {
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var model:AppModel
     @Environment(\.colorScheme) private var scheme
-    @State private var showingGlobalSearch = false
     /// 行右键「在这下面建子 crew」选中的父 crew（非 nil = 开子 crew 表单）。
     /// sheet 挂在侧栏顶层而不是行上：List 行会被回收，挂行上的表单可能被顶掉。
     @State private var childCrewTarget: CrewChildCreationTarget?
@@ -114,30 +113,6 @@ struct CrewSidebarView: View {
         // WindowChromeConfigurator 一次性藏死。
         .task { reloadArrangement() }
         .onReceive(crewStore.usesCrewdAuthority ? Empty<Void, Never>().eraseToAnyPublisher() : LocalWhiteboardStore.shared.directoryChanged.eraseToAnyPublisher()) { _ in reloadArrangement() }
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    showingGlobalSearch = true
-                } label: {
-                    Label("搜索所有群", systemImage: "magnifyingglass")
-                }
-                .help("搜索所有群")
-                Button {
-                    Task {
-                        await crewStore.refreshList()
-                        await crewStore.refreshMachines()
-                    }
-                } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-                .help("刷新 crew 列表")
-                .disabled(crewStore.loadingList)
-            }
-        }
-        .sheet(isPresented: $showingGlobalSearch) {
-            CrewGlobalSearchSheet()
-                .environmentObject(crewStore)
-        }
         // 行右键进来的「在这下面建子 crew」走同一份内存占位，保留被右键行的父 id。
         .onChange(of: childCrewTarget) { _, target in
             guard let target else { return }

@@ -10,6 +10,7 @@ import Combine
     @Published private(set) var selected: UUID?
     @Published private(set) var retainedWorkspaces: [CrewdWorkspace] = []
     @Published private(set) var credentialBusy = false
+    @Published var showingConnectionSettings = false
     @Published var error: String?
     /// Read-only review follows the original workspace, never the current writer.
     var inputReviewWorkspaces: [CrewdWorkspace] {

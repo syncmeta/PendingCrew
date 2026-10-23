@@ -27,6 +27,7 @@ struct CrewChatSearchRequest: Identifiable, Equatable {
     let crewId: String
     let query: String
     let messageId: String
+    var channelId: String? = nil
 }
 
 /// Crew 列表 + detail 缓存。
@@ -584,7 +585,7 @@ final class CrewStore: ObservableObject {
         chatSearchRequest = CrewChatSearchRequest(
             crewId: result.document.crewId,
             query: query,
-            messageId: result.document.messageId)
+            messageId: result.document.messageId, channelId: result.document.channelId)
     }
 
     // MARK: - 引用胶囊的跳转与返回（人类 Todo #132/#133）
