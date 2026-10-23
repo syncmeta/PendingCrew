@@ -52,17 +52,9 @@ struct CrewSidebarView: View {
                     BackendSidebarConnectionStatus(
                         client: viewer, decision: sessionHost.orchestrationDecision)
                 }
-                if visibleCrews.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if crewStore.loadingList {
-                            ProgressView("正在读取机组").controlSize(.small)
-                        } else {
-                            Text("点右边那个孤独的加号\n新建机组以开始。")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }.padding(.vertical, 14).listRowSeparator(.hidden)
+                if visibleCrews.isEmpty && crewStore.loadingList {
+                    ProgressView("正在读取机组").controlSize(.small)
+                        .padding(.vertical, 14).listRowSeparator(.hidden)
                 }
                 if !visibleCrews.isEmpty {
                 if model.usesCrewdAuthority {

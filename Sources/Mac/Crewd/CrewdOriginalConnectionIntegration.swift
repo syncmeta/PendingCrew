@@ -306,9 +306,6 @@ struct CrewdMachinePicker: View {
             .first { $0.dataDirectory != nil }
         return "computer/" + (local?.authorityRecordID.uuidString.lowercased() ?? "local-unconnected")
     }
-    private func emoji(_ seed: String) -> String {
-        CrewColorHash.emoji(for: seed + "/first") + CrewColorHash.emoji(for: seed + "/second")
-    }
     private var localSelected: Bool { window.workspace?.dataDirectory != nil }
     private var currentName: String {
         if localSelected { return "本机" }
@@ -316,40 +313,25 @@ struct CrewdMachinePicker: View {
         return "尚未连接"
     }
     private var currentSeed: String { localSelected || window.selected == nil ? localSeed : "computer/" + window.selected!.uuidString.lowercased() }
-    private var connected: Bool { window.workspace?.client.readyForWork == true }
-
     var body: some View {
         Menu {
-            Button(emoji(localSeed) + " 本机" + (localSelected ? (connected ? " · 已连接" : " · 已选，未连接") : " · 本地工作区")) {
-                Task { await model.connectCrewdAuthority() }
-            }
-            .disabled(model.connectingAuthority || crewStore.pendingCrewSending)
+            Button("本机") { Task { await model.connectCrewdAuthority() } }
+                .disabled(model.connectingAuthority || crewStore.pendingCrewSending)
             ForEach(window.computers.filter(\.paired)) { computer in
-                Button(emoji("computer/" + computer.id.uuidString.lowercased()) + " " + computer.name
-                    + (window.selected == computer.id ? (connected ? " · 已连接" : " · 已选，未连接") : " · 已配对")) {
-                    Task { await model.connectCrewdAuthority(computerID: computer.id) }
-                }.disabled(model.connectingAuthority || crewStore.pendingCrewSending || window.credentialBusy)
+                Button(computer.name) { Task { await model.connectCrewdAuthority(computerID: computer.id) } }
+                    .disabled(model.connectingAuthority || crewStore.pendingCrewSending || window.credentialBusy)
             }
-            Divider()
-            switch window.computerListState {
-            case .notLoaded: Text("已存电脑尚未读取")
-            case .loaded: if window.computers.filter(\.paired).isEmpty { Text("没有已配对的远程电脑") }
-            case .failed: Text("已存电脑读取失败；未切换连接")
-            }
-            Button("读取已存电脑") { Task { await window.refresh() } }.disabled(window.credentialBusy || model.connectingAuthority)
-            Button("电脑与连接设置…") { window.showingConnectionSettings = true }
         } label: {
-            HStack(spacing: 8) {
-                Text(emoji(currentSeed)).font(.system(size: 20))
+            HStack(spacing: 10) {
+                BotAvatar(seed: currentSeed, size: 26)
                 Text(currentName).lineLimit(1)
                 Spacer(minLength: 2)
-                if model.connectingAuthority { ProgressView().controlSize(.mini) }
-                else { Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .accessibilityLabel("机器：" + currentName + (connected ? "，已连接" : "，未连接"))
-        .help("选择当前工作电脑；配对与连接管理在设置中。")
+        .menuStyle(.borderlessButton)
+        .tint(Color(nsColor: .controlAccentColor)).foregroundStyle(.primary)
+        .accessibilityLabel("机器：" + currentName)
+        .task { if window.computerListState == .notLoaded { await window.refresh() } }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
