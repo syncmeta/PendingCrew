@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-23 原生文档首次保存、加入与重开接受
+
+产品源 `fb5a7cff2763443f51e4dce9ed3f970d22494d3e` clean，三路径。两处产品Swift修正首次Save准入、placement identity及提交后原scope只读恢复；原fixture新增必要模式但未独跑。14项实际生产切片compile/run0，覆盖uninitialized、拒绝/Unknown/原UUID和event-before-response；不冒全fixture或未变Rust重验。最终暖Mac build0，准确开发Core1708629e/SHA6ea58be4…947e7ea复用。
+
+独立实际GUI完整通过：无知识库→一次Save→一次Join→原生正文读取→正常Quit真gone→同一已签构建包重开→同文档/正文读回。request `0c49e952-3ccb-4063-85b4-cf69d7f42e8b` committed，view `f0ee3cb8-47da-4000-92ee-57315f8dcb1e`，generation0→1，知识receipt1/objects2、channel link1、sessions0/native_execution_receipts0。根全文读报告并亲看前后图，证据在 `native-document-first-save-20261023/`，报告SHA6491c78f…e8c2ee。
+
+最终App43105/Core43121及工具53720留运行，日用32881/32904保留；原run重开遇低盘buildguard即止，作者只按根裁定核准同fb5包来源/strict/helper后沿原私域env正常启动，未重build/sign/copy/降低门或清理。无模型、页面JS、远程/云同步或日用替换。本轮稳定旧资格复用，新增源与真实影响范围清楚分列。
+
 ## 2026-10-23 同排搜索按钮受影响范围接受
 
 冻源 `fd9b8f3854e96939422b9c291a2da1d9807d6fdb` clean，仅 `CrewCenterView` 与 `CrewdOriginalWorkIntegration` 两处 Mac UI 改动；原胶囊 Tab 与搜索按钮同排，常驻搜索框删除，范围/输入收进弹层。原查询/结果定位实现与后端未变。最终暖构建 exit0，App35247；根亲看900点同排图，独立实际当前群输入、全局静态结果、重复⌘F仍打开聚焦通过。最终一次结果点击无错误但未取得弹层关闭/原定位成功证据，保留为本轮未验证范围，不以观察限制确认产品缺陷；没有追加测试工具或重复全量业务。报告与截图沿原 `creation-chat-ui-independent-qa-20261023/`。

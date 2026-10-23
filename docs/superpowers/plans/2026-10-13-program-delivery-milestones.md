@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-23 原生文档首次保存完整流程已通
+
+冻源 `fb5a7cff2763443f51e4dce9ed3f970d22494d3e` 修复新机组原生文档的三个实际阻断：Save误排除uninitialized；新placement未提供id或alias；data.changed先于提交回复使读模型失效后无法恢复原保存阶段。现在只在明确Save时沿既有data.submit初始化SQLite，提交独立placement alias，原机组/通道/呈现范围不变才只读refresh并恢复原UUID的持久阶段。拒绝、未知、切换范围和待核对请求保护保留；Rust/API与默认创建机组的只读行为不变。
+
+14项实际生产切片compile/run0，准确暖Mac构建0；原journal fixture新增模式保源码，未独跑，不冒通过。独立GUI在原演示私域从无知识库开始，一次保存“PendingCrew 功能导览”→一次加入本群→读取正文→正常退出确认App/Core结束→同包重开读取同一文档与正文，完整通过。原请求0c49e952…2e8b committed，generation0→1，知识receipt1/对象2/群引用1，sessions与native execution均0。根亲看document-read及document-reopened实图，报告 `native-document-first-save-20261023/NATIVE-DOCUMENT-GUI-QA.json`。
+
+当前开发App43105/Core43121、原工具53720保留，日用F2未动。重开时原run因磁盘不足在build前拦停；只复用已核来源/签名/后台的同一fb5产物正常启动，未重新构建/签名/改门/清缓存。现有1708629e开发Core准确复用，不称新normal、Release、iOS运行、云同步或全工程完成。本轮为实质产品进展，持续目标保持active，外部交付前提分别保留。
+
 ## 2026-10-23 Tab 与单一搜索按钮同排
 
 产品输入 `fd9b8f3854e96939422b9c291a2da1d9807d6fdb`，仅两处 Mac Swift 源码。保留胶囊 Tab，在同一会话标题行右侧放单一搜索按钮，移除常驻 toolbar 搜索框；点击后弹层选择当前群/全局·当前电脑及输入，复用原查询和定位链。重复 ⌘F 始终打开并聚焦，空态与草稿使用互斥的同一搜索入口，不增加后端接口。

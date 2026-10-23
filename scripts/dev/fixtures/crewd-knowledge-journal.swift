@@ -5,7 +5,10 @@ import Foundation
     var committed = false
     var submitted = 0
     var requestID = ""
-    func info() -> CrewdDataWorkspaceInfo { .init(context:context,state:"ready",engineVersion:"sqlite",reason:nil) }
+    var state = "ready"
+    var lastSubmit: CrewdValue = .null
+    var beforeReply: (() -> Void)?
+    func info() -> CrewdDataWorkspaceInfo { .init(context:context,state:state,engineVersion:"sqlite",reason:nil) }
     func result(_ id:String, before:String) -> CrewdDataChangeResult {
         .init(requestId:id,phase:.committed,context:context,beforeGeneration:before,afterGeneration:context.generation,snapshotId:nil,created:["document":.object(object:.init(reference:.init(namespace:context.namespace,kind:"view",id:"saved-view"),revision:"1"))],changed:[],conflicts:[],reason:nil,resolvedByRequest:nil)
     }
@@ -14,8 +17,15 @@ import Foundation
         case "data.workspace.get": return try CrewdKnowledgeStore.encode(info())
         case "data.object.list": return try CrewdKnowledgeStore.encode(CrewdDataObjectPage(context:context,generation:context.generation,items:[],next:nil))
         case "data.submit":
-            submitted += 1; requestID = input["requestId"].string!
-            if committed{var response=result(requestID,before:context.generation);if refused{response.phase = .rejected;response.created=[:];response.reason="explicit refusal"};return try CrewdKnowledgeStore.encode(response)}
+            submitted += 1; requestID = input["requestId"].string!; lastSubmit = input
+            if committed{
+                let before = context.generation
+                if state == "uninitialized" { state = "ready"; context.generation = "1" }
+                var response=result(requestID,before:before)
+                if refused{response.phase = .rejected;response.created=[:];response.reason="explicit refusal"}
+                beforeReply?()
+                return try CrewdKnowledgeStore.encode(response)
+            }
             throw NSError(domain:"reply lost",code:1)
         case "data.request.get":
             precondition(input["requestId"].string == requestID)
@@ -37,6 +47,40 @@ import Foundation
         let origin = CrewdKnowledgeStore.Origin(scope:scope,observation:UUID(),connection:UUID(),crew:"crew")
         let rpc = FakeRPC()
         func store() -> CrewdKnowledgeStore { CrewdKnowledgeStore(origin:{origin},rpc:{ try rpc.call($0,$1) },journal:{journal}) }
+        if CommandLine.arguments.dropFirst().first == "document-first-save" {
+            let first = store()
+            precondition(!first.canSaveNativeDocument)
+            for state in ["locked", "unavailable"] {
+                rpc.state = state
+                await first.refresh()
+                precondition(!first.canSaveNativeDocument)
+                _ = await first.submitNativeDocument(title:"not sent",body:"not sent",channel:"group")
+                let blockedStage = try journal.currentDocumentStage(crew:"crew",channel:"group")
+                precondition(rpc.submitted == 0 && blockedStage == nil)
+            }
+            rpc.state = "uninitialized"; rpc.context.generation = "0"; rpc.committed = true
+            await first.refresh()
+            precondition(first.canSaveNativeDocument && rpc.submitted == 0,"read never initializes or submits")
+            rpc.beforeReply = { first.handleEvent("data.changed", .object(["crewId":.string("crew")])) }
+            let committed = await first.submitNativeDocument(title:"native title",body:"exact native body",channel:"group")
+            precondition(committed?.phase == .committed && rpc.submitted == 1)
+            let edits = rpc.lastSubmit["change"]["edits"].array
+            let placement = edits[1]["definition"]["placements"].array[0]
+            precondition(placement["id"] == .null && placement["alias"] == .string("bodyPlacement"))
+            precondition(placement["block"]["alias"] == .string("body"))
+            precondition(!first.canSaveNativeDocument,"event before reply invalidates only the read model")
+            do { _ = try first.nativeDocumentStage(channel:"group"); preconditionFailure("event invalidation should require a fresh read") } catch {}
+            await first.refresh()
+            let stage = try first.nativeDocumentStage(channel:"group")!
+            let saved = try first.nativeDocumentResult(stage)
+            precondition(saved == committed && saved?.requestId == rpc.requestID && stage.id.uuidString.lowercased() == rpc.requestID)
+            precondition(saved?.created["document"] != nil && rpc.submitted == 1,"same durable source is now ready for joining")
+            let reopened = store(); await reopened.refresh()
+            _ = await reopened.submitNativeDocument(title:"later",body:"later",channel:"group")
+            precondition(rpc.submitted == 1,"reopen never recreates the saved source")
+            print("PASS native first Save: nil/locked/unavailable refuse before staging; uninitialized reads do not write; independent placement alias; event-before-reply refresh restores the same committed UUID/source for Join; reopen sends nothing")
+            return
+        }
         if CommandLine.arguments.dropFirst().first == "document-refused" {
             rpc.committed=true;rpc.refused=true
             let first=store();await first.refresh()
