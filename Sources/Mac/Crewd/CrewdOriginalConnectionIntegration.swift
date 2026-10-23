@@ -313,6 +313,13 @@ struct CrewdMachinePicker: View {
         return "尚未连接"
     }
     private var currentSeed: String { localSelected || window.selected == nil ? localSeed : "computer/" + window.selected!.uuidString.lowercased() }
+    // Native Menu extracts a Label's title/image; arbitrary SwiftUI backgrounds
+    // are not retained. Render the existing avatar as an original-colour icon.
+    private var machineAvatar: NSImage {
+        let renderer = ImageRenderer(content: BotAvatar(seed: currentSeed, size: 26))
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage ?? NSImage(size: NSSize(width: 26, height: 26))
+    }
     var body: some View {
         Menu {
             Button("本机") { Task { await model.connectCrewdAuthority() } }
@@ -322,14 +329,16 @@ struct CrewdMachinePicker: View {
                     .disabled(model.connectingAuthority || crewStore.pendingCrewSending || window.credentialBusy)
             }
         } label: {
-            HStack(spacing: 10) {
-                BotAvatar(seed: currentSeed, size: 26)
+            Label {
                 Text(currentName).lineLimit(1)
-                Spacer(minLength: 2)
-            }.frame(maxWidth: .infinity, alignment: .leading)
+            } icon: {
+                Image(nsImage: machineAvatar).renderingMode(.original)
+            }
+            .labelStyle(.titleAndIcon)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .menuStyle(.borderlessButton)
-        .tint(Color(nsColor: .controlAccentColor)).foregroundStyle(.primary)
+        .tint(Color(nsColor: .controlTextColor)).foregroundStyle(.primary)
         .accessibilityLabel("机器：" + currentName)
         .task { if window.computerListState == .notLoaded { await window.refresh() } }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)

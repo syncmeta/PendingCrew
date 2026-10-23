@@ -58,3 +58,10 @@ extension Theme.Palette {
     /// 额度环的底槽（未用掉的那段弧）—— 比 hairline 重一点点，3pt 细环才看得出。
     static let quotaTrack = Color.adaptive(light: 0xE6E6E2, dark: 0x2E3038)
 }
+
+/// PendingCrew's faint avatar wash; vendored identity/emoji algorithms stay unchanged.
+enum CrewAvatarPalette {
+    static func softBackground(hue: Double) -> Color {
+        Color(hue: hue, saturation: 0.10, brightness: 0.98)
+    }
+}
