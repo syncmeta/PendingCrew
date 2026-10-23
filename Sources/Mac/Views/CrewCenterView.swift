@@ -186,7 +186,8 @@ struct CrewCenterView: View {
     private var searchButton: some View {
         Button {
             if crewStore.selectedDetail == nil { searchScope = .all }
-            showingSearch.toggle()
+            showingSearch = true
+            searchFocused = true
         } label: {
             Image(systemName: searchScope == .current && !searchQuery.isEmpty ? "magnifyingglass.circle.fill" : "magnifyingglass")
                 .font(.system(size: 15, weight: .medium))
