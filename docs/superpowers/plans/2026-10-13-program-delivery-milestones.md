@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 累计界面优化已交到普通 Mac 日用版
+
+完整输入 `edcc894eade6f0959368c013ab97515f58d0d683` 已完成准确新 normal、普通 Mac Release/M42 签名、独立整包核验及实际安装，日用为 **0.1.44/20749.65747**。它集中交付聊天式新建、默认目录/名称、机器栏与浅色头像、同排胶囊 Tab/单搜索，以及原生文档首次保存与本轮文档区精修。旧 F2 经临近无任务核查后正常菜单退出、安全暂停并确认 App/Core 结束；原三阶段整包更新成功，旧 wholeApp 与完整 ZIP 均保留，未迁移或回退数据库。
+
+质量线唯一正常首开实际 App8367/Core8379，本机连接与机器绿点可见。原侧栏和已停止会话自然保留；首开前后 public receipts 同为5、session仍 stopped1、native runtime/receipt/input均0、无provider子进程，支持本次零自动启动/恢复结论。根亲看实际934×688窗口并全文读验收记录。证据：`cumulative-edcc-normal-20261024/`、`complete-edcc894e-production-20261024/`、`complete-edcc894e-install-20261024/`，最终 `core-personal-drafts-runtime-preparation-20261023/EDCC-ACTUAL-UPDATE-QA-20261024.json`。本轮未构建/运行新iOS、未公证或发布，既有未变业务不重验。
+
+双App草稿同步仍未验通：正常单链接配对的原 begin/lookup 为 Unknown，同身份正常重启后一次原查询仍未确认；原A/B、密钥和监听保全，不以过期、无reservation或正常重启推断未提交，不新邀或重发。该局部恢复有限收束，不阻塞上述日用交付。后端另以全新私域、正常CLI入口定位握手无回复的实际缺口；不继续旧现场探针或造验收框架。全工程目标仍active，Apple云/推送、实际设备、VPS服务及供应商剩余资格保持各自原范围。
+
 ## 2026-10-24 对照热重载窗口完成文档区精修
 
 产品源 `3af3492a96932c915e8d9b71ca20426db48801b1`，仅一处KnowledgeViews文件：范围/类型改紧凑原生中性菜单、说明移Help、分类收为单行；单条列表收至68点、多条最多180点，把空间还给正文；选中底改轻中性、标题/来源统一14点边距。原胶囊Tab、同排单搜索、机器footer及数据/权限/原UUID动作不变。两处视图接入仅Mac专用Debug热更新hook；正常退出旧开发App后才加入存储字段并暖构建一次，不重做normal/Release候选。

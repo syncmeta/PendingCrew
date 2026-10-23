@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 edcc 普通 Mac 日用安装与首开接受
+
+准确完整输入 `edcc894eade6f0959368c013ab97515f58d0d683`，1950完整输入/478Rust；新normal默认Debug/features[]、149方法/Store21独验接受，helper SHA `b9263f2e2641a41e7ac5f82323746a75fb974e3649ab8c98def92fab11e5e25f`。同源普通Mac Release/M42 hardened、无Injection，2598项封存与ZIP/51产品文件逐字相等独验接受，实际版本0.1.44/20749.65747。旧1708开发helper和756f候选均未改标；新iOS不在本轮范围。
+
+安装原三阶段适配净差异独验后实际全0；installed receipt位于 `complete-edcc894e-install-20261024/installed-receipt.json`。旧F2 wholeApp保留，备份ZIP SHA `b6d0f1fb3222c503478397c9bd4800ac071d4d040d462e734201ed66da1dc5ad`。质量线唯一普通首开App8367/Core8379，934×688真实窗口经根亲看；本机ready、原侧栏与stopped1自然延续，public receipts保持5、native runtime/receipt/input0、无provider子进程。本次支持零自动启动/恢复；未打开正文、发送、执行JS或模型，不扩大为全业务重验。最终报告 `core-personal-drafts-runtime-preparation-20261023/EDCC-ACTUAL-UPDATE-QA-20261024.json`。
+
+私域双端草稿验收仍WITHHOLD：原单链接begin13a33e32在同身份正常重启后一次原lookup仍Unknown，未到challenge/commit/personal成员与草稿阶段；保留原A/B及密钥，不新邀/重发。有限恢复记录 `core-personal-app-runtime-plan-20261023/FINITE-RECOVERY-TERMINAL-20261024.json`，不以无reservation推断未提交。此局部失败与已接受日用安装分别记账，新的普通CLI握手入口复现独立推进。
+
 ## 2026-10-24 文档区视觉与实际保存热更新接受
 
 `3af3492a` clean冻源，仅 `Sources/CrewdRemote/CrewdKnowledgeViews.swift` 36增/18删。紧凑中性范围/类型、说明Help与单行分类、按数量有上限的列表及标题/正文间距，保原业务闭包与权限/UUID。两处官方Inject hook严格限定 `DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)`。旧A经实际可见正常退出询问、安全暂停并确认App/Core退出后才改存储结构；原暖Debug构建0。旧B同注入源的首次尝试因无编译命令失败，无Compiled/Rebound；B随后正常退出，后续唯一保存只面向新A。
