@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 cce 当前真机候选及实际安装接受，首开未通过
+
+候选源 `cce3204d38dae7d7b76c903387f993a07045917c`，iPhoneOS27/arm64/DEBUG，M42 BF947 Development及a081 profile含原登记设备。实际 **0.1.44/20749.76893**，1953Git/blob/mode、404目标与3878依赖精确，53App/ZIP/IPA字节相同，94最终封存及14外部绑定独验接受。COMBINATION SHA `e82f2161143a24ec7478a1602d360eebf8b9bd17ab430f308b33afb09ed782e8`，manifest SHA `3ba11dabae187da67161924faa1cf7bdb0ab88e57bb21b0ce2ebbe39598707f2`。根完整读取最终独验与具体动作。原Local恢复0644、三旧wholeZIP与C114项均保全；无内嵌crewd、不重normal/Mac/稳定业务，未将旧P或e1证明改标。版本优先级已知红证据95024保留，实际90564与一次build83444通过，两非签名CLI的SPM资源版本影响入证。
+
+当前全类别精确App记录0后，唯一新cce安装80572成功，安装receipt SHA `50598e536d34eedfba022ae9e711d2e9c8c55e2b9c538f6cfd68b7d29c2c26c3`，独立已装版本读回准确。唯一正常首开99330被实际设备锁屏拒绝：CoreDevice10002/FBSService1/FBSOpen7、RequestDenied/Locked。没有运行进程或UI验收资格，已停，无解锁、launch重试、旧连接/配对、模型、Cloud/APNs或权限操作。旧P timeout Unknown原样保留，不能改写为失败无副作用；新安装成功亦不宣称设备数据从不存在。最终 `iphoneos-cce3204d-install-20261024/PHONE-INSTALL-FIRST-OPEN-QA.json`，Mac日用仍e1/0.1.44-20749.74290。
+
+精确GOCACHE清单12872项回收，实际空闲增量2,049,781,760B，21受保护哈希及源码指纹同，原3GiB门保留；证据 `go-build-cache-inventory-20261024/RECEIPT.json`。当前Apple账号资格未取得，入口中断由根发起，非人类拒绝；原生APNs已整合而Cloudflare桥未整合，不重造中转，真实容器/签名/密钥等信息待答。当前Linux相对旧M实际缺首消息默认目录/capability，4Rust/schema路径净差，API/数量/Store相同不能重标旧包；VPS无已查工具链，本机标准库不等完整linker或Linux服务。只读资格报告在 `linux-current-build-qualification-20261024/`，新限时Linux构建额度待核，未开新CI。全工程多端/云/推送/VPS/供应商等范围未冒完成。
+
 ## 2026-10-24 e1 视觉精修普通日用交付接受
 
 冻结源 `e1be3f4de798b9a8bb0b7c47bdd118bdd2ea2aff`，视觉产品8a、Rust tree233d。准确新normal默认Debug/features[]、显式CARGO_INCREMENTAL=0、fresh图、149方法/Store21独验接受，helper SHA `f5c220fbf0fe7d29c94142fccdcc1e404ccf7c5b0565b61d7cdefba108ca7564`。同源Mac Release **0.1.44/20749.74290**（M42 hardened/51文件）与普通iOS Debug arm64 Simulator（Info0.1.43/1、76文件）全目标实际0；1953完整输入、404目标输入、3878依赖及2706项组合封存独验接受。组合SHA `ddb1f27b43e0b6959eb4c5b99cd47cf4a2b44bf41b22bdb270d1404b9705460b`，manifest SHA `72741c177ba520bb329479273754a2f01af64bdb45ebd04b7063c173cc69dbd7`。稳定业务和8a实际900深色精修证据复用，不冒新iOS运行资格。

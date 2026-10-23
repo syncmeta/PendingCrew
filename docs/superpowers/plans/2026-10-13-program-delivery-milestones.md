@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 最新 iOS 真机包已安装，首开待手机正常解锁
+
+完整冻结源 `cce3204d38dae7d7b76c903387f993a07045917c` 已完成普通 iPhoneOS27/arm64 Debug Development 构建、M42/BF947/a081签名、独立整包核验与封存，实际 **0.1.44/20749.76893**。1953完整Git输入、404目标、3878依赖前后精确，53项App/ZIP/IPA相同，94项最终manifest及14项外部绑定均独验接受；无内嵌crewd，不重建Rust或Mac，也不重复稳定业务。原项目版本优先级导致首次settings仍0.1.43/1，保留该红证据后仅用原发布方式的两版本CLI明确修正；实际90564通过、唯一build83444为0，依赖资源版本受影响如实记录。原Local字节/mode0644恢复，三旧暖产物及C完整包先保全，C114项及原ZIP构建后仍相同。证据 `ios-device-cce3204d-preparation-20261024/`、`ios-device-cce3204d-candidate-20261024/`。
+
+原已登记iPhone经当前全类别元数据读取未列出本App后，执行一次全新cce安装，实际owner80572/exit0/success；质量线独立读取已装版本精确为0.1.44/20749.76893。唯一正常首开owner99330实际失败，系统明确RequestDenied/Locked，设备未能解锁；这不是自动审批或网络超时。已停，不解锁、不重发launch或换路，不称UI/运行/同步通过。原P安装timeout Unknown仍按原结果保留，不因这次新包成功改标；无卸载、清数据、配对、模型或Apple云变更。最终报告 `iphoneos-cce3204d-install-20261024/PHONE-INSTALL-FIRST-OPEN-QA.json`。Mac日用仍e1/20749.74290。
+
+本轮按明确终态清单回收Go构建缓存12872文件，观察可用空间增加2,049,781,760B，21项受保护哈希与HEAD/diff不变；未碰go/pkg/mod、SDK、暖DD/SPM、源码、DB、日志和实际包。原3GiB门未降低。Apple门户读取未取得账户事实：CUA inventory为browser空，getApp等待后由根中断，无在途handle；不能推断未登录，也不是人类拒绝。现有通知后端是原生直连APNs，非已整合Cloudflare Worker，继续复用现有链。实际container/profile/key/topic/env仍缺，信息问题已提出，原剪贴板实际审批拒绝继续待答，不换路。
+
+另核当前Linux实质缺口：旧M的Rust tree0a10与当前233d差4路径，仅缺已验的首消息缺省CrewGround目录及capability；API3/149方法/Store21相同不等完整schema相同。VPS指定debian没有Rust/C工具链或缓存；本机已有Linux标准库但指定linker与本地Docker服务均未找到，未启动VM或下载。`linux-current-build-qualification-20261024/`记录真实差异及有限环境资格，未编译、部署或新耗CI。下一当前Linux包需要合格构建环境；已询问一次必要限时Linux构建的当前Actions额度，不凭旧额度冒认。供应商CLI登录、正常VPS服务、Apple云/推送、多端草稿、真机UI及Claude剩余范围仍各自保留，全工程active。
+
 ## 2026-10-24 视觉精修已交付普通 Mac 日用版
 
 完整冻结输入 `e1be3f4de798b9a8bb0b7c47bdd118bdd2ea2aff` 已完成准确 normal、普通 Mac Release/M42 签名与同源普通 iOS Simulator 构建、独立整包核验及组合终封；2706项封存、1953完整 Git 输入、478项 Rust 与3878依赖准确对应。复用8a四项实窗视觉和未变业务证据，未重跑稳定全套、all-features或GitHub CI，未把开发Core或旧normal改标。候选证据集中在 `cumulative-e1be3f4d-normal-20261024/`、`complete-e1be3f4d-production-20261024/`。
