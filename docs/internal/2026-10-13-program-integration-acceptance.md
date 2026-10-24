@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 当前 Linux95 完整产物与目标 VPS ABI 独验接受
+
+唯一 Actions run `40051514004/attempt1/job120745015499` 实际success728秒（12分8秒），控制器/源码 `95cd6f90ff6d6be4081ccaef6e68d9df0b51a60a`，Rust tree233d。1953完整Git输入、478 Rust、502原manifest、ZIP CRC与原GitHub digest一致；原require_fresh verifier通过，Release/default features[]/testfalse、12workspace owner/13raw fresh owning artifacts、7项编译环境完整。Linux纯schema exit0/空stderr/full JSON==checked149/API3/Store21，实际相关测试server5+proto1通过。normal ELF64 x86_64共64,085,728B，SHA256 `7164238800b96d49ee3199861f9814f92055d3fc37fa0262ff67b5b1f71faa65`。artifact12543567516共99,051,126B，ZIP SHA256 `d1ee71da6cecefbca28348d715e09c2ae8e69dd301a28cd15d7d22284c588ac4`；host.tar.gz SHA256 `206f625f7792cb90870bc88dee95267f81d5afce9c121d8c20b327dc6834369d`，准确五regular成员、安装器/模板/source-proof逐字核验。来源 `linux-host-95cd6f90-20261024/INDEPENDENT-ARTIFACT-QA.json`，根全文受领。没有发布、安装或把旧M重新命名。
+
+strict host-key SSH确认原debian UID/GID1000，唯一新root `/var/tmp/pcw-linux95-abi-20261024-40051514004` 原不存在→0700/debian，准确ELF单SCP及hash核对后0555。非root执行 `--version` 与 `--data-dir <newroot>/schema-data schema` 各一次，全0/空stderr；完整schema SHA256 `9c80bb4174e8917226c90279dd7dc1e7c75612558464fb7ba688918898fe29c3` 与当前149一致，ELF前后同，schema-data前后不存在。独立质量只读原始start/terminal/observations/version/schema，未重复SSH或重执行，最终 `INDEPENDENT-VPS-ABI-QA.json` 接受，根全文受领。仅目标ABI/纯CLI合格，无serve、数据库、端口、systemd、provider登录/模型或完整部署资格；旧R2与其他现场不动。原执行句柄全终态，无新CI、rerun或重复下载。
+
+本次记录提交在构建后，不是上述准确95产物的新输入。人类已获得Apple官方配置说明；真实M42 CloudKit容器/APNs key/env/p8路径、匹配profile/签名与后续实际云/推送仍未验，源码资格nil。Mac e1/20749.74290与手机cce/20749.76893本轮不变。VPS服务、供应商登录、双端实际草稿/撤权、正常手机首开及Claude后续等剩余完整交付单元保留，不以本模块完成冒全工程完成。
+
 ## 2026-10-24 聊天与文档去噪开发界面接受
 
 产品源 `b9d38dd9d8091a7dc2a51621a091691397127408`，4 文件 23增/15删。独立净源复核仅发现刷新保留 loaded 旧值时可能过早显示空结论，已最窄排除 loading/reading/两处 failure；原权限、Unknown、非空正文/滚动、Save/Join 闭包与 iOS 标题路径不变。单次原暖 Debug 构建 owner65965/exit0，复用准确 e1 normal helper，正常打开同私域 C App64638/Core64640。`ui-refinement-review-20261024-2/FINAL-VISUAL-QA.json` 接受 900 点浅色聊天/文档实图与范围/类型菜单开闭，根全文读并亲看前后图，C 留在消息页。未注入其他 client、未改日用、未重建 Rust/普通包/iOS或重跑稳定业务，也不扩大为其他尺寸/业务写入通过。

@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 当前 Linux 完整包与目标 VPS 纯 CLI 兼容性接受
+
+人类确认当前 Actions 至少余15分钟后，唯一手动 run `40051514004/attempt1/job120745015499` 成功，用时728秒；控制器与产品均准确 `95cd6f90ff6d6be4081ccaef6e68d9df0b51a60a`，Rust tree `233d978c6a97e387fb107c01505a8b4357c88b68`。默认 Release/features[] 的完整 normal、新首消息默认目录/capability相关 Linux 5+1项测试、完整schema/API3/149方法/Store21及可安装封包均独验接受。502项manifest、完整1953 Git输入/478 Rust输入与原fresh构建证明保全；包不能改标为本次后续记录提交。旧M与失败证据保原来源，不重复稳定业务或all-features，不自动重跑CI。
+
+目标 `154.36.143.228` 新私域中，以普通debian用户对准确ELF各执行一次版本及纯schema，均0/空stderr、schema完整一致，ELF前后相同，显式数据目录前后不存在。此处只接受目标ABI/纯CLI兼容性，不代表systemd安装、服务启动、配对、供应商登录或模型通过。证据 `linux-host-95cd6f90-20261024/INDEPENDENT-ARTIFACT-QA.json` 与 `INDEPENDENT-VPS-ABI-QA.json`；全部执行句柄终态，构建所有权释放。
+
+Apple配置步骤已向人类说明，实际M42容器、APNs key/env与本地p8路径仍待提供；源码资格nil，不因说明激活云/推送。VPS正常服务仍待预定服务用户的Codex/Claude安装及登录资格；双端草稿实际流程、手机正常首开、原剪贴板拒绝和Claude后续范围沿既有事实保留。Mac日用与iOS已装版本本轮未改，全工程尚未完成。
+
 ## 2026-10-24 按人工方向收敛聊天与文档开发界面
 
 UI 源 `b9d38dd9d8091a7dc2a51621a091691397127408`，4 文件 23增/15删：聊天频道标题降为次级、普通群聊泛副标不再占行、文档工具栏压紧，已加载且无错误/读取/刷新时的空集合只显示一份轻提示。原 Tab、同排单搜索、浅白背景、机器 footer 以及有效 agent/@/未读信息保留。独立净源复核与 900 点浅色实窗通过，范围/类型菜单开闭和回消息页通过；根亲看前后两组图。证据 `ui-refinement-review-20261024-2/FINAL-VISUAL-QA.json`。
