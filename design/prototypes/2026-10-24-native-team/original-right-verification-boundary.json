@@ -1,0 +1,162 @@
+{
+  "newFile": "PendingCrew-SwiftUI-Original-Right-Layout.sketch",
+  "sha256": "211bf9e21482f2b45558df5f4c727bfea0950e098aae0e786d8bc2c4f8941296",
+  "oldFiles": [
+    {
+      "path": "PendingCrew-SwiftUI-Refined.sketch",
+      "sha256": "8486121ce58e88204c757a94c888314e18c89f62e0c1c3e61cde9f63228992ed",
+      "newScriptNeverWritesThisFile": true,
+      "trackedHEADComparisonAvailable": false
+    },
+    {
+      "path": "PendingCrew-SwiftUI-Refined-Final.sketch",
+      "sha256": "8486121ce58e88204c757a94c888314e18c89f62e0c1c3e61cde9f63228992ed",
+      "newScriptNeverWritesThisFile": true,
+      "trackedHEADComparisonAvailable": false
+    },
+    {
+      "path": "PendingCrew-SwiftUI-Runtime-Environment.sketch",
+      "sha256": "646b7d41046af2cfadd6757859e3160bf060dc7727c6e668dd9757f9094cf8b3",
+      "newScriptNeverWritesThisFile": true,
+      "HEADByteExact": true
+    },
+    {
+      "path": "PendingCrew-SwiftUI-Sidebar-Navigation.sketch",
+      "sha256": "3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db",
+      "newScriptNeverWritesThisFile": true,
+      "HEADByteExact": true
+    },
+    {
+      "path": "PendingCrew-SwiftUI-Four-Proofs.sketch",
+      "sha256": "acb9da9047aa1fdf06ff0beb6af9dcc78de877d1a4f32c4184380256afcdc6e2",
+      "newScriptNeverWritesThisFile": true,
+      "trackedHEADComparisonAvailable": false
+    },
+    {
+      "path": "PendingCrew-PrivateTeam.sketch",
+      "sha256": "614552e2acfc5ab48d6caf1062f3473f96fba2fa309dee08c3d9489f38bfca26",
+      "newScriptNeverWritesThisFile": true,
+      "HEADByteExact": true
+    }
+  ],
+  "unchangedArtboardObjects": [
+    6,
+    7,
+    8,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    50,
+    51,
+    52,
+    53,
+    54,
+    62,
+    63,
+    64,
+    65
+  ],
+  "old162SymbolObjectsUnchanged": true,
+  "finalRepresentativeExports": [
+    {
+      "path": "01 群聊.png",
+      "bytes": 140544,
+      "sha256": "bc13d0b5c04c457d9268534ed7cc56c066b9466fe14d890db64ee4549a45a581"
+    },
+    {
+      "path": "02 单聊.png",
+      "bytes": 139919,
+      "sha256": "2d76af6bfab33a08dcd37274a94ac2ad19b99929ceb0013bcdde3b50bf91b654"
+    },
+    {
+      "path": "11 新成员会话.png",
+      "bytes": 152506,
+      "sha256": "f1c53549ed03d2b56dc9f21f33c798177a4f4837e66cc619633cb59d85511d67"
+    },
+    {
+      "path": "14 会话选择.png",
+      "bytes": 126753,
+      "sha256": "c830b3e7a827651e913f854cfb92571949e26b5b4c217d3e90a577f376cee28d"
+    },
+    {
+      "path": "15 人待办.png",
+      "bytes": 144641,
+      "sha256": "e41a5e593ada1ad07e8820b05f720081394f72891554bb3f46de05a84e3210ca"
+    },
+    {
+      "path": "21 文档数据.png",
+      "bytes": 144272,
+      "sha256": "d098f9721892532d4e8a59320256cf940a7a03f85102f907281a4dd2da0c7ee0"
+    },
+    {
+      "path": "33 机器菜单.png",
+      "bytes": 148626,
+      "sha256": "85ea7021c41fdae411b550a2785e7f5d98ac2094e75cb991d60e0ddd81f2d102"
+    },
+    {
+      "path": "38 Codex控制.png",
+      "bytes": 151620,
+      "sha256": "5b01e2a6afe060fac9a31a269368426cf0861f0fef055de6cb1cf6927ea3bcce"
+    },
+    {
+      "path": "55 Codex执行.png",
+      "bytes": 151972,
+      "sha256": "af119ea1c673a6820f91da2cb3b2c53d7b1a064c0a7158264c8acc81ab14c4ce"
+    },
+    {
+      "path": "56 Codex历史.png",
+      "bytes": 149986,
+      "sha256": "365aaf3ec1a2178d9f7e9f81158d5637a64f12205fab2044abcb724d1cb43560"
+    },
+    {
+      "path": "57 Codex设置.png",
+      "bytes": 152591,
+      "sha256": "2aab5a9bdd1f12ef69ca0ab5e7cb5391745c395954edcc764aeefc9ee802204d"
+    },
+    {
+      "path": "62 会话选择·人待办.png",
+      "bytes": 130759,
+      "sha256": "a8a4c4c6e8a54ca67cee6d4fe16672d71ac3566456de5d691d7ee57713a39d48"
+    },
+    {
+      "path": "70 后端会话.png",
+      "bytes": 127554,
+      "sha256": "53b9c0fee405dde958c22f73ee3ea0e9a806755ef608dfcede9f851e96b8dc23"
+    }
+  ],
+  "finalExportLog": {
+    "path": "/Users/hey/Untitled/Pendingname/PendingCrew/docs/private/preserved-delivery-artifacts/original-right-layout-design-20261025/pendingcrew-original-right-final-cli.log",
+    "sha256": "327130c78109ed5ff072abf9e9402bd43d382985a833ebee0a7131ea842be994"
+  },
+  "all70InitialCLIExportExit": 0,
+  "necessaryNewMemberTargetedRenderExit": 0,
+  "final13RepresentativeCLIExit": 0,
+  "GUIUsed": false,
+  "noAppBuildOrApple": true,
+  "fivePreexistingUntrackedUntouched": [
+    "INDEPENDENT-FOUR-PROOFS-QA.json",
+    "REFINEMENT-NOTES.md",
+    "refine.py",
+    "refined-native-integrity.json",
+    "refined-proof-integrity.json"
+  ],
+  "notClaims": [
+    "Sketch real doubleclick",
+    "free form typing or task execution",
+    "new App runtime",
+    "physical divider dragging"
+  ],
+  "finalRosterSource": "actual F macOverview title/inline ledgers/open detail + memberSection count/newSessionRow; empty work state; no invented work headings or member-header action"
+}

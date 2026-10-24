@@ -1,4 +1,12 @@
-# 当前主交付：Sidebar 样式与运行环境收口
+# 当前主交付：原群聊与常驻成员工作区
+
+打开 [PendingCrew-SwiftUI-Original-Right-Layout.sketch](PendingCrew-SwiftUI-Original-Right-Layout.sketch)。它与已实测的 SwiftUI 源码 `431de9db` 对齐：机组群聊保持在中间，右侧常驻待办与成员，选择成员后显示64pt头像轨、原会话与输入框；保留新的 Sidebar 子页、共同顶部 Tabs 与唯一搜索。
+
+完整70态沿用原交互图，43态更新、27态原对象保留；171个可编辑组件、2446条连线，全部画板可达。说明见 [ORIGINAL-RIGHT-LAYOUT-DESIGN.md](ORIGINAL-RIGHT-LAYOUT-DESIGN.md)，13张最终原生导出见 `original-right-previews/`。独立静态验收已通过；未操作 Sketch GUI，不模拟自由输入、真实双击或任务执行，App 的实际验收单独记录。旧文件和可能的人工修改保持不变。以下各版主交付说明及播放记录均为历史。
+
+---
+
+# 历史：Sidebar 样式与运行环境收口
 
 打开 `PendingCrew-SwiftUI-Runtime-Environment.sketch`。复用既有 70 态，按客户端静态视觉冻结 `86c4ac2e…` 同步 Sidebar 机组/会话行、footer 与运行环境菜单；原 `PendingCrew-SwiftUI-Sidebar-Navigation.sketch` 保留且 hash 未变。当前说明与验证边界见 [RUNTIME-ENVIRONMENT-DESIGN.md](RUNTIME-ENVIRONMENT-DESIGN.md)，原生 CLI 代表图见 `runtime-previews/`。
 
