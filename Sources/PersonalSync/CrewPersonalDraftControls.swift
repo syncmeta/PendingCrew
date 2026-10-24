@@ -233,6 +233,11 @@ private struct PersonalArchiveSelection:Identifiable {
     let key:AppleDraftKey
     var id:AppleDraftKey{key}
 }
+#if os(macOS)
+private struct CrewPersonalArchiveEditorScroll:ViewModifier {
+    func body(content:Content)->some View {ScrollView{content}}
+}
+#endif
 private struct CrewPersonalArchiveEditor:View {
     @ObservedObject var service:CrewPersonalDraftService
     let key:AppleDraftKey
@@ -278,7 +283,11 @@ private struct CrewPersonalArchiveEditor:View {
                 Button("关闭"){dismiss()}
                 Button("保存本机草稿"){service.checkpoint(payload,key:key,scope:scope);editing=false}.disabled(!loaded).buttonStyle(CrewdPrimaryButtonStyle())
             }
-        }.padding(20).modifier(CrewdAdaptiveFormFrame(width:620,height:520))
+        }.padding(20)
+        #if os(macOS)
+        .modifier(CrewPersonalArchiveEditorScroll())
+        #endif
+        .modifier(CrewdAdaptiveFormFrame(width:620,height:520))
         .task{
             let current=service.editingScope();scope=current
             let original=await service.restoreOwn(key)
