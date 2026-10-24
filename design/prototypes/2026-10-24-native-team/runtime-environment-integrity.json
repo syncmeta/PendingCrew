@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "artboards": 70,
+  "nativeSymbols": 162,
+  "nativeSymbolInstances": 2104,
+  "nativeFlowLinks": 2360,
+  "uniqueLayerIDs": 8882,
+  "startPoints": 1,
+  "reachableArtboards": 70,
+  "backLinks": 44,
+  "sha256": "646b7d41046af2cfadd6757859e3160bf060dc7727c6e668dd9757f9094cf8b3"
+}

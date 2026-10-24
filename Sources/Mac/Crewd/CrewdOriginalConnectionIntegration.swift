@@ -34,14 +34,14 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
         content
 .sheet(isPresented:$window.showingConnectionSettings,onDismiss:{let action=settingsNext;settingsNext=nil;action?()}){
             VStack(alignment:.leading,spacing:14){
-                HStack{Text("电脑与连接设置").font(.headline);Spacer();Button("完成"){window.showingConnectionSettings=false}}
+                HStack{Text("运行环境设置").font(.headline);Spacer();Button("完成"){window.showingConnectionSettings=false}}
                 Form { settingsItems }.formStyle(.grouped)
             }.padding(16).frame(width:560,height:560)
         }.sheet(isPresented:$localCodexInputs){CrewdCodexLocalInputs(directory:directory)}
         .sheet(isPresented:$statusDetails){
             if let current=window.workspace {
                 VStack(spacing:0){
-                    HStack{Text("当前电脑").font(.headline);Spacer();Button("关闭"){statusDetails=false}}.padding(16)
+                    HStack{Text("当前运行环境").font(.headline);Spacer();Button("关闭"){statusDetails=false}}.padding(16)
                     CrewdOriginalConnectionStatus(workspace:current,compact:true,detailOnly:true)
                 }.frame(minWidth:360)
             }
@@ -91,9 +91,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             }
 
 
-            if window.workspace != nil { Button("当前电脑状态与原请求",systemImage:"info.circle"){fromSettings{statusDetails=true}} }
+            if window.workspace != nil { Button("当前运行环境状态与原请求",systemImage:"info.circle"){fromSettings{statusDetails=true}} }
             Button("个人主机目录与同步状态"){fromSettings{personalDirectory=true}}
-            Menu("电脑") {
+            Menu("运行环境") {
                 Button("本机") { Task { await chooseLocal() } }
                 #if PENDINGCREW_KNOWLEDGE_VALIDATION || (PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT)
                 Text("当前使用本机工作区")
@@ -327,7 +327,7 @@ struct CrewdMachinePicker: View {
                 + window.computers.filter(\.paired).map { computer in
                     .init(name: computer.name, enabled: !window.credentialBusy,
                           action: { Task { await model.connectCrewdAuthority(computerID: computer.id) } })
-                })
+                }, openSettings: { window.showingConnectionSettings = true })
         .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
         .task { if window.computerListState == .notLoaded { await window.refresh() } }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -349,6 +349,7 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
     let ready: Bool
     let enabled: Bool
     let choices: [Choice]
+    let openSettings: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSButton {
@@ -367,20 +368,21 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
     }
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.choices = choices
+        context.coordinator.openSettings = openSettings
         button.image = avatar
         button.isEnabled = enabled
-        let title = NSMutableAttributedString(string: "   " + name,
-            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor])
+        let title = NSMutableAttributedString(string: "   ")
+        title.append(NSAttributedString(string: "●",
+            attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: ready ? NSColor.systemGreen : NSColor.systemRed]))
+        title.append(NSAttributedString(string: "  " + name,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor]))
         title.append(NSAttributedString(string: "    "))
         if let chevron = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 16, weight: .medium)) {
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .medium)) {
             let attachment = NSTextAttachment()
             attachment.attachmentCell = NSTextAttachmentCell(imageCell: chevron)
             title.append(NSAttributedString(attachment: attachment))
         }
-        title.append(NSAttributedString(string: "  "))
-        title.append(NSAttributedString(string: "●",
-            attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: ready ? NSColor.systemGreen : NSColor.systemRed]))
         button.attributedTitle = title
         button.setAccessibilityLabel("机器：" + name)
         button.setAccessibilityValue(ready ? "已连接" : "未连接")
@@ -388,18 +390,27 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
     }
     final class Coordinator: NSObject {
         var choices: [Choice] = []
+        var openSettings: (() -> Void)?
         private var menuChoices: [Choice] = []
         @objc func openMenu(_ button: NSButton) {
             let menu = NSMenu()
             menu.autoenablesItems = false
             menuChoices = choices
+            let title = NSMenuItem(title: "运行环境", action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            menu.addItem(title); menu.addItem(.separator())
             for (index, choice) in menuChoices.enumerated() {
                 let item = NSMenuItem(title: choice.name, action: #selector(selectMachine(_:)), keyEquivalent: "")
                 item.target = self; item.tag = index; item.isEnabled = choice.enabled
                 menu.addItem(item)
             }
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+            menu.addItem(.separator())
+            let settings = NSMenuItem(title: "运行环境设置", action: #selector(showSettings(_:)), keyEquivalent: "")
+            settings.target = self; menu.addItem(settings)
+            // Anchor the last option above the footer; the list grows upward.
+            menu.popUp(positioning: settings, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
         }
+        @objc func showSettings(_ item: NSMenuItem) { openSettings?() }
         @objc func selectMachine(_ item: NSMenuItem) {
             guard menuChoices.indices.contains(item.tag), menuChoices[item.tag].enabled else { return }
             menuChoices[item.tag].action()

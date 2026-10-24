@@ -1,0 +1,39 @@
+{
+  "status": "ACCEPT_STATIC_VISUAL_DESIGN_ONLY",
+  "file": "/Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-24-native-team/PendingCrew-SwiftUI-Runtime-Environment.sketch",
+  "sha256": "646b7d41046af2cfadd6757859e3160bf060dc7727c6e668dd9757f9094cf8b3",
+  "previousSidebarFileUnchangedSHA256": "3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db",
+  "same70ArtboardIDs": true,
+  "nativeSymbols": 162,
+  "instances": 2104,
+  "flows": 2360,
+  "backLinks": 44,
+  "all70Reachable": true,
+  "previewImagesPersonallyViewed": 11,
+  "acceptedScope": [
+    "Sidebar shared52 row /6gap/14radius/13semibold/12subtitle/11time; crew alone36avatar and conversations noavatar",
+    "Footer26emoji/name/statusdot before name/smaller10up",
+    "Upward environment menu heading, names-only choices, bottom Runtime Environment Settings action",
+    "Common topTabs/singleSearch and original right-side content retained; no layout scope expansion"
+  ],
+  "sourceQualification": "Reviewed current ten-file static visual scope only; no fulltarget type or runtime claim.",
+  "mustFix": [],
+  "boundaries": [
+    "No Sketch GUI actions or playback of this new file.",
+    "Native editable Symbols/Flow valid but not real backend, freely typed text or persisted operations.",
+    "Actual NSMenu upward positioning and settings mapping require future client runtime gate, not proven by design PNG."
+  ],
+  "previewHashes": {
+    "01 群聊.png": "8d5c08d9bdb10dc5826a1c91b1307ea4637e614c9b472cb4c63c902dde4bd0f0",
+    "07 新建机组.png": "57f0b1aff4e3ae756f1b3588cbf48af32f628be56c93cf5676cf39fbd44d82b1",
+    "14 会话选择.png": "acc56fd78c29f02fb6fd449d2e8cc8df4af135e20efa8ab41cbfa32010cfd750",
+    "15 人待办.png": "2cdd76fae46a73a0832ff8ee4a29909ca9e2044c8d60fe77a199eaa43fcd966b",
+    "21 文档数据.png": "d27649fcb85494ae4d88c6176919ea6dd4825b945981aeebb00f3926574105e2",
+    "33 机器菜单.png": "5996c14de8a25203ac82f022b75648f4cb5e4d44b74d2001157ad5c11ad22817",
+    "34 设置.png": "19e7945fea0ccf4a8a485927605b3e6f2daa0c855f12ab3d315698e9f994c8c9",
+    "35 连接设置.png": "19e7945fea0ccf4a8a485927605b3e6f2daa0c855f12ab3d315698e9f994c8c9",
+    "38 Codex控制.png": "7a2f20fda8eb4de1fe892f9b3200685d886ea22f7c677ac938dee36bbbc5f575",
+    "62 会话选择·人待办.png": "d1bd998e5d2a01b941800ff542d1117080781c1e2054e60a4d30ef7cb10a6c41",
+    "70 后端会话.png": "0b122284433480df94b4547424e7c16b6e78958d3fec24d321a844a577f055c5"
+  }
+}

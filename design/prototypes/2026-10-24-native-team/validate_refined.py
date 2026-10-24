@@ -56,4 +56,4 @@ assert reached==targets,('unreachable',targets-reached)
 sources={l['symbolID'] for l in all_layers if l['_class']=='symbolMaster'}
 assert all(l['symbolID'] in sources for l in layers if l['_class']=='symbolInstance')
 result={'status':'PASS','artboards':len(boards),'nativeSymbols':len(pages[1]['layers']),'nativeSymbolInstances':sum(l['_class']=='symbolInstance' for l in layers),'nativeFlowLinks':len(flows),'uniqueLayerIDs':len(ids),'startPoints':1,'reachableArtboards':len(reached),'backLinks':flows.count('back'),'sha256':hashlib.sha256((P/filename).read_bytes()).hexdigest()}
-(P/('refined-proof-integrity.json' if 'Four-Proofs' in filename else 'sidebar-native-integrity.json' if 'Sidebar-Navigation' in filename else 'refined-native-integrity.json')).write_text(json.dumps(result,indent=2));print(result)
+(P/('refined-proof-integrity.json' if 'Four-Proofs' in filename else 'runtime-environment-integrity.json' if 'Runtime-Environment' in filename else 'sidebar-native-integrity.json' if 'Sidebar-Navigation' in filename else 'refined-native-integrity.json')).write_text(json.dumps(result,indent=2));print(result)

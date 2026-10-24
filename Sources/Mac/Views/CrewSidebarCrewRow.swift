@@ -115,7 +115,7 @@ struct CrewSidebarCrewRow: View {
         // 每个 crew 之间留一道竖向呼吸间距 —— 加在高亮 pill 之外(背景/点击区已闭合),
         // 所以是 crew 之间的留白,不是把 pill 撑高;根 crew(独立 list row)与展开的
         // 子 crew(同 VStack 内堆叠)都吃这道下边距,间距统一。
-        .padding(.bottom, 6)
+        .padding(.bottom, CrewSidebarRowStyle.rowSpacing)
         .sheet(isPresented:$showingDetails){
             if let detail=crewStore.details[crew.id]{CrewDetailInspector(detail:detail).environmentObject(crewStore).environmentObject(sessionRunner)}
             else{ProgressView("正在读取机组详情…").padding(30)}
@@ -125,8 +125,8 @@ struct CrewSidebarCrewRow: View {
 
     private var rowCore: some View {
         HStack(alignment: .top, spacing: 6) {
-            // 三角槽**恒占位**（无三角时画透明占位）—— 同层级的色条/标题左缘必须
-            // 对齐，不能因为某行有子带三角就被推出去。
+            // 原层级列表保留三角和色条槽；crewd 的扁平导航不占透明旧槽，
+            // 把窄侧栏的宽度留给真实头像和机组名称。
             if let expansion {
                 Button { expansion.wrappedValue.toggle() } label: {
                     Image(systemName: "chevron.right")
@@ -137,7 +137,7 @@ struct CrewSidebarCrewRow: View {
                 .buttonStyle(.plain)
                 .frame(width: 12)
                 .padding(.top, 10)
-            } else {
+            } else if !crewStore.usesCrewdAuthority {
                 Color.clear.frame(width: 12, height: 1)
             }
 
@@ -156,36 +156,25 @@ struct CrewSidebarCrewRow: View {
                         )
                         .offset(x: 6, y: -5)
                     }
-            } else {
-                // 位置留着、不上色：标题左缘因此仍与其它行对齐（「样式一样」的那一半）。
-                Color.clear.frame(width: crewStore.usesCrewdAuthority ? 2:CrewColorBar.defaultWidth)
+            } else if !crewStore.usesCrewdAuthority {
+                Color.clear.frame(width: CrewColorBar.defaultWidth)
             }
 
+            if crewStore.usesCrewdAuthority {
+                CrewdGroupAvatar(members: crewStore.crewdWorkspace?.crewAvatarMembers[crew.id] ?? [],
+                    channel: crew.id, name: crew.title)
+            }
             let last = resolvedLastMessage
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: CrewSidebarRowStyle.lineSpacing) {
+                CrewSidebarTitleLine(activityDate: CrewActivityTime.resolve(
+                    lastMessageCreatedAt: last?.createdAt, crewUpdatedAt: crew.updatedAt)) {
                     CrewTitleRootBadge(
                         title: crew.title,
-                        titleFont: Theme.Fonts.system(size: 13, weight: .semibold),
+                        titleFont: CrewSidebarRowStyle.titleFont,
                         titleColor: Theme.Palette.ink,
                         rootTitles: rootTitles,
                         badgeSize: 11
                     )
-                    Spacer(minLength: 8)
-                    if let date = CrewActivityTime.resolve(
-                        lastMessageCreatedAt: last?.createdAt, crewUpdatedAt: crew.updatedAt) {
-                        // 相对时间要随 now 老化 —— 不包 TimelineView 的话首次渲染
-                        // 算死的文案会一直冻住（同 CrewTimeSeparator）。
-                        TimelineView(.everyMinute) { _ in
-                            Text(date.formatted(.relative(presentation: .numeric)))
-                                .font(Theme.Fonts.caption2)
-                                .foregroundStyle(.secondary)
-                                // 同 PendingBot 会话行：加了黄字标注后横向变紧，
-                                // 不钉住的话相对时间会折行把整行撑高。该让位的是黄字。
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let statusLine {
@@ -240,12 +229,7 @@ struct CrewSidebarCrewRow: View {
                     .accessibilityLabel("查看" + crew.title + "的会话")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
-                .fill(isSelected ? Theme.Palette.accentBg : Color.clear)
-        )
+        .modifier(CrewSidebarRowSurface(selected: isSelected))
         // 拖拽落点高亮：只有**合法**目标才描边（自己 / 自己的子树不高亮，
         // 也接不了 drop）—— 判定全在 `CrewDragDropLogic`。
         .overlay(

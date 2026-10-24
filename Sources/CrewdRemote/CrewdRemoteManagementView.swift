@@ -13,7 +13,7 @@ struct CrewdRemoteManagementView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error = admin.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                     if let status = admin.status {
-                        GroupBox("电脑连接设置") {
+                        GroupBox("运行环境连接设置") {
                             VStack(alignment: .leading, spacing: 10) {
                                 Text(status.listening ? "正在接受已配对设备的连接" : "设备连接已关闭")
                                 if let failure = status.failure { Text(failure).foregroundStyle(.orange) }

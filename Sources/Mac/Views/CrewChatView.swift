@@ -387,21 +387,18 @@ struct CrewChatView: View {
         return crewTitle
     }
     private var conversationHeader:some View {
-        ViewThatFits(in:.horizontal){
-            HStack(spacing:8){
-                Text(conversationTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
-                Spacer(minLength:2)
+        HStack(spacing:10){
+            Text(conversationTitle).font(CrewdType.label.weight(.semibold)).lineLimit(1)
+                .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
+            Spacer(minLength:2)
+            ViewThatFits(in:.horizontal){
                 communicationControls(compact:false)
-            }
-            HStack(spacing:6){
-                Spacer(minLength:0)
                 communicationControls(compact:true)
-            }
-        }.padding(.horizontal,14).frame(minHeight:36).tint(.gray)
+            }.fixedSize(horizontal:false,vertical:true)
+        }.padding(.horizontal,14).padding(.vertical,6).tint(Theme.Palette.accent)
     }
     private func communicationControls(compact:Bool)->some View {
-        HStack(spacing:6){
+        HStack(spacing:8){
             if let control = messageFolders.control { control }
             if let communicationView {
                 if compact {
@@ -422,7 +419,7 @@ struct CrewChatView: View {
                 Button("成员",systemImage:"person.2",action:showMembers)
                     .buttonStyle(.plain).help("本群成员与工作")
             }
-        }.font(.caption).controlSize(.small)
+        }
     }
     @ViewBuilder
     private var timelineWithTopEdge: some View {
@@ -437,7 +434,7 @@ struct CrewChatView: View {
     @ViewBuilder
     private var errorBar: some View {
         if let workspace=appModel.crewdBackend?.workspace {
-            CrewPersonalDraftControls(workspace:workspace,context:.message(crew:crewId,channel:crewdChannelID,session:""),payload:Binding(get:{.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget)},set:{value in draft=value.text;replyTarget=value.replyTarget;stagedMentions=value.stagedMentions;saveDraft()})).padding(.horizontal,14).padding(.vertical,2)
+            CrewPersonalDraftControls(workspace:workspace,context:.message(crew:crewId,channel:crewdChannelID,session:""),payload:Binding(get:{.init(text:draft,stagedMentions:stagedMentions,replyTarget:replyTarget)},set:{value in draft=value.text;replyTarget=value.replyTarget;stagedMentions=value.stagedMentions;saveDraft()})).padding(.horizontal,14).padding(.top,4)
         }
         if let errorText = loadError ?? composerDraftStore.storageError {
             Text(errorText)

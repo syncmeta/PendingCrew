@@ -1,3 +1,11 @@
+# 当前主交付：Sidebar 样式与运行环境收口
+
+打开 `PendingCrew-SwiftUI-Runtime-Environment.sketch`。复用既有 70 态，按客户端静态视觉冻结 `86c4ac2e…` 同步 Sidebar 机组/会话行、footer 与运行环境菜单；原 `PendingCrew-SwiftUI-Sidebar-Navigation.sketch` 保留且 hash 未变。当前说明与验证边界见 [RUNTIME-ENVIRONMENT-DESIGN.md](RUNTIME-ENVIRONMENT-DESIGN.md)，原生 CLI 代表图见 `runtime-previews/`。
+
+本版通过原生格式、70 态可达与 CLI 渲染；没有操作用户 Sketch 窗口，没有本版 GUI 播放，也不代表 Swift App 类型或 runtime 验收。文内以下早期主交付与播放记录均为历史版本。
+
+---
+
 # 当前主交付：SwiftUI 精修 · 侧栏会话导航
 
 打开 `PendingCrew-SwiftUI-Sidebar-Navigation.sketch`。70个原生可编辑状态，sidebar机组根→行尾箭头推入会话子页→返回保留原Tab；右侧铺满，顶层Tab不加分隔线。完整说明、源码对照、Codex四页覆盖与核验边界见 [SIDEBAR-DESIGN.md](SIDEBAR-DESIGN.md)。原生代表图见 `sidebar-previews/`。

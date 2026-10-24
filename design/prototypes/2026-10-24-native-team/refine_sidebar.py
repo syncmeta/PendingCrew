@@ -7,9 +7,16 @@ from copy import deepcopy
 W,H=1280,820
 INK='#202124';MUTED='#858585';SOFT='#b2b2b2';LINE='#e7e7e7';ACCENT='#044735';MINT='#e3eeea'
 PROOF='--proof' in sys.argv
+RUNTIME='--runtime' in sys.argv
 oldzip=zipfile.ZipFile(P/'PendingCrew-PrivateTeam.sketch');oldoc=json.loads(oldzip.read('document.json'));oldpage=json.loads(oldzip.read(oldoc['pages'][0]['_ref']+'.json'))
 allstates=[b['name'][3:] for b in oldpage['layers']]+['读取中','读取失败','只读权限','提交结果未知','筛选为空','Codex执行','Codex历史','Codex设置','Codex高级设置','Codex请求答复','Codex控制不可用','Codex操作确认','会话选择·人待办','会话选择·AI待办','会话选择·文档','会话选择·进展','Codex输入选择','Codex删除确认','Codex截断确认','Codex排队回执','后端会话']
 stateids={b['name'][3:]:b['do_objectID'] for b in oldpage['layers']}
+if RUNTIME:
+ # Reuse the delivered seventy-state graph IDs without touching that document.
+ with zipfile.ZipFile(P/'PendingCrew-SwiftUI-Sidebar-Navigation.sketch') as previous:
+  previous_doc=json.loads(previous.read('document.json'))
+  previous_page=json.loads(previous.read(previous_doc['pages'][0]['_ref']+'.json'))
+  stateids.update({state:b['do_objectID'] for state,b in zip(allstates,previous_page['layers'])})
 for state in allstates:
  if state not in stateids:stateids[state]=uid()
 states=['群聊','新建机组','人待办','文档数据'] if PROOF else allstates
@@ -117,6 +124,17 @@ def tabs(b,selected):
   label(b,t,x+12,19,ww-15,12,INK,h=18,weight='semibold' if selected==target else 'regular');hotspot(b,'Tab/'+t,x,13,ww,30,target);x+=ww
  glass(b,'toolbar/search glass',1234,12,30,30,15);symbol_icon(b,'search',1241,19,16,INK,'搜索')
  shape(b,'workspace/底部分隔',238,54,1042,.6,LINE)
+def sidebar_row(b,title,sub,tm,y,selected,target,crew=False,index=0):
+ # Shared CrewSidebarRowSurface: 10/8 insets, 36 content, 14 radius, 6 gap.
+ if selected:shape(b,'sidebar/选中机组' if crew else 'sidebar/channel selection',12,y,214,52,MINT,14)
+ tx=48
+ if crew:
+  avatar(b,['group','backend','design','captain'][index%4],32,y+8,36);tx=74
+ label(b,title,tx,y+8,99 if crew else 115,13,INK,h=18,weight='semibold')
+ label(b,sub,tx,y+30,139 if crew else 164,12,MUTED,h=17)
+ if tm:label(b,tm,178,y+10,36,11,MUTED,h=16)
+ hotspot(b,('sidebar/机组 ' if crew else 'sidebar/conversation ')+title,12,y,214,52,target)
+
 def legacy_shell(s,b,selected='群聊'):
  shape(b,'window/白色共用画布',0,0,W,H,'#ffffff',16)
  shape(b,'sidebar/系统材质',0,0,238,H,'#efeeeb',16)
@@ -135,13 +153,20 @@ def legacy_shell(s,b,selected='群聊'):
  else:
   crewrows=[('京都' if s=='已创建机组' else 'PendingCrew','把团队留在你身边','12:42','机组详情'),('后端实现','重连验证记录已更新','12:18','另一机组'),('前端设计','正在细化原生控件','昨天','群聊'),('PendingName','今天从这里开始','周五','另一机组')]
   for i,(t,sub,tm,target) in enumerate(crewrows):
-   yy=107+i*70
-   if i==0:shape(b,'sidebar/选中机组',12,yy,214,60,MINT,12)
-   label(b,t,26,yy+9,139,13,INK,h=22,weight='semibold' if i==0 else 'medium');label(b,tm,177,yy+11,40,10,MUTED,h=18)
-   label(b,sub,26,yy+32,182,11,MUTED,h=20);hotspot(b,'sidebar/机组 '+t,14,yy,210,60,target)
-  label(b,'已隐藏的机组',26,413,170,11,'#999999');symbol_icon(b,'chevron.right',205,414,12,'#999999')
- # Footer is a small real repeated Symbol assembly, not a card.
- avatar(b,'machine',18,766,30);label(b,'Mac Studio',58,773,118,13,INK,h=22,weight='semibold');symbol_icon(b,'chevron.up',172,774,19,INK);ellipse(b,'machine/online',202,781,7,7,'#34c759',True);hotspot(b,'机器菜单入口',12,756,210,54,'机器菜单')
+   yy=107+i*(58 if RUNTIME else 70)
+   if RUNTIME:sidebar_row(b,t,sub,'',yy,i==0,target,True,i)
+   else:
+    if i==0:shape(b,'sidebar/选中机组',12,yy,214,60,MINT,12)
+    label(b,t,26,yy+9,139,13,INK,h=22,weight='semibold' if i==0 else 'medium');label(b,tm,177,yy+11,40,10,MUTED,h=18)
+    label(b,sub,26,yy+32,182,11,MUTED,h=20);hotspot(b,'sidebar/机组 '+t,14,yy,210,60,target)
+  hy=357 if RUNTIME else 413
+  label(b,'已隐藏的机组',26,hy,170,11,'#999999');symbol_icon(b,'chevron.right',205,hy+1,12,'#999999')
+ # Footer keeps the original machine emoji with the status preceding its name.
+ if RUNTIME:
+  avatar(b,'machine',18,768,26);ellipse(b,'machine/online',55,779,8,8,'#34c759',True);label(b,'Mac Studio',69,773,97,13,INK,h=22,weight='semibold');symbol_icon(b,'chevron.up',175,779,10,INK)
+ else:
+  avatar(b,'machine',18,766,30);label(b,'Mac Studio',58,773,118,13,INK,h=22,weight='semibold');symbol_icon(b,'chevron.up',172,774,19,INK);ellipse(b,'machine/online',202,781,7,7,'#34c759',True)
+ hotspot(b,'运行环境菜单入口' if RUNTIME else '机器菜单入口',12,756,210,54,'机器菜单')
  if s in ['新建机组','填写机组','空白']:
   glass(b,'toolbar/search glass',1234,12,30,30,15);symbol_icon(b,'search',1241,19,16,INK,'搜索');shape(b,'pending/header divider',238,54,1042,.6,LINE);return
  tabs(b,selected)
@@ -365,8 +390,8 @@ def menu_panel(b,title,items,x=224,y=125,w=277):
   label(b,t,x+39,yy+3,w-50,12,h=23);hotspot(b,'menu/'+t,x+6,yy,w-12,31,target)
 
 def settings(b,s):
- x,y,w,foot=panel(b,'设置','机器、连接与通知在同一处管理。',x=631,y=132,w=604,h=565)
- for i,(t,target) in enumerate([('机器与连接','连接设置'),('通知','通知设置')]):chip(b,t,x+i*139,y-28,128,(s=='通知设置' and i==1)or(s!='通知设置'and i==0),target)
+ x,y,w,foot=panel(b,'运行环境设置' if RUNTIME else '设置','运行环境、连接与通知在同一处管理。' if RUNTIME else '机器、连接与通知在同一处管理。',x=631,y=132,w=604,h=565)
+ for i,(t,target) in enumerate([('运行环境与连接' if RUNTIME else '机器与连接','连接设置'),('通知','通知设置')]):chip(b,t,x+i*139,y-28,128,(s=='通知设置' and i==1)or(s!='通知设置'and i==0),target)
  if s=='通知设置':
   for i,(t,sub,on) in enumerate([('提及我时通知','仅与我有关的消息',True),('等待我决定的事项','待办与人工确认',True),('普通消息','其他群内消息',False),('安静时间','22:00 — 08:00',True)]):
    yy=y+27+i*75;label(b,t,x,yy,w-65,13,h=23,weight='medium');label(b,sub,x,yy+27,w-65,11,MUTED,h=21);shape(b,'toggle/'+t,x+w-41,yy+8,32,19,'#6a8a76' if on else '#dedede',10);ellipse(b,'toggle/thumb',x+w-(25 if on else 39),yy+10,15,15,'#ffffff',True);hotspot(b,'toggle/'+t,x+w-44,yy,44,35,'通知设置');shape(b,'setting/divider',x,yy+64,w,.5,LINE)
@@ -441,21 +466,23 @@ def shell(s,b,selected='群聊'):
  if s not in SIDEBAR_STATES:
   if s=='另一机组':
    for layer in b['layers']:
-    if layer['name']=='sidebar/选中机组':layer['frame']['y']+=70
+    if layer['name']=='sidebar/选中机组':layer['frame']['y']+=58 if RUNTIME else 70
   # The row is a normal crew selector. Trailing arrow pushes its sidebar subpage.
   for l in b['layers']:
    if l['name'].startswith('sidebar/机组 '):
     target='另一机组' if '后端实现' in l['name'] else '群聊';l['flow']['destinationArtboardID']=boards[target]['do_objectID']
    if l['_class']=='text' and l['frame']['x']==177:l['attributedString']['string']=''
-  for i in range(4):symbol_icon(b,'chevron.right',207,124+i*70,14,'#8b8b8b','后端会话' if i==1 else pageTarget)
-  symbol_icon(b,'ellipsis',181,191 if s=='另一机组' else 121,18,'#9b9b9b','机组详情')
+  for i in range(4):symbol_icon(b,'chevron.right',207,124+i*(58 if RUNTIME else 70),14,'#8b8b8b','后端会话' if i==1 else pageTarget)
+  symbol_icon(b,'ellipsis',181,(179 if RUNTIME else 191) if s=='另一机组' else 121,18,'#9b9b9b','机组详情')
  else:
   shape(b,'sidebar/subpage background',0,54,238,700,'#efeeeb')
   symbol_icon(b,'chevron.left',18,70,17,'#575757','另一机组' if s=='后端会话' else actual);label(b,'机组',40,72,64,12,'#626262',h=22);hotspot(b,'返回机组选择并保留上下文',12,61,92,35,'另一机组' if s=='后端会话' else actual)
   label(b,'会话',17,117,180,17,h=30,weight='semibold');label(b,'后端实现' if s=='后端会话' else 'PendingCrew',17,151,198,11,MUTED,h=22);symbol_icon(b,'plus',204,119,18,MUTED,'新建机组')
   rows=[('验证讨论' if s=='后端会话' else '大厅','群聊 · 4 位成员','group','另一机组' if s=='后端会话' else '群聊'),('与你沟通','你与机长','captain','单聊'),('后端','Codex · 工作中','backend','单聊'),('设计','Codex · 等待消息','design','单聊')]
   for i,(title,sub,av,target) in enumerate(rows):
-   yy=188+i*67
+   yy=188+i*(58 if RUNTIME else 67)
+   if RUNTIME:
+    sidebar_row(b,title,sub,['12:42','12:18','昨天','周五'][i],yy,i==0,target);continue
    if i==0:shape(b,'sidebar/channel selection',12,yy,214,58,'#e2e7e3',8)
    avatar(b,av,22,yy+12,32);label(b,title,65,yy+9,153,13,h=22,weight='medium');label(b,sub,65,yy+33,153,10,MUTED,h=19);hotspot(b,'sidebar/conversation '+title,12,yy,214,58,target)
 
@@ -588,7 +615,10 @@ for s,b in boards.items():
  if s in ['成员','成员详情']:members(b,s)
  if s in ['消息分类','分类展开']:menu_panel(b,'本群消息分类',[('全部消息','check','群聊'),('实现讨论','folder','分类展开'),('  验证讨论',None,'群聊'),('界面讨论','folder','群聊'),('管理分类…','pencil','待办分组')],x=830,y=97,w=264)
  if s in ['搜索','全局搜索','搜索结果']:search_panel(b,s)
- if s=='机器菜单':menu_panel(b,'机器',[('Mac Studio','check','群聊'),('MacBook Pro',None,'机器切换'),('添加机器…','plus','连接设置'),('设置…','gear','设置'),('退出 PendingCrew…',None,'退出询问')],x=15,y=537,w=223)
+ if s=='机器菜单' and not RUNTIME:menu_panel(b,'机器',[('Mac Studio','check','群聊'),('MacBook Pro',None,'机器切换'),('添加机器…','plus','连接设置'),('设置…','gear','设置'),('退出 PendingCrew…',None,'退出询问')],x=15,y=537,w=223)
+ if s=='机器菜单' and RUNTIME:
+  menu_panel(b,'运行环境',[('Mac Studio','check','群聊'),('MacBook Pro',None,'机器切换'),('运行环境设置',None,'设置')],x=15,y=608,w=223)
+  shape(b,'menu/header separator',23,641,207,.6,LINE);shape(b,'menu/settings separator',23,712,207,.6,LINE)
  if s=='机器切换':
   x,y,w,foot=panel(b,'MacBook Pro','远端电脑 · 离线',h=347);symbol_icon(b,'warning',x,y,27,MUTED);label(b,'连接未建立。\n此电脑的机组和内容不会与本机混合。',x+43,y,w-48,13,'#626262',h=79);button(b,'连接设置',x,foot,130,'连接设置',kind='bordered');button(b,'返回 Mac Studio',x+w-155,foot,155,'群聊',kind='primary')
  if s in ['设置','连接设置','通知设置']:settings(b,s)
@@ -646,9 +676,9 @@ comp=default(json.loads((P/'schema-source/package/dist/page.schema.json').read_t
 for i,m in enumerate(comp['layers']):m['frame'].update(x=i%5*250,y=i//5*110)
 doc=default(schema['properties']['document']);doc['pages']=[{'_class':'MSJSONFileReference','_ref_class':'MSImmutablePage','_ref':'pages/'+p['do_objectID']}for p in [page,comp]]
 meta=obj('Meta');meta.update(version=146,appVersion='2026.3',build=234013,commit='native-refinement',pagesAndArtboards={p['do_objectID']:{'name':p['name'],'artboards':{b['do_objectID']:{'name':b['name']}for b in p['layers']}}for p in [page,comp]});meta['created'].update(version=146,appVersion='2026.3',build=234013)
-filename='PendingCrew-SwiftUI-Four-Proofs.sketch' if PROOF else 'PendingCrew-SwiftUI-Sidebar-Navigation.sketch'
+filename='PendingCrew-SwiftUI-Four-Proofs.sketch' if PROOF else 'PendingCrew-SwiftUI-Runtime-Environment.sketch' if RUNTIME else 'PendingCrew-SwiftUI-Sidebar-Navigation.sketch'
 with zipfile.ZipFile(P/filename,'w',zipfile.ZIP_DEFLATED)as z:
  for n,v in [('document.json',doc),('meta.json',meta),('user.json',obj('User'))]+[('pages/'+p['do_objectID']+'.json',p)for p in [page,comp]]:z.writestr(n,json.dumps(v,ensure_ascii=False))
 print(filename,len(boards),'boards',len(masters),'Symbols',len(flows),'Flow links')
 
-(P/'sidebar-navigation-profile.json').write_text(json.dumps({'file':filename,'artboards':len(boards),'stateNames':list(boards),'symbols':len(masters),'sourceGraph':'original 49 states retained; five boundary states; Codex four-page controls and sidebar context states','sidebar':238,'standaloneConversationColumn':False,'topTabDivider':False,'nativeDoubleClick':False,'sha256':hashlib.sha256((P/filename).read_bytes()).hexdigest()},ensure_ascii=False,indent=2))
+(P/('runtime-environment-profile.json' if RUNTIME else 'sidebar-navigation-profile.json')).write_text(json.dumps({'file':filename,'artboards':len(boards),'stateNames':list(boards),'symbols':len(masters),'sourceGraph':'original 49 states retained; five boundary states; Codex four-page controls and sidebar context states','sidebar':238,'standaloneConversationColumn':False,'topTabDivider':False,'nativeDoubleClick':False,'sha256':hashlib.sha256((P/filename).read_bytes()).hexdigest()},ensure_ascii=False,indent=2))

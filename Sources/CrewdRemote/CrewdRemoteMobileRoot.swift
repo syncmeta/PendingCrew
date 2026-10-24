@@ -14,8 +14,8 @@ struct CrewdRemoteMobileRoot: View {
             if let workspace = window.workspace {
                 CrewdMobileWorkspaceView(workspace: workspace).id(ObjectIdentifier(workspace))
                     .overlay(alignment: .topTrailing) {
-                        Button { computersSheet = true } label: { Label("电脑", systemImage: "desktopcomputer") }
-                            .buttonStyle(.bordered).padding(8).accessibilityLabel("切换连接电脑")
+                        Button { computersSheet = true } label: { Label("运行环境", systemImage: "desktopcomputer") }
+                            .buttonStyle(.bordered).padding(8).accessibilityLabel("切换运行环境")
                     }
             } else {
                 NavigationStack {
@@ -30,7 +30,7 @@ struct CrewdRemoteMobileRoot: View {
         .onChange(of: phase) { _, value in if value == .active { Task { await window.refresh() } } }
         .sheet(isPresented: $computersSheet) {
             NavigationStack {
-                computerList.navigationTitle("电脑")
+                computerList.navigationTitle("运行环境")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) { Button("返回") { computersSheet = false } }
                         ToolbarItem(placement: .primaryAction) { Button("添加") { computersSheet = false; pairingSheet = true } }

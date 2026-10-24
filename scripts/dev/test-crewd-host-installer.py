@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Affected installer controls only; no systemd/provider/network execution."""
-import argparse, importlib.util, io, json, os, pathlib, subprocess, sys, tarfile, tempfile, types, unittest
+import argparse, hashlib, importlib.util, io, json, os, pathlib, subprocess, sys, tarfile, tempfile, types, unittest
 from unittest import mock
 sys.dont_write_bytecode = True
 repo = pathlib.Path(__file__).resolve().parents[2]
@@ -215,6 +215,47 @@ class ReviewedBuildBindingControls(unittest.TestCase):
         self.assertEqual(result['rustTree'],self.tree)
         self.assertEqual(result['runId'],'123')
         self.assertEqual(result['sourceInputs'],result['controllerInputs'])
+
+    def test_committed_symlink_binds_raw_target_without_following(self):
+        name = 'design/prototypes/2026-10-24-native-team/schema-source'
+        link = self.root/name; link.parent.mkdir(parents=True)
+        target = os.readlink(repo/name)
+        link.symlink_to(target)
+        dangling = self.root/'unresolved-source'; dangling.symlink_to('missing-input')
+        for args in [['add','.'],['-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','committed link inputs']]:
+            subprocess.run(['git','-C',str(self.root),*args],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        self.ref = self.build.git(self.root,'rev-parse','HEAD').decode().strip()
+        self.environment.update(SOURCE_SHA=self.ref,GITHUB_SHA=self.ref)
+        with mock.patch.dict(os.environ,self.environment,clear=True):
+            result = self.build.binding(self.root,self.root,self.ref,self.ref)
+        rows = {row['path']:row for row in result['sourceInputs']}
+        for path, raw in [(name,os.fsencode(target)),('unresolved-source',b'missing-input')]:
+            self.assertEqual(rows[path],{'path':path,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'gitMode':'120000'})
+        self.assertEqual(result['sourceInputs'],result['controllerInputs'])
+
+    def test_inventory_rejects_changed_raw_target_type_or_executable_mode(self):
+        link = self.root/'source-link'; link.symlink_to('missing-original')
+        regular = self.root/'regular-input'; regular.write_bytes(b'ordinary input')
+        executable = self.root/'executable-input'; executable.write_bytes(b'executable input'); executable.chmod(0o755)
+        for args in [['add','.'],['-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','input mode controls']]:
+            subprocess.run(['git','-C',str(self.root),*args],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        ref = self.build.git(self.root,'rev-parse','HEAD').decode().strip()
+        original_git = self.build.git
+        def status_clean(root,*args):
+            # Exercise the blob/type/mode guards independently of the earlier dirty-tree gate.
+            return b'' if args == ('status','--porcelain') else original_git(root,*args)
+        cases = [('link-target',link,lambda:link.symlink_to('missing-modified')),
+                 ('link-to-file',link,lambda:link.write_bytes(b'missing-original')),
+                 ('file-to-link',regular,lambda:regular.symlink_to('missing-original')),
+                 ('file-bytes',regular,lambda:regular.write_bytes(b'changed input')),
+                 ('executable-mode',executable,lambda:executable.chmod(0o644))]
+        for name,path,change in cases:
+            with self.subTest(name=name):
+                subprocess.run(['git','-C',str(self.root),'restore','--worktree','.'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                if name != 'executable-mode': path.unlink()
+                change()
+                with mock.patch.object(self.build,'git',side_effect=status_clean):
+                    with self.assertRaises(AssertionError): self.build.inventory(self.root,ref)
 
     def test_missing_or_changed_review_and_execution_context_are_refused(self):
         for key, value in [('SOURCE_SHA',None),('SOURCE_SHA','f'*40),('EXPECTED_RUST_TREE',None),

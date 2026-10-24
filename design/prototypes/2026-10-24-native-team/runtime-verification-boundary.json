@@ -1,0 +1,29 @@
+{
+  "nativeFile": "PendingCrew-SwiftUI-Runtime-Environment.sketch",
+  "sha256": "646b7d41046af2cfadd6757859e3160bf060dc7727c6e668dd9757f9094cf8b3",
+  "originalDeliveredFileUnchanged": true,
+  "originalSha256": "3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db",
+  "all70ArtboardIDsPreserved": true,
+  "newBusinessStates": 0,
+  "cliRenderedArtboards": 70,
+  "nativeGUIPerformed": false,
+  "userSketchWindowsTouched": false,
+  "appTypeOrRuntimeClaimed": false,
+  "sourceFreeze": "86c4ac2e0cc808c61692281d074c88b7060fea23fbc081fd0f865061036ccc5f",
+  "rightWorkspacePixelIdenticalToDeliveredStates": [
+    "01 群聊",
+    "07 新建机组",
+    "14 会话选择",
+    "15 人待办",
+    "21 文档数据",
+    "38 Codex控制",
+    "62 会话选择·人待办",
+    "70 后端会话"
+  ],
+  "rightWorkspaceComparisonRegion": [
+    238,
+    0,
+    1280,
+    820
+  ]
+}

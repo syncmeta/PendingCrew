@@ -49,7 +49,7 @@ private struct CrewdNativeMacRoot: View {
                     .id(ObjectIdentifier(workspace))
             } else { Text("正在连接本机") }
         }.toolbar {
-            Menu("电脑") {
+            Menu("运行环境") {
                 Button("本机") { Task { await chooseLocal() } }
                 ForEach(window.computers) { computer in
                     Button(computer.name + (computer.paired ? "" : " · 等待确认")) {

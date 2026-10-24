@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 最新视觉源码、原生设计与 Linux 控制器受影响证明
+
+Sidebar 视觉十源最终 freeze 为 `c13f04c72ea4d3d7b32bd0c2ad1ee8b5d5030daa86523837207774291174b548`，根逐项核实字节。`sidebar-visual-unification-20261024/INDEPENDENT-VISUAL-FINAL-QA.json` 证明完整标题、会话无头像、footer 状态点与小箭头、原生运行环境菜单和真实设置入口；不证明最终外层行框一致。根亲看两图发现 List16pt 与 ScrollView5pt 的实际遗漏，`QA-OUTER-INSET-OMISSION.json` 保留纠偏，最终仅 Mac 会话父容器改为原生 sidebar List，iOS 原容器不改；Mac 和 iOS unsigned 类型构建均0。外框受影响运行复验待最终回执，其余已验业务、菜单与导航保留不重跑。
+
+最新70态原生设计另存 Runtime-Environment.sketch，独立设计 QA 与 CLI 导出接受，旧文件不覆盖。静态 Flow、原生 App 运行和普通安装仍分层。Linux `linux-current-symlink-controller-20261024/INDEPENDENT-SOURCE-QA.json` 接受两控制器源，原始120000拒绝与修复后五项原 fixture 红绿保全；类型/目标/字节/执行位变化直接拒绝，原上下文与干净输入门未降级。未新增 Cargo、Actions 或部署结果。
+
+人类新授权发布“半成品”Release；以实际最新公开0.1.42对照列变化，0.1.44仅源码预览，不上传私有/nonhermetic Apple Development 包，不改变稳定更新源。main/global 最新已保存的2dbc导航原子推送0且独立读回一致。实际日用 Mac 仍b0/33659，手机仍f7/22585；新视觉普通包/安装尚未完成。VPS22实际连接超时，无远端命令或服务资格结论。全工程继续，未将局部源验收或公开预览当正式完整交付。
+
 ## 2026-10-24 b0 Mac 日用与 Sidebar 导航完整接受，视觉统一继续按人类反馈收口
 
 `cumulative-b0b08b56-normal-20261024/INDEPENDENT-NORMAL-QA.json` 接受准确 b0 完整1971 Git 输入、478 Rust 输入、默认 Debug/features[]/非 testkit/arm64、fresh owning-artifact 门与506项清单；normal SHA `f6211fda2a56ac0f165b7e9e49d6b533892d69e38192199fc293cc2ffb488b36`，纯 schema 完整149方法/API3/Store21。原 symlink 输入准备拒绝保留，限于 lstat/readlink 与 Git blob 原始目标字节核对后通过，不跟随路径，不放宽普通文件门。八项明确终态 incremental 清单回收实际释放942,080,000B，五项保护哈希不变。

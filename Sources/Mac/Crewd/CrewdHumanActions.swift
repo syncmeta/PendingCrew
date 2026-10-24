@@ -29,33 +29,101 @@ enum CrewdChatStyle {
 
 /// Shared native chrome, using the product tour's warm neutral surfaces.
 /// These components only present caller-owned data and explicit actions.
+enum CrewSidebarRowStyle {
+    static let horizontalInset: CGFloat = 10
+    static let verticalInset: CGFloat = 8
+    static let lineSpacing: CGFloat = 4
+    static let rowSpacing: CGFloat = 6
+    static let minimumContentHeight: CGFloat = 36
+    #if os(macOS)
+    static let titleFont = Theme.Fonts.system(size: 13, weight: .semibold)
+    static let subtitleFont = Theme.Fonts.caption
+    #else
+    static let titleFont = Font.body.weight(.medium)
+    static let subtitleFont = Font.caption
+    #endif
+}
+/// The title wins at narrow widths; time is shown only when both fit naturally.
+struct CrewSidebarTitleLine<Title: View>: View {
+    let activityDate: Date?
+    @ViewBuilder let title: () -> Title
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            if let activityDate {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    title().fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 0)
+                    TimelineView(.everyMinute) { _ in
+                        Text(activityDate.formatted(.relative(presentation: .numeric)))
+                            .font(Theme.Fonts.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+            }
+            title().frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+struct CrewSidebarRowSurface: ViewModifier {
+    let selected: Bool
+    func body(content: Content) -> some View {
+        content.frame(minHeight: CrewSidebarRowStyle.minimumContentHeight, alignment: .top)
+            .padding(.horizontal, CrewSidebarRowStyle.horizontalInset)
+            .padding(.vertical, CrewSidebarRowStyle.verticalInset)
+            .background(RoundedRectangle(cornerRadius: Theme.Metrics.cardRadius, style: .continuous)
+                .fill(selected ? Theme.Palette.accentBg : Color.clear))
+            .contentShape(Rectangle())
+    }
+}
+
 struct CrewdConversationRow<Avatar: View>: View {
     @Environment(\.colorScheme) private var scheme
     let title: String
     let subtitle: String
     let selected: Bool
+    var sidebarStyle = false
+    var activityDate: Date? = nil
     let action: () -> Void
     @ViewBuilder let avatar: () -> Avatar
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 9) {
-                avatar()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(CrewdType.body.weight(selected ? .semibold:.medium)).lineLimit(1)
-                        .foregroundStyle(CrewdChatStyle.ink(scheme))
-                    if !subtitle.isEmpty {
-                        Text(subtitle).font(CrewdType.caption).lineLimit(1)
-                            .foregroundStyle(CrewdChatStyle.muted(scheme))
+            if sidebarStyle { rowContent.modifier(CrewSidebarRowSurface(selected: selected)) }
+            else {
+                HStack(spacing: 9) {
+                    avatar()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(CrewdType.body.weight(selected ? .semibold : .medium)).lineLimit(1)
+                            .foregroundStyle(CrewdChatStyle.ink(scheme))
+                        if !subtitle.isEmpty {
+                            Text(subtitle).font(CrewdType.caption).lineLimit(1)
+                                .foregroundStyle(CrewdChatStyle.muted(scheme))
+                        }
                     }
-                }
-                Spacer(minLength: 0)
-            }.padding(.horizontal, 10).padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(selected ? CrewdChatStyle.listSelection(scheme) : .clear, in: RoundedRectangle(cornerRadius: 7))
-                .contentShape(Rectangle())
+                    Spacer(minLength: 0)
+                }.padding(.horizontal, 10).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(selected ? CrewdChatStyle.listSelection(scheme) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+            }
         }.buttonStyle(.plain)
+        .padding(.bottom, sidebarStyle ? CrewSidebarRowStyle.rowSpacing : 0)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
+    private var rowContent: some View {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(alignment: .leading, spacing: CrewSidebarRowStyle.lineSpacing) {
+                CrewSidebarTitleLine(activityDate: activityDate) {
+                    Text(title).font(CrewSidebarRowStyle.titleFont)
+                        .lineLimit(1).foregroundStyle(Theme.Palette.ink)
+                }
+                Text(subtitle.isEmpty ? " " : subtitle)
+                    .font(CrewSidebarRowStyle.subtitleFont)
+                    .lineLimit(1).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
 }
 struct CrewdEmptySurface: View {
     @Environment(\.colorScheme) private var scheme

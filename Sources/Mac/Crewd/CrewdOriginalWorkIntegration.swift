@@ -528,20 +528,32 @@ struct CrewdSidebarConversations: View {
     private var directory: some View {
         Group {
             if workspace.crewID == crewID {
+                #if os(macOS)
+                // Use the same native sidebar List container as the crew root, so
+                // both pages inherit identical outer row margins from the host.
+                List { directoryRows }
+                    .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                #else
                 ScrollView {
-                    LazyVStack(spacing: 3) {
-                        if filtersChannelFolders {
-                            CrewdFolderControls(store: workspace.resources, drafts: $workspace.resourceDrafts,
-                                selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages) },
-                                                   set: { workspace.resourceDrafts.select(crewID, .messages, $0) }), view: .messages)
-                        }
-                        ForEach(items) { item in
-                            if item.channel { channelRow(item.value) }
-                            else { sessionRow(item.value) }
-                        }
-                    }.padding(.horizontal, 5).padding(.vertical, 8)
+                    LazyVStack(spacing: 0) { directoryRows }
+                        .padding(.horizontal, 5).padding(.vertical, 8)
                 }
+                #endif
             } else { ProgressView("正在读取会话…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+        }
+    }
+    @ViewBuilder
+    private var directoryRows: some View {
+        if filtersChannelFolders {
+            CrewdFolderControls(store: workspace.resources, drafts: $workspace.resourceDrafts,
+                selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages) },
+                                   set: { workspace.resourceDrafts.select(crewID, .messages, $0) }), view: .messages)
+        }
+        ForEach(items) { item in
+            if item.channel { channelRow(item.value) }
+            else { sessionRow(item.value) }
         }
     }
     private var directoryTools: some View {
@@ -576,7 +588,7 @@ struct CrewdSidebarConversations: View {
         #else
         let selected = workspace.channelID == id
         #endif
-        return CrewdConversationRow(title: CrewdConversationProjection.title(channel), subtitle: subtitle(channel), selected: selected, action: {
+        return CrewdConversationRow(title: CrewdConversationProjection.title(channel), subtitle: subtitle(channel), selected: selected, sidebarStyle: true, activityDate: (channel["updatedAt"].string ?? channel["createdAt"].string).flatMap { CrewTimestamp.parse($0) }, action: {
             guard workspace.crewID == crewID else { return }
             if workspace.channelID != id { workspace.selectConversation(id) }
             #if os(macOS)
@@ -603,7 +615,7 @@ struct CrewdSidebarConversations: View {
         let selected = workspace.sessionID == id
         let enabled = openSession != nil
         #endif
-        return CrewdConversationRow(title: session["displayName"].string ?? session["title"].string ?? session["role"].string ?? "成员", subtitle: (session["executor"].string ?? "") + " · 成员会话", selected: selected, action: {
+        return CrewdConversationRow(title: session["displayName"].string ?? session["title"].string ?? session["role"].string ?? "成员", subtitle: (session["executor"].string ?? "") + " · 成员会话", selected: selected, sidebarStyle: true, activityDate: (session["updatedAt"].string ?? session["createdAt"].string).flatMap { CrewTimestamp.parse($0) }, action: {
             guard workspace.crewID == crewID else { return }
             #if os(macOS)
             guard let run else { return }

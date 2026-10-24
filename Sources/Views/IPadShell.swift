@@ -227,7 +227,7 @@ struct IPadShell: View {
                         }.navigationTitle("个人草稿与同步")
                     }
                 }
-                Section("电脑与连接"){
+                Section("运行环境"){
                     Button("连接状态与未完成操作"){settingsAction{showingConnectionStatus=true}}
                     Button("连接或添加电脑"){settingsAction{showingPairing=true}}
                     if let workspace=appModel.crewdBackend?.workspace{

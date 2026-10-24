@@ -10,11 +10,11 @@ struct CrewSettingsView: View {
                 .tabItem { Label("通用", systemImage: "gearshape") }
             if model.usesCrewdAuthority {
                 VStack(alignment:.leading,spacing:16){
-                    Text("电脑与连接").font(.headline)
+                    Text("运行环境").font(.headline)
                     Text("查看当前电脑状态、选择或添加电脑，并核对原请求。关闭设置不会丢弃原连接的未完成记录。")
-                    Button("打开电脑与连接设置"){model.crewdWindow.showingConnectionSettings=true}
+                    Button("打开运行环境设置"){model.crewdWindow.showingConnectionSettings=true}
                     Spacer()
-                }.padding(24).tabItem{Label("电脑",systemImage:"desktopcomputer")}
+                }.padding(24).tabItem{Label("运行环境",systemImage:"desktopcomputer")}
                 Group {
                     if let workspace=model.crewdBackend?.workspace{CrewNotificationSettings(workspace:workspace,embedded:true)}
                     else{Text("连接电脑后可查看任务通知设置；不会自动连接或申请系统权限。").padding()}

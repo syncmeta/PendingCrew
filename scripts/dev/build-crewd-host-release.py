@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One reviewed Linux host build; no publish, service, provider, or retry action."""
-import hashlib, importlib.util, json, os, pathlib, re, subprocess, sys
+import hashlib, importlib.util, json, os, pathlib, re, stat, subprocess, sys
 sys.dont_write_bytecode = True
 
 # Exact manual review inputs avoid a self-referential committed source SHA.
@@ -34,11 +34,19 @@ def inventory(root, ref):
         metadata, name = raw.split(b'\t', 1)
         mode, kind, blob = metadata.decode().split()
         name = name.decode(); path = root / name
-        assert kind == 'blob' and mode in ['100644', '100755'], 'ordinary tracked files only'
-        assert not path.is_symlink() and path.is_file(), name
+        assert kind == 'blob' and mode in ['100644', '100755', '120000'], 'ordinary tracked files or symbolic links only'
+        info = path.lstat()
+        if mode == '120000':
+            assert stat.S_ISLNK(info.st_mode), name
+            # The Git blob is the raw link target; never resolve or read its referent.
+            actual = os.readlink(os.fsencode(path))
+        else:
+            assert stat.S_ISREG(info.st_mode), name
+            assert bool(info.st_mode & stat.S_IXUSR) == (mode == '100755'), 'source mode differs from committed mode: ' + name
+            actual = path.read_bytes()
         data = git(root, 'cat-file', 'blob', blob)
-        assert path.read_bytes() == data, 'source differs from committed blob: ' + name
-        rows.append({'path': name, 'sha256': sha(path), 'bytes': len(data), 'gitMode': mode})
+        assert actual == data, 'source differs from committed blob: ' + name
+        rows.append({'path': name, 'sha256': hashlib.sha256(actual).hexdigest(), 'bytes': len(data), 'gitMode': mode})
     return rows
 
 
