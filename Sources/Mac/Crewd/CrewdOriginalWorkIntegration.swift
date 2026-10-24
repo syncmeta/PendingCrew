@@ -40,16 +40,6 @@ extension EnvironmentValues {
     }
 }
 
-#if os(macOS)
-private struct CrewdShowMembersKey:EnvironmentKey { static let defaultValue:(()->Void)? = nil }
-extension EnvironmentValues {
-    var crewdShowMembers:(()->Void)? {
-        get { self[CrewdShowMembersKey.self] }
-        set { self[CrewdShowMembersKey.self] = newValue }
-    }
-}
-#endif
-
 private struct CrewdMessageSearchTargetKey:EnvironmentKey{static let defaultValue:String?=nil}
 extension EnvironmentValues{
     var crewdMessageSearchTarget:String?{
@@ -80,7 +70,11 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     var body: some View {
         VStack(spacing:0){
             sectionHeader
+            #if os(macOS)
+            sectionContent
+            #else
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
+            #endif
         }
     }
     private var sectionHeader:some View {
@@ -97,8 +91,15 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             ZStack {
                 // Keep the original chat instance mounted: drafts, anchors and
                 // its existing pagination/identity adapter survive other panels.
+                #if os(macOS)
+                CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){
+                    CrewdOriginalMessageSurface(workspace:workspace){content()}
+                        .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
+                }
+                #else
                 CrewdOriginalMessageSurface(workspace:workspace){content()}
                     .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
+                #endif
                     .opacity(workspace.originalSection == "消息" ? 1 : 0)
                     .allowsHitTesting(workspace.originalSection == "消息")
                     .disabled(workspace.originalSection != "消息")
@@ -291,6 +292,76 @@ private struct CrewdOriginalTodoSummary: View {
         return count>0 ? title+"  \(count)":title
     }
     var body: some View {
+        Group {
+            #if os(macOS)
+            macOverview
+            #else
+            standardOverview
+            #endif
+        }
+        .onAppear { group.setActive(true, owner: owner) }
+        .onDisappear { group.setActive(false, owner: owner) }
+        .task(id: group.crew + group.channel + group.capabilities.sorted().joined(separator: ",") + group.activationEpoch.uuidString) {
+            if group.capabilities.contains("channelWork"), !group.channel.isEmpty { try? await group.refresh() }
+        }
+    }
+    #if os(macOS)
+    /// Original CrewTodoPanel geometry, fed only by the current channel work
+    /// projection. No legacy LocalTodoStore reader or detail action is used.
+    private var macOverview: some View {
+        VStack(alignment:.leading,spacing:0) {
+            HStack(spacing:6) {
+                Text("待办工作").font(Theme.Fonts.headline.weight(.semibold))
+                CrewTodoLedgerPills(ledger:Binding(get:{human ? .human:.agent},set:{human = $0 == .human}),contextHelp:{ledger in
+                    ledger == .human ? "查看当前群需要人处理的关联工作":"查看当前群 AI 的关联工作"
+                })
+                Spacer(minLength:8)
+                Button(TodoListPresentation.overviewLayout.detailButtonTitle){showDetails(human)}
+                    .buttonStyle(.bordered).controlSize(.small).font(Theme.Fonts.caption).tint(Theme.Palette.accent)
+            }.padding(.horizontal,14).padding(.vertical,10)
+            if group.crew != currentCrew || group.loading {
+                ProgressView("正在读取当前群").controlSize(.small).font(Theme.Fonts.caption).padding(.horizontal,14)
+            } else if let failure=group.failure {
+                CrewdInlineNotice(title:"待办工作暂未更新",detail:failure.localizedDescription,symbol:"exclamationmark.triangle",warning:true).padding(.horizontal,14)
+            } else if !group.capabilities.contains("channelWork") {
+                Text("当前后台尚未开放群工作引用。").font(Theme.Fonts.caption).foregroundStyle(.secondary).padding(.horizontal,14)
+            } else if !group.loaded {
+                Text("尚未读取当前会话事项").font(Theme.Fonts.caption).foregroundStyle(.secondary).padding(.horizontal,14)
+            } else if items(human).isEmpty {
+                Text(human ? "暂无待处理的人工待办":"暂无未完成的 AI 待办")
+                    .font(Theme.Fonts.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.bottom,6)
+            } else {
+                let rows=items(human)
+                LazyVStack(alignment:.leading,spacing:8) {
+                    ForEach(rows.indices,id:\.self){index in macTodoRow(rows[index])}
+                }.padding(.horizontal,12).padding(.bottom,8)
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading).background(CrewTodoPagePalette.background)
+    }
+    private func macTodoRow(_ row:CrewdValue)->some View {
+        let layout=TodoListPresentation.overviewLayout
+        let corners=layout.cardCorners
+        let shape=UnevenRoundedRectangle(cornerRadii:.init(topLeading:CGFloat(corners.topLeading),bottomLeading:CGFloat(corners.bottomLeading),bottomTrailing:CGFloat(corners.bottomTrailing),topTrailing:CGFloat(corners.topTrailing)),style:.continuous)
+        return VStack(alignment:.leading,spacing:7) {
+            HStack(spacing:6) {
+                CrewTodoStatusCircle(status:row["status"].string ?? "",size:15)
+                Text(CrewdWorkStatusLabel.display(row["status"].string ?? ""))
+                    .font(Theme.Fonts.footnote.weight(.semibold)).foregroundStyle(Theme.Palette.accent)
+            }
+            MarkdownText(text:TodoListPresentation.cardMarkdown(row["label"].string ?? "关联工作",lineBudget:layout.bodyLineLimit),variant:.todo)
+                .lineLimit(layout.bodyLineLimit).textSelection(.enabled)
+                .frame(maxHeight:CGFloat(layout.previewMaxHeight),alignment:.top).clipped()
+            Button(layout.rowDetailTitle){showDetails(human)}
+                .buttonStyle(.plain).font(Theme.Fonts.caption.weight(.semibold)).foregroundStyle(Theme.Palette.accent)
+        }.padding(.vertical,10).padding(.horizontal,12)
+            .frame(maxWidth:.infinity,alignment:.leading)
+            .frame(maxHeight:CGFloat(layout.cardMaxHeight),alignment:.top).clipped()
+            .background(shape.fill(CrewTodoPagePalette.card))
+            .overlay(shape.strokeBorder(Theme.Palette.hairline,lineWidth:0.5))
+            .padding(.vertical,4).contentShape(Rectangle()).onTapGesture{showDetails(human)}
+    }
+    #endif
+    private var standardOverview: some View {
         VStack(alignment:.leading,spacing:12){
             HStack{
                 Text("待办工作").font(CrewdType.label.weight(.semibold))
@@ -328,11 +399,6 @@ private struct CrewdOriginalTodoSummary: View {
                 }
             }
         }.padding(12)
-        .onAppear { group.setActive(true, owner: owner) }
-        .onDisappear { group.setActive(false, owner: owner) }
-        .task(id: group.crew + group.channel + group.capabilities.sorted().joined(separator: ",") + group.activationEpoch.uuidString) {
-            if group.capabilities.contains("channelWork"), !group.channel.isEmpty { try? await group.refresh() }
-        }
     }
 }
 
@@ -356,44 +422,26 @@ private struct CrewdOriginalMessages<Content: View>: View {
     #endif
     #if os(macOS)
     @EnvironmentObject private var runner: CrewSessionRunner
-    @State private var showingMembers = false
-    @State private var openedSession = false
     private var showingSession: Bool { runner.viewingTerminal }
-    private var visibleChat: Bool { !showingSession && workspace.channels.contains { $0["id"].string == workspace.channelID } }
-    private var visibleContent: Bool { workspace.originalSection != "消息" || visibleChat }
-    private var visibleSession: Bool { workspace.originalSection == "消息" && showingSession }
     #endif
     var body: some View {
         #if os(macOS)
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
             if let header { header }
-            ZStack {
-                content()
-                    .environment(\.crewdShowMembers, { showingMembers = true })
-                    .opacity(visibleContent ? 1 : 0).allowsHitTesting(visibleContent).disabled(!visibleContent).accessibilityHidden(!visibleContent)
-                if openedSession || showingSession {
-                    CrewSessionWindowView(presentation: .conversation)
-                        .opacity(visibleSession ? 1 : 0).allowsHitTesting(visibleSession)
-                        .disabled(!visibleSession).accessibilityHidden(!visibleSession)
+            GeometryReader { available in
+                // The pre-rewrite work area kept group chat and the member/
+                // terminal pane side by side. The new shared tabs stay above
+                // both; bound the old minimums to the actual available width.
+                HSplitView {
+                    content()
+                        .frame(minWidth:min(360,max(0,(available.size.width-1)/2)),maxWidth:.infinity,maxHeight:.infinity)
+                    CrewSessionWindowView(conversationVisible:workspace.originalSection == "消息")
+                        .frame(minWidth:min(320,max(0,(available.size.width-1)/2)),idealWidth:400,maxWidth:560,maxHeight:.infinity)
                 }
-                if workspace.originalSection == "消息" && !showingSession && !visibleChat {
-                    CrewdEmptySurface(title: "选择一段会话", detail: "从左侧选择群聊或成员。不同会话的消息和草稿分别保留。", symbol: "bubble.left.and.bubble.right")
-                }
-            }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-            }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        .opacity(showingMembers ? 0:1).allowsHitTesting(!showingMembers).accessibilityHidden(showingMembers)
-        .overlay {
-            if showingMembers {
-                VStack(spacing:0){
-                    HStack{Button("返回会话",systemImage:"chevron.left"){showingMembers=false};Spacer();Text("本群成员与工作")}.padding(12)
-                    Divider();CrewSessionWindowView(presentation:.inspector)
-                }.background(Theme.Palette.canvas)
+                .frame(maxWidth:.infinity,maxHeight:.infinity)
             }
-        }
-        .onChange(of:workspace.crewID){_,_ in showingMembers=false}
-        .onChange(of:workspace.originalSection){_,_ in showingMembers=false}
+        }.frame(minWidth:0,maxWidth:.infinity,maxHeight:.infinity)
         .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (showingSession ? runner.selectedRunId?.uuidString ?? "new" : "channel")))
-        .onChange(of: showingSession) { _, value in if value { openedSession = true } }
         .task(id: workspace.originalSection + resources.activationEpoch.uuidString) {
             if workspace.originalSection == "消息" { await resources.activate(.messages, force: true) }
         }

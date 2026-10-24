@@ -16,9 +16,6 @@ import UIKit
 struct CrewChatView: View {
     @Environment(\.crewdOriginalChannelID) private var crewdChannelID
     @Environment(\.crewdMessageFolders) private var messageFolders
-    #if os(macOS)
-    @Environment(\.crewdShowMembers) private var showMembers
-    #endif
     @Environment(\.colorScheme) private var chromeScheme
     let crewId: String
     let crewTitle: String
@@ -379,17 +376,8 @@ struct CrewChatView: View {
     }
 
     #if os(macOS)
-    private var conversationTitle: String {
-        if let workspace = appModel.crewdBackend?.workspace,
-           let row = workspace.channels.first(where: { $0["id"].string == crewdChannelID }) {
-            return CrewdConversationProjection.title(row)
-        }
-        return crewTitle
-    }
     private var conversationHeader:some View {
         HStack(spacing:10){
-            Text(conversationTitle).font(CrewdType.label.weight(.semibold)).lineLimit(1)
-                .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
             Spacer(minLength:2)
             ViewThatFits(in:.horizontal){
                 communicationControls(compact:false)
@@ -414,10 +402,6 @@ struct CrewChatView: View {
             if let showOnlyHumanMentions {
                 Toggle("仅@你",isOn:showOnlyHumanMentions).toggleStyle(.button).controlSize(.small)
                     .help("只显示 @ 你的消息和你发出的消息")
-            }
-            if let showMembers {
-                Button("成员",systemImage:"person.2",action:showMembers)
-                    .buttonStyle(.plain).help("本群成员与工作")
             }
         }
     }

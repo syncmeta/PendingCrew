@@ -357,6 +357,9 @@ enum CrewTodoPagePalette {
 /// 免得两处各长一个样子。人类原话「弄两个药丸选择」。
 struct CrewTodoLedgerPills: View {
     @Binding var ledger: TodoLedger
+    /// A Core-backed presentation supplies its own terminology without
+    /// borrowing the legacy ledger's protocol-specific help text.
+    var contextHelp: ((TodoLedger) -> String)? = nil
 
     var body: some View {
         HStack(spacing: 4) {
@@ -371,9 +374,9 @@ struct CrewTodoLedgerPills: View {
                         Capsule().fill(ledger == l
                             ? Theme.Palette.accent.opacity(0.14)
                             : Theme.Palette.surfaceMuted.opacity(0.6)))
-                    .help(l == .agent
+                    .help(contextHelp?(l) ?? (l == .agent
                           ? "人类派给 agent 的活 —— 机器人经 respond_todo 回应"
-                          : "agent 请人类拍板的事 —— 你回应后会叫醒当初提它的那个 session")
+                          : "agent 请人类拍板的事 —— 你回应后会叫醒当初提它的那个 session"))
             }
         }
     }

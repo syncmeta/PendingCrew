@@ -21,6 +21,8 @@ import SwiftUI
 struct CrewSessionWindowView: View {
     enum Presentation { case automatic, inspector, conversation }
     var presentation: Presentation = .automatic
+    /// Passed by the workspace-observing host so Tab visibility is reactive.
+    var conversationVisible: Bool = true
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var crewStore: CrewStore
@@ -71,6 +73,17 @@ struct CrewSessionWindowView: View {
     /// （跨进程，目录监听捕获）或本进程 append 都会推一个事件 → bump 一次。
     @State private var badgeTick = 0
 
+    /// The restored permanent pane owns the same Core-backed draft route as
+    /// the former full-width conversation; the legacy authority is unchanged.
+    private var ownsCrewdComposer: Bool {
+        guard appModel.usesCrewdAuthority, presentation != .inspector, conversationVisible,
+              let workspace=appModel.crewdBackend?.workspace,
+              workspace.originalSection == "消息",
+              workspace.crewID == crewStore.selectedDetail?.crew.id,
+              presentation == .conversation || sessionRunner.viewingTerminal else { return false }
+        return sessionRunner.isComposingNew || sessionRunner.current.map { $0.crewId == workspace.crewID } == true
+    }
+
     /// spec §9.3 + 用户心智：右栏是**常驻**和 claude/codex 交互的面（像 Codex
     /// Desktop）。没有 session 时就地给一个 composer —— **第一条消息即开始
     /// session**（零配置，用 crew 默认目录/runner/权限模式；无标题、无单独的
@@ -86,7 +99,7 @@ struct CrewSessionWindowView: View {
         // 填满 inspector 栏 —— 内容是弹性的，跟随固定列宽布局，不溢出。
         .frame(maxWidth: .infinity)
         .safeAreaInset(edge:.bottom){
-            if presentation == .conversation,let owner=presentedDraftOwner,let context=presentedDraftContext {
+            if ownsCrewdComposer, (presentation == .conversation || sessionRunner.viewingTerminal),let owner=presentedDraftOwner,let context=presentedDraftContext {
                 CrewPersonalDraftControls(workspace:owner,context:context,payload:Binding(get:{.init(text:draft)},set:{sessionDraftBinding.wrappedValue=$0.text})).padding(.horizontal,12).padding(.vertical,5)
             }
         }
@@ -125,7 +138,7 @@ struct CrewSessionWindowView: View {
         }
         .onChange(of: draft) { old, new in
             if old != new { pendingExplicitId = nil }
-            if presentation == .conversation, let context = presentedDraftContext,personalEditingScope.map({personalService.isCurrent($0)}) ?? true { presentedDraftOwner?.messageDrafts.set(new, for: context) }
+            if ownsCrewdComposer, let context = presentedDraftContext,personalEditingScope.map({personalService.isCurrent($0)}) ?? true { presentedDraftOwner?.messageDrafts.set(new, for: context) }
         }
         .onChange(of: presentedRouteKey) { _, _ in synchronizePresentedDraft() }
         // composer 的 agent kind 默认跟随 crew 建好时选的 captainAgentKind ——
@@ -191,9 +204,10 @@ struct CrewSessionWindowView: View {
     /// User edits are versioned synchronously, before an async receipt can finish.
     private var sessionDraftBinding: Binding<String> {
         Binding(get: { draft }, set: { value in
+            if appModel.usesCrewdAuthority && !ownsCrewdComposer { return }
             guard value != draft else { return }
             draftEditRevision = UUID(); draft = value
-            if presentation == .conversation, let context = presentedDraftContext {
+            if ownsCrewdComposer, let context = presentedDraftContext {
                 presentedDraftOwner?.setPersonalInput(value,context:context,scope:personalEditingScope)
             }
         })
@@ -201,12 +215,17 @@ struct CrewSessionWindowView: View {
 
     private var presentedRouteKey: String {
         let workspace = appModel.crewdBackend?.workspace
-        return (workspace?.presentationNamespace ?? "") + "/" + (crewStore.selectedDetail?.crew.id ?? "") + "/" +
+        return (ownsCrewdComposer ? "active/":"inactive/") + (workspace?.presentationNamespace ?? "") + "/" + (crewStore.selectedDetail?.crew.id ?? "") + "/" +
             (sessionRunner.isComposingNew ? "new" : sessionRunner.current?.sessionId ?? "new") + "/" + personalService.projectionID.uuidString
     }
     private func synchronizePresentedDraft() {
-        guard presentation == .conversation, appModel.usesCrewdAuthority,
-              let owner = appModel.crewdBackend?.workspace, let crew = crewStore.selectedDetail?.crew.id else { return }
+        guard ownsCrewdComposer else {
+            // Invalidate the old route, including scheduled/late restores.
+            // User edits were already saved synchronously by the binding.
+            draftEditRevision=UUID();presentedDraftOwner=nil;presentedDraftContext=nil;personalEditingScope=nil
+            return
+        }
+        guard let owner = appModel.crewdBackend?.workspace, let crew = crewStore.selectedDetail?.crew.id else { return }
         let current = sessionRunner.current.flatMap { $0.crewId == crew ? $0 : nil }
         let next: CrewdDrafts.Context = sessionRunner.isComposingNew || current == nil
             ? .initialTask(crew: crew, session: "original-composer")
@@ -217,7 +236,12 @@ struct CrewSessionWindowView: View {
         draftEditRevision = UUID()
         draft = owner.messageDrafts.text(for: next)
         let revision=draftEditRevision,scope=personalService.editingScope()
-        Task{await owner.restorePersonalInput(next);guard personalService.isCurrent(scope),presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision,draft.isEmpty else{return};draft=owner.messageDrafts.text(for:next)}
+        Task {
+            guard ownsCrewdComposer,personalService.isCurrent(scope),presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision else{return}
+            await owner.restorePersonalInput(next)
+            guard ownsCrewdComposer,personalService.isCurrent(scope),presentedDraftOwner === owner,presentedDraftContext == next,draftEditRevision == revision,draft.isEmpty else{return}
+            draft=owner.messageDrafts.text(for:next)
+        }
     }
 
     // MARK: - 终端模式（切换条 + 终端 + composer）
