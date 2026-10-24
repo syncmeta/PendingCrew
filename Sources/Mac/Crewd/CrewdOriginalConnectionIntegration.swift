@@ -371,8 +371,14 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
         button.isEnabled = enabled
         let title = NSMutableAttributedString(string: "   " + name,
             attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.labelColor])
-        title.append(NSAttributedString(string: "    ⌄  ",
-            attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor]))
+        title.append(NSAttributedString(string: "    "))
+        if let chevron = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 16, weight: .medium)) {
+            let attachment = NSTextAttachment()
+            attachment.attachmentCell = NSTextAttachmentCell(imageCell: chevron)
+            title.append(NSAttributedString(attachment: attachment))
+        }
+        title.append(NSAttributedString(string: "  "))
         title.append(NSAttributedString(string: "●",
             attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: ready ? NSColor.systemGreen : NSColor.systemRed]))
         button.attributedTitle = title

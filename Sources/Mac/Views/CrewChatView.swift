@@ -16,6 +16,9 @@ import UIKit
 struct CrewChatView: View {
     @Environment(\.crewdOriginalChannelID) private var crewdChannelID
     @Environment(\.crewdMessageFolders) private var messageFolders
+    #if os(macOS)
+    @Environment(\.crewdShowMembers) private var showMembers
+    #endif
     @Environment(\.colorScheme) private var chromeScheme
     let crewId: String
     let crewTitle: String
@@ -384,18 +387,22 @@ struct CrewChatView: View {
         return crewTitle
     }
     private var conversationHeader:some View {
-        HStack(spacing:8){
-            Text(conversationTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
-            Spacer(minLength:2)
-            ViewThatFits(in:.horizontal){
+        ViewThatFits(in:.horizontal){
+            HStack(spacing:8){
+                Text(conversationTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .help(appModel.crewdBackend?.workspace.channels.first(where:{$0["id"].string == crewdChannelID}).map(CrewdConversationProjection.context) ?? "")
+                Spacer(minLength:2)
                 communicationControls(compact:false)
+            }
+            HStack(spacing:6){
+                Spacer(minLength:0)
                 communicationControls(compact:true)
-            }.fixedSize(horizontal:false,vertical:true)
+            }
         }.padding(.horizontal,14).frame(minHeight:36).tint(.gray)
     }
     private func communicationControls(compact:Bool)->some View {
         HStack(spacing:6){
+            if let control = messageFolders.control { control }
             if let communicationView {
                 if compact {
                     Picker("沟通范围",selection:communicationView){
@@ -410,6 +417,10 @@ struct CrewChatView: View {
             if let showOnlyHumanMentions {
                 Toggle("仅@你",isOn:showOnlyHumanMentions).toggleStyle(.button).controlSize(.small)
                     .help("只显示 @ 你的消息和你发出的消息")
+            }
+            if let showMembers {
+                Button("成员",systemImage:"person.2",action:showMembers)
+                    .buttonStyle(.plain).help("本群成员与工作")
             }
         }.font(.caption).controlSize(.small)
     }

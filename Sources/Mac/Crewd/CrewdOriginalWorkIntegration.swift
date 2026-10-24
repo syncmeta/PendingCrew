@@ -17,6 +17,9 @@ struct CrewdMessageFolderPresentation {
     var filter:CrewTimelineFilter.MessageFolder = .all
     var clear:(()->Void)? = nil
     var classify:((String)->Void)? = nil
+    #if os(macOS)
+    var control:AnyView? = nil
+    #endif
 }
 private struct CrewdMessageFolderKey:EnvironmentKey {
     static let defaultValue=CrewdMessageFolderPresentation()
@@ -27,6 +30,16 @@ extension EnvironmentValues {
         set{self[CrewdMessageFolderKey.self]=newValue}
     }
 }
+
+#if os(macOS)
+private struct CrewdShowMembersKey:EnvironmentKey { static let defaultValue:(()->Void)? = nil }
+extension EnvironmentValues {
+    var crewdShowMembers:(()->Void)? {
+        get { self[CrewdShowMembersKey.self] }
+        set { self[CrewdShowMembersKey.self] = newValue }
+    }
+}
+#endif
 
 private struct CrewdMessageSearchTargetKey:EnvironmentKey{static let defaultValue:String?=nil}
 extension EnvironmentValues{
@@ -56,10 +69,14 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
     var body: some View {
+        #if os(macOS)
+        CrewdOriginalMessages(workspace:workspace,header:AnyView(sectionHeader),openSession:openSession){sectionContent}
+        #else
         VStack(spacing:0){
             sectionHeader
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
         }
+        #endif
     }
     private var sectionHeader:some View {
         VStack(spacing:0){
@@ -153,7 +170,12 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
             if value == "none"{filter = .exclude(Set(assignments.compactMap{$0["object"]["id"].string}))}
             else{filter = .include(Set(assignments.filter{$0["folderId"] == .string(value)}.compactMap{$0["object"]["id"].string}))}
         }else{filter = .include([])}
-        return .init(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
+        var presentation = CrewdMessageFolderPresentation(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
+        #if os(macOS)
+        presentation.control = AnyView(CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,
+            selection:selection,view:.messages,compact:true).fixedSize(horizontal:true,vertical:false))
+        #endif
+        return presentation
     }
     var body:some View {
         VStack(spacing:0){
@@ -347,47 +369,23 @@ private struct CrewdOriginalMessages<Content: View>: View {
         HStack(spacing: 0) {
             if geometry.size.width >= 600 && conversationListVisible {
                 conversationList.frame(width: min(196, max(180, geometry.size.width * 0.26)))
-                Divider()
             }
+            Button {
+                if geometry.size.width >= 600 { conversationListVisible.toggle() }
+                else { showConversationPopover.toggle() }
+            } label: {
+                Image(systemName: geometry.size.width >= 600 && conversationListVisible ? "chevron.left" : "chevron.right")
+                    .font(.system(size:11,weight:.medium)).foregroundStyle(.secondary)
+                    .frame(width:18,height:44).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .help(geometry.size.width >= 600 && conversationListVisible ? "收起会话列表" : "展开会话列表")
+                .accessibilityLabel(geometry.size.width >= 600 && conversationListVisible ? "收起会话列表" : "展开会话列表")
+                .popover(isPresented:$showConversationPopover){conversationList.frame(width:248,height:440)}
             VStack(spacing: 0) {
-                if geometry.size.width < 600 || !conversationListVisible {
-                    HStack {
-                        Button { if geometry.size.width>=600 {conversationListVisible=true} else {showConversationPopover=true} } label: {
-                            Label("群聊与会话", systemImage: "bubble.left.and.bubble.right")
-                        }.buttonStyle(.plain).font(.system(size: 12))
-                        Button("成员",systemImage:"person.2"){showingMembers=true}.buttonStyle(.plain)
-                        Spacer()
-                        if showingSession {
-                            Button("返回群聊") { runner.viewingTerminal = false }
-                                .buttonStyle(.plain).font(.system(size: 12))
-                        }
-                    }.padding(.horizontal, 12).frame(height: 32)
-                        .popover(isPresented: $showConversationPopover) {
-                            conversationList.frame(width: 248, height: 440)
-                        }
-                    if geometry.size.width<600 {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in
-                                if let row = workspace.channels.first(where: { $0["id"].string == id }) {
-                                    Button {
-                                        workspace.selectConversation(id); runner.viewingTerminal = false
-                                    } label: {
-                                        Text(CrewdConversationProjection.title(row))
-                                            .font(.system(size: 12, weight: !showingSession && workspace.channelID == id ? .semibold : .regular))
-                                            .padding(.horizontal, 10).padding(.vertical, 5)
-                                            .background(!showingSession && workspace.channelID == id ? CrewdChatStyle.bubble(scheme) : .clear, in: Capsule())
-                                    }.buttonStyle(.plain)
-                                }
-                            }
-                        }.padding(.horizontal, 8)
-                    }.frame(height: 32)
-                    }
-                    Divider()
-                }
             if let header { header }
             ZStack {
                 content()
+                    .environment(\.crewdShowMembers, { showingMembers = true })
                     .opacity(visibleContent ? 1 : 0).allowsHitTesting(visibleContent).disabled(!visibleContent).accessibilityHidden(!visibleContent)
                 if openedSession || showingSession {
                     CrewSessionWindowView(presentation: .conversation)
@@ -541,11 +539,8 @@ private struct CrewdOriginalMessages<Content: View>: View {
     private var conversationList: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
-                messageFolderMenu.menuIndicator(.hidden)
+                Text("会话").font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Button{showingMembers=true}label:{Image(systemName:"person.2")}.buttonStyle(CrewdToolButtonStyle()).help("本群成员与工作")
-                Button{conversationListVisible=false}label:{Image(systemName:"sidebar.left")}
-                    .buttonStyle(CrewdToolButtonStyle()).help("收起会话列表").accessibilityLabel("收起会话列表")
                 Button { workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }
                     .buttonStyle(CrewdToolButtonStyle()).help("新建成员会话").accessibilityLabel("新建成员会话")
             }.font(.system(size: 12)).controlSize(.small).tint(.gray)

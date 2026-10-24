@@ -202,6 +202,14 @@ struct IPadShell: View {
     private var mobileSettings:some View {
         NavigationStack{
             List{
+                Section("个人草稿与同步"){
+                    NavigationLink("个人草稿与同步") {
+                        List {
+                            Section { CrewPersonalHostDirectory() }
+                            Section { CrewPersonalDraftArchive() }
+                        }.navigationTitle("个人草稿与同步")
+                    }
+                }
                 Section("电脑与连接"){
                     Button("连接状态与未完成操作"){settingsAction{showingConnectionStatus=true}}
                     Button("连接或添加电脑"){settingsAction{showingPairing=true}}
@@ -211,7 +219,7 @@ struct IPadShell: View {
                 }
                 Section("本机输入与原请求"){
                     Button("本机 Codex 原输入"){settingsAction{showingLocalCodexInputs=true}}
-                    Button("本机已保存草稿"){settingsAction{showingOfflineDrafts=true}}
+                    Button("历史聊天输入（仅本机）"){settingsAction{showingOfflineDrafts=true}}
                     if !appModel.crewdWindow.inputReviewWorkspaces.isEmpty{Button("原连接的输入"){settingsAction{showingRetainedInputs=true}}}
                     if appModel.crewdBackend?.workspace.client.capabilities.contains("command.receipts") == true{Button("原请求核对"){settingsAction{showingRecovery=true}}}
                 }

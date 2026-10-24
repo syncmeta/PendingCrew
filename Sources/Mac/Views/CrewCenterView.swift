@@ -195,6 +195,7 @@ struct CrewCenterView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .modifier(CrewSearchGlass())
         .help(searchQuery.isEmpty ? "搜索" : "搜索 · " + searchScope.rawValue + "：" + searchQuery)
         .accessibilityLabel("搜索")
         .keyboardShortcut("f", modifiers: .command)
@@ -403,4 +404,15 @@ private struct PendingCrewChatView: View {
         }
     }
 }
+
+private struct CrewSearchGlass:ViewModifier {
+    func body(content:Content)->some View {
+        if #available(macOS 26.0,*) {
+            content.glassEffect(.regular.interactive(),in:Circle())
+        } else {
+            content.background(.regularMaterial,in:Circle())
+        }
+    }
+}
+
 #endif

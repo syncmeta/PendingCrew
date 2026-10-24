@@ -32,7 +32,7 @@ struct CrewdFolderControls:View {
                         Picker("本群文件夹",selection:$selection){folderChoices}
                         Divider()
                         Button("管理本群分类",systemImage:"folder.badge.gearshape"){managing=true}
-                    }label:{if iconOnly{Image(systemName:"folder")}else{Label(currentFolderTitle,systemImage:"folder")}}
+                    }label:{if iconOnly{Image(systemName:"folder")}else{Label(view == .messages ? (selection == "all" ? "消息分类" : "消息分类 · "+currentFolderTitle) : currentFolderTitle,systemImage:"folder")}}
                     .fixedSize().frame(minWidth:iconOnly ? CrewdType.target:0,minHeight:iconOnly ? CrewdType.target:0).help("消息分类："+currentFolderTitle+"；管理分类不会改变原文").accessibilityLabel("消息分类："+currentFolderTitle)
                 }else {
                     Picker("文件夹",selection:$selection){folderChoices}.frame(maxWidth:220)
