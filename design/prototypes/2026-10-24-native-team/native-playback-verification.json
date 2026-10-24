@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "app": "Sketch 2026.3.1",
+  "nativeFile": "PendingCrew-PrivateTeam.sketch",
+  "sha256": "614552e2acfc5ab48d6caf1062f3473f96fba2fa309dee08c3d9489f38bfca26",
+  "flow": [
+    "01 群聊",
+    "07 新建机组",
+    "08 填写机组",
+    "09 已创建机组",
+    "10 成员",
+    "09 已创建机组 via back"
+  ],
+  "actions": "Clicked native rendered prototype controls; did not use frame dropdown to advance",
+  "screenshots": [
+    "native-playback-created.png",
+    "native-playback-back.png"
+  ],
+  "openedInSketch": true,
+  "uploaded": false,
+  "editedLayers": false,
+  "guiLeaseReleased": true,
+  "limits": "49 states linked, representative native playback only; floating panels are composited full-frame state simulation, not independent overlay engine; no live free input or business execution."
+}
