@@ -435,10 +435,18 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 // terminal pane side by side. The new shared tabs stay above
                 // both; bound the old minimums to the actual available width.
                 HSplitView {
-                    content()
-                        .frame(minWidth:min(360,max(0,(available.size.width-1)/2)),maxWidth:.infinity,maxHeight:.infinity)
-                    CrewSessionWindowView(conversationVisible:workspace.originalSection == "消息")
-                        .frame(minWidth:min(320,max(0,(available.size.width-1)/2)),idealWidth:400,maxWidth:560,maxHeight:.infinity)
+                    // Split sizing belongs to the pane, not the ideal width of
+                    // its current chat, roster or terminal contents. In particular,
+                    // entering the terminal must not grow the entire split view.
+                    GeometryReader { pane in
+                        content().frame(width:pane.size.width,height:pane.size.height)
+                    }
+                    .frame(minWidth:min(360,max(0,(available.size.width-1)/2)),maxWidth:.infinity,maxHeight:.infinity)
+                    GeometryReader { pane in
+                        CrewSessionWindowView(conversationVisible:workspace.originalSection == "消息")
+                            .frame(width:pane.size.width,height:pane.size.height)
+                    }
+                    .frame(minWidth:min(320,max(0,(available.size.width-1)/2)),idealWidth:400,maxWidth:560,maxHeight:.infinity)
                 }
                 .frame(maxWidth:.infinity,maxHeight:.infinity)
             }

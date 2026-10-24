@@ -254,6 +254,7 @@ struct CrewSessionWindowView: View {
             Divider()
             }
             terminalContent
+                .frame(minWidth:0,maxWidth:.infinity,maxHeight:.infinity)
         }
     }
 
