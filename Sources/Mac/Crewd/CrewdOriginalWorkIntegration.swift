@@ -91,15 +91,17 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             ZStack {
                 // Keep the original chat instance mounted: drafts, anchors and
                 // its existing pagination/identity adapter survive other panels.
-                #if os(macOS)
-                CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){
+                Group {
+                    #if os(macOS)
+                    CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){
+                        CrewdOriginalMessageSurface(workspace:workspace){content()}
+                            .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
+                    }
+                    #else
                     CrewdOriginalMessageSurface(workspace:workspace){content()}
                         .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
+                    #endif
                 }
-                #else
-                CrewdOriginalMessageSurface(workspace:workspace){content()}
-                    .environment(\.crewdOriginalChannelID, workspace.channelID).id(workspace.channelID)
-                #endif
                     .opacity(workspace.originalSection == "消息" ? 1 : 0)
                     .allowsHitTesting(workspace.originalSection == "消息")
                     .disabled(workspace.originalSection != "消息")
