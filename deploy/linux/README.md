@@ -1,16 +1,28 @@
 # PendingCrew host installation
 
-This directory prepares the one-command Linux installer and one device-enrollment link. It has not published a Linux release or installed a permanent VPS service. The retained R2 package cannot be substituted for this source.
+The Linux x86_64 preview installer is published as [host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d](https://github.com/syncmeta/PendingCrew/releases/tag/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d), built from that exact source commit. It provides one installation command and one device-enrollment link. The retained R2 package cannot be substituted for this source.
 
-A release owner assembles a reviewed **Linux ELF** with its clean default-build proof using `package-host-release.py`. Supply immutable HTTPS artifact and manifest URLs containing the full source commit. The output contains `host.tar.gz`, its SHA256-bound `manifest.json`, and an `install.py` entry with the manifest URL/hash embedded. Assembly performs no download, provider call, installation or publication. Publish only after the separately authorized release gates.
+[0.1.44](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.44) is the source preview; the separate host release contains only the three Linux installation assets. The public macOS package and Homebrew remain on the older stable channel, [0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42). This Linux release does not update that channel or provide a macOS installer.
 
-The eventual user entry is a single immutable installer URL, for example this command template (the URL must be the actual reviewed published entry):
+The exact Linux build and its original package passed independent artifact review. The published asset API sizes/digests match those reviewed bytes, and the public tar URL returned HEAD200 with the expected length. A complete public download and actual installation have not been verified. The target VPS has no accepted permanent service, public-port or device-pairing result; publication is not deployment acceptance.
+
+On a Linux x86_64 host with Python 3 and systemd, replace the existing ordinary login user, reachable address and explicit local bind IP, then run the original entry:
 
 ```sh
-curl -fsSL '<immutable install.py URL>' | sudo /usr/bin/python3 -I - install --user '<existing login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
 ```
 
-The ordinary selected user must first install and log in to both providers themselves. This candidate accepts exactly Codex0.163.0 and Claude2.1.301. Missing executables, an unsupported version, or unsuccessful login status stops before PendingCrew prefix/data/unit writes and prints the official installation/login instructions. No provider installation, login, model request, credential import, downgrade or HOME/PATH/SHELL/CODEX_HOME assignment is performed. Successful version/login metadata is not proof of model access.
+This is a Python entry executed from stdin in isolated mode, not a shell installer. Its embedded HTTPS manifest URL and SHA256 bind the original tar. It still downloads the manifest and tar; copying only `install.py` is not an offline installation.
+
+| Published asset | Bytes | SHA256 |
+| --- | ---: | --- |
+| [install.py](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/install.py) | 45778 | `bacc40a9b65cb288e80c7c670dbbff7d140fddc6cc64f66b7441987989a6d37d` |
+| [manifest.json](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/manifest.json) | 371 | `3edba0256c49b7ac350a3f2275402dfeefbadae4638442af35c42f827859210e` |
+| [host.tar.gz](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/host.tar.gz) | 21526325 | `79735ba993bd4e0511bac733b81013c58878386f8f9fe47d634e02280975fd2d` |
+
+The ordinary selected user must first install and log in to both providers themselves; see the official [Codex CLI](https://developers.openai.com/codex/cli) and [Claude Code setup](https://code.claude.com/docs/en/setup) instructions. This candidate accepts exactly Codex0.163.0 and Claude Code2.1.301, even if an upstream installer offers a newer version. Missing executables, an unsupported version, or unsuccessful login status stops before PendingCrew prefix/data/unit writes and prints the official installation/login instructions. No provider installation, login, model request, credential import, automatic upgrade/downgrade or HOME/PATH/SHELL/CODEX_HOME assignment is performed. Successful version/login metadata is not proof of model access. Optional `--codex /absolute/path` and `--claude /absolute/path` select existing executables; the original preflight still checks their real systemd service-user environment.
+
+For future releases, a release owner assembles a reviewed **Linux ELF** with its clean default-build proof using `package-host-release.py`, supplying immutable HTTPS artifact and manifest URLs containing the full source commit. Its three-file output has the same contract above. Assembly alone performs no download, provider call, installation or publication; publish only after the separately authorized release gates.
 
 The installer verifies the immutable package and offline schema, refuses active runtime or changed activation UUID, then activates root-owned code under `/opt/pendingcrew`. Its background Core runs as that same ordinary login user; data defaults to their real `~/.local/share/PendingCrew` and remains private0700. Existing data is retained. The service shares the installed-prefix flock; Core retains its original exclusive `crewd.lock`. There is no duplicate data lease. The systemd service receives only the explicitly named root-created listener FD. Its admin pathname is `/run/pendingcrew/admin.sock`, root0700 parent/root0600 socket. Ordinary work remains the original mandatory-client-certificate TLS service.
 

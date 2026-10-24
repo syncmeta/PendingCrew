@@ -1,5 +1,19 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 新 Sidebar 完整交付 Mac，准确 Linux 安装资产公开发布
+
+完整源码 `fd7a563fd1d69365ab38811c7e5c6718aa4cd66d` 已保存 main/global 并普通原子推送。机组和会话 Sidebar 采用相同原生行与容器、机组仅多头像；双入口进入会话子页与保 Tab 返回、旧右侧布局、顶部 Tabs/单搜索、运行环境 footer/menu/settings 的完整受影响模块已接受。根亲看最终实际两图；原标题裁切及外层16/5pt留白漏项均单独保留纠偏，最终同原生 List 留白实测闭合，不用旧 QA 冒最终几何证明。
+
+准确普通 Mac **0.1.44／20750.44496** 已完整交付 `/Applications/PendingCrew.app`。一次原暖 Debug/Apple Development 构建绑定2009全 Git 输入及3878依赖，293项封存、115项整包/ZIP与签名独验通过；沿原三阶段完整备份旧 b0/33659 后整包替换。唯一普通无参首开 App62705/Core62719 本机 ready，原Qincheng/旧停态自然保留，两次live均stopped1/native runtime/receipts/inputs全0、无provider子进程，Cloud同意仍unset。离线RO查询unableopen原错误保留，不冒fresh离线baseline或DB前后全等。根全文受领 `apple-development-fd7a563f-independent-qa-20261024/INDEPENDENT-DAILY-DELIVERY-FINAL-QA.json` 并亲看实际首开图。旧整包/ZIP与更早0.1.43等备份全保留。
+
+Mac 后台仍准确标为原 b0/f621 normal 组件，完整478 Rust/e873树、原配方/锁/环境与fresh拥有者原证明逐字桥接；不是新编译的 fd7 normal。App自身源码与双戳均fd7。当前本机包仍是 Apple Development Debug/nonhermetic，不是公开公证安装包；下一公开 Mac 单元只收敛现有同源 Release 配方的必要合法链接、私副本执行位和时间戳缺口，不为维护旧标签增加双ref构建路径，不新造发布框架或改产品行为。
+
+Linux 唯一手动 Actions `40093691105/attempt1/job120871421863` 实际success **713秒**，控制器与完整源码均fd7，标准ubuntu-24.04/15分钟上限。独验接受2009双checkout/478Rust、502清单、原require_fresh默认Release/features[]/非testkit、完整七项环境、完整149 schema/API3/Store21和真实5+1受影响检查。ELF SHA `22299e1f8bb425217d432087b28bf9285882998afcc0be6bbcd502c016c4427f`；原120秒下载超时保部分文件，后同一不可变artifact精确206尾段续传，完整ZIP99113594B/SHA d1064a86…ee392f3与GitHub digest一致，无重复CI或换对象，独验不再下载。
+
+人类明确要求的 [0.1.44“半成品”预发布](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.44) 已发布，并列出相对公开0.1.42的变化和未完成项。沿现有不可变URL合同，另以同fd7的 [Linux后台配套资产](https://github.com/syncmeta/PendingCrew/releases/tag/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d) 原样发布install.py/manifest.json/host.tar.gz三文件；draft上传后API字节/hash逐项核对才publish，主Release已链接入口，旧latest仍v0.1.42，未改Sparkle/Homebrew feed或公开私有证明。tar公开URL HEAD200/长度准确；两份小文件实际GET在当前本机直连github443超时（一次原请求及一次HTTP1连接核对），已停，不冒完整下载/安装验证。`linux-host-fd7a563f-20261024/PUBLICATION-RESULT.json` 保留该边界。
+
+M5确定性调度和Jev生产接线已按当前源核实存在，不按旧待办重写，真实启用资格仍分层。VPS22本轮连接超时、无远端命令，当前CLI/长期服务未知，不能把已发布包说成目标VPS已部署。手机实际仍f7/20750.22585，新UI目前仅iOS受影响unsigned编译通过；双端Cloud完整合并重开、APNs实际收发、Claude剩余供应商资格和剩余平台/独立Mac分发仍未完成，全工程目标继续active。
+
 ## 2026-10-24 Sidebar 视觉统一源码冻结，按人类要求发布半成品预览
 
 人类最终澄清只统一 Sidebar 的会话和机组行，机组多头像；右侧保留旧聊天与成员会话布局，顶部保留新增 Tabs。十项展示源以 `2dbc9256` 为导航基线冻结，最终输入清单 SHA `c13f04c72ea4d3d7b32bd0c2ad1ee8b5d5030daa86523837207774291174b548`：共用原侧栏行字号、间距与选中背景；完整标题优先，时间按空间让位；会话不加头像。左下状态点移到名称前，小号向上箭头打开原生“运行环境”菜单，底部“运行环境设置”仍进入原设置，不改 RPC 或存储键。Mac 暖开发及 iPhoneOS unsigned 受影响编译均0。实际完整标题、原生菜单和原设置入口已验；根亲看实图再发现原 QA 漏核父容器左右留白，明确撤回该单项推断，作者改为与机组共用原生 sidebar List。最终外框与基本返回实际复验继续，不把源码或编译通过冒最终视觉接受。

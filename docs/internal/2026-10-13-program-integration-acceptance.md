@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 fd7 完整 Mac 日用交付与准确 Linux 公开资产接受
+
+根全文受领最终四份独验：Sidebar外框闭合06a9c98f、普通Mac完整候选fbd2b84f、真实日用安装/普通首开41772b9c，以及Linux完整产物f564f7d5；亲看最终两Sidebar图与真实日用首开图。精确来源与范围沿原件，不重跑已验业务。新Mac为fd7／0.1.44-20750.44496，原2009源/3878依赖前后及11保护全同，293项manifest与115整包/ZIP、M42/BF947实际双来源戳/签名/加载闭合接受，保留本地Development Debug/nonhermetic限制。后端明确compiledb0/f621，完整478/e873及原配方、七环境、fresh owning graph逐字桥接，绝非fd7新normal。
+
+原三阶段安装全0，旧b0/33659整包与ZIP SHA57cd85634f008587464f882fbb335a9cd8471b19d6fb7f92b4f1a835ea2999f6完整保留，更早备份不动。fresh实际App/helper已gone，无需重开退出；离线RO SELECT unableopen不当0。唯一无参首开62705/62719，本机ready、原机组/停态自然保留，两次真实live sessions1/desiredstopped1/native三表0，无其它直接子进程；Cloud前后unset，无模型/云/手机/配对动作。未宣称fresh离线DB前后全等，GUI已停止并留安全未选根页。
+
+Linux run40093691105/1、job120871421863成功713秒，artifact12560580682完整ZIP99113594B/d1064a86…ee392f3。原下载120s超时原件保全，同对象206精确尾段/同ETag拼合最终总长度和GitHub digest相等；不是第二整包或新构建。独验502项字节、2009双源/478Rust/fresh默认Release与完整env、149完整schema和原Linux5+1日志，ELF64085768B/22299e1f…16c4427f，tar恰五regular成员与原Git源闭合。
+
+根按人类直接Release授权发布0.1.44主预发布和同fd7的不可变host技术资产。只上传原install.py（bacc40a9…89a6d37d）、manifest（3edba025…7859210e）、host.tar.gz（79735ba9…975fd2d），API实际尺寸/digest和两tag来源、正文均读回一致。主说明首行“半成品。”，对照旧0.1.42且注明未完成项；latest实际仍0.1.42。tar公开HEAD200/长度准确；本机小文件GET连接超时已停，未冒端到端下载/安装通过。实际VPS服务、入口端口/配对、真实供应商、手机Cloud/APNs及公开Mac公证包仍各自未验。完整原件见上述两个独验目录、linux-host-fd7a563f-20261024及PUBLICATION-RESULT.json；全工程不标完成。
+
 ## 2026-10-24 最新视觉源码、原生设计与 Linux 控制器受影响证明
 
 Sidebar 视觉十源最终 freeze 为 `c13f04c72ea4d3d7b32bd0c2ad1ee8b5d5030daa86523837207774291174b548`，根逐项核实字节。`sidebar-visual-unification-20261024/INDEPENDENT-VISUAL-FINAL-QA.json` 证明完整标题、会话无头像、footer 状态点与小箭头、原生运行环境菜单和真实设置入口；不证明最终外层行框一致。根亲看两图发现 List16pt 与 ScrollView5pt 的实际遗漏，`QA-OUTER-INSET-OMISSION.json` 保留纠偏，最终仅 Mac 会话父容器改为原生 sidebar List，iOS 原容器不改；Mac 和 iOS unsigned 类型构建均0。外框受影响运行复验待最终回执，其余已验业务、菜单与导航保留不重跑。
