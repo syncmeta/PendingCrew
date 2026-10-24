@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 正常打开 Cloud 配置修复，Mac 日用与 iPhone 更新完成
+
+人类 iPhone 截图明确显示“此版本尚未配置 iCloud”。已定位为原 Development 包仅依赖启动 ENV 的产品缺陷；准确修复源 `ae0bd2c4885ceb828eb55aef146fe86a46ffcd94`，3 文件28增/8删。只有原 Debug CloudDevelopment 正常 bundle 在 ENV 缺失时启用 normal drafts/hosts；有效 qualification run 保原隔离，显式无效值、Release/HotReload/flags-off 仍关闭，原同意/账号边界及 APNs gate 不变。旧实现真实失败与新实现六条件独验保全，未增配置层、迁移或验收框架。
+
+同源完整 normal、Mac 与 iPhoneOS **0.1.44/20750.17582** 构建、签封与组合独验完成；1958 项源码、478 Rust、3878 依赖及328项终封清单绑定准确 ae0。Mac 日用已整包备份后替换，正常无参首开通过，本机 ready、原 stopped 会话保留、零自动执行/恢复，正常 iCloud 启用按钮实际可见但日用同步未启用。iPhone 在人类正常关闭并解锁后唯一安装成功、准确新包元数据核实，保数据不卸载；正常图标打开与屏幕操作仍交人类核对。Mac 当前为本地 Apple Development Debug 包，保留已有 DerivedData 搜索项限制，不冒 Release、公证或可移植分发。
+
+本轮 Cloud 传输实际自动审批拒绝已保留，人类随后明确授权指定两条静态草稿及版本元数据进入正常 Development 私有空间；后续原生同意成功。Mac 新私域指定未发送草稿“Mac 草稿 normal ae0b：保留本机原文。”实际显示“当前个人版本已同步”，保持现场等待手机同 key 读回及独立 writer。双端交换、合并、云保存后重开与停用保留尚未接受，不把旧 D/ecca 或单端成功冒双端通过。证据在 `apple-cloud-normal-opening-20261025/`、`cumulative-ae0bd2c4-normal-20261024/`、`apple-development-ae0bd2c4-candidate-20261024/` 和 `apple-cloud-normal-ae0bd2c4-preparation-20261024/`。无新 CI、Linux 重建、模型或推送；Linux95/VPS纯CLI、APNs与其他剩余交付边界不变。
+
 ## 2026-10-24 Apple 新描述文件与双端开发包接受，Mac 实际云草稿保存/重开通过
 
 人类提供的两份更新 Development profiles 已独立核实：原 Team M42BKJN82S、正常 App ID、现有 BF947 证书及原 Mac/iPhone，CloudKit 容器 iCloud.com.pendingname.pendingcrew 与 Development 权限匹配。没有新建证书/设备或探测门户。基于完整冻结源 `d509a8c6cc9d58e56bd8449410040f66ce7841a3`，准确 normal、普通 Mac Debug Development 与 iPhoneOS Development 均完成构建/签名及独立整包终封，实际两端 **0.1.44/20750.12911**。1958 项 Git 输入、478 项 Rust、3878 项依赖及 361 项终封清单保全。项目正常生成前已补回原四个通知测试源，实际 App/test 文件集合不变；原 Local 配置恢复。Mac 为 Cloud-only、iOS 为 Cloud 加 Sandbox APS 资格；正常 Release/HotReload 仍关闭，不能称云功能已交到原日用版。

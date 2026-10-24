@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 ae0 正常 Cloud 配置与双端更新接受，双端云业务待实际读回
+
+准确修复源 `ae0bd2c4885ceb828eb55aef146fe86a46ffcd94`，三个原路径28增/8删。真实旧源 red 编译0/运行-5保留，新源六模式独立编译/运行均0；只扩原 Debug CloudDevelopment 正常 bundle 的缺 ENV 情形为 normal drafts/hosts，原 qualification 隔离、无效值拒绝、账号同意与 APNs gate 不变。`apple-cloud-normal-opening-20261025/INDEPENDENT-SOURCE-QA.json` 接受；目录日期为原证据命名，不改写。
+
+同源 normal default Debug/features[]/CARGO_INCREMENTAL=0、fresh own-artifact 及纯 schema/API3/149方法/Store21接受，原始 binary SHA `9476813762282186b903085351a44637615d232e1f12180f7c6cd21e5cfa3ef1`。完整 Mac/iPhoneOS **0.1.44/20750.17582** 各一次暖构建0；1958 Git/478 Rust/3878依赖前后绑定、精确 M42/BF947 profiles/权限、包与 ZIP/IPA 及328项终封清单独验接受。组合 SHA `8020d3c8e1d8f95d8de26f6fe981cf8b532a58e6ae75bc66dc6cc5ee079f8d6f`；manifest SHA `f3ce9201a40aa8e9eb16efaccadd153e2aba55c32317338377932985162c0f92`。Mac 签后 helper 与上述 normal 代码等价，保原 Debug绝对搜索项/供应商 Sparkle 签名分类限制，不冒 hermetic/Release/公证。无重跑稳定业务、all-features 或新 CI。
+
+原 e1 日用正常退出/安全暂停并确认 App/Core 结束后，原三阶段更新均0；旧整包与 ZIP 保留。已装115项精确等于候选，唯一正常无参首开 App88476/Core88480，本机 ready 与正常 Cloud 按钮实际可见；原 stopped1、native runtime/receipt/input0、provider/runner children[]，Cloud consent 未设。根全文读 `DAILY-UPDATE-FIRST-OPEN-QA.json` 并亲看实际截图，日用不参加静态云传输。iPhone 人类确认关闭/解锁后唯一安装 owner30235 为0/success，元数据精确17582、现有 data container 保留，无卸载或工具 launch；正常手机 UI 尚待人工读回。
+
+指定两条静态草稿的正常 Cloud 传输曾实际被自动审批拒绝，原日志保留且未绕过；人类后续“授权本次完整云同步验证”已直接覆盖修订范围。Mac 新私域正常同意后指定未发送原文实际“当前个人版本已同步”，branch A6C8320B-C0DF-46B7-B839-0F5731093EE2、writer e8ededb9…、rev1；archive key为 crew-1593ce83a07f48c28b1bc9ddb6600e84 / human / DB前缀423dfc12a59b。现场启用待手机同key读回、独立分支、显式合并及正常重开/停用保留；当前仅接受 Mac 单端保存，尚无手机实际 Cloud 屏幕/双端通过。当前报告 `apple-cloud-normal-ae0bd2c4-preparation-20261024/NORMAL-CLOUD-LIVE-PROGRESS.json`；原 D/ecca、A/B Unknown及剪贴板拒绝不改写，无模型/APNs/新配对或旧数据迁移。上述构建源始终 ae0，不因后续仅记录提交改标。
+
 ## 2026-10-24 新 Apple profiles、准确 d509 双端签包及 Mac 单端 Cloud 保存/重开接受
 
 两份人类提供 profiles 的公开 CMS/证书/Team/App ID/设备/Cloud/APS 资格已独立接受；原 BF947 证书实际 Team 仍 M42，括号4L5个人ID不作另一 Team。Mac profile UUID0fedf688-4ca5-47e8-9d43-e09afd4776f7、iOS UUID774bbb92-be03-48b7-b65c-f1dccc54b339，原下载字节不变，只按精确 UUID 安装副本；未新建证书/设备、调用自动 provisioning 或读取 p8 内容。
