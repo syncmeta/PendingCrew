@@ -1650,7 +1650,9 @@ mod tests {
             .map(|k| k.as_str())
             .collect();
         listed.sort();
-        let mut all: Vec<&str> = methods::ALL.to_vec();
+        // Notification methods are schema-public on their dedicated actor
+        // dispatch, not members of the ordinary client methods table.
+        let mut all: Vec<&str> = methods::ALL.iter().copied().chain(["notification.status", "notification.configure", "notification.installationRegister", "notification.installationRevoke", "notification.installationGet", "notification.requestLookup", "notification.deliveryGet", "notification.deliveryList"]).collect();
         all.sort();
         assert_eq!(listed, all);
         assert_eq!(s["apiVersion"], 3);

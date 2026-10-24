@@ -57,7 +57,7 @@ fn transaction(c: &Connection) -> Result<()> {
 }
 fn activate(c: &Connection) -> Result<()> {
     transaction(c)?;
-    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? != 20 {
+    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? != crate::schema::SCHEMA_VERSION {
         return Err(invalid());
     }
     if !exists(c)? {
@@ -972,7 +972,7 @@ mod tests {
             s.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            20
+            crate::schema::SCHEMA_VERSION
         );
         assert_eq!(
             s.conn()
@@ -989,7 +989,7 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("crewd-v19-pre-v20-")
+                    .starts_with(&format!("crewd-v19-pre-v{}-", crate::schema::SCHEMA_VERSION))
             })
             .collect::<Vec<_>>();
         assert_eq!(backups.len(), 1);

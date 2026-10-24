@@ -852,7 +852,7 @@ mod sqlite_knowledge_restore_guard_tests {
                 .conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            15
+            crate::schema::SCHEMA_VERSION
         );
     }
 }

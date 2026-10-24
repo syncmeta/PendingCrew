@@ -136,6 +136,7 @@ async fn registered_generated_agent_keeps_attach_watcher_token_after_polled_pani
                 ("XDG_CACHE_HOME".into(), cache.display().to_string()),
                 ("CLAUDE_CONFIG_DIR".into(), config.display().to_string()),
                 ("FAKE_CLAUDE_MODE".into(), "s5-agent".into()),
+                ("FAKE_CLAUDE_VERSION".into(), "2.1.301 (Claude Code)".into()),
                 ("S5_AGENT_FIXTURE_DIR".into(), phase.display().to_string()),
             ]),
             shutdown_limit: Duration::from_secs(10),

@@ -197,7 +197,8 @@ fn s1_literal_rpc_sibling_waits_real_driver_enrollment_and_pending_managed_peer_
         ])
         .arg(format!("S1_PEER_FIXTURE_DIR={}", fake.display()))
         .arg("--claude-env")
-        .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()));
+        .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()))
+        .args(["--claude-env", "FAKE_CLAUDE_VERSION=2.1.301 (Claude Code)"]);
     let mut daemon = spawn(c, &f, "daemon").unwrap();
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> io::Result<_> {
         wait_file(&control.join("configured.json"))?;

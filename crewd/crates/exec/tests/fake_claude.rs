@@ -1084,6 +1084,8 @@ async fn managed_refused_resume_never_respawns_or_moves_the_initial_body() {
     let log = dir.path().join("submitted.log");
     let mut config = DriverConfig::new(dir.path().join("run"));
     config.managed_hook_producer = true;
+    let original = "11111111-1111-4111-8111-111111111111";
+    config.managed_resume_id = Some(original.into());
     config.stop_grace = Duration::from_millis(500);
     let start = ClaudeStart {
         session_id: next_session_id(),
@@ -1098,7 +1100,7 @@ async fn managed_refused_resume_never_respawns_or_moves_the_initial_body() {
             ]),
             ..Default::default()
         },
-        ledger: Arc::new(MemoryLedger::with(Some("gone-managed-id"))),
+        ledger: Arc::new(MemoryLedger::with(Some(original))),
     };
     let (h, rx) = start_claude(start, config).await.unwrap();
     let mut r = Run {

@@ -184,6 +184,11 @@ fn c13_next(fake: &Fake, rx: &mpsc::Receiver<Vec<u8>>, released: &mut bool) -> O
     let Some(c) = C13_FIXTURE.get() else {
         return rx.recv().ok();
     };
+    // Managed activity must come from an authenticated task callback, never a
+    // terminal heartbeat. The existing gate is held inside submit instead.
+    if fake.managed() {
+        return rx.recv().ok();
+    }
     loop {
         c.check();
         if c.gate.join("arm").is_file() && !*released {
@@ -381,6 +386,16 @@ impl Fake {
                     "PostToolUse",
                     serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}}),
                 );
+                if let Some(c) = C13_FIXTURE.get().filter(|c| c.gate.join("arm").is_file() && !c.gate.join("released").is_file()) {
+                    assert!(self.managed_hook("PreToolUse", serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}})));
+                    std::fs::write(c.gate.join("managed-prompt"), prompt.as_bytes()).unwrap();
+                    std::fs::write(c.gate.join("busy-written"), b"authenticated task callback completed").unwrap();
+                    while !c.gate.join("release").is_file() {
+                        c.check();
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    std::fs::write(c.gate.join("released"), b"actual task release").unwrap();
+                }
                 self.managed_hook("Stop",serde_json::json!({"prompt_id":prompt,"stop_hook_active":false,"last_assistant_message":"Synthetic response only"}));
                 if case == "activity-after-stop" {
                     self.managed_hook("PreToolUse",serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}}));

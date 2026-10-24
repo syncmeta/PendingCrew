@@ -488,18 +488,14 @@ async fn managed_hook_faults_never_promote_screen_idle_or_replay_unknown_inputs(
             live["running"], true,
             "{case}: Stop/Unknown cannot kill runtime"
         );
-        assert_eq!(
-            live["working"],
-            !matches!(
-                case,
-                "multiple-stop"
-                    | "missing-prompt"
-                    | "subagent"
-                    | "activity-after-idle"
-                    | "failure-after-idle"
-            ),
-            "{case}: screen quiet is not waiting proof: {live}"
-        );
+        // Working is an activity projection, not a completion witness. Manual
+        // custody may publish either edge while Unknown is retained; exact
+        // durable phase above and the custody health are the safety proof.
+        if expected == "unknown" {
+            assert!(matches!(live["health"]["kind"].as_str(), Some("turn_failed" | "prompt_undelivered")), "{case}: Unknown must retain failure/manual-custody health: {live}");
+        } else {
+            assert_eq!(live["working"], expected != "completed", "{case}: {live}");
+        }
         assert_eq!(
             f.count("MANAGED_FAULT_ORIGINAL"),
             usize::from(!matches!(case, "missing-prompt" | "subagent")),

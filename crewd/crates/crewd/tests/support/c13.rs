@@ -84,7 +84,9 @@ impl Rig {
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .arg("serve")
                 .arg("--claude-env")
-                .arg("FAKE_CLAUDE_FULL_INPUT=1");
+                .arg("FAKE_CLAUDE_FULL_INPUT=1")
+                .arg("--claude-env")
+                .arg("FAKE_CLAUDE_VERSION=2.1.301 (Claude Code)");
             for (key, value) in [
                 ("FAKE_CLAUDE_LOG", f.log.clone()),
                 ("FAKE_CLAUDE_C13_GATE", gate),
@@ -457,7 +459,9 @@ impl Generated {
     }
     pub async fn arm(&self, r: &mut Rig, sid: &str) {
         std::fs::write(self.gate.join("arm"), []).unwrap();
-        t11::wait("actual heartbeat frame receipt", || {
+        let session = r.client.call("session.get", json!({"sessionId":sid})).await.unwrap();
+        r.client.call("message.post", json!({"channelId":format!("{}/lobby", session["crewId"].as_str().unwrap()),"text":"C13_CURRENT_HUMAN_BUSY_TASK","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
+        t11::wait("actual managed task callback receipt", || {
             self.gate.join("busy-written").is_file()
         })
         .await;
@@ -475,8 +479,10 @@ impl Generated {
         agent::fire_isolated(
             &self.settings,
             event,
-            json!({"hook_event_name":event,"tool_name":"mcp__crew__read_channel",
-   "tool_input":{},"tool_response":{"synthetic":true},"error":"synthetic failure"}),
+            json!({"hook_event_name":event,"session_id":self.agent_id,
+   "prompt_id":std::fs::read_to_string(self.gate.join("managed-prompt")).unwrap(),
+   "tool_name":"mcp__crew__read_channel","tool_input":{},
+   "tool_response":{"synthetic":true},"error":"synthetic failure"}),
             &f.home,
         )
         .await

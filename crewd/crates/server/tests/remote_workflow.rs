@@ -554,7 +554,7 @@ async fn remote_human_knowledge_recovery_routes_keep_context_and_live_grant() {
 }
 
 #[tokio::test]
-async fn public_pair_backup_revoke_restore_same_server_identity_never_revives_old_certificate_or_accept_witness()
+async fn public_pair_backup_refusal_preserves_revocation_same_server_identity_and_accept_witness()
  {
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Public remote restore evidence: {}", root.display());
@@ -570,7 +570,8 @@ async fn public_pair_backup_revoke_restore_same_server_identity_never_revives_ol
     local(&mut original.owner,"remote.revoke",json!({"grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"Actual pre-restore revoke"})).await;
     stopped(original).await;
     let lock = crewd_server::lock_data_dir(&root).unwrap();
-    crewd_store::backup::restore(&root, &backup).unwrap();
+    let refusal = crewd_store::backup::restore(&root, &backup).unwrap_err();
+    assert!(refusal.to_string().contains("Core-only restore cannot replace a knowledge workspace"));
     drop(lock);
     assert_eq!(std::fs::read(&backup).unwrap(), old_bytes);
     assert_eq!(
@@ -579,8 +580,8 @@ async fn public_pair_backup_revoke_restore_same_server_identity_never_revives_ol
     );
     let mut restored = service(&root).await;
     let status = local(&mut restored.owner, "remote.status", json!({})).await;
-    assert_eq!(status["configuration"]["enabled"], false);
-    assert_eq!(status["listening"], false);
+    assert_eq!(status["configuration"]["enabled"], true);
+    assert_eq!(status["listening"], true);
     let confirmed: RemoteAcceptResult =
         serde_json::from_value(local(&mut restored.owner, "remote.accept", accept_input).await)
             .unwrap();
@@ -1070,9 +1071,14 @@ async fn slow_tls_reader_revoke_cancels_partial_frame_denies_queued_mutation_and
     );
     let crew = local(&mut running.owner,"crew.create",json!({"title":"Slow remote transport","workingDirectory":root.join("work").to_str().unwrap()})).await;
     let source = local(&mut running.owner,"todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew["id"],"text":"existing read fixture"})).await;
-    let document = local(&mut running.owner,"document.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew["id"],"title":"Slow full response","body":"x".repeat(1_000_000)})).await;
+    // Four bounded current messages form the same >kernel-buffer response.
+    // This validates transport cancellation without withdrawn document CRUD.
+    let channel = format!("{}/lobby", crew["id"].as_str().unwrap());
+    for _ in 0..4 {
+        local(&mut running.owner, "message.post", json!({"channelId":channel,"text":"x".repeat(250_000)})).await;
+    }
     let mut wire = serde_json::to_vec(
-        &json!({"id":1000,"method":"document.get","params":{"id":document["document"]["id"]}}),
+        &json!({"id":1000,"method":"message.list","params":{"channelId":channel}}),
     )
     .unwrap();
     wire.push(b'\n');
@@ -1319,9 +1325,14 @@ async fn remote_global_shutdown_retires_a_still_authorized_kernel_blocked_writer
     assert!(socket_set_buffer(client_fd, libc::SO_RCVBUF) < 100_000);
     assert!(socket_set_buffer(server_fd, libc::SO_SNDBUF) < 100_000);
     let crew = local(&mut running.owner,"crew.create",json!({"title":"Unrevoked drain fixture","workingDirectory":root.join("work").to_str().unwrap()})).await;
-    let document = local(&mut running.owner,"document.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew["id"],"title":"Actual drain frame","body":"d".repeat(1_000_000)})).await;
+    // Four bounded current messages form the same >kernel-buffer response.
+    // This validates transport cancellation without withdrawn document CRUD.
+    let channel = format!("{}/lobby", crew["id"].as_str().unwrap());
+    for _ in 0..4 {
+        local(&mut running.owner, "message.post", json!({"channelId":channel,"text":"d".repeat(250_000)})).await;
+    }
     let mut wire = serde_json::to_vec(
-        &json!({"id":9000,"method":"document.get","params":{"id":document["document"]["id"]}}),
+        &json!({"id":9000,"method":"message.list","params":{"channelId":channel}}),
     )
     .unwrap();
     wire.push(b'\n');

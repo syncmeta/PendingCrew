@@ -1325,18 +1325,18 @@ impl Walk {
         if op == Op::FaultLatch {
             Box::pin(self.latch_fault_sequence(r))
         } else {
-            Box::pin(self.apply_selected(r, op, session, live))
+            self.apply_selected(r, op, session, live)
         }
     }
-    async fn apply_selected(
-        &mut self,
-        r: &mut Rig,
+    fn apply_selected<'a>(
+        &'a mut self,
+        r: &'a mut Rig,
         op: Op,
         session: String,
         live: Option<String>,
-    ) -> Result<bool, String> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + 'a>> {
         match op {
-            Op::HumanMention | Op::SessionMention | Op::Dm | Op::Listener => {
+            Op::HumanMention | Op::SessionMention | Op::Dm | Op::Listener => Box::pin(async move {
                 let (channel, sender, mentions) = match op {
                     Op::HumanMention => (
                         "c/lobby",
@@ -1365,8 +1365,10 @@ impl Walk {
                 if op == Op::HumanMention && self.rng.index(4) == 0 {
                     r.port.lock().window_cap = Some(1);
                 }
-            }
-            Op::System | Op::Timer | Op::AskAnswer => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::System | Op::Timer | Op::AskAnswer => Box::pin(async move {
                 let kind = match op {
                     Op::Timer => WakeKind::Timer,
                     Op::AskAnswer => WakeKind::AskAnswer,
@@ -1399,8 +1401,10 @@ impl Walk {
                     .handle(Input::Collab(CollabFact::WakeEnqueued { session }))
                     .await;
                 r.settle().await;
-            }
-            Op::Start => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Start => Box::pin(async move {
                 self.command(r, "Cmd::Start".into(), |reply| Cmd::Start {
                     req: StartSession {
                         codex_options: None,
@@ -1418,8 +1422,10 @@ impl Walk {
                     reply,
                 })
                 .await;
-            }
-            Op::Resume | Op::LaunchedOk | Op::LaunchedErr => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Resume | Op::LaunchedOk | Op::LaunchedErr => Box::pin(async move {
                 let launches_before = r.exec.lock().launch_outcomes.len();
                 let targeted_session = session.clone();
                 if op == Op::LaunchedErr {
@@ -1443,14 +1449,18 @@ impl Walk {
                         .iter()
                         .any(|(s, ok)| s == &targeted_session && *ok == expected_ok));
                 }
-            }
-            Op::Stop => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Stop => Box::pin(async move {
                 if self.rng.index(2) == 0 {
                     r.exec.lock().hang_on_stop.insert(session.clone());
                 }
                 self.stop(r, session).await?;
-            }
-            Op::NudgeText | Op::NudgeKeys => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::NudgeText | Op::NudgeKeys => Box::pin(async move {
                 let input = if op == Op::NudgeText {
                     "sim nudge"
                 } else {
@@ -1468,8 +1478,10 @@ impl Walk {
                     }))
                     .await;
                 r.settle().await;
-            }
-            Op::Answer => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Answer => Box::pin(async move {
                 let fingerprint = r
                     .core
                     .live
@@ -1500,8 +1512,10 @@ impl Walk {
                     },
                 )
                 .await;
-            }
-            Op::SetCaptain => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::SetCaptain => Box::pin(async move {
                 self.command(r, format!("Cmd::SetCaptain {session}"), |reply| {
                     Cmd::SetCaptain {
                         crew: "c".into(),
@@ -1510,8 +1524,10 @@ impl Walk {
                     }
                 })
                 .await;
-            }
-            Op::Recover => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Recover => Box::pin(async move {
                 let latches = r.port.lock().latches.clone();
                 let (scope, id) = latches
                     .get(self.rng.index(latches.len().max(1)))
@@ -1521,8 +1537,10 @@ impl Walk {
                     Cmd::Recover { scope, id, reply }
                 })
                 .await;
-            }
-            Op::SetSettings => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::SetSettings => Box::pin(async move {
                 let update = SettingsUpdate {
                     lang: Some(if self.rng.index(2) == 0 {
                         Lang::Zh
@@ -1536,21 +1554,27 @@ impl Walk {
                     Cmd::SetSettings { update, reply }
                 })
                 .await;
-            }
-            Op::Hibernate => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Hibernate => Box::pin(async move {
                 let deadline_ms = Some(if self.rng.index(2) == 0 { 0 } else { 2_000 });
                 self.command(r, format!("Cmd::Hibernate {deadline_ms:?}"), |reply| {
                     Cmd::Hibernate { deadline_ms, reply }
                 })
                 .await;
-            }
-            Op::Shutdown => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Shutdown => Box::pin(async move {
                 let (tx, rx) = oneshot::channel();
                 self.replies.add("Input::Shutdown".into(), rx);
                 r.core.handle(Input::Shutdown(tx)).await;
                 r.settle().await;
-            }
-            Op::AdvanceSmall | Op::AdvanceBackoff | Op::AdvanceSixHours => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::AdvanceSmall | Op::AdvanceBackoff | Op::AdvanceSixHours => Box::pin(async move {
                 let delta = match op {
                     Op::AdvanceSmall => 1 + self.rng.index(2_000) as i64,
                     Op::AdvanceBackoff => 180_000,
@@ -1558,21 +1582,25 @@ impl Walk {
                 };
                 self.record(format!("clock+={delta}"));
                 r.tick(delta).await;
-            }
-            Op::RestartAnswered => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::RestartAnswered => Box::pin(async move {
                 let resume = self.rng.index(2) == 0;
                 if !self.restart_answer(r, resume).await {
                     return Ok(false);
                 }
-            }
-            Op::FaultLatch => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::FaultLatch => Box::pin(async move {
                 unreachable!("fault sequence dispatched before ordinary operation future")
-            }
+            }),
             Op::FaultClaim
             | Op::FaultAck
             | Op::FaultAckCursor
             | Op::FaultRender
-            | Op::FaultSettle => {
+            | Op::FaultSettle => Box::pin(async move {
                 let f = match op {
                     Op::FaultClaim => MemFault::Claim,
                     Op::FaultAck => MemFault::Ack,
@@ -1581,26 +1609,34 @@ impl Walk {
                     _ => MemFault::Settle,
                 };
                 r.port.fail_next(f);
-            }
-            Op::Progress => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Progress => Box::pin(async move {
                 r.core.handle(Input::Progress { session }).await;
                 r.settle().await;
-            }
-            Op::BinaryReplaced => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::BinaryReplaced => Box::pin(async move {
                 r.core
                     .handle(Input::BinaryReplaced { crew: "c".into() })
                     .await;
                 r.settle().await;
-            }
-            Op::StreamEnded => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::StreamEnded => Box::pin(async move {
                 let Some(live) = live else {
                     return Ok(false);
                 };
                 r.exec.end_stream(&live);
                 r.settle().await;
-            }
-            Op::Crash => unreachable!("crash consumes Rig in the driver"),
-            _ => {
+                r.core.shutdown_done();
+                Ok(true)
+            }),
+            Op::Crash => Box::pin(async move { unreachable!("crash consumes Rig in the driver") }),
+            _ => Box::pin(async move {
                 let Some(live) = live else {
                     return Ok(false);
                 };
@@ -1741,11 +1777,10 @@ impl Walk {
                 self.record(format!("SessionEvent {live} {event:?}"));
                 r.exec.emit(&live, event);
                 r.settle().await;
-            }
+                r.core.shutdown_done();
+                Ok(true)
+            }),
         }
-        // The real actor calls this after handle; the direct harness must too.
-        r.core.shutdown_done();
-        Ok(true)
     }
     async fn restart_answer(&mut self, r: &mut Rig, resume: bool) -> bool {
         if let Some(prompt) = r.core.restart_prompt {
@@ -1810,7 +1845,11 @@ impl Walk {
     }
 }
 
-async fn run(seed: u64, steps: usize) -> Walk {
+// Heap-own the large synthetic walk before polling it. This keeps the
+// unoptimized async state out of each test caller's stack; execution and
+// all seed/step/cleanup assertions remain identical.
+fn run(seed: u64, steps: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = Walk>>> {
+    Box::pin(async move {
     let mut w = Walk::new(seed);
     // Small synthetic loop thresholds exercise the same real breaker/latch
     // persistence path within 400 steps; this is not a production settings edit.
@@ -1930,6 +1969,7 @@ async fn run(seed: u64, steps: usize) -> Walk {
         w.latch_skip_reasons
     );
     w
+    })
 }
 
 fn env_number(name: &str, default: usize) -> usize {

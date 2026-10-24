@@ -52,6 +52,7 @@ impl Serve {
             .args(["serve", "--claude-env"])
             .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()))
             .args(["--claude-env", "FAKE_CLAUDE_FULL_INPUT=1"])
+            .args(["--claude-env", "FAKE_CLAUDE_VERSION=2.1.301 (Claude Code)"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr)
@@ -125,6 +126,13 @@ fn start_pair(f: &Fixture) -> (String, String, String) {
     wait("initial submissions", || {
         f.count("SYNTHETIC_ALPHA") == 1 && f.count("SYNTHETIC_BETA") == 1
     });
+    // Body logging precedes Stop/idle hooks. Only the matched durable receipts
+    // establish that both managed turns may accept the next Human task.
+    let conn = rusqlite::Connection::open_with_flags(f.data.join("crewd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    wait("initial managed idle receipts", || conn.query_row(
+        "SELECT COUNT(*) FROM native_execution_receipts r JOIN native_execution_runtimes n USING(runtime_id) WHERE n.session_id IN (?1,?2) AND r.phase='completed'",
+        rusqlite::params![cap,worker], |r|r.get::<_,i64>(0)).unwrap()==2);
+
     (crew["id"].as_str().unwrap().to_string(), cap, worker)
 }
 fn message_ids(f: &Fixture) -> Vec<(i64, String)> {
@@ -200,7 +208,7 @@ fn note(key: &str) -> &'static str {
     crewd_wake::text::get(crewd_wake::text::Lang::Zh, key)
 }
 #[test]
-fn kill_dash_nine_then_restart_asks_first_and_delivers_each_wake_once() {
+fn crash_reopen_and_explicit_resume_preserve_old_wakes_without_automatic_replay() {
     let f = Fixture::new();
     let mut first = Serve::start(&f);
     let (cid, cap, worker) = start_pair(&f);
@@ -255,30 +263,29 @@ fn kill_dash_nine_then_restart_asks_first_and_delivers_each_wake_once() {
         );
     }
     assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
-    rpc(
-        &f,
-        "restart.answer",
-        json!({"id":prompt["id"],"answer":"resume"}),
-    )
-    .unwrap();
-    wait("restart interrupted and timer notes", || {
-        f.count(note("restart.interrupted")) == 1 && f.count("SYNTHETIC_TIMER") == 1
-    });
-    std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(f.count(note("restart.interrupted")), 1);
-    assert_eq!(f.count("SYNTHETIC_TIMER"), 1);
+    rpc(&f, "restart.answer", json!({"id":prompt["id"],"answer":"later"})).unwrap();
+    rpc(&f, "session.resume", json!({"sessionId":worker})).unwrap();
+    wait("explicit original session resumed", || rpc(&f,"session.live",json!({"sessionId":worker})).unwrap()["running"] == true);
+    assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
+    assert_eq!(f.count(note("restart.interrupted")), 0);
+    rpc(&f,"message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_NEW_AFTER_EXPLICIT_RESUME","mentions":[{"kind":"session","targetId":worker}]})).unwrap();
+    wait("new Human task reaches explicit resumed session", || f.count("SYNTHETIC_NEW_AFTER_EXPLICIT_RESUME") == 1);
+    assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
+    assert_eq!(f.count("SYNTHETIC_ALPHA"), 1);
+    assert_eq!(f.count("SYNTHETIC_BETA"), 1);
     let after_ids = message_ids(&f);
     assert!(
         before_ids.iter().all(|id| after_ids.contains(id)),
         "restart lost historical message identities"
     );
-    assert_storage(&f);
+    // Quiescent storage assertions belong after the owned server exits; a
+    // logged body can still have a legitimate in-flight ACK while it is live.
     second.term();
     assert_registry_clean(&f);
     assert_storage(&f);
 }
 #[test]
-fn hibernate_result_reaches_client_then_exits_and_restart_note_is_once() {
+fn hibernate_response_and_physical_cleanup_reopen_without_implicit_tasks() {
     let f = Fixture::new();
     let mut first = Serve::start(&f);
     let (cid, cap, worker) = start_pair(&f);
@@ -286,13 +293,6 @@ fn hibernate_result_reaches_client_then_exits_and_restart_note_is_once() {
         [&cap, &worker].iter().all(|sid| {
             rpc(&f, "session.live", json!({"sessionId":sid})).unwrap()["working"] == false
         })
-    });
-    // fake ready has a real output activity edge but no long provider tool call.
-    // Wake it, observe actual session.live working, then hibernate in that window.
-    rpc(&f,"message.post",json!({"channelId":format!("{}/lobby",cid),"text":"SYNTHETIC_HIBERNATE_ACTIVE","mentions":[{"kind":"session","targetId":cap}]})).unwrap();
-    wait("actual driver working edge", || {
-        f.count("SYNTHETIC_HIBERNATE_ACTIVE") == 1
-            && rpc(&f, "session.live", json!({"sessionId":cap})).unwrap()["working"] == true
     });
     let began = Instant::now();
     let response = rpc(&f, "crewd.hibernate", json!({"deadlineSecs":0}))
@@ -303,43 +303,19 @@ fn hibernate_result_reaches_client_then_exits_and_restart_note_is_once() {
     assert_registry_clean(&f);
     assert_storage(&f);
     let mut second = Serve::start(&f);
-    let prompt = rpc(&f, "restart.pending", Value::Null).unwrap();
-    assert_eq!(prompt["reason"], "hibernate");
-    assert!(
-        prompt["interrupted"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(cap)),
-        "{prompt}"
-    );
-    rpc(
-        &f,
-        "restart.answer",
-        json!({"id":prompt["id"],"answer":"resume"}),
-    )
-    .unwrap();
-    let until = Instant::now() + Duration::from_secs(15);
-    while f.count(note("hibernate.interrupted")) != 1 {
-        if Instant::now() >= until {
-            eprintln!(
-                "synthetic cap live: {:?}",
-                rpc(&f, "session.live", json!({"sessionId":cap}))
-            );
-            eprintln!(
-                "synthetic cap native: {:?}",
-                rpc(&f, "session.inspect", json!({"sessionId":cap}))
-            );
-            eprintln!(
-                "synthetic serve stderr: {}",
-                std::fs::read_to_string(f.root.path().join("serve-stderr.log")).unwrap_or_default()
-            );
-            panic!("timed out: hibernate interrupted note");
-        }
-        std::thread::sleep(Duration::from_millis(25));
+    for sid in [&cap, &worker] {
+        assert_eq!(rpc(&f,"session.live",json!({"sessionId":sid})).unwrap()["running"],false);
     }
-    std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(f.count(note("hibernate.interrupted")), 1);
+    assert_eq!(f.count("SYNTHETIC_ALPHA"), 1);
+    assert_eq!(f.count("SYNTHETIC_BETA"), 1);
+    assert_eq!(f.count(note("hibernate.interrupted")), 0);
+    rpc(&f,"session.resume",json!({"sessionId":cap})).unwrap();
+    rpc(&f,"message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_NEW_AFTER_HIBERNATE","mentions":[{"kind":"session","targetId":cap}]})).unwrap();
+    wait("new Human task after explicit hibernate resume",||f.count("SYNTHETIC_NEW_AFTER_HIBERNATE")==1);
+    assert_eq!(f.count(note("hibernate.interrupted")), 0);
+    let resumed = registry(&f.data);
     second.term();
+    assert_old_children_gone(&resumed);
     assert_registry_clean(&f);
     assert_storage(&f);
 }

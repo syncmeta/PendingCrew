@@ -815,7 +815,7 @@ async fn official_restore_same_db_id_histories_judgments_and_request_without_loa
         .requirement_id
         .unwrap();
     let settled = f.settled(JudgmentSourceKind::Requirement, fresh).await;
-    assert_eq!(settled.diagnostic["reason"], "unconfigured");
+    assert_eq!(settled.diagnostic["reason"], "awaiting_manual_resume");
     assert_eq!(fake.requests().len(), 0);
     f.close().await;
 }

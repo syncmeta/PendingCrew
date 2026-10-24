@@ -519,7 +519,13 @@ async fn registry_failure_kills_the_child_even_if_it_floods_the_pty() {
     .err()
     .expect("必须报错");
     assert!(matches!(err, StartError::Registry(_)), "{err:?}");
-    assert!(registry.entries().is_empty());
+    // Failed persistence retains the restrictive in-memory obligation. Actual
+    // launch failure must nevertheless reap its exact physical child; it must
+    // not erase provenance merely because orphan-file IO is unavailable.
+    let entries = registry.entries();
+    assert_eq!(entries.len(), 1);
+    assert!(matches!(crewd_exec::registry::probe(entries[0].1.pid), crewd_exec::registry::ProbeResult::Missing));
+    assert!(!env.dir.path().join("missing/r.json").exists());
 }
 
 fn write_auth_failure(projects: &Path, id: &str) {

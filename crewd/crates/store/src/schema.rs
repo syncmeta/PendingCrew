@@ -2782,8 +2782,9 @@ mod organization_version_tests {
     }
     fn exact_v11_fixture() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        conn.execute_batch("DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+        initialize_legacy_fixture(&conn, 9).unwrap();
+        migrate_v10(&conn).unwrap();
+        migrate_v11(&conn).unwrap();
         conn
     }
     #[test]
@@ -2839,8 +2840,12 @@ mod organization_version_tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("crewd.db");
         {
-            let store = crate::Store::open(&path).unwrap();
-            store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now'); DROP TABLE local_client_trust; DROP TABLE public_command_receipts; DROP TABLE work_followup_facts; DELETE FROM meta WHERE key='work_followup_baseline_required'; DROP TABLE native_execution_inputs; DROP TABLE native_execution_receipts; DROP TABLE native_execution_runtimes; PRAGMA user_version=11;").unwrap();
+            let conn = Connection::open(&path).unwrap();
+            initialize_legacy_fixture(&conn, 9).unwrap();
+            migrate_v10(&conn).unwrap();
+            migrate_v11(&conn).unwrap();
+            crate::mark_identity(&conn).unwrap();
+            conn.execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('v11-work','retained','now','now');").unwrap();
         }
         let store = crate::Store::open(&path).unwrap();
         assert_eq!(version(store.conn()), SCHEMA_VERSION);
@@ -2939,7 +2944,7 @@ mod resource17_tests {
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            18
+            SCHEMA_VERSION
         );
         assert_eq!(
             c.query_row(
@@ -3024,7 +3029,7 @@ mod resource17_tests {
             )
             .unwrap();
         migrate_guarded(&c, Some(&dir.path().join("backups"))).unwrap();
-        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), 19);
+        assert_eq!(one::<i64>(&c, "PRAGMA user_version"), SCHEMA_VERSION);
         assert_eq!(
             c.query_row(
                 "SELECT name FROM view_folders WHERE id='retained-folder'",
@@ -3070,27 +3075,21 @@ mod resource17_tests {
         original15(&c);
         seed(&c);
         migrate_v17(&c).unwrap();
-        let schema: String = c
-            .query_row(
-                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master WHERE name NOT LIKE 'notification_%' ORDER BY name)",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let schema: Vec<(String, Option<String>)> = c.prepare(
+            "SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'notification_%' ORDER BY name"
+        ).unwrap().query_map([], |r| Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         migrate_guarded(&c, Some(&dir.path().join("backups"))).unwrap();
         assert_eq!(
             c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            19
+            SCHEMA_VERSION
         );
-        let after: String = c
-            .query_row(
-                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master WHERE name NOT LIKE 'notification_%' ORDER BY name)",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(schema, after);
+        // Later current migrations may add their own tables/indexes; every
+        // original non-notification schema object must remain byte-identical.
+        for (name, original) in schema {
+            let after: Option<String> = c.query_row("SELECT sql FROM sqlite_master WHERE name=?1", [&name], |r| r.get(0)).unwrap();
+            assert_eq!(after, original, "original schema object {name}");
+        }
         assert_eq!(
             c.query_row(
                 "SELECT name FROM view_folders WHERE id='retained-folder'",

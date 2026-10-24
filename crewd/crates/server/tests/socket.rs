@@ -771,7 +771,7 @@ async fn subscribe_with_unknown_topic_is_invalid_params_and_subscribes_nothing()
     let dir = tempfile::tempdir().unwrap();
     let _stop = start(dir.path()).await;
     let mut sub = Client::connect(dir.path()).await;
-    for (id, topics) in [(1, json!(["todo"])), (2, json!(["message", "nope"]))] {
+    for (id, topics) in [(1, json!(["not-a-topic"])), (2, json!(["message", "nope"]))] {
         sub.send_raw(
             &json!({"id":id,"method":"events.subscribe","params":{"topics":topics}}).to_string(),
         )

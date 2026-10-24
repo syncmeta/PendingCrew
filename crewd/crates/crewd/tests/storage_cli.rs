@@ -110,7 +110,7 @@ fn crew_titles(data: &Path) -> Vec<String> {
 /// serve 在跑时：备份照常（自己的只读连接）、检查照常；恢复被数据目录锁挡住。
 /// 停掉之后恢复，再起服务看到的是备份时的数据，原来的库挪在一边。
 #[test]
-fn backup_while_serving_then_restore_after_stopping() {
+fn backup_while_serving_then_restore_refuses_knowledge_rollback_after_stopping() {
     let data = tempfile::tempdir().unwrap();
     add_crew(data.path(), "a");
     let d = start(data.path());
@@ -152,25 +152,25 @@ fn backup_while_serving_then_restore_after_stopping() {
     assert!(before.iter().any(|t| t == "备份之后建的"), "{before:?}");
     drop(d);
 
-    ok(crewd(data.path())
-        .args(["restore", "--from"])
-        .arg(&path)
-        .output()
-        .unwrap());
+    let backup_bytes = std::fs::read(&path).unwrap();
+    let refused = crewd(data.path()).args(["restore", "--from"]).arg(&path).output().unwrap();
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("Core-only restore cannot replace a knowledge workspace"));
+    assert_eq!(std::fs::read(&path).unwrap(), backup_bytes);
     let names: Vec<String> = std::fs::read_dir(data.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     assert!(
-        names.iter().any(|n| n.starts_with("crewd.db.replaced-")),
+        !names.iter().any(|n| n.starts_with("crewd.db.replaced-")),
         "{names:?}"
     );
     let _d = start(data.path());
     let after = crew_titles(data.path());
     assert!(after.iter().any(|t| t == "示例 a"), "{after:?}");
     assert!(
-        !after.iter().any(|t| t == "备份之后建的"),
-        "恢复的是备份时的数据：{after:?}"
+        after.iter().any(|t| t == "备份之后建的"),
+        "被拒恢复不能回滚当前数据：{after:?}"
     );
 }
 
