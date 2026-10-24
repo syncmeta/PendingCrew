@@ -212,6 +212,7 @@ targets:
       # The workspace observes the same SQLite store and renderer contracts.
       - path: Sources/PersonalSync
       - path: Sources/Presentation
+      - path: Sources/Notifications
       - path: Sources/CrewdRemote/CrewdKnowledgeWire.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeStore.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeViewRuntime.swift
