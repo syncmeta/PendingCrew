@@ -26,6 +26,9 @@ struct MacThreePaneView: View {
         }detail:{
             CrewCenterView().environmentObject(sessionRunner)
                 .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
+                // The shared workspace header reaches the existing transparent
+                // titlebar; a full-width detail keeps native window-button space.
+                .ignoresSafeArea(.container,edges:columnVisibility == .detailOnly ? [] : .top)
         }
         .navigationSplitViewStyle(.balanced).tint(Theme.Palette.accent)
         .onChange(of: crewStore.selectedCrewId) { old, new in

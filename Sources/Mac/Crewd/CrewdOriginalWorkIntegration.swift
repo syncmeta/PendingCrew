@@ -69,14 +69,10 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
     var body: some View {
-        #if os(macOS)
-        CrewdOriginalMessages(workspace:workspace,header:AnyView(sectionHeader),openSession:openSession){sectionContent}
-        #else
         VStack(spacing:0){
             sectionHeader
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
         }
-        #endif
     }
     private var sectionHeader:some View {
         VStack(spacing:0){
