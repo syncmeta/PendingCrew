@@ -1,3 +1,12 @@
 exports/
 draft-evidence/
 __pycache__/
+
+# Local full export sets and superseded refinement candidates remain on disk.
+refined-exports/
+sidebar-exports/
+refined-proofs/
+PendingCrew-SwiftUI-Four-Proofs.sketch
+PendingCrew-SwiftUI-Refined.sketch
+PendingCrew-SwiftUI-Refined-Final.sketch
+refined-native-*.png

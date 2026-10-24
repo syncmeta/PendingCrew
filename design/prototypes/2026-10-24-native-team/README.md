@@ -1,3 +1,11 @@
+# 当前主交付：SwiftUI 精修 · 侧栏会话导航
+
+打开 `PendingCrew-SwiftUI-Sidebar-Navigation.sketch`。70个原生可编辑状态，sidebar机组根→行尾箭头推入会话子页→返回保留原Tab；右侧铺满，顶层Tab不加分隔线。完整说明、源码对照、Codex四页覆盖与核验边界见 [SIDEBAR-DESIGN.md](SIDEBAR-DESIGN.md)。原生代表图见 `sidebar-previews/`。
+
+当前新文件已通过schema/原生CLI全部70态导出与全图可达检查；因保护用户正在操作的Sketch窗口，未做新侧栏版GUI播放。下文旧49态原型及其GUI记录属于历史版本，不是当前交付验收。所有旧文件与可能的人工设计均保留。
+
+---
+
 # PendingCrew · 私人团队 · 原生 Sketch
 
 主文件：`PendingCrew-PrivateTeam.sketch`。在 Sketch.app 打开，选择「01 群聊」，点击预览/播放按钮。49 个原生画板、6 个可复用 Symbol 源组件、1 个 Symbol 实例。文字和矢量可直接编辑；保存 Sketch 文件即可保留自己的设计修改。

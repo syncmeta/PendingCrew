@@ -1,0 +1,54 @@
+{
+  "status": "ACCEPT_STATIC_DESIGN_AND_NATIVE_DOCUMENT_STRUCTURE",
+  "file": "/Users/hey/Untitled/Pendingname/PendingCrew/design/prototypes/2026-10-24-native-team/PendingCrew-SwiftUI-Sidebar-Navigation.sketch",
+  "sha256": "3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db",
+  "independentChecks": {
+    "zipJSONRead": true,
+    "uniqueLayerIDs": 8877,
+    "artboards": 70,
+    "symbols": 159,
+    "symbolInstances": 1854,
+    "resolvedNativeFlows": 2362,
+    "nativeBackLinks": 44,
+    "allArtboardsReachableFromSingleStart": true,
+    "previewImagesPersonallyViewed": 12
+  },
+  "acceptedScope": [
+    "238pt single sidebar; root crew selector and arrow-to-conversation subpage; domain-specific back targets preserve their tab",
+    "No independent 196pt conversation column or 18pt collapse edge; common top tabs and single search; original footer proportions",
+    "New crew pending state lacks old conversation column and tabs; five metadata fields and composer retained",
+    "Todo action stays within card and 3 open plus 2 completed sample counts agree; document samples remain document references",
+    "Codex source-shaped overview/execution/history/settings plus independent inputs and confirmations; unknown catalog not fabricated; settings draft separated from observed state; destructive history consequences and unknown-result handling explicit",
+    "Editable native Symbols, text and vector layers with valid native destinations; no image-only artboards"
+  ],
+  "sourceReferences": [
+    "Sources/Mac/Crewd/CrewdCodexControlsView.swift",
+    "Sources/Mac/Crewd/CrewdOriginalSessionControls.swift",
+    "Sources/Mac/Crewd/CrewdCodexInputViews.swift",
+    "design/prototypes/2026-10-24-native-team/refine_sidebar.py"
+  ],
+  "mustFix": [],
+  "limitations": [
+    "Current 70-state Sidebar document has NOT been played in Sketch GUI. Historical 54-state playback applies only to its original file.",
+    "Native flow reachability and prefilled confirmation states do not establish runtime data persistence, arbitrary text entry, real backend execution, authorization or destructive operations.",
+    "Arrow is the implemented prototype navigation gesture; genuine double-click is a product runtime gate, not proven by Sketch.",
+    "Actual new SwiftUI sidebar runtime must independently confirm sidebar-local back/title/plus, common top tabs and search, native window controls, draft/tab retention and no task start/resume.",
+    "Prototype capability examples are not live backend observations."
+  ],
+  "previewHashes": {
+    "01 群聊.png": "6306faee276d899ed21054ca63689f67e046d54cae945dd1659803b03fee68ea",
+    "07 新建机组.png": "3e56368f99a5531872f1cb8ce4fb32686a7686805a7ab62f90192241686c0728",
+    "14 会话选择.png": "2d1e75c8b3aebc2107047d490fa5811484ea889732db1135045cd1fe6ef13c5b",
+    "15 人待办.png": "f8b4727bd5a822cefe1c608fa9594aa17fae46b9f959e17076d7fe45bd5b2a85",
+    "21 文档数据.png": "fcbb05470040c770a25c3771b649f80473717d6d7f70d97280928fe253b13e96",
+    "38 Codex控制.png": "517e0e536102ebdbf1328a33f51b12ac445fdd8d2d1c4e60b95ace5c22afbc3a",
+    "55 Codex执行.png": "d768b94ec2b491c3b078dad2578595e2c821724ac99e473076b7af5a07fc5c6d",
+    "56 Codex历史.png": "fabdc314424bd6fdeee8e93793f74002e0f5336a18d7c4d515218353638b7a39",
+    "57 Codex设置.png": "d6e865aafedc20c19c8a38c4b9c157fe5be7ba1ae6971679f5d5f9a989115f9b",
+    "58 Codex高级设置.png": "605838e4489858b7e35e68b4dfd87fbf24ad0c5655c81411fc6d52a4e88f1aed",
+    "66 Codex输入选择.png": "4e6080ad2eaa192fa8d634fb4e003409ec4bb4aaecbdad7a50e6497b7aadf0c9",
+    "67 Codex删除确认.png": "b9251f2b927516cc159327e70e2f5267105643f94eaf5aa61553061d6f048646"
+  },
+  "guiActions": 0,
+  "productSourceWrites": 0
+}

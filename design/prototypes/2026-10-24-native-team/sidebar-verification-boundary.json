@@ -1,0 +1,31 @@
+{
+  "newDelivery": "PendingCrew-SwiftUI-Sidebar-Navigation.sketch",
+  "newDeliverySHA256": "3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db",
+  "newDeliveryNativePlayback": false,
+  "reason": "GUI automation stopped at root instruction after CUA reported user changes; existing documents and possible unsaved edits preserved. No new document was opened after this stop.",
+  "newDeliveryEvidence": "CLI schema, native Symbol/Flow validation, 70 native CLI exports; independent review pending",
+  "priorPlaybackFile": "PendingCrew-SwiftUI-Refined-Final.sketch",
+  "priorPlaybackSHA256": "8486121ce58e88204c757a94c888314e18c89f62e0c1c3e61cde9f63228992ed",
+  "priorObservedFlow": [
+    "01 群聊",
+    "07 新建机组",
+    "08 填写机组",
+    "09 已创建机组",
+    "21 文档数据",
+    "22 片段编辑",
+    "53 提交结果未知",
+    "22 片段编辑 via native back",
+    "23 片段保存"
+  ],
+  "priorEvidence": [
+    "refined-native-start.png",
+    "refined-native-new.png",
+    "refined-native-created.png",
+    "refined-native-unknown.png",
+    "refined-native-back.png",
+    "refined-native-saved.png"
+  ],
+  "editsPerformedInSketch": false,
+  "uploadedToWorkspace": false,
+  "guiLease": "released; no more GUI actions"
+}
