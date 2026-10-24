@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 个人草稿完整界面模块交付 Mac，手机保存问题继续按实际结果核对
+
+个人同步与本机草稿界面源 `f7e6ece6932394f8ab2f1a7cdb343169c2315123` 已整合：原文预览、当前来源和设备版本数量、技术 ID 折叠、窄屏操作排列及明确的本机保存反馈。保留原初始化、账号、来源、CAS 与 Unknown 边界，不提前开放可能覆盖未读原文的空编辑器。保存提示只认原持久分支中的完整草稿一致性，不把内存相等、按钮点击或本机保存冒称云同步成功。原精确加载任务7项与实际保存状态13项证据独验接受；既有存储/API未改。
+
+Mac 私域实际一次保存、正常退出与重开后，同一 branch/key/writer/revision1 和原文保留，零执行。实测发现展开详情会裁切标题与保存按钮；最小 Mac 专属修复 `0273df8cfa62b63a532df97ef74b802c35d09a29` 已合入，实际上下滚动及保存/关闭可达性通过。iOS 条件后原源与 f7 一致，保留准确 f7 手机候选，不重建或改标。准确新 normal 均绑定各自完整1958项输入和478 Rust输入；f7 双端开发包、0273 Mac 开发包独立签封通过，复用未变业务范围，不新增 CI 或 Linux 构建。
+
+Mac 日用 **0.1.44/20750.24346，准确源0273** 已安装：fresh 检查无新用户工作后正常退出旧 AE0，经原三个阶段完整备份并整包替换；QA 独验安装115项后唯一普通无参首开，本机 ready、原 Qincheng 与 stopped1 自然保留，native runtime/receipts/inputs全0，无 provider 子进程及自动启动/恢复。根全文受领报告并亲看最终实图。日用 Cloud 同意仍未设置。旧整包与 ZIP 均保留，仍是本机 Apple Development Debug/nonhermetic 交付，不冒公证或 Release 分发。
+
+手机实际仍 **ae0/20750.17582**。人类已确认正常 Cloud 同意和 Mac 原文读回，其独立保存为“按钮正常，点击后没反应或报错”，具体错误尚未收到，不能宣称手机缺陷已修。f7/20750.22585 手机修复候选已独验，保数据更新沿既有授权，仅待这次新的人类正常关闭/解锁答复；不复用旧关闭状态。原 normal Cloud 场景保留启用，手机 writer、双端合并、重开和停用保留尚未接受。证据见 `personal-sync-ux-20261025/`、`personal-sync-ux-mac-scroll-20261025/`、`apple-personal-sync-f7e6ece6-preparation-20261024/` 与 `apple-personal-sync-0273df8c-preparation-20261024/DAILY-UPDATE-FIRST-OPEN-QA.json`。VPS 正常服务的用户 CLI 安装登录前提、APNs 实际收发、Claude 供应商完整历史资格及正式分发仍各自保留；本次统筹记录不改标包来源，全工程继续。
+
 ## 2026-10-24 正常打开 Cloud 配置修复，Mac 日用与 iPhone 更新完成
 
 人类 iPhone 截图明确显示“此版本尚未配置 iCloud”。已定位为原 Development 包仅依赖启动 ENV 的产品缺陷；准确修复源 `ae0bd2c4885ceb828eb55aef146fe86a46ffcd94`，3 文件28增/8删。只有原 Debug CloudDevelopment 正常 bundle 在 ENV 缺失时启用 normal drafts/hosts；有效 qualification run 保原隔离，显式无效值、Release/HotReload/flags-off 仍关闭，原同意/账号边界及 APNs gate 不变。旧实现真实失败与新实现六条件独验保全，未增配置层、迁移或验收框架。

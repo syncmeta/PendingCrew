@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 个人草稿界面与 Mac 日用更新完整接受，手机写回仍未接受
+
+界面源 `f7e6ece6932394f8ab2f1a7cdb343169c2315123`（单 Swift 文件153增/43删）独验接受：原文预览、来源/设备版本数、技术详情折叠、窄屏排列和实际本机保存状态。原 Save/任务/服务/DTO/持久分支合同不变；未就绪编辑器仍有原身份和加载门，避免用空值覆盖未读取的同 writer 原文。原加载任务7项与保存状态13项独验合格，范围仅控制缝隙；实际 Mac 本机保存与退出重开另有真实证据，不能当作手机或 Cloud 写回通过。
+
+准确 f7 normal 和双端 **0.1.44/20750.22585** 候选已签封独验。Mac 私域实际 archive/来源/保存反馈/一次等内容保存及正常退出重开后，同一 branch/key/writer/revision1/原文保留，sessions与native三表均0。实测展开详情裁切已作为真实缺陷保全；源 `0273df8cfa62b63a532df97ef74b802c35d09a29` 仅加 Mac 整表滚动（10增/1删），iOS 条件后源精确等 f7，不重建手机。准确0273完整 normal 与 **0.1.44/20750.24346** Mac 包独验通过；同私域实际展开后顶部标题、底部完整保存/关闭、一次保存和关闭均正常，复用原 f7 保存/重开证据，无重复稳定业务测试或 CI。
+
+日用安装和普通首开实际接受：先 fresh 核准确旧 AE0/17582、无新工作/stopped1/native三表0/Cloud consent unset，经正常 CmdQ 与真实 Ask 安全暂停确认 App/Core 结束；原 preflight→backup-stage→replace 均 known0，安装115项全等候选。旧整包 `/Applications/.PendingCrew-previous-0.1.44-20750.17582-0273df8c` 与完整 ZIP 保留（SHA `6ea1195cfa73030470c99782f9168f74e39d12b6331051d476561db0c551e4ac`）。QA 唯一普通 `/Applications/PendingCrew.app` 首开无args/env，实际版本准确0273/24346、本机ready、旧Qincheng停态自然显示；前后stopped1/native runtime、receipts、inputs全0，无provider/worker后代，未选会话或恢复，Cloud consent仍unset。根读全文并亲看最终实图。报告 `apple-personal-sync-0273df8c-preparation-20261024/DAILY-UPDATE-FIRST-OPEN-QA.json`（SHA `d8096d5401bf59e6b43b051d94b595c6faefc95d41d915525bcd64a881cb6984`）；安装回执 `apple-development-0273df8c-install-20261024/installed-receipt.json`。
+
+当前手机 ae0/17582 的人类证据仅接受正常同意与 Mac 原文读回；保存按钮可点击但无结果或报错，具体错误未提供，独立 writer/Cloud上传未证明。已独验 f7/22585 手机候选沿原授权等待本次新正常关闭解锁答复，不卸载、无工具launch、无自动重试。旧Cloud场景启用保留，合并/双端重开/停用保留均未执行。当前Mac为本机Development/Debug/nonhermetic包，保原DerivedData限制，不冒Release/公证；准确1958输入/478Rust的新normal分别对应真实源，后续docs-only提交不改标。未新增模型、Cloud传输、APNs、配对、VPS服务或Linux构建；这些剩余模块及旧all-features ENOSPC边界不变。
+
 ## 2026-10-24 ae0 正常 Cloud 配置与双端更新接受，双端云业务待实际读回
 
 准确修复源 `ae0bd2c4885ceb828eb55aef146fe86a46ffcd94`，三个原路径28增/8删。真实旧源 red 编译0/运行-5保留，新源六模式独立编译/运行均0；只扩原 Debug CloudDevelopment 正常 bundle 的缺 ENV 情形为 normal drafts/hosts，原 qualification 隔离、无效值拒绝、账号同意与 APNs gate 不变。`apple-cloud-normal-opening-20261025/INDEPENDENT-SOURCE-QA.json` 接受；目录日期为原证据命名，不改写。
