@@ -22,8 +22,9 @@ struct ApplePersonalCloudConfiguration: Equatable, Sendable {
     }
 }
 
-/// Explicit App-only Development builds use a named, private qualification
-/// partition. Signing/profile qualification is a separate mandatory build gate;
+/// Explicit App-only Cloud Development builds use normal personal collections.
+/// An explicitly supplied qualification run selects its separate test partition.
+/// Signing/profile qualification is a separate mandatory build gate;
 /// these values neither select CloudKit's signed environment nor grant access.
 enum CrewAppleServiceDevelopment {
     static func qualificationRunID(environment:[String:String] = ProcessInfo.processInfo.environment,
@@ -36,6 +37,11 @@ enum CrewAppleServiceDevelopment {
     static func cloudConfiguration(environment:[String:String] = ProcessInfo.processInfo.environment,
                                    bundleIdentifier:String? = Bundle.main.bundleIdentifier)->ApplePersonalCloudConfiguration? {
         #if DEBUG && PENDINGCREW_APPLE_CLOUD_DEVELOPMENT && !PENDINGCREW_HOTRELOAD
+        guard bundleIdentifier == "com.pendingname.pendingcrew" else{return nil}
+        if environment["PENDINGCREW_APPLE_QUALIFICATION_RUN_ID"] == nil {
+            return .init(containerIdentifier:"iCloud.com.pendingname.pendingcrew",environment:.development,
+                         draftsCollection:"drafts",hostsCollection:"hosts",keyValueStoreIdentifier:nil)
+        }
         guard let run=qualificationRunID(environment:environment,bundleIdentifier:bundleIdentifier) else{return nil}
         return .init(containerIdentifier:"iCloud.com.pendingname.pendingcrew",environment:.development,
                      draftsCollection:"qualification.\(run).drafts",hostsCollection:"qualification.\(run).hosts",
