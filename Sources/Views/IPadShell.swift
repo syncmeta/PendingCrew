@@ -27,6 +27,8 @@ struct IPadShell: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var selectedCrewId: String?
+    @State private var sidebarPath: [String] = []
+    @State private var compactColumn = NavigationSplitViewColumn.sidebar
     @State private var showingPairing = false
     @State private var showingNewCrew = false
     @State private var didReadComputerList = false
@@ -45,13 +47,26 @@ struct IPadShell: View {
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(preferredCompactColumn: $compactColumn) {
+            NavigationStack(path: $sidebarPath) {
             CrewListView(connectComputer: canChooseComputer ? { showingPairing = true } : nil,
                          hasPairedComputer: hasPairedComputer,
                          readingComputers: !didReadComputerList || appModel.connectingAuthority,
                          showsComputerIntroduction: isCompact,
                          selection: $selectedCrewId)
                 .navigationTitle("机组")
+                .environment(\.crewdOpenSidebarConversations, { crew in
+                    if selectedCrewId != crew { selectedCrewId = crew }
+                    if let workspace = appModel.crewdBackend?.workspace { workspace.selectCrew(crew) }
+                    sidebarPath = [crew]; compactColumn = .sidebar
+                })
+                .navigationDestination(for: String.self) { crew in
+                    if let workspace = appModel.crewdBackend?.workspace {
+                        CrewdSidebarConversations(workspace: workspace, crewID: crew,
+                            openSession: { selectedRemoteSessionID = $0 },
+                            showContent: { compactColumn = .detail })
+                    }
+                }
                 .safeAreaInset(edge:.bottom){
                     HStack{
                         Button("设置",systemImage:"gearshape"){showingSettings=true}
@@ -60,6 +75,7 @@ struct IPadShell: View {
                     }.padding(12)
                 }
 
+            }
         } detail: {
             detail
                 .opacity(searchScope == .all ? 0:1)
@@ -72,6 +88,7 @@ struct IPadShell: View {
         .sheet(isPresented:$showingSettings,onDismiss:{let action=pendingSettingsAction;pendingSettingsAction=nil;action?()}){mobileSettings}
         .modifier(CrewdWindowMaterial())
         .onChange(of: selectedCrewId) { _, id in
+            if let current = sidebarPath.last, current != id { sidebarPath = [] }
             crewStore.selectCrew(id) // selectCrew 是同步方法，接受 String?
             if crewStore.chatSearchRequest == nil{communicationView = .human;searchQuery="";searchTargetMessageId=nil}
             if let id, id != crewStore.pendingCrew?.id, let workspace = appModel.crewdBackend?.workspace {
@@ -95,7 +112,7 @@ struct IPadShell: View {
         }
         .onChange(of: appModel.crewdBackend?.workspace.presentationNamespace) { _, _ in
             crewStore.retireOriginalAuthorityPresentation()
-            selectedCrewId = nil; selectedRemoteSessionID = nil
+            selectedCrewId = nil; selectedRemoteSessionID = nil; sidebarPath = []
             Task { await crewStore.refreshList() }
         }
         .sheet(isPresented: $showingNewCrew, onDismiss: { Task { await crewStore.refreshList() } }) {

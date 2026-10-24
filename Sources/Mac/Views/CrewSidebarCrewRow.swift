@@ -78,6 +78,7 @@ struct CrewSidebarCrewRow: View {
     @ObservedObject var dragState: CrewDragState
     /// 右键「在这下面建子 crew」的目标（侧栏持有，表单也在那层弹）。
     @Binding var childCrewTarget: CrewChildCreationTarget?
+    @Environment(\.crewdOpenSidebarConversations) private var openConversations
     @EnvironmentObject private var crewStore: CrewStore
     /// session 状态源（isWorking/health/退出）—— 状态点聚合用。由 `MacRootView`
     /// 注入 sidebar（与中/右栏同一实例，才看得到同一批 run）。
@@ -230,6 +231,14 @@ struct CrewSidebarCrewRow: View {
                     .help("挂在 \(lineageLine) 之下")
                 }
             }
+            if let openConversations {
+                Button { openConversations(crew.id) } label: {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary).frame(width: 22, height: 30)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).help("查看机组会话")
+                    .accessibilityLabel("查看" + crew.title + "的会话")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -246,7 +255,9 @@ struct CrewSidebarCrewRow: View {
         )
         .opacity(dragState.draggingCrewId == crew.id && dragState.draggingParentId == parentId ? 0.4 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { crewStore.selectCrew(crew.id) }
+        .onTapGesture(count: 2) { openConversations?(crew.id) }
+        .onTapGesture { if crewStore.selectedCrewId != crew.id { crewStore.selectCrew(crew.id) } }
+        .accessibilityAction(named: "查看机组会话") { openConversations?(crew.id) }
     }
 
     /// 行右键菜单（Todo #35）。目标恒为**本行这个 crew**（`crew` 是本行自己的

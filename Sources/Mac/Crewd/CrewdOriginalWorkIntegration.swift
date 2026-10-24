@@ -5,6 +5,15 @@ import AppKit
 import UIKit
 #endif
 
+/// Only the sidebar owns its navigation path. Returning never changes the work route.
+private struct CrewdOpenSidebarConversationsKey: EnvironmentKey { static let defaultValue: ((String) -> Void)? = nil }
+extension EnvironmentValues {
+    var crewdOpenSidebarConversations: ((String) -> Void)? {
+        get { self[CrewdOpenSidebarConversationsKey.self] }
+        set { self[CrewdOpenSidebarConversationsKey.self] = newValue }
+    }
+}
+
 private struct CrewdOriginalChannelKey: EnvironmentKey { static let defaultValue = "" }
 extension EnvironmentValues {
     var crewdOriginalChannelID: String {
@@ -81,7 +90,6 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     .frame(maxWidth:.infinity,alignment:.leading)
                 if let searchControl { searchControl }
             }.padding(.horizontal,14).padding(.vertical,8)
-            Divider()
         }
     }
     private var sectionContent: some View {
@@ -344,16 +352,12 @@ private struct CrewdOriginalMessages<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
     #if os(iOS)
     @Environment(\.crewdMessageSearchTarget) private var messageSearchTarget
-    @State private var mobileChat = false
-    @State private var showingNewMember = false
     @State private var showingMobileInspector = false
     #endif
     #if os(macOS)
     @EnvironmentObject private var runner: CrewSessionRunner
     @State private var showingMembers = false
     @State private var openedSession = false
-    @State private var showConversationPopover = false
-    @State private var conversationListVisible = true
     private var showingSession: Bool { runner.viewingTerminal }
     private var visibleChat: Bool { !showingSession && workspace.channels.contains { $0["id"].string == workspace.channelID } }
     private var visibleContent: Bool { workspace.originalSection != "消息" || visibleChat }
@@ -361,22 +365,6 @@ private struct CrewdOriginalMessages<Content: View>: View {
     #endif
     var body: some View {
         #if os(macOS)
-        GeometryReader { geometry in
-        HStack(spacing: 0) {
-            if geometry.size.width >= 600 && conversationListVisible {
-                conversationList.frame(width: min(196, max(180, geometry.size.width * 0.26)))
-            }
-            Button {
-                if geometry.size.width >= 600 { conversationListVisible.toggle() }
-                else { showConversationPopover.toggle() }
-            } label: {
-                Image(systemName: geometry.size.width >= 600 && conversationListVisible ? "chevron.left" : "chevron.right")
-                    .font(.system(size:11,weight:.medium)).foregroundStyle(.secondary)
-                    .frame(width:18,height:44).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-                .help(geometry.size.width >= 600 && conversationListVisible ? "收起会话列表" : "展开会话列表")
-                .accessibilityLabel(geometry.size.width >= 600 && conversationListVisible ? "收起会话列表" : "展开会话列表")
-                .popover(isPresented:$showConversationPopover){conversationList.frame(width:248,height:440)}
             VStack(spacing: 0) {
             if let header { header }
             ZStack {
@@ -393,8 +381,6 @@ private struct CrewdOriginalMessages<Content: View>: View {
                 }
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        }.frame(width: geometry.size.width, height: geometry.size.height)
-        }
         .opacity(showingMembers ? 0:1).allowsHitTesting(!showingMembers).accessibilityHidden(showingMembers)
         .overlay {
             if showingMembers {
@@ -412,37 +398,23 @@ private struct CrewdOriginalMessages<Content: View>: View {
             if workspace.originalSection == "消息" { await resources.activate(.messages, force: true) }
         }
         #else
-        GeometryReader { geometry in
-            let wide = geometry.size.width >= 650
-            HStack(spacing: 0) {
-                if wide { mobileConversationList.frame(width: 210); Divider() }
-                VStack(spacing: 0) {
-                    HStack {
-                        if !wide {Button { mobileChat = false } label: { Label("会话", systemImage: "chevron.left") }}
-                        Spacer()
-                        Button{showingMobileInspector=true}label:{Label("待办工作与成员",systemImage:"sidebar.right")}
-                            .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("查看当前群的待办工作与成员")
-                    }.font(CrewdType.label).frame(minHeight:44).padding(.horizontal,14)
-                    if let header { header }
-                    content()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .opacity(wide || mobileChat ? 1 : 0)
-                .allowsHitTesting(wide || mobileChat).disabled(!wide && !mobileChat)
-                .accessibilityHidden(!wide && !mobileChat)
-            }
-            .overlay {
-                if !wide && !mobileChat { mobileConversationList }
-            }
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { showingMobileInspector = true } label: { Label("待办工作与成员", systemImage: "sidebar.right") }
+                    .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("查看当前群的待办工作与成员")
+            }.font(CrewdType.label).frame(minHeight: 44).padding(.horizontal, 14)
+            if let header { header }
+            content().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (mobileChat ? "detail" : "list")))
+        .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID))
         .opacity(showingMobileInspector ? 0:1).allowsHitTesting(!showingMobileInspector).accessibilityHidden(showingMobileInspector)
         .overlay {
             if showingMobileInspector {
                 VStack(spacing:0){
                     HStack{Button("返回会话",systemImage:"chevron.left"){showingMobileInspector=false};Spacer();Text("本群成员")}.padding(12)
                     ScrollView{VStack(alignment:.leading,spacing:18){
-                        CrewdOriginalTodoSummary(group:workspace.channelWork,currentCrew:workspace.crewID,showDetails:{human in workspace.originalSection=human ? "真人Todo":"Todo";mobileChat=true;showingMobileInspector=false})
+                        CrewdOriginalTodoSummary(group:workspace.channelWork,currentCrew:workspace.crewID,showDetails:{human in workspace.originalSection=human ? "真人Todo":"Todo";showingMobileInspector=false})
                         ForEach(workspace.selectedMembers.indices,id:\.self){index in
                             let member=workspace.selectedMembers[index];let id=member["id"].string ?? ""
                             HStack{CrewdMemberAvatar(seed:CrewdAvatarIdentity.seed(member) ?? id,colorSeed:workspace.channelID)
@@ -455,128 +427,14 @@ private struct CrewdOriginalMessages<Content: View>: View {
             }
         }
         .onChange(of:workspace.originalSection){_,_ in showingMobileInspector=false}
-        .onChange(of:messageSearchTarget,initial:true){_,id in if id != nil{mobileChat=true;showingMobileInspector=false}}
-        .sheet(isPresented:$showingNewMember) {
-            NavigationStack {
-                ScrollView {CrewdSessionStartView(workspace:workspace,drafts:$workspace.messageDrafts).padding(20)}
-                    .navigationTitle("新成员会话").navigationBarTitleDisplayMode(.inline)
-                    .toolbar {ToolbarItem(placement:.cancellationAction){Button("关闭"){showingNewMember=false}}}
-            }
-        }
-        .onChange(of: workspace.crewID) { _, _ in mobileChat = false; showingNewMember=false;showingMobileInspector=false }
+        .onChange(of:messageSearchTarget,initial:true){_,id in if id != nil{showingMobileInspector=false}}
+        .onChange(of: workspace.crewID) { _, _ in showingMobileInspector=false }
         .onChange(of: workspace.knowledgeNavigation) { _, _ in
-            workspace.originalSection = "消息"; mobileChat = true
+            workspace.originalSection = "消息"
         }
         #endif
     }
-    private var messageFolderMenu:some View {
-        CrewdFolderControls(store:workspace.channelResources,drafts:$workspace.resourceDrafts,
-            selection:Binding(get:{workspace.resourceDrafts.selection(workspace.crewID,.messages,channel:workspace.channelID)},
-                              set:{workspace.resourceDrafts.select(workspace.crewID,.messages,$0,channel:workspace.channelID)}),
-            view:.messages,compact:true,iconOnly:true)
-    }
-    #if os(iOS)
-    private var mobileConversationList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text("会话").font(CrewdType.label.weight(.medium))
-                    Spacer()
-                    messageFolderMenu
-                    Button{showingNewMember=true}label:{Image(systemName:"plus")}
-                        .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("新建成员会话")
-                }.foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal,12).padding(.vertical,4)
-                ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in
-                    if let row = workspace.channels.first(where: { $0["id"].string == id }) {
-                        CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: conversationSubtitle(row),
-                            selected: workspace.channelID == id,
-                            action: { workspace.selectConversation(id); mobileChat = true }) {
-                                channelAvatar(row)
-                            }.accessibilityHint(CrewdConversationProjection.context(row))
-                    }
-                }
-                if !workspace.sessions.isEmpty {
-                    Text("Agent 会话").font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(12)
-                }
-                ForEach(workspace.sessions.compactMap { $0["id"].string }, id: \.self) { id in
-                    if let row = workspace.sessions.first(where: { $0["id"].string == id }) {
-                        CrewdConversationRow(title: row["displayName"].string ?? row["role"].string ?? "成员",
-                            subtitle: (row["executor"].string ?? "") + " · 成员会话", selected: false,
-                            action: { workspace.selectSession(id); openSession?(id) }) {
-                                CrewdMemberAvatar(seed: id, colorSeed: workspace.crewID)
-                            }.disabled(openSession == nil)
-                    }
-                }
-            }.padding(.horizontal, 5).frame(maxWidth: .infinity, alignment: .leading)
-        }.background(CrewdChatStyle.canvas(scheme))
-    }
-    @ViewBuilder private func channelAvatar(_ channel: CrewdValue) -> some View {
-        let id = channel["id"].string ?? ""
-        let members = workspace.channelSummaries.first { $0["channel"]["id"].string == id }?["members"].array ?? []
-        if channel["kind"].string == "dm", let peer = members.compactMap(CrewdAvatarIdentity.seed).first(where: { $0 != "human" }) {
-            CrewdMemberAvatar(seed: peer, colorSeed: id)
-        } else {
-            CrewdAttentionAvatar(group:workspace.channelWork,crew:workspace.crewID,channel:id){
-                CrewdGroupAvatar(members:members,channel:id,name:CrewdConversationProjection.title(channel))
-            }
-        }
-    }
-    #endif
-    private func conversationSubtitle(_ channel: CrewdValue) -> String {
-        let summary = workspace.channelSummaries.first { $0["channel"]["id"] == channel["id"] }
-        let mentions = summary?["humanMentions"].int ?? 0
-        let unread = summary?["unreadForHuman"].int ?? 0
-        if mentions > 0 { return "\(mentions) 条消息 @你" }
-        if unread > 0 { return "\(unread) 条未读消息" }
-        return channel["purpose"].string ?? (channel["kind"].string == "dm" ? "群内单聊" : "机组群聊")
-    }
-    #if os(macOS)
-    private var conversationList: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Text("会话").font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Button { workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true; openedSession = true; showConversationPopover = false } label: { Image(systemName: "plus") }
-                    .buttonStyle(CrewdToolButtonStyle()).help("新建成员会话").accessibilityLabel("新建成员会话")
-            }.font(.system(size: 12)).controlSize(.small).tint(.gray)
-                .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal, 10).frame(height: 36)
-                .accessibilityLabel("会话工具")
-            ScrollView {
-                VStack(spacing: 3) {
-                    ForEach(workspace.channels.compactMap { $0["id"].string }, id: \.self) { id in
-                        if let row = workspace.channels.first(where: { $0["id"].string == id }) {
-                            let subtitle = conversationSubtitle(row)
-                            CrewdConversationRow(title: CrewdConversationProjection.title(row), subtitle: subtitle == "机组群聊" ? "" : subtitle,
-                                selected: !visibleSession && workspace.channelID == id,
-                                action: { workspace.selectConversation(id); runner.viewingTerminal = false; showConversationPopover = false }) {
-                                CrewdAttentionAvatar(group:workspace.channelWork,crew:workspace.crewID,channel:id){
-                                    CrewdGroupAvatar(members: workspace.channelSummaries.first(where: { $0["channel"]["id"].string == id })?["members"].array ?? [], channel: id, name: CrewdConversationProjection.title(row))
-                                }
-                            }.help(CrewdConversationProjection.context(row))
-                        }
-                    }
-                    if !workspace.sessions.isEmpty {
-                        HStack { Text("Agent 会话").font(.system(size: 10, weight: .medium)); Spacer() }
-                            .foregroundStyle(CrewdChatStyle.muted(scheme)).padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 3)
-                    }
-                    ForEach(workspace.sessions.compactMap { $0["id"].string }, id: \.self) { id in
-                        if let row = workspace.sessions.first(where: { $0["id"].string == id }) {
-                            CrewdConversationRow(title: row["displayName"].string ?? row["title"].string ?? row["role"].string ?? "成员",
-                                subtitle: (row["executor"].string ?? "") + " · 成员会话",
-                                selected: showingSession && workspace.sessionID == id && !runner.isComposingNew,
-                                action: {
-                                    guard let run = runner.runs.first(where: { $0.sessionId == id && $0.crewId == workspace.crewID }) else { return }
-                                    workspace.originalSection = "消息"; runner.openSession(run.runID); openedSession = true; showConversationPopover = false
-                                }) { CrewdMemberAvatar(seed: id, colorSeed: workspace.crewID) }
-                                .disabled(!runner.runs.contains { $0.sessionId == id && $0.crewId == workspace.crewID })
-                        }
-                    }
-                }.padding(.horizontal, 5).padding(.top, 3)
-            }
-        }.background(CrewdChatStyle.canvas(scheme))
-    }
-    #endif
+
 }
 #if os(macOS)
 /// Reset only this presentation window's keyboard focus when the visible route
@@ -604,3 +462,156 @@ private struct CrewdConversationFocusReset: UIViewRepresentable {
     }
 }
 #endif
+
+/// The single conversation directory lives inside the existing sidebar stack.
+/// Its actions only select existing projections; execution still needs explicit controls.
+struct CrewdSidebarConversations: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crewID: String
+    var openSession: ((String) -> Void)? = nil
+    var showContent: () -> Void = {}
+    var filtersChannelFolders = false
+    var back: (() -> Void)? = nil
+    @Environment(\.colorScheme) private var scheme
+    #if os(macOS)
+    @EnvironmentObject private var runner: CrewSessionRunner
+    #else
+    @State private var showingNewMember = false
+    #endif
+    private struct Item: Identifiable {
+        let id: String
+        let value: CrewdValue
+        let channel: Bool
+        let order: Int
+        var date: String { value["updatedAt"].string ?? value["createdAt"].string ?? "" }
+    }
+    private var items: [Item] {
+        let visibleChannels = workspace.channels.filter { channel in
+            !filtersChannelFolders || CrewdFolderFilter.includes(
+                CrewdFolderFilter.object("channel", channel["id"].string ?? ""),
+                selection: workspace.resourceDrafts.selection(crewID, .messages), snapshot: workspace.resources.folders[.messages])
+        }
+        let channels = visibleChannels.enumerated().compactMap { index, row in
+            row["id"].string.map { Item(id: "channel/" + $0, value: row, channel: true, order: index) }
+        }
+        let members = workspace.sessions.enumerated().compactMap { index, row in
+            row["id"].string.map { Item(id: "session/" + $0, value: row, channel: false, order: channels.count + index) }
+        }
+        return (channels + members).sorted { $0.date == $1.date ? $0.order < $1.order : $0.date > $1.date }
+    }
+    var body: some View {
+        VStack(spacing: 0) {
+            #if os(macOS)
+            HStack(spacing: 6) {
+                if let back {
+                    Button("机组", systemImage: "chevron.left", action: back)
+                        .buttonStyle(.borderless).accessibilityLabel("返回机组选择")
+                } else { Text("会话").font(.headline) }
+                Spacer(minLength: 0)
+                directoryTools
+            }.controlSize(.small).frame(minHeight: 36).padding(.horizontal, 10)
+            #endif
+            directory.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(iOS)
+        .navigationTitle("会话")
+        .toolbar { ToolbarItem(placement: .primaryAction) { directoryTools } }
+        .sheet(isPresented: $showingNewMember) {
+            NavigationStack {
+                ScrollView { CrewdSessionStartView(workspace: workspace, drafts: $workspace.messageDrafts).padding(20) }
+                    .navigationTitle("新成员会话").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingNewMember = false } } }
+            }
+        }
+        #endif
+    }
+    private var directory: some View {
+        Group {
+            if workspace.crewID == crewID {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        if filtersChannelFolders {
+                            CrewdFolderControls(store: workspace.resources, drafts: $workspace.resourceDrafts,
+                                selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages) },
+                                                   set: { workspace.resourceDrafts.select(crewID, .messages, $0) }), view: .messages)
+                        }
+                        ForEach(items) { item in
+                            if item.channel { channelRow(item.value) }
+                            else { sessionRow(item.value) }
+                        }
+                    }.padding(.horizontal, 5).padding(.vertical, 8)
+                }
+            } else { ProgressView("正在读取会话…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+        }
+    }
+    private var directoryTools: some View {
+        HStack(spacing: 6) {
+            CrewdFolderControls(store: workspace.channelResources, drafts: $workspace.resourceDrafts,
+                selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages, channel: workspace.channelID) },
+                                   set: { workspace.resourceDrafts.select(crewID, .messages, $0, channel: workspace.channelID) }),
+                view: .messages, compact: true, iconOnly: true)
+            Button("新建成员会话", systemImage: "plus") {
+                guard workspace.crewID == crewID else { return }
+                #if os(macOS)
+                workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true
+                #else
+                showingNewMember = true
+                #endif
+                showContent()
+            }.labelStyle(.iconOnly).disabled(workspace.crewID != crewID)
+        }
+    }
+    private func subtitle(_ channel: CrewdValue) -> String {
+        let summary = workspace.channelSummaries.first { $0["channel"]["id"] == channel["id"] }
+        let mentions = summary?["humanMentions"].int ?? 0, unread = summary?["unreadForHuman"].int ?? 0
+        if mentions > 0 { return "\(mentions) 条消息 @你" }
+        if unread > 0 { return "\(unread) 条未读消息" }
+        return channel["purpose"].string ?? (channel["kind"].string == "dm" ? "群内单聊" : "")
+    }
+    private func channelRow(_ channel: CrewdValue) -> some View {
+        let id = channel["id"].string ?? ""
+        let members = workspace.channelSummaries.first { $0["channel"]["id"].string == id }?["members"].array ?? []
+        #if os(macOS)
+        let selected = !runner.viewingTerminal && workspace.channelID == id
+        #else
+        let selected = workspace.channelID == id
+        #endif
+        return CrewdConversationRow(title: CrewdConversationProjection.title(channel), subtitle: subtitle(channel), selected: selected, action: {
+            guard workspace.crewID == crewID else { return }
+            if workspace.channelID != id { workspace.selectConversation(id) }
+            #if os(macOS)
+            runner.viewingTerminal = false
+            #endif
+            showContent()
+        }) {
+            if channel["kind"].string == "dm", let peer = members.compactMap(CrewdAvatarIdentity.seed).first(where: { $0 != "human" }) {
+                CrewdMemberAvatar(seed: peer, colorSeed: id)
+            } else {
+                CrewdAttentionAvatar(group: workspace.channelWork, crew: crewID, channel: id) {
+                    CrewdGroupAvatar(members: members, channel: id, name: CrewdConversationProjection.title(channel))
+                }
+            }
+        }.help(CrewdConversationProjection.context(channel))
+    }
+    private func sessionRow(_ session: CrewdValue) -> some View {
+        let id = session["id"].string ?? ""
+        #if os(macOS)
+        let run = runner.runs.first { $0.sessionId == id && $0.crewId == crewID }
+        let selected = runner.viewingTerminal && workspace.sessionID == id && !runner.isComposingNew
+        let enabled = run != nil
+        #else
+        let selected = workspace.sessionID == id
+        let enabled = openSession != nil
+        #endif
+        return CrewdConversationRow(title: session["displayName"].string ?? session["title"].string ?? session["role"].string ?? "成员", subtitle: (session["executor"].string ?? "") + " · 成员会话", selected: selected, action: {
+            guard workspace.crewID == crewID else { return }
+            #if os(macOS)
+            guard let run else { return }
+            runner.openSession(run.runID)
+            #else
+            workspace.selectSession(id); openSession?(id)
+            #endif
+            workspace.originalSection = "消息"; showContent()
+        }) { CrewdMemberAvatar(seed: id, colorSeed: crewID) }.disabled(!enabled)
+    }
+}

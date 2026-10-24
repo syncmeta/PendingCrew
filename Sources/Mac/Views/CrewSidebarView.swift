@@ -25,6 +25,7 @@ struct CrewSidebarView: View {
     /// 底部「已隐藏的群」那行展开着没有（不持久化：默认收起，每次开 app 都是收起的
     /// —— 藏起来的群本来就不该占视线）。
     @State private var hiddenExpanded = false
+    @State private var conversationPath: [String] = []
     /// crew 级「最后看过」时间（UserDefaults）—— 已隐藏那行算未读的第二个参照点。
     @ObservedObject private var viewed = CrewViewedStore.shared
     @ObservedObject private var quota = QuotaCenter.shared
@@ -45,6 +46,8 @@ struct CrewSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
             viewModePicker
             List {
                 if let viewer = sessionHost.viewer {
@@ -91,14 +94,31 @@ struct CrewSidebarView: View {
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
             if !crewStore.usesCrewdAuthority { quotaFooterLine }
+            }
+            .opacity(conversationPath.isEmpty ? 1 : 0)
+            .allowsHitTesting(conversationPath.isEmpty).disabled(!conversationPath.isEmpty)
+            .accessibilityHidden(!conversationPath.isEmpty)
+            if let crew = conversationPath.last, let workspace = model.crewdBackend?.workspace {
+                CrewdSidebarConversations(workspace: workspace, crewID: crew,
+                    back: { conversationPath = [] })
+                    .environmentObject(sessionHost.runner)
+            }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .environment(\.crewdOpenSidebarConversations, model.usesCrewdAuthority ? { crew in
+                guard crew != crewStore.pendingCrew?.id else { return }
+                if crewStore.selectedCrewId != crew { crewStore.selectCrew(crew) }
+                conversationPath = [crew]
+            } : nil)
             // Stable emoji machine picker, sharing the existing connection source.
             identityFooter
 
         }.frame(maxHeight:.infinity)
-        // 完全不设 navigationTitle —— 一旦设了（哪怕空串），SwiftUI 会不停把窗口
-        // titleVisibility 设回 .visible，把我们在 WindowChromeConfigurator 里藏标题的
-        // 设置顶掉，于是 App 名 "PendingCrew" 又冒回标题栏。不设它，标题由
-        // WindowChromeConfigurator 一次性藏死。
+        // Sidebar-local navigation keeps native SwiftUI controls inside this column.
+        // Root list stays mounted; machine identity stays outside both pages.
+        .onChange(of: crewStore.selectedCrewId) { _, crew in
+            if let current = conversationPath.last, current != crew { conversationPath = [] }
+        }
+        .onChange(of: model.crewdBackend?.workspace.presentationNamespace) { _, _ in conversationPath = [] }
         .task { reloadArrangement() }
         .onReceive(crewStore.usesCrewdAuthority ? Empty<Void, Never>().eraseToAnyPublisher() : LocalWhiteboardStore.shared.directoryChanged.eraseToAnyPublisher()) { _ in reloadArrangement() }
         // 行右键进来的「在这下面建子 crew」走同一份内存占位，保留被右键行的父 id。

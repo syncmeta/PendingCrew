@@ -1,5 +1,21 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 b0 Mac 日用与 Sidebar 导航完整接受，视觉统一继续按人类反馈收口
+
+`cumulative-b0b08b56-normal-20261024/INDEPENDENT-NORMAL-QA.json` 接受准确 b0 完整1971 Git 输入、478 Rust 输入、默认 Debug/features[]/非 testkit/arm64、fresh owning-artifact 门与506项清单；normal SHA `f6211fda2a56ac0f165b7e9e49d6b533892d69e38192199fc293cc2ffb488b36`，纯 schema 完整149方法/API3/Store21。原 symlink 输入准备拒绝保留，限于 lstat/readlink 与 Git blob 原始目标字节核对后通过，不跟随路径，不放宽普通文件门。八项明确终态 incremental 清单回收实际释放942,080,000B，五项保护哈希不变。
+
+最初双端20750.32028候选的 Mac 在原安装预检发现 Info 来源戳缺失，未执行备份、替换或启动；独验补认该遗漏，撤回 Mac 安装准入，保留原候选与失败。仅 Mac 以既有 `PENDINGCREW_PRODUCT_SOURCE_REF` 显式传入 b0 暖重建为 **20750.33659**，170项来源修复封存与双戳精确，原正确手机20750.32028证明及后台 normal 原封复用。未为表面同号重建 iOS、未手改签后 Info、未弱化安装门。
+
+Mac 真实更新与普通首开由 `apple-development-b0b08b56-sourcefix-independent-qa-20261024/DAILY-UPDATE-FIRST-OPEN-QA.json` 接受。原三个安装阶段均0、115项安装字节/链接精确、strict签名0；原20750.24346整包与 ZIP 完整保留，ZIP SHA `ae5c7268501a3fedf6a07296a31b4d9b32ce208ac1756f2eb693b1430774dae8`。唯一无参首开 App38552/Core38560，本机 ready，前后 stopped1/native三表0、无 provider/worker，Cloud 同意仍 unset。停止时数据库只读失败保留，前后比较使用真实 prequit 和成功 live postopen，不将错误当零。根已读完整回执与独验并亲看实际首开图；Development Debug/nonhermetic、非 Release/公证的限制保留。
+
+原生精修设计 `399b0b7e` 的当前主文件为 `PendingCrew-SwiftUI-Sidebar-Navigation.sketch`，SHA `3523d5df0d456d16c011c33ef2133237c605f0e751ee988e9cc5713e593804db`。独立 `INDEPENDENT-SIDEBAR-PROTOTYPE-QA.json` 接受70画板、159 Symbols/1854实例、2362原生 Flow/44返回、8877唯一ID与全部可达，亲看12代表图；根亲看当前群聊、会话子页和 Codex 执行/设置等原生导出。最新设计移除独立中列和折叠边，Sidebar根→箭头会话子页→保Tab返回，原生尺度/完整 Codex 四页与未发送新建状态均已对照。当前文件无 Sketch GUI 播放，不冒用旧54态播放；原型预填状态不证明自由输入、真实双击、业务持久性或执行。
+
+六 Swift 源导航整块由 `sidebar-navigation-module-20261024/INDEPENDENT-SIDEBAR-NAVIGATION-QA.json` 接受，报告 SHA `b5c0428b590a7fce36633d4864762cfe2cc87a613a662d3ece5ce51c079d5d55`；根全文受领，六源实字节与 freeze 全等，原净 diff SHA `65a8297c611ba041257167a89a45581240a9cb337541e590f030b79570ae4219` 相同。Mac 暖开发与最终 iOS unsigned 受影响编译均0；iOS arrow/double 明确保持 sidebar，只有选会话才进入 detail，不冒真机通过。首次真实双击缺失原 runner 闪退、次轮原生导航提升全窗工具及隐藏 footer/list 两件失败均保全；最终改为局部 Sidebar path/header/back 并注入同一原 runner，不造新实例或窗口控制器。
+
+最终实际 App43873/Core43875 在原 C 私域及准确 b0 代码等价 helper 下，真实双击与行尾箭头均进有内容的侧栏子页；返回保文档Tab、原大厅/与我沟通切换不改Tab，回消息仍见唯一原静态 Human 正文。局部返回/folder/+、原机器footer、共同顶五Tab与唯一搜索完整，无196中列/18折叠边/Tab下Divider。根亲看最终实际暗色900宽截图。临时未发送输入受当时输入法限制只收到精确“（）。”，仅该真实非空值的返回和Tab往返保留已证明，随后清本次自有marker恢复原空草稿；未发送，不冒完整中文输入、长历史滚动或无样本停态session选择通过。live只读实得sessions/native runtime/receipts/inputs全0，原A/B/day的birth保持。窗口停在会话子页供人类查看，GUI已停止；原 C 与 task-owned InjectionNext在最初源保存前已正常退出确认gone，旧Unknown/Cloud不动，无模型/云/新配对或强退。
+
+当前日用仍准确 b0／20750.33659，不含此新导航。人类看图后追加会话/机组采用同一UI且机组仅多头像、右侧除顶部/新增Tab外沿用旧版的裁决，客户端作为下一完整视觉统一模块继续；本导航运行通过不等于追加视觉要求已完成。精修70态Sketch静态接受保留，后续不得覆盖已交文件或人工设计。普通候选待该模块冻结再一次构建，后台仅允许完整输入/锁/配方/环境字节同一的明确 b0 组件复用，绝不将旧 normal 命名为新源码构建。
+
 ## 2026-10-24 执行回归、共同顶栏与原生 Sketch 整合接受
 
 本地 main 已包含后端 `35315bd5`、共同顶栏 `215c9587` 与原生原型 `c4e3e4e1`。根读取完整独验报告，逐字比较20路径 Rust diff 与封存 `d59f08bc3e2fdd07b159d58f4420bccccd44c1077ac126bd14198fcc05074ab7` 相同，并亲看共同顶栏最终实图与原生 Sketch 播放截图。未将独立源验收冒当前普通包、安装或全工程通过。

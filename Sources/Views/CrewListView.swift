@@ -129,6 +129,7 @@ struct CrewListView: View {
 
 #if os(iOS)
 private struct CrewMobileDirectory: View {
+    @Environment(\.crewdOpenSidebarConversations) private var openConversations
     @EnvironmentObject private var crewStore:CrewStore
     @State private var detailID:String?
     @EnvironmentObject private var appModel:AppModel
@@ -208,7 +209,13 @@ private struct CrewMobileDirectory: View {
                 }
             }
             Spacer(minLength: 0)
+            if let openConversations {
+                Button { openConversations(crew.id) } label: {
+                    Image(systemName: "chevron.right").frame(minWidth: 30, minHeight: 36)
+                }.buttonStyle(.plain).accessibilityLabel("查看" + crew.title + "的会话")
+            }
         }.padding(.vertical, 5)
+            .onTapGesture(count: 2) { openConversations?(crew.id) }
             .contextMenu{Button("详情",systemImage:"info.circle"){detailID=crew.id;Task{await crewStore.refreshDetail(crew.id)}}}
     }
 }
