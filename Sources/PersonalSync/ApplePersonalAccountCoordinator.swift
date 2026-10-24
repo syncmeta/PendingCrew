@@ -21,6 +21,38 @@ struct ApplePersonalCloudConfiguration: Equatable, Sendable {
         account.container == containerIdentifier && account.environment == environment && !account.userRecordID.isEmpty
     }
 }
+
+/// Explicit App-only Development builds use a named, private qualification
+/// partition. Signing/profile qualification is a separate mandatory build gate;
+/// these values neither select CloudKit's signed environment nor grant access.
+enum CrewAppleServiceDevelopment {
+    static func qualificationRunID(environment:[String:String] = ProcessInfo.processInfo.environment,
+                                   bundleIdentifier:String? = Bundle.main.bundleIdentifier)->String? {
+        guard bundleIdentifier == "com.pendingname.pendingcrew",
+              let raw=environment["PENDINGCREW_APPLE_QUALIFICATION_RUN_ID"],
+              let id=UUID(uuidString:raw),id.uuidString.lowercased()==raw else{return nil}
+        return raw
+    }
+    static func cloudConfiguration(environment:[String:String] = ProcessInfo.processInfo.environment,
+                                   bundleIdentifier:String? = Bundle.main.bundleIdentifier)->ApplePersonalCloudConfiguration? {
+        #if DEBUG && PENDINGCREW_APPLE_CLOUD_DEVELOPMENT && !PENDINGCREW_HOTRELOAD
+        guard let run=qualificationRunID(environment:environment,bundleIdentifier:bundleIdentifier) else{return nil}
+        return .init(containerIdentifier:"iCloud.com.pendingname.pendingcrew",environment:.development,
+                     draftsCollection:"qualification.\(run).drafts",hostsCollection:"qualification.\(run).hosts",
+                     keyValueStoreIdentifier:nil)
+        #else
+        return nil
+        #endif
+    }
+    static func apnsSandboxEnabled(environment:[String:String] = ProcessInfo.processInfo.environment,
+                                   bundleIdentifier:String? = Bundle.main.bundleIdentifier)->Bool {
+        #if DEBUG && PENDINGCREW_APPLE_APNS_SANDBOX && !PENDINGCREW_HOTRELOAD
+        return qualificationRunID(environment:environment,bundleIdentifier:bundleIdentifier) != nil
+        #else
+        return false
+        #endif
+    }
+}
 struct ApplePersonalNamespaceID: Hashable, Sendable {
     let account: AppleSyncAccount?
     var core:PersonalCoreDraftProjection?=nil

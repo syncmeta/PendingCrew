@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 Apple 信息及私钥权限准备接受，实际签名/云/推送未验
+
+人类补齐CloudKit实际容器iCloud.com.pendingname.pendingcrew及collectionID QUERYABLE索引完成声明，APNs Sandbox、原M42/topic与key文件名ID4S3KZLY3MJ。后端仅lstat原精确p8、按根裁定chmod0644→0600，前后inode230525771/uid501/gid20/257B/mtimeNS1792810909151551783不变；未open/read/hash/copy密钥、无JWT/Keychain/provider配置/APNs流量。两件原manifest逐字核验通过，根全文读准备与权限收据，独立 `apple-activation-independent-qa-20261024/PROVIDER-PREPARATION-QA.json` 接受；密钥有效/吊销状态仍未知。
+
+现有4份M42同bundle/通配profiles均缺Cloud容器/services/env与两平台APS字段，新签名输入仍不足。a081公开证书DER的CN为Apple Development: syncmeta@outlook.com (4L5JZ6K424)，实际OU=M42BKJN82S、到期2027-04-15；括号个人ID不是另一个Team，保既有纠偏。CUA browser列表为空、Xcode进程不在，不据此推断账号未登录。根已一次向用户给出匹配原AppID/原证书/原设备的两份Development profile下载步骤；未门户变更、新建证书/设备或allowProvisioningUpdates探测。
+
+原C有限公开settings/counts读：通知settings无行→revision0/enabledfalse/noBinding，installations0/outbox0/remotegrants0；LocalHuman不可注册recipient。Linux95只通过ABI，不冒正规service已装。后续沿原Linux安装器+service用户CLI安装/login+rootFD notificationConfigure的合法入口，不新建Mac providerUI/RPC验收工具；原humanTask.create→AskOpened为后续无模型实际事件备选，未触发。Cloud可独立Core配对推进。源资格、签包、两端Cloud exchange/reopen、APNs provider接受/设备显示/tap/撤销均分层保持未验，旧Unknown和实际剪贴板拒绝未重放。
+
+Apple Development源单元基于753fe445完整准入：9路径161增/5删，实际3Swift/project、3ent模板、原目录纯配置fixture及配置手册。根全文读作者freeze/全部净源/模板/手册/fixture及独验 `apple-development-activation-20261024/INDEPENDENT-SOURCE-QA.json`，9SHA逐项核同。质量独立亲编译/运行6条件全0，且6作者原SHA绑定binary独跑0；verbatim生产struct/enum提取核同，默认/非Debug/HotReload为nil，两个flag独立、normal bundle/canonical UUID、同run drafts/hosts与不同run隔离、KVSnil、精确ent keyset/原两Keychain组和平台APS正确。原consent/account fence/普通sign-only白名单未改，无新target/config或pbx生成。只接受公共配置接入源码，不等于完整App目标编译、匹配profile/签封或真实云/推送；后续按实际新profile一次完整组合，不重复稳定Rust/业务或Linux CI。
+
 ## 2026-10-24 当前 Linux95 完整产物与目标 VPS ABI 独验接受
 
 唯一 Actions run `40051514004/attempt1/job120745015499` 实际success728秒（12分8秒），控制器/源码 `95cd6f90ff6d6be4081ccaef6e68d9df0b51a60a`，Rust tree233d。1953完整Git输入、478 Rust、502原manifest、ZIP CRC与原GitHub digest一致；原require_fresh verifier通过，Release/default features[]/testfalse、12workspace owner/13raw fresh owning artifacts、7项编译环境完整。Linux纯schema exit0/空stderr/full JSON==checked149/API3/Store21，实际相关测试server5+proto1通过。normal ELF64 x86_64共64,085,728B，SHA256 `7164238800b96d49ee3199861f9814f92055d3fc37fa0262ff67b5b1f71faa65`。artifact12543567516共99,051,126B，ZIP SHA256 `d1ee71da6cecefbca28348d715e09c2ae8e69dd301a28cd15d7d22284c588ac4`；host.tar.gz SHA256 `206f625f7792cb90870bc88dee95267f81d5afce9c121d8c20b327dc6834369d`，准确五regular成员、安装器/模板/source-proof逐字核验。来源 `linux-host-95cd6f90-20261024/INDEPENDENT-ARTIFACT-QA.json`，根全文受领。没有发布、安装或把旧M重新命名。

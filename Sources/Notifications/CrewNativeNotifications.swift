@@ -14,7 +14,8 @@ struct CrewNotificationQualification:Equatable {
 }
 @MainActor final class CrewNativeNotifications:NSObject,ObservableObject,UNUserNotificationCenterDelegate {
     static let shared=CrewNativeNotifications()
-    static let qualification:CrewNotificationQualification?=nil
+    static let qualification:CrewNotificationQualification? = CrewAppleServiceDevelopment.apnsSandboxEnabled()
+        ? .init(environment:.sandbox,topic:"com.pendingname.pendingcrew") : nil
     @Published private(set) var notice:String?
     @Published private(set) var hint:CrewdNotificationWire.Hint?
     @Published private(set) var pending=false

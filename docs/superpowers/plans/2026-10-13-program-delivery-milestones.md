@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 Apple 真实配置补齐，Development 接入继续
+
+人类确认实际CloudKit容器 `iCloud.com.pendingname.pendingcrew`、原PCWPersonalBranch字段与collectionID QUERYABLE索引已完成，APNs为Sandbox，Team仍M42BKJN82S、topic仍com.pendingname.pendingcrew。keyID按所给文件名为4S3KZLY3MJ，尚无密钥有效性或Apple接受资格。精确原p8仅收紧mode0644→0600，同inode/owner/size/mtime，未读、hash或复制内容；准备层独验在 `apple-activation-independent-qa-20261024/PROVIDER-PREPARATION-QA.json`。
+
+本地现有4份同Team匹配profiles均无所需Cloud/APSclaims，不能直接把旧包的nil开关打开。已一次向人类请求原AppID/原证书/原设备的新Mac App Development与iOS App Development profiles；本轮不新证书/注册设备、不反复构建探测。App唯一写者沿原Debug/Local路线完成独立CloudDevelopment与APNsSandbox最小资格：9净路径161增/5删，Cloud私有同run双collection、KVSoff，HotReload原强制nil保留。独立6种条件均实际编译/运行0，默认/非Debug/HotReload关闭，3精确ent模板与原Keychain组保持；根全文受领 `apple-development-activation-20261024/INDEPENDENT-SOURCE-QA.json`。新签包/真实Cloud交换/APNs接收均需后续实际profile/签名准入，当前日用包不改。
+
+Cloud可独立于Core配对继续；APNs还需正常已配对recipient、系统显式通知同意和provider。根选择现有Linux正规installer/systemd/rootFD配置路径，待服务用户安装及登录条件；不为验收补Mac providerUI/RPC工具或以ABI私域程序替代部署。原A/B Unknown、剪贴板拒绝、手机正常首开及其他未验范围保留，不把准备完成冒云同步或推送已交付。
+
 ## 2026-10-24 当前 Linux 完整包与目标 VPS 纯 CLI 兼容性接受
 
 人类确认当前 Actions 至少余15分钟后，唯一手动 run `40051514004/attempt1/job120745015499` 成功，用时728秒；控制器与产品均准确 `95cd6f90ff6d6be4081ccaef6e68d9df0b51a60a`，Rust tree `233d978c6a97e387fb107c01505a8b4357c88b68`。默认 Release/features[] 的完整 normal、新首消息默认目录/capability相关 Linux 5+1项测试、完整schema/API3/149方法/Store21及可安装封包均独验接受。502项manifest、完整1953 Git输入/478 Rust输入与原fresh构建证明保全；包不能改标为本次后续记录提交。旧M与失败证据保原来源，不重复稳定业务或all-features，不自动重跑CI。

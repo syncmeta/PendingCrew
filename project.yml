@@ -144,11 +144,14 @@ targets:
         SUPPORTS_MACCATALYST: NO
       configs:
         Debug:
+          # App-only explicit qualification input, supplied by the reviewed Local
+          # signing overlay. Empty in ordinary builds; never a global SPM flag.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG $(PENDINGCREW_APPLE_SERVICE_CONDITIONS)"
           # Simulator Keychain uses only this app's identity, without a team or shared group.
           "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Config/Simulator.entitlements
           "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist
           "MARKETING_VERSION[sdk=macosx*]": "0.1.44"
-          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT"
+          "SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]": "$(inherited) DEBUG PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT $(PENDINGCREW_APPLE_SERVICE_CONDITIONS)"
           "OTHER_LDFLAGS[sdk=macosx*]": "$(inherited) -Wl,-dead_strip_dylibs"
         Release:
           "INFOPLIST_FILE[sdk=macosx*]": Config/Mac-Info.plist

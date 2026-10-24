@@ -17,9 +17,9 @@ import Darwin
     private static var instance:CrewPersonalDraftService?
     private static var owners:[String:CrewPersonalDraftService]=[:]
     private static var appActive=false
-    // Filled only by a later explicitly qualified signed overlay. Nil performs
-    // no CKContainer/account/KVS discovery, even if a prior preference is true.
-    static let applicationConfiguration:ApplePersonalCloudConfiguration?=nil
+    // Ordinary and HotReload builds remain unqualified. Explicit Development
+    // builds still require the original per-user opt-in before account access.
+    static let applicationConfiguration = CrewAppleServiceDevelopment.cloudConfiguration()
     static var shared:CrewPersonalDraftService {
         if let instance{return instance}
         let next=owned(root:PendingCrewDataRoot.url.appendingPathComponent("personal-input",isDirectory:true))
