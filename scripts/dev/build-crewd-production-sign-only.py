@@ -62,18 +62,27 @@ def distribution_entitlements(template,profile,team,bundle):
     if len(set(expanded))!=len(expanded):raise ValueError('duplicate source entitlement')
     return {'com.apple.application-identifier':application,'com.apple.developer.team-identifier':team,'keychain-access-groups':expanded}
 
-def production_archive_argv(v,snapshot,out,normal_sha,build_number):
+def marketing_version(value):
+    if not isinstance(value,str) or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',value):raise ValueError('numeric three-part marketing version required')
+    return value
+
+def qualify_product_info(info,source_ref,build_number,version='0.1.44'):
+    version=marketing_version(version)
+    if info.get('CFBundleIdentifier')!='com.pendingname.pendingcrew' or info.get('PendingCrewSourceRef')!=source_ref or info.get('BuildStampCommit')!=source_ref or info.get('CFBundleVersion')!=build_number or info.get('CFBundleShortVersionString')!=version:raise ValueError('actual archive source/version differs')
+
+def production_archive_argv(v,snapshot,out,normal_sha,build_number,version='0.1.44'):
     """One production overlay over the protected original local-Core Release.
     Xcode always archives unsigned; the exact reviewed profile and expanded
     source claims are embedded and signed explicitly after archive qualification.
     """
     if not re.fullmatch('[0-9a-f]{64}',normal_sha) or not re.fullmatch(r'[0-9]+\.[0-9]{5}',build_number):raise ValueError('exact backend SHA and ordinary build version required')
+    version=marketing_version(version)
     return ['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Release','-destination','platform=macOS,arch=arm64','-derivedDataPath',v['derivedData'],'-clonedSourcePackagesDirPath',v['sourcePackages'],'-disableAutomaticPackageResolution','-skipPackageUpdates','-jobs','2','ARCHS=arm64',
         'CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_IDENTITY=','DEVELOPMENT_TEAM=','PROVISIONING_PROFILE_SPECIFIER=','PROVISIONING_PROFILE=','CODE_SIGN_ENTITLEMENTS=',
         'ENABLE_HARDENED_RUNTIME=YES','ENABLE_DEBUG_DYLIB=NO','ENABLE_PREVIEWS=NO',
         'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_LOCAL_MAC PENDINGCREW_REMOTE_PRODUCT',
         'PENDINGCREW_BACKEND_INPUT='+str(out/'crewd.pre-sign'),'PENDINGCREW_BACKEND_SHA256='+normal_sha,
-        'PENDINGCREW_PRODUCT_SOURCE_REF='+v['sourceRef'],'MARKETING_VERSION=0.1.44','CURRENT_PROJECT_VERSION='+build_number,
+        'PENDINGCREW_PRODUCT_SOURCE_REF='+v['sourceRef'],'MARKETING_VERSION='+version,'CURRENT_PROJECT_VERSION='+build_number,
         '-archivePath',str(out/'PendingCrew.xcarchive')]
 
 def copy_backend_for_archive(source,destination,expected_sha):
@@ -93,11 +102,11 @@ def production_sign_argv(identity,artifact,timestamp_mode='none',entitlements=No
     return args+[str(artifact)]
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('manifest');p.add_argument('--execute',action='store_true');p.add_argument('--timestamp-mode',choices=['none','secure'],default='none');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('manifest');p.add_argument('--execute',action='store_true');p.add_argument('--timestamp-mode',choices=['none','secure'],default='none');p.add_argument('--marketing-version',type=marketing_version,default='0.1.44');a=p.parse_args()
     scope,v,repo=prepare(a.manifest);manifest_hash=sha(pathlib.Path(a.manifest));out=scope/'signed-output'
     if out.exists():raise ValueError('immutable fresh output required')
     if not a.execute:
-        print(json.dumps({'sourceRef':v['sourceRef'],'backendCompiledRef':v['backendCompiledRef'],'configuration':'Release','remoteProductOverlay':True,'preservesLocalCoreGuards':True,'identifier':'com.pendingname.pendingcrew','hardenedRuntime':True,'timestampMode':a.timestamp_mode,'explicitInputsPresent':True,'profileCompatibilityValidated':False,'identityAvailabilityValidated':False,'output':str(out),'actualSigning':False,'notarize':False,'upload':False,'install':False},indent=2));return
+        print(json.dumps({'sourceRef':v['sourceRef'],'backendCompiledRef':v['backendCompiledRef'],'configuration':'Release','marketingVersion':a.marketing_version,'remoteProductOverlay':True,'preservesLocalCoreGuards':True,'identifier':'com.pendingname.pendingcrew','hardenedRuntime':True,'timestampMode':a.timestamp_mode,'explicitInputsPresent':True,'profileCompatibilityValidated':False,'identityAvailabilityValidated':False,'output':str(out),'actualSigning':False,'notarize':False,'upload':False,'install':False},indent=2));return
     if shutil.disk_usage(scope).free<3221225472:raise ValueError('3GiB capacity required before build')
     out.mkdir(mode=0o700);snapshot=out/'source-inputs';snapshot.mkdir();archive=out/'source.tar'
     subprocess.run(['git','archive','--format=tar','-o',str(archive),v['sourceRef']],cwd=repo,check=True)
@@ -133,7 +142,7 @@ def main():
     local=snapshot/'Config/Local.xcconfig'
     local.write_text('CODE_SIGNING_ALLOWED = NO\nCODE_SIGNING_REQUIRED = NO\nCODE_SIGN_IDENTITY =\nCODE_SIGN_IDENTITY[sdk=macosx*] =\nDEVELOPMENT_TEAM =\nPROVISIONING_PROFILE_SPECIFIER =\nPROVISIONING_PROFILE =\nCODE_SIGN_ENTITLEMENTS =\n')
     epoch=int(time.time());build_number=str(epoch//86400)+'.'+format(epoch%86400,'05d')
-    argv=production_archive_argv(v,snapshot,out,witness['binarySHA256'],build_number)
+    argv=production_archive_argv(v,snapshot,out,witness['binarySHA256'],build_number,a.marketing_version)
     builder.query(argv+['-showBuildSettings','-json'],snapshot,out/'settings.log',out/'settings.json')
     settings=next(x['buildSettings'] for x in json.loads((out/'settings.json').read_text()) if x.get('target')=='PendingCrew')
     if settings.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew' or settings.get('DEVELOPMENT_TEAM','')!='' or settings.get('CODE_SIGNING_ALLOWED')!='NO' or settings.get('CODE_SIGNING_REQUIRED')!='NO' or any(settings.get(k,'') for k in ['CODE_SIGN_IDENTITY','CODE_SIGN_ENTITLEMENTS','PROVISIONING_PROFILE_SPECIFIER','PROVISIONING_PROFILE']) or settings.get('ENABLE_HARDENED_RUNTIME')!='YES' or settings.get('ARCHS')!='arm64' or settings.get('ENABLE_DEBUG_DYLIB')!='NO' or not {'PENDINGCREW_LOCAL_MAC','PENDINGCREW_REMOTE_PRODUCT'}.issubset(settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split()) or any(x in settings.get('SWIFT_ACTIVE_COMPILATION_CONDITIONS','').split() for x in ['DEBUG','PENDINGCREW_NATIVE_CANDIDATE','PENDINGCREW_DELIVERY_VALIDATION','PENDINGCREW_KNOWLEDGE_VALIDATION']):raise ValueError('actual Release production configuration mismatch')
@@ -149,7 +158,7 @@ def main():
     if sha(helper)!=witness['binarySHA256']:raise ValueError('archive did not embed the exact normal Core input')
     builder.run(production_sign_argv(v['identitySHA1'],helper,a.timestamp_mode),snapshot,out/'helper-sign.log')
     info=app/'Contents/Info.plist';info_value=plistlib.loads(info.read_bytes())
-    if info_value.get('CFBundleIdentifier')!='com.pendingname.pendingcrew' or info_value.get('PendingCrewSourceRef')!=v['sourceRef'] or info_value.get('BuildStampCommit')!=v['sourceRef'] or info_value.get('CFBundleVersion')!=build_number or info_value.get('CFBundleShortVersionString')!='0.1.44':raise ValueError('actual archive source/version differs')
+    qualify_product_info(info_value,v['sourceRef'],build_number,a.marketing_version)
     # Archive is a new artifact created by this exact invocation. Preserve its
     # actual main before resealing; never mutate an installed or earlier bundle.
     shutil.copy2(app/'Contents/MacOS'/info_value['CFBundleExecutable'],out/'gui.archive-image')

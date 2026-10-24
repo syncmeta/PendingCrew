@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Recipe construction and local archive/inode checks. No Xcode/security/Apple calls."""
-import copy,hashlib,importlib.util,io,os,pathlib,plistlib,shutil,subprocess,sys,tarfile,tempfile
+import contextlib,copy,hashlib,importlib.util,io,os,pathlib,plistlib,shutil,subprocess,sys,tarfile,tempfile
 sys.dont_write_bytecode=True
 root=pathlib.Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('sign_recipe',root/'scripts/dev/build-crewd-production-sign-only.py')
@@ -32,11 +32,44 @@ for token in ['CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_ID
 assert not any('[sdk=' in token for token in args)
 assert '-allowProvisioningUpdates' not in args and '-configuration' in args and args[args.index('-configuration')+1]=='Release'
 print('PASS unsigned ordinary Release construction clears Xcode signing/profile selection; no provisioning updates')
+assert 'MARKETING_VERSION=0.1.44' in args
+version_args=m.production_archive_argv({'derivedData':'/existing/warm','sourcePackages':'/existing/spm','sourceRef':'a'*40},pathlib.Path('/snapshot'),pathlib.Path('/out'),'b'*64,'20749.00001','0.2.0')
+assert [x for x in version_args if x.startswith('MARKETING_VERSION=')]==['MARKETING_VERSION=0.2.0']
+assert [x for x in args if not x.startswith('MARKETING_VERSION=')]==[x for x in version_args if not x.startswith('MARKETING_VERSION=')]
+print('PASS explicit0.2.0 archive version; default0.1.44 and all other original archive arguments unchanged')
 
 def reject_call(label,operation):
  try:operation()
  except ValueError:print('PASS reject '+label);return
  raise AssertionError('accepted '+label)
+
+info={'CFBundleIdentifier':bundle,'PendingCrewSourceRef':'a'*40,'BuildStampCommit':'a'*40,'CFBundleVersion':'20749.00001','CFBundleShortVersionString':'0.2.0'}
+m.qualify_product_info(info,'a'*40,'20749.00001','0.2.0')
+legacy_info=dict(info,CFBundleShortVersionString='0.1.44')
+m.qualify_product_info(legacy_info,'a'*40,'20749.00001')
+reject_call('old actual metadata under requested0.2.0',lambda:m.qualify_product_info(legacy_info,'a'*40,'20749.00001','0.2.0'))
+reject_call('new actual metadata under default0.1.44',lambda:m.qualify_product_info(info,'a'*40,'20749.00001'))
+for key in ['PendingCrewSourceRef','BuildStampCommit','CFBundleVersion','CFBundleIdentifier']:
+ reject_call('version gate preserves '+key,lambda key=key:m.qualify_product_info(dict(info,**{key:'wrong'}),'a'*40,'20749.00001','0.2.0'))
+for value in ['', '0.2', '0.2.0-preview', '00.2.0', '0.2.0\nOTHER=1']:
+ reject_call('invalid marketing version '+repr(value),lambda value=value:m.production_archive_argv({'derivedData':'/existing/warm','sourcePackages':'/existing/spm','sourceRef':'a'*40},pathlib.Path('/snapshot'),pathlib.Path('/out'),'b'*64,'20749.00001',value))
+print('PASS actual metadata gate binds requested version and retains every source/build/identifier check')
+
+# Exercise the actual CLI parser and read-only plan. Only the separately tested
+# source/profile preparation boundary is replaced; no execute flag is passed.
+with tempfile.TemporaryDirectory(prefix='pcw-version-plan-fixture-') as temporary:
+ scope=pathlib.Path(temporary);manifest=scope/'fixture-manifest';manifest.write_text('{}');original_prepare=m.prepare;original_argv=sys.argv
+ try:
+  m.prepare=lambda manifest:(scope,{'sourceRef':'a'*40,'backendCompiledRef':'b'*40},root)
+  for flags,version in [([], '0.1.44'),(['--marketing-version','0.2.0'], '0.2.0')]:
+   sys.argv=['build-crewd-production-sign-only.py',str(manifest)]+flags;output=io.StringIO()
+   with contextlib.redirect_stdout(output):m.main()
+   plan=__import__('json').loads(output.getvalue())
+   assert plan['marketingVersion']==version and plan['timestampMode']=='none'
+   assert plan['actualSigning'] is False and plan['notarize'] is False and plan['upload'] is False
+   assert not (scope/'signed-output').exists()
+ finally:m.prepare=original_prepare;sys.argv=original_argv
+print('PASS actual CLI default/0.2.0 read-only plans preserve original local timestamp/signing semantics')
 
 assert m.production_sign_argv('identity','/app')==['codesign','--force','--sign','identity','--options','runtime','--timestamp=none','/app']
 for artifact in ['/app','/app/Contents/Helpers/crewd']:

@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 按人工要求收敛为一个 0.2.0 安装预览发布
+
+人类明确要求 Linux 与 Mac 放在同一个 Release，版本可从0.2开始，安装资产齐备才发布。后续唯一目标为 `v0.2.0`，不再新增独立 Mac Release。原无安装包的0.1.44源码预览已实际收回draft（标签、正文保留）；现有Linux预览在新合并版就绪前保持原入口，随后收拢为草稿，旧稳定版与自动更新渠道不动。
+
+准确08c/0.1.44-20750.48135的Developer ID、安全时间戳与整包独验已接受；原合法私域首开本机ready、四执行表全0，正常退出后App/Core真gone，日用fd7进程未变。首次Apple上传在CreateProcess前被自动审批拒绝；人类随后针对准确f5c99 ZIP明确授权，唯一真实公证UUID `7c8ca4cb-78ac-4c35-a352-a6717b1ebcd7` 已Accepted，私有副本staple及原签名/Gatekeeper/ZIP/dSYM门均0。此旧版本产物只作私有历史保全，不改标成0.2、不公开、不安装。0.2需要真实新版本构建/签名及对应公证；原iOS0.1.44准备从未dispatch。
+
+0.2原production controller正常marketing-version参数已完成两源独验，原fixture实际42PASS/exit0，默认0.1.44与原身份/双源戳/构建号守卫保留，显式0.2贯通archive与真实Info断言；Swift、Rust、Info模板及工程无需改变。本节与两源由根保存唯一新同源冻结，随后复用原暖缓存串行构建Mac/iOS，维持各次fresh3GiB门。Linux复用明确compiledfd7的已接受ELF与完整证明，原packager URL参数足够将安装脚本/manifest/tar统一指向v0.2.0，保原source-qualified URL门，不重跑CI、不伪称新编译后台。
+
+最新普通原子push0及GitHub API两ref读回确认main/global均08c。公开Linux install.py/manifest原URL各一次GET实际200，原字节/hash精确，前次超时保留为历史。VPS13:33Z新一次原地址SSH仍connect timeout/exit255，无远端命令，当前服务未知，不再探针；该局部外部条件不停止其他交付。仅清理已核定20个npm内容寻址下载缓存前缀，约1.020GiB计划分配量；终态0后实际可用4,298,846,208B，保护抽样前后全同，无SDK/暖DD/SPM/实际包删除。APFS并发变化不冒称等额空间归因。
+
 ## 2026-10-24 fd7 完整 Mac 日用交付与准确 Linux 公开资产接受
 
 根全文受领最终四份独验：Sidebar外框闭合06a9c98f、普通Mac完整候选fbd2b84f、真实日用安装/普通首开41772b9c，以及Linux完整产物f564f7d5；亲看最终两Sidebar图与真实日用首开图。精确来源与范围沿原件，不重跑已验业务。新Mac为fd7／0.1.44-20750.44496，原2009源/3878依赖前后及11保护全同，293项manifest与115整包/ZIP、M42/BF947实际双来源戳/签名/加载闭合接受，保留本地Development Debug/nonhermetic限制。后端明确compiledb0/f621，完整478/e873及原配方、七环境、fresh owning graph逐字桥接，绝非fd7新normal。
