@@ -561,7 +561,7 @@ struct CrewdSidebarConversations: View {
                         .buttonStyle(.borderless).accessibilityLabel("返回机组选择")
                 } else { Text("会话").font(.headline) }
                 Spacer(minLength: 0)
-                directoryTools
+                directoryTools.tint(.gray)
             }.controlSize(.small).frame(minHeight: 36).padding(.horizontal, 10)
             #endif
             directory.frame(maxWidth: .infinity, maxHeight: .infinity)

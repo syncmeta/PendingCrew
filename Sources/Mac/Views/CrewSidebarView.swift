@@ -175,6 +175,7 @@ struct CrewSidebarView: View {
             .tint(Theme.Palette.accent)
             Button { crewStore.beginPendingCrew() } label: { Image(systemName:"plus") }
                 .buttonStyle(CrewdToolButtonStyle()).help("新建机组").accessibilityLabel("新建机组")
+                .tint(.gray)
             Menu {
                 Button("按最近消息排序") { viewModeRaw = CrewSidebarViewMode.timeline.rawValue }
                 Button("按机长整理排序") { viewModeRaw = CrewSidebarViewMode.chief.rawValue }

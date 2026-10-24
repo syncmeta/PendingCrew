@@ -383,7 +383,7 @@ struct CrewChatView: View {
                 communicationControls(compact:false)
                 communicationControls(compact:true)
             }.fixedSize(horizontal:false,vertical:true)
-        }.padding(.horizontal,14).padding(.vertical,6).tint(Theme.Palette.accent)
+        }.padding(.horizontal,14).padding(.vertical,6).tint(.gray)
     }
     private func communicationControls(compact:Bool)->some View {
         HStack(spacing:8){
