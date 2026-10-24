@@ -481,51 +481,55 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-aaaa","ledger":"agent"}"#,
             Ok,
         ),
+        // Legacy document CRUD is withdrawn in favor of SQLite knowledge.
+        // These typed negatives cover routing, not legacy document usability.
         (
             "document.create",
-            r#"{"requestId":"fb69c781-91bb-4220-ae23-79d1a231861d","crewId":"local-aaaa","title":"CLI doc","body":"CLI original 🙂"}"#,
-            Ok,
+            r#"{"crewId":"local-aaaa","title":"missing create request"}"#,
+            Code(-32602),
         ),
         (
             "document.get",
-            r#"{"id":"11111111-1111-4111-8111-111111111111"}"#,
-            Code(-32004),
+            r#"{"id":7}"#,
+            Code(-32602),
         ),
-        ("document.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        ("document.list", r#"{"crewId":7}"#, Code(-32602)),
         (
             "document.update",
-            r#"{"id":"11111111-1111-4111-8111-111111111111","expectedRevision":"1","title":"x","body":"x"}"#,
-            Code(-32004),
+            r#"{"id":"11111111-1111-4111-8111-111111111111","title":"missing revision"}"#,
+            Code(-32602),
         ),
         (
             "document.delete",
-            r#"{"id":"11111111-1111-4111-8111-111111111111","expectedRevision":"1"}"#,
-            Code(-32004),
+            r#"{"id":"11111111-1111-4111-8111-111111111111"}"#,
+            Code(-32602),
         ),
         (
             "viewFolder.list",
-            r#"{"crewId":"local-aaaa","view":"documents"}"#,
+            r#"{"crewId":"local-aaaa","view":"progress"}"#,
             Ok,
         ),
         (
             "viewFolder.create",
-            r#"{"requestId":"56fc7f71-3fde-494b-a163-7c1a646af4af","crewId":"local-aaaa","view":"documents","expectedTreeRevision":"0","name":"CLI folder"}"#,
+            r#"{"requestId":"56fc7f71-3fde-494b-a163-7c1a646af4af","crewId":"local-aaaa","view":"progress","expectedTreeRevision":"0","name":"CLI folder"}"#,
             Ok,
         ),
+        // The preceding progress-folder cycle advanced this tree revision.
+        // Stale revision 0 must conflict before object lookup or mutation.
         (
             "viewFolder.update",
             r#"{"crewId":"local-aaaa","view":"progress","id":"11111111-1111-4111-8111-111111111111","expectedTreeRevision":"0","name":"x","position":0}"#,
-            Code(-32004),
+            Code(-32009),
         ),
         (
             "viewFolder.delete",
             r#"{"crewId":"local-aaaa","view":"progress","id":"11111111-1111-4111-8111-111111111111","expectedTreeRevision":"0"}"#,
-            Code(-32004),
+            Code(-32009),
         ),
         (
             "viewFolder.assign",
             r#"{"crewId":"local-aaaa","view":"progress","expectedTreeRevision":"0","object":{"kind":"work","id":"W999"}}"#,
-            Code(-32003),
+            Code(-32009),
         ),
         (
             "channel.workList",
@@ -633,6 +637,68 @@ fn rpc_drives_every_client_method() {
         ("judgment.settings.get", "null", Ok),
         ("judgment.settings.set", "null", Code(-32602)),
         ("judgment.inspect", "null", Code(-32602)),
+        // Knowledge writes require a request/revision/source envelope; a channel
+        // alone must be rejected before a link or workspace can be created.
+        ("channel.knowledgeLink", r#"{"channelId":"local-aaaa/lobby"}"#, Code(-32602)),
+        ("channel.knowledgeUnlink", r#"{"channelId":"local-aaaa/lobby"}"#, Code(-32602)),
+        ("channel.knowledgeList", r#"{"channelId":"local-aaaa/lobby","limit":-1}"#, Code(-32602)),
+        ("channel.workTagsSet", r#"{"channelId":"local-aaaa/lobby","tags":[]}"#, Code(-32602)),
+        // A crew ID is not a bound DataContext. Each route must parse its own
+        // closed DTO and reject the missing authority/DB/epoch/generation before
+        // any workspace initialization, SQL submission, preview or restore.
+        ("data.confirm", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.history", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.object.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.object.list", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.preview", r#"{"context":{"crewId":"local-aaaa"},"statements":[]}"#, Code(-32602)),
+        ("data.preview.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.query", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.request.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.restore", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.schema.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.snapshots", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.submit", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        ("data.table.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        // Workspace inspection itself is a safe read, including uninitialized.
+        ("data.workspace.get", r#"{"crewId":"local-aaaa"}"#, Ok),
+        // Missing Human task text/request is not permission to create an ask.
+        ("humanTask.create", r#"{"crewId":"local-aaaa","channelId":"local-aaaa/lobby"}"#, Code(-32602)),
+        // Each rpc CLI invocation is an independent observer connection. Do not
+        // claim management or exit the fixture: malformed empty-DTO objects are
+        // rejected; an actual exit by a non-owner is forbidden.
+        ("lifecycle.status", "{}", Ok),
+        ("lifecycle.claim", r#"{"unexpected":true}"#, Code(-32602)),
+        ("lifecycle.release", r#"{"unexpected":true}"#, Code(-32602)),
+        ("lifecycle.exit", r#"{"mode":"safePause"}"#, Code(-32003)),
+        ("local.clientTrust.status", "{}", Ok),
+        ("personalDraft.status", "{}", Ok),
+        // A partial space/member scope cannot authorize personal draft access.
+        ("personalDraft.branches", r#"{"scope":{"spaceId":"not-approved"}}"#, Code(-32602)),
+        ("personalDraft.catalog", r#"{"scope":{"spaceId":"not-approved"}}"#, Code(-32602)),
+        ("personalDraft.members", r#"{"spaceId":"not-approved"}"#, Code(-32602)),
+        ("personalDraft.requestFence", r#"{"original":{}}"#, Code(-32602)),
+        // No token is generated or enrollment begun: the signed/UUID envelopes
+        // remain required even while the fixture listener is disabled.
+        ("remote.enrollmentCreate", r#"{"computerLabel":"offline fixture"}"#, Code(-32602)),
+        ("remote.enrollmentLookup", r#"{"enrollmentId":"11111111-1111-4111-8111-111111111111"}"#, Code(-32602)),
+        ("resource.requestLookup", r#"{"requestId":7}"#, Code(-32602)),
+        // These DTO negatives exercise the public typed parsers, not provider
+        // history/model execution. No valid input bytes or live source is given.
+        ("session.claude.history", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.claude.inspect", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.claude.taskGet", r#"{"sessionId":"worker-2222bbbb"}"#, Code(-32602)),
+        ("session.codex.history", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.codex.inspect", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.codex.models", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.codex.permissionProfiles", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.codex.tools", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.codex.inputDiscard", r#"{"crewId":"local-aaaa"}"#, Code(-32602)),
+        ("session.codex.inputLookup", r#"{"crewId":"local-aaaa"}"#, Code(-32602)),
+        ("session.codex.inputPrepare", r#"{"crewId":"local-aaaa","filename":"not-uploaded.txt"}"#, Code(-32602)),
+        // Existing object identities remain typed, not arbitrary todo strings.
+        ("todo.assign", r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#, Code(-32602)),
+        ("todo.attributesGet", r#"{"object":{"kind":"invalid"}}"#, Code(-32602)),
+        ("todo.setState", r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#, Code(-32602)),
         // Hibernate ends the server, so it is the final method in this table.
         ("crewd.hibernate", "null", Ok),
     ];
@@ -643,7 +709,6 @@ fn rpc_drives_every_client_method() {
     all.sort();
     assert_eq!(covered, all, "加了新方法就在这里加一条");
     let mut created_work = Vec::new();
-    let mut created_document = None;
     for (method, params, want) in cases {
         let out: Output = crewd(data.path())
             .args(["rpc", method, params])
@@ -706,52 +771,19 @@ fn rpc_drives_every_client_method() {
             );
             created_work.push(second["id"].as_str().unwrap().to_owned());
             assert_ne!(created_work[0], created_work[1]);
-        } else if method == "document.create" {
-            let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-            let id = first["document"]["id"].as_str().unwrap();
-            let original = rpc(
-                data.path(),
-                "document.get",
-                &serde_json::json!({"id":id}).to_string(),
-            );
-            assert_eq!(original["body"], "CLI original 🙂");
-            let edited=rpc(data.path(),"document.update",&serde_json::json!({"id":id,"expectedRevision":original["revision"],"title":"CLI edited","body":"changed 🐾"}).to_string());
-            assert_eq!(edited["revision"], "2");
-            let retry = rpc(data.path(), "document.create", params);
-            assert_eq!(retry["reused"], true);
-            assert_eq!(retry["document"], edited);
-            created_document = Some(id.to_string());
         } else if method == "viewFolder.create" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             let folder = first["folders"][0]["id"].as_str().unwrap();
-            let doc = created_document.as_ref().unwrap();
-            let assigned=rpc(data.path(),"viewFolder.assign",&serde_json::json!({"crewId":"local-aaaa","view":"documents","expectedTreeRevision":first["treeRevision"],"object":{"kind":"document","id":doc},"folderId":folder}).to_string());
-            assert_eq!(assigned["assignments"][0]["object"]["id"], doc.as_str());
-            let updated=rpc(data.path(),"viewFolder.update",&serde_json::json!({"crewId":"local-aaaa","view":"documents","id":folder,"expectedTreeRevision":assigned["treeRevision"],"name":"renamed","position":0}).to_string());
+            let work = &created_work[0];
+            let original = rpc(data.path(), "work.get", &serde_json::json!({"id":work}).to_string());
+            let assigned=rpc(data.path(),"viewFolder.assign",&serde_json::json!({"crewId":"local-aaaa","view":"progress","expectedTreeRevision":first["treeRevision"],"object":{"kind":"work","id":work},"folderId":folder}).to_string());
+            assert_eq!(assigned["assignments"][0]["object"]["id"], work.as_str());
+            let updated=rpc(data.path(),"viewFolder.update",&serde_json::json!({"crewId":"local-aaaa","view":"progress","id":folder,"expectedTreeRevision":assigned["treeRevision"],"name":"renamed","position":0}).to_string());
             assert_eq!(updated["folders"][0]["name"], "renamed");
-            let deleted=rpc(data.path(),"viewFolder.delete",&serde_json::json!({"crewId":"local-aaaa","view":"documents","id":folder,"expectedTreeRevision":updated["treeRevision"]}).to_string());
+            let deleted=rpc(data.path(),"viewFolder.delete",&serde_json::json!({"crewId":"local-aaaa","view":"progress","id":folder,"expectedTreeRevision":updated["treeRevision"]}).to_string());
             assert_eq!(deleted["folders"], serde_json::json!([]));
             assert_eq!(deleted["assignments"], serde_json::json!([]));
-            let d = rpc(
-                data.path(),
-                "document.get",
-                &serde_json::json!({"id":doc}).to_string(),
-            );
-            assert_eq!(d["body"], "changed 🐾");
-            let gone = rpc(
-                data.path(),
-                "document.delete",
-                &serde_json::json!({"id":doc,"expectedRevision":d["revision"]}).to_string(),
-            );
-            assert!(gone["deletedAt"].is_string());
-            assert_eq!(
-                rpc(
-                    data.path(),
-                    "document.get",
-                    &serde_json::json!({"id":doc}).to_string()
-                )["body"],
-                d["body"]
-            );
+            assert_eq!(rpc(data.path(), "work.get", &serde_json::json!({"id":work}).to_string()), original);
         } else if method == "channel.workList" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             assert_eq!(first["items"], serde_json::json!([]));
