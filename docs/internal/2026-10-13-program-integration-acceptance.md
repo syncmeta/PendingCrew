@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 执行回归、共同顶栏与原生 Sketch 整合接受
+
+本地 main 已包含后端 `35315bd5`、共同顶栏 `215c9587` 与原生原型 `c4e3e4e1`。根读取完整独验报告，逐字比较20路径 Rust diff 与封存 `d59f08bc3e2fdd07b159d58f4420bccccd44c1077ac126bd14198fcc05074ab7` 相同，并亲看共同顶栏最终实图与原生 Sketch 播放截图。未将独立源验收冒当前普通包、安装或全工程通过。
+
+`execution-quality-closure-20261024/INDEPENDENT-CLOSURE-QA.json` 接受478当前/快照源、17实际二进制、548项封存与16条最终外层日志，246通过、0失败、10 ignored、2484 filtered。唯一普通生产修复是 input 的 stale20→精确 SCHEMA_VERSION；Owner/库/机组/来源/全文/原UUID、事务和恢复失效门保留。原all-features85目标仍14失败且serverlib栈中断，未再跑全套；最终受影响组合不证明此前未完成的全部serverlib项。latest literal/helper原执行终态补件明确区分作者原会话记录与已封原log，未伪称新抓取。真实active stop/Unknown回执、原进程物理消失和sim故障分层保留，不称单case active hibernate端到端通过。
+
+`ui-common-top-position-20261024/INDEPENDENT-FINAL-POSITION-QA.json` 接受两源与实际main/debug/helper绑定，原C26999/Core27007在900×688实际共同顶栏、原Tab点击、唯一搜索、侧栏隐藏/恢复及traffic-light避让通过，最终恢复静态消息页。根亲看 `execution/common-top-final-restored.png`。原6源界面模块其余已验范围不重复，手机及900以下未扩验。当前开发产物仍是旧e1 helper组合，不能冒本轮20路径normal或日用更新。
+
+原生 `PendingCrew-PrivateTeam.sketch` SHA `614552e2acfc5ab48d6caf1062f3473f96fba2fa309dee08c3d9489f38bfca26`，49画板/1320 Flow/34返回/6 Symbols/4526唯一ID均通过schema与全部可达校验，官方CLI导出49/49；Sketch.app实点01→07→08→09→10→原生back返回09。文件保持打开，无人工未保存图层编辑；原型中的发送/保存等为预填设计状态，非真实业务。旧原型与初稿证据保留。
+
+Mac日用仍0273／20750.24346。iPhone官方保数据更新已独验准确f7／20750.22585，证据 `apple-personal-sync-f7e6ece6-phone-update-20261024/attempt-02-after-human-connected-unlocked/INDEPENDENT-PHONE-UPDATE-QA.json`；不卸载、不工具launch，原连接失败/Unknown不改写。保存写回、双端云合并/重开仍未接受，按最新优先级停止独立草稿小轮。普通main/global推送均超时，实际远端仍f7；VPS新只读连接超时、未执行远端命令，当前资格未知。下一准确普通组合先核磁盘后沿原暖配方构建一次，既有0273/f7/Linux95来源和稳定业务证据均不改标。
+
 ## 2026-10-24 个人草稿界面与 Mac 日用更新完整接受，手机写回仍未接受
 
 界面源 `f7e6ece6932394f8ab2f1a7cdb343169c2315123`（单 Swift 文件153增/43删）独验接受：原文预览、来源/设备版本数、技术详情折叠、窄屏排列和实际本机保存状态。原 Save/任务/服务/DTO/持久分支合同不变；未就绪编辑器仍有原身份和加载门，避免用空值覆盖未读取的同 writer 原文。原加载任务7项与保存状态13项独验合格，范围仅控制缝隙；实际 Mac 本机保存与退出重开另有真实证据，不能当作手机或 Cloud 写回通过。
