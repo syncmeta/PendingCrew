@@ -97,10 +97,11 @@ struct CrewSessionWindowView: View {
             }
         }
         // 填满 inspector 栏 —— 内容是弹性的，跟随固定列宽布局，不溢出。
-        .frame(maxWidth: .infinity)
+        .frame(minWidth:0,maxWidth: .infinity)
         .safeAreaInset(edge:.bottom){
             if ownsCrewdComposer, (presentation == .conversation || sessionRunner.viewingTerminal),let owner=presentedDraftOwner,let context=presentedDraftContext {
                 CrewPersonalDraftControls(workspace:owner,context:context,payload:Binding(get:{.init(text:draft)},set:{sessionDraftBinding.wrappedValue=$0.text})).padding(.horizontal,12).padding(.vertical,5)
+                    .frame(minWidth:0,maxWidth:.infinity,alignment:.leading)
             }
         }
         // 无 navigationTitle —— 这是 inspector 内容,标题会漏到主窗标题栏(显成
@@ -247,14 +248,17 @@ struct CrewSessionWindowView: View {
     // MARK: - 终端模式（切换条 + 终端 + composer）
 
     private var terminalMode: some View {
-        HStack(spacing: 0) {
-            if presentation != .conversation {
-            // 左侧成员头像竖条 —— 始终保留(含新建 session 占位),当前 session/新建态高亮。
-            terminalRail
-            Divider()
+        GeometryReader { available in
+            let railWidth:CGFloat = presentation == .conversation ? 0 : 65
+            HStack(spacing:0) {
+                if presentation != .conversation {
+                    terminalRail
+                    Divider().frame(width:1)
+                }
+                terminalContent
+                    .frame(width:max(0,available.size.width-railWidth),height:available.size.height)
             }
-            terminalContent
-                .frame(minWidth:0,maxWidth:.infinity,maxHeight:.infinity)
+            .frame(width:available.size.width,height:available.size.height)
         }
     }
 

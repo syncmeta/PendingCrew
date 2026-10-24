@@ -431,24 +431,19 @@ private struct CrewdOriginalMessages<Content: View>: View {
         VStack(spacing: 0) {
             if let header { header }
             GeometryReader { available in
-                // The pre-rewrite work area kept group chat and the member/
-                // terminal pane side by side. The new shared tabs stay above
-                // both; bound the old minimums to the actual available width.
-                HSplitView {
-                    // Split sizing belongs to the pane, not the ideal width of
-                    // its current chat, roster or terminal contents. In particular,
-                    // entering the terminal must not grow the entire split view.
-                    GeometryReader { pane in
-                        content().frame(width:pane.size.width,height:pane.size.height)
-                    }
-                    .frame(minWidth:min(360,max(0,(available.size.width-1)/2)),maxWidth:.infinity,maxHeight:.infinity)
-                    GeometryReader { pane in
-                        CrewSessionWindowView(conversationVisible:workspace.originalSection == "消息")
-                            .frame(width:pane.size.width,height:pane.size.height)
-                    }
-                    .frame(minWidth:min(320,max(0,(available.size.width-1)/2)),idealWidth:400,maxWidth:560,maxHeight:.infinity)
+                // Keep both original regions within the actual work area.
+                // The right pane keeps its old 400pt ideal; at narrow widths
+                // the two panes share the finite space rather than negotiating
+                // their contents' intrinsic sizes through NSSplitView.
+                let rightWidth=min(400,max(0,(available.size.width-1)/2))
+                let leftWidth=max(0,available.size.width-rightWidth-1)
+                HStack(spacing:0) {
+                    content().frame(width:leftWidth,height:available.size.height)
+                    Divider().frame(width:1)
+                    CrewSessionWindowView(conversationVisible:workspace.originalSection == "消息")
+                        .frame(width:rightWidth,height:available.size.height)
                 }
-                .frame(maxWidth:.infinity,maxHeight:.infinity)
+                .frame(width:available.size.width,height:available.size.height)
             }
         }.frame(minWidth:0,maxWidth:.infinity,maxHeight:.infinity)
         .background(CrewdConversationFocusReset(key: workspace.originalSection + workspace.crewID + workspace.channelID + (showingSession ? runner.selectedRunId?.uuidString ?? "new" : "channel")))
