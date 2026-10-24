@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-24 Apple 新描述文件与双端开发包接受，Mac 实际云草稿保存/重开通过
+
+人类提供的两份更新 Development profiles 已独立核实：原 Team M42BKJN82S、正常 App ID、现有 BF947 证书及原 Mac/iPhone，CloudKit 容器 iCloud.com.pendingname.pendingcrew 与 Development 权限匹配。没有新建证书/设备或探测门户。基于完整冻结源 `d509a8c6cc9d58e56bd8449410040f66ce7841a3`，准确 normal、普通 Mac Debug Development 与 iPhoneOS Development 均完成构建/签名及独立整包终封，实际两端 **0.1.44/20750.12911**。1958 项 Git 输入、478 项 Rust、3878 项依赖及 361 项终封清单保全。项目正常生成前已补回原四个通知测试源，实际 App/test 文件集合不变；原 Local 配置恢复。Mac 为 Cloud-only、iOS 为 Cloud 加 Sandbox APS 资格；正常 Release/HotReload 仍关闭，不能称云功能已交到原日用版。
+
+Mac 新私域使用同一 run，正常以 none 创建静态机组 Personal Cloud ecca 和唯一 Human 说明，之后只保存未发送草稿。显式云同意后实际 UI 显示“当前个人版本已同步”；正常退出/安全暂停、App/Core 真正结束后，同包同根重开，原文“Mac 草稿 ecca：保留本机原文。”及同一 branch/key/writer/revision1 保留并再次显示已同步。实际 sessions/native execution runtimes/receipts/inputs 全0、Core 无 provider 子进程，两个真实启动参数均为 /usr/bin/false。根全文受领完整独立报告并亲看重开实图。云保持启用以接双端流程，opt-out/保留尚未执行，不能把单端结果冒双端交换或合并通过。
+
+iPhone 唯一安装成功并核到准确新版本及实际新 sandbox；唯一正常首开在15秒超时，原结果保留 Unknown。人类随后确认已解锁/无提示，后续有条件续行的只读预检发现准确新包进程，因此第二次 launch 没有发送，也未接管或结束该进程；当前存在不证明原启动回执或环境归属。现有工具未具备这台物理 iPhone 的实际 UI 操作表面，不增加镜像/AX框架；已给人类原生个人同步与本机草稿入口，待正常屏幕读回再接设备版本/合并/重开。原剪贴板拒绝、A/B Unknown、C/日用/模拟器与旧数据不动。
+
+证据：`apple-development-profile-independent-qa-20261024/INDEPENDENT-PROFILE-QA.json`、`cumulative-d509a8c6-normal-20261024/INDEPENDENT-NORMAL-QA.json`、`apple-development-d509a8c6-candidate-20261024/FINAL-DELIVERY.json`、`apple-cloud-runtime-d509-preparation-20261024/FINAL-SEAL-QA.json` 及 `MAC-SINGLE-END-CLOUD-RESULT.json`。Mac Debug 保留 DerivedData 搜索项的实际限制与原失败日志，实际加载/签名/来源核实后接受，不重建/重签或声称可移植。仅明确清单10处旧终态 Rust incremental 回收约1.38GB，23项保护哈希不变，未清暖 DD/SPM/SDK 或任何实际包/DB/日志。没有重复稳定业务/all-features 或 GitHub CI；Linux95原包/目标ABI资格复用，正式服务仍待预定用户 CLI 安装登录。APNs provider/接收/tap、完整双端同步、Claude剩余实际资格与正式分发仍未交付，全工程继续。后续统筹记录提交不改标上述准确 d509 包来源。
+
 ## 2026-10-24 Apple 真实配置补齐，Development 接入继续
 
 人类确认实际CloudKit容器 `iCloud.com.pendingname.pendingcrew`、原PCWPersonalBranch字段与collectionID QUERYABLE索引已完成，APNs为Sandbox，Team仍M42BKJN82S、topic仍com.pendingname.pendingcrew。keyID按所给文件名为4S3KZLY3MJ，尚无密钥有效性或Apple接受资格。精确原p8仅收紧mode0644→0600，同inode/owner/size/mtime，未读、hash或复制内容；准备层独验在 `apple-activation-independent-qa-20261024/PROVIDER-PREPARATION-QA.json`。

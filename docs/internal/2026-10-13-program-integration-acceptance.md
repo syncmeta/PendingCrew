@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-24 新 Apple profiles、准确 d509 双端签包及 Mac 单端 Cloud 保存/重开接受
+
+两份人类提供 profiles 的公开 CMS/证书/Team/App ID/设备/Cloud/APS 资格已独立接受；原 BF947 证书实际 Team 仍 M42，括号4L5个人ID不作另一 Team。Mac profile UUID0fedf688-4ca5-47e8-9d43-e09afd4776f7、iOS UUID774bbb92-be03-48b7-b65c-f1dccc54b339，原下载字节不变，只按精确 UUID 安装副本；未新建证书/设备、调用自动 provisioning 或读取 p8 内容。
+
+准确完整源 `d509a8c6cc9d58e56bd8449410040f66ce7841a3` normal：1958完整Git/478Rust输入、原 fresh owning-artifact 门及纯 schema 完整 JSON/149/API3/Store21 均接受，binary SHA `3cd6d5c854506d51cbd1ab367534f2ad82bffae221aead7a63ca481c5813b9cd`。同源 Mac/iPhoneOS **0.1.44/20750.12911** 各一次完整暖构建成功，原3878依赖、实际 BF947/M42 签名/嵌入profile/精确权限、封包逐项和终封361项清单接受。Mac Cloud-only 无 APS/get-task-allow，iOS Cloud 加 development APS/get-task-allow，均沿原 Keychain 两组；正常 Release/HotReload 仍关闭。组合 SHA `8681c82553b1517c079c6d099504459f60060991209abca1acfdb1e742ddd24c`。Mac 实际非平台加载首选包内 Debug dylib，但保留绝对 DerivedData 搜索路径，不冒 hermetic/可移植。原两处过强审计红证据保留，按实际加载闭包与原供应商签名分类收敛，无重建/重签；原 Local 字节/mode 恢复。
+
+`apple-cloud-runtime-d509-preparation-20261024/MAC-SINGLE-END-CLOUD-RESULT.json` 接受 Mac 单端实际业务：唯一 none 静态机组及首条 Human 消息，显式 Cloud 同意，未发送原文“Mac 草稿 ecca：保留本机原文。”显示“当前个人版本已同步”。原 App69638/Core69674 通过真实退出询问/安全暂停并确认 gone，新 App73617/Core73621 同包/同私根读回相同 branch C8240097-9F17-41B9-B55B-4F1F1CD5D1AB/key/writer/revision1 和原文；sessions/native runtime/receipt/input 均0、Core children[]，false providers 见真实 argv。根全文读报告并亲看实际重开图。Cloud 维持启用待双端衔接，未做 opt-out，未以本机缓存读回替代双端独立读取。
+
+iPhone install实际0/success，新装版本和 sandbox 精确核实；首开实际15秒 timeout/exit2，结果 Unknown，不标 Locked/未启动/成功。人类随后解锁/无提示，条件续行 preflight 实际发现 PID18449/准确新 bundle，因此没有发送第二次 launch、没有接管/结束，也未据 presence 推断当前 env/root。物理机实际 UI 尚无现成操作表面，当前交正常人工设置→已存电脑与草稿→个人同步→本机草稿读回；不造镜像/验收框架。Phone Cloud readback/独立分支/合并/重开、Mac opt-out/保留及 APNs provider/注册/显示/tap 均未验；无模型、生成代码、配对重试、p8读取或新推送。Mac e1/20749.74290 日用不改，原 A/B Unknown、C、模拟器、剪贴板实际拒绝与旧数据保留。
+
+独验原件另见 `apple-development-profile-independent-qa-20261024/INDEPENDENT-PROFILE-QA.json`、`cumulative-d509a8c6-normal-20261024/INDEPENDENT-NORMAL-QA.json`、`apple-development-d509a8c6-candidate-20261024/INDEPENDENT-BOTH-ARTIFACT-QA.json`、`apple-cloud-runtime-d509-preparation-20261024/FINAL-SEAL-QA.json`。唯一明确清单缓存回收释放1,380,904,960B、23保护SHA不变；未删源码/DB/日志/SDK/暖DD或实际程序。未重复已验业务或 all-features、未新跑 CI/编译 Linux。上述包只对应准确 d509 全输入，不因本次仅验收记录提交改标；全工程未完成。
+
 ## 2026-10-24 Apple 信息及私钥权限准备接受，实际签名/云/推送未验
 
 人类补齐CloudKit实际容器iCloud.com.pendingname.pendingcrew及collectionID QUERYABLE索引完成声明，APNs Sandbox、原M42/topic与key文件名ID4S3KZLY3MJ。后端仅lstat原精确p8、按根裁定chmod0644→0600，前后inode230525771/uid501/gid20/257B/mtimeNS1792810909151551783不变；未open/read/hash/copy密钥、无JWT/Keychain/provider配置/APNs流量。两件原manifest逐字核验通过，根全文读准备与权限收据，独立 `apple-activation-independent-qa-20261024/PROVIDER-PREPARATION-QA.json` 接受；密钥有效/吊销状态仍未知。
