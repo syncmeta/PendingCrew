@@ -2,7 +2,7 @@
 """Private, explicit-input macOS signing preparation. Never notarize or publish.
 Default is read-only planning; --execute needs a separately authorized manifest.
 """
-import argparse,hashlib,importlib.util,json,os,pathlib,plistlib,re,shutil,subprocess,sys,tarfile,time
+import argparse,hashlib,importlib.util,json,os,pathlib,plistlib,re,shutil,stat,subprocess,sys,time
 sys.dont_write_bytecode=True
 
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -76,30 +76,47 @@ def production_archive_argv(v,snapshot,out,normal_sha,build_number):
         'PENDINGCREW_PRODUCT_SOURCE_REF='+v['sourceRef'],'MARKETING_VERSION=0.1.44','CURRENT_PROJECT_VERSION='+build_number,
         '-archivePath',str(out/'PendingCrew.xcarchive')]
 
+def copy_backend_for_archive(source,destination,expected_sha):
+    source=pathlib.Path(source);destination=pathlib.Path(destination)
+    before=source.lstat()
+    if not stat.S_ISREG(before.st_mode) or sha(source)!=expected_sha:raise ValueError('exact regular normal input required')
+    if destination.exists() or destination.is_symlink():raise ValueError('fresh private normal copy required')
+    shutil.copy2(source,destination);destination.chmod(0o755)
+    if sha(destination)!=expected_sha or sha(source)!=expected_sha or source.lstat().st_mode!=before.st_mode:raise ValueError('normal copy changed input or bytes')
+    return {'originalMode':oct(before.st_mode&0o777),'privateCopyMode':'0o755','sha256':expected_sha,'originalUnchanged':True}
+
+def production_sign_argv(identity,artifact,timestamp_mode='none',entitlements=None):
+    if timestamp_mode not in ['none','secure']:raise ValueError('explicit none/secure timestamp mode required')
+    args=['codesign','--force','--sign',identity,'--options','runtime',
+          '--timestamp' if timestamp_mode=='secure' else '--timestamp=none']
+    if entitlements is not None:args+=['--entitlements',str(entitlements)]
+    return args+[str(artifact)]
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('manifest');p.add_argument('--execute',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('manifest');p.add_argument('--execute',action='store_true');p.add_argument('--timestamp-mode',choices=['none','secure'],default='none');a=p.parse_args()
     scope,v,repo=prepare(a.manifest);manifest_hash=sha(pathlib.Path(a.manifest));out=scope/'signed-output'
     if out.exists():raise ValueError('immutable fresh output required')
     if not a.execute:
-        print(json.dumps({'sourceRef':v['sourceRef'],'backendCompiledRef':v['backendCompiledRef'],'configuration':'Release','remoteProductOverlay':True,'preservesLocalCoreGuards':True,'identifier':'com.pendingname.pendingcrew','hardenedRuntime':True,'explicitInputsPresent':True,'profileCompatibilityValidated':False,'identityAvailabilityValidated':False,'output':str(out),'actualSigning':False,'notarize':False,'upload':False,'install':False},indent=2));return
-    if shutil.disk_usage(scope).free<2684354560:raise ValueError('2.5GiB capacity required before build')
+        print(json.dumps({'sourceRef':v['sourceRef'],'backendCompiledRef':v['backendCompiledRef'],'configuration':'Release','remoteProductOverlay':True,'preservesLocalCoreGuards':True,'identifier':'com.pendingname.pendingcrew','hardenedRuntime':True,'timestampMode':a.timestamp_mode,'explicitInputsPresent':True,'profileCompatibilityValidated':False,'identityAvailabilityValidated':False,'output':str(out),'actualSigning':False,'notarize':False,'upload':False,'install':False},indent=2));return
+    if shutil.disk_usage(scope).free<3221225472:raise ValueError('3GiB capacity required before build')
     out.mkdir(mode=0o700);snapshot=out/'source-inputs';snapshot.mkdir();archive=out/'source.tar'
     subprocess.run(['git','archive','--format=tar','-o',str(archive),v['sourceRef']],cwd=repo,check=True)
-    with tarfile.open(archive) as t:
-        if any(pathlib.PurePosixPath(m.name).is_absolute() or '..' in pathlib.PurePosixPath(m.name).parts or not(m.isfile() or m.isdir()) for m in t):raise ValueError('unsafe committed archive')
-        t.extractall(snapshot)
-    archive.unlink()
     def load(name,path):
         spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
-    builder=load('production_inventory',snapshot/'scripts/dev/build-crewd-native-macos.py');proof=load('production_normal',snapshot/'scripts/dev/write-codex-first-provenance.py')
+    builder_path=repo/'scripts/dev/build-crewd-native-macos.py'
+    if subprocess.check_output(['git','show',v['sourceRef']+':scripts/dev/build-crewd-native-macos.py'],cwd=repo)!=builder_path.read_bytes():raise ValueError('builder must match frozen source')
+    source_builder=load('production_source_extract',builder_path)
+    symlink_inputs=source_builder.committed_symlink_inputs(repo,v['sourceRef'])
+    source_builder.extract_source_archive(archive,snapshot,symlink_inputs);archive.unlink()
+    builder=load('production_inventory',snapshot/'scripts/dev/build-crewd-native-macos.py')
+    proof=load('production_normal',snapshot/'scripts/dev/write-codex-first-provenance.py')
     closure=load('production_closure',snapshot/'scripts/dev/crewd-validation-load-closure.py');seal=load('production_seal',snapshot/'scripts/dev/crewd-macho-seal-equivalence.py')
-    inputs=builder.regular_inventory(snapshot);rust=[x for x in inputs if x['path'].startswith('crewd/')]
+    inputs=builder.regular_inventory(snapshot,symlink_inputs);rust=[x for x in inputs if x['path'].startswith('crewd/')]
     os.environ['PENDINGCREW_BUILD_BACKEND_PROFILE']=v['backendProfile']
     witness,evidence=proof.verify_witness(pathlib.Path(v['backendWitness']),pathlib.Path(v['backendPath']),proof.digest(rust),proof.requested_configuration(snapshot/'crewd'),require_fresh=True)
     if witness['sourceRef']!=v['backendCompiledRef']:raise ValueError('actual helper compiled-ref mismatch')
     shutil.copytree(evidence,out/'backend-evidence');witness['evidenceDirectory']='backend-evidence';builder.save(out/'backend-witness.json',witness)
-    shutil.copy2(v['backendPath'],out/'crewd.pre-sign')
-    if sha(out/'crewd.pre-sign')!=witness['binarySHA256']:raise ValueError('frozen helper copy does not match actual normal proof')
+    builder.save(out/'backend-copy.json',copy_backend_for_archive(v['backendPath'],out/'crewd.pre-sign',witness['binarySHA256']))
     lock=json.loads((snapshot/'PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved').read_text());pins=[{'identity':x['identity'],'revision':x['state']['revision']} for x in lock['pins']]
     spm=pathlib.Path(v['sourcePackages']);before=builder.external_dependency_inventory(spm,pins)
     if sha(pathlib.Path(v['profilePath']))!=v['profileSHA256']:raise ValueError('profile changed before decoding')
@@ -130,7 +147,7 @@ def main():
     if sha(embedded)!=v['profileSHA256']:raise ValueError('explicit embedded reviewed profile differs')
     helper=app/'Contents/Helpers/crewd'
     if sha(helper)!=witness['binarySHA256']:raise ValueError('archive did not embed the exact normal Core input')
-    builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none',str(helper)],snapshot,out/'helper-sign.log')
+    builder.run(production_sign_argv(v['identitySHA1'],helper,a.timestamp_mode),snapshot,out/'helper-sign.log')
     info=app/'Contents/Info.plist';info_value=plistlib.loads(info.read_bytes())
     if info_value.get('CFBundleIdentifier')!='com.pendingname.pendingcrew' or info_value.get('PendingCrewSourceRef')!=v['sourceRef'] or info_value.get('BuildStampCommit')!=v['sourceRef'] or info_value.get('CFBundleVersion')!=build_number or info_value.get('CFBundleShortVersionString')!='0.1.44':raise ValueError('actual archive source/version differs')
     # Archive is a new artifact created by this exact invocation. Preserve its
@@ -144,13 +161,17 @@ def main():
             if entry.is_symlink() and not entry.resolve(strict=True).is_relative_to(updater):raise ValueError('archive updater alias escapes')
             if not(entry.is_symlink() or entry.is_file() or entry.is_dir()):raise ValueError('archive updater special file')
         shutil.rmtree(updater)
-    builder.run(['codesign','--force','--sign',v['identitySHA1'],'--options','runtime','--timestamp=none','--entitlements',str(expected_ent_path),str(app)],snapshot,out/'app-sign.log')
+    builder.run(production_sign_argv(v['identitySHA1'],app,a.timestamp_mode,expected_ent_path),snapshot,out/'app-sign.log')
     builder.run(['codesign','--verify','--deep','--strict',str(app)],snapshot,out/'signature-check.log')
     requirement='anchor apple generic and identifier "com.pendingname.pendingcrew" and certificate leaf[subject.OU] = "'+v['team']+'" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
     builder.run(['codesign','--verify','--strict','--test-requirement','='+requirement,str(app)],snapshot,out/'apple-publisher-requirement.log')
     display=closure.readonly_query(['/usr/bin/codesign','--display','--verbose=4',str(app)])
     signed_ent=closure.readonly_query(['/usr/bin/codesign','--display','--entitlements','-','--xml',str(app)])
     if display['exitCode'] or signed_ent['exitCode']:raise ValueError('actual signature query failed')
+    if a.timestamp_mode=='secure':
+        helper_display=closure.readonly_query(['/usr/bin/codesign','--display','--verbose=4',str(helper)])
+        builder.save(out/'helper-timestamp-query.json',helper_display)
+        if helper_display['exitCode'] or not any(line.startswith('Timestamp=') for line in helper_display['stderr'].splitlines()) or not any(line.startswith('Timestamp=') for line in display['stderr'].splitlines()):raise ValueError('secure timestamp missing from helper or App')
     (out/'signature-display.log').write_text(display['stdout']+display['stderr']);(out/'signed-entitlements.plist').write_text(signed_ent['stdout'])
     builder.save(out/'actual-signature-queries.json',{'display':display,'entitlements':signed_ent})
     actual_ent=plistlib.loads(signed_ent['stdout'].encode('utf-8'));text=display['stderr']
@@ -161,10 +182,10 @@ def main():
     equivalence={'GUI':seal.equivalent_files(out/'gui.archive-image',app/'Contents/MacOS'/info_value['CFBundleExecutable']),'backend':seal.equivalent_files(out/'crewd.pre-sign',helper)}
     builder.save(out/'seal-equivalence.json',equivalence)
     after=builder.external_dependency_inventory(spm,pins)
-    observed=builder.regular_inventory(snapshot);expected=[x for x in inputs if x['path']!='Config/Local.xcconfig'];actual=[x for x in observed if x['path']!='Config/Local.xcconfig']
+    observed=builder.regular_inventory(snapshot,symlink_inputs);expected=[x for x in inputs if x['path']!='Config/Local.xcconfig'];actual=[x for x in observed if x['path']!='Config/Local.xcconfig']
     if sha(pathlib.Path(a.manifest))!=manifest_hash or sha(pathlib.Path(v['profilePath']))!=v['profileSHA256']:raise ValueError('reviewed signing input changed')
     if expected!=actual or before!=after:raise ValueError('committed inputs or dependencies changed')
-    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'remoteProductOverlay':True,'preservesLocalCoreGuards':True,'version':info_value['CFBundleShortVersionString'],'buildNumber':build_number,'actualArchiveArgv':argv+['archive'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'unsignedArchive':True,'unsignedArchiveQualification':unsigned_qualification,'explicitProfileEmbedding':True,'expectedEntitlements':expected_ent,'expectedEntitlementsSHA256':sha(expected_ent_path),'actualEntitlementsMatchExpected':actual_ent==expected_ent,'signingAction':True,'staticAppleRequirement':requirement,'staticAppleRequirementLogSHA256':sha(out/'apple-publisher-requirement.log'),'staticAppleRequirementVerified':True,'loadClosure':final_closure,'archiveLoadClosureBeforeUpdaterExclusion':before_closure,'sealEquivalenceSHA256':sha(out/'seal-equivalence.json'),'publisherRuntimeAcceptance':False,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
+    builder.save(out/'sign-only-proof.json',{'sourceRef':v['sourceRef'],'remoteProductOverlay':True,'preservesLocalCoreGuards':True,'version':info_value['CFBundleShortVersionString'],'buildNumber':build_number,'actualArchiveArgv':argv+['archive'],'fullCommittedInputs':inputs,'explicitLocalOverrideSHA256':sha(local),'actualHelperCompiledRef':witness['sourceRef'],'helperOriginalSHA256':witness['binarySHA256'],'buildSettingsSHA256':sha(out/'settings.json'),'manifestSHA256':manifest_hash,'products':builder.regular_inventory(app),'dependencyBefore':before,'dependencyAfter':after,'profileSHA256':v['profileSHA256'],'unsignedArchive':True,'unsignedArchiveQualification':unsigned_qualification,'explicitProfileEmbedding':True,'expectedEntitlements':expected_ent,'expectedEntitlementsSHA256':sha(expected_ent_path),'actualEntitlementsMatchExpected':actual_ent==expected_ent,'signingAction':True,'timestampMode':a.timestamp_mode,'staticAppleRequirement':requirement,'staticAppleRequirementLogSHA256':sha(out/'apple-publisher-requirement.log'),'staticAppleRequirementVerified':True,'loadClosure':final_closure,'archiveLoadClosureBeforeUpdaterExclusion':before_closure,'sealEquivalenceSHA256':sha(out/'seal-equivalence.json'),'publisherRuntimeAcceptance':False,'AppLaunched':False,'installed':False,'notarized':False,'published':False})
     print('BUILT private sign-only product; no launch/install/notarize/publication')
 if __name__=='__main__':
     try:main()

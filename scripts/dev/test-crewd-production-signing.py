@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Pure recipe construction/entitlement rejection checks. No Xcode/security calls."""
-import copy,importlib.util,pathlib,plistlib,sys
+"""Recipe construction and local archive/inode checks. No Xcode/security/Apple calls."""
+import copy,hashlib,importlib.util,io,os,pathlib,plistlib,shutil,subprocess,sys,tarfile,tempfile
 sys.dont_write_bytecode=True
 root=pathlib.Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('sign_recipe',root/'scripts/dev/build-crewd-production-sign-only.py')
@@ -32,3 +32,75 @@ for token in ['CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','CODE_SIGN_ID
 assert not any('[sdk=' in token for token in args)
 assert '-allowProvisioningUpdates' not in args and '-configuration' in args and args[args.index('-configuration')+1]=='Release'
 print('PASS unsigned ordinary Release construction clears Xcode signing/profile selection; no provisioning updates')
+
+def reject_call(label,operation):
+ try:operation()
+ except ValueError:print('PASS reject '+label);return
+ raise AssertionError('accepted '+label)
+
+assert m.production_sign_argv('identity','/app')==['codesign','--force','--sign','identity','--options','runtime','--timestamp=none','/app']
+for artifact in ['/app','/app/Contents/Helpers/crewd']:
+ signed=m.production_sign_argv('identity',artifact,'secure')
+ assert '--timestamp' in signed and '--timestamp=none' not in signed and signed[-1]==artifact
+assert m.production_sign_argv('identity','/app','secure','/claims')[-3:]==['--entitlements','/claims','/app']
+reject_call('arbitrary timestamp service',lambda:m.production_sign_argv('identity','/app','https://other'))
+print('PASS secure timestamp construction for App and helper; original local default unchanged')
+
+spec=importlib.util.spec_from_file_location('source_inventory',root/'scripts/dev/build-crewd-native-macos.py')
+b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+with tempfile.TemporaryDirectory(prefix='pcw-production-recipe-fixture-') as temporary:
+ scope=pathlib.Path(temporary);repo=scope/'repo';repo.mkdir();(repo/'design').mkdir()
+ payload=repo/'payload';payload.write_bytes(b'ordinary executable input\n');payload.chmod(0o755)
+ target='../never-present';os.symlink(target,repo/'design/schema-source')
+ def git(*args):return subprocess.check_output(['git','-C',str(repo),*args],stderr=subprocess.DEVNULL)
+ git('init','-q');git('add','payload','design/schema-source')
+ git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','inputs')
+ ref=git('rev-parse','HEAD').decode().strip();links=b.committed_symlink_inputs(repo,ref)
+ archive=scope/'source.tar';git('archive','--format=tar','-o',str(archive),ref)
+ snapshot=scope/'snapshot';snapshot.mkdir();b.extract_source_archive(archive,snapshot,links)
+ rows=b.regular_inventory(snapshot,links);link=next(r for r in rows if r['path']=='design/schema-source')
+ assert link['gitMode']=='120000' and link['gitBlob']==links['design/schema-source']['blob']
+ assert link['sha256']==hashlib.sha256(os.fsencode(target)).hexdigest()
+ assert (snapshot/'payload').stat().st_mode&0o111 and not (snapshot/'design/schema-source').exists()
+ assert (snapshot/'design/schema-source').is_symlink() and len(rows)==2
+ print('PASS real Git120000 archive/blob and lstat/readlink inventory; dangling target never followed; executable preserved')
+ reject_call('default unreviewed symlink',lambda:b.regular_inventory(snapshot))
+ linkpath=snapshot/'design/schema-source';linkpath.unlink();os.symlink('changed-target',linkpath)
+ reject_call('changed symlink bytes',lambda:b.regular_inventory(snapshot,links))
+ linkpath.unlink();linkpath.write_bytes(os.fsencode(target))
+ reject_call('symlink replaced by regular file',lambda:b.regular_inventory(snapshot,links))
+ linkpath.unlink();reject_call('missing committed symlink',lambda:b.regular_inventory(snapshot,links))
+ for label,name,kind,value in [
+     ('unreviewed archive link','other',tarfile.SYMTYPE,target),
+     ('changed archive link','design/schema-source',tarfile.SYMTYPE,'changed'),
+     ('archive hardlink','other',tarfile.LNKTYPE,'payload'),
+     ('archive path traversal','../escape',tarfile.REGTYPE,''),
+     ('member below reviewed link','design/schema-source/escape',tarfile.REGTYPE,'')]:
+  bad=scope/'bad.tar'
+  with tarfile.open(bad,'w') as t:
+   if label=='member below reviewed link':
+    original=tarfile.TarInfo('design/schema-source');original.type=tarfile.SYMTYPE;original.linkname=target;t.addfile(original)
+   item=tarfile.TarInfo(name);item.type=kind;item.linkname=value;t.addfile(item,io.BytesIO(b''))
+  dest=scope/'bad-output';dest.mkdir()
+  reject_call(label,lambda:b.extract_source_archive(bad,dest,links))
+  assert not list(dest.iterdir());dest.rmdir()
+ original=scope/'normal';original.write_bytes(b'normal payload');original.chmod(0o444)
+ digest=hashlib.sha256(original.read_bytes()).hexdigest();private=scope/'private-normal'
+ proof=m.copy_backend_for_archive(original,private,digest)
+ assert original.stat().st_mode&0o777==0o444 and private.stat().st_mode&0o777==0o755
+ assert original.read_bytes()==private.read_bytes() and proof['originalUnchanged']
+ reject_call('overwrite prior private normal',lambda:m.copy_backend_for_archive(original,private,digest))
+ reject_call('wrong normal hash',lambda:m.copy_backend_for_archive(original,scope/'wrong','0'*64))
+ print('PASS actual0444 normal -> private0755 exact bytes; immutable input stays0444')
+ products=scope.resolve()/'Products';(products/'Fixture.app/Contents').mkdir(parents=True)
+ legacy_copy=scope/'legacy-copy';shutil.copy2(original,legacy_copy)
+ env=dict(os.environ,PLATFORM_NAME='macosx',CONFIGURATION='Release',PENDINGCREW_BACKEND_INPUT=str(legacy_copy.resolve()),PENDINGCREW_BACKEND_SHA256=digest,TARGET_BUILD_DIR=str(products),CONTENTS_FOLDER_PATH='Fixture.app/Contents')
+ red=subprocess.run(['/bin/sh',str(root/'Shared/scripts/embed-crewd-macos.sh')],env=env,capture_output=True,text=True)
+ assert red.returncode!=0 and 'executable regular file' in red.stderr
+ assert not (products/'Fixture.app/Contents/Helpers/crewd').exists()
+ env['PENDINGCREW_BACKEND_INPUT']=str(private.resolve())
+ green=subprocess.run(['/bin/sh',str(root/'Shared/scripts/embed-crewd-macos.sh')],env=env,capture_output=True,text=True)
+ assert green.returncode==0,green.stderr
+ assert (products/'Fixture.app/Contents/Helpers/crewd').read_bytes()==original.read_bytes()
+ assert original.stat().st_mode&0o777==0o444
+ print('PASS real existing embed entry RED with copy2/0444 then GREEN private0755; original guard unchanged')

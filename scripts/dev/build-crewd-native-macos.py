@@ -2,7 +2,7 @@
 """Build an isolated Native candidate from committed sources. Never launch/install.
 Requires a recorded normal backend witness and a pre-resolved SPM cache.
 """
-import argparse, hashlib, importlib.util, json, os, pathlib, plistlib, shlex, shutil, subprocess, tarfile, sys
+import argparse, hashlib, importlib.util, json, os, pathlib, plistlib, shlex, shutil, stat, subprocess, tarfile, sys
 sys.dont_write_bytecode = True
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -37,14 +37,55 @@ def copied_inputs(source,dest):
    target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(p,target)
   else: raise ValueError('dependency input must be a regular file/directory')
  copy(source,dest,set())
-def regular_inventory(root):
+def committed_symlink_inputs(repo,ref):
+ rows={}
+ for entry in git(repo,'ls-tree','-r','-z',ref).split(b'\0'):
+  if not entry: continue
+  metadata,name=entry.split(b'\t',1);mode,kind,blob=metadata.decode().split()
+  if mode!='120000': continue
+  if kind!='blob': raise ValueError('committed symlink must be a blob')
+  target=git(repo,'cat-file','blob',blob)
+  if not target or b'\0' in target: raise ValueError('invalid committed symlink bytes')
+  rows[os.fsdecode(name)]={'blob':blob,'targetBytesHex':target.hex()}
+ return rows
+
+def extract_source_archive(archive,root,symlink_inputs):
+ root=pathlib.Path(root)
+ if root.is_symlink() or not root.is_dir() or any(root.iterdir()): raise ValueError('fresh empty source directory required')
+ with tarfile.open(archive) as t:
+  members=t.getmembers();links={m.name for m in members if m.issym()}
+  for m in members:
+   p=pathlib.PurePosixPath(m.name)
+   if p.is_absolute() or '..' in p.parts or any(c in m.name for c in '\n\r\t') or str(p)!=m.name.rstrip('/'):
+    raise ValueError('unsafe source archive path')
+   if any(parent.as_posix() in links for parent in p.parents): raise ValueError('source archive member below symlink')
+   if m.issym():
+    expected=symlink_inputs.get(m.name)
+    if expected is None or os.fsencode(m.linkname).hex()!=expected['targetBytesHex']: raise ValueError('unreviewed source symlink')
+   elif not(m.isfile() or m.isdir()): raise ValueError('unsafe source archive member')
+   elif m.name in symlink_inputs: raise ValueError('committed symlink type changed')
+  t.extractall(root)
+
+def regular_inventory(root,symlink_inputs=None):
+ root=pathlib.Path(root);symlink_inputs={} if symlink_inputs is None else symlink_inputs
  rows=[]
- for p in sorted(root.rglob('*')):
-  if p.is_symlink(): raise ValueError('evidence snapshot cannot contain symlinks')
-  if p.is_file():
+ def walk(directory):
+  for p in sorted(directory.iterdir()):
+   mode=p.lstat().st_mode
    relative=p.relative_to(root).as_posix()
    if any(c in relative for c in '\n\r\t'): raise ValueError('control characters in evidence paths')
-   rows.append({'path':relative,'sha256':sha(p)})
+   if stat.S_ISLNK(mode):
+    expected=symlink_inputs.get(relative)
+    if expected is None: raise ValueError('evidence snapshot cannot contain unreviewed symlinks')
+    raw=os.readlink(os.fsencode(p));blob=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+    if raw.hex()!=expected['targetBytesHex'] or blob!=expected['blob']: raise ValueError('committed symlink bytes changed')
+    rows.append({'path':relative,'sha256':hashlib.sha256(raw).hexdigest(),'gitMode':'120000','gitBlob':blob})
+   elif relative in symlink_inputs: raise ValueError('committed symlink type changed')
+   elif stat.S_ISDIR(mode): walk(p)
+   elif stat.S_ISREG(mode): rows.append({'path':relative,'sha256':sha(p)})
+   else: raise ValueError('special evidence inode refused')
+ walk(root)
+ if {r['path'] for r in rows if r.get('gitMode')=='120000'}!=set(symlink_inputs): raise ValueError('committed symlink missing')
  return sorted(rows,key=lambda row:row['path'])
 
 def external_dependency_inventory(spm,pins):
