@@ -1,0 +1,2873 @@
+{
+  "kind": "pendingcrew.native-html-demo.v1",
+  "sourcePipeline": "initialState(true,website) -> applyPresentationUpdates; workspaceRefresh -> developmentExamples -> nativeDemo -> contentCompletion + topic/document/presentation refresh",
+  "notice": "演示资料：来自现有 HTML Demo 的静态快照。成员均停止，计划仅展示，不代表真实执行或当前审批。",
+  "sources": {
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/captainHistory.json": "bbc6fc94c5fb79e3e47297bc07f9d6e9f0c90d625fb060eca91bbf48877b7206",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/contentCases.json": "6fe76f939c07aea00097c41585a5540930dfafd348e04bcd425deaffb2a318fc",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/contentCompletion.ts": "f2c7dfdb2283e780bf6004ddbe96ed3ae60333e61f31a097bd586d3c03c2361a",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/contentMigration.ts": "d4757814855712a28304d93c3593db91a5e1fb879c8dee8d9f28c624b371fe27",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/dataViews.ts": "d8df0ed3d537a2d6c9cf94512a508348fa89b63b5cafa0e4713453354c1de80e",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/developmentExamples.json": "768ba41eba2183a4afd4d9531968717833db9f29a7ba361bcfc87e656d6e9af0",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/developmentExamples.ts": "ddd3bb7bca616a012344bbad038b0737341153fab6bcac7d6ee4fbfda06cab5d",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/displayText.ts": "f8a8d5c1ada1297ce7985b23edee75125ff927775410471edf25feeb4fec4476",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/documentLibrary.ts": "7fa99dcc1a47b14442279d71d3fe584bbf162bb3a8c927701ded138402c01b68",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/humanContext.ts": "3917721c36c3315669492d01e4a39a2406e1e103f201a5b4d015f40ee5a6b10d",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/nativeDemo.ts": "15deda56714a63638b16474a799d5c5238ca65bc70cfe1e6e3c8ab4adfabf784",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/presentationUpdates.ts": "aea2bada9f85486bea2586cefd3f6d4355ae3d7298a8192ae3c4dbd1ca6a514e",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/programSnapshot.json": "e6f1e75828d25fb4f66d6e1bb7e2cc0509da3e3220b9cc26c866838448c82608",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/reducer.ts": "5163814b4487f05e177e76aa1154825e360cfaa11ed3c2ff7a7ee0f0ad32e6fc",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/seed.ts": "259edf14c8348257677c5c9c1c8d4a4a1b8855b3d5db80fbe54254f4dbe573bb",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/selectors.ts": "41b3bf2cb278c2b8a877d318affc0a3dd4adb0dc909efca33b05ff77da65823c",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/siteDocuments.json": "de9bfd9100411d4a850e270106c89c407b9865c4b5c5e879e53f8fcd1c3ba97b",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/todoModel.ts": "523b63462ac171bcdf49ab85c0b18fc27f22c7940b955cb32ad3b2fb13f40c51",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/topicCrews.ts": "1ce0488ad5281332144e165e69b8e4d9de3bb25cca1b079c7fc08dbf26a20757",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/types.ts": "84c2be58b52048b6136e4616835ba2553c41f42a7780d63bd162fe8cac012aa6",
+    "design/prototypes/2026-10-14-react-product-tour/src/domain/workspaceRefresh.ts": "6b910cdb4a2469bcfe8ade83abf40a667504400f69e39ea5e3aeccaaaa9921a3",
+    "design/prototypes/2026-10-14-react-product-tour/src/content.json": "3f1bb8695fcc45cecd98f644713c865eb94ed212d9c50c08ac998fb1bbac69ea",
+    "design/prototypes/2026-10-14-react-product-tour/src/fixtures.json": "c3badedc77a79f4e7709881d5a07c4733af5536a28539a21f09ba191d346179b",
+    "design/prototypes/2026-10-14-react-product-tour/src/topicCrews.json": "e488e90635b3a3c696017df8712e17761d111d89216712ef106f5b5907cd9084",
+    "design/prototypes/2026-10-14-react-product-tour/src/documentLibrary.json": "834851bdf260efa1bc7ed07ce19740bbb25275663a562ca3d4b94817e7c08927"
+  },
+  "crews": [
+    {
+      "id": "website",
+      "title": "概览和演示",
+      "sessions": [
+        {
+          "id": "website-session-captain",
+          "name": "机长",
+          "detail": "Codex Session · 协调开发与交付",
+          "glyph": "🦉"
+        },
+        {
+          "id": "website-session-todo",
+          "name": "Todo介绍",
+          "detail": "Codex Session · 人机两套 Todo",
+          "glyph": "🦊"
+        },
+        {
+          "id": "website-session-composer",
+          "name": "Todo入口改造",
+          "detail": "Claude Code Session · 输入体验",
+          "glyph": "🛠️"
+        },
+        {
+          "id": "website-session-core",
+          "name": "Core/持久化",
+          "detail": "Codex Session · 统一工作账与恢复",
+          "glyph": "🗃️"
+        },
+        {
+          "id": "website-session-native",
+          "name": "原生客户端",
+          "detail": "Codex Session · Mac / iOS 界面",
+          "glyph": "🖥️"
+        },
+        {
+          "id": "website-session-remote",
+          "name": "远程与配对",
+          "detail": "Codex Session · iOS ↔ VPS 持久配对",
+          "glyph": "🔗"
+        },
+        {
+          "id": "website-session-acp",
+          "name": "跨厂商执行",
+          "detail": "Codex Session · PTY / ACP 生命周期",
+          "glyph": "🔌"
+        },
+        {
+          "id": "website-session-qa",
+          "name": "独立质量",
+          "detail": "Codex Session · 完整用户流程验收",
+          "glyph": "🔎"
+        },
+        {
+          "id": "website-session-search",
+          "name": "搜索核验",
+          "detail": "Codex Session · 搜索语义与证据",
+          "glyph": "📚"
+        },
+        {
+          "id": "website-session-followup",
+          "name": "跟进与调度",
+          "detail": "Codex Session · 事实驱动跟进",
+          "glyph": "⏱️"
+        }
+      ],
+      "channels": [
+        {
+          "id": "website-main",
+          "title": "总群",
+          "kind": "group",
+          "subtitle": "一个长期项目，连接消息、Todo、文档和进展。",
+          "members": [
+            {
+              "name": "机长",
+              "detail": "Codex Session · 协调开发与交付",
+              "glyph": "🦉"
+            },
+            {
+              "name": "Todo介绍",
+              "detail": "Codex Session · 人机两套 Todo",
+              "glyph": "🦊"
+            },
+            {
+              "name": "Todo入口改造",
+              "detail": "Claude Code Session · 输入体验",
+              "glyph": "🛠️"
+            },
+            {
+              "name": "Core/持久化",
+              "detail": "Codex Session · 统一工作账与恢复",
+              "glyph": "🗃️"
+            },
+            {
+              "name": "原生客户端",
+              "detail": "Codex Session · Mac / iOS 界面",
+              "glyph": "🖥️"
+            },
+            {
+              "name": "远程与配对",
+              "detail": "Codex Session · iOS ↔ VPS 持久配对",
+              "glyph": "🔗"
+            },
+            {
+              "name": "跨厂商执行",
+              "detail": "Codex Session · PTY / ACP 生命周期",
+              "glyph": "🔌"
+            },
+            {
+              "name": "独立质量",
+              "detail": "Codex Session · 完整用户流程验收",
+              "glyph": "🔎"
+            },
+            {
+              "name": "搜索核验",
+              "detail": "Codex Session · 搜索语义与证据",
+              "glyph": "📚"
+            },
+            {
+              "name": "跟进与调度",
+              "detail": "Codex Session · 事实驱动跟进",
+              "glyph": "⏱️"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "website-main-0",
+              "sender": "机长",
+              "text": "这是一个让你和AI持续协作的空间，你们可以在这里面**完成长期项目，共同面对持续变化的、纷繁复杂的任务流和数据**。",
+              "folder": "产品介绍"
+            },
+            {
+              "id": "website-main-1",
+              "sender": "机长",
+              "text": "如果说飞书/钉钉/企业微信是员工的Harness，那么PendingCrew就是Harness的Harness。PendingCrew和企业微信很像。",
+              "folder": "产品介绍"
+            },
+            {
+              "id": "website-main-2",
+              "sender": "机长",
+              "text": "这是一个可交互的Demo，我直接拿它来当作产品介绍了。",
+              "folder": "产品介绍",
+              "link": {
+                "label": "GitHub",
+                "href": "https://github.com/syncmeta/PendingCrew"
+              }
+            },
+            {
+              "id": "website-main-3",
+              "sender": "你",
+              "text": "右侧是Todo和群成员。每一个群成员是你电脑上的一个Codex/Claude Code Session。",
+              "folder": "产品介绍"
+            },
+            {
+              "id": "website-main-4",
+              "sender": "机长",
+              "text": "可以把 PendingCrew 理解为：把企业微信里的同事换成 Agent 会话。",
+              "folder": "产品介绍"
+            },
+            {
+              "id": "website-main-friction",
+              "sender": "机长",
+              "text": "主要想优化的是人机协作的摩擦。",
+              "folder": "产品介绍"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N101",
+              "code": "#101",
+              "text": "这是第一条Todo。",
+              "folder": "原始需求",
+              "tags": []
+            },
+            {
+              "id": "N102",
+              "code": "#102",
+              "text": "你可以持续往群里喂Todo，我来处理这海量而琐碎的需求",
+              "folder": "原始需求",
+              "tags": []
+            },
+            {
+              "id": "N103",
+              "code": "#103",
+              "text": "可以点我试试看",
+              "folder": "原始需求",
+              "tags": []
+            }
+          ],
+          "asks": [],
+          "plans": [
+            {
+              "id": "W101",
+              "code": "P1",
+              "title": "让人与 AI 持续协作",
+              "parent": null,
+              "status": "active",
+              "owner": "机长",
+              "sources": [
+                "N101"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "今天 15:00",
+              "note": "一个长期项目，连接消息、Todo、文档和进展。",
+              "goal": "让人与 AI 持续协作",
+              "level": "local",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。",
+              "folder": "持续协作",
+              "evidence": "D800001"
+            },
+            {
+              "id": "W102",
+              "code": "P1-1",
+              "title": "保留原始需求，持续接收任务",
+              "parent": "W101",
+              "status": "done",
+              "owner": "机长",
+              "sources": [
+                "N101"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "—",
+              "note": "保留你交代的原文，避免任务流中的细节丢失。",
+              "evidence": "D101",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            },
+            {
+              "id": "W103",
+              "code": "P1-2",
+              "title": "把复杂工作组织成计划",
+              "parent": "W101",
+              "status": "active",
+              "owner": "机长",
+              "sources": [
+                "N101"
+              ],
+              "dependsOn": [
+                "W102"
+              ],
+              "blockedOn": [],
+              "nextCheck": "今天 14:30",
+              "note": "最多三层拆解；层级表示包含，依赖表示先后。",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            },
+            {
+              "id": "W104",
+              "code": "P1-2-1",
+              "title": "记录负责人、状态、下一步和产物",
+              "parent": "W103",
+              "status": "open",
+              "owner": "机长",
+              "sources": [
+                "N101"
+              ],
+              "dependsOn": [
+                "W102"
+              ],
+              "blockedOn": [],
+              "nextCheck": "今天 14:30",
+              "note": "点击标题可修改状态、负责人和备注，Todo 同步更新。",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            }
+          ],
+          "docs": [
+            {
+              "id": "D101",
+              "title": "PendingCrew：持续协作的空间.md",
+              "body": "PendingCrew 是一个让你和 AI 持续协作的空间。你们可以完成长期项目，共同面对持续变化的、纷繁复杂的任务流和数据。\n\n如果说飞书、钉钉、企业微信是员工的 Harness，那么 PendingCrew 就是 Harness 的 Harness。它用熟悉的聊天和组织方式，承接多个 agent 的协作。\n\n机长组织工作，成员围绕具体事项推进，你参与目标、边界与关键判断。消息、Todo、文档、进展一起保留工作的上下文。",
+              "author": "机长",
+              "folder": "产品说明",
+              "archived": true
+            },
+            {
+              "id": "D102",
+              "title": "一本账，四个入口.md",
+              "body": "消息负责沟通；Todo 保存原始需求、计划和待人类处理事项；进展展示计划的当前状态；文档保存说明与成果。\n\n原始需求保留原文，计划最多拆成三层。计划记录负责人、状态、依赖、卡点、下一步和检查时间，完成后关联产物。\n\nTodo 和进展引用同一份计划。你在进展里修改备注，再打开 Todo 的计划，看到的仍是同一条记录。",
+              "author": "机长",
+              "folder": "功能关系",
+              "archived": true
+            },
+            {
+              "id": "D103",
+              "title": "分类由工作决定.md",
+              "body": "同一个机组里，消息、文档、Todo 和进展的分类经常不同。各自的文件夹独立组织，agent 可以根据内容整理归类。\n\n机组层级回答谁与谁协作，文件夹回答这份内容放在哪里。一份工作可以在不同视图里采用不同分类，而稳定编号让引用保持一致。",
+              "author": "机长",
+              "folder": "功能关系",
+              "archived": true
+            },
+            {
+              "id": "D800001",
+              "catalogKey": "position",
+              "title": "Harness 的 Harness.md",
+              "body": "## 为什么做 PendingCrew\n\n开发者变成 AI 以后，沟通、分工、组织和判断仍然存在。PendingCrew 希望用熟悉的聊天与组织结构，让你和多个 agent 围绕长期项目持续协作。\n\n飞书、钉钉、企业微信是员工的 Harness。**PendingCrew 是 Harness 的 Harness。**\n\n## 人的角色\n\n人负责目标、边界与重要判断，机长负责组织工作，成员推进具体事项。产品强调人的认知参与，降低组织多个 agent 的负担，而不是让人完全退出。",
+              "author": "机长",
+              "folder": "产品与理念",
+              "summary": "把人与多个 agent 组织在熟悉的协作空间里。",
+              "kind": "产品说明",
+              "sources": [
+                {
+                  "path": "README.md",
+                  "label": "PendingCrew 产品说明"
+                }
+              ],
+              "related": [
+                "D800002",
+                "D800004"
+              ],
+              "archived": true
+            }
+          ],
+          "history": [
+            {
+              "text": "产品介绍以同一份计划连接 Todo 与进展。",
+              "time": "13:20"
+            }
+          ]
+        },
+        {
+          "id": "website-todo",
+          "title": "Todo介绍",
+          "kind": "group",
+          "subtitle": "Todo系统是在给人脑做上下文工程",
+          "messages": [
+            {
+              "id": "website-todo-0",
+              "sender": "机长",
+              "text": "Todo系统是在给人脑做上下文工程"
+            },
+            {
+              "id": "website-todo-1",
+              "sender": "机长",
+              "text": "与飞书/企业微信/钉钉的任务跟进相关功能也一样"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N1301",
+              "code": "#1301",
+              "text": "Todo介绍：Todo系统是在给人脑做上下文工程",
+              "folder": "原始需求",
+              "tags": []
+            }
+          ],
+          "asks": [],
+          "plans": [
+            {
+              "id": "W1301",
+              "code": "P1",
+              "title": "Todo介绍的工作结构",
+              "parent": null,
+              "status": "active",
+              "owner": "机长",
+              "sources": [
+                "N1301"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "今天 15:00",
+              "note": "一个长期项目，连接消息、Todo、文档和进展。",
+              "goal": "让人与 AI 持续协作",
+              "level": "local",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。",
+              "folder": "持续协作",
+              "evidence": "D800008"
+            },
+            {
+              "id": "W1302",
+              "code": "P1-1",
+              "title": "保留原始需求，持续接收任务",
+              "parent": "W1301",
+              "status": "done",
+              "owner": "机长",
+              "sources": [
+                "N1301"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "—",
+              "note": "保留你交代的原文，避免任务流中的细节丢失。",
+              "evidence": "D1301",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            },
+            {
+              "id": "W1303",
+              "code": "P1-2",
+              "title": "把复杂工作组织成计划",
+              "parent": "W1301",
+              "status": "active",
+              "owner": "机长",
+              "sources": [
+                "N1301"
+              ],
+              "dependsOn": [
+                "W1302"
+              ],
+              "blockedOn": [],
+              "nextCheck": "今天 14:30",
+              "note": "最多三层拆解；层级表示包含，依赖表示先后。",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            },
+            {
+              "id": "W1304",
+              "code": "P1-2-1",
+              "title": "记录负责人、状态、下一步和产物",
+              "parent": "W1303",
+              "status": "open",
+              "owner": "机长",
+              "sources": [
+                "N1301"
+              ],
+              "dependsOn": [
+                "W1302"
+              ],
+              "blockedOn": [],
+              "nextCheck": "今天 14:30",
+              "note": "点击标题可修改状态、负责人和备注，Todo 同步更新。",
+              "folder": "持续协作",
+              "goal": "让人与 AI 持续协作",
+              "acceptance": "需求、执行结构和产物可关联；关键判断保留人的参与。"
+            }
+          ],
+          "docs": [
+            {
+              "id": "D1301",
+              "title": "Todo介绍说明.md",
+              "body": "## 给人的大脑保留上下文\n\n群聊保留讨论的来龙去脉，通讯录让组织与分工清楚，Todo 把需求、进展、卡点和待判断事项留在眼前。\n\n不用把所有事都记在脑子里，也不用每次切换会话都重新理一遍：为什么做、谁在跟进、推进到哪里、下一步需要你判断什么，都有地方可以找到。\n\nPendingCrew 的根本目标是让人与 AI 高效协同、保持清晰思绪，不做“一句话搞定”的产品。\n\nTodo系统是在给人脑做上下文工程\n\nTodo系统是在给人脑做上下文工程",
+              "author": "机长",
+              "folder": "产品说明",
+              "archived": true
+            },
+            {
+              "id": "D800008",
+              "catalogKey": "one-ledger",
+              "title": "一本账，三种记录.md",
+              "body": "## 给人的大脑保留上下文\n\n群聊保留讨论的来龙去脉，通讯录让组织与分工清楚，Todo 把需求、进展、卡点和待判断事项留在眼前。\n\n不用把所有事都记在脑子里，也不用每次切换会话都重新理一遍：为什么做、谁在跟进、推进到哪里、下一步需要你判断什么，都有地方可以找到。\n\nPendingCrew 的根本目标是让人与 AI 高效协同、保持清晰思绪，不做“一句话搞定”的产品。\n\n## 原始需求\n\n保留人交代的原文，用稳定编号记录。需求如何推进，通过关联计划体现。\n\n## 计划\n\n计划回答怎样推进：目标、负责人、状态、依赖、下一步、检查时间和成果。可以按最多三层组织拆解。\n\n## 待人类处理\n\n把需要人判断的事项连同上下文和推荐选项一起记录。回答、稍后和撤回分别表达不同动作。\n\n**一本账不等于所有人拥有同样权限。** 稳定引用连接工作，具体操作仍按角色和范围约束。",
+              "author": "机长",
+              "folder": "工作模型",
+              "summary": "把需求、计划和待判断事项留在眼前，帮助人和 AI 接上同一条思路。",
+              "kind": "已敲定设计",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "协作与工作跟进设计"
+                },
+                {
+                  "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+                  "label": "全组织工作跟进"
+                }
+              ],
+              "related": [
+                "D800010",
+                "D800012"
+              ],
+              "archived": true
+            },
+            {
+              "id": "D800009",
+              "catalogKey": "original-request",
+              "title": "原始需求保持原文.md",
+              "body": "## 原文是起点\n\n人的原始要求不应该在 agent 整理计划时被悄悄改写。计划可以调整，原始要求仍然可以回看。\n\n## 一条需求与多个计划\n\n同一条需求可以关联多个计划；一个计划也可以带有来源引用。关系保留后，可以找到某项工作因何而来。\n\n## Todo 模式\n\n输入框旁的 Todo 模式把一次发送记成原始需求。本 Demo 会保留文字和引用，不会自动编造已经完成的执行过程。",
+              "author": "机长",
+              "folder": "工作模型",
+              "summary": "需求进入以后，拆解和执行另行记录。",
+              "kind": "已敲定设计",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "协作与工作跟进设计"
+                },
+                {
+                  "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+                  "label": "全组织工作跟进"
+                },
+                {
+                  "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+                  "label": "网页 Demo 维护说明"
+                }
+              ],
+              "related": [
+                "D800008",
+                "D800026"
+              ],
+              "archived": true
+            },
+            {
+              "id": "D800010",
+              "catalogKey": "three-levels",
+              "title": "三层拆解与独立依赖.md",
+              "body": "## 最多三层\n\n计划可以从目标拆为工作，再细化到可推进的事项。最多三层约束父子拆解的深度。\n\n## 依赖另行记录\n\n父子关系不自动表示执行顺序。某件事要等另一件事完成，应当使用独立的依赖引用。跨机组关系仍在统一工作模型下校验。\n\n## 在 Demo 中\n\n进展左侧箭头可以逐层折叠，也可以全部展开或收起。点击标题查看状态、负责人、备注、来源和产物。",
+              "author": "机长",
+              "folder": "计划与跟进",
+              "summary": "层级表达包含关系，依赖表达先后关系。",
+              "kind": "已敲定设计",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "协作与工作跟进设计"
+                },
+                {
+                  "path": "docs/superpowers/plans/2026-10-13-global-work-flow.md",
+                  "label": "全组织工作跟进"
+                },
+                {
+                  "path": "design/prototypes/2026-10-14-react-product-tour/README.md",
+                  "label": "网页 Demo 维护说明"
+                }
+              ],
+              "related": [
+                "D800011",
+                "D800023"
+              ],
+              "archived": true
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "website-development-practice",
+          "title": "实际开发演示",
+          "subtitle": "PendingCrew 真实历史任务、开发分工和过程记录。",
+          "kind": "group",
+          "members": [
+            {
+              "name": "机长",
+              "detail": "Codex Session · 协调开发与交付",
+              "glyph": "🦉"
+            },
+            {
+              "name": "Todo入口改造",
+              "detail": "Claude Code Session · 输入体验",
+              "glyph": "🛠️"
+            },
+            {
+              "name": "Core/持久化",
+              "detail": "Codex Session · 统一工作账与恢复",
+              "glyph": "🗃️"
+            },
+            {
+              "name": "原生客户端",
+              "detail": "Codex Session · Mac / iOS 界面",
+              "glyph": "🖥️"
+            },
+            {
+              "name": "独立质量",
+              "detail": "Codex Session · 完整用户流程验收",
+              "glyph": "🔎"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "development-example-1",
+              "sender": "你",
+              "text": "输入框 placeholder 换成「发群消息/新建 Todo」；中文候选态也应该立即消失。",
+              "ref": "N92001"
+            },
+            {
+              "id": "development-example-2",
+              "sender": "你",
+              "text": "Session 终端没有开启时，输入框换成与群聊一致的样式。",
+              "ref": "N92002"
+            },
+            {
+              "id": "development-example-3",
+              "sender": "机长",
+              "text": "这是 PendingCrew 真实历史里连续丢进来的两条小任务。文案、输入法候选态和样式复用需要分开跟进，不能只写一句“输入体验已优化”。",
+              "ref": "D92001"
+            },
+            {
+              "id": "development-example-4",
+              "sender": "Todo入口改造",
+              "text": "我负责输入框样式；任务卡上保留负责人，计划里保留实现和验收记录。你可以改负责人、打多个标签，再打开计划/进展看同一条工作。",
+              "ref": "W92002"
+            },
+            {
+              "id": "development-example-5",
+              "sender": "机长",
+              "text": "还有翻历史时阅读位置乱跳、额度环的悬停和刷新。相关任务、数据表和来源文档都放在本群，不需要切去另一本账。",
+              "ref": "D92004"
+            },
+            {
+              "id": "captain-context",
+              "sender": "机长",
+              "text": "这里摘选了 PendingCrew 历史里的真实任务，演示怎样持续收下零碎需求。任务状态为模拟，可在右侧 Todo 和计划/进展中交互。"
+            },
+            {
+              "id": "captain-history-0",
+              "sender": "你",
+              "text": "#144 翻历史时新消息让位置乱跳：纯判定已造红（8d683ed），等 main 解冻 + CrewChatView 红线解除再接线",
+              "ref": "N90011"
+            },
+            {
+              "id": "captain-history-1",
+              "sender": "你",
+              "text": "待人类装版后一次性亲验：标错分类会不会真污染驾驶舱、那条「建了 #N」撤不撤得掉、折叠 UI、侧栏黄色数字胶囊",
+              "ref": "N90010"
+            },
+            {
+              "id": "captain-history-2",
+              "sender": "你",
+              "text": "#132+#133 群聊引用可点：Todo #N / 消息 / session / 机组 四类，从字段来不从正文认",
+              "ref": "N90009"
+            },
+            {
+              "id": "captain-history-3",
+              "sender": "你",
+              "text": "待审批 vs Todo 讲清楚 + 修「读不出来」被读成「有东西等你」（4-1 计划 #72）",
+              "ref": "N90008"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N92001",
+              "code": "#92001",
+              "text": "输入框 placeholder 换成「发群消息/新建 Todo」；中文候选态也应该立即消失。",
+              "owner": "机长",
+              "tags": [
+                "前端",
+                "小工程"
+              ],
+              "status": "done",
+              "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+            },
+            {
+              "id": "N92002",
+              "code": "#92002",
+              "text": "Session 终端没有开启时，输入框换成与群聊一致的样式。",
+              "owner": "Todo入口改造",
+              "tags": [
+                "前端",
+                "小工程"
+              ],
+              "status": "done",
+              "source": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+            },
+            {
+              "id": "N92003",
+              "code": "#92003",
+              "text": "翻历史时，新消息不要让当前阅读位置乱跳。",
+              "owner": "机长",
+              "tags": [
+                "前端",
+                "紧急"
+              ],
+              "status": "active",
+              "source": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+            },
+            {
+              "id": "N92004",
+              "code": "#92004",
+              "text": "侧栏额度改成品牌标识和额度环，悬停查看百分比与重置时间。",
+              "owner": "Todo入口改造",
+              "tags": [
+                "前端",
+                "小工程"
+              ],
+              "status": "done",
+              "source": "Sources/Mac/Views/QuotaRingsFooter.swift"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H90001",
+              "question": "群聊消息默认折叠到什么程度？",
+              "recommendation": "只折代码块、表格和终端输出",
+              "options": [
+                "只折代码块、表格和终端输出",
+                "也折叠长引用和列表"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W90004",
+              "context": "摘自历史人类 Todo #1；此处演示 Agent 请真人判断的流程。",
+              "tags": [
+                "前端",
+                "紧急"
+              ],
+              "owner": "人"
+            },
+            {
+              "id": "H90002",
+              "question": "消息超过几行时折叠？",
+              "recommendation": "超过 8 行",
+              "options": [
+                "超过 8 行",
+                "超过 4 行",
+                "超过 15 行"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W90004",
+              "context": "摘自历史人类 Todo #2；这里的待答状态仅用于演示。",
+              "tags": [
+                "前端",
+                "小工程"
+              ],
+              "owner": "人"
+            }
+          ],
+          "plans": [
+            {
+              "id": "W92001",
+              "code": "P92001",
+              "title": "统一输入框文案与中文候选态",
+              "owner": "机长",
+              "sources": [
+                "N92001"
+              ],
+              "status": "done",
+              "note": "历史 Todo #2 的回应记录列出了两处实现；真机候选态手感另有验收边界。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D92001"
+            },
+            {
+              "id": "W92002",
+              "code": "P92002",
+              "title": "复用群聊 Composer 的视觉与行为",
+              "owner": "Todo入口改造",
+              "sources": [
+                "N92002"
+              ],
+              "status": "done",
+              "note": "历史 Todo #3 记录已合入的输入框样式修订。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D92001"
+            },
+            {
+              "id": "W92003",
+              "code": "P92003",
+              "title": "保持翻历史时的阅读锚点",
+              "owner": "机长",
+              "sources": [
+                "N92003"
+              ],
+              "status": "active",
+              "note": "9 月 13 日快照：纯判定已造红，等待接线；此处演示继续跟进。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D92002"
+            },
+            {
+              "id": "W92004",
+              "code": "P92004",
+              "title": "复刻侧栏额度环",
+              "owner": "Todo入口改造",
+              "sources": [
+                "N92004"
+              ],
+              "status": "done",
+              "note": "对照当前仓库的 QuotaRingsFooter：Claude 三环、Codex 周环、悬停和刷新行。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D92003"
+            }
+          ],
+          "docs": [
+            {
+              "id": "D92001",
+              "title": "输入体验：两条小 Todo 怎样落地",
+              "body": "历史记录日期：2026-07-18（9 月快照收录）。\n\n人类连续提出了两条很小的需求：输入框文案和候选态的占位文字、终端没开时的输入框样式。它们并不是一个完整的产品 PRD，但同样需要记录、认领、实现、回复和后续验收。\n\nTodo #2 的回应记录了 placeholder 统一和 NSTextView 的 hasMarkedText 判定；Todo #3 的回应记录了复用群聊 ComposerView。历史回应同时把真机手感留作独立验收，没有把代码合入等同于界面实测。\n\n本群的负责人是用于交互演示的角色分工；任务文字和过程依据来自真实历史。你可以在 Todo 卡片中换负责人，在计划/进展中修改同一项工作的状态。",
+              "author": "机长",
+              "folder": "开发记录",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "历史 Todo 与回应",
+                  "path": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D92002",
+              "title": "翻历史时的新消息：从红测到界面接线",
+              "body": "历史记录日期：2026-09-13。\n\n计划 #10 对应 Todo #144：翻历史时新消息让位置乱跳。记录写明纯判定已造红，等待 main 解冻以及 CrewChatView 的修改窗口，再接入界面。\n\n这里值得保留的不是一句「已经修了」，而是这件事当时停在哪一层：失败判定已被测试捕获，界面连接和真实滚动行为还有下一步。这就是计划/进展需要结构化的原因。\n\n此处沿用快照的进行中状态来演示跟进，不代表当前产品仍有这个缺口。",
+              "author": "机长",
+              "folder": "开发记录",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "历史计划 #10",
+                  "path": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D92003",
+              "title": "额度环：按 Mac 端自己的交互呈现",
+              "body": "依据：当前仓库 Sources/Mac/Views/QuotaRingsFooter.swift 与 Sources/Support/QuotaRingLayout.swift。\n\n每家一行，品牌图标后放额度环。Claude Code 显示 5h、周和当前模型；Codex 显示周额度。环平时写窗口名称，悬停显示已用百分比，下面一行变成该窗口的重置时间。刷新按钮固定在行首，避免文案变化时左右跳动。\n\n网页复用原品牌图标、33px 圆环和 54px 模型长环。这里的额度是明确标注的演示数据，不连接访问者账户。",
+              "author": "机长",
+              "folder": "开发记录",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "Mac 原生额度视图",
+                  "path": "Sources/Mac/Views/QuotaRingsFooter.swift"
+                },
+                {
+                  "label": "额度布局规则",
+                  "path": "Sources/Support/QuotaRingLayout.swift"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D92004",
+              "title": "开发任务数据：任务、负责人、计划与证据",
+              "body": "同一批开发任务可以从聊天进入，也可以按负责人或标签查看。下表保留真实任务依据，演示怎样把文字任务变为可筛选的结构化记录。",
+              "author": "机长",
+              "folder": "数据与验收",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "历史 Todo",
+                  "path": "docs/internal/2026-09-13-ledger-snapshot/todos.json"
+                },
+                {
+                  "label": "历史计划",
+                  "path": "docs/internal/2026-09-13-ledger-snapshot/plan.json"
+                }
+              ],
+              "dataView": {
+                "kind": "table",
+                "primaryKey": "todo",
+                "description": "任务来源为真实记录；负责人和可编辑状态是演示分工，不是当前项目实时账本。",
+                "schema": "CREATE TABLE development_tasks (todo TEXT PRIMARY KEY, title TEXT, owner TEXT, tags TEXT, plan TEXT, evidence TEXT);",
+                "columns": [
+                  {
+                    "key": "todo",
+                    "label": "Todo",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "title",
+                    "label": "任务",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "owner",
+                    "label": "负责人",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "tags",
+                    "label": "标签",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "plan",
+                    "label": "计划",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "evidence",
+                    "label": "依据",
+                    "type": "TEXT"
+                  }
+                ],
+                "rows": [
+                  {
+                    "todo": "N92001",
+                    "title": "输入框文案与候选态",
+                    "owner": "机长",
+                    "tags": "前端 / 小工程",
+                    "plan": "W92001",
+                    "evidence": "历史 Todo #2"
+                  },
+                  {
+                    "todo": "N92002",
+                    "title": "复用群聊输入框",
+                    "owner": "Todo入口改造",
+                    "tags": "前端 / 小工程",
+                    "plan": "W92002",
+                    "evidence": "历史 Todo #3"
+                  },
+                  {
+                    "todo": "N92003",
+                    "title": "保持历史消息阅读位置",
+                    "owner": "机长",
+                    "tags": "前端 / 紧急",
+                    "plan": "W92003",
+                    "evidence": "历史计划 #10"
+                  }
+                ]
+              }
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "website-development-lessons",
+          "title": "经验与复盘",
+          "subtitle": "把开发中的经验、数据与验收边界留下来。",
+          "kind": "group",
+          "members": [
+            {
+              "name": "机长",
+              "detail": "Codex Session · 协调开发与交付",
+              "glyph": "🦉"
+            },
+            {
+              "name": "独立质量",
+              "detail": "Codex Session · 完整用户流程验收",
+              "glyph": "🔎"
+            },
+            {
+              "name": "搜索核验",
+              "detail": "Codex Session · 搜索语义与证据",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "lessons-example-1",
+              "sender": "机长",
+              "text": "有一次读取账本失败，提示把 errno 和路径丢了。之后每个接手的人都从猜测开始。我们把这件事留下来：别让错误信息自己变成信息黑洞。",
+              "ref": "D93001"
+            },
+            {
+              "id": "lessons-example-2",
+              "sender": "搜索核验",
+              "text": "另一份搜索复核提醒了我们：用户搜索和 Agent 工具、Mac 入口和 iOS 入口，必须分开核对。“已经修好”需要对应真实提交和具体测试。",
+              "ref": "D93002"
+            },
+            {
+              "id": "lessons-example-3",
+              "sender": "机长",
+              "text": "原始命中有 18 次，真正系统警示是 10 次，涉及 7 个机组。把统计口径保留成数据，下一次可以继续计算，而不是只留下一个结论。",
+              "ref": "D93003"
+            },
+            {
+              "id": "lessons-example-4",
+              "sender": "机长",
+              "text": "这些是注明日期的真实历史经验。任务、负责人、计划、数据和文档在本群互相引用；后续接手的人可以顺着证据继续，而不必重新猜一遍。",
+              "ref": "D93004"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N93001",
+              "code": "#93001",
+              "text": "读取账本失败时保留 errno 和路径，不把「读不到」显示成「不存在」。",
+              "owner": "机长",
+              "tags": [
+                "后端",
+                "小工程"
+              ],
+              "status": "done",
+              "source": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+            },
+            {
+              "id": "N93002",
+              "code": "#93002",
+              "text": "复核搜索修复的真实提交和覆盖范围，分清 Mac、iOS 和 Agent 工具。",
+              "owner": "搜索核验",
+              "tags": [
+                "后端",
+                "大工程"
+              ],
+              "status": "open",
+              "source": "docs/internal/2026-09-07-todo-49-search-closeout.md"
+            }
+          ],
+          "asks": [],
+          "plans": [
+            {
+              "id": "W93001",
+              "code": "P93001",
+              "title": "保留故障诊断的原始上下文",
+              "owner": "机长",
+              "sources": [
+                "N93001"
+              ],
+              "status": "done",
+              "note": "9 月 8 日记录：错误上下文修订已测；EPERM 触发者仍未直接查清。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D93001"
+            },
+            {
+              "id": "W93002",
+              "code": "P93002",
+              "title": "核实搜索实现与遗漏的入口",
+              "owner": "搜索核验",
+              "sources": [
+                "N93002"
+              ],
+              "status": "active",
+              "note": "以 9 月 7 日记录演示：将已合入实现、缺失界面和不同查询路径逐项核对。",
+              "parent": null,
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "查看关联记录",
+              "evidence": "D93002"
+            }
+          ],
+          "docs": [
+            {
+              "id": "D93001",
+              "title": "真实经验：别在错误提示里丢掉诊断线索",
+              "body": "记录日期：2026-09-08。\n\n账本读取失败的提示丢掉了错误对象里已有的 errno 和绝对路径。后果是每个接手的人都要从猜测开始，甚至把「读不到」误判成「不存在」。\n\n这次修订保留了诊断上下文，并通过测试和变异验证。但报告明确区分了另一个问题：EPERM 是谁触发的，仍没有直接观测到。修好提示并不等于查清系统权限根因。\n\n可复用的经验：保存原始错误；区分观察、代码事实和推论；把没核到的部分留在下一步，而不是把整件事笼统标为完成。",
+              "author": "机长",
+              "folder": "经验与复盘",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "原始诊断与证据",
+                  "path": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D93002",
+              "title": "真实经验：先核事实，再接着做",
+              "body": "记录日期：2026-09-07。\n\n聊天记录搜索的收尾核对发现：用户搜索、Agent 工具搜索、Mac 和 iOS 入口不是同一条链路。一条「修好了」的消息不能替代具体代码和有效 Git 提交。\n\n报告逐项列出已合入的搜索实现、当时仍缺失的入口和查询语义，还记下了一个无法解析的旧提交号。这些结论只代表该日记录，不能当成今天的产品状态。\n\n可复用的经验：接手前核现状；共享纯逻辑，减少各端语义漂移；先造能失败的中文回归，再修工具查询。",
+              "author": "机长",
+              "folder": "经验与复盘",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "搜索收尾核对",
+                  "path": "docs/internal/2026-09-07-todo-49-search-closeout.md"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D93003",
+              "title": "故障样本：原始命中与系统警示要分开",
+              "body": "记录日期：2026-09-08。下表摘录原诊断报告中的统计口径，可以筛选、排序并打开行详情。不同口径不能直接相互替代。",
+              "author": "机长",
+              "folder": "数据与验收",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "故障统计原表",
+                  "path": "docs/internal/2026-09-08-ledger-read-failure-diagnosis.md"
+                }
+              ],
+              "dataView": {
+                "kind": "table",
+                "primaryKey": "scope",
+                "description": "这是历史排查的数据切片，不是当前运行监控。",
+                "schema": "CREATE TABLE failure_counts (scope TEXT PRIMARY KEY, count INTEGER, explanation TEXT, captured_on TEXT);",
+                "columns": [
+                  {
+                    "key": "scope",
+                    "label": "口径",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "count",
+                    "label": "数量",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "explanation",
+                    "label": "说明",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "captured_on",
+                    "label": "记录日期",
+                    "type": "TEXT"
+                  }
+                ],
+                "rows": [
+                  {
+                    "scope": "原始文本命中",
+                    "count": "18",
+                    "explanation": "包含排查任务 brief 中的两次提及",
+                    "captured_on": "2026-09-08"
+                  },
+                  {
+                    "scope": "白板与账本命中",
+                    "count": "16",
+                    "explanation": "18 减去 brief 中的两次提及",
+                    "captured_on": "2026-09-08"
+                  },
+                  {
+                    "scope": "真正系统警示",
+                    "count": "10",
+                    "explanation": "9 条 approvals + 1 条 todos",
+                    "captured_on": "2026-09-08"
+                  },
+                  {
+                    "scope": "涉及机组",
+                    "count": "7",
+                    "explanation": "与其他报告的计数差异保留待复核",
+                    "captured_on": "2026-09-08"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "D93004",
+              "title": "验收经验：代码、测试、安装与 GUI 分开记录",
+              "body": "记录日期：2026-09-27。前后端分离复核同时写了源码、运行探针、测试和安装态的证据边界。\n\n当时全量 macOS 测试记录为 2931 tests / 4 skips / 1 failure；唯一失败涉及真实 helper 生命周期，不能改写成全量通过。报告还区分了恢复提示的源码回归和安装态点击恢复的完整链路。\n\n在 PendingCrew 的计划/进展里，这些可以成为不同子项：代码实现、自动回归、安装验证、真人界面验收。它们共享一个目标，却有各自的状态和证据。",
+              "author": "机长",
+              "folder": "经验与复盘",
+              "kind": "工程说明",
+              "sources": [
+                {
+                  "label": "前后端分离验收记录",
+                  "path": "docs/internal/2026-09-27-todo-84-main-audit.md"
+                }
+              ],
+              "archived": true
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "website-program",
+          "title": "大工程",
+          "subtitle": "2026-10-22 计划与进展快照",
+          "kind": "group",
+          "members": [
+            {
+              "name": "机长",
+              "detail": "Codex Session · 协调开发与交付",
+              "glyph": "🦉"
+            },
+            {
+              "name": "Todo介绍",
+              "detail": "Codex Session · 人机两套 Todo",
+              "glyph": "🦊"
+            },
+            {
+              "name": "Todo入口改造",
+              "detail": "Claude Code Session · 输入体验",
+              "glyph": "🛠️"
+            },
+            {
+              "name": "Core/持久化",
+              "detail": "Codex Session · 统一工作账与恢复",
+              "glyph": "🗃️"
+            },
+            {
+              "name": "原生客户端",
+              "detail": "Codex Session · Mac / iOS 界面",
+              "glyph": "🖥️"
+            },
+            {
+              "name": "远程与配对",
+              "detail": "Codex Session · iOS ↔ VPS 持久配对",
+              "glyph": "🔗"
+            },
+            {
+              "name": "跨厂商执行",
+              "detail": "Codex Session · PTY / ACP 生命周期",
+              "glyph": "🔌"
+            },
+            {
+              "name": "独立质量",
+              "detail": "Codex Session · 完整用户流程验收",
+              "glyph": "🔎"
+            },
+            {
+              "name": "搜索核验",
+              "detail": "Codex Session · 搜索语义与证据",
+              "glyph": "📚"
+            },
+            {
+              "name": "跟进与调度",
+              "detail": "Codex Session · 事实驱动跟进",
+              "glyph": "⏱️"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "program-snapshot-main",
+              "sender": "机长",
+              "text": "这是正在推进的大工程。计划/进展按 2026-10-22 总计划整理：本机工作闭环、Mac 交付和 Linux 受管恢复已有对应证据；当前推进 iOS ↔ VPS 持久配对。",
+              "ref": "W94001"
+            },
+            {
+              "id": "program-snapshot-next",
+              "sender": "远程与配对",
+              "text": "邀请文件和长码表单的实际流程已经验证；三阶段交换、持久保存、重开手动连接、业务读写和撤权仍要按完整链路推进。",
+              "ref": "W94040"
+            },
+            {
+              "id": "program-snapshot-acp",
+              "sender": "跨厂商执行",
+              "text": "基础组件证据继续复用。正式 ACP 合同、完整历史和生命周期尚未闭合，不能把局部组件通过算作全部完成。",
+              "ref": "W94050"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N94001",
+              "code": "#大工程",
+              "text": "把本机协作、跨厂商执行和远程多端交付推进成完整的人机协作系统。",
+              "owner": "机长",
+              "tags": [
+                "大工程"
+              ],
+              "status": "active",
+              "source": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "sourceLabel": "大工程快照 · 2026-10-22"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H94001",
+              "question": "下一轮 iOS 远程配对真人验收，优先检查哪个场景？",
+              "owner": "人",
+              "context": "根据 2026-10-22 大工程验收范围改编的演示事项，不是当前真实审批记录。",
+              "recommendation": "先检查重开后手动连接，再核业务读写和撤权。",
+              "options": [
+                "重开后手动连接",
+                "业务读写与撤权"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W94043",
+              "tags": [
+                "大工程"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "W94001",
+              "code": "P1",
+              "title": "PendingCrew 大工程：可靠协作与多端交付",
+              "parent": null,
+              "status": "active",
+              "owner": "机长",
+              "note": "按 2026-10-22 总计划整理；只把具有对应证据的模块标为完成。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94010",
+              "code": "P2",
+              "title": "本机工作、文档与知识闭环",
+              "parent": "W94001",
+              "status": "done",
+              "owner": "Core/持久化",
+              "note": "本机统一工作与主要业务闭环已有分层证据。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94011",
+              "code": "P3",
+              "title": "统一 Todo、计划与工作账",
+              "parent": "W94010",
+              "status": "done",
+              "owner": "Core/持久化",
+              "note": "复用公共身份和事务，保持任务与计划的关联。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94012",
+              "code": "P4",
+              "title": "文档、知识块、视图与恢复",
+              "parent": "W94010",
+              "status": "done",
+              "owner": "Core/持久化",
+              "note": "知识与视图保存、原 UUID 和恢复流程已有验收记录。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94020",
+              "code": "P5",
+              "title": "原生 Mac 日用版交付",
+              "parent": "W94001",
+              "status": "done",
+              "owner": "原生客户端",
+              "note": "最新记录已完成准确来源构建、签名核对和安装。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94021",
+              "code": "P6",
+              "title": "完整普通配置构建与产物来源",
+              "parent": "W94020",
+              "status": "done",
+              "owner": "原生客户端",
+              "note": "实际源码、后台和 App 产物分别核对，不能用旧包改标新来源。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94022",
+              "code": "P7",
+              "title": "安装完整候选并保留回退",
+              "parent": "W94020",
+              "status": "done",
+              "owner": "原生客户端",
+              "note": "10 月 22 日记录确认完整候选已安装；安装本身不替代远程配对验收。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            },
+            {
+              "id": "W94030",
+              "code": "P8",
+              "title": "Linux 受管崩溃恢复",
+              "parent": "W94001",
+              "status": "done",
+              "owner": "Core/持久化",
+              "note": "10 月 22 日独立实际验收闭合，非新常驻部署。",
+              "sources": [
+                "N94001"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "检查关联模块的验收证据",
+              "sourceReference": "docs/superpowers/plans/2026-10-13-program-delivery-milestones.md",
+              "folder": "大工程"
+            }
+          ],
+          "docs": [
+            {
+              "id": "D980080",
+              "title": "前后端解耦",
+              "body": "现在的情况是所有逻辑都用Swift。将来我打算把后端逻辑放进用Go写的一个Helper程序里面，Swift只负责控制。\n\n这么做能直接把 PendingCrew 扩展到任意平台上，比如用iPhone控制运行着Linux的主机上的Harness。另外，多人 co-drive 场景也更适合用这样解耦的架构。\n\n还有一点重要考虑，Go写出来的东西方便Agent验证，它也相对擅长做这个。这点太重要了，Agent的能力在训练阶段都是挑着可验证的东西来练的。\n\n开始做 PendingCrew 的时候主要就只在 Mac 上用 Claude Code 和 Codex，也就是当个小工具做，于是现在就是用 Swift 硬去控制 Claude Code CLI 和 Codex app-server。不过这个改动巨大，又有好多其它事情要做。主要是做完之后肯定又有一大堆 Agent 意识不到的问题，很难搞。更主要的是这属于技术实现方案而不是产品方向类的问题。实现方案千千万，Agent 也擅长，可产品方向得我自己想。现在很多想法还没确定，万一哪天想到应该有一个不一样的定位？所以先按现状用着先。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/前后端解耦",
+              "sourceSha256": "7a418ad16637c90dba621c96feedfd0fecab8959f1281f802296781547997ffa",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/前后端解耦"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            },
+            {
+              "id": "D980081",
+              "title": "驾驶舱",
+              "body": "驾驶舱（cockpit）展示了 Agent 内心的蓝图。按道理，它的打算、理解都会在驾驶舱里面呈现。\n\n最初驾驶舱是想设计给人类写的，然后 Agent 照着驾驶舱做。那个味道就像一个“声明式创作系统”，说什么就有什么。实际使用下来有几个问题：\n- 文档很难一下子就写清楚，而且很难让它保持最新状态。\n- 计划赶不上变化。有时候一些技术限制会让整个方向的取舍发生重大转变。\n- 做了一段时间我其实很少用它。不如 To Do 来得方便。声明式创作设想很美好，但是很多东西不经过一定的过程光靠声明还是会出大问题，因为做出来的很多东西不是固定的，不像 Nix 或者声明式语言一样有相对固定的映射。\n\n现在这个东西会给 Agent 充分展示它的理解和想法。因为我经常发现 Agent 的理解跟我的理解压根是两码事。它编码和执行很厉害，但是理解能力确实欠佳，很容易自己臆想出不合适的东西。所以充分暴露它的所思所想我觉得还是很有必要的。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/驾驶舱",
+              "sourceSha256": "b1a9946d67f33780c952eec89a24d9788a75490bc47882045ac1a83a2e8cb8e1",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/驾驶舱"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            }
+          ],
+          "history": [
+            {
+              "text": "按总计划与验收记录整理，状态截于 2026-10-22",
+              "time": "2026-10-22"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "knowledge",
+      "title": "文档和数据",
+      "sessions": [
+        {
+          "id": "knowledge-session-lead",
+          "name": "资料设计",
+          "detail": "Codex Session · 组织个人和小团队的公共记忆",
+          "glyph": "📚"
+        }
+      ],
+      "channels": [
+        {
+          "id": "knowledge-main",
+          "title": "借鉴Palantir",
+          "kind": "group",
+          "subtitle": "Palantir用企业数据做成一套企业操作系统",
+          "members": [
+            {
+              "name": "资料设计",
+              "detail": "Codex Session · 组织个人和小团队的公共记忆",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "knowledge-main-0",
+              "sender": "资料设计",
+              "text": "Palantir用企业数据做成一套企业操作系统",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-main-1",
+              "sender": "资料设计",
+              "text": "我也想弄一个给个人/家庭/小团队用的人机协作系统",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-main-2",
+              "sender": "资料设计",
+              "text": "数据之间可计算、有关系",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-main-3",
+              "sender": "资料设计",
+              "text": "一定程度上也类似于把企业的ERP给小团队使用",
+              "folder": "信息组织"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N-demo-knowledge-main",
+              "code": "#场景",
+              "text": "把项目、任务、成员和决定整理成可以互相关联的对象",
+              "owner": "资料设计",
+              "status": "active",
+              "tags": [
+                "文档/数据"
+              ],
+              "sourceLabel": "主题场景演示",
+              "source": "https://docs.pendingname.com/pendingcrew/"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H-demo-knowledge-main",
+              "question": "个人和小团队最值得先结构化的是什么？",
+              "owner": "人",
+              "context": "此事项用于演示本群主题的判断与反馈，不会执行真实操作。",
+              "recommendation": "任务和决定",
+              "options": [
+                "任务和决定",
+                "材料和经验"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W-demo-knowledge-main-3",
+              "tags": [
+                "文档/数据"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "Wknowledge-main-0",
+              "code": "P1-1",
+              "title": "信息如何组织",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "我想借鉴 Palantir 的，是把分散的信息组织成对象、关系、动作和视图的思路。项目、需求、成员、决定和风险不只是聊天里的一段文字，它们可以有稳定的身份和彼此的联系。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-main",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-main-1",
+              "code": "P1-2",
+              "title": "如何在协作中使用",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "它可以服务个人和小团队：当资料越来越多，Agent 需要知道哪条信息说明哪件事、依据来自哪里、哪些对象会受到影响。希望把组织信息的能力带进私人团队的工作空间。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-main",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-main-2",
+              "code": "P1-3",
+              "title": "边界与后续验证",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "围绕对象查询、关联和更新，再用合适的视图呈现。这个方向要服务实际协作，而不是让每个人先学会管理一套庞大的企业系统。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-main",
+              "folder": "设计问题"
+            },
+            {
+              "id": "W-demo-knowledge-main",
+              "code": "P·场景",
+              "title": "把项目、任务、成员和决定整理成可以互相关联的对象",
+              "parent": null,
+              "status": "active",
+              "owner": "资料设计",
+              "sources": [
+                "N-demo-knowledge-main"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "note": "先有可计算、有联系的数据，才有面向个人与小团队的人机协作系统；界面是工作对象的一种呈现。",
+              "nextCheck": "核对下一步与相关材料",
+              "folder": "主题场景"
+            }
+          ],
+          "docs": [
+            {
+              "id": "Dknowledge-main",
+              "title": "借鉴Palantir.md",
+              "author": "资料设计",
+              "body": "1. Palantir用企业数据做成一套企业操作系统\n\n2. 我也想弄一个给个人/家庭/小团队用的人机协作系统\n\n3. 数据之间可计算、有关系\n\n4. 一定程度上也类似于把企业的ERP给小团队使用\n\n## 对象\n\n把长期协作中的项目、需求、计划、成员、资料、决定和风险识别为有稳定身份的对象。\n\n## 关系\n\n计划来自哪条需求、谁负责、文档说明哪个决定，关系把分散内容连接起来。工作账本仍然负责正式的执行状态。\n\n## 动作\n\n查看、关联、整理、更新和交接，是围绕对象发生的动作。数据视图本身不自动获得执行权限。\n\n## 视图\n\n同一组信息可以用表、文档或其他方式呈现。产品定位是专业可靠、了解你的私人团队，不是默认把个人变成企业管理员。\n\n下面的对象表、SQLite 数据示例和文档组合用 PendingCrew 的产品内容说明这个想法，不连接 Palantir 或真实工作库。",
+              "summary": "Palantir用企业数据做成一套企业操作系统",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "产品定位 §29 与工作模型 §24"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "Dknowledge-data-main",
+              "title": "产品对象与关系表",
+              "author": "资料设计",
+              "body": "## 对象视图示例\n\n这是一组用于解释 PendingCrew 的产品对象。表格支持搜索、排序和选择行，右侧资料入口连接已有产品文档。关系字段只是示意数据，不另建真实工作账本。",
+              "summary": "点击对象查看关系和资料；同一批数据可以有不同视图。",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "产品定位 §29 与工作模型 §24"
+                }
+              ],
+              "dataView": {
+                "kind": "table",
+                "primaryKey": "id",
+                "description": "以 PendingCrew 自己为例，把项目、需求、成员、文档与决定连接起来。",
+                "columns": [
+                  {
+                    "key": "id",
+                    "label": "对象 ID",
+                    "type": "TEXT PRIMARY KEY"
+                  },
+                  {
+                    "key": "type",
+                    "label": "类型",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "name",
+                    "label": "名称",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "relation",
+                    "label": "关系",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "target",
+                    "label": "关联对象",
+                    "type": "TEXT"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "project-pendingcrew",
+                    "type": "项目",
+                    "name": "PendingCrew",
+                    "relation": "包含",
+                    "target": "介绍、Todo介绍、Demo开发",
+                    "detail": "一个持续的人机协作项目；不同入口承接沟通、执行与资料。",
+                    "relatedKeys": [
+                      "position",
+                      "crew-channel"
+                    ]
+                  },
+                  {
+                    "id": "requirement-intro",
+                    "type": "需求",
+                    "name": "用产品自己介绍自己",
+                    "relation": "来源于",
+                    "target": "产品介绍",
+                    "detail": "保留原始要求；展示内容与产品实际概念一致。",
+                    "relatedKeys": [
+                      "original-request",
+                      "demo-content"
+                    ]
+                  },
+                  {
+                    "id": "member-captain",
+                    "type": "成员",
+                    "name": "机长",
+                    "relation": "协调",
+                    "target": "requirement-intro",
+                    "detail": "机长组织分工、跟进事项，把关键判断交给人。",
+                    "relatedKeys": [
+                      "session-members",
+                      "human-role"
+                    ]
+                  },
+                  {
+                    "id": "document-work-model",
+                    "type": "文档",
+                    "name": "一本账，三种记录",
+                    "relation": "说明",
+                    "target": "requirement-intro",
+                    "detail": "文档与需求、计划之间保留可追溯的引用。",
+                    "relatedKeys": [
+                      "one-ledger"
+                    ]
+                  },
+                  {
+                    "id": "decision-independent-folders",
+                    "type": "决定",
+                    "name": "四个入口独立分类",
+                    "relation": "约束",
+                    "target": "project-pendingcrew",
+                    "detail": "文件夹表达内容分类，不改变负责人、计划状态和父子结构。",
+                    "relatedKeys": [
+                      "independent-folders"
+                    ]
+                  }
+                ],
+                "schema": "CREATE TABLE product_objects (\n  id TEXT PRIMARY KEY,\n  type TEXT NOT NULL,\n  name TEXT NOT NULL,\n  relation TEXT,\n  target TEXT\n);"
+              }
+            },
+            {
+              "id": "D988000",
+              "title": "参考Palantir 让PendingCrew自己行动",
+              "body": "Palantir这家企业很有意思，它把企业里分散的知识、逻辑放进软件里，成为公司运转的一部分。PendingCrew从设计之初就一直在参考企业的模式，Palantir的一些思路很值得借鉴。不过我对它的了解还不太多。\n现在PendingCrew还是处于全部听我指挥的状态，我经常感觉我大脑的上下文不够用。我做了很多机制来缓解，例如Todo系统，驾驶舱等等。可是似乎治标不治本。本是什么？我现在觉得是：Agent让我决策的东西里面，很多决策价值很低。我不可能去做所有看似重要的事情，这种情况下牺牲一些重要但价值较低的决策是必要的。例如是否同意合main，真机验证某个它刚做好的功能等等。仅当它们拿不准，或者某个决策涉及我的重大利益（比如如果做错的话可能致使文件丢失，财产丢失等等）这种情况下才应该让我决策。\n\n这其实也是任何一个组织的管理者面临的问题，只不过在Agent这里较为特殊，因为Agent无法独立承担责任。当责任只能由人来承担时，不亲自审阅往往被视为不负责任的表现，可正是这个道德观点束缚着许多人，包括我自己。\n\n自从AI Agent出现以来，“安全、负责任、有判断力”就像“努力”在教育行业一样崇高。\n试想如果一个人在完成它的任务时，说：“xxx都是AI做的，权限我都没怎么看就批了。”听者会如何想？可能会觉得这个人没有安全意识，没有判断力，盲目觉得AI可以帮他完成所有任务。学生翘课欠作业是一个很好的类比，一个学生这样做有可能是他真的懈怠学业，也可能是因为课堂和作业的效率和价值过低，但给人的初步印象就是不努力，哪怕后者的情况下他大概率做出了更恰当的选择。同理，如果一个人适当让AI“假性”承担一些价值较低的责任，也许从整个项目的角度来说效益仍是更大的。\n\n借鉴Palantir能得到什么启示？Palantir试图建立一个企业长期存在的决策模型，把一些较为固定的决策流程和判断方法给AI执行或者预处理，比如某地发生战争、某竞品推出后企业采取的行动。PendingCrew其实有执行的能力，但是缺乏执行前的这一部分，缺乏的原因又要追溯到我没有把我的策略、目标、框架等等明确地给到它，而这些东西正是Palantir建立决策模型的原料。\n\n我之前也不是没想过类似的思路。PendingCrew曾经按照“声明式创作系统”这个思路去做过，当时重点在驾驶舱上，我的想法是把我的决策逻辑、我想要的东西放到驾驶舱里，详细地写清楚，然后交由Agent来做就好了。执行起来发现很多问题是完全没办法提前设计的，并且过程中遇到的问题反过来可能会让最初敲定的决策不再合理。\n\n那我应该怎么设计呢？我目前的设想是把任务分级，给定一套分类方法，什么事情属于应该找我的再来找我。什么事情是不应该找我的，或者只需要我完成一小部分的，那就按照Palantir的思路做处理后再给我。但是具体怎么分类呢？预处理到什么程度呢？好难啊！我真的想不出这两个问题的答案。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动",
+              "sourceSha256": "4b1cd18012f1b92fdec5eebca32bda0e3c25d4ee2b5fe204eb1b931e294e27f0",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明",
+              "archived": false
+            },
+            {
+              "id": "D-topic-knowledge-main-index.md",
+              "title": "PendingCrew",
+              "body": "[GitHub](https://github.com/syncmeta/PendingCrew)\n\nPendingCrew 是**为持续任务流设计的人机深度协作工具**。\n\n![[crew-collaboration.png|PendingCrew 主界面：不同厂家的 Agent 在同一个群里协作]]\n\n对于 Claude Code / Codex 等等 Agent 的用户来说，它可以：\n- 持续布置工作，喂 To Do\n- 可以在一处处理必须由人处理的事务\n- 不用你亲自开几个会话手动协调多个会话\n- 不用所有子 Agent 都塞在一个对话/一个群聊里\n- 为多个会话安排领导 为多个领导安排领导 **建立共事的组织 这很关键！！**\n\n它是 Harness 的 Harness。\n为了实现上述功能，PendingCrew中搭建了一套类似企业的组织架构\n\n人类社会中，为什么复杂生产需要企业？因为企业内部可以分工协作，整合各种分散资源。PendingCrew 做的事情也就是分工协作、整合分散资源。\n\n[[PendingCrew/快速开始|快速开始]]",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/",
+              "sourceSha256": "de6cc65d75a1d89ef99c050cfb1456aafc2c5e5c3a7abec6b994e8d8ad18dd99",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "knowledge-slicing",
+          "title": "文档切片",
+          "kind": "group",
+          "subtitle": "文档只是作为数据库的一个视图",
+          "members": [
+            {
+              "name": "资料设计",
+              "detail": "文档与数据思路",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "knowledge-slicing-0",
+              "sender": "资料设计",
+              "text": "文档只是作为数据库的一个视图",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-slicing-1",
+              "sender": "资料设计",
+              "text": "人机协作过程中一切的零碎数据和经验都可以存到数据库中，合适时再写视图。其实这就和人类写作的原理和过程一样。",
+              "folder": "信息组织"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N-demo-knowledge-slicing",
+              "code": "#场景",
+              "text": "把开发过程中的零碎材料存成带来源的片段",
+              "owner": "资料设计",
+              "status": "active",
+              "tags": [
+                "文档/数据"
+              ],
+              "sourceLabel": "主题场景演示",
+              "source": "https://docs.pendingname.com/pendingcrew/"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H-demo-knowledge-slicing",
+              "question": "片段写成正式文档前，先保留哪些信息？",
+              "owner": "人",
+              "context": "此事项用于演示本群主题的判断与反馈，不会执行真实操作。",
+              "recommendation": "来源和上下文",
+              "options": [
+                "来源和上下文",
+                "对象关系和标签"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W-demo-knowledge-slicing-3",
+              "tags": [
+                "文档/数据"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "Wknowledge-slicing-0",
+              "code": "P2-1",
+              "title": "信息如何组织",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "文档不必永远是一个不可拆的长文本。一个完整段落、一条决定、一段有上下文的说明，都可以成为带身份、来源和语义的内容块。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-slicing",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-slicing-1",
+              "code": "P2-2",
+              "title": "如何在协作中使用",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "按语义切片，不是机械地每隔多少字切一刀。同一个内容块可以被多份文档引用，文档保存的是哪些块按什么顺序出现。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-slicing",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-slicing-2",
+              "code": "P2-3",
+              "title": "边界与后续验证",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "共享修改与独立副本需要明确区分：编辑共享块会影响引用它的视图，创建副本则保留新的身份和来源。下面的文档/数据里可以操作一个共享内容块的示意。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-slicing",
+              "folder": "设计问题"
+            },
+            {
+              "id": "W-demo-knowledge-slicing",
+              "code": "P·场景",
+              "title": "把开发过程中的零碎材料存成带来源的片段",
+              "parent": null,
+              "status": "active",
+              "owner": "资料设计",
+              "sources": [
+                "N-demo-knowledge-slicing"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "note": "一条见闻、一段排查经验和一次判断都可以先保存。完整文章是在合适的时候对这些材料做组织。",
+              "nextCheck": "核对下一步与相关材料",
+              "folder": "主题场景"
+            }
+          ],
+          "docs": [
+            {
+              "id": "Dknowledge-slicing",
+              "title": "文档切片.md",
+              "author": "资料设计",
+              "body": "1. 文档只是作为数据库的一个视图\n\n2. 人机协作过程中一切的零碎数据和经验都可以存到数据库中，合适时再写视图。其实这就和人类写作的原理和过程一样。",
+              "summary": "文档只是作为数据库的一个视图",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "crewd/crates/proto/src/team_data.rs",
+                  "label": "内容块、文档视图与数据类型"
+                },
+                {
+                  "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+                  "label": "早期团队数据与语义文档草案（历史方案）"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "Dknowledge-data-slicing",
+              "title": "两份文档，共享一个内容块.md",
+              "author": "资料设计",
+              "body": "## 组合视图示例\n\n产品概览与协作说明是两份视图。工作模型只有一份内容身份，但有两个展示位置。修改下方共享块会同时反映到两份视图；修改只保存在这份浏览器演示里。",
+              "summary": "切换文档、查看块来源和复用位置，编辑后会同步到另一份文档。",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "crewd/crates/proto/src/team_data.rs",
+                  "label": "内容块、文档视图与数据类型"
+                },
+                {
+                  "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+                  "label": "早期团队数据与语义文档草案（历史方案）"
+                }
+              ],
+              "dataView": {
+                "kind": "composition",
+                "description": "两份产品文档引用同一个「工作模型」内容块。编辑共享块，两个文档一起变化。",
+                "blocks": [
+                  {
+                    "id": "block-position",
+                    "title": "产品定位",
+                    "body": "PendingCrew 是让你与 AI 持续协作的空间。",
+                    "source": "产品说明"
+                  },
+                  {
+                    "id": "block-work-model",
+                    "title": "工作模型",
+                    "body": "一本账连接原始需求、计划和待人类处理；进展是同一份计划的视图。",
+                    "source": "工作模型 §24.1"
+                  },
+                  {
+                    "id": "block-view-data",
+                    "title": "数据与视图",
+                    "body": "内容以有身份的语义块保存，文档通过有序位置组合内容，视图与数据分开。",
+                    "source": "语义文档设计"
+                  }
+                ],
+                "views": [
+                  {
+                    "id": "view-product",
+                    "title": "产品概览",
+                    "placements": [
+                      {
+                        "id": "placement-a1",
+                        "blockId": "block-position"
+                      },
+                      {
+                        "id": "placement-a2",
+                        "blockId": "block-work-model"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "view-collaboration",
+                    "title": "协作说明",
+                    "placements": [
+                      {
+                        "id": "placement-b1",
+                        "blockId": "block-work-model"
+                      },
+                      {
+                        "id": "placement-b2",
+                        "blockId": "block-view-data"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "id": "D988020",
+              "title": "参考Palantir 让PendingCrew自己行动",
+              "body": "Palantir这家企业很有意思，它把企业里分散的知识、逻辑放进软件里，成为公司运转的一部分。PendingCrew从设计之初就一直在参考企业的模式，Palantir的一些思路很值得借鉴。不过我对它的了解还不太多。\n现在PendingCrew还是处于全部听我指挥的状态，我经常感觉我大脑的上下文不够用。我做了很多机制来缓解，例如Todo系统，驾驶舱等等。可是似乎治标不治本。本是什么？我现在觉得是：Agent让我决策的东西里面，很多决策价值很低。我不可能去做所有看似重要的事情，这种情况下牺牲一些重要但价值较低的决策是必要的。例如是否同意合main，真机验证某个它刚做好的功能等等。仅当它们拿不准，或者某个决策涉及我的重大利益（比如如果做错的话可能致使文件丢失，财产丢失等等）这种情况下才应该让我决策。\n\n这其实也是任何一个组织的管理者面临的问题，只不过在Agent这里较为特殊，因为Agent无法独立承担责任。当责任只能由人来承担时，不亲自审阅往往被视为不负责任的表现，可正是这个道德观点束缚着许多人，包括我自己。\n\n自从AI Agent出现以来，“安全、负责任、有判断力”就像“努力”在教育行业一样崇高。\n试想如果一个人在完成它的任务时，说：“xxx都是AI做的，权限我都没怎么看就批了。”听者会如何想？可能会觉得这个人没有安全意识，没有判断力，盲目觉得AI可以帮他完成所有任务。学生翘课欠作业是一个很好的类比，一个学生这样做有可能是他真的懈怠学业，也可能是因为课堂和作业的效率和价值过低，但给人的初步印象就是不努力，哪怕后者的情况下他大概率做出了更恰当的选择。同理，如果一个人适当让AI“假性”承担一些价值较低的责任，也许从整个项目的角度来说效益仍是更大的。\n\n借鉴Palantir能得到什么启示？Palantir试图建立一个企业长期存在的决策模型，把一些较为固定的决策流程和判断方法给AI执行或者预处理，比如某地发生战争、某竞品推出后企业采取的行动。PendingCrew其实有执行的能力，但是缺乏执行前的这一部分，缺乏的原因又要追溯到我没有把我的策略、目标、框架等等明确地给到它，而这些东西正是Palantir建立决策模型的原料。\n\n我之前也不是没想过类似的思路。PendingCrew曾经按照“声明式创作系统”这个思路去做过，当时重点在驾驶舱上，我的想法是把我的决策逻辑、我想要的东西放到驾驶舱里，详细地写清楚，然后交由Agent来做就好了。执行起来发现很多问题是完全没办法提前设计的，并且过程中遇到的问题反过来可能会让最初敲定的决策不再合理。\n\n那我应该怎么设计呢？我目前的设想是把任务分级，给定一套分类方法，什么事情属于应该找我的再来找我。什么事情是不应该找我的，或者只需要我完成一小部分的，那就按照Palantir的思路做处理后再给我。但是具体怎么分类呢？预处理到什么程度呢？好难啊！我真的想不出这两个问题的答案。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动",
+              "sourceSha256": "4b1cd18012f1b92fdec5eebca32bda0e3c25d4ee2b5fe204eb1b931e294e27f0",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明",
+              "archived": false
+            },
+            {
+              "id": "D-topic-knowledge-slicing-驾驶舱.md",
+              "title": "驾驶舱",
+              "body": "驾驶舱（cockpit）展示了 Agent 内心的蓝图。按道理，它的打算、理解都会在驾驶舱里面呈现。\n\n最初驾驶舱是想设计给人类写的，然后 Agent 照着驾驶舱做。那个味道就像一个“声明式创作系统”，说什么就有什么。实际使用下来有几个问题：\n- 文档很难一下子就写清楚，而且很难让它保持最新状态。\n- 计划赶不上变化。有时候一些技术限制会让整个方向的取舍发生重大转变。\n- 做了一段时间我其实很少用它。不如 To Do 来得方便。声明式创作设想很美好，但是很多东西不经过一定的过程光靠声明还是会出大问题，因为做出来的很多东西不是固定的，不像 Nix 或者声明式语言一样有相对固定的映射。\n\n现在这个东西会给 Agent 充分展示它的理解和想法。因为我经常发现 Agent 的理解跟我的理解压根是两码事。它编码和执行很厉害，但是理解能力确实欠佳，很容易自己臆想出不合适的东西。所以充分暴露它的所思所想我觉得还是很有必要的。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/驾驶舱",
+              "sourceSha256": "b1a9946d67f33780c952eec89a24d9788a75490bc47882045ac1a83a2e8cb8e1",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/驾驶舱"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "knowledge-database",
+          "title": "个人和小团队数据库",
+          "kind": "group",
+          "subtitle": "每个人、每个团队都会产生很多数据",
+          "members": [
+            {
+              "name": "资料设计",
+              "detail": "文档与数据思路",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "knowledge-database-0",
+              "sender": "资料设计",
+              "text": "每个人、每个团队都会产生很多数据",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-database-1",
+              "sender": "资料设计",
+              "text": "以前没有如此强大的Agent的时候，整理数据的成本高于收益，大家都不弄",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-database-2",
+              "sender": "资料设计",
+              "text": "就像移动互联网普及后很多原本不会用互联网解决的东西都在线上解决了",
+              "folder": "信息组织"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N-demo-knowledge-database",
+              "code": "#场景",
+              "text": "为个人和小团队建立能持续积累的数据库",
+              "owner": "资料设计",
+              "status": "active",
+              "tags": [
+                "文档/数据"
+              ],
+              "sourceLabel": "主题场景演示",
+              "source": "https://docs.pendingname.com/pendingcrew/"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H-demo-knowledge-database",
+              "question": "第一批数据先从哪里来？",
+              "owner": "人",
+              "context": "此事项用于演示本群主题的判断与反馈，不会执行真实操作。",
+              "recommendation": "正在进行的工作",
+              "options": [
+                "正在进行的工作",
+                "已有文档与零碎记录"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W-demo-knowledge-database-3",
+              "tags": [
+                "文档/数据"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "Wknowledge-database-0",
+              "code": "P3-1",
+              "title": "信息如何组织",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "个人和小团队也会积累很多结构化信息：项目事项、联系人、需求、决定、资料和业务记录。它们不该只能散落在聊天和表格里。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-database",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-database-1",
+              "code": "P3-2",
+              "title": "如何在协作中使用",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "希望让人和 Agent 按工作需要建立表、字段、对象和关系。SQLite 可以承接机组知识数据；原始记录、来源和修改依据需要能够保留。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-database",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-database-2",
+              "code": "P3-3",
+              "title": "边界与后续验证",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "这类业务数据与正式执行状态各有职责。表可以整理业务信息，计划仍然负责工作状态；展示一个表或数据视图，也不等于自动获得所有执行权限。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-database",
+              "folder": "设计问题"
+            },
+            {
+              "id": "W-demo-knowledge-database",
+              "code": "P·场景",
+              "title": "为个人和小团队建立能持续积累的数据库",
+              "parent": null,
+              "status": "active",
+              "owner": "资料设计",
+              "sources": [
+                "N-demo-knowledge-database"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "note": "Agent 改变的是整理成本：以前不值得整理的零碎数据，现在可能值得被保存和联系起来。",
+              "nextCheck": "核对下一步与相关材料",
+              "folder": "主题场景"
+            }
+          ],
+          "docs": [
+            {
+              "id": "Dknowledge-database",
+              "title": "个人和小团队数据库.md",
+              "author": "资料设计",
+              "body": "1. 每个人、每个团队都会产生很多数据\n\n2. 以前没有如此强大的Agent的时候，整理数据的成本高于收益，大家都不弄\n\n3. 就像移动互联网普及后很多原本不会用互联网解决的东西都在线上解决了",
+              "summary": "每个人、每个团队都会产生很多数据",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "crewd/crates/store/src/sqlite_knowledge.rs",
+                  "label": "当前按机组 SQLite 知识库源码"
+                },
+                {
+                  "path": "crewd/crates/proto/src/sqlite_data_api.rs",
+                  "label": "当前 SQLite 知识 API 注册"
+                },
+                {
+                  "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+                  "label": "早期团队数据与语义文档草案（历史方案）"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "Dknowledge-data-database",
+              "title": "SQLite 表：产品事项清单",
+              "author": "资料设计",
+              "body": "## 数据示例\n\n这是可能放进团队知识工作区的一张业务表。事项、负责人、状态和资料使用独立字段，不需要把所有信息塞进文档正文。表中的状态只用于说明，不与正式 Todo 状态混写。",
+              "summary": "浏览数据、查看字段类型和 SQL 表结构，NULL 明确显示。",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "crewd/crates/store/src/sqlite_knowledge.rs",
+                  "label": "当前按机组 SQLite 知识库源码"
+                },
+                {
+                  "path": "crewd/crates/proto/src/sqlite_data_api.rs",
+                  "label": "当前 SQLite 知识 API 注册"
+                }
+              ],
+              "dataView": {
+                "kind": "table",
+                "primaryKey": "id",
+                "description": "可能用来整理产品需求与资料的业务表；不作为真实任务执行状态。",
+                "columns": [
+                  {
+                    "key": "id",
+                    "label": "编号",
+                    "type": "TEXT PRIMARY KEY"
+                  },
+                  {
+                    "key": "title",
+                    "label": "事项",
+                    "type": "TEXT NOT NULL"
+                  },
+                  {
+                    "key": "owner",
+                    "label": "负责人",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "state",
+                    "label": "状态",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "document",
+                    "label": "关联资料",
+                    "type": "TEXT"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "item-01",
+                    "title": "介绍产品定位",
+                    "owner": "机长",
+                    "state": "已整理",
+                    "document": "Harness 的 Harness",
+                    "detail": "产品定位来自仓库 README，说明持续协作与人的认知参与。",
+                    "relatedKeys": [
+                      "position"
+                    ]
+                  },
+                  {
+                    "id": "item-02",
+                    "title": "解释 Todo 与进展",
+                    "owner": "Todo介绍",
+                    "state": "已整理",
+                    "document": "一本账，三种记录",
+                    "detail": "需求、计划与人的事项互相引用，进展使用相同计划。",
+                    "relatedKeys": [
+                      "one-ledger",
+                      "progress-view"
+                    ]
+                  },
+                  {
+                    "id": "item-03",
+                    "title": "展示语义内容块",
+                    "owner": "Demo开发",
+                    "state": "进行中",
+                    "document": "文档切片与复用",
+                    "detail": "在网页里用共享段落说明文档组合，不表示生产引擎已经运行。",
+                    "relatedKeys": [
+                      "semantic-slicing"
+                    ]
+                  },
+                  {
+                    "id": "item-04",
+                    "title": "整理个人记忆方向",
+                    "owner": "人",
+                    "state": "待讨论",
+                    "document": null,
+                    "detail": "个人记忆与成员持续学习保留为后续方向，不补造已经确定的实现方案。",
+                    "relatedKeys": [
+                      "knowledge-direction"
+                    ]
+                  }
+                ],
+                "schema": "CREATE TABLE product_items (\n  id TEXT PRIMARY KEY,\n  title TEXT NOT NULL,\n  owner TEXT,\n  state TEXT CHECK (state IN ('已整理', '进行中', '待讨论')),\n  document TEXT\n);"
+              }
+            },
+            {
+              "id": "D988040",
+              "title": "参考Palantir 让PendingCrew自己行动",
+              "body": "Palantir这家企业很有意思，它把企业里分散的知识、逻辑放进软件里，成为公司运转的一部分。PendingCrew从设计之初就一直在参考企业的模式，Palantir的一些思路很值得借鉴。不过我对它的了解还不太多。\n现在PendingCrew还是处于全部听我指挥的状态，我经常感觉我大脑的上下文不够用。我做了很多机制来缓解，例如Todo系统，驾驶舱等等。可是似乎治标不治本。本是什么？我现在觉得是：Agent让我决策的东西里面，很多决策价值很低。我不可能去做所有看似重要的事情，这种情况下牺牲一些重要但价值较低的决策是必要的。例如是否同意合main，真机验证某个它刚做好的功能等等。仅当它们拿不准，或者某个决策涉及我的重大利益（比如如果做错的话可能致使文件丢失，财产丢失等等）这种情况下才应该让我决策。\n\n这其实也是任何一个组织的管理者面临的问题，只不过在Agent这里较为特殊，因为Agent无法独立承担责任。当责任只能由人来承担时，不亲自审阅往往被视为不负责任的表现，可正是这个道德观点束缚着许多人，包括我自己。\n\n自从AI Agent出现以来，“安全、负责任、有判断力”就像“努力”在教育行业一样崇高。\n试想如果一个人在完成它的任务时，说：“xxx都是AI做的，权限我都没怎么看就批了。”听者会如何想？可能会觉得这个人没有安全意识，没有判断力，盲目觉得AI可以帮他完成所有任务。学生翘课欠作业是一个很好的类比，一个学生这样做有可能是他真的懈怠学业，也可能是因为课堂和作业的效率和价值过低，但给人的初步印象就是不努力，哪怕后者的情况下他大概率做出了更恰当的选择。同理，如果一个人适当让AI“假性”承担一些价值较低的责任，也许从整个项目的角度来说效益仍是更大的。\n\n借鉴Palantir能得到什么启示？Palantir试图建立一个企业长期存在的决策模型，把一些较为固定的决策流程和判断方法给AI执行或者预处理，比如某地发生战争、某竞品推出后企业采取的行动。PendingCrew其实有执行的能力，但是缺乏执行前的这一部分，缺乏的原因又要追溯到我没有把我的策略、目标、框架等等明确地给到它，而这些东西正是Palantir建立决策模型的原料。\n\n我之前也不是没想过类似的思路。PendingCrew曾经按照“声明式创作系统”这个思路去做过，当时重点在驾驶舱上，我的想法是把我的决策逻辑、我想要的东西放到驾驶舱里，详细地写清楚，然后交由Agent来做就好了。执行起来发现很多问题是完全没办法提前设计的，并且过程中遇到的问题反过来可能会让最初敲定的决策不再合理。\n\n那我应该怎么设计呢？我目前的设想是把任务分级，给定一套分类方法，什么事情属于应该找我的再来找我。什么事情是不应该找我的，或者只需要我完成一小部分的，那就按照Palantir的思路做处理后再给我。但是具体怎么分类呢？预处理到什么程度呢？好难啊！我真的想不出这两个问题的答案。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动",
+              "sourceSha256": "4b1cd18012f1b92fdec5eebca32bda0e3c25d4ee2b5fe204eb1b931e294e27f0",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明",
+              "archived": false
+            },
+            {
+              "id": "D-topic-knowledge-database-index.md",
+              "title": "PendingCrew",
+              "body": "[GitHub](https://github.com/syncmeta/PendingCrew)\n\nPendingCrew 是**为持续任务流设计的人机深度协作工具**。\n\n![[crew-collaboration.png|PendingCrew 主界面：不同厂家的 Agent 在同一个群里协作]]\n\n对于 Claude Code / Codex 等等 Agent 的用户来说，它可以：\n- 持续布置工作，喂 To Do\n- 可以在一处处理必须由人处理的事务\n- 不用你亲自开几个会话手动协调多个会话\n- 不用所有子 Agent 都塞在一个对话/一个群聊里\n- 为多个会话安排领导 为多个领导安排领导 **建立共事的组织 这很关键！！**\n\n它是 Harness 的 Harness。\n为了实现上述功能，PendingCrew中搭建了一套类似企业的组织架构\n\n人类社会中，为什么复杂生产需要企业？因为企业内部可以分工协作，整合各种分散资源。PendingCrew 做的事情也就是分工协作、整合分散资源。\n\n[[PendingCrew/快速开始|快速开始]]",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/",
+              "sourceSha256": "de6cc65d75a1d89ef99c050cfb1456aafc2c5e5c3a7abec6b994e8d8ad18dd99",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "knowledge-memory",
+          "title": "公共记忆可计算、可联系",
+          "kind": "group",
+          "subtitle": "其实就是关系型数据库的特征",
+          "members": [
+            {
+              "name": "资料设计",
+              "detail": "文档与数据思路",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "knowledge-memory-0",
+              "sender": "资料设计",
+              "text": "其实就是关系型数据库的特征",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-memory-1",
+              "sender": "资料设计",
+              "text": "各种东西，文档啊，牢骚啊，经验啊，问题啊，或者什么零碎的东西，见闻，都放到数据库里面",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-memory-2",
+              "sender": "资料设计",
+              "text": "有一点数据湖的意味，但是没有那么湖",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-memory-3",
+              "sender": "资料设计",
+              "text": "Agent让原本不会被计算的东西、整理成本太高的但是又确实能带来价值的东西，拿来结构化处理，让它们可计算",
+              "folder": "信息组织"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N-demo-knowledge-memory",
+              "code": "#场景",
+              "text": "把问题、经验和观察连接到具体任务与决定",
+              "owner": "资料设计",
+              "status": "active",
+              "tags": [
+                "文档/数据"
+              ],
+              "sourceLabel": "主题场景演示",
+              "source": "https://docs.pendingname.com/pendingcrew/"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H-demo-knowledge-memory",
+              "question": "不确定的信息以什么方式进入公共记忆？",
+              "owner": "人",
+              "context": "此事项用于演示本群主题的判断与反馈，不会执行真实操作。",
+              "recommendation": "标明推测并保留来源",
+              "options": [
+                "标明推测并保留来源",
+                "等验证后再成为结论"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W-demo-knowledge-memory-3",
+              "tags": [
+                "文档/数据"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "Wknowledge-memory-0",
+              "code": "P4-1",
+              "title": "信息如何组织",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "我希望公共记忆不只是“大家都能读的一叠文档”。公共是指团队共享的工作记忆：做过什么决定、依据是什么、出现过什么问题、留下了什么教训。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-memory",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-memory-1",
+              "code": "P4-2",
+              "title": "如何在协作中使用",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "如果这些记忆有类型、字段、时间、来源和关联，就可以查询、筛选、比较和计算。还能沿着关系找到相关的人、项目、计划和资料。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-memory",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-memory-2",
+              "code": "P4-3",
+              "title": "边界与后续验证",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "它不必只靠相似文本检索。希望让 Agent 既能读到叙述，也能使用有结构的事实与联系，再把结果带回协作现场。这是需要逐步验证的信息组织方向。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-memory",
+              "folder": "设计问题"
+            },
+            {
+              "id": "W-demo-knowledge-memory",
+              "code": "P·场景",
+              "title": "把问题、经验和观察连接到具体任务与决定",
+              "parent": null,
+              "status": "active",
+              "owner": "资料设计",
+              "sources": [
+                "N-demo-knowledge-memory"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "note": "可计算不是把所有文字压成一个摘要，而是保留必要的结构，让后来的人和 Agent 能继续核对与使用。",
+              "nextCheck": "核对下一步与相关材料",
+              "folder": "主题场景"
+            }
+          ],
+          "docs": [
+            {
+              "id": "Dknowledge-memory",
+              "title": "公共记忆可计算、可联系.md",
+              "author": "资料设计",
+              "body": "1. 其实就是关系型数据库的特征\n\n2. 各种东西，文档啊，牢骚啊，经验啊，问题啊，或者什么零碎的东西，见闻，都放到数据库里面\n\n3. 有一点数据湖的意味，但是没有那么湖\n\n4. Agent让原本不会被计算的东西、整理成本太高的但是又确实能带来价值的东西，拿来结构化处理，让它们可计算",
+              "summary": "其实就是关系型数据库的特征",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "协作与工作跟进设计"
+                },
+                {
+                  "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+                  "label": "团队数据与语义文档设计草案"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D988060",
+              "title": "参考Palantir 让PendingCrew自己行动",
+              "body": "Palantir这家企业很有意思，它把企业里分散的知识、逻辑放进软件里，成为公司运转的一部分。PendingCrew从设计之初就一直在参考企业的模式，Palantir的一些思路很值得借鉴。不过我对它的了解还不太多。\n现在PendingCrew还是处于全部听我指挥的状态，我经常感觉我大脑的上下文不够用。我做了很多机制来缓解，例如Todo系统，驾驶舱等等。可是似乎治标不治本。本是什么？我现在觉得是：Agent让我决策的东西里面，很多决策价值很低。我不可能去做所有看似重要的事情，这种情况下牺牲一些重要但价值较低的决策是必要的。例如是否同意合main，真机验证某个它刚做好的功能等等。仅当它们拿不准，或者某个决策涉及我的重大利益（比如如果做错的话可能致使文件丢失，财产丢失等等）这种情况下才应该让我决策。\n\n这其实也是任何一个组织的管理者面临的问题，只不过在Agent这里较为特殊，因为Agent无法独立承担责任。当责任只能由人来承担时，不亲自审阅往往被视为不负责任的表现，可正是这个道德观点束缚着许多人，包括我自己。\n\n自从AI Agent出现以来，“安全、负责任、有判断力”就像“努力”在教育行业一样崇高。\n试想如果一个人在完成它的任务时，说：“xxx都是AI做的，权限我都没怎么看就批了。”听者会如何想？可能会觉得这个人没有安全意识，没有判断力，盲目觉得AI可以帮他完成所有任务。学生翘课欠作业是一个很好的类比，一个学生这样做有可能是他真的懈怠学业，也可能是因为课堂和作业的效率和价值过低，但给人的初步印象就是不努力，哪怕后者的情况下他大概率做出了更恰当的选择。同理，如果一个人适当让AI“假性”承担一些价值较低的责任，也许从整个项目的角度来说效益仍是更大的。\n\n借鉴Palantir能得到什么启示？Palantir试图建立一个企业长期存在的决策模型，把一些较为固定的决策流程和判断方法给AI执行或者预处理，比如某地发生战争、某竞品推出后企业采取的行动。PendingCrew其实有执行的能力，但是缺乏执行前的这一部分，缺乏的原因又要追溯到我没有把我的策略、目标、框架等等明确地给到它，而这些东西正是Palantir建立决策模型的原料。\n\n我之前也不是没想过类似的思路。PendingCrew曾经按照“声明式创作系统”这个思路去做过，当时重点在驾驶舱上，我的想法是把我的决策逻辑、我想要的东西放到驾驶舱里，详细地写清楚，然后交由Agent来做就好了。执行起来发现很多问题是完全没办法提前设计的，并且过程中遇到的问题反过来可能会让最初敲定的决策不再合理。\n\n那我应该怎么设计呢？我目前的设想是把任务分级，给定一套分类方法，什么事情属于应该找我的再来找我。什么事情是不应该找我的，或者只需要我完成一小部分的，那就按照Palantir的思路做处理后再给我。但是具体怎么分类呢？预处理到什么程度呢？好难啊！我真的想不出这两个问题的答案。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动",
+              "sourceSha256": "4b1cd18012f1b92fdec5eebca32bda0e3c25d4ee2b5fe204eb1b931e294e27f0",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明",
+              "archived": false
+            },
+            {
+              "id": "D-topic-knowledge-memory-群聊白板.md",
+              "title": "群聊白板",
+              "body": "群聊是人类协作的重要工具，Agent 大概也是如此。\n\nPendingCrew 里面每个 Session 会接收到群聊里面的什么消息？\n- @它的。这不用多说。@某个 Session，就会唤醒它。\n- 自己订阅监听的：比如它问了某个人一个问题，或者关注某个 Session 的动态，那它就会自己去监听那个人。有消息来的时候，就相当于@它，会唤醒它或注入到它的上下文里面。还比如，一个 Session 说了个什么东西，等待大家的回应，那它可能就会监听几分钟之内的消息。这跟人类看群聊一样，有时候发完消息之后会等一段时间看大家有什么反应，有时候会特别关注某个人说什么。\n- 机长会收到任何新消息。类似于前台嘛，就是做这个事的，信息和事务就是由它整理的。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/群聊白板",
+              "sourceSha256": "057f1099cba691f067783a9bd29f73fe089c69c12fbee7094ceea6aa3e8a0bb4",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/群聊白板"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            },
+            {
+              "id": "D-memory-links-demo",
+              "title": "问题、经验和观察的关联数据",
+              "author": "机长",
+              "folder": "数据示例",
+              "body": "这是一组可筛选的示意记录。内容与任务、决定相联系，并保留事实和推测的区别。",
+              "dataView": {
+                "kind": "table",
+                "primaryKey": "id",
+                "description": "演示数据：把零碎记录变成可计算、有关系的公共材料。",
+                "schema": "CREATE TABLE memory_records (id TEXT PRIMARY KEY, kind TEXT, text TEXT, relation TEXT, certainty TEXT);",
+                "columns": [
+                  {
+                    "key": "id",
+                    "label": "编号",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "kind",
+                    "label": "类型",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "text",
+                    "label": "内容",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "relation",
+                    "label": "关联",
+                    "type": "TEXT"
+                  },
+                  {
+                    "key": "certainty",
+                    "label": "性质",
+                    "type": "TEXT"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "M1",
+                    "kind": "经验",
+                    "text": "错误提示应保留 errno 和路径",
+                    "relation": "诊断记录 / 开发复盘",
+                    "certainty": "历史记录"
+                  },
+                  {
+                    "id": "M2",
+                    "kind": "问题",
+                    "text": "重开后是否出现自动连接？",
+                    "relation": "远程配对验收",
+                    "certainty": "待验证"
+                  },
+                  {
+                    "id": "M3",
+                    "kind": "观察",
+                    "text": "交接需要目标、证据和下一步",
+                    "relation": "机长 / 工作跟进",
+                    "certainty": "实践观察"
+                  }
+                ]
+              }
+            }
+          ],
+          "history": []
+        },
+        {
+          "id": "knowledge-views",
+          "title": "数据和视图分开",
+          "kind": "group",
+          "subtitle": "和人类写作过程一样",
+          "members": [
+            {
+              "name": "资料设计",
+              "detail": "文档与数据思路",
+              "glyph": "📚"
+            },
+            {
+              "name": "人",
+              "detail": "人类",
+              "glyph": "👤"
+            }
+          ],
+          "messages": [
+            {
+              "id": "knowledge-views-0",
+              "sender": "资料设计",
+              "text": "和人类写作过程一样",
+              "folder": "信息组织"
+            },
+            {
+              "id": "knowledge-views-1",
+              "sender": "资料设计",
+              "text": "人类写作也是在不断的实践中积累经验、思考，然后找个时间整理出来，形成的文字在一定程度上就是作者大脑中数据的一个视图",
+              "folder": "信息组织"
+            }
+          ],
+          "requests": [
+            {
+              "id": "N-demo-knowledge-views",
+              "code": "#场景",
+              "text": "让同一份开发材料组成不同的工作视图",
+              "owner": "资料设计",
+              "status": "active",
+              "tags": [
+                "文档/数据"
+              ],
+              "sourceLabel": "主题场景演示",
+              "source": "https://docs.pendingname.com/pendingcrew/"
+            }
+          ],
+          "asks": [
+            {
+              "id": "H-demo-knowledge-views",
+              "question": "材料变更后，两个视图应该怎样更新？",
+              "owner": "人",
+              "context": "此事项用于演示本群主题的判断与反馈，不会执行真实操作。",
+              "recommendation": "共享同一内容块",
+              "options": [
+                "共享同一内容块",
+                "固定各自发布的版本"
+              ],
+              "status": "open",
+              "answer": "",
+              "item": "W-demo-knowledge-views-3",
+              "tags": [
+                "文档/数据"
+              ]
+            }
+          ],
+          "plans": [
+            {
+              "id": "Wknowledge-views-0",
+              "code": "P5-1",
+              "title": "信息如何组织",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "数据描述事实和关系，视图决定怎样看它。同一组信息可以是表格、说明文档、结构化列表，也可以是按问题组织的专题。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-views",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-views-1",
+              "code": "P5-2",
+              "title": "如何在协作中使用",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "文档也是一种视图：它可以组合已有的内容块，而不必每次复制一遍原文。改变分类、排列或展示方式，不应该悄悄改变底下的数据身份和事实。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-views",
+              "folder": "设计问题"
+            },
+            {
+              "id": "Wknowledge-views-2",
+              "code": "P5-3",
+              "title": "边界与后续验证",
+              "parent": null,
+              "status": "open",
+              "owner": "资料设计",
+              "sources": [],
+              "dependsOn": [],
+              "blockedOn": [],
+              "nextCheck": "随设计讨论更新",
+              "note": "",
+              "goal": "这样，人可以选择更容易理解的呈现方式，Agent 可以访问更适合计算的数据结构。数据与视图分开，但通过稳定引用联系起来。",
+              "acceptance": "明确表示方式、来源与使用边界",
+              "evidence": "Dknowledge-views",
+              "folder": "设计问题"
+            },
+            {
+              "id": "W-demo-knowledge-views",
+              "code": "P·场景",
+              "title": "让同一份开发材料组成不同的工作视图",
+              "parent": null,
+              "status": "active",
+              "owner": "资料设计",
+              "sources": [
+                "N-demo-knowledge-views"
+              ],
+              "dependsOn": [],
+              "blockedOn": [],
+              "note": "写作也像一个视图：实践中积累经验和思考，再在某个时候组织成文字。数据和表达不必绑在同一个文件里。",
+              "nextCheck": "核对下一步与相关材料",
+              "folder": "主题场景"
+            }
+          ],
+          "docs": [
+            {
+              "id": "Dknowledge-views",
+              "title": "数据和视图分开.md",
+              "author": "资料设计",
+              "body": "1. 和人类写作过程一样\n\n2. 人类写作也是在不断的实践中积累经验、思考，然后找个时间整理出来，形成的文字在一定程度上就是作者大脑中数据的一个视图",
+              "summary": "和人类写作过程一样",
+              "kind": "规划设想",
+              "folder": "文档与数据",
+              "sources": [
+                {
+                  "path": "docs/superpowers/specs/2026-10-05-crewd-backend-and-work-tracking-design.md",
+                  "label": "协作与工作跟进设计"
+                },
+                {
+                  "path": "docs/internal/2026-10-15-doltlite-team-data-public-contract.md",
+                  "label": "团队数据与语义文档设计草案"
+                }
+              ],
+              "archived": true
+            },
+            {
+              "id": "D988080",
+              "title": "参考Palantir 让PendingCrew自己行动",
+              "body": "Palantir这家企业很有意思，它把企业里分散的知识、逻辑放进软件里，成为公司运转的一部分。PendingCrew从设计之初就一直在参考企业的模式，Palantir的一些思路很值得借鉴。不过我对它的了解还不太多。\n现在PendingCrew还是处于全部听我指挥的状态，我经常感觉我大脑的上下文不够用。我做了很多机制来缓解，例如Todo系统，驾驶舱等等。可是似乎治标不治本。本是什么？我现在觉得是：Agent让我决策的东西里面，很多决策价值很低。我不可能去做所有看似重要的事情，这种情况下牺牲一些重要但价值较低的决策是必要的。例如是否同意合main，真机验证某个它刚做好的功能等等。仅当它们拿不准，或者某个决策涉及我的重大利益（比如如果做错的话可能致使文件丢失，财产丢失等等）这种情况下才应该让我决策。\n\n这其实也是任何一个组织的管理者面临的问题，只不过在Agent这里较为特殊，因为Agent无法独立承担责任。当责任只能由人来承担时，不亲自审阅往往被视为不负责任的表现，可正是这个道德观点束缚着许多人，包括我自己。\n\n自从AI Agent出现以来，“安全、负责任、有判断力”就像“努力”在教育行业一样崇高。\n试想如果一个人在完成它的任务时，说：“xxx都是AI做的，权限我都没怎么看就批了。”听者会如何想？可能会觉得这个人没有安全意识，没有判断力，盲目觉得AI可以帮他完成所有任务。学生翘课欠作业是一个很好的类比，一个学生这样做有可能是他真的懈怠学业，也可能是因为课堂和作业的效率和价值过低，但给人的初步印象就是不努力，哪怕后者的情况下他大概率做出了更恰当的选择。同理，如果一个人适当让AI“假性”承担一些价值较低的责任，也许从整个项目的角度来说效益仍是更大的。\n\n借鉴Palantir能得到什么启示？Palantir试图建立一个企业长期存在的决策模型，把一些较为固定的决策流程和判断方法给AI执行或者预处理，比如某地发生战争、某竞品推出后企业采取的行动。PendingCrew其实有执行的能力，但是缺乏执行前的这一部分，缺乏的原因又要追溯到我没有把我的策略、目标、框架等等明确地给到它，而这些东西正是Palantir建立决策模型的原料。\n\n我之前也不是没想过类似的思路。PendingCrew曾经按照“声明式创作系统”这个思路去做过，当时重点在驾驶舱上，我的想法是把我的决策逻辑、我想要的东西放到驾驶舱里，详细地写清楚，然后交由Agent来做就好了。执行起来发现很多问题是完全没办法提前设计的，并且过程中遇到的问题反过来可能会让最初敲定的决策不再合理。\n\n那我应该怎么设计呢？我目前的设想是把任务分级，给定一套分类方法，什么事情属于应该找我的再来找我。什么事情是不应该找我的，或者只需要我完成一小部分的，那就按照Palantir的思路做处理后再给我。但是具体怎么分类呢？预处理到什么程度呢？好难啊！我真的想不出这两个问题的答案。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动",
+              "sourceSha256": "4b1cd18012f1b92fdec5eebca32bda0e3c25d4ee2b5fe204eb1b931e294e27f0",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/展望/参考palantir-让pendingcrew自己行动"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明",
+              "archived": false
+            },
+            {
+              "id": "D-topic-knowledge-views-驾驶舱.md",
+              "title": "驾驶舱",
+              "body": "驾驶舱（cockpit）展示了 Agent 内心的蓝图。按道理，它的打算、理解都会在驾驶舱里面呈现。\n\n最初驾驶舱是想设计给人类写的，然后 Agent 照着驾驶舱做。那个味道就像一个“声明式创作系统”，说什么就有什么。实际使用下来有几个问题：\n- 文档很难一下子就写清楚，而且很难让它保持最新状态。\n- 计划赶不上变化。有时候一些技术限制会让整个方向的取舍发生重大转变。\n- 做了一段时间我其实很少用它。不如 To Do 来得方便。声明式创作设想很美好，但是很多东西不经过一定的过程光靠声明还是会出大问题，因为做出来的很多东西不是固定的，不像 Nix 或者声明式语言一样有相对固定的映射。\n\n现在这个东西会给 Agent 充分展示它的理解和想法。因为我经常发现 Agent 的理解跟我的理解压根是两码事。它编码和执行很厉害，但是理解能力确实欠佳，很容易自己臆想出不合适的东西。所以充分暴露它的所思所想我觉得还是很有必要的。",
+              "siteSource": "https://docs.pendingname.com/pendingcrew/驾驶舱",
+              "sourceSha256": "b1a9946d67f33780c952eec89a24d9788a75490bc47882045ac1a83a2e8cb8e1",
+              "sources": [
+                {
+                  "label": "文档站原文",
+                  "path": "https://docs.pendingname.com/pendingcrew/驾驶舱"
+                }
+              ],
+              "author": "PendingCrew 文档站",
+              "folder": "文档站",
+              "kind": "产品说明"
+            },
+            {
+              "id": "D-views-composition-demo",
+              "title": "同一份材料，两种工作视图",
+              "author": "机长",
+              "folder": "数据示例",
+              "body": "材料先独立保存，再按读者和用途组合。修改共享内容块后，引用它的视图会一起更新。",
+              "dataView": {
+                "kind": "composition",
+                "description": "示意数据：相同的内容块可以同时进入项目概览和交接材料。",
+                "blocks": [
+                  {
+                    "id": "delivery",
+                    "title": "交付阶段",
+                    "body": "当前材料需要区分已验收模块和仍在推进的完整链路。",
+                    "source": "开发记录"
+                  },
+                  {
+                    "id": "next",
+                    "title": "下一步",
+                    "body": "下一轮检查重开后的手动连接、业务读写和撤销。",
+                    "source": "大工程计划"
+                  }
+                ],
+                "views": [
+                  {
+                    "id": "overview",
+                    "title": "项目概览",
+                    "placements": [
+                      {
+                        "id": "overview-delivery",
+                        "blockId": "delivery"
+                      },
+                      {
+                        "id": "overview-next",
+                        "blockId": "next"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "handoff",
+                    "title": "交接材料",
+                    "placements": [
+                      {
+                        "id": "handoff-next",
+                        "blockId": "next"
+                      },
+                      {
+                        "id": "handoff-delivery",
+                        "blockId": "delivery"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "history": []
+        }
+      ]
+    }
+  ]
+}
