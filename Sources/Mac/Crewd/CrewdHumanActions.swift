@@ -373,27 +373,15 @@ struct CrewdExecutorChoiceView: View {
                 if workspace.executorProfiles.isEmpty { Text("尚未读取").tag(executor) }
                 ForEach(workspace.executorProfiles.filter(\.offeredInOriginalUI)) { profile in
                     Text(profile.title).tag(profile.executor)
+                        .disabled(workspace.executorProfile(profile.executor)?.canStart != true)
                 }
             }
             if let profile = workspace.executorProfile(executor) {
-                Text(profile.canStart ? "后台已配置此执行器；登录、额度与实际启动仍以原请求及会话状态为准。" : profile.unavailableDescription)
-                    .font(.caption).foregroundStyle(profile.canStart ? Color.secondary : Color.orange)
-                DisclosureGroup("执行能力详情") {
-                Text("额外任务上下文：\(profile.initialContext ? "支持" : "未开放")").font(.caption).foregroundStyle(.secondary)
-                Text("手工终端：\(profile.manualTerminal ? "支持" : "未开放") · 结构化审批：\(profile.structuredDecisions ? "支持" : "未开放")")
-                    .font(.caption).foregroundStyle(.secondary)
-                if !profile.fullHistoryLoad {
-                    Text(profile.backend == "codex" && workspace.client.capabilities.contains("session.codex") ? "原历史可在会话控制页只读读取；手动恢复被拒绝时不会创建替代 thread。":profile.recoveryDescription)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                }.font(CrewdType.caption)
-
+                if !profile.canStart { Text(profile.unavailableDescription).font(.caption).foregroundStyle(.orange) }
             } else {
-                Text(workspace.executorProfilesFailure ?? "尚未读取当前后台的执行能力，不能启动。")
+                Text(workspace.executorProfilesFailure ?? "当前执行方式尚未读取，暂不可选。")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button("重新读取执行能力") { Task { await workspace.refreshExecutorProfiles() } }
-                .disabled(!workspace.client.readyForWork || workspace.crewID.isEmpty)
         }.task(id: workspace.crewID + "/" + workspace.client.connectionEpoch.uuidString) {
             await workspace.refreshExecutorProfiles()
         }
@@ -418,7 +406,7 @@ struct CrewdSessionStartView: View {
     private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context,scope:personalScope); reviewedUnknown = false }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            CrewdPanelHeader(title:"新成员会话",detail:"发送第一件具体任务后才会启动。",symbol:"person.badge.plus")
+            CrewdPanelHeader(title:"新AI成员")
             CrewdFormSection(title:"执行成员") {CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)}
             CrewdFormField(title:"第一件事",detail:"这段任务原文会作为新会话的首条消息。") {
                 TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(3...8)
@@ -457,7 +445,6 @@ struct CrewdSessionStartView: View {
                     }
                 }
             }.disabled(personalScope.map{!personalService.isCurrent($0)} == true || workspace.executorProfile(workspace.selectedExecutor)?.canStart != true || reading || workspace.busy || !workspace.client.connected || !workspace.client.supportsSessionStart || workspace.crewID.isEmpty || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!unknown.isEmpty && !reviewedUnknown))
-            Text(workspace.status).font(CrewdType.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }.onAppear{workspace.bindPersonalProjection();personalScope=personalService.editingScope()}
         .onChange(of:personalService.projectionID){_,_ in personalScope=personalService.editingScope()}
         .onChange(of: workspace.crewID) { _, _ in

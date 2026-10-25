@@ -25,6 +25,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     private var lastScreen: String?
     private var renderingCoreOutput = false
     private var retired = false
+    private var resumeInFlight = false
     private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, crewID: String, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind; observedCrew = crewID
@@ -84,31 +85,56 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     func submitWake(_ text: String) async -> SessionWakeSubmission { .blocked }
     func interrupt() { command("session.interrupt", ["sessionId": .string(sessionID)]) }
     func stop() { command("session.stop", ["sessionId": .string(sessionID), "reason": .string("人类在原窗口明确停止")]) }
-    func resume() { command("session.resume", ["sessionId": .string(sessionID)]) }
+    func resume() { resumeFromExplicitOpen() }
+    /// Only explicit Human actions call this. Observation and history never do.
+    func resumeFromExplicitOpen(onFailure: ((String) -> Void)? = nil) {
+        command("session.resume", ["sessionId": .string(sessionID)], onFailure: onFailure)
+    }
     func retireDisplay() {
         retired = true
         transcript?.revokeKnowledgeCallDetails()
         publicTerminal?.retire()
         terminalView?.onSendBytes = nil; terminalView?.onResize = nil
     }
-    private func command(_ method: String, _ fields: [String: CrewdValue]) {
+    private func command(_ method: String, _ fields: [String: CrewdValue], onFailure: ((String) -> Void)? = nil) {
         let epoch = workspace.observationGeneration
-        guard !retired, workspace.acceptsObservation(epoch) else { return }
-        // These explicit session-ID controls resolve a fresh CAS target in
-        // Workspace immediately before submission. A cached pre-resume target
-        // belongs to the old generation even when the new live row is visible.
+        let route = workspace.observationSelection, connection = workspace.client.connectionEpoch
+        let resuming = method == "session.resume"
+        guard !retired, workspace.acceptsObservation(epoch), !resuming || !resumeInFlight else { return }
+        if resuming { resumeInFlight = true }
         Task {
-            // Authority may have switched while this main-actor task was queued.
-            guard !retired, workspace.acceptsObservation(epoch),
-                  workspace.crewID == observedCrew, workspace.sessionID == sessionID else { return }
+            defer { if resuming { resumeInFlight = false } }
+            @MainActor func current() -> Bool {
+                !retired && workspace.acceptsObservation(epoch) && workspace.observationSelection == route &&
+                    workspace.client.connectionEpoch == connection && workspace.crewID == observedCrew && workspace.sessionID == sessionID
+            }
+            guard current() else { return }
             do {
+                if resuming {
+                    let live = try await workspace.readValue("session.live", .object(["sessionId": .string(sessionID)]))
+                    guard current() else { return }
+                    guard live["sessionId"].string == sessionID, case .bool(let running) = live["running"] else {
+                        throw CrewdClientError(message: "原会话运行状态未确认，未提交恢复。", kind: .notSubmitted)
+                    }
+                    if running { status = .running; isWorking = live["working"] == .bool(true); failure = nil; return }
+                    await workspace.refreshExecutorProfiles()
+                    guard current() else { return }
+                }
+                // Resolves the original fresh CAS target, executor qualification,
+                // permission and Unknown guards; never session.start/replacement.
                 _ = try await workspace.performValue(method, .object(fields))
-                guard !retired, workspace.acceptsObservation(epoch) else { return }
+                guard current() else { return }
                 failure = nil
                 await refresh()
             } catch {
-                guard !retired, workspace.acceptsObservation(epoch) else { return }
-                failure = error.localizedDescription
+                guard current() else { return }
+                let hint = kind == .claudeCode
+                    ? "Claude 只能恢复本 Core 已记录且合格的原会话；请右键会话打开会话控制核对原标识与原请求，不会新建替代会话。"
+                    : "请右键会话打开会话控制核对执行能力与原请求；不会创建替代 thread 或重发未知请求。"
+                let detail = resuming ? "恢复未完成：" + error.localizedDescription + "\n" + hint : error.localizedDescription
+                failure = detail
+                workspace.error = detail
+                onFailure?(detail)
             }
         }
     }

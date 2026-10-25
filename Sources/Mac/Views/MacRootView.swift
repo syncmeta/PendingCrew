@@ -26,11 +26,25 @@ struct MacThreePaneView: View {
         }detail:{
             CrewCenterView().environmentObject(sessionRunner)
                 .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
-                // The shared workspace header reaches the existing transparent
-                // titlebar; a full-width detail keeps native window-button space.
-                .ignoresSafeArea(.container,edges:columnVisibility == .detailOnly ? [] : .top)
+                .toolbar(removing: .sidebarToggle)
+                // Keep workspace controls below the native titlebar hit region.
+                // The root material still extends behind the transparent chrome.
         }
         .navigationSplitViewStyle(.balanced).tint(Theme.Palette.accent)
+        .toolbar(removing: .sidebarToggle)
+        .environment(\.crewdToggleSidebar, {
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        })
+        .environment(\.crewdSidebarCollapsed, columnVisibility == .detailOnly)
+        .toolbar {
+            if crewStore.selectedDetail == nil {
+                ToolbarItem(placement: .navigation) {
+                    Button { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly } label: {
+                        Image(systemName: "sidebar.left")
+                    }.labelStyle(.iconOnly).accessibilityLabel("显示或隐藏边栏")
+                }
+            }
+        }
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
             if model.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace, let new, new != crewStore.pendingCrew?.id {

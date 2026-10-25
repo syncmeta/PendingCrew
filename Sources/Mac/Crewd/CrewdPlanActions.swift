@@ -125,20 +125,18 @@ struct CrewdPlanActions:View {
     private func binding<T>(_ path:WritableKeyPath<CrewdPlanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
-            CrewdPanelHeader(title:key.object.isEmpty ? "新建工作计划":"更新工作计划",detail:key.object.isEmpty ? "把待办展开为可跟进的目标、负责人和检查点。":"核对当前状态后，明确提交一次操作。",symbol:"list.bullet.indent")
-            DisclosureGroup("原事项编号"){Text(key.object.isEmpty ? key.source:key.object).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
-            Text("机组："+(crews.first(where:{$0["id"] == .string(key.crew)})?["title"].string ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
+            CrewdPanelHeader(title:key.object.isEmpty ? "新建计划":"更新计划",symbol:"list.bullet.indent")
             if !key.object.isEmpty {
                 #if os(macOS)
                 Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented)
                 #else
                 Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.menu)
                 #endif
-                HStack {Text("已读取版本："+(revision ?? "尚未读取")).font(.caption);Spacer();Button("核对当前详情"){Task {await load()}}.disabled(reading || drafts.busy(key))}
+                HStack {if reading {ProgressView().controlSize(.small)};Spacer();Button("刷新"){Task {await load()}}.font(CrewdType.caption).disabled(reading || drafts.busy(key))}
                 if let id=CrewdWorkID(key.object,kind:.plan),let current=store.plans[id] {
                     Text(current.value["title"].string ?? "").font(.headline)
-                    Text("当前："+CrewdWorkStatusLabel.display(current.status)+" · "+(current.value["owner"].string ?? "未指派")).font(.caption).foregroundStyle(.secondary)
-                    Text("卡点："+current.value["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)
+                    Text(CrewdWorkStatusLabel.display(current.status)+" · "+ownerName(current.value["owner"].string)).font(.caption).foregroundStyle(.secondary)
+                    if !current.value["blockedOn"].array.isEmpty {Text("待答复："+current.value["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)}
                     if let note=current.value["note"].string {Text(note).font(.caption).textSelection(.enabled)}
                 }
             }
@@ -176,18 +174,17 @@ struct CrewdPlanActions:View {
                             Text("无父计划").tag("")
                             ForEach(store.plans.values.filter{!$0.frozen && !["done","dropped"].contains($0.status)}.sorted(by:{$0.id.raw < $1.id.raw}),id:\.id){plan in Text("\(plan.id.raw) · \(plan.value["title"].string ?? "")").tag(plan.id.raw)}
                         }
-                        Text("父计划选项来自已读取的实际计划；层级与跨机组权限由后台校验。").font(.caption).foregroundStyle(.secondary)
                     } else {
                         switch fields.action {
                         case .assign,.reassignLost:
                             if fields.action == .reassignLost {
-                                Text("后台会核实当前负责人是否确实失联；健康成员不能通过此操作重派。若只是人工调整负责人，请选择指派。").font(.caption).foregroundStyle(.secondary)
+                                Text("仅用于负责人失联；正常调整请选择「指派」。").font(.caption).foregroundStyle(.secondary)
                                 if !store.capabilities.contains("work.reassignLost") {Text("配套后台尚未开放此操作，当前不能提交。").font(.caption).foregroundStyle(.orange)}
                             }
                             ownerPicker;TextField("交接说明",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                         case .report:
                             Picker("状态",selection:binding(\.reportStatus)){Text("待推进").tag("open");Text("推进中").tag("active").disabled(!currentHasOwner)}
-                            if !currentHasOwner {Text("尚未指派负责人，可以先记录待推进的说明，不设置检查点。指派后才能设置检查点或推进中。").font(.caption).foregroundStyle(.secondary)}
+                            if !currentHasOwner {Text("先指派负责人，才能推进或设置检查点。").font(.caption).foregroundStyle(.secondary)}
                             TextField("当前进展与下一步",text:binding(\.note),axis:.vertical).lineLimit(2...5)
                             Toggle("设置下一检查点",isOn:binding(\.checkpoint)).disabled(!currentHasOwner && !fields.checkpoint)
                             if checkpointRequired {Text("推进中需要下一检查点，请设置检查时间。").font(.caption).foregroundStyle(.orange)}
@@ -213,10 +210,13 @@ struct CrewdPlanActions:View {
         VStack(alignment:.leading,spacing:4) {
             Picker("负责人",selection:binding(\.owner)) {
                 Text("暂不指派").tag("")
-                ForEach(members.indices,id:\.self){i in let m=members[i];Text((m["displayName"].string ?? m["id"].string ?? "成员")+" · "+(crews.first(where:{$0["id"] == m["crewId"]})?["title"].string ?? "所属机组资料尚未加载")).tag(m["id"].string ?? "")}
+                ForEach(members.indices,id:\.self){i in let m=members[i];Text(m["displayName"].string ?? m["id"].string ?? "成员").tag(m["id"].string ?? "")}
             }
-            Text("已加载的真实成员，不代表完整组织名册。").font(.caption).foregroundStyle(.secondary)
         }
+    }
+    private func ownerName(_ id:String?)->String {
+        guard let id,!id.isEmpty else{return "未指派"}
+        return members.first(where:{$0["id"] == .string(id)})?["displayName"].string ?? id
     }
     private func unknownPayload(_ f:CrewdPlanDrafts.Fields)->String {
         var lines:[String]=[]

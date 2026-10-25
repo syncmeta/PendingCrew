@@ -59,7 +59,7 @@ struct CrewdWorkPanels: View {
                         }.font(.caption).padding(.bottom, 4)
                     }
                     if progressOnly && visibleProgress.isEmpty && !store.loading && store.lastFailure == nil {
-                        CrewdEmptySurface(title: "把工作展开成计划", detail: "从 AI 待办中记录的事情开始，计划、负责人和进展会整理在这里。",
+                        CrewdEmptySurface(title: "还没有计划", detail: "从 AI 待办新建计划，在这里跟进进展。",
                                           symbol: "list.bullet.indent", actionTitle: openTodo == nil ? nil : "打开 AI 待办", action: openTodo)
                             .frame(minHeight: 200)
                     }
@@ -73,14 +73,12 @@ struct CrewdWorkPanels: View {
                                     if selectedRequirement != nil {Task {do {_ = try await store.requirementDetail(id)} catch {failure = describe(error)}}}
                                 } label: {
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(id.raw).font(.system(size: 10, weight: .medium)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                         Text(store.requirements[id]?["text"].string ?? "需求").font(CrewdType.body.weight(.medium)).multilineTextAlignment(.leading)
                                     }
                                 }.buttonStyle(.plain)
                                 HStack {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("requirement",id.raw));Button("从需求建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))};Spacer()}
                                 if selectedRequirement == id {requirementDetail(id)}
                                 Text(CrewdWorkStatusLabel.display(store.requirements[id]?["status"].string ?? "")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
-                                Text(store.plans(from:id).map {$0.id.raw}.joined(separator:" · ")).font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                             }.padding(12).frame(maxWidth:.infinity,alignment:.leading)
                                 .background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:10))
                                 .overlay(RoundedRectangle(cornerRadius:10).stroke(CrewdChatStyle.line(colorScheme),lineWidth:0.6))
@@ -90,14 +88,13 @@ struct CrewdWorkPanels: View {
                     if domain == .all {
                     ForEach(CrewdNavigation.planTree(visibleProgress.filter{includes("work",$0.id.raw)},collapsed:collapsed)) {row in
                         if let id=CrewdWorkID(row.object,kind:.plan),let plan=store.plans[id] {
-                            VStack(alignment:.leading,spacing:4) {
+                            VStack(alignment:.leading,spacing:10) {
                                 HStack(alignment:.top) {
                                     if row.expandable {Button {if !collapsed.insert(row.id).inserted {collapsed.remove(row.id)}} label:{Image(systemName:collapsed.contains(row.id) ? "chevron.right":"chevron.down")}.buttonStyle(.plain)}
                                     Image(systemName:plan.status == "done" ? "checkmark.circle.fill":plan.status == "blocked" ? "questionmark.circle":"circle").foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     Button { selected = selected == id.raw ? nil : id.raw; if selected != nil && !compact {Task {do {_ = try await store.detail(id)} catch {failure=error.localizedDescription}}} } label: {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(plan.value["title"].string ?? "计划").font(CrewdType.body.weight(.medium)).multilineTextAlignment(.leading)
-                                            Text(id.raw).font(.system(size: 10)).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                         }
                                     }.buttonStyle(.plain)
                                     Spacer()
@@ -109,18 +106,19 @@ struct CrewdWorkPanels: View {
                                         if let owner=plan.value["owner"].string {
                                             Label(members.first(where:{$0["id"] == .string(owner)})?["displayName"].string ?? owner,systemImage:"person").font(CrewdType.caption)
                                         }
-                                        if let note=plan.value["note"].string,!note.isEmpty{Text(note).font(CrewdType.label).lineLimit(selected == id.raw ? nil:3)}
-                                        if let date=plan.value["nextCheckAt"].string{Label("下次检查 · "+date,systemImage:"clock").font(CrewdType.caption)}
+                                        if selected != id.raw,let note=plan.value["note"].string,!note.isEmpty{Text(note).font(CrewdType.label).lineLimit(2)}
+                                        if let date=plan.value["nextCheckAt"].string{Label("下次检查 · "+checkpointLabel(date),systemImage:"clock").font(CrewdType.caption)}
                                     }.foregroundStyle(CrewdChatStyle.muted(colorScheme))
                                     if let parent=plan.value["parent"].string,row.depth == 0 {Text("上级：\(parent)").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))}
-                                    if row.depth >= 3 {Text("后台返回超过三层的计划，请核对账本。").font(.caption).foregroundStyle(.orange)}
                                 }
                                 if selected == id.raw, !compact {
                                     if let detail=plan.detail {
-                                        Text(detail["goal"].string ?? "").textSelection(.enabled)
-                                        Text("来源：" + detail["sources"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
-                                        Text("依赖：" + detail["dependsOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
-                                        Text("卡点：" + detail["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)
+                                        Divider()
+                                        if let goal=detail["goal"].string,!goal.isEmpty {Text(goal).font(CrewdType.body).textSelection(.enabled)}
+                                        if let acceptance=detail["acceptance"].string,!acceptance.isEmpty {Text("验收："+acceptance).font(CrewdType.label).textSelection(.enabled)}
+                                        if let note=detail["note"].string,!note.isEmpty {Text(note).font(CrewdType.label).textSelection(.enabled)}
+                                        if !detail["dependsOn"].array.isEmpty {Text("依赖：" + detail["dependsOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)}
+                                        if !detail["blockedOn"].array.isEmpty {Text("待答复：" + detail["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption)}
                                         if let evidence=detail["evidence"]["value"].string {Text(evidence).textSelection(.enabled)}
                                         CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:folderView,object:CrewdFolderFilter.object("work",id.raw))
                                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew + ":" + id.raw)
@@ -128,7 +126,7 @@ struct CrewdWorkPanels: View {
                                     } else {Button("读取当前详情") {Task {do {_ = try await store.detail(id)} catch {failure=describe(error)}}}}
 
                                 }
-                            }.padding(11).frame(maxWidth: .infinity, alignment: .leading)
+                            }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:10))
                                 .overlay(RoundedRectangle(cornerRadius:10).stroke(CrewdChatStyle.line(colorScheme),lineWidth:0.6))
                                 .padding(.leading,CGFloat(min(row.depth,3))*12)
@@ -156,6 +154,14 @@ struct CrewdWorkPanels: View {
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }
+    private func checkpointLabel(_ raw:String)->String {
+        let parser=ISO8601DateFormatter()
+        parser.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+        let precise=parser.date(from:raw)
+        parser.formatOptions=[.withInternetDateTime]
+        guard let date=precise ?? parser.date(from:raw) else{return raw}
+        return date.formatted(date:.abbreviated,time:.shortened)
+    }
     private func describe(_ error:Error)->String {
         guard let e=error as? CrewdClientError else {return error.localizedDescription}
         return [e.message,e.code.map {"错误 \($0)"},e.refusal].compactMap{$0}.joined(separator:" · ")
@@ -165,7 +171,7 @@ struct CrewdWorkPanels: View {
         return VStack(alignment:.leading,spacing:6) {
             ForEach(drafts.uncertain(crew),id:\.requestID) {snapshot in
                 VStack(alignment:.leading,spacing:4) {
-                    Text("可能已创建，使用原草稿再次确认会复用同一请求编号。").font(.caption).foregroundStyle(.orange)
+                    Text("创建结果未确认，请核对原提交后再继续。").font(.caption).foregroundStyle(.orange)
                     Text(snapshot.text).font(.caption).lineLimit(3).textSelection(.enabled)
                     Button("确认这份原始提交") {
                         guard drafts.confirm(snapshot) else {return}
@@ -185,7 +191,6 @@ struct CrewdWorkPanels: View {
             TextField("写下原始需求",text:Binding(get:{drafts.text(crew)},set:{drafts.set(crew,text:$0)}),axis:.vertical).lineLimit(2...5)
                 .disabled(drafts.busy(crew))
             HStack {
-                Text("保存原文，计划与处理由团队继续跟进").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
                 Spacer()
                 Button(drafts.busy(crew) ? "提交中":"新增需求") {
                     guard let snapshot=drafts.begin(crew) else {return}
@@ -208,7 +213,6 @@ struct CrewdWorkPanels: View {
         let raw=store.requirements[id] ?? .null
         let status=raw["status"].string ?? "", note=closeNotes[id] ?? ""
         Text(raw["text"].string ?? "").textSelection(.enabled)
-        Text("全局编号：\(id.raw)").font(.caption).foregroundStyle(CrewdChatStyle.muted(colorScheme))
         if raw["closure"] != .null {
             Text("关闭理由：" + (raw["closure"]["note"].string ?? "")).textSelection(.enabled)
         }

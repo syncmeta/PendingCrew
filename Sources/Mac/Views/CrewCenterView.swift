@@ -31,6 +31,14 @@ struct CrewCenterView: View {
         let editingDraft = crewStore.pendingCrew.map { crewStore.selectedCrewId == $0.id } ?? false
         return !editingDraft && crewStore.selectedDetail != nil && model.crewdBackend?.workspace != nil
     }
+    private var messageFilter: some View {
+        Group {
+            if let workspace = model.crewdBackend?.workspace {
+                CrewdMessageFilterMenu(workspace: workspace, resources: workspace.channelResources,
+                    communicationView: $communicationView, onlyMentions: $onlyMentions)
+            }
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             if !hasWorkspaceHeader {
@@ -77,7 +85,7 @@ struct CrewCenterView: View {
                 // 未发出的草稿由 `CrewComposerDraftStore` 按 crew 记着，切回来原样在。
                 .id((model.crewdBackend?.workspace.presentationNamespace ?? "legacy") + "/" + detail.crew.id + "/" + personalService.projectionID.uuidString)
                 .modifier(CrewdOriginalWorkIntegration(workspace: model.crewdBackend?.workspace,
-                    searchControl: AnyView(searchButton)))
+                    searchControl: AnyView(searchButton), filterControl: AnyView(messageFilter)))
             } else if let id = crewStore.selectedCrewId, crewStore.loadingDetailIds.contains(id) {
                 ProgressView("正在读取机组…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -415,4 +423,46 @@ private struct CrewSearchGlass:ViewModifier {
     }
 }
 
+#endif
+
+#if os(macOS)
+private struct CrewdMessageFilterMenu: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @ObservedObject var resources: CrewdResources
+    @Binding var communicationView: CrewTimelineFilter.CommunicationView
+    @Binding var onlyMentions: Bool
+    @State private var managing = false
+    private var folder: Binding<String> {
+        Binding(get: { workspace.resourceDrafts.selection(resources.crew, .messages, channel: resources.channel) },
+                set: { workspace.resourceDrafts.select(resources.crew, .messages, $0, channel: resources.channel) })
+    }
+    var body: some View {
+        Menu {
+            Picker("沟通范围", selection: $communicationView) {
+                ForEach(CrewTimelineFilter.CommunicationView.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Toggle("仅@你", isOn: $onlyMentions)
+            if resources.capabilities.contains("viewFolders") {
+                Divider()
+                Picker("消息分类", selection: folder) {
+                    Text("全部分类").tag("all"); Text("未分类").tag("none")
+                    ForEach(resources.folders[.messages]?.rows ?? []) { row in
+                        Text(String(repeating: "　", count: row.depth) + (row.value["name"].string ?? "分类")).tag(row.id)
+                    }
+                }
+                Button("管理消息分类") { managing = true }
+            }
+        } label: { Label("消息筛选", systemImage: "line.3.horizontal.decrease") }
+            .modifier(CrewdMessageFilterGlass()).fixedSize()
+            .sheet(isPresented: $managing) {
+                CrewdFolderEditor(store: resources, drafts: $workspace.resourceDrafts, view: .messages)
+            }
+    }
+}
+private struct CrewdMessageFilterGlass: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) { content.buttonStyle(.glass) }
+        else { content.buttonStyle(.bordered) }
+    }
+}
 #endif

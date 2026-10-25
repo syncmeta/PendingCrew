@@ -65,20 +65,10 @@ struct CrewPersonalDraftControls:View {
     private var key:AppleDraftKey?{workspace.personalDraftKey(context)}
     var body:some View {
         VStack(alignment:.leading,spacing:4){
-            HStack(spacing:8){
-                Text(key.map{service.saving.contains($0) ? (service.unsavedLatest.contains($0) ? "原文尚未保存 · 正在保存版本":"原文已本机保全 · 正在保存版本"):service.status} ?? service.status).font(.caption2).foregroundStyle(.secondary)
-                Spacer(minLength:0)
-                if let key,service.errors[key] != nil{Button("重试保存"){service.checkpoint(payload,key:key,scope:scope)}.font(.caption)}
-                Menu {
-                    Button("草稿版本"){showing=true}.disabled(key == nil)
-                    if let key,service.usingCore{Button("保存当前内容为新版本"){guard let expected=service.snapshot(key,payload:payload,scope:scope) else{failure="原输入已变化，请重新核对。";return};Task{do{try await service.saveCurrentAsNewVersion(key,payload:payload,expected:expected)}catch{failure=error.localizedDescription}}}}
-                    Button("个人同步"){settings=true}
-                    Button("导出草稿"){do{exportDocument = .init(bytes:try appleSyncEncode(payload));exportTicket=key.flatMap{service.exportTicket($0,payload:payload,scope:scope)};recoveredExport=key.flatMap{service.staleExportTicket($0,payload:payload,scope:scope)};exporting=true}catch{failure=error.localizedDescription}}
-                }label:{Label("草稿",systemImage:"doc.text")}
-                    .font(.caption2).foregroundStyle(.secondary).buttonStyle(.plain).controlSize(.mini).tint(.gray)
+            if let key, service.errors[key] != nil {
+                Button("重试保存") { service.checkpoint(payload, key: key, scope: scope) }.font(.caption)
             }
             if let issue=key.flatMap({service.errors[$0]}) ?? service.initializationError ?? failure{Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
-            if key == nil{Text("来源身份尚未核对；原输入仍按本机草稿保留。").font(.caption2).foregroundStyle(.secondary)}
         }
         .fileExporter(isPresented:$exporting,document:exportDocument,contentType:.json,defaultFilename:"PendingCrew-草稿"){result in switch result{case .failure(let error):failure=error.localizedDescription;case .success:if let exportTicket{service.acknowledgeExport(exportTicket)};if let recoveredExport{service.acknowledgeRecoveredExport(recoveredExport)}}}
         .sheet(isPresented:$showing){if let key{CrewPersonalVersionPicker(service:service,key:key,payload:$payload)}}

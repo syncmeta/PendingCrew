@@ -978,3 +978,45 @@ async fn sqlite_jev_never_calls_provider_before_manual_current_run_admission() {
     assert!(fake.requests().is_empty());
     f.close().await;
 }
+
+#[tokio::test]
+async fn fresh_human_message_admits_only_jev_chosen_new_target() {
+    let fake = FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"wake_s0":{"type":"noul","noul":0.1},"wake_s1":{"type":"noul","noul":0.9}}}).to_string())]).await;
+    let f = Fixture::new().await;
+    let ids=f.state.db.call_result(|s|sessions::list(s.conn(),None)).await.unwrap().unwrap();
+    for s in ids { f.state.admission.revoke(&s.id); }
+    assert!(!f.state.admission.any());
+    f.configure(&fake.base_url).await;
+    let channel=format!("{}/lobby",f.crew);
+    let message=f.state.collab(move |tx|messages::post(tx,Sender::Human,messages::NewPost{channel_id:channel,text:"new explicit Human message from quiet startup".into(),..Default::default()})).await.unwrap().message;
+    let record=f.settled(JudgmentSourceKind::Message,message.id.clone()).await;
+    assert_eq!(fake.requests().len(),1,"new Human intent must not get stuck behind empty admission");
+    assert_eq!(record.recipients,vec![f.worker.clone()]);
+    // Settlement is durable before the post-commit admission read completes.
+    let until=tokio::time::Instant::now()+std::time::Duration::from_secs(1);
+    while !f.state.admission.contains(&f.worker) {
+        assert!(tokio::time::Instant::now()<until,"chosen current target was not admitted after commit");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(f.state.db.call_result(|s|sessions::list(s.conn(),None)).await.unwrap().unwrap().iter().filter(|s|f.state.admission.contains(&s.id)).count(),1,"only selected actual target may be admitted");
+    f.state.admission.revoke(&f.worker);
+    f.runtime.run(JudgmentSourceKind::Message,message.id.clone(),false).await;
+    f.runtime.run(JudgmentSourceKind::Message,message.id,true).await;
+    assert!(!f.state.admission.any(),"duplicate/recovery must not revive old intent");
+    assert_eq!(fake.requests().len(),1);
+    // Simulate a persisted Pending fact whose live event was missed. Recovery
+    // settles the original record but never treats that scan as a new send.
+    let channel=format!("{}/lobby",f.crew);
+    let missed=f.state.db.call_result(move |s|crewd_collab::run(s,crewd_store::now_ms(),|tx|messages::post(tx,Sender::Human,messages::NewPost{channel_id:channel,text:"old pending fact is not a new live event".into(),..Default::default()}))).await.unwrap().unwrap().0.message;
+    f.runtime.scan_pending(true).await.unwrap();
+    f.settled(JudgmentSourceKind::Message,missed.id).await;
+    assert_eq!(fake.requests().len(),1);
+    assert!(!f.state.admission.any(),"recovery does not admit old pending work");
+    f.state.admission.close();
+    let channel=format!("{}/lobby",f.crew);
+    let closed=f.state.collab(move |tx|messages::post(tx,Sender::Human,messages::NewPost{channel_id:channel,text:"closed admission is not new permission".into(),..Default::default()})).await.unwrap().message;
+    f.settled(JudgmentSourceKind::Message,closed.id).await;
+    assert_eq!(fake.requests().len(),1,"closed admission must not call the fake provider");
+    assert!(!f.state.admission.any());
+    f.close().await;
+}

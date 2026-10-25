@@ -429,11 +429,22 @@ final class CrewSessionRunner: ObservableObject {
         if let session = runs.first(where: { $0.runID == runId })?.sessionId { crewdProjectionWorkspace?.selectSession(session) }
     }
 
-    /// Opens the original conversation for viewing. Resuming execution requires
-    /// the separate explicit resume control.
+    /// Human member/sidebar/rail click: show the original conversation and
+    /// resume that stopped session. Pure select/restore/observation stays quiet.
     func openSession(_ runId: UUID) {
         select(runId)
         viewingTerminal = true
+        guard let run = runs.first(where: { $0.runID == runId }),
+              let backend = run.backend as? CrewdOriginalSessionBackend else { return }
+        lastStartError = nil
+        backend.resumeFromExplicitOpen { [weak self, weak run] detail in
+            guard let self, let run, self.selectedRunId == runId,
+                  self.crewdProjectionWorkspace === backend.workspace else { return }
+            self.lastStartError = run.displayName + "：" + detail
+            // The existing member-pane error row makes qualification failures
+            // actionable even when terminal controls live in the context menu.
+            self.viewingTerminal = false
+        }
     }
 
     /// 进入「新建 session」态（composer 显零配置启动面）。

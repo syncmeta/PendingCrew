@@ -9,29 +9,36 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument('--derived-data', required=True)
     a.add_argument('--output')
+    a.add_argument('--products', help='Existing warm built module/products directory; never builds an App')
+    a.add_argument('--library', help='Existing actual App debug dylib, including the current HotReload product')
+    a.add_argument('--module-name', choices=['PendingCrew','PendingCrewHotReload'], default='PendingCrew')
     a.add_argument('--configuration', choices=['Debug','NativeCandidate'], default='NativeCandidate')
     a.add_argument('--scenarios', nargs='+', help='Run only named affected scenarios; default keeps the complete suite')
     args = a.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
     dd = pathlib.Path(args.derived_data).resolve()
-    products = dd/'Build/Products'/args.configuration
-    library = products/'PendingCrew.app/Contents/MacOS/PendingCrew.debug.dylib'
+    products = pathlib.Path(args.products).resolve() if args.products else dd/'Build/Products'/args.configuration
+    library = pathlib.Path(args.library).resolve() if args.library else products/'PendingCrew.app/Contents/MacOS/PendingCrew.debug.dylib'
     assert library.is_file(), 'Build the selected actual original App configuration first'
     out = pathlib.Path(args.output) if args.output else pathlib.Path(tempfile.mkdtemp(prefix='pcw-original-flow-', dir='/private/tmp'))
     out.mkdir(parents=True, exist_ok=True)
     (out/'inputs.json').write_text(json.dumps({'appLibrary':str(library),'sha256':hashlib.sha256(library.read_bytes()).hexdigest()},indent=2)+'\n')
     probe = out/'probe'
+    fixture = out/'actual-session-flow.swift'
+    source = (root/'scripts/dev/fixtures/crewd-original-session-flow.swift').read_text()
+    assert source.count('@testable import PendingCrew\n') == 1
+    fixture.write_text(source.replace('@testable import PendingCrew\n', '@testable import '+args.module_name+'\n'))
     command = ['xcrun', 'swiftc', '-parse-as-library', '-I', str(products),
                '-module-cache-path', str(dd/'ModuleCache.noindex'), '-Xcc',
                '-fmodule-map-file='+str(dd/'Build/Intermediates.noindex/GeneratedModuleMaps/CTOML.modulemap'),
-               str(root/'scripts/dev/fixtures/crewd-original-session-flow.swift'), str(library),
+               str(fixture), str(library),
                '-Xlinker', '-rpath', '-Xlinker', str(library.parent),
                '-Xlinker', '-rpath', '-Xlinker', str(library.parent.parent/'Frameworks'), '-o', str(probe)]
     (out/'compile-argv.json').write_text(json.dumps(command,indent=2)+'\n')
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    scenarios = ['profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']
+    scenarios = ['quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']
     assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
     for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')
@@ -51,7 +58,7 @@ def main():
                             def profile(id, executor, backend, features, available=True, reason=None):
                                 return {'id':id,'executor':executor,'displayName':id,'backend':backend,'available':available,'features':dict(zip(['initialContext','manualTerminal','structuredDecisions','fullHistoryLoad'],features)),'unavailableReason':reason}
                             result = {'profiles':[
-                                profile('codex','codex','codex',[True,False,True,False],scenario!='profiles-unavailable','notConfigured' if scenario=='profiles-unavailable' else None),
+                                profile('codex','codex','codex',[True,False,True,False],scenario not in ['profiles-unavailable','click-unavailable'],'notConfigured' if scenario in ['profiles-unavailable','click-unavailable'] else None),
                                 profile('claude','claude','existingClaudePty',[False,True,False,False]),
                                 profile('claude-managed','acp:claude-managed','nativeAcp',[False]*4,False,'nativeVerificationPending')]}
                             if scenario=='profiles-missing': result = {'profiles':'invalid'}
@@ -68,7 +75,7 @@ def main():
                             result={'requestId':e['requestId'],'dbId':e['dbId'],'runtimeBindingId':e['runtimeBindingId'],'command':cmd,'phase':'unknown','historical':False,'payloadSha256':'a'*64,'createdAt':'2026-10-22T00:00:00Z','updatedAt':'2026-10-22T00:00:00Z','result':{}}
                         elif method == 'crew.list': result = [{'id':'crew-a'}]
                         elif method == 'session.list':
-                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':'claude' if scenario=='legacy-resume' else 'codex'}] if state['captain'] or not scenario.startswith('captain') else []
+                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':('claude' if scenario=='legacy-resume' else 'acp:claude-managed' if scenario=='claude-unavailable' else 'codex')}] if state['captain'] or not scenario.startswith('captain') else []
                         elif method == 'session.live':
                             if scenario in ['switch','switch-return','double-click']: time.sleep(.15)
                             result = {} if scenario == 'malformed' else {'sessionId':'session-a','running':state['running']}
@@ -79,6 +86,8 @@ def main():
                             state['captain'] = True; result = {'id':'session-a'}
                         elif method == 'session.resume':
                             assert req['params'] == {'sessionId':'session-a'}
+                            if scenario == 'resume-refused':
+                                conn.sendall((json.dumps({'id':req['id'],'error':{'code':-32009,'message':'synthetic permission refusal'}})+'\n').encode()); continue
                             state['running'] = True; result = {'sessionId':'session-a'}
                         elif method.endswith('.list'): result = []
                         else: result = {}
@@ -92,7 +101,7 @@ def main():
             thread.join(timeout=3)
             assert not problems, problems
             methods = [r['method'] for r in calls]
-            assert methods.count('session.resume') == 0, methods
+            assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click','resume-refused'] else 0), methods
             assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') else 0), methods
             assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')

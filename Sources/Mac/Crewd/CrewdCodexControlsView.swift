@@ -24,13 +24,38 @@ struct CrewdCodexSettingsDraft {
 /// UI defaults are never represented as observed provider values.
 struct CrewdCodexSettingsEditor:View {
     @Binding var draft:CrewdCodexSettingsDraft
+    var models: [CrewdValue] = []
+    private var selectedModel: CrewdValue? { models.first { $0["model"].string == draft.model } }
+    private var modelSelection: Binding<String> {
+        Binding(get: { draft.modelEnabled ? draft.model : "" }, set: { value in
+            draft.modelEnabled = !value.isEmpty; draft.model = value
+            draft.effortEnabled = false; draft.effort = ""
+        })
+    }
     var body:some View{
         VStack(alignment:.leading,spacing:16){
             CrewdFormSection(title:"模型与执行方式",detail:"未启用的项目沿用原设置，不会被界面默认值覆盖。") {
-                Toggle("指定模型",isOn:$draft.modelEnabled)
-                if draft.modelEnabled{TextField("模型目录中的实际 ID",text:$draft.model).textFieldStyle(.roundedBorder)}
+                Picker("模型", selection: modelSelection) {
+                    Text("运行环境默认").tag("")
+                    ForEach(models.indices, id: \.self) { index in
+                        let model = models[index]
+                        Text(model["displayName"].string ?? model["model"].string ?? "不可用")
+                            .tag(model["model"].string ?? "").disabled(model["model"].string == nil)
+                    }
+                    if draft.modelEnabled, !models.contains(where: { $0["model"].string == draft.model }) {
+                        Text("原选择尚未核对：" + draft.model).tag(draft.model).disabled(true)
+                    }
+                }.pickerStyle(.menu)
                 Toggle("指定推理强度",isOn:$draft.effortEnabled)
-                if draft.effortEnabled{TextField("模型支持的 effort 值",text:$draft.effort).textFieldStyle(.roundedBorder)}
+                    .disabled(selectedModel?["supportedReasoningEfforts"].array.isEmpty != false)
+                if draft.effortEnabled {
+                    Picker("推理强度", selection: $draft.effort) {
+                        Text("请选择").tag("")
+                        ForEach(selectedModel?["supportedReasoningEfforts"].array ?? [], id: \.pretty) { effort in
+                            if let value = effort["reasoningEffort"].string { Text(value).tag(value) }
+                        }
+                    }.pickerStyle(.menu)
+                }
                 Toggle("设置速度档位",isOn:$draft.fastEnabled)
                 if draft.fastEnabled{Toggle("Fast",isOn:$draft.fast)}
                 Toggle("设置协作模式",isOn:$draft.modeEnabled)
@@ -172,15 +197,7 @@ private struct CrewdCodexControlPanel:View {
                 }
                 CrewdCodexPermissionProfiles(workspace:workspace,session:sessionID,settings:$settings)
                 actionButton("读取实际模型目录",capability:"models"){Task{await store.read("models")}}
-                ForEach(store.models.indices,id:\.self){index in
-                    let model=store.models[index]
-                    Button(model["displayName"].string ?? model["model"].string ?? "模型") {settings.modelEnabled=true;settings.model=model["model"].string ?? ""}
-                    ForEach(model["supportedReasoningEfforts"].array.indices,id:\.self){effortIndex in
-                        let effort=model["supportedReasoningEfforts"].array[effortIndex]
-                        Button("推理："+(effort["reasoningEffort"].string ?? "")){settings.effortEnabled=true;settings.effort=effort["reasoningEffort"].string ?? ""}.font(.caption)
-                    }
-                }
-                CrewdCodexSettingsEditor(draft:$settings)
+                CrewdCodexSettingsEditor(draft:$settings, models:store.models)
                 actionButton("提交后续轮次设置",capability:"configure"){do{guard let patch=try settings.value() else{return};Task{await store.submit(.codexConfigure,fields:["patch":patch])}}catch{localError=error.localizedDescription}}
             }.padding(.vertical,8)
         }
@@ -321,13 +338,23 @@ struct CrewdCodexStartOptions:View {
     @Binding var title:String
     @Binding var settings:CrewdCodexSettingsDraft
     @Binding var inputs:CrewdCodexInputChoice
+    // These rows come from this authority's saved session projection. They are
+    // reusable configuration, not a claim about a freshly queried model catalog.
+    private var savedModels: [CrewdValue] {
+        let names = Set(workspace.sessions.compactMap { row -> String? in
+            guard let id = row["id"].string, workspace.profileForSession(id)?.backend == "codex",
+                  let model = row["model"].string, !model.isEmpty else { return nil }
+            return model
+        })
+        return names.sorted().map { .object(["model": .string($0), "displayName": .string($0 + "（已保存配置）")]) }
+    }
     var body:some View {
         DisclosureGroup("Codex 首轮设置与名称"){
             VStack(alignment:.leading,spacing:8){
                 CrewdFormField(title:"会话名称",detail:"留空时取首条任务摘要；名称不会替代首条任务。") {TextField("例如：整理发布资料",text:$title)}
                 if workspace.client.capabilities.contains("session.codex"){
                     CrewdCodexPermissionProfiles(workspace:workspace,session:nil,settings:$settings)
-                    CrewdCodexSettingsEditor(draft:$settings)
+                    CrewdCodexSettingsEditor(draft:$settings, models:savedModels)
                     CrewdCodexInputPicker(workspace:workspace,session:nil,title:"首轮的独立输入与Skills",choice:$inputs)
                     Text("配置确认后才提交首轮原任务；标题不同步不会重发任务。").font(.caption).foregroundStyle(.secondary)
                 }else{Text("当前后台尚未接入首轮 Codex 设置。").font(.caption).foregroundStyle(.secondary)}

@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-25 日用发送／点击恢复与精简原生UI整块源码冻结
+
+按人类新合同，明确新Human发送与点击实际session均为恢复意图；打开App、历史加载、重连和纯选择仍不执行，活动／inflight／Unknown不重复。Core普通链与已配置Jev链均只为本次可信新事件实际新入队目标获得资格，旧消息／恢复扫描／关闭／Stop晚回不冒新意图。原Rig真实RED后最小修复，六项受影响准入、真实serve／SQLite／fakeCodex原thread新post恢复，以及FakeJev十项分别通过；不是真实模型验收。Swift明确点击沿既有能力／CAS／权限／scope守卫，错误可见，右键只绑定目标打开控件，不展开即恢复。
+
+同轮12原生UI源整理顶部图标侧栏开关／五Tab／玻璃消息筛选、右键会话控制、新AI成员／真实默认模型选择、简化待办计划进展与草稿技术提示、向上运行环境菜单。独立源审c6085b46、ddcbbbed、edcda46e接受。界面最终五源和新Swift类型尚待新编译及普通鼠标验证，旧26344窗口使用1708629e旧Core，不作为新发送功能证明；所有源冻结后必须构建同源default-features新Core，不借旧件改标。热更工具21157已guard SIGTERM以免旧类注入；人类17点后已解锁，UI作者正常处理仅私窗后用原aeh／SPM暖构建，日用／旧版／Demo均不动。
+
 ## 2026-10-25 独立原生HTML演示版已安装启动，按人类要求轻量收口
 
 准确源码 `cc32d4402c2ef89cffdcd64cd130389ca4c191b6` 的本地演示版 **0.2.0／20751.19933** 已安装到 `/Applications/PendingCrew Demo.app` 并普通打开。真实HTML最终刷新链选出2机组／10群，含40消息、16 Agent待办、8人工待办、42 planned计划和38原生文档；11个示例角色注册为Stopped，不伪造真实执行回执。独立Demo身份／偏好和固定 `PendingCrewDemo` 数据根，最终helper参数双provider均为 `/usr/bin/false`；真实播种ready且执行表0，后续不重播覆盖。源／数据独验80ce0f1d接受。原暖archive82014实际0，首轮10788配方参数碰撞失败保留；Demo仅本地ad-hoc，不动已公开公证G或新传Apple。

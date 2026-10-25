@@ -92,6 +92,20 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
 
 
             if window.workspace != nil { Button("当前运行环境状态与原请求",systemImage:"info.circle"){fromSettings{statusDetails=true}} }
+            if let current = window.workspace {
+                DisclosureGroup("执行能力") {
+                    ForEach(current.executorProfiles.filter(\.offeredInOriginalUI)) { profile in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(profile.title).font(.subheadline.weight(.medium))
+                            Text(profile.canStart ? "可用" : profile.unavailableDescription).font(.caption)
+                            Text("额外上下文：" + (profile.initialContext ? "支持" : "未开放") + " · 手工终端：" + (profile.manualTerminal ? "支持" : "未开放"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Button("重新读取执行能力") { Task { await current.refreshExecutorProfiles() } }
+                        .disabled(!current.client.readyForWork)
+                }
+            }
             Button("个人主机目录与同步状态"){fromSettings{personalDirectory=true}}
             Menu("运行环境") {
                 Button("本机") { Task { await chooseLocal() } }
@@ -407,8 +421,12 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
             menu.addItem(.separator())
             let settings = NSMenuItem(title: "运行环境设置", action: #selector(showSettings(_:)), keyEquivalent: "")
             settings.target = self; menu.addItem(settings)
-            // Anchor the last option above the footer; the list grows upward.
-            menu.popUp(positioning: settings, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+            menu.update()
+            let buttonTop = button.isFlipped ? button.bounds.minY : button.bounds.maxY
+            // AppKit anchors the menu's top-left content corner here. Offset by
+            // its measured height so its bottom clears the entire footer button.
+            let offset = menu.size.height + 8
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: buttonTop + (button.isFlipped ? -offset : offset)), in: button)
         }
         @objc func showSettings(_ item: NSMenuItem) { openSettings?() }
         @objc func selectMachine(_ item: NSMenuItem) {

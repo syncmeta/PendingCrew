@@ -41,6 +41,7 @@ struct CrewSessionWindowView: View {
     @State private var localErrorAction: CrewSessionRunner.StartErrorAction?
     /// 成员行右键「设为机长」的待确认目标。确认后不是原地翻角色，而是续接同一
     /// agent conversation 以 captain 世界观/工具权限重新挂起。
+    @State private var controllingRun: CrewSessionRun?
     @State private var pendingCaptainRun: CrewSessionRun?
     private struct ManualWorkerTarget {
         let sessionId: String
@@ -98,6 +99,14 @@ struct CrewSessionWindowView: View {
         }
         // 填满 inspector 栏 —— 内容是弹性的，跟随固定列宽布局，不溢出。
         .frame(minWidth:0,maxWidth: .infinity)
+        .sheet(item: $controllingRun) { run in
+            if let backend = run.backend as? CrewdOriginalSessionBackend {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack { Text("会话控制").font(.headline); Spacer(); Button("完成") { controllingRun = nil } }
+                    CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
+                }.padding(20).frame(minWidth: 460, minHeight: 220)
+            }
+        }
         .safeAreaInset(edge:.bottom){
             if ownsCrewdComposer, (presentation == .conversation || sessionRunner.viewingTerminal),let owner=presentedDraftOwner,let context=presentedDraftContext {
                 CrewPersonalDraftControls(workspace:owner,context:context,payload:Binding(get:{.init(text:draft)},set:{sessionDraftBinding.wrappedValue=$0.text})).padding(.horizontal,12).padding(.vertical,5)
@@ -409,16 +418,6 @@ struct CrewSessionWindowView: View {
             if !appModel.usesCrewdAuthority && selectedKind == .codex && sessionRunner.lastStartError == nil {
                 CodexCLIProvisioningNotice(center: cliVersions)
             }
-            if appModel.usesCrewdAuthority, !hasRunningCaptain,
-               let workspace = appModel.crewdBackend?.workspace,
-               workspace.crewID == crewStore.selectedDetail?.crew.id {
-                VStack(alignment:.leading,spacing:6){
-                    Text("未观察到运行中的机长").font(CrewdType.caption).foregroundStyle(.secondary)
-                    DisclosureGroup("执行器准备"){
-                        CrewdExecutorChoiceView(workspace:workspace,executor:Binding(get:{workspace.selectedExecutor},set:{workspace.selectedExecutor=$0})).padding(.top,6)
-                    }.font(CrewdType.caption)
-                }.padding(.horizontal,12).padding(.vertical,8)
-            }
             // 启动 Captain 失败原因（含「未在 PATH 中找到 codex/claude」「无工作目录」）——
             // 点击入口（captain 成员行）就在这屏，错误必须在这显，否则点了像没反应。
             if let err = sessionRunner.lastStartError {
@@ -574,6 +573,17 @@ struct CrewSessionWindowView: View {
             .buttonStyle(.plain)
             .help("打开这个 session 的终端")
             .contextMenu {
+                if run.backend is CrewdOriginalSessionBackend {
+                    Button("会话控制") {
+                        // Choosing the control entry selects its exact original
+                        // target, but does not perform openSession's resume.
+                        sessionRunner.select(run.runID)
+                        if let backend = run.backend as? CrewdOriginalSessionBackend {
+                            backend.workspace.selectSession(run.sessionId)
+                        }
+                        controllingRun = run
+                    }
+                }
                 if run.role == .worker && run.kind.isAgent {
                     Button("设为机长") { pendingCaptainRun = run }
                     if run.status != .running {
@@ -675,12 +685,7 @@ struct CrewSessionWindowView: View {
             sessionRunner.viewingTerminal = true
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.Palette.accent)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(Theme.Palette.accentBg))
-                Text("新成员会话")
+                Text("新AI成员")
                     .font(Theme.Fonts.callout)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -692,7 +697,7 @@ struct CrewSessionWindowView: View {
         }
         .buttonStyle(.plain)
         .disabled(starting)
-        .help("打开新成员会话草稿，发送后才会启动")
+        .help("添加新AI成员")
     }
 
     /// 成员行的「头像 + 名」基础排版（captain 入口与 human 行共用）。
@@ -988,7 +993,7 @@ struct CrewSessionWindowView: View {
     private var idleState: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:20) {
-                CrewdPanelHeader(title:"新成员会话",detail:"写下一件具体要完成的事，发送后才会启动。",symbol:"person.badge.plus")
+                CrewdPanelHeader(title:"新AI成员")
                 if crewStore.selectedDetail == nil {
                     CrewdInlineNotice(title:"先选择一个机组",detail:"新成员会在所选机组的工作目录中执行任务。")
                 } else {
@@ -1085,9 +1090,11 @@ struct CrewSessionWindowView: View {
                         get: { workspace.selectedExecutor },
                         set: { workspace.selectedExecutor = $0; selectedKind = $0 == "codex" ? .codex : .claudeCode }))
                 } else {
-                    sessionKindPill(.claudeCode, title: "Claude Code")
-                    sessionKindPill(.codex, title: "Codex")
-                    sessionKindPill(.terminal, title: "终端")
+                    Picker("执行方式", selection: $selectedKind) {
+                        Text("Claude Code").tag(LocalCodingAgentKind.claudeCode)
+                        Text("Codex").tag(LocalCodingAgentKind.codex)
+                        Text("终端").tag(LocalCodingAgentKind.terminal)
+                    }.pickerStyle(.menu)
                 }
             }
             if appModel.usesCrewdAuthority {
@@ -1547,7 +1554,6 @@ private struct SessionRunContentView: View {
             }
             Divider()
             if let backend = run.backend as? CrewdOriginalSessionBackend {
-                CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
                 if let control = backend.publicTerminal { CrewdTerminalControlBar(control: control) }
             }
             if let terminalView = run.terminalView {

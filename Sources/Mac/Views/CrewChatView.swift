@@ -338,8 +338,7 @@ struct CrewChatView: View {
         // navigationTitle 底下叠字 —— 顶部滚动边缘用 .hard：标题后面是一条不透明底,
         // 消息滚到顶被它挡住,标题始终可读。
         VStack(spacing: 0) {
-            conversationHeader
-            Divider()
+            if !appModel.usesCrewdAuthority { conversationHeader; Divider() }
             timelineWithTopEdge
         }
             .safeAreaInset(edge: .bottom, spacing: 0) {

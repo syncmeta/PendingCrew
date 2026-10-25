@@ -42,14 +42,14 @@ import Foundation
         }
         // Use the same presentation runner/member-open path as the original UI.
         let runner = CrewSessionRunner(presentationOnly: true, observePowerNotifications: false)
-        let backend = CrewdOriginalSessionBackend(workspace: workspace, crewID: "crew-a", sessionID: "session-a", kind: .codex)
+        let backend = CrewdOriginalSessionBackend(workspace: workspace, crewID: "crew-a", sessionID: "session-a", kind: scenario == "claude-unavailable" ? .claudeCode : .codex)
         let run = CrewSessionRun(crewId: "crew-a", sessionId: "session-a", kind: .codex,
                                  taskBrief: "", workingDirectory: root, backend: backend)
         runner.installCrewdProjection([run], workspace: workspace)
         func viewOriginal() async {
             runner.openSession(run.runID)
-            await Task.yield()
-            precondition(runner.selectedRunId == run.runID && runner.viewingTerminal && workspace.sessionID == "session-a")
+            try? await Task.sleep(for: .milliseconds(450))
+            precondition(runner.selectedRunId == run.runID && workspace.sessionID == "session-a")
         }
         if scenario == "legacy-text" || scenario == "legacy-resume" {
             workspace.originalJournalRequired = true
@@ -69,6 +69,14 @@ import Foundation
             print("PASS actual App public legacy command: " + scenario + "; unknown retained, no automatic retry"); return
         }
         switch scenario {
+        case "quiet":
+            runner.select(run.runID)
+            await backend.refresh()
+            runner.select(run.runID)
+            precondition(!runner.viewingTerminal, "programmatic select must stay observational")
+        case "click-unavailable", "claude-unavailable", "resume-refused":
+            await viewOriginal()
+            precondition(runner.lastStartError != nil && !runner.viewingTerminal, "qualification failure must be visible without starting")
         case "captain":
             let first = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(first == "session-a")
@@ -89,8 +97,8 @@ import Foundation
             await first.value; await second.value
         default:
             await viewOriginal()
-            if scenario == "malformed" { precondition(workspace.error == nil, "viewing must not interpret execution liveness as a resume decision") }
-            if scenario == "stopped" { await viewOriginal() }
+            if scenario == "malformed" { precondition(workspace.error != nil && !runner.viewingTerminal, "malformed liveness must fail visibly without resuming") }
+            if scenario == "stopped" { await viewOriginal(); precondition(backend.failure == nil && runner.viewingTerminal) }
         }
         print("PASS actual App session flow: " + scenario)
     }

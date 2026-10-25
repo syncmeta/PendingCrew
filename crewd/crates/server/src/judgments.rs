@@ -212,7 +212,8 @@ impl Runtime {
                         runtime.schedule(JudgmentSourceKind::Requirement, id).await
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if let Err(e) = runtime.scan_pending(false).await {
+                        // A backlog scan is recovery, not a new Human action.
+                        if let Err(e) = runtime.scan_pending(true).await {
                             eprintln!("crewd: judgment pending scan failed: {e}");
                             break;
                         }
@@ -350,7 +351,8 @@ impl Runtime {
             return Ok(());
         };
         let started = std::time::Instant::now();
-        let can_wake = if kind == JudgmentSourceKind::Message {
+        let started_at = state.admission.started_at;
+        let (can_wake, fresh_human_message) = if kind == JudgmentSourceKind::Message {
             let mid = id.clone();
             state
                 .db
@@ -358,14 +360,17 @@ impl Runtime {
                     let m = crewd_collab::messages::get(s.conn(), &mid)?;
                     let now = Ms(crewd_store::now_ms());
                     let f = crate::wake_adapter::message_facts(s.conn(), &m, now)?;
-                    Ok::<_, crewd_collab::CollabError>(
+                    Ok::<_, crewd_collab::CollabError>((
                         crate::wake_adapter::channel_context(s.conn(), &m.channel_id, now)?
                             .is_some_and(|ctx| plan::needs_arbiter(&f, &ctx, now)),
-                    )
+                        !recovery && f.sender == plan::Sender::Human
+                            && f.provenance == plan::MessageProvenance::Ordinary
+                            && f.created_at.0 >= started_at,
+                    ))
                 })
                 .await??
         } else {
-            false
+            (false, false)
         };
         let request = batch(&snapshot, can_wake);
         let config = settings
@@ -379,12 +384,13 @@ impl Runtime {
         let result = if recovery
             || remaining.is_zero()
             || self.closed.load(Ordering::Acquire)
-            || !state.admission.any()
+            || !state.admission.can_admit()
+            || (!state.admission.any() && !fresh_human_message)
         {
             JudgmentResult::Deferred {
                 reason: if recovery {
                     "restart_unknown"
-                } else if !state.admission.any() {
+                } else if !state.admission.can_admit() || (!state.admission.any() && !fresh_human_message) {
                     "awaiting_manual_resume"
                 } else {
                     "deadline"
@@ -417,10 +423,10 @@ impl Runtime {
         let key = kind.clone();
         let source = id.clone();
         let closed = self.closed.clone();
-        state
+        let admitted = state
             .collab(move |tx| {
                 if closed.load(Ordering::Acquire) {
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
                 let targets = if key == JudgmentSourceKind::Requirement {
                     chosen
@@ -436,7 +442,7 @@ impl Runtime {
                     let Some(ctx) =
                         crate::wake_adapter::channel_context(tx.conn(), &m.channel_id, now)?
                     else {
-                        return Ok(());
+                        return Ok(Vec::new());
                     };
                     plan::plan(
                         &facts,
@@ -484,13 +490,14 @@ impl Runtime {
                     link,
                     diagnostic,
                 )? {
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
+                let mut admitted = Vec::new();
                 for (target, priority) in targets {
-                    crewd_collab::wakes::enqueue(
+                    let enqueued = crewd_collab::wakes::enqueue(
                         tx,
                         crewd_collab::wakes::WakeRequest {
-                            session: target,
+                            session: target.clone(),
                             kind: if key == JudgmentSourceKind::Requirement {
                                 crewd_collab::wakes::WakeKind::System
                             } else {
@@ -507,10 +514,38 @@ impl Runtime {
                             origin: None,
                         },
                     )?;
+                    if fresh_human_message && priority == crewd_collab::wakes::WakePriority::Human {
+                        if let crewd_collab::wakes::Enqueued::New(wake) = enqueued {
+                            admitted.push((target, wake));
+                        }
+                    }
                 }
-                Ok(())
+                Ok(admitted)
             })
             .await?;
+        // Admission follows the successful settlement/queue commit, serialized
+        // with Human stop writes: a stop between commit and admission has already
+        // dropped this exact row and must not be undone by a late evaluation.
+        let admission = state.admission.clone();
+        let admitted = state.db.call_result(move |store| {
+            let mut ready = Vec::new();
+            for (target, wake) in admitted {
+                let pending = crewd_collab::wakes::by_ids(store.conn(), &[wake])?.into_iter().any(|row|
+                    row.session == target && row.state == crewd_collab::wakes::WakeState::Pending);
+                if pending && wake > crewd_collab::wakes::human_stop_floor(store.conn(), &target)? {
+                    admission.allow(&target);
+                    if admission.contains(&target) { ready.push(target); }
+                }
+            }
+            Ok::<_, crewd_collab::CollabError>(ready)
+        }).await??;
+        // Hub may already have delivered WakeEnqueued before the read above;
+        // notify only these exact targets using the existing idempotent event.
+        for target in admitted {
+            if let Some(orchestra) = state.orchestra.get() {
+                orchestra.collab(crate::orchestra::core::CollabFact::WakeEnqueued { session: target });
+            }
+        }
         Ok(())
     }
     async fn invalidate(&self) {

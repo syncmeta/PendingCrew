@@ -28,6 +28,11 @@ impl Default for Admission {
     }
 }
 impl Admission {
+    /// New explicit Human intent may enter an empty current run, never a closed
+    /// or orphan-blocked daemon. Reading this does not admit any session.
+    pub(crate) fn can_admit(&self) -> bool {
+        !self.closed.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire)
+    }
     pub fn allow(&self, id: &str) {
         if !self.closed.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire) {
             if let Ok(mut s) = self.sessions.lock() {

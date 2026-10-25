@@ -48,12 +48,26 @@ extension EnvironmentValues{
     }
 }
 
+private struct CrewdToggleSidebarKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+private struct CrewdSidebarCollapsedKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var crewdToggleSidebar: (() -> Void)? {
+        get { self[CrewdToggleSidebarKey.self] }
+        set { self[CrewdToggleSidebarKey.self] = newValue }
+    }
+    var crewdSidebarCollapsed: Bool {
+        get { self[CrewdSidebarCollapsedKey.self] }
+        set { self[CrewdSidebarCollapsedKey.self] = newValue }
+    }
+}
+
 struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
     var openSession: ((String) -> Void)? = nil
     var searchControl: AnyView? = nil
+    var filterControl: AnyView? = nil
     func body(content: Content) -> some View {
-        if let workspace { CrewdOriginalCrewContent(workspace: workspace, content: { content }, openSession: openSession, searchControl: searchControl) }
+        if let workspace { CrewdOriginalCrewContent(workspace: workspace, content: { content }, openSession: openSession, searchControl: searchControl, filterControl: filterControl) }
         else { content }
     }
 }
@@ -64,18 +78,42 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @ViewBuilder let content: () -> Content
     var openSession: ((String) -> Void)? = nil
     var searchControl: AnyView? = nil
+    var filterControl: AnyView? = nil
+    @Environment(\.crewdToggleSidebar) private var toggleSidebar
+    @Environment(\.crewdSidebarCollapsed) private var sidebarCollapsed
     @State private var workScopes:[String:String]=[:]
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
     var body: some View {
         VStack(spacing:0){
+            #if !os(macOS)
             sectionHeader
+            #endif
             #if os(macOS)
             sectionContent
             #else
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
             #endif
         }
+        #if os(macOS)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 10) {
+                    if let toggleSidebar {
+                        Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
+                            .labelStyle(.iconOnly)
+                            .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
+                    }
+                    CrewdGlassWorkspaceTabs(selection: $workspace.originalSection)
+                        .frame(width: 365)
+                    if let filterControl { filterControl }
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                if let searchControl { searchControl }
+            }
+        }
+        #endif
     }
     private var sectionHeader:some View {
         VStack(spacing:0){
@@ -528,6 +566,7 @@ struct CrewdSidebarConversations: View {
     @Environment(\.colorScheme) private var scheme
     #if os(macOS)
     @EnvironmentObject private var runner: CrewSessionRunner
+    @State private var controllingRun: CrewSessionRun?
     #else
     @State private var showingNewMember = false
     #endif
@@ -566,13 +605,23 @@ struct CrewdSidebarConversations: View {
             #endif
             directory.frame(maxWidth: .infinity, maxHeight: .infinity)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(macOS)
+        .sheet(item: $controllingRun) { run in
+            if let backend = run.backend as? CrewdOriginalSessionBackend {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack { Text("会话控制").font(.headline); Spacer(); Button("完成") { controllingRun = nil } }
+                    CrewdOriginalSessionControls(backend: backend, workspace: backend.workspace)
+                }.padding(20).frame(minWidth: 460, minHeight: 220)
+            }
+        }
+        #endif
         #if os(iOS)
         .navigationTitle("会话")
         .toolbar { ToolbarItem(placement: .primaryAction) { directoryTools } }
         .sheet(isPresented: $showingNewMember) {
             NavigationStack {
                 ScrollView { CrewdSessionStartView(workspace: workspace, drafts: $workspace.messageDrafts).padding(20) }
-                    .navigationTitle("新成员会话").navigationBarTitleDisplayMode(.inline)
+                    .navigationTitle("新AI成员").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingNewMember = false } } }
             }
         }
@@ -615,7 +664,7 @@ struct CrewdSidebarConversations: View {
                 selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages, channel: workspace.channelID) },
                                    set: { workspace.resourceDrafts.select(crewID, .messages, $0, channel: workspace.channelID) }),
                 view: .messages, compact: true, iconOnly: true)
-            Button("新建成员会话", systemImage: "plus") {
+            Button("新AI成员") {
                 guard workspace.crewID == crewID else { return }
                 #if os(macOS)
                 workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true
@@ -623,7 +672,7 @@ struct CrewdSidebarConversations: View {
                 showingNewMember = true
                 #endif
                 showContent()
-            }.labelStyle(.iconOnly).disabled(workspace.crewID != crewID)
+            }.disabled(workspace.crewID != crewID)
         }
     }
     private func subtitle(_ channel: CrewdValue) -> String {
@@ -678,5 +727,21 @@ struct CrewdSidebarConversations: View {
             #endif
             workspace.originalSection = "消息"; showContent()
         }) { CrewdMemberAvatar(seed: id, colorSeed: crewID) }.disabled(!enabled)
+        #if os(macOS)
+        .contextMenu {
+            if let run, run.backend is CrewdOriginalSessionBackend {
+                Button("会话控制") {
+                    runner.select(run.runID)
+                    workspace.selectSession(id)
+                    controllingRun = run
+                }
+            }
+        }
+        #else
+        .contextMenu {
+            CrewdCodexSessionControls(workspace: workspace, sessionID: id)
+            CrewdClaudeSessionControls(workspace: workspace, sessionID: id)
+        }
+        #endif
     }
 }

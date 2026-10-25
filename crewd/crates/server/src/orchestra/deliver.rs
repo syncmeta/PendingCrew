@@ -165,7 +165,7 @@ impl<P: Port> Core<P> {
             .cfg
             .admission
             .as_ref()
-            .is_some_and(|a| !a.any() || msg.created_at.0 < a.started_at)
+            .is_some_and(|a| msg.created_at.0 < a.started_at || (!a.any() && msg.sender != Sender::Human))
         {
             return Ok(());
         }
@@ -225,7 +225,8 @@ impl<P: Port> Core<P> {
         let mut fresh = Vec::new();
         for t in targets {
             // Current admitted Agent work may delegate along the existing planner/ACL
-            // chain. A Human mention alone does not revive an unselected old session.
+            // chain. A fresh Human send admits only its newly committed explicit
+            // targets below; old/backlog events and duplicate queue rows do not.
             if let (Some(a), Sender::Session { id, .. }) = (&self.cfg.admission, &msg.sender) {
                 if a.contains(id) && msg.created_at.0 >= a.started_at {
                     a.allow(&t.session);
@@ -241,6 +242,13 @@ impl<P: Port> Core<P> {
                 origin: message_origin(msg, &t.session),
             };
             if self.enqueue(w).await? {
+                if let (Some(a), Sender::Human) = (&self.cfg.admission, &msg.sender) {
+                    if msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
+                        && msg.created_at.0 >= a.started_at && t.priority == Priority::Human
+                    {
+                        a.allow(&t.session);
+                    }
+                }
                 fresh.push(t.session);
             }
         }
@@ -4009,6 +4017,38 @@ mod tests {
         assert_eq!(rig.core.live_view("w1").await.unwrap().input_draft, None);
     }
     #[tokio::test]
+    async fn fresh_human_message_admission_wakes_only_new_targets_without_replay() {
+        use crate::lifecycle::Admission;
+        use crate::orchestra::OrchestraConfig;
+        let mut admission = Admission::default();
+        admission.started_at = T0.0 + SEC;
+        let admission = Arc::new(admission);
+        let cfg = OrchestraConfig { admission: Some(admission.clone()), previous_clean: true, ..OrchestraConfig::for_tests() };
+        let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+        rig.crew("c1", "cap"); rig.worker("c1", "selected"); rig.worker("c1", "unrelated");
+        rig.post(LOBBY,Sender::Human,at("selected"),"historical Human message before current-run admission").await;
+        rig.port.enqueue(NewWake {session:"selected".into(),kind:WakeKind::Timer,source:"timer:old".into(),priority:Priority::Auto,not_before:T0,note:Some("do not replay old work".into()),origin:"system".into()}).await.unwrap();
+        rig.core.boot().await.unwrap(); rig.tick(SEC).await; rig.settle().await;
+        rig.core.rescue_backlog().await.unwrap();
+        assert!(rig.exec.lock().launches.is_empty(), "boot and backlog observation are quiet");
+        let message = rig.post(LOBBY,Sender::Human,at("selected"),"explicit new Human send").await;
+        assert_eq!(rig.exec.launches("selected").len(),1,"committed Human message must wake its selected recipient");
+        assert!(admission.contains("selected"));
+        assert!(rig.exec.launches("cap").is_empty() && rig.exec.launches("unrelated").is_empty());
+        assert!(!rig.exec.sent("selected").iter().any(|s| s.contains("do not replay old work")));
+        rig.post(LOBBY,Sender::Human,at("selected"),"another explicit send while already live").await;
+        assert_eq!(rig.exec.launches("selected").len(),1,"live/inflight receiver is not started twice");
+        rig.cmd(|reply| Cmd::Stop { session:"selected".into(),reply }).await.unwrap();
+        assert!(!admission.contains("selected"));
+        rig.core.on_collab(CollabFact::MessageAppended {channel:message.channel,seq:message.seq}).await.unwrap();
+        rig.settle().await;
+        assert!(!admission.contains("selected"),"duplicate committed event must not re-admit a stopped session");
+        assert_eq!(rig.exec.launches("selected").len(),1);
+        rig.post(LOBBY,Sender::Human,vec![],"new untargeted group message for captain").await;
+        assert_eq!(rig.exec.launches("cap").len(),1,"ordinary group send must wake its captain");
+    }
+
+    #[tokio::test]
     async fn sqlite_startup_is_observational_until_selected_human_admission() {
         use crate::lifecycle::Admission;
         use crate::orchestra::{OrchestraConfig, core::Origin, port::Port};
@@ -4043,9 +4083,9 @@ mod tests {
         assert!(rig.port.lock().restarts.is_empty());
         rig.post(
             LOBBY,
-            Sender::Human,
+            Rig::sender("cap"),
             at("old"),
-            "new message is not a restore click",
+            "unadmitted Agent work is not Human execution authority",
         )
         .await;
         assert!(rig.exec.lock().launches.is_empty());
