@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-25 独立原生HTML演示版已安装启动，按人类要求轻量收口
+
+准确源码 `cc32d4402c2ef89cffdcd64cd130389ca4c191b6` 的本地演示版 **0.2.0／20751.19933** 已安装到 `/Applications/PendingCrew Demo.app` 并普通打开。真实HTML最终刷新链选出2机组／10群，含40消息、16 Agent待办、8人工待办、42 planned计划和38原生文档；11个示例角色注册为Stopped，不伪造真实执行回执。独立Demo身份／偏好和固定 `PendingCrewDemo` 数据根，最终helper参数双provider均为 `/usr/bin/false`；真实播种ready且执行表0，后续不重播覆盖。源／数据独验80ce0f1d接受。原暖archive82014实际0，首轮10788配方参数碰撞失败保留；Demo仅本地ad-hoc，不动已公开公证G或新传Apple。
+
+人类后续明确“快速弄一个，不用太严谨”，故省去全矩阵和重开验收。作者实际普通open0；根正常上下文ps确认App18999／Core19010仍在、私域和false2准确。质量唯一CUA窗口读取挂起806.4秒后被根中止，无截图或页面内容独立通过声明，也无点击／重试／退出。交付真实层次为已安装启动、数据已播种，不能冒称界面已验；记录在 `docs/private/preserved-delivery-artifacts/native-html-demo-module-20261025/FINAL-FAST-DELIVERY.json`。人类同时要求先搁置Tab点按问题，该线未改任何源，不混入Demo候选。新旧截图与五日文字对照此前已交付，日用／旧候选／未知旧窗口不由此模块接管。
+
 ## 2026-10-25 本机公证日用更新与约五日前隔离对照已交付
 
 按人类追加指令，日用已整包更新到准确G **0.2.0／20750.61411**。原preflight／backup-stage／replace全0，52项安装库存与已公证副本相同；旧fd7整包及115项CRC ZIP完整保留，备份SHA `6d56b8b5…ff4ad8fd`，原日用数据不迁移、不删除。普通无参首开后App13081／Core13084本机ready，原Qincheng与已退出历史自然保留，旧stopped1、native三表全0、无provider子进程，无自动恢复。
