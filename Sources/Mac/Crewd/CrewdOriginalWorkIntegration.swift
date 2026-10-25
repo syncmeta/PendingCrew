@@ -698,10 +698,10 @@ struct CrewdSidebarConversations: View {
             showContent()
         }) {
             if channel["kind"].string == "dm", let peer = members.compactMap(CrewdAvatarIdentity.seed).first(where: { $0 != "human" }) {
-                CrewdMemberAvatar(seed: peer, colorSeed: id)
+                CrewdSidebarSessionAvatar(seed: peer, colorSeed: id, size: 36)
             } else {
                 CrewdAttentionAvatar(group: workspace.channelWork, crew: crewID, channel: id) {
-                    CrewdGroupAvatar(members: members, channel: id, name: CrewdConversationProjection.title(channel))
+                    CrewdSidebarGroupAvatar(seed: id)
                 }
             }
         }.help(CrewdConversationProjection.context(channel))
@@ -725,7 +725,7 @@ struct CrewdSidebarConversations: View {
             workspace.selectSession(id); openSession?(id)
             #endif
             workspace.originalSection = "消息"; showContent()
-        }) { CrewdMemberAvatar(seed: id, colorSeed: crewID) }.disabled(!enabled)
+        }) { CrewdSidebarSessionAvatar(seed: id, colorSeed: id, size: 36) }.disabled(!enabled)
         #if os(macOS)
         .contextMenu {
             if let run, run.backend is CrewdOriginalSessionBackend {
@@ -742,5 +742,49 @@ struct CrewdSidebarConversations: View {
             CrewdClaudeSessionControls(workspace: workspace, sessionID: id)
         }
         #endif
+    }
+}
+
+// Sidebar-only avatars mirror PendingBot's stable conversation identities.
+// They do not change the shared member, machine or mobile avatar components.
+private struct CrewdSidebarSessionAvatar: View {
+    let seed: String
+    let colorSeed: String
+    var size: CGFloat = 36
+    var body: some View {
+        ZStack {
+            Circle().fill(CrewAvatarPalette.softBackground(hue: ColorHash.hue(for: colorSeed)))
+            Text(ColorHash.emoji(for: seed)).font(Theme.Fonts.glyph(size: size * 0.55))
+        }.frame(width: size, height: size)
+            .overlay(Circle().strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+    }
+}
+private struct CrewdSidebarGroupAvatar: View {
+    let seed: String
+    var size: CGFloat = 36
+    private static let glyphs = ["🦊","🐼","🐯","🦁","🐸","🐧","🐳","🐙","🦉","🦄","🐝","🦋","🐢","🐬","🦒","🦔","🌵","🌻","🌸","🌙","⭐","🔥","🍄","🍀","🍓","🍑","🍋","🍇","🥑","🌽","🥨","🍪","🎈","🎨","🎭","🎪","🎲","🧩","🪁","🪐","🚀","⛵","🏕","🪴","🪨","💎","🧊","🦤"]
+    private var chosenGlyphs: [String] {
+        var cursor: UInt64 = 1469598103934665603
+        for scalar in seed.unicodeScalars { cursor = (cursor ^ UInt64(scalar.value)) &* 1099511628211 }
+        var result: [String] = []
+        while result.count < 3 {
+            let glyph = Self.glyphs[Int(cursor % UInt64(Self.glyphs.count))]
+            if !result.contains(glyph) { result.append(glyph) }
+            cursor = cursor &* 6364136223846793005 &+ 1442695040888963407
+        }
+        return result
+    }
+    var body: some View {
+        let selected = chosenGlyphs
+        let radius = size * 0.18
+        let offsets: [(CGFloat, CGFloat)] = [(0, -radius), (-radius * 0.866, radius * 0.5), (radius * 0.866, radius * 0.5)]
+        ZStack {
+            Circle().fill(Color.white)
+            ForEach(0..<3, id: \.self) { index in
+                Text(selected[index]).font(Theme.Fonts.glyph(size: size * 0.32))
+                    .offset(x: offsets[index].0, y: offsets[index].1)
+            }
+        }.frame(width: size, height: size)
+            .overlay(Circle().strokeBorder(Color.gray.opacity(0.25), lineWidth: max(0.5, size * 0.025)))
     }
 }

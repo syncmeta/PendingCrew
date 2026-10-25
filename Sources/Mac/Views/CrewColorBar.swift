@@ -56,7 +56,7 @@ struct CrewColorBar: View {
             h = h &* 1099511628211
         }
         let hue = Double(h % 360) / 360
-        return Color(hue: hue, saturation: 0.62, brightness: 0.82)
+        return CrewAvatarPalette.softBackground(hue: hue)
     }
 
     /// 沿「第一父」边向根收集色链（本 crew 在前）。多父 crew 取

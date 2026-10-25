@@ -141,7 +141,7 @@ struct CrewSidebarCrewRow: View {
                 Color.clear.frame(width: 12, height: 1)
             }
 
-            if showsColorBar && !crewStore.usesCrewdAuthority {
+            if showsColorBar || crewStore.usesCrewdAuthority {
                 CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
                     // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
                     // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
@@ -160,10 +160,6 @@ struct CrewSidebarCrewRow: View {
                 Color.clear.frame(width: CrewColorBar.defaultWidth)
             }
 
-            if crewStore.usesCrewdAuthority {
-                CrewdGroupAvatar(members: crewStore.crewdWorkspace?.crewAvatarMembers[crew.id] ?? [],
-                    channel: crew.id, name: crew.title)
-            }
             let last = resolvedLastMessage
             VStack(alignment: .leading, spacing: CrewSidebarRowStyle.lineSpacing) {
                 CrewSidebarTitleLine(activityDate: CrewActivityTime.resolve(

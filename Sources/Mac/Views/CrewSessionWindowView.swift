@@ -991,16 +991,15 @@ struct CrewSessionWindowView: View {
     }
 
     private var idleState: some View {
-        ScrollView {
-            VStack(alignment:.leading,spacing:20) {
-                CrewdPanelHeader(title:"新AI成员")
-                if crewStore.selectedDetail == nil {
-                    CrewdInlineNotice(title:"先选择一个机组",detail:"新成员会在所选机组的工作目录中执行任务。")
-                } else {
-                    sessionKindControls
-                }
-            }.padding(20).frame(maxWidth:560,alignment:.leading).frame(maxWidth:.infinity)
-        }.frame(maxWidth:.infinity,maxHeight:.infinity)
+        VStack(spacing: 16) {
+            if crewStore.selectedDetail == nil {
+                Text("先在左侧选一个机组").foregroundStyle(.secondary)
+            } else {
+                sessionKindControls
+            }
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Codex 续聊输入卡只接结构化 Codex backend；发送仍走统一 send() 注入当前 run。
@@ -1114,7 +1113,7 @@ struct CrewSessionWindowView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: 300, alignment: .leading)
         .disabled(starting)
     }
 

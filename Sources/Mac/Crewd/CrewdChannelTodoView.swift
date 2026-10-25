@@ -103,55 +103,28 @@ struct CrewdChannelTodoView:View {
                     Button("核对当前关联"){selected = .object(["object":old.object]);association=true}.font(.caption)
                 }
                 ScrollView {
-                    VStack(alignment:.leading,spacing:8) {
+                    LazyVStack(alignment:.leading,spacing:10) {
                         if group.loaded,!group.loading,group.failure == nil,visibleItems.isEmpty {
                             if !query.wrappedValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !tag.wrappedValue.isEmpty {
-                                CrewdEmptySurface(title:"没有符合筛选的事项",detail:"试试其他关键词，或清除筛选。",symbol:"line.3.horizontal.decrease.circle",actionTitle:"清除筛选",action:{query.wrappedValue="";tag.wrappedValue=""}).frame(minHeight:220)
+                                HStack {
+                                    Text("没有符合筛选的待办").foregroundStyle(.secondary)
+                                    Button("清除筛选") { query.wrappedValue=""; tag.wrappedValue="" }
+                                }.font(CrewdType.label)
                             }else {
-                                CrewdEmptySurface(title:selectedKind == .human ? "还没有人待办":"还没有 AI 待办",detail:selectedKind == .human ? "把需要你处理的事记在这里。":"把希望 AI 完成的事记在这里。",symbol:"checklist").frame(minHeight:220)
+                                Text(selectedKind == .human ? "暂无待处理的人待办" : "暂无 AI 待办")
+                                    .font(CrewdType.label).foregroundStyle(.secondary).padding(.top, 8)
                             }
                         }
-                        ForEach(visibleItems.indices,id:\.self){i in
-                            let row=visibleItems[i]
-                            if let id=CrewdChannelWorkStore.workID(row["object"]) {
-                                VStack(alignment:.leading,spacing:10){
-                                    HStack(alignment:.top,spacing:8) {
-                                    Button{select(row)}label:{
-                                        HStack(alignment:.top,spacing:9){
-                                            Image(systemName:statusLabel(row)=="人工完成" || row["status"] == .string("done") ? "checkmark.circle.fill":"circle")
-                                                .font(.system(size:15)).foregroundStyle(id.kind == .human ? Theme.Palette.amber:Theme.Palette.accent).padding(.top,2)
-                                            Text((row["label"].string ?? "")+(row["labelTruncated"] == .bool(true) ? "…":""))
-                                                .font(CrewdType.body.weight(.medium)).foregroundStyle(Theme.Palette.ink).multilineTextAlignment(.leading)
-                                        }.frame(maxWidth:.infinity,alignment:.leading)
-                                    }.buttonStyle(.plain)
-                                    if id.kind != .plan, mutationDrafts != nil {
-                                        Button { metadataTarget = .init(row:row) } label: { Image(systemName:"ellipsis") }
-                                            .buttonStyle(CrewdToolButtonStyle()).help("编辑负责人、状态与标签").accessibilityLabel("编辑待办")
-                                    }
-                                    }
-                                    HStack(spacing:8) {
-                                        Text(statusLabel(row))
-                                        if id.kind != .plan {
-                                            let source=group.todoAttributes[id.raw] ?? row["todo"]
-                                            Text("·")
-                                            Label(ownerLabel(source["owner"]),systemImage:"person")
-                                        }
-                                    }.font(CrewdType.caption).foregroundStyle(.secondary)
-                                    if id.kind != .plan {
-                                        if !row["tags"].array.isEmpty {
-                                            ScrollView(.horizontal,showsIndicators:false){HStack{ForEach(row["tags"].array.compactMap(\.string),id:\.self){name in Button(name){tag.wrappedValue=name}.font(CrewdType.caption).buttonStyle(.plain).padding(.horizontal,8).padding(.vertical,4).background(Theme.Palette.surfaceMuted,in:Capsule())}}}
-                                        }
-                                    }
-                                    if selected?["object"] == row["object"] {Divider();selectedDetails(row,id)}
-                                }.padding(14).frame(maxWidth:.infinity,alignment:.leading)
-                                    .background(Theme.Palette.surface,in:RoundedRectangle(cornerRadius:9))
-                                    .overlay(RoundedRectangle(cornerRadius:9).strokeBorder(Theme.Palette.hairline.opacity(0.75),lineWidth:0.6))
+                        ForEach(visibleItems.indices,id: \.self) { index in
+                            let row = visibleItems[index]
+                            if let id = CrewdChannelWorkStore.workID(row["object"]) {
+                                todoRow(row, id)
                             }
                         }
-                    }.frame(maxWidth:.infinity,alignment:.leading)
+                    }.padding(16).frame(maxWidth:.infinity,alignment:.leading)
                 }
             }
-        }.onAppear{group.setActive(true,owner:activeOwner)}.onDisappear{group.setActive(false,owner:activeOwner)}
+        }.background(todoPageBackground).onAppear{group.setActive(true,owner:activeOwner)}.onDisappear{group.setActive(false,owner:activeOwner)}
         .onChange(of:channel){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil;creatingRequirement=false}
         .onChange(of:crew){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil;creatingRequirement=false}
         .onChange(of:group.items){_,rows in
@@ -185,7 +158,72 @@ struct CrewdChannelTodoView:View {
         guard let id=value["id"].string else{return "未分配"}
         return members.first(where:{$0["id"] == .string(id)})?["displayName"].string ?? id
     }
+    private var todoPageBackground: Color {
+        #if os(macOS)
+        CrewTodoPagePalette.background
+        #else
+        Theme.Palette.canvas
+        #endif
+    }
+    private func rowState(_ row: CrewdValue, _ id: CrewdWorkID) -> String {
+        let source = row["status"].string ?? ""
+        if ["withdrawn", "dropped"].contains(source) { return source }
+        return (group.todoAttributes[id.raw] ?? row["todo"])["manualState"].string ?? source
+    }
+    private func bodyText(_ row: CrewdValue, _ id: CrewdWorkID) -> String {
+        let preview = (row["label"].string ?? "") + (row["labelTruncated"] == .bool(true) ? "…" : "")
+        if selected?["object"] == row["object"], detail != .null {
+            return detail["text"].string ?? detail["goal"].string ?? detail["question"].string ?? preview
+        }
+        switch id.kind {
+        case .requirement: return work.requirements[id]?["text"].string ?? preview
+        case .human: return work.humanTasks[id]?["ask"]["question"].string ?? preview
+        case .plan: return work.plans[id]?.value["title"].string ?? preview
+        }
+    }
+    private func todoRow(_ row: CrewdValue, _ id: CrewdWorkID) -> some View {
+        let state = rowState(row, id)
+        let withdrawn = ["withdrawn", "dropped"].contains(state)
+        let finished = ["done", "closed", "completed", "answered"].contains(state)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: withdrawn ? "minus.circle" : finished ? "checkmark.circle.fill" : id.kind == .human ? "questionmark.circle" : "circle")
+                    .font(.system(size: 14)).frame(width: 14, height: 14)
+                    .foregroundStyle(finished || withdrawn ? Theme.Palette.inkMuted : id.kind == .human ? Theme.Palette.amber : Theme.Palette.accent)
+                Text(id.raw).font(CrewdType.label.weight(.semibold).monospacedDigit()).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button(selected?["object"] == row["object"] ? "收起" : "详情") { select(row) }
+                if id.kind != .plan, mutationDrafts != nil {
+                    Button { metadataTarget = .init(row: row) } label: { Image(systemName: "pencil") }
+                        .help("编辑负责人、状态与标签").accessibilityLabel("编辑待办")
+                }
+            }.font(CrewdType.caption).buttonStyle(.plain)
+            MarkdownText(text: bodyText(row, id), variant: .todo, dimmed: finished || withdrawn)
+                .textSelection(.enabled).padding(.leading, 22)
+            HStack(spacing: 8) {
+                Text(statusLabel(row))
+                if id.kind != .plan {
+                    let source = group.todoAttributes[id.raw] ?? row["todo"]
+                    Text("·"); Label(ownerLabel(source["owner"]), systemImage: "person")
+                }
+            }.font(CrewdType.caption).foregroundStyle(.secondary).padding(.leading, 22)
+            if id.kind != .plan, !row["tags"].array.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(row["tags"].array.compactMap(\.string), id: \.self) { name in
+                            Button(name) { tag.wrappedValue = name }.buttonStyle(.plain).font(CrewdType.caption)
+                        }
+                    }
+                }.padding(.leading, 22)
+            }
+            if selected?["object"] == row["object"] {
+                VStack(alignment: .leading, spacing: 8) { selectedDetails(row, id) }.padding(.leading, 22)
+            }
+        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: 8))
+    }
     private func statusLabel(_ row:CrewdValue)->String {
+        if let raw = row["status"].string, ["withdrawn", "dropped"].contains(raw) { return CrewdWorkStatusLabel.display(raw) }
         let source=group.todoAttributes[row["object"]["id"].string ?? ""] ?? row["todo"]
         if source["manualState"] == .string("done"){return "人工完成"}
         if source["manualState"] == .string("open"){return "待处理"}
@@ -250,10 +288,8 @@ struct CrewdChannelTodoView:View {
     @ViewBuilder private func selectedDetails(_ row:CrewdValue,_ id:CrewdWorkID)->some View {
         if reading {ProgressView().controlSize(.small)}
         if detail != .null {
-            Text(id.raw).font(CrewdType.caption).foregroundStyle(.tertiary).textSelection(.enabled)
-            Text(detail["text"].string ?? detail["goal"].string ?? detail["question"].string ?? "").font(.caption).textSelection(.enabled)
-            if let answer=detail["answer"].string {Text("答复："+answer).font(.caption).textSelection(.enabled)}
-            if let reason=detail["withdrawReason"].string {Text("撤回理由："+reason).font(.caption).textSelection(.enabled)}
+            if let answer=detail["answer"].string { MarkdownText(text: "答复：" + answer, variant: .todoNote).textSelection(.enabled) }
+            if let reason=detail["withdrawReason"].string { MarkdownText(text: "撤回理由：" + reason, variant: .todoNote).textSelection(.enabled) }
             if id.kind == .requirement {
                 Button("新建计划"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:"",source:id.raw,channel:channel))}.font(.caption).disabled(busy || detail["status"] == .string("closed"))
             }else if id.kind == .plan,row["crewId"] == .string(crew) {

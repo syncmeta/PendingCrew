@@ -125,16 +125,17 @@ struct CrewdPlanActions:View {
     private func binding<T>(_ path:WritableKeyPath<CrewdPlanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
-            CrewdPanelHeader(title:key.object.isEmpty ? "新建计划":"更新计划",symbol:"list.bullet.indent")
+            CrewdPanelHeader(title:key.object.isEmpty ? "新建计划":"更新计划")
             if !key.object.isEmpty {
-                #if os(macOS)
-                Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented)
-                #else
-                Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.menu)
-                #endif
-                HStack {if reading {ProgressView().controlSize(.small)};Spacer();Button("刷新"){Task {await load()}}.font(CrewdType.caption).disabled(reading || drafts.busy(key))}
+                HStack {
+                    Picker("操作",selection:binding(\.action)){ForEach(CrewdPlanDrafts.Action.allCases,id:\.self){Text($0.rawValue).tag($0)}}.pickerStyle(.menu).fixedSize()
+                    Spacer()
+                    if reading {ProgressView().controlSize(.small)}
+                    Button {Task {await load()}} label:{Image(systemName:"arrow.clockwise")}
+                        .buttonStyle(CrewdToolButtonStyle()).help("刷新计划").accessibilityLabel("刷新计划").disabled(reading || drafts.busy(key))
+                }
                 if let id=CrewdWorkID(key.object,kind:.plan),let current=store.plans[id] {
-                    Text(current.value["title"].string ?? "").font(.headline)
+                    Text(current.value["title"].string ?? "").font(CrewdType.body.weight(.semibold)).textSelection(.enabled)
                     Text(CrewdWorkStatusLabel.display(current.status)+" · "+ownerName(current.value["owner"].string)).font(.caption).foregroundStyle(.secondary)
                     if !current.value["blockedOn"].array.isEmpty {Text("待答复："+current.value["blockedOn"].array.compactMap(\.string).joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)}
                     if let note=current.value["note"].string {Text(note).font(.caption).textSelection(.enabled)}
@@ -163,8 +164,9 @@ struct CrewdPlanActions:View {
                 Toggle("我已核对当前计划与关联事项，再继续提交",isOn:$reviewedUnknown).font(.caption)
             }
             if store.selectedCrew != key.crew {Text("当前已切换机组，请切回原机组后再提交。").foregroundStyle(.orange)}
+            Divider()
             ScrollView {
-                VStack(alignment:.leading,spacing:12) {
+                VStack(alignment:.leading,spacing:16) {
                     if key.object.isEmpty {
                         CrewdFormField(title:"计划标题"){TextField("概括这项工作",text:binding(\.title))}
                         CrewdFormField(title:"目标"){TextField("希望达成什么",text:binding(\.goal),axis:.vertical).lineLimit(2...5)}
@@ -201,9 +203,10 @@ struct CrewdPlanActions:View {
                             if fields.split {TextField("可独立推进的部分",text:binding(\.splitTitle),axis:.vertical).lineLimit(2...5)}
                         }
                     }
-                }.disabled(drafts.busy(key))
+                }.disabled(drafts.busy(key)).padding(.vertical,12)
             }
-            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
+            Divider()
+            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":key.object.isEmpty ? "创建计划":fields.action.rawValue){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
         }.padding(20).textFieldStyle(.roundedBorder).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:560,height:640)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {

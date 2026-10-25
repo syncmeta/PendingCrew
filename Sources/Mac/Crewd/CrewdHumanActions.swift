@@ -36,7 +36,7 @@ enum CrewSidebarRowStyle {
     static let rowSpacing: CGFloat = 6
     static let minimumContentHeight: CGFloat = 36
     #if os(macOS)
-    static let titleFont = Theme.Fonts.system(size: 13, weight: .semibold)
+    static let titleFont = Theme.Fonts.system(size: 14, weight: .semibold)
     static let subtitleFont = Theme.Fonts.caption
     #else
     static let titleFont = Font.body.weight(.medium)
@@ -111,6 +111,7 @@ struct CrewdConversationRow<Avatar: View>: View {
     }
     private var rowContent: some View {
         HStack(alignment: .top, spacing: 6) {
+            avatar()
             VStack(alignment: .leading, spacing: CrewSidebarRowStyle.lineSpacing) {
                 CrewSidebarTitleLine(activityDate: activityDate) {
                     Text(title).font(CrewSidebarRowStyle.titleFont)
