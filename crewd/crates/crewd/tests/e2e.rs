@@ -898,3 +898,90 @@ fn rpc_drives_every_client_method() {
         }
     }
 }
+
+/// CLI selection reaches the original profile, owned-history eligibility and
+/// terminal capability together. The synthetic executable must never be invoked.
+#[test]
+fn explicit_claude_disable_and_existing_selection_contract() {
+    use std::os::unix::fs::PermissionsExt;
+    for mode in ["disabled", "discover", "explicit"] {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let work = root.path().join("work");
+        let tools = root.path().join("tools");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir(&tools).unwrap();
+        let invoked = root.path().join("provider-was-invoked");
+        let fake = tools.join("claude");
+        std::fs::write(&fake, format!("#!/bin/sh\ntouch '{}'\nexit 90\n", invoked.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        {
+            let store = crewd_store::Store::open_data_dir(&data).unwrap();
+            crewd_store::crews::upsert(store.conn(), &crewd_proto::Crew {
+                id: "disabled-crew".into(), title: "Synthetic configuration".into(),
+                working_directory: Some(work.display().to_string()),
+                created_at: "2026-10-25T00:00:00.000Z".into(), updated_at: "2026-10-25T00:00:00.000Z".into(),
+                ..Default::default()
+            }, None).unwrap();
+            crewd_store::sessions::upsert(store.conn(), &crewd_proto::Session {
+                id: "disabled-session".into(), crew_id: "disabled-crew".into(), role: crewd_proto::Role::Worker,
+                executor: "claude".into(), agent_session_id: Some("00000000-0000-4000-8000-000000000001".into()),
+                working_directory: Some(work.display().to_string()), desired: crewd_proto::Desired::Stopped,
+                updated_at: "2026-10-25T00:00:00.000Z".into(), ..Default::default()
+            }, None).unwrap();
+        }
+        let mut command = crewd(&data);
+        command.env_remove("CREWD_CLAUDE").env("PATH", format!("{}:/usr/bin:/bin", tools.display())).arg("serve");
+        match mode {
+            "disabled" => { command.arg("--disable-claude"); }
+            "explicit" => { command.arg("--claude").arg(&fake); }
+            _ => {}
+        }
+        let mut daemon = Daemon(command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !data.join("crewd.sock").exists() {
+            if let Some(status) = daemon.0.try_wait().unwrap() { panic!("{mode} serve exited before readiness: {status}"); }
+            assert!(Instant::now() < deadline, "{mode} socket readiness timed out");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let expected = mode != "disabled";
+        let listed = rpc(&data, "executor.list", r#"{"crewId":"disabled-crew"}"#);
+        let profiles = listed["profiles"].as_array().unwrap();
+        let claude = profiles.iter().find(|p| p["id"] == "claude").unwrap();
+        assert_eq!(claude["available"], expected, "{mode}: {listed}");
+        if !expected { assert_eq!(claude["unavailableReason"], "notConfigured"); }
+        assert_eq!(profiles.iter().find(|p| p["id"] == "codex").unwrap()["available"], false);
+        let inspection = rpc(&data, "session.claude.inspect", r#"{"sessionId":"disabled-session"}"#);
+        assert_eq!(inspection["manualResume"]["eligibility"], if expected {"eligible"} else {"notConfigured"}, "{mode}: {inspection}");
+        assert_eq!(inspection["manualResume"]["originalAgentSessionId"], "00000000-0000-4000-8000-000000000001");
+        let hello = rpc(&data, "system.hello", "null");
+        assert_eq!(hello["capabilities"].as_array().unwrap().iter().any(|v| v == "session.terminal"), expected, "{mode}: {hello}");
+        assert!(!invoked.exists(), "{mode} ran a provider during configuration reads");
+        // Only this fixture's owned daemon; no production process is signaled.
+        assert_eq!(unsafe { libc::kill(daemon.0.id() as i32, libc::SIGTERM) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            if let Some(status) = daemon.0.try_wait().unwrap() { assert!(status.success(), "{mode}: {status}"); break; }
+            assert!(Instant::now() < deadline, "{mode} normal shutdown timed out");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+#[test]
+fn explicit_claude_disable_conflicts_with_path_and_environment_before_storage() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("must-not-exist");
+    for environment in [false, true] {
+        let mut command = crewd(&data);
+        command.env_remove("CREWD_CLAUDE").args(["serve", "--disable-claude"]);
+        if environment { command.env("CREWD_CLAUDE", "/usr/bin/false"); }
+        else { command.args(["--claude", "/usr/bin/false"]); }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("cannot be used with"), "must reject an option conflict, not an unknown flag: {error}");
+        assert!(!data.exists(), "argument rejection created storage");
+    }
+}

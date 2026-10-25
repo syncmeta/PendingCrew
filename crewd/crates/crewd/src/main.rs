@@ -40,8 +40,11 @@ enum Cmd {
         codex: Option<PathBuf>,
         #[arg(long = "codex-env", value_name = "K=V", hide = true)]
         codex_env: Vec<String>,
-        #[arg(long, env = "CREWD_CLAUDE")]
+        #[arg(long, env = "CREWD_CLAUDE", conflicts_with = "disable_claude")]
         claude: Option<PathBuf>,
+        /// Disable Claude explicitly; omitting both options retains CLI discovery.
+        #[arg(long)]
+        disable_claude: bool,
         /// Explicit Native program metadata; no provider qualification or launch.
         #[arg(long = "claude-managed", value_name = "PROGRAM")]
         managed_claude: Option<PathBuf>,
@@ -204,6 +207,7 @@ async fn run() -> anyhow::Result<()> {
             managed_parent,
             system_admin_socket,
             claude,
+            disable_claude,
             claude_env,
             managed_claude,
             codex,
@@ -244,11 +248,15 @@ async fn run() -> anyhow::Result<()> {
                         None => crewd_server::orchestra::exec_codex::CodexProgram::Disabled,
                     },
                     codex_env: codex_extra,
-                    claude: match claude {
-                        Some(p) => {
-                            crewd_server::orchestra::exec_claude::ClaudeProgram::Path(p.clone())
+                    claude: if *disable_claude {
+                        crewd_server::orchestra::exec_claude::ClaudeProgram::Disabled
+                    } else {
+                        match claude {
+                            Some(p) => {
+                                crewd_server::orchestra::exec_claude::ClaudeProgram::Path(p.clone())
+                            }
+                            None => crewd_server::orchestra::exec_claude::ClaudeProgram::Discover,
                         }
-                        None => crewd_server::orchestra::exec_claude::ClaudeProgram::Discover,
                     },
                     claude_env: extra,
                     managed_claude: managed_claude.clone(),

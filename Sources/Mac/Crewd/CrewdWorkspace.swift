@@ -536,7 +536,7 @@ final class CrewdWorkspace: ObservableObject {
             let codex = CrewdCodexConfiguration.program(environment: env)
             let p = Process(); p.executableURL = program
             p.arguments = CrewdCodexConfiguration.launchArguments(directory: dataDirectory, program: codex)
-            p.environment = env
+            p.environment = CrewdCodexConfiguration.childEnvironment(env)
             // crewd owns a lock and its sessions. GUI reconnect never imports data or replays tasks.
             let logs = dataDirectory.appendingPathComponent("client-backend.log")
             if !FileManager.default.fileExists(atPath: dataDirectory.path) {

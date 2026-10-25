@@ -159,14 +159,32 @@ enum CrewdCodexConfiguration {
             fputs("PendingCrew Demo: isolated data is unavailable; refusing startup.\n", stderr)
             exit(78)
         }
-        return ["--data-dir", fixed.path, "serve", "--managed-parent", "--claude", "/usr/bin/false", "--codex", "/usr/bin/false"]
+        return ["--data-dir", fixed.path, "serve", "--managed-parent", "--disable-claude"]
         #else
-        var arguments = ["--data-dir", directory.path, "serve", "--claude", claudeProgram.flatMap { executable($0) ? $0 : nil } ?? "/usr/bin/false"]
+        var arguments = ["--data-dir", directory.path, "serve"]
+        if let claude = enabledProgram(claudeProgram) { arguments += ["--claude", claude] }
+        else { arguments.append("--disable-claude") }
         #if PENDINGCREW_LOCAL_MAC
         arguments.append("--managed-parent")
         #endif
-        return arguments + (program.flatMap { executable($0) ? $0 : nil }.map { ["--codex", $0] } ?? [])
+        return arguments + (enabledProgram(program).map { ["--codex", $0] } ?? [])
         #endif
+    }
+    /// The App selects executors through its own configuration and argv. CLI
+    /// environment aliases must not conflict with or re-enable that selection.
+    static func childEnvironment(_ environment: [String: String]) -> [String: String] {
+        var child = environment
+        child.removeValue(forKey: "CREWD_CLAUDE")
+        child.removeValue(forKey: "CREWD_CODEX")
+        return child
+    }
+    /// Retain the existing explicit isolation sentinels, but express them to
+    /// Core as Disabled rather than advertising the false executable as ready.
+    private static func enabledProgram(_ path: String?) -> String? {
+        path.flatMap { value in
+            guard value != "/usr/bin/false", value != "/bin/false", executable(value) else { return nil }
+            return value
+        }
     }
     static func executable(_ path: String) -> Bool {
         var directory: ObjCBool = false
