@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-26 三平台准确产物完成，开发窗口已恢复
+
+本轮实际编译源码固定为 `cc316548ccf498c092247e90cf2e2c9f95ecf72b`，Rust树 `9262fb1af2850c998b0ec0c3be0a2d92a3357d62`。Mac新normal独验afc0a9ef接受；Mac/iOS Development 0.2.1／20751.57170签名包由8610b0d6整块接受；唯一Linux手动run40208757054／attempt1成功，原artifact12604453334完整下载后由93376468接受。Linux原生产Release／默认features[]，ELF5419c976…13f03，安装tar f712737c…f1509e，实际API3／Store21／schema149，不能沿旧记录称当前Store19。三平台完整包与根验收绑定于 `docs/private/preserved-delivery-artifacts/apple-development-cc316548-candidate-20261025/MODULE-DELIVERY.json`（474a0da1…de8b8）；此后的交付记录提交不改变这些产物的compiledRef，不把旧包改标新HEAD。
+
+Mac正常构建曾由Xcode自动清理同target的DerivedData HotReload App，导致原protected-after门停止（build0／driver1）。四个其它受保护包和日用数据未变；根裁定仅继续原Mac后处理，未重复Mac构建，iOS按原单次构建完成。开发App另经唯一build-only恢复、完整库存和签名核对后复制到 `/private/tmp/pendingcrew-hotreload-runtime-20261023/PendingCrewHotReload.app`，现在63256／Core63258运行于稳定目录，小圆格14×14／5×5／gap4／radius2实际可见。原失败证据保留，不能声称五包始终未变；未来正常同target构建仍须协调owned watcher与macOS对象缓存。日用53700／53703及其c634包保持，手机旧版保持。
+
+Linux下载首65秒只读部分失败已保留；原完整长读2405 exit0、99,302,975字节与GitHub digest匹配，未重派CI。仓库公开、标准Ubuntu分钟免费已按当前API及官方规则核实；未启larger runner或自动CI，本次产物保留7天。OrbStack初始化因自动审批拒绝未执行；无需再靠它完成本次Linux资产。
+
+界限：本轮新包尚未安装／发布，未向Apple公证外发，未读取真实p8、注册设备或发送APNs，未跑真实模型；VPS154:22当前仍超时。正常设备持久配对、双设备工作／草稿同步、真实CloudKit写回和推送接收仍待真实运行证据，不能因代码或签包通过算完成。当前全工程目标继续active。更细的最新状态在既有 `docs/private/preserved-delivery-artifacts/current-root-delivery-state-20261021.json` 的latestContinuation20261025与latestCrewFourSquares20261025。
+
 ## 2026-10-25 日用已安装，小信号格可见，正常通知配置整块冻结
 
 日用 0.2.1／20751.52764（准确 c634e389）已完整备份替换并正常首开：独验954a4637确认本机连接、原历史保留、零自动任务，旧整包和 ZIP 完整保留。后续四格机组标识为准确0b85fd0f私有开发窗效果，14×14、每格5×5、间隔4、圆角2；上自身／左下父／右下祖父，无上级逐级回退，原生日用包尚不含此追加界面。最终暖构建91008 exit0，447项实际App输入前后同，复用准确c634 Core，不冒热保存成功。
