@@ -13,7 +13,7 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
   <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
-  <a href="https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.44"><img alt="源码预览" src="https://img.shields.io/badge/preview-v0.1.44-informational" /></a>
+  <a href="https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.2.0-informational" /></a>
 </p>
 
 <p align="center">
@@ -41,6 +41,8 @@
 
 ## 快速开始
 
+当前版本：[0.2.0 — macOS 与 Linux 安装包](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.0)。macOS 安装包与 Linux 后台的三项安装资产都在同一个 Release 中。
+
 macOS 旧稳定版安装包：[0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42)。
 
 或沿旧稳定通道用 Homebrew 安装：
@@ -49,15 +51,13 @@ macOS 旧稳定版安装包：[0.1.42](https://github.com/syncmeta/PendingCrew/r
 brew install --cask syncmeta/tap/pendingcrew
 ```
 
-当前开发版本：[0.1.44 源码预览](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.44)。该预发布提供源码，不提供本次开发版的公开 macOS 安装包，也不替换 Homebrew/自动更新的旧稳定通道。
-
-Linux x86_64 后台另提供同一源码 `fd7a563fd1d69365ab38811c7e5c6718aa4cd66d` 的[预览安装资产](https://github.com/syncmeta/PendingCrew/releases/tag/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d)。先替换已有普通登录用户、设备可达地址及明确的本机 bind IP，再在 Linux 主机执行：
+Linux x86_64 后台使用同一 0.2.0 Release 的安装入口。先替换已有普通登录用户、设备可达地址及明确的本机 bind IP，再在 Linux 主机执行：
 
 ```sh
-curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/install.py' | sudo /usr/bin/python3 -I - install --user '<已有普通登录用户>' --advertise-host '<设备可达的主机地址>' --listen-host '<明确的本机bind-IP>' --port 49381
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.0/PendingCrew-0.2.0-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<已有普通登录用户>' --advertise-host '<设备可达的主机地址>' --listen-host '<明确的本机bind-IP>' --port 49381
 ```
 
-Linux 预览需要 Python 3、systemd，以及由该普通用户自行安装并登录的 **Codex 0.163.0 和 Claude Code 2.1.301**；安装器不代装、代登录或自动升级降级。成功安装后只提供一个设备配对链接。资产已发布，目标 VPS 的常驻服务、公网端口和设备配对尚未完成实测；完整前提、哈希与恢复操作见 [Linux 安装说明](deploy/linux/README.md)。
+Linux 安装需要 Python 3、systemd，以及由该普通用户自行安装并登录的 **Codex 0.163.0 和 Claude Code 2.1.301**；安装器不代装、代登录或自动升级降级。成功安装后只提供一个设备配对链接。目标 VPS 的实际部署、常驻服务、公网端口和配对尚未完成验收；本次 Mac/Linux 发布也不代表 iOS、Cloud 同步或 APNs 的完整交付通过。完整前提、三项资产哈希与恢复操作见 [Linux 安装说明](deploy/linux/README.md)。
 
 作为与 Claude Code / Codex 协作的平台，你电脑上得先有它们。暂时不能接入其它 Harness。
 

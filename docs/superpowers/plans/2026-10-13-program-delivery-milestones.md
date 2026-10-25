@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-25 准确0.2公证与Mac／Linux统一安装分发已公开
+
+五控件系统灰与真正重建前右侧双区，以准确源码 `7f32084dcbfbdb6ef21babd2cbf87c226e76d1de`、Mac **0.2.0／20750.61411** 完整同包实测接受。人类对准确ZIP再确认外发后，唯一Apple提交 `48bc6c2c-da27-4fc8-b083-2cda662c81bc` 实际Accepted；只在私有副本加票，原51项及原ZIP保留。最终公证ZIP **42,566,589字节／SHA256 `f71f778eb07f89edaca3f206fca6c1d299765ef034ccf15093b0e5938fec27e5`**，独立分发验收 `dc892502…39eca108` 接受，复用已验五灰与业务，不再首开或重编。
+
+同一个 [v0.2.0半成品预发布](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.0)（id422772938）在台北时间2026-10-25 12:15公开，准确tag为G、包含Mac ZIP与三项Linux安装资产。四项API名称／大小／digest／uploaded状态全部核同；公开installer与manifest实际GET及哈希也通过，未重复下载完整Mac或Linux tar。旧host技术预览已收draft并保留tag／三资产；此前旧0.1.44源草稿按指令移除，0.1.42稳定latest、Sparkle及Homebrew保持原样。README与Linux部署说明已切到唯一0.2安装入口。公开分发证明见 `docs/private/preserved-delivery-artifacts/public-mac-020-7f32084d-publication-20261025/RESULT.json`。
+
+本次Mac内含后台仍为准确b0普通组件，Linux仍为准确fd7编译组件，其完整Rust输入与G一致，保留各原编译证明。文档提交不改候选来源，不重建。人类新增授权替换本机并打开最新与约五日前版本：普通安装与两版可见对照作为后续独立运行门，尚未在本节冒称完成。手机Cloud写回／双端合并重开、真实APNs送达、目标VPS常驻部署及Claude剩余供应商资格继续保留为全工程未完成范围。
+
 ## 2026-10-25 五控件灰色修正与同一0.2公证发布单元
 
 按人类最新指令，消息分类／人类沟通／仅@你和Sidebar文件夹／加号采用系统灰，仅三处局部Mac tint。三源独验 `f674f7b9…2d383997` 接受，原动作／状态／禁用／有限宽度布局逐字保持，其它强调色和iOS不改。根保存准确新来源后只构建一个原暖Release候选，同包验五处正常／选中菜单色态及原双区保持，复用已过稳定业务，不扩fixture或重跑全量。空间实测约137GiB，不清缓存，不重编Rust／iOS。

@@ -1,24 +1,24 @@
 # PendingCrew host installation
 
-The Linux x86_64 preview installer is published as [host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d](https://github.com/syncmeta/PendingCrew/releases/tag/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d), built from that exact source commit. It provides one installation command and one device-enrollment link. The retained R2 package cannot be substituted for this source.
+The Linux x86_64 installer and macOS installation package share the single [0.2.0 Release](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.0). Linux provides one installation command and one device-enrollment link. The retained R2 package cannot be substituted for this source.
 
-[0.1.44](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.44) is the source preview; the separate host release contains only the three Linux installation assets. The public macOS package and Homebrew remain on the older stable channel, [0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42). This Linux release does not update that channel or provide a macOS installer.
+Distribution version0.2.0 reuses the independently accepted Linux ELF and original build proof from source `fd7a563fd1d69365ab38811c7e5c6718aa4cd66d` (API3/schema149/Store21); it is not a new Rust build or a relabelled compiled source. All three Linux download URLs belong to v0.2.0, with the exact compiled-source SHA retained in the tar and manifest filenames. The older stable [0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42) and Homebrew installation context remain separate from this release.
 
-The exact Linux build and its original package passed independent artifact review. The published asset API sizes/digests match those reviewed bytes, and the public tar URL returned HEAD200 with the expected length. A complete public download and actual installation have not been verified. The target VPS has no accepted permanent service, public-port or device-pairing result; publication is not deployment acceptance.
+The original Linux build and the affected0.2.0 packaging passed independent artifact review. The table below identifies the exact three reviewed assets. The published installer and manifest were actually downloaded and their hashes matched; the complete tar download and actual installation of these0.2.0 URLs have not been verified. Target VPS deployment, permanent service, public port and device pairing remain unaccepted; this Mac/Linux release does not claim complete iOS, Cloud synchronization or APNs delivery.
 
 On a Linux x86_64 host with Python 3 and systemd, replace the existing ordinary login user, reachable address and explicit local bind IP, then run the original entry:
 
 ```sh
-curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.0/PendingCrew-0.2.0-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
 ```
 
-This is a Python entry executed from stdin in isolated mode, not a shell installer. Its embedded HTTPS manifest URL and SHA256 bind the original tar. It still downloads the manifest and tar; copying only `install.py` is not an offline installation.
+This is a Python entry executed from stdin in isolated mode, not a shell installer. Its embedded HTTPS manifest URL and SHA256 bind the original tar. It still downloads the manifest and tar; copying only the installation script is not an offline installation.
 
-| Published asset | Bytes | SHA256 |
+| 0.2.0 Release asset | Bytes | SHA256 |
 | --- | ---: | --- |
-| [install.py](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/install.py) | 45778 | `bacc40a9b65cb288e80c7c670dbbff7d140fddc6cc64f66b7441987989a6d37d` |
-| [manifest.json](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/manifest.json) | 371 | `3edba0256c49b7ac350a3f2275402dfeefbadae4638442af35c42f827859210e` |
-| [host.tar.gz](https://github.com/syncmeta/PendingCrew/releases/download/host-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d/host.tar.gz) | 21526325 | `79735ba993bd4e0511bac733b81013c58878386f8f9fe47d634e02280975fd2d` |
+| [PendingCrew-0.2.0-linux-install.py](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.0/PendingCrew-0.2.0-linux-install.py) | 45811 | `8185463692fdd33f1c0cc742bdaf0acb79a955a3515fcaf81626cb27e2b88ce1` |
+| [Linux manifest](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.0/PendingCrew-0.2.0-linux-x86_64-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d.manifest.json) | 399 | `d969559e4ad559c8c33d4a7f3c57d5079673798a6471591c84261b3258c241f6` |
+| [Linux x86_64 tar](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.0/PendingCrew-0.2.0-linux-x86_64-fd7a563fd1d69365ab38811c7e5c6718aa4cd66d.tar.gz) | 21526325 | `1afb10f885683dbf1849bc2129e098cdd6fcd4fe16afb56a70fe0860696e9486` |
 
 The ordinary selected user must first install and log in to both providers themselves; see the official [Codex CLI](https://developers.openai.com/codex/cli) and [Claude Code setup](https://code.claude.com/docs/en/setup) instructions. This candidate accepts exactly Codex0.163.0 and Claude Code2.1.301, even if an upstream installer offers a newer version. Missing executables, an unsupported version, or unsuccessful login status stops before PendingCrew prefix/data/unit writes and prints the official installation/login instructions. No provider installation, login, model request, credential import, automatic upgrade/downgrade or HOME/PATH/SHELL/CODEX_HOME assignment is performed. Successful version/login metadata is not proof of model access. Optional `--codex /absolute/path` and `--claude /absolute/path` select existing executables; the original preflight still checks their real systemd service-user environment.
 
