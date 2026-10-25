@@ -4,12 +4,13 @@ mod claude_cmd;
 mod codex_cmd;
 mod hook_cmd;
 mod mcp_cmd;
+mod notification_cmd;
 
 use anyhow::{Context, bail};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 use crewd_proto::{Request, ServerFrame};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
@@ -77,6 +78,8 @@ enum Cmd {
         /// JSON 参数，缺省 null
         params: Option<String>,
     },
+    /// Secret-safe APNs configuration and original-request lookup; never sends a push.
+    Notification(notification_cmd::NotificationArgs),
     /// Offline orphan diagnostics/reconciliation; no signals or ordinary work.
     Recovery {
         #[command(subcommand)]
@@ -348,6 +351,7 @@ async fn run() -> anyhow::Result<()> {
             let result = call(&dir, method, params)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        Cmd::Notification(args) => notification_cmd::run(&dir, args)?,
         Cmd::Claude(args) => claude_cmd::run(&dir, args.clone()).await?,
         Cmd::Codex(args) => codex_cmd::run(&dir, args.clone()).await?,
         Cmd::Mcp(args) => mcp_cmd::run(&dir, args.clone()).await?,
@@ -375,9 +379,37 @@ fn call(
     method: &str,
     params: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
+    call_inner(dir, method, params, false)
+}
+
+fn call_notification(
+    dir: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    // Bound even socket connect without retrying or waiting for a blocking
+    // worker during runtime shutdown. A timed-out original request stays unknown.
+    let directory = dir.to_owned();
+    let method = method.to_owned();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || { let _ = tx.send(call_inner(&directory, &method, params, true)); });
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| anyhow::anyhow!("notification result deadline exceeded"))?
+}
+
+fn call_inner(
+    dir: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+    bounded: bool,
+) -> anyhow::Result<serde_json::Value> {
     let sock = dir.join("crewd.sock");
     let mut stream = UnixStream::connect(&sock)
         .with_context(|| format!("连不上 {}（crewd serve 在跑吗？）", sock.display()))?;
+    if bounded {
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+    }
     let req = Request {
         id: 1,
         method: method.to_string(),
@@ -389,8 +421,14 @@ fn call(
     let mut reader = BufReader::new(stream);
     loop {
         let mut buf = String::new();
-        if reader.read_line(&mut buf)? == 0 {
+        let length = if bounded {
+            Read::by_ref(&mut reader).take(16_385).read_line(&mut buf)?
+        } else { reader.read_line(&mut buf)? };
+        if length == 0 {
             bail!("crewd 在回复前关闭了连接");
+        }
+        if bounded && (length > 16_384 || !buf.ends_with('\n')) {
+            bail!("notification response frame unavailable");
         }
         if let ServerFrame::Response(r) = serde_json::from_str::<ServerFrame>(&buf)? {
             if r.id != 1 {

@@ -13,6 +13,8 @@ crewd-proto = { version = "0.1.0", path = "../proto" }
 crewd-server = { version = "0.1.0", path = "../server" }
 crewd-store = { version = "0.1.0", path = "../store" }
 dirs = "7.0.0"
+# Existing locked libc supplies owned/no-follow secret-file operations.
+libc = "0.2.190"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -20,8 +22,6 @@ tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "signal",
 
 [dev-dependencies]
 crewd-work = { path = "../work" }
-# Direct dependency for exact owned PID signals; cached workspace version.
-libc = "0.2.190"
 # Read-only observation of the disposable live fixture; version already in the workspace lock.
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 crewd-wake = { path = "../wake" }

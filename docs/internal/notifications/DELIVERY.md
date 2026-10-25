@@ -40,3 +40,18 @@ The independent reviewer preserved an original60s Runtime hang and35s native loc
 This is complete backend source and local synthetic evidence, awaiting independent quality. It is not a production normal/release package, Linux/systemd install, real Keychain/provider-key qualification, signed device-token registration, Apple APNs acceptance, device delivery/display/tap, or Swift opt-in/navigation acceptance. No real Apple material or network, model/provider/SDK, public service, Worker, CI, VPS, publication, global configuration change or native16 activation was used. Default remains off. APNs HTTP200 means only acceptedByApns, never business Done or device read; Unknown is retained without automatic resend.
 
 The accepted B baseline is a normal merge ancestor; its frozen bb033/20c artifacts/current Store18 candidates are unchanged. This source qualifies Store19 installer metadata, not the old B-only Linux input. The integration owner may select a future single frozen B+APNs+client/UI source for its separately authorized one manual Linux build; this module does not dispatch it.
+
+## Secret-safe ordinary Core management CLI (2026-10-25)
+
+The ordinary `crewd` now exposes the existing Local Human API without putting provider JSON in process arguments. Use the current Core's canonical data directory and a configuration JSON file owned by the current user, mode0600, regular and not a symlink:
+
+```sh
+crewd --data-dir '/absolute/canonical/Core-data' notification configure --input-file '/absolute/private/apns-configuration.json'
+# The same bounded JSON may instead arrive through stdin, without terminal output:
+crewd --data-dir '/absolute/canonical/Core-data' notification configure < '/absolute/private/apns-configuration.json'
+crewd --data-dir '/absolute/canonical/Core-data' notification lookup --request-id '<original request UUID>'
+```
+
+Input is the existing `NotificationConfigureParams` JSON (`requestId`, `expectedRevision`, `enabled`, optional `provider`), bounded to16KiB. `provider.privateKeyPkcs8Base64` retains the existing API format and the same preparation contract as Linux `notification-configure`; `--input-file` is not an Apple `.p8`/PEM reader. Prepare that JSON privately through the existing provider-configuration process. Do not put Apple key material in argv, an `echo` command or terminal output. The CLI opens the operator's input read-only and does not change it.
+
+Before its single configuration call, the CLI writes only the Linux-shaped `{format,kind,requestId,payloadSha256}` witness under the Core data directory's private `notification-cli/notification-UUID.json` (directory0700/file0600). It never saves provider JSON or a private-key copy. An existing UUID witness cannot be overwritten or submitted again. A lost/invalid reply leaves that original witness; explicit `lookup` uses only `notification.requestLookup`. Unknown and notFound never trigger a configuration resend, replacement UUID or push. Output is a typed non-secret status summary, not raw RPC/error bodies or proof of Apple delivery. Existing Local Human permission checks still apply; this CLI does not create host identity, trust or sender authorization. The sender, rootFD Linux route, API/schema and protected server key storage are unchanged.

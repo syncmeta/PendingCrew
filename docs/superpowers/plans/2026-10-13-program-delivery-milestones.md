@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-25 日用已安装，小信号格可见，正常通知配置整块冻结
+
+日用 0.2.1／20751.52764（准确 c634e389）已完整备份替换并正常首开：独验954a4637确认本机连接、原历史保留、零自动任务，旧整包和 ZIP 完整保留。后续四格机组标识为准确0b85fd0f私有开发窗效果，14×14、每格5×5、间隔4、圆角2；上自身／左下父／右下祖父，无上级逐级回退，原生日用包尚不含此追加界面。最终暖构建91008 exit0，447项实际App输入前后同，复用准确c634 Core，不冒热保存成功。
+
+正常 Apple Development/Sandbox 配置四源已独验c9e06350：正常无测试环境变量可选APNs，仍保明确Debug/flag/bundle/非HotReload门及无效显式资格拒绝；不放开公开Release或切Production。Mac/iOS actual构建设置均核对平台profile/entitlements，未签新服务包或执行云写/设备注册。Mac/通用Core安全通知CLI五源独验12aa280b通过，完整configure与原UUID lookup、密钥受保护输入、hash-only见证先落盘、Unknown不重发、错误脱敏；原5项真实fake验证通过，setup/hang另存，不重跑已验44sender。下一步准确提交后一次新normal，与正常Development双平台包组合。
+
+Linux额度前提已更正：当前GitHub API证实syncmeta/PendingCrew为PUBLIC；官方说明public标准runner分钟免费，现manual workflow使用ubuntu-24.04及15分钟上限。只把本次artifact保留设7天，不恢复自动全量CI、不使用larger runner；准确最终ref远端确认后才一次必要manual正常Linux构建。此前VPS154:22当前只读仍超时、未运行远端命令；OrbStack命令被自动审批拒绝其run目录初始化权限修改，未换路执行。它们不阻本地通知模块。真实APNs送达、双设备同步及实际VPS运行仍未宣称完成。
+
 ## 2026-10-25 执行器禁用模块冻结，日用替换已授权
 
 五源模块独验 `5568bdcc…fc1a1ca` 接受：显式 Claude Disabled、Mac/Demo false 哨兵转换、实际 App 子进程仅清除 CREWD_CODEX/CREWD_CLAUDE 继承覆盖；CLI 无参数 Discover 和独立环境支持保持。真实失败证据与 CLI 两项、普通及 Demo 各五项通过分别保留；不声称真实模型验收。五源准确哈希已由根核对。
