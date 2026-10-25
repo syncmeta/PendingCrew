@@ -7,33 +7,31 @@ struct CrewColorBar: View {
     /// 色链：[0] = 自身，[1] = 已知父，[2] = 已知祖父。
     let colors: [Color]
     /// 侧栏隐藏标识时保留相同宽度，统一行标题的左缘。
-    static let defaultWidth: CGFloat = 32
-
-    var width: CGFloat = Self.defaultWidth
-    var height: CGFloat = 32
-    private let spacing: CGFloat = 2
+    static var defaultWidth: CGFloat { side }
+    private static var side: CGFloat { 14 }
+    private static var spacing: CGFloat { 4 }
 
     var body: some View {
         let own = colors.first ?? .gray
         let parent = colors.dropFirst().first ?? own
         let grandparent = colors.dropFirst(2).first ?? parent
-        VStack(spacing: spacing) {
-            HStack(spacing: spacing) {
+        VStack(spacing: Self.spacing) {
+            HStack(spacing: Self.spacing) {
                 tile(own)
                 tile(own)
             }
-            HStack(spacing: spacing) {
+            HStack(spacing: Self.spacing) {
                 tile(parent)
                 tile(grandparent)
             }
         }
-        .frame(width: width, height: height)
+        .frame(width: Self.side, height: Self.side)
     }
 
     private func tile(_ color: Color) -> some View {
         RoundedRectangle(cornerRadius: 2, style: .continuous)
             .fill(color)
-            .frame(width: (width - spacing) / 2, height: (height - spacing) / 2)
+            .frame(width: (Self.side - Self.spacing) / 2, height: (Self.side - Self.spacing) / 2)
     }
 
     // MARK: - 取色 / 色链

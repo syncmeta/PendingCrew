@@ -1,0 +1,34 @@
+// Explicit ordinary PendingCrew Debug / Apple Development / APNs Sandbox overlay.
+// Opt in only for registered local macOS/iOS devices with these verified profiles.
+// This file is NOT included by default. Preserve the existing Local.xcconfig;
+// use this only as an App-owned build overlay, never a global SPM -xcconfig.
+// See docs/internal/apple-development/CONFIGURATION.md. Release/HotReload
+// remain unqualified in source even if this example is selected accidentally.
+CODE_SIGN_STYLE = Manual
+DEVELOPMENT_TEAM = M42BKJN82S
+CODE_SIGN_IDENTITY = BF947A3B314A09428419892ADDAF8E8BDA8984BF
+CODE_SIGN_IDENTITY[sdk=macosx*] = BF947A3B314A09428419892ADDAF8E8BDA8984BF
+CODE_SIGN_IDENTITY[sdk=iphoneos*] = BF947A3B314A09428419892ADDAF8E8BDA8984BF
+CODE_SIGNING_ALLOWED = YES
+CODE_SIGNING_REQUIRED = YES
+PROVISIONING_PROFILE =
+PROVISIONING_PROFILE_SPECIFIER =
+CODE_SIGN_ENTITLEMENTS =
+PENDINGCREW_APPLE_SERVICE_CONDITIONS =
+
+PROVISIONING_PROFILE[sdk=macosx*] = 0fedf688-4ca5-47e8-9d43-e09afd4776f7
+PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*] = PendingCrewMacProfile
+CODE_SIGN_ENTITLEMENTS[sdk=macosx*] = Resources/AppleDevelopment-macOS.entitlements
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=macosx*] = NO
+PENDINGCREW_APPLE_SERVICE_CONDITIONS[sdk=macosx*] = PENDINGCREW_APPLE_CLOUD_DEVELOPMENT PENDINGCREW_APPLE_APNS_SANDBOX
+
+PROVISIONING_PROFILE[sdk=iphoneos*] = 774bbb92-be03-48b7-b65c-f1dccc54b339
+PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*] = PendingCrewiOSProfile
+CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Resources/AppleDevelopment-iOS.entitlements
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS[sdk=iphoneos*] = YES
+PENDINGCREW_APPLE_SERVICE_CONDITIONS[sdk=iphoneos*] = PENDINGCREW_APPLE_CLOUD_DEVELOPMENT PENDINGCREW_APPLE_APNS_SANDBOX
+
+// This overlay qualifies physical local devices only.
+CODE_SIGNING_ALLOWED[sdk=iphonesimulator*] = NO
+CODE_SIGNING_REQUIRED[sdk=iphonesimulator*] = NO
+CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -

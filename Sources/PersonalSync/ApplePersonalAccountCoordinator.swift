@@ -53,6 +53,10 @@ enum CrewAppleServiceDevelopment {
     static func apnsSandboxEnabled(environment:[String:String] = ProcessInfo.processInfo.environment,
                                    bundleIdentifier:String? = Bundle.main.bundleIdentifier)->Bool {
         #if DEBUG && PENDINGCREW_APPLE_APNS_SANDBOX && !PENDINGCREW_HOTRELOAD
+        guard bundleIdentifier == "com.pendingname.pendingcrew" else{return false}
+        // Normal Development opening needs no test partition. An explicitly
+        // supplied qualification scope must still be valid; never ignore it.
+        if environment["PENDINGCREW_APPLE_QUALIFICATION_RUN_ID"] == nil { return true }
         return qualificationRunID(environment:environment,bundleIdentifier:bundleIdentifier) != nil
         #else
         return false

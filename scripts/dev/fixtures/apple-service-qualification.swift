@@ -10,7 +10,7 @@ import Foundation
         let expectAPNs=CommandLine.arguments.contains("--expect-apns")
         let normal=CrewAppleServiceDevelopment.cloudConfiguration(environment:[:],bundleIdentifier:bundle)
         precondition((normal != nil)==expectCloud,"Normal opening must not require a qualification launch environment")
-        precondition(!CrewAppleServiceDevelopment.apnsSandboxEnabled(environment:[:],bundleIdentifier:bundle))
+        precondition(CrewAppleServiceDevelopment.apnsSandboxEnabled(environment:[:],bundleIdentifier:bundle)==expectAPNs,"Normal Sandbox opening must not require a qualification launch environment")
         if let normal {
             precondition(normal.containerIdentifier=="iCloud.com.pendingname.pendingcrew")
             precondition(normal.environment == .development)
@@ -28,6 +28,7 @@ import Foundation
         }
         for foreign in [nil,"com.pendingname.pendingcrew.hotreload","com.pendingname.pendingcrew.native-candidate"] {
             precondition(CrewAppleServiceDevelopment.cloudConfiguration(environment:[:],bundleIdentifier:foreign)==nil)
+            precondition(!CrewAppleServiceDevelopment.apnsSandboxEnabled(environment:[:],bundleIdentifier:foreign))
             precondition(CrewAppleServiceDevelopment.qualificationRunID(environment:environment,bundleIdentifier:foreign)==nil)
             precondition(CrewAppleServiceDevelopment.cloudConfiguration(environment:environment,bundleIdentifier:foreign)==nil)
             precondition(!CrewAppleServiceDevelopment.apnsSandboxEnabled(environment:environment,bundleIdentifier:foreign))
@@ -45,6 +46,6 @@ import Foundation
             precondition(other.draftsCollection != cloud.draftsCollection)
             precondition(other.hostsCollection != cloud.hostsCollection)
         }
-        print("PASS explicit cloud=\(expectCloud) apns=\(expectAPNs); missing/invalid/foreign qualification refused; no SDK/account/network action")
+        print("PASS explicit cloud=\(expectCloud) apns=\(expectAPNs); normal opening configured; invalid/foreign qualification refused; no SDK/account/network action")
     }
 }
