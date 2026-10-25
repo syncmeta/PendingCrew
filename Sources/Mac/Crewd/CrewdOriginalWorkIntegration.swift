@@ -86,7 +86,9 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var todoTags: [String: String] = [:]
     var body: some View {
         VStack(spacing:0){
-            #if !os(macOS)
+            #if os(macOS)
+            desktopHeader
+            #else
             sectionHeader
             #endif
             #if os(macOS)
@@ -95,26 +97,23 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
             #endif
         }
-        #if os(macOS)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 10) {
-                    if let toggleSidebar {
-                        Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
-                            .labelStyle(.iconOnly)
-                            .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
-                    }
-                    CrewdGlassWorkspaceTabs(selection: $workspace.originalSection)
-                        .frame(width: 365)
-                    if let filterControl { filterControl }
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                if let searchControl { searchControl }
-            }
-        }
-        #endif
     }
+    #if os(macOS)
+    private var desktopHeader: some View {
+        HStack(spacing: 10) {
+            if let toggleSidebar {
+                Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
+                    .buttonStyle(.plain)
+                    .frame(width: 28, height: 30)
+                    .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
+            }
+            CrewdGlassWorkspaceTabs(selection: $workspace.originalSection).frame(width: 365)
+            if let filterControl { filterControl }
+            Spacer(minLength: 0)
+            if let searchControl { searchControl }
+        }.padding(.horizontal, 14).padding(.vertical, 8)
+    }
+    #endif
     private var sectionHeader:some View {
         VStack(spacing:0){
             HStack(spacing:12){

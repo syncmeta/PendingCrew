@@ -184,9 +184,28 @@ def run_private(args, dd):
         env.update(INJECTION_DIRECTORIES=str(ROOT / 'Sources'), NSUnbufferedIO='YES')
         logs = dd / 'Logs/Build'
         recent = max(logs.glob('*.xcactivitylog'), key=lambda path: path.stat().st_mtime)
+        # Official builtin-compilation fallback locates source.o using this
+        # preference, without filtering its platform. A stale iOS preference
+        # in shared warm DerivedData must not select an iOS object for macOS.
+        object_base = (dd / 'Build/Intermediates.noindex/PendingCrew.build/Debug/'
+                       'PendingCrew.build/Objects-normal' / os.uname().machine)
+        if not object_base.is_dir() or not any(object_base.glob('*.o')):
+            raise SystemExit('Warm macOS object directory is missing; no InjectionNext or App was launched.')
+        previous = {}
+        for key in ('appObjectBase', 'HotReloadingBuildLogsDir'):
+            value = subprocess.run(['defaults', 'read', info['CFBundleIdentifier'], key],
+                                   text=True, capture_output=True)
+            if value.returncode not in (0, 1):
+                raise SystemExit('Could not record InjectionNext configuration; nothing was launched.')
+            previous[key] = value.stdout.rstrip('\n') if value.returncode == 0 else None
+        (runtime / ('injection-tool-config-' + str(time.time_ns()) + '.json')).write_text(
+            json.dumps(dict(domain=info['CFBundleIdentifier'], previous=previous,
+                            processOverrides=dict(appObjectBase=str(object_base),
+                                                  HotReloadingBuildLogsDir=str(recent))), indent=2) + '\n')
         with (runtime / 'tool-run.log').open('ab') as log:
             child = subprocess.Popen([str(tool_exe), '-devicesEnabled', 'NO', '-mcpServer', 'NO',
                                       '-autoLaunchXcode', 'NO', '-hideXcodeAlert', 'YES',
+                                      '-appObjectBase', str(object_base),
                                       '-HotReloadingBuildLogsDir', str(recent)],
                                      env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         time.sleep(1)

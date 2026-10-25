@@ -48,8 +48,8 @@ import Foundation
         runner.installCrewdProjection([run], workspace: workspace)
         func viewOriginal() async {
             runner.openSession(run.runID)
-            try? await Task.sleep(for: .milliseconds(450))
             precondition(runner.selectedRunId == run.runID && workspace.sessionID == "session-a")
+            try? await Task.sleep(for: .milliseconds(450))
         }
         if scenario == "legacy-text" || scenario == "legacy-resume" {
             workspace.originalJournalRequired = true

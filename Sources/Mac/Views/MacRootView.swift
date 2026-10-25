@@ -23,6 +23,7 @@ struct MacThreePaneView: View {
         NavigationSplitView(columnVisibility:$columnVisibility){
             CrewSidebarView().environmentObject(sessionRunner)
                 .navigationSplitViewColumnWidth(min:200,ideal:238,max:310)
+                .toolbar(removing: .sidebarToggle)
         }detail:{
             CrewCenterView().environmentObject(sessionRunner)
                 .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
@@ -36,15 +37,7 @@ struct MacThreePaneView: View {
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
         })
         .environment(\.crewdSidebarCollapsed, columnVisibility == .detailOnly)
-        .toolbar {
-            if crewStore.selectedDetail == nil {
-                ToolbarItem(placement: .navigation) {
-                    Button { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly } label: {
-                        Image(systemName: "sidebar.left")
-                    }.labelStyle(.iconOnly).accessibilityLabel("显示或隐藏边栏")
-                }
-            }
-        }
+        .toolbar(.hidden, for: .windowToolbar)
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
             if model.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace, let new, new != crewStore.pendingCrew?.id {

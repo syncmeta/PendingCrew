@@ -15,6 +15,8 @@ struct CrewCenterView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var crewStore: CrewStore
     @EnvironmentObject private var sessionRunner: CrewSessionRunner
+    @Environment(\.crewdToggleSidebar) private var toggleSidebar
+    @Environment(\.crewdSidebarCollapsed) private var sidebarCollapsed
     /// 「只看 @ 我的消息」（Todo #61 立、#155 改成默认不点亮）。开关钮在 toolbar 上，
     /// 状态喂给 `CrewChatView` 的时间线。**放在这里而不是 chat 里面**：
     /// `CrewChatView` 带 `.id(crewId)`，切 crew 会整个重建 —— 状态放里面就没法从
@@ -43,7 +45,14 @@ struct CrewCenterView: View {
         VStack(spacing: 0) {
             if !hasWorkspaceHeader {
                 VStack(spacing: 0) {
-                    HStack { Spacer(minLength: 0); searchButton }
+                    HStack {
+                        if let toggleSidebar {
+                            Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
+                        }
+                        Spacer(minLength: 0); searchButton
+                    }
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .frame(minHeight: 54)
                     Divider()
@@ -453,6 +462,8 @@ private struct CrewdMessageFilterMenu: View {
                 Button("管理消息分类") { managing = true }
             }
         } label: { Label("消息筛选", systemImage: "line.3.horizontal.decrease") }
+            .tint(.gray)
+            .labelStyle(.titleAndIcon)
             .modifier(CrewdMessageFilterGlass()).fixedSize()
             .sheet(isPresented: $managing) {
                 CrewdFolderEditor(store: resources, drafts: $workspace.resourceDrafts, view: .messages)

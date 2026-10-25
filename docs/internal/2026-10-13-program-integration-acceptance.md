@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-25 原生窗口与恢复模块已实际组合，保存注入修正平台缓存路径
+
+准确35ce新normal后台（Debug/defaultfeatures[]，SHA `b1beb3d2…41454d`）已独验ea0d0698接受，原full478新树8311／witness／schema149与2034完整Git输入通过。实际新App库的11个针对场景由acd12c55独验，涵盖静默选择、明确点击、active／双击去重、切换作用域、拒绝与Unknown；原fixture只把即时选择断言移到点击当刻，不是产品改动，不重复构建Core。不能以旧170组件代替此修复后台，也不将fake协议证明冒真实模型运行。
+
+组合开发窗接入新后台后，普通鼠标切页、侧栏收放、五Tabs／消息筛选／唯一搜索、向上运行环境菜单已实际通过，根亲看展开和菜单原图。原NSToolbar整体overflow的真实失败保留，最终改为遵守顶部安全区的外层VStack首行原生HStack并隐藏系统toolbar；全背景与Sidebar仍铺顶，无额外横线。实际尺寸1138×688，未冒最终900宽全覆盖。新增筛选灰tint尾修随本次源码保存；当前日用包未替换，独立Demo不再开发。
+
+保存热更新的失败另有实证：官方工具曾读取旧Debug-iphoneos appObjectBase，macOS注入错链iOS对象。只在原launcher用官方进程参数固定同一暖DD的macOS Debug对象目录，并保留旧配置；不写全局preferences、不改官方tool字节／删iOS缓存。此前compile／Rebound日志与未挂hook叶View探针界限均保留，最后新参数的同PID可见改变及还原仍待实际验证。所有其它日用／旧版／Demo／未知窗口不由此接管。
+
 ## 2026-10-25 日用发送／点击恢复与精简原生UI整块源码冻结
 
 按人类新合同，明确新Human发送与点击实际session均为恢复意图；打开App、历史加载、重连和纯选择仍不执行，活动／inflight／Unknown不重复。Core普通链与已配置Jev链均只为本次可信新事件实际新入队目标获得资格，旧消息／恢复扫描／关闭／Stop晚回不冒新意图。原Rig真实RED后最小修复，六项受影响准入、真实serve／SQLite／fakeCodex原thread新post恢复，以及FakeJev十项分别通过；不是真实模型验收。Swift明确点击沿既有能力／CAS／权限／scope守卫，错误可见，右键只绑定目标打开控件，不展开即恢复。
