@@ -1,48 +1,39 @@
 #if os(macOS)
 import SwiftUI
 
-/// crew 竖色条 —— 侧栏"头像"位的身份标识（取代 emoji 群像）。
-///
-/// 递归二分构造：本 crew 的颜色占**上半段**，**下半段**整体照搬父 crew 的
-/// 色条（等比压成一半）。于是 DAG 第 N 层的 crew 恰好有 N 段颜色：
-/// 自身 1/2、父 1/4、祖父 1/8……最末两段等高。一眼读出"它是谁 + 它挂在
-/// 谁的谱系下"。
+/// 机组四格标识：上两格为自身，左下为父，右下为祖父。
+/// 缺少已知祖先时沿最近的已知机组颜色回退，根机组四格同色。
 struct CrewColorBar: View {
-    /// 色链：[0] = 本 crew，依次向上直到根。至少 1 个。
+    /// 色链：[0] = 自身，[1] = 已知父，[2] = 已知祖父。
     let colors: [Color]
-    /// 默认宽度的**单一真值** —— 侧栏行在「不画色条」时要留同宽的空位保持左缘
-    /// 对齐（见 `CrewSidebarCrewRow.showsColorBar`），那边不该再抄一个 5 过去。
-    static let defaultWidth: CGFloat = 5
+    /// 侧栏隐藏标识时保留相同宽度，统一行标题的左缘。
+    static let defaultWidth: CGFloat = 32
 
     var width: CGFloat = Self.defaultWidth
     var height: CGFloat = 32
+    private let spacing: CGFloat = 2
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<max(1, colors.count), id: \.self) { i in
-                (colors.indices.contains(i) ? colors[i] : .gray)
-                    .frame(height: segmentHeights[i])
+        let own = colors.first ?? .gray
+        let parent = colors.dropFirst().first ?? own
+        let grandparent = colors.dropFirst(2).first ?? parent
+        VStack(spacing: spacing) {
+            HStack(spacing: spacing) {
+                tile(own)
+                tile(own)
+            }
+            HStack(spacing: spacing) {
+                tile(parent)
+                tile(grandparent)
             }
         }
         .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: width / 2, style: .continuous))
     }
 
-    /// 逐段折半，末段吃掉全部余量（与倒数第二段等高），保证总高恰为 height。
-    private var segmentHeights: [CGFloat] {
-        let n = max(1, colors.count)
-        var out: [CGFloat] = []
-        var remaining = height
-        for i in 0..<n {
-            if i == n - 1 {
-                out.append(remaining)
-            } else {
-                let h = remaining / 2
-                out.append(h)
-                remaining -= h
-            }
-        }
-        return out
+    private func tile(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(color)
+            .frame(width: (width - spacing) / 2, height: (height - spacing) / 2)
     }
 
     // MARK: - 取色 / 色链
@@ -59,19 +50,24 @@ struct CrewColorBar: View {
         return CrewAvatarPalette.softBackground(hue: hue)
     }
 
-    /// 沿「第一父」边向根收集色链（本 crew 在前）。多父 crew 取
-    /// `parentCrewIds` 首个（行内已有分叉图标提示多父）；父不在本组子集时
-    /// 仍取其 id 的颜色，但无法继续上溯。防环 + 封顶 8 层。
-    static func chain(for crew: CrewSummary, crewsById: [String: CrewSummary]) -> [Color] {
-        var colors = [color(forCrewId: crew.id)]
-        var visited: Set<String> = [crew.id]
-        var parentId = crew.parentCrewIds.first
-        while let pid = parentId, !visited.contains(pid), colors.count < 8 {
-            colors.append(color(forCrewId: pid))
-            visited.insert(pid)
-            parentId = crewsById[pid]?.parentCrewIds.first
+    /// 层级行优先使用本行所在的真实父边；扁平行沿既有第一父关系。
+    /// 只读取两代已知节点，不依赖列表位置；悬挂父边和循环不继续上溯。
+    static func chain(
+        for crew: CrewSummary,
+        crewsById: [String: CrewSummary],
+        parentId: String? = nil
+    ) -> [Color] {
+        var ids = [crew.id]
+        let requestedParent = parentId.flatMap { crew.parentCrewIds.contains($0) ? $0 : nil }
+            ?? crew.parentCrewIds.first
+        if let pid = requestedParent, pid != crew.id, let parent = crewsById[pid] {
+            ids.append(pid)
+            if let gid = parent.parentCrewIds.first,
+               !ids.contains(gid), crewsById[gid] != nil {
+                ids.append(gid)
+            }
         }
-        return colors
+        return ids.map(color(forCrewId:))
     }
 }
 #endif

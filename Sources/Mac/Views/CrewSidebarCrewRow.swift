@@ -14,14 +14,14 @@ import SwiftUI
 ///   `CrewTimelineOrdering.lineageLine`）；
 /// - `parentId`：本行这次渲染所处的那条父边（拖拽要摘的就是它）。
 ///
-/// 会话行样式对齐 PendingBot `ConversationListRow`：细竖色条（谱系二分色，见
+/// 会话行样式对齐 PendingBot `ConversationListRow`：四格谱系标识（见
 /// `CrewColorBar`）+ 无衬线-14 标题 + 最近一条消息 + 相对时间。
 ///
 /// **不贴每行「本机/云端」location tag**（#369：层级视图已按 machine 分组；时间流
-/// 视图是跨机器扁平的，机器归属由竖色条 + 血缘行承担）。
+/// 视图是跨机器扁平的，机器归属由四格标识 + 血缘行承担）。
 struct CrewSidebarCrewRow: View {
     let crew: CrewSummary
-    /// 算竖色条色链用（本组/全量 crew 的 id → crew）。
+    /// 算四格谱系色链用（本组/全量 crew 的 id → crew）。
     let crewsById: [String: CrewSummary]
     /// 名字后面那行黄字标注（根 crew 标题）。整表一次算好传进来，别每行重算。
     let rootTitles: [String]
@@ -51,19 +51,8 @@ struct CrewSidebarCrewRow: View {
     /// 分开**的，不是靠一句提示文案区分：改组织树只有层级视图那一条路。
     var allowsReparentDrag: Bool = true
 
-    /// 画不画左边那道谱系竖色条（连同浮在它右上角的状态点）。默认画 —— 三个视图里
-    /// 的普通行一个字不受影响。
-    ///
-    /// **总机组那一行传 `false`**。人类 2026-09-12 原话：「总机组和普通机组的样式要
-    /// 一样 包括sidebar里的 颜色条可以不使用」。色条画的是**谱系二分色**（沿父链算
-    /// 出来的），而总机组按设计没有也永远不会有父边，那道条对它本来就没有含义。
-    ///
-    /// **传 false 时色条的位置留空、不塌缩** —— 标题因此仍与其它行左缘对齐，
-    /// 那才是「样式一样」。真要让它吃掉那 3pt，改这里一行。
-    ///
-    /// ⚠️ **状态点挂在色条上，所以它跟着一起没了。** 对总机组这是安全的：那个点的
-    /// 两个信号源（本 crew 的人类 Todo、沿父边聚合的后代 Todo）对它结构上都取不到值
-    /// —— 它没有 session 去提 Todo，也没有存下来的子边可聚合。**别把这条推广到普通行。**
+    /// 是否显示四格谱系标识及状态点；旧总机长入口可隐藏，crewd 导航统一显示。
+    /// 隐藏标识时保留同宽标识槽，让标题左缘与其它机组行对齐；状态点随标识隐藏。
     var showsColorBar: Bool = true
 
     /// 挂不挂右键菜单。默认挂。
@@ -125,8 +114,8 @@ struct CrewSidebarCrewRow: View {
 
     private var rowCore: some View {
         HStack(alignment: .top, spacing: 6) {
-            // 原层级列表保留三角和色条槽；crewd 的扁平导航不占透明旧槽，
-            // 把窄侧栏的宽度留给真实头像和机组名称。
+            // 原层级列表保留三角和标识槽；crewd 的扁平导航不占透明旧槽，
+            // 把窄侧栏的宽度留给机组标识和名称。
             if let expansion {
                 Button { expansion.wrappedValue.toggle() } label: {
                     Image(systemName: "chevron.right")
@@ -142,8 +131,8 @@ struct CrewSidebarCrewRow: View {
             }
 
             if showsColorBar || crewStore.usesCrewdAuthority {
-                CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById))
-                    // 状态点浮在色条右上角（Todo #71/#73）：红=错误、黄=本 crew 或
+                CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById, parentId: parentId))
+                    // 状态点浮在四格标识右上角（Todo #71/#73）：红=错误、黄=本 crew 或
                     // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
                     .overlay(alignment: .topTrailing) {
                         CrewStatusDotView(
