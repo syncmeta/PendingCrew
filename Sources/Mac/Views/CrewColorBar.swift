@@ -8,8 +8,8 @@ struct CrewColorBar: View {
     let colors: [Color]
     /// 侧栏隐藏标识时保留相同宽度，统一行标题的左缘。
     static var defaultWidth: CGFloat { side }
-    private static var side: CGFloat { 14 }
-    private static var spacing: CGFloat { 4 }
+    private static var side: CGFloat { 12 }
+    private static var spacing: CGFloat { 3 }
 
     var body: some View {
         let own = colors.first ?? .gray
@@ -29,7 +29,7 @@ struct CrewColorBar: View {
     }
 
     private func tile(_ color: Color) -> some View {
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
+        RoundedRectangle(cornerRadius: 2.25, style: .continuous)
             .fill(color)
             .frame(width: (Self.side - Self.spacing) / 2, height: (Self.side - Self.spacing) / 2)
     }
