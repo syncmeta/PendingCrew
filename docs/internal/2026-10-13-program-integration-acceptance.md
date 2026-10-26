@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 计划页读取生命周期四源接受
+
+独立质量已接受 CrewdWorkStore、CrewdWorkPanels 和原 Store fixture／runner 四源：selectCrew／invalidate 清读取资格，原 generation、refreshID、sourceEpoch 守卫全部通过后才标 hasLoaded；进入面板 ensureLoaded 同范围共享，面板取消不取消 Store 所有的读；未读不渲染旧行或假空态。作者 `/private/tmp/pcw-work-store.J9SNm8` 原 seam 终态 0，独立直接运行其实际已编译程序也为 0；独立运行未传 socket，只覆盖内存 Store，作者原 NDJSON 证据复用，不冒重复 socket 验证。原 runner 缺 LocalIPC 依赖的失败保留，仅修完整真实源输入，不复制产品逻辑。
+
+当前正常 0f56 包的实际 UI 已见非空人／AI 待办、计划与非消息筛选隐藏；窄窗／长分类最后刷新因系统窗口工具失效未取得，不宣称通过。新修复尚未构建进 App。人类已明确授权本轮替换日用版并要求 Joy 连接指导，作为下一交付动作执行；不因此新增真实模型任务、迁移旧数据或扩大服务器账户权限。
+
 ## 2026-10-26 Linux 安装前提与包策略完整模块接受
 
 独验 `fba64c72e68e4e3116502100532cf45689ecc4fa5166a804067006ec29c20c4c` 接受 installer、packager、原测试和部署 README 四源。原旧实现的 Codex0.164 拒绝／首错漏查 Claude RED 保留；新实现 6 个受影响函数 GREEN，包含两工具失败组合、退出 0 但未知子命令帮助拒绝、超时、策略篡改拒绝、非 root 服务身份及原 unit 环境。Codex 检查只代表安装前提，不代表完整协议或模型资格；Claude 真实精确版本合同仍在。原管理 socket、配对、CAS、lease、原 UUID Unknown 查询路径未改。退出后 stdout 长度检查不冒流式内存限额。

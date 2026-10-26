@@ -50,6 +50,10 @@ struct CrewdWorkPanels: View {
             if let error=resources.failure {Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
             if store.loading {ProgressView().controlSize(.small)}
+            if !store.hasLoaded && !store.loading && store.lastFailure == nil {
+                Text("尚未读取当前机组事项").font(CrewdType.label).foregroundStyle(.secondary)
+            }
+            if store.hasLoaded {
             ScrollView {
                 LazyVStack(alignment:.leading,spacing:10) {
                     if progressOnly && !compact && !visibleProgress.isEmpty {
@@ -97,7 +101,9 @@ struct CrewdWorkPanels: View {
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }
+            }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
+        .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }

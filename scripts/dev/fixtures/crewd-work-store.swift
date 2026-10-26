@@ -16,12 +16,16 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
     var frozen = false
     var delayNext = false
     var held: CheckedContinuation<CrewdValue, Error>?
+    var readError: CrewdClientError?
+    var emptyPlans = false
     func call(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         calls.append((method,params))
         if delayNext && method == "work.list" { delayNext = false; return try await withCheckedThrowingContinuation { held = $0 } }
         let crew = params["crewId"].string ?? "a"
         switch method {
         case "work.list":
+            if let readError { throw readError }
+            if emptyPlans { return .object(["items":.array([]),"nextAfter":.null]) }
             if params["after"] == .null { return .object(["items":.array([plan(crew:crew, revision: revisionAdvance ? "9007199254740995" : changed ? "9007199254740994" : "9007199254740993",status:changed ? "done" : "future_status")]),"nextAfter":.string("W9007199254740993")]) }
             return .object(["items":.array([plan("W9007199254740994",crew:crew)]),"nextAfter":.null])
         case "todo.list":
@@ -48,6 +52,57 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
 }
 @main struct Test {
     @MainActor static func main() async throws {
+        let reads=Fixture(), ledger=CrewdWorkStore(call:{try await reads.call($0,$1)})
+        ledger.selectCrew("a")
+        precondition(!ledger.hasLoaded && !ledger.loading && ledger.lastFailure == nil,
+                     "a cleared ledger has not established a real empty result")
+        await ledger.ensureLoaded()
+        precondition(reads.calls.isEmpty,"wait for connection capabilities before reading")
+        ledger.configureCapabilities(["work"])
+        reads.delayNext=true
+        let firstRead=Task {await ledger.ensureLoaded()}
+        while reads.held == nil {await Task.yield()}
+        let sharingRead=Task {await ledger.ensureLoaded()}
+        await Task.yield()
+        precondition(reads.calls.count == 1 && ledger.loading && !ledger.hasLoaded,
+                     "another panel shares the current scope read instead of duplicating it")
+        let originalScope=ledger.readScope
+        ledger.selectCrew("b")
+        precondition(ledger.readScope != originalScope && !ledger.hasLoaded)
+        reads.held!.resume(returning:.object(["items":.array([plan(crew:"a")]),"nextAfter":.null]));reads.held=nil
+        await firstRead.value
+        await sharingRead.value
+        precondition(!ledger.hasLoaded && ledger.planIDs.isEmpty,"late previous crew cannot qualify the new scope")
+        await ledger.ensureLoaded()
+        precondition(ledger.hasLoaded && ledger.progress.allSatisfy{$0.crew == "b"})
+        let loadedCalls=reads.calls.count
+        await ledger.ensureLoaded()
+        precondition(reads.calls.count == loadedCalls,"switching ledger panels reuses the loaded scope")
+        ledger.invalidateConnection();ledger.configureCapabilities(["work"]);reads.delayNext=true
+        let disappearingPanel=Task {await ledger.ensureLoaded()}
+        while reads.held == nil {await Task.yield()}
+        disappearingPanel.cancel()
+        reads.held!.resume(returning:.object(["items":.array([]),"nextAfter":.null]));reads.held=nil
+        await disappearingPanel.value
+        precondition(ledger.hasLoaded,"leaving one panel does not cancel the store's shared scope read")
+        let connectedScope=ledger.readScope
+        ledger.invalidateConnection()
+        precondition(!ledger.hasLoaded && ledger.readScope != connectedScope)
+        ledger.configureCapabilities(["work"])
+        reads.delayNext=true
+        let disconnectedRead=Task {await ledger.ensureLoaded()}
+        while reads.held == nil {await Task.yield()}
+        ledger.invalidateConnection()
+        reads.held!.resume(returning:.object(["items":.array([]),"nextAfter":.null]));reads.held=nil
+        await disconnectedRead.value
+        precondition(!ledger.hasLoaded,"a reply from the old connection cannot qualify the reconnect")
+        ledger.configureCapabilities(["work"]);reads.readError=CrewdClientError(message:"read denied")
+        await ledger.ensureLoaded()
+        precondition(!ledger.hasLoaded && ledger.lastFailure?.message == "read denied","failed reads remain visibly unqualified")
+        reads.readError=nil;reads.emptyPlans=true
+        await ledger.ensureLoaded()
+        precondition(ledger.hasLoaded && ledger.progress.isEmpty && ledger.lastFailure == nil,
+                     "only a complete successful empty read can show the empty plan state")
         let transferID=CrewdWorkID("W42",kind:.plan)!
         guard case .object(var full)=plan("W42",full:true), case .object(var short)=plan("W42") else {preconditionFailure()}
         full["pendingTransfer"] = .object(["to":.string("target"),"requestSeq":.string("99"),"note":.string("on-demand full handoff"),"requestedBy":.string("owner")])
@@ -135,6 +190,6 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
             catch let e as CrewdClientError {precondition(e.code == -32009 && e.refusal == "work.revision_conflict" && e.currentWork["revision"] == .string("18446744073709551615") && e.data["unknown"] == .bool(true))}
             c.disconnect()
         }
-        print("PASS: organization projection, pagination, global identities, summary/detail, CAS wire, no replay, scoped refresh and block contract")
+        print("PASS: scoped initial read/reuse/cancellation/reconnect/empty qualification, organization projection, pagination, global identities, summary/detail, CAS wire, no replay and block contract")
     }
 }

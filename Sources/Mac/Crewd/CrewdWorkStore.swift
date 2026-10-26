@@ -69,6 +69,8 @@ final class CrewdWorkStore: ObservableObject {
     @Published private(set) var requirementIDs: [CrewdWorkID] = []
     @Published private(set) var lastFailure: CrewdClientError?
     @Published private(set) var loading = false
+    @Published private(set) var hasLoaded = false
+    @Published private(set) var readScope = UUID()
     @Published private(set) var capabilities:Set<String>=[]
     private let call: Call
     private var generation = UUID()
@@ -76,6 +78,7 @@ final class CrewdWorkStore: ObservableObject {
     private var requirementEpoch = UUID()
     private var activeMutations = 0
     private var pendingDetails: [CrewdWorkID: UUID] = [:]
+    private var ensureTask: Task<Void,Never>?
 
     init(call: @escaping Call) { self.call = call }
     func configureCapabilities(_ value:Set<String>) {capabilities=value}
@@ -87,13 +90,34 @@ final class CrewdWorkStore: ObservableObject {
     }
     func selectCrew(_ crew: String) {
         guard selectedCrew != crew else { return }
+        ensureTask?.cancel(); ensureTask = nil
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
         selectedCrew = crew; planIDs = []; requirementIDs = []; lastFailure = nil
+        hasLoaded = false; readScope = UUID()
     }
     /// Stops old reads. Reconnect reconciles by reading; never resends a mutation.
     func invalidateConnection() {
+        ensureTask?.cancel(); ensureTask = nil
         capabilities=[]
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
+        hasLoaded = false; readScope = UUID()
+    }
+    /// A mounted ledger reads once per crew/connection, sharing any read already
+    /// in flight. Explicit refresh and successful mutations still reconcile normally.
+    func ensureLoaded() async {
+        guard !selectedCrew.isEmpty, !capabilities.isEmpty, !hasLoaded else { return }
+        if let ensureTask { await ensureTask.value; return }
+        guard !loading else { return }
+        let scope = readScope
+        // The shared read belongs to the store, not to a panel that may disappear
+        // while another panel for this same scope is entering.
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do { try await self.refresh() } catch { /* refresh retains current-scope failures. */ }
+            if self.readScope == scope { self.ensureTask = nil }
+        }
+        ensureTask = task
+        await task.value
     }
     private func check(_ token: UUID, _ refresh: UUID? = nil) throws {
         guard token == generation, !Task.isCancelled, refresh == nil || refresh == refreshID else { throw CancellationError() }
@@ -269,6 +293,7 @@ final class CrewdWorkStore: ObservableObject {
                 requirements[id] = next
             }
             planIDs = rows.map(\.id); requirementIDs = sources.map { $0.0 }; humanTasks = humans
+            hasLoaded = true
         } catch {
             if token == generation && refreshID == current && !(error is CancellationError) { lastFailure = failure(error) }
             throw error
