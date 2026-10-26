@@ -1,5 +1,11 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-26 Claude新Human恢复模块冻结，Joy远程试用进入执行准备
+
+五源受管Claude恢复模块由独验 `cc1a7a6e…761e2c` 接受。可信本轮Human新提交才获得精确原UUID恢复意图，无启动正文；原wake/message的精确截止边界保本次新消息、旧Unknown不回放。异步仲裁按真正目标依赖处理逆序，独立目标不等慢仲裁；单目标资格明确拒绝不吞同消息的其他合法目标，真实数据库错误仍报错。原真实Core/fake PTY RED及最终10个不同受影响函数通过证据保留，最后单点修复只补两项delta、不重原9项。严格Clippy遇未改proto六项基线告警失败，限定目标advisory为0，不冒严格lint全过。完整原件在 `claude-fresh-human-resume-20261026/` 和其revision-2；未调用真实Claude、未改变公共schema。下一步准确提交后一次新normal及客户端组合，旧cc316产物不含此修复。
+
+人类新明确要求在Joy VPS运行后台、本机作为前端，且Joy Codex已登录。实际SSH别名为 `root@154.12.95.46:22`，不是旧目标154.36；只读核实Debian13.7/x86_64/glibc2.41、41GB空闲、Codex0.164.0已登录ChatGPT，无crewd。现PendingNet和Docker服务保持。首轮标准Core临时serve＋SSH隧道，使用已独验cc316 Linux产物和正常Mac客户端，在全新测试目录完成唯一配对、最小真实Codex任务、回执及远端文件读回、停工和静默重开；完整准备在 `/private/tmp/pendingcrew-joy-vps-codex-20261026/PREPARATION.json`。其正式installer原资格为Codex0.163/Claude2.1.301及非root服务用户，本次不放宽、降级、搬凭据或冒正式安装通过；Core自身若拒绝版本就停止。新Joy任务不重试此前被拒的本机sameCore私域动作。
+
 ## 2026-10-26 去除机组标识及四Tab精修，Claude恢复模块并行收口
 
 人类最终取消全部机组颜色标识；此前1eeac47a的小圆格效果不再是最终设计。六源精修60fcf8c5经81406f33源审、唯一暖构建86832 exit0、416输入前后相同后显示于稳定私窗72985/Core72999。实际四Tab普通点击、机组无标识、非空AI待办、人/计划空态已见；28152b89文档布局修正同PID注入后宽窗横排实际通过。316c92a8只在消息页显示筛选的源码已保存，generic视图热刷新尚未可见，不冒完整最新源运行通过；窄窗回落、长分类名和非空人/计划仍未实测。图和边界在 `/private/tmp/pendingcrew-four-tabs-refinement-20261026/RUNTIME-PROGRESS.json`。普通日用c634保持。

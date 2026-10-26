@@ -29,7 +29,7 @@
 //! 「每一下之前回读屏幕、框换了就停手」都在执行器里（T10d），编排层**不 sleep**——派生任务只等它的结果，结果以
 //! `Input::WriteDone` 回来，队列才往下走。没有派生任务抢锁，先后不靠运行时的调度。
 use super::notify::{Key, Kind, Notifier, WINDOW_MS};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -655,6 +655,28 @@ pub struct Inflight {
     pub batch: Batch,
 }
 
+/// One current-run Human cause, never task text or durable retry authority.
+#[derive(Clone)]
+pub(crate) struct HumanResumeIntent {
+    pub message: crewd_wake::MessageRef,
+    pub wake_id: i64,
+    pub cut: ManagedResumeCut,
+}
+
+/// Private launch input; a missing cut retains explicit resume MAX semantics.
+struct ManagedResumeLaunch {
+    original_id: String,
+    cut: Option<ManagedResumeCut>,
+}
+
+/// Pending arbitration delays only plans with overlapping possible targets.
+pub(crate) struct HumanMessagePlan {
+    pub msg: MsgFacts,
+    pub ctx: ChannelCtx,
+    pub answer: Option<Vec<String>>,
+    pub waiting: bool,
+}
+
 pub struct Live {
     /// This physical managed resume excludes old pending wakes without settling them.
     pub managed_resume_wake_cut: Option<ManagedResumeCut>,
@@ -820,6 +842,11 @@ pub struct Core<P: Port> {
     pub(crate) held: BTreeSet<String>,
     /// `boot` 结束时队列里最大的唤醒 id：比它新的人类消息唤醒 = 询问开出之后人 @ 的（C4）。
     pub(crate) held_watermark: i64,
+    pub(crate) managed_human_boot_floor: i64,
+    pub(crate) managed_human_stop_floors: HashMap<String, i64>,
+    pub(crate) seen_human_messages: HashSet<i64>,
+    pub(crate) human_message_plans: BTreeMap<i64, HumanMessagePlan>,
+    pub(crate) human_resume_intents: HashMap<String, HumanResumeIntent>,
     /// `boot` 开的那条重启询问（M3a `restart::open` 的 id）：协作事件落后（Lagged）时据它从库里重推「答了没有」。
     pub(crate) restart_prompt: Option<i64>,
     pub(crate) breaker: LoopBreaker,
@@ -892,6 +919,7 @@ impl<P: Port> Core<P> {
         let loops = cfg.loops;
         let seed = cfg.jitter_seed.unwrap_or(clock.now().0 as u64);
         let jitter = queue::Jitter::new(seed, cfg.retry_jitter);
+        let managed_human_boot_floor = port.managed_human_message_floor().await?;
         Ok(Self {
             notifier: Notifier::new(port.clone()),
             port,
@@ -914,6 +942,11 @@ impl<P: Port> Core<P> {
             quota_blocked: HashMap::new(),
             held: BTreeSet::new(),
             held_watermark: 0,
+            managed_human_boot_floor,
+            managed_human_stop_floors: HashMap::new(),
+            seen_human_messages: HashSet::new(),
+            human_message_plans: BTreeMap::new(),
+            human_resume_intents: HashMap::new(),
             restart_prompt: None,
             breaker: LoopBreaker::new(loops, latches),
             timers: BTreeSet::new(),
@@ -1029,7 +1062,7 @@ impl<P: Port> Core<P> {
             }
             Input::Collab(f) => self.on_collab(f).await,
             Input::Arbitrated { msg, ctx, answer } => {
-                self.enqueue_targets(&msg, &ctx, answer.as_deref()).await
+                self.on_arbitrated(msg, ctx, answer).await
             }
             Input::Progress { session } => {
                 self.breaker.progress(&session);
@@ -1464,6 +1497,15 @@ impl<P: Port> Core<P> {
         session: &str,
         origin: Origin,
     ) -> Result<(), ControlError> {
+        self.resume_with_cut(session, origin, None).await
+    }
+
+    pub(crate) async fn resume_with_cut(
+        &mut self,
+        session: &str,
+        origin: Origin,
+        human_cut: Option<ManagedResumeCut>,
+    ) -> Result<(), ControlError> {
         if self.shutting_down {
             return Err(ControlError::ShuttingDown);
         }
@@ -1509,15 +1551,43 @@ impl<P: Port> Core<P> {
         }
         self.check_cap(origin)?;
         if exec.requires_exact_managed_resume() {
-            if origin != Origin::Human || !row.agent_session_id.as_deref().is_some_and(crewd_exec::driver::exact_managed_id) {
-                return Err(ControlError::Invalid(Refusal::new(Code::ResourceInvalid).arg("field", "claude.exactManagedResumeRequired")));
+            if origin != Origin::Human
+                || !row
+                    .agent_session_id
+                    .as_deref()
+                    .is_some_and(crewd_exec::driver::exact_managed_id)
+            {
+                return Err(ControlError::Invalid(
+                    Refusal::new(Code::ResourceInvalid)
+                        .arg("field", "claude.exactManagedResumeRequired"),
+                ));
             }
-            let expected = row.agent_session_id.clone();
+            let expected = row
+                .agent_session_id
+                .clone()
+                .map(|original_id| ManagedResumeLaunch {
+                    original_id,
+                    cut: human_cut,
+                });
             self.held.remove(session);
-            if let Some(a)=&self.cfg.admission {a.allow(session);}
-            let batch=Batch {session:row.id.clone(),..Default::default()};
-            let result=self.launch_carrying_inner(row,exec,None,batch,None,expected).await.map(|_|()).map_err(ControlError::from_port);
-            if result.is_err(){if let Some(a)=&self.cfg.admission{a.revoke(session);}self.held.insert(session.to_owned());}
+            if let Some(a) = &self.cfg.admission {
+                a.allow(session);
+            }
+            let batch = Batch {
+                session: row.id.clone(),
+                ..Default::default()
+            };
+            let result = self
+                .launch_carrying_inner(row, exec, None, batch, None, expected)
+                .await
+                .map(|_| ())
+                .map_err(ControlError::from_port);
+            if result.is_err() {
+                if let Some(a) = &self.cfg.admission {
+                    a.revoke(session);
+                }
+                self.held.insert(session.to_owned());
+            }
             return result;
         }
         // 单个恢复一个等人答复的 session（§22.7 Q1）：上次停在干活中途的，开场补一句「被打断」；被休眠停下的换成
@@ -1547,6 +1617,11 @@ impl<P: Port> Core<P> {
         {
             return Err(ControlError::NotFound(session.into()));
         }
+        let message_floor = self.port.managed_human_message_floor().await
+            .map_err(ControlError::from_port)?
+            .max(self.seen_human_messages.iter().copied().max().unwrap_or(self.managed_human_boot_floor));
+        self.managed_human_stop_floors.insert(session.to_owned(), message_floor);
+        self.human_resume_intents.remove(session);
         let pending = self
             .due
             .touch(&self.port)
@@ -1946,9 +2021,20 @@ impl<P: Port> Core<P> {
         exec: Arc<dyn Executor>,
         text: Option<String>,
         batch: Batch,
-        initial_inputs:Option<crewd_exec::codex::input::Submission>,
-    ) -> anyhow::Result<bool> {self.launch_carrying_inner(row,exec,text,batch,initial_inputs,None).await}
-    async fn launch_carrying_inner(&mut self,row:SessionRow,exec:Arc<dyn Executor>,text:Option<String>,mut batch:Batch,initial_inputs:Option<crewd_exec::codex::input::Submission>,managed_resume_id:Option<String>)->anyhow::Result<bool>{
+        initial_inputs: Option<crewd_exec::codex::input::Submission>,
+    ) -> anyhow::Result<bool> {
+        self.launch_carrying_inner(row, exec, text, batch, initial_inputs, None)
+            .await
+    }
+    async fn launch_carrying_inner(
+        &mut self,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        text: Option<String>,
+        mut batch: Batch,
+        initial_inputs: Option<crewd_exec::codex::input::Submission>,
+        managed_resume: Option<ManagedResumeLaunch>,
+    ) -> anyhow::Result<bool> {
         if self
             .cfg
             .admission
@@ -1963,7 +2049,16 @@ impl<P: Port> Core<P> {
         if self.live.contains_key(&row.id) || self.starting.contains_key(&row.id) {
             return Err(ControlError::AlreadyRunning(row.id).into());
         }
-        let managed_resume_wake_cut=if managed_resume_id.is_some(){Some(self.port.managed_resume_cut(&row.id).await?)}else{None};
+        let (managed_resume_id, managed_resume_wake_cut) = match managed_resume {
+            Some(resume) => {
+                let cut = match resume.cut {
+                    Some(cut) => cut,
+                    None => self.port.managed_resume_cut(&row.id).await?,
+                };
+                (Some(resume.original_id), Some(cut))
+            }
+            None => (None, None),
+        };
         self.retry_terminal(&row.id).await?;
         self.check_launch(&exec, &row.crew_id, &row.executor)?;
         let now = self.now();
@@ -2481,9 +2576,13 @@ impl<P: Port> Core<P> {
     /// 编排自己入队（规划、恢复、换机长、额度、IdleHook……）：入了就发一条 `wake.changed`（S54：客户端看得到「排上了」）。
     /// 返回入没入（撞了去重 / 机组已移除 = false）。
     pub(crate) async fn enqueue(&self, w: NewWake) -> anyhow::Result<bool> {
+        Ok(self.enqueue_with_id(w).await?.is_some())
+    }
+
+    pub(crate) async fn enqueue_with_id(&self, w: NewWake) -> anyhow::Result<Option<i64>> {
         let session = w.session.clone();
         let Some(id) = self.due.touch(&self.port).enqueue(w.clone()).await? else {
-            return Ok(false);
+            return Ok(None);
         };
         let row = QueuedWake {
             id,
@@ -2501,7 +2600,7 @@ impl<P: Port> Core<P> {
             last_error: None,
         };
         self.port.publish(wake_changed(&session, [&row]));
-        Ok(true)
+        Ok(Some(id))
     }
 
     /// Give-ups of every priority join a ten-minute crew window; count each given-up wake once.

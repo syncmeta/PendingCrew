@@ -169,7 +169,20 @@ impl<P: Port> Core<P> {
         {
             return Ok(());
         }
-        if plan::needs_arbiter(&msg, &ctx, now) {
+        let arbiter_needed = plan::needs_arbiter(&msg, &ctx, now);
+        let trusted_human = msg.sender == Sender::Human
+            && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
+            && msg.at.seq > self.managed_human_boot_floor;
+        if trusted_human {
+            if !self.seen_human_messages.insert(msg.at.seq) { return Ok(()); }
+            self.human_message_plans.insert(msg.at.seq, super::core::HumanMessagePlan {
+                msg: msg.clone(),
+                ctx: ctx.clone(),
+                answer: None,
+                waiting: arbiter_needed,
+            });
+        }
+        if arbiter_needed {
             // Jev 要联网：放到派生任务里问，答案（或超时）以 `Input::Arbitrated` 回来，不卡 actor。
             let (arbiter, tx, limit) = (
                 self.hooks.arbiter.clone(),
@@ -178,23 +191,88 @@ impl<P: Port> Core<P> {
             );
             tokio::spawn(async move {
                 let q = ArbiterQuestion {
-                    message: msg,
+                    message: msg.clone(),
                     text,
-                    ctx,
+                    ctx: ctx.clone(),
                 };
-                let answer = tokio::time::timeout(limit, arbiter.wake_set(&q))
-                    .await
-                    .ok()
-                    .flatten();
-                let _ = tx.send(Input::Arbitrated {
-                    msg: q.message,
-                    ctx: q.ctx,
-                    answer,
-                });
+                // A failed hook must release the same bounded planning wait,
+                // rather than stranding later messages for this target.
+                let mut worker = tokio::spawn(async move { arbiter.wake_set(&q).await });
+                let answer = match tokio::time::timeout(limit, &mut worker).await {
+                    Ok(Ok(answer)) => answer,
+                    Ok(Err(_)) => None,
+                    Err(_) => {
+                        worker.abort();
+                        None
+                    }
+                };
+                let _ = tx.send(Input::Arbitrated { msg, ctx, answer });
             });
             return Ok(());
         }
-        self.enqueue_targets(&msg, &ctx, None).await
+        if trusted_human {
+            self.drain_human_plans().await
+        } else {
+            self.enqueue_targets(&msg, &ctx, None).await
+        }
+    }
+
+    pub(crate) async fn on_arbitrated(
+        &mut self,
+        msg: MsgFacts,
+        ctx: ChannelCtx,
+        answer: Option<Vec<String>>,
+    ) -> anyhow::Result<()> {
+        if let Some(pending) = self.human_message_plans.get_mut(&msg.at.seq) {
+            if pending.msg.id != msg.id || pending.msg.at != msg.at {
+                anyhow::bail!("Human arbitration source changed");
+            }
+            pending.answer = answer;
+            pending.waiting = false;
+            return self.drain_human_plans().await;
+        }
+        if self.seen_human_messages.contains(&msg.at.seq) {
+            return Ok(());
+        }
+        self.enqueue_targets(&msg, &ctx, answer.as_deref()).await
+    }
+
+    async fn drain_human_plans(&mut self) -> anyhow::Result<()> {
+        loop {
+            // Only an earlier plan that can reach the same target is a
+            // dependency. Unrelated crews and direct recipients keep moving.
+            let mut waiting_targets = BTreeSet::new();
+            let mut ready = None;
+            for (&seq, plan) in &self.human_message_plans {
+                let targets: BTreeSet<String> = if plan.waiting {
+                    plan.ctx.session_members.iter().cloned().collect()
+                } else {
+                    plan::plan(&plan.msg, &plan.ctx, plan.answer.as_deref(), self.now())
+                        .into_iter()
+                        .map(|target| target.session)
+                        .collect()
+                };
+                if !plan.waiting && targets.is_disjoint(&waiting_targets) {
+                    ready = Some(seq);
+                    break;
+                }
+                waiting_targets.extend(targets);
+            }
+            let Some(seq) = ready else { break };
+            let plan = self
+                .human_message_plans
+                .remove(&seq)
+                .expect("current Human plan");
+            if let Err(error) = self
+                .enqueue_targets_with_intent(&plan.msg, &plan.ctx, plan.answer.as_deref(), true)
+                .await
+            {
+                eprintln!(
+                    "crewd: trusted Human planning failed; original message retained: {error:#}"
+                );
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn enqueue_targets(
@@ -202,6 +280,17 @@ impl<P: Port> Core<P> {
         msg: &MsgFacts,
         ctx: &ChannelCtx,
         answer: Option<&[String]>,
+    ) -> anyhow::Result<()> {
+        self.enqueue_targets_with_intent(msg, ctx, answer, false)
+            .await
+    }
+
+    async fn enqueue_targets_with_intent(
+        &mut self,
+        msg: &MsgFacts,
+        ctx: &ChannelCtx,
+        answer: Option<&[String]>,
+        trusted_human: bool,
     ) -> anyhow::Result<()> {
         let now = self.now();
         let targets = plan::plan(msg, ctx, answer, now);
@@ -224,6 +313,16 @@ impl<P: Port> Core<P> {
         // 先全部入队、再逐个试投（评审 (3)）：一个目标投递出错不能让后面的目标连唤醒都没有。
         let mut fresh = Vec::new();
         for t in targets {
+            if trusted_human
+                && msg.at.seq
+                    <= self
+                        .managed_human_stop_floors
+                        .get(&t.session)
+                        .copied()
+                        .unwrap_or(self.managed_human_boot_floor)
+            {
+                continue; // A late callback cannot turn pre-Stop input into a new intent.
+            }
             // Current admitted Agent work may delegate along the existing planner/ACL
             // chain. A fresh Human send admits only its newly committed explicit
             // targets below; old/backlog events and duplicate queue rows do not.
@@ -241,13 +340,55 @@ impl<P: Port> Core<P> {
                 note: None,
                 origin: message_origin(msg, &t.session),
             };
-            if self.enqueue(w).await? {
+            if let Some(wake_id) = self.enqueue_with_id(w).await? {
                 if let (Some(a), Sender::Human) = (&self.cfg.admission, &msg.sender) {
                     if msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
-                        && msg.created_at.0 >= a.started_at && t.priority == Priority::Human
+                        && msg.created_at.0 >= a.started_at
+                        && t.priority == Priority::Human
+                        && (!trusted_human
+                            || msg.at.seq
+                                > self
+                                    .managed_human_stop_floors
+                                    .get(&t.session)
+                                    .copied()
+                                    .unwrap_or(self.managed_human_boot_floor))
                     {
                         a.allow(&t.session);
                     }
+                }
+                if trusted_human
+                    && t.priority == Priority::Human
+                    && msg.at.seq
+                        > self
+                            .managed_human_stop_floors
+                            .get(&t.session)
+                            .copied()
+                            .unwrap_or(self.managed_human_boot_floor)
+                    && !self.live.contains_key(&t.session)
+                    && !self.starting.contains_key(&t.session)
+                    && let Some(row) = self.port.session(&t.session).await?
+                    && row.agent_session_id.is_some()
+                    && self
+                        .execs
+                        .get(&row.executor)
+                        .is_ok_and(|exec| exec.requires_exact_managed_resume())
+                {
+                    let Some(cut) = self
+                        .port
+                        .managed_human_resume_cut(&t.session, &msg.at, wake_id)
+                        .await?
+                    else {
+                        // This target lost its exact cause qualification. Keep
+                        // its wake untouched and continue independent targets.
+                        continue;
+                    };
+                    self.human_resume_intents
+                        .entry(t.session.clone())
+                        .or_insert(super::core::HumanResumeIntent {
+                            message: msg.at.clone(),
+                            wake_id,
+                            cut,
+                        });
                 }
                 fresh.push(t.session);
             }
@@ -282,6 +423,45 @@ impl<P: Port> Core<P> {
             return Ok(false);
         }
         self.retry_terminal(session).await?;
+        if !self.live.contains_key(session)
+            && !self.starting.contains_key(session)
+            && let Some(intent) = self.human_resume_intents.get(session).cloned()
+        {
+            match self
+                .gate
+                .check(self.live.len() + self.starting.len(), true, self.now())
+            {
+                Gate::Go => {}
+                Gate::WaitUntil(until) => {
+                    self.timers.insert(until);
+                    return Ok(false);
+                }
+                Gate::AtCap => return Ok(false),
+            }
+            // Capacity may defer a new intent, but reaching the launch boundary
+            // consumes it once. A failed/Unknown launch is never retried by tick.
+            self.human_resume_intents.remove(session);
+            let Some(cut) = self
+                .port
+                .managed_human_resume_cut(session, &intent.message, intent.wake_id)
+                .await?
+            else {
+                return Ok(false);
+            };
+            anyhow::ensure!(cut == intent.cut, "trusted Human resume boundary changed");
+            return match self
+                .resume_with_cut(session, super::core::Origin::Human, Some(cut))
+                .await
+            {
+                Ok(()) => Ok(true),
+                Err(error) => {
+                    eprintln!(
+                        "crewd: strict Human Claude resume refused; original wake retained: {error}"
+                    );
+                    Ok(false)
+                }
+            };
+        }
         let now = self.now();
         // 每轮可能把「已注入」的消息类唤醒直接记 delivered，然后重选；最多 4 轮。
         for _ in 0..4 {
@@ -782,6 +962,12 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
         };
+        // A recorded managed conversation can start only from a new trusted
+        // Human event or the original explicit resume command. Queue scans are
+        // observations, including after failed launches and Unknown input.
+        if exec.requires_exact_managed_resume() && row.agent_session_id.is_some() {
+            return Ok(false);
+        }
         // C4：等重启答复的 session 被人 @ 拉起 = 对它单个 resume；上次停在干活中途的，开场补一句「被打断」
         // （被休眠停下的换成休眠附言，C26）。
         let interrupted = if self.held.remove(session) {
@@ -4015,6 +4201,60 @@ mod tests {
         rig.emit("w1", SessionEvent::InputDraft(None)).await;
         agrees(&mut rig, "w1", "msg:c1/lobby#2", "inflight").await;
         assert_eq!(rig.core.live_view("w1").await.unwrap().input_draft, None);
+    }
+    #[tokio::test]
+    async fn trusted_human_duplicate_and_late_arbiter_cannot_revive_stopped_intent() {
+        let mut rig = Rig::with(Hooks {
+            arbiter: Arc::new(Hangs),
+            ..Hooks::default()
+        })
+        .await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "w1");
+        let message = rig
+            .post(LOBBY, Sender::Human, vec![], "waiting before Stop")
+            .await;
+        let pending = rig.core.human_message_plans.get(&message.seq).unwrap();
+        let msg = pending.msg.clone();
+        let ctx = pending.ctx.clone();
+        rig.cmd(|reply| Cmd::Stop {
+            session: "w1".into(),
+            reply,
+        })
+        .await
+        .unwrap();
+        rig.core
+            .on_arbitrated(msg.clone(), ctx.clone(), Some(vec!["w1".into()]))
+            .await
+            .unwrap();
+        rig.settle().await;
+        assert!(
+            rig.exec.launches("w1").is_empty(),
+            "late planning is not a post-Stop Human action"
+        );
+        rig.core
+            .on_arbitrated(msg.clone(), ctx, Some(vec!["w1".into()]))
+            .await
+            .unwrap();
+        rig.core
+            .on_collab(super::super::core::CollabFact::MessageAppended {
+                channel: msg.at.channel,
+                seq: msg.at.seq,
+            })
+            .await
+            .unwrap();
+        rig.settle().await;
+        assert!(
+            rig.exec.launches("w1").is_empty(),
+            "duplicate event/callback cannot create another intent"
+        );
+        rig.post(LOBBY, Sender::Human, at("w1"), "new Human after Stop")
+            .await;
+        assert_eq!(
+            rig.exec.launches("w1").len(),
+            1,
+            "an actually newer Human action still works"
+        );
     }
     #[tokio::test]
     async fn fresh_human_message_admission_wakes_only_new_targets_without_replay() {

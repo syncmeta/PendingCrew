@@ -485,6 +485,21 @@ pub trait Port: Send + Sync + 'static {
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<Option<i64>>> + Send;
     /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
     fn managed_resume_cut(&self,_session:&str)->impl Future<Output=Result<ManagedResumeCut>>+Send{async {anyhow::bail!("strict managed resume cut unavailable")}}
+    /// Current stored message boundary, used only to exclude pre-boot/Stop event replays.
+    fn managed_human_message_floor(&self) -> impl Future<Output = Result<i64>> + Send {
+        async { Ok(0) }
+    }
+    /// Verify an exact newly enqueued Ordinary Human cause before strict resume.
+    /// None is source/target refusal; actual storage errors remain Err.
+    fn managed_human_resume_cut(
+        &self,
+        _session: &str,
+        _message: &crewd_wake::MessageRef,
+        _wake_id: i64,
+    ) -> impl Future<Output = Result<Option<ManagedResumeCut>>> + Send {
+        async { anyhow::bail!("trusted Human managed resume unavailable") }
+    }
+
     fn pending(&self, session: &str) -> impl Future<Output = Result<Vec<QueuedWake>>> + Send;
     /// 人停：停止状态、全部旧行的持久化取消意图、pending 作废一个事务提交。inflight 保留，允许迟到真实送达；
     /// 之后旧行退回/失败/boot 必须作废，即使新工作已改 desired=Running。Err = 没提交，不能假装停成功。

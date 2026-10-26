@@ -42,6 +42,399 @@ async fn stop(
     assert!(registry(&f.data).is_empty());
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_human_message_strictly_resumes_owned_claude_after_quiet_reopen() {
+    let f = Fixture::new();
+    let (tx, server, mut c) = start(&f, "ready").await;
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Human Claude resume", "workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let row = c.call("session.start", json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_HUMAN_RESUME_ORIGINAL","isolation":false})).await.unwrap();
+    let sid = row["id"].as_str().unwrap();
+    wait("original managed body", || {
+        f.count("SYNTHETIC_HUMAN_RESUME_ORIGINAL") == 1
+    })
+    .await;
+    let original = c
+        .call("session.claude.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap()["manualResume"]["originalAgentSessionId"]
+        .clone();
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"fixture stop"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    stop(tx, server, &f).await;
+    let before = std::fs::read_to_string(&f.log).unwrap();
+    let (tx, server, mut c) = start(&f, "ready").await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(registry(&f.data).is_empty(), "reopen is observational");
+    assert_eq!(std::fs::read_to_string(&f.log).unwrap(), before);
+    c.call("message.post", json!({"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"SYNTHETIC_HUMAN_RESUME_TRIGGER","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
+    let until = tokio::time::Instant::now() + Duration::from_secs(15);
+    while f.count("SYNTHETIC_HUMAN_RESUME_TRIGGER") == 0 && tokio::time::Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let submitted = f.count("SYNTHETIC_HUMAN_RESUME_TRIGGER");
+    let after = c
+        .call("session.claude.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let wakes = c.call("wake.list", json!({"sessionId":sid})).await.unwrap();
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"fixture cleanup"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    stop(tx, server, &f).await;
+    assert_eq!(after["manualResume"]["originalAgentSessionId"], original);
+    assert_eq!(
+        f.count("SYNTHETIC_HUMAN_RESUME_ORIGINAL"),
+        1,
+        "no old brief replay"
+    );
+    eprintln!(
+        "Human resume fixture={}; new submissions={submitted}; inspect={after}; wakes={wakes}; stdin={before}",
+        f.root.path().display()
+    );
+    assert_eq!(
+        submitted, 1,
+        "fresh Human message must resume exact managed Claude and submit once"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_human_resume_keeps_original_unknown_body_and_receipt() {
+    let f = Fixture::new();
+    let mut options = f.options("managed-hooks");
+    options
+        .orchestra
+        .as_mut()
+        .unwrap()
+        .claude_env
+        .insert("FAKE_CLAUDE_MANAGED_CASE".into(), "stop-only".into());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+        let _ = rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Human after Unknown", "workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let row = c.call("session.start", json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_OLD_UNKNOWN_BODY","isolation":false})).await.unwrap();
+    let sid = row["id"].as_str().unwrap();
+    wait("original Stop only", || {
+        std::fs::read_to_string(f.log.with_extension("hooks.jsonl"))
+            .unwrap_or_default()
+            .contains("Stop")
+    })
+    .await;
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"Unknown fixture stop"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(sid).await;
+    stop(tx, server, &f).await;
+    let db = rusqlite::Connection::open_with_flags(
+        f.data.join(crewd_store::DB_FILE),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let original: (String, String) = db
+        .query_row(
+            "SELECT request_id,phase FROM native_execution_receipts",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(original.1, "unknown");
+    let (tx, server, mut c) = start(&f, "ready").await;
+    assert!(registry(&f.data).is_empty());
+    c.call("message.post", json!({"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"SYNTHETIC_NEW_AFTER_UNKNOWN","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
+    wait("only new Human reaches restored conversation", || {
+        f.count("SYNTHETIC_NEW_AFTER_UNKNOWN") == 1
+    })
+    .await;
+    assert_eq!(f.count("SYNTHETIC_OLD_UNKNOWN_BODY"), 1);
+    assert_eq!(
+        db.query_row(
+            "SELECT phase FROM native_execution_receipts WHERE request_id=?1",
+            [&original.0],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "unknown"
+    );
+    c.call("session.stop", json!({"sessionId":sid,"reason":"cleanup"}))
+        .await
+        .unwrap();
+    c.stopped(sid).await;
+    stop(tx, server, &f).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fresh_human_reverse_arbiter_preserves_both_inputs_and_independent_target() {
+    use crewd_server::orchestra::{
+        exec::BoxFut,
+        hooks::{Arbiter, ArbiterQuestion, Hooks},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct Reversed {
+        target: String,
+        first_seen: AtomicBool,
+        second_seen: AtomicBool,
+        release: tokio::sync::Semaphore,
+    }
+    impl Arbiter for Reversed {
+        fn wake_set<'a>(&'a self, q: &'a ArbiterQuestion) -> BoxFut<'a, Option<Vec<String>>> {
+            Box::pin(async move {
+                if q.text == "SYNTHETIC_REVERSE_FIRST" {
+                    self.first_seen.store(true, Ordering::SeqCst);
+                    self.release.acquire().await.unwrap().forget();
+                } else if q.text == "SYNTHETIC_REVERSE_SECOND" {
+                    self.second_seen.store(true, Ordering::SeqCst);
+                }
+                Some(vec![self.target.clone()])
+            })
+        }
+    }
+    let f = Fixture::new();
+    let (tx, server, mut c) = start(&f, "ready").await;
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Reversed Human targets","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let other = c
+        .call(
+            "crew.create",
+            json!({"title":"Independent Human target","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let a = c.call("session.start", json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_REVERSE_ORIGINAL","isolation":false})).await.unwrap();
+    let b = c.call("session.start", json!({"crewId":other["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_INDEPENDENT_ORIGINAL","isolation":false})).await.unwrap();
+    let sid = a["id"].as_str().unwrap();
+    let independent = b["id"].as_str().unwrap();
+    wait("both initial bodies", || {
+        f.count("SYNTHETIC_REVERSE_ORIGINAL") == 1 && f.count("SYNTHETIC_INDEPENDENT_ORIGINAL") == 1
+    })
+    .await;
+    for target in [sid, independent] {
+        c.call(
+            "session.stop",
+            json!({"sessionId":target,"reason":"prepare reversed callbacks"}),
+        )
+        .await
+        .unwrap();
+        c.stopped(target).await;
+    }
+    stop(tx, server, &f).await;
+    let arbiter = Arc::new(Reversed {
+        target: sid.into(),
+        first_seen: AtomicBool::new(false),
+        second_seen: AtomicBool::new(false),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let mut options = f.options("ready");
+    options.orchestra.as_mut().unwrap().config.arbiter_timeout = Duration::from_secs(5);
+    let hooks = Hooks {
+        arbiter: arbiter.clone(),
+        ..Default::default()
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with_test_hooks(
+        f.data.clone(),
+        options,
+        hooks,
+        async {
+            let _ = rx.await;
+        },
+    ));
+    let mut c = Client::connect(&f.data).await;
+    let channel = format!("{}/lobby", crew["id"].as_str().unwrap());
+    c.call(
+        "message.post",
+        json!({"channelId":channel,"text":"SYNTHETIC_REVERSE_FIRST"}),
+    )
+    .await
+    .unwrap();
+    wait("first arbiter held", || {
+        arbiter.first_seen.load(Ordering::SeqCst)
+    })
+    .await;
+    c.call(
+        "message.post",
+        json!({"channelId":channel,"text":"SYNTHETIC_REVERSE_SECOND"}),
+    )
+    .await
+    .unwrap();
+    wait("second callback already ready", || {
+        arbiter.second_seen.load(Ordering::SeqCst)
+    })
+    .await;
+    assert_eq!(
+        f.count("SYNTHETIC_REVERSE_SECOND"),
+        0,
+        "cannot cut past earlier dependent new Human"
+    );
+    c.call("message.post", json!({"channelId":format!("{}/lobby",other["id"].as_str().unwrap()),"text":"SYNTHETIC_INDEPENDENT_NEW","mentions":[{"kind":"session","targetId":independent}]})).await.unwrap();
+    wait(
+        "unrelated target progresses while first arbiter waits",
+        || f.count("SYNTHETIC_INDEPENDENT_NEW") == 1,
+    )
+    .await;
+    arbiter.release.add_permits(1);
+    wait("both out-of-order planned Human inputs survive", || {
+        f.count("SYNTHETIC_REVERSE_FIRST") == 1 && f.count("SYNTHETIC_REVERSE_SECOND") == 1
+    })
+    .await;
+    assert_eq!(f.count("SYNTHETIC_REVERSE_ORIGINAL"), 1);
+    let history = c
+        .call("session.claude.history", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let runtimes: std::collections::BTreeSet<_> = history["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["runtimeId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        runtimes.len(),
+        2,
+        "one initial birth and exactly one resumed birth"
+    );
+    for target in [sid, independent] {
+        c.call(
+            "session.stop",
+            json!({"sessionId":target,"reason":"reversed callback cleanup"}),
+        )
+        .await
+        .unwrap();
+        c.stopped(target).await;
+    }
+    stop(tx, server, &f).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn human_resume_denied_target_does_not_drop_other_target_from_same_message() {
+    let f = Fixture::new();
+    let (tx, server, mut c) = start(&f, "ready").await;
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Human target isolation","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let a = c.call("session.start", json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_DENIED_TARGET_ORIGINAL","isolation":false})).await.unwrap();
+    let b = c.call("session.start", json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_VALID_TARGET_ORIGINAL","isolation":false})).await.unwrap();
+    let denied = a["id"].as_str().unwrap();
+    let valid = b["id"].as_str().unwrap();
+    wait("both initial managed bodies", || {
+        f.count("SYNTHETIC_DENIED_TARGET_ORIGINAL") == 1
+            && f.count("SYNTHETIC_VALID_TARGET_ORIGINAL") == 1
+    })
+    .await;
+    let topic = c.call("channel.create", json!({"crewId":crew["id"],"kind":"topic","name":"target isolation","members":[{"kind":"session","id":denied},{"kind":"session","id":valid}]})).await.unwrap();
+    let channel = topic["id"].as_str().unwrap();
+    for sid in [denied, valid] {
+        c.call(
+            "session.stop",
+            json!({"sessionId":sid,"reason":"prepare membership race"}),
+        )
+        .await
+        .unwrap();
+        c.stopped(sid).await;
+    }
+    stop(tx, server, &f).await;
+    // Inject the real membership-change window after this target's durable
+    // enqueue but before its original stored-cause qualification.
+    {
+        let db = rusqlite::Connection::open(f.data.join(crewd_store::DB_FILE)).unwrap();
+        let denied_literal: String = db
+            .query_row("SELECT quote(?1)", [denied], |r| r.get(0))
+            .unwrap();
+        let channel_literal: String = db
+            .query_row("SELECT quote(?1)", [channel], |r| r.get(0))
+            .unwrap();
+        db.execute_batch(&format!("CREATE TRIGGER synthetic_human_target_membership AFTER INSERT ON wakes WHEN NEW.session_id={denied_literal} BEGIN UPDATE channel_members SET left_at='2026-01-01T00:00:00.000Z' WHERE channel_id={channel_literal} AND member_kind='session' AND member_id={denied_literal}; END;")).unwrap();
+    }
+    let (tx, server, mut c) = start(&f, "ready").await;
+    // Explicit mention order makes the denied recipient run first.
+    c.call("message.post", json!({"channelId":channel,"text":"SYNTHETIC_MULTI_TARGET_NEW_HUMAN","mentions":[{"kind":"session","targetId":denied},{"kind":"session","targetId":valid}]})).await.unwrap();
+    let until = tokio::time::Instant::now() + Duration::from_secs(15);
+    while f.count("SYNTHETIC_MULTI_TARGET_NEW_HUMAN") == 0 && tokio::time::Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let submitted = f.count("SYNTHETIC_MULTI_TARGET_NEW_HUMAN");
+    let denied_wakes = c
+        .call("wake.list", json!({"sessionId":denied}))
+        .await
+        .unwrap();
+    let valid_wakes = c
+        .call("wake.list", json!({"sessionId":valid}))
+        .await
+        .unwrap();
+    let denied_live = c
+        .call("session.live", json!({"sessionId":denied}))
+        .await
+        .unwrap();
+    for sid in [denied, valid] {
+        c.call(
+            "session.stop",
+            json!({"sessionId":sid,"reason":"membership race cleanup"}),
+        )
+        .await
+        .unwrap();
+        c.stopped(sid).await;
+    }
+    stop(tx, server, &f).await;
+    eprintln!(
+        "same-message target isolation: submissions={submitted}; denied={denied_wakes}; valid={valid_wakes}; deniedLive={denied_live}"
+    );
+    assert_eq!(denied_live["running"], false);
+    assert!(
+        denied_wakes["wakes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["state"] == "pending" && w["attempts"] == 0)
+    );
+    assert_eq!(
+        submitted, 1,
+        "a rejected first target cannot swallow the same message's independent valid target"
+    );
+    assert!(
+        valid_wakes["wakes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["attempts"] == 1)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_sessions_owned_history_exact_resume_cut_and_zero_reopen_input() {
     let f = Fixture::new();
     let mut options=f.options("ready");
@@ -78,30 +471,29 @@ async fn managed_sessions_owned_history_exact_resume_cut_and_zero_reopen_input()
     .await
     .unwrap();
     c.stopped(sid).await;
-    c.call("message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_MUST_NOT_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
-    assert_eq!(
-        c.call("session.live", json!({"sessionId":sid}))
-            .await
-            .unwrap()["running"],
-        false
-    );
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let queued = c.call("wake.list", json!({"sessionId":sid})).await.unwrap();
-        if queued["wakes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|w| w["state"] == "pending" && w["attempts"] == 0)
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "new stopped wake was not durably queued: {queued}"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    // This is genuinely pre-boot pending history, rather than a newly posted
+    // Human request (which now explicitly authorizes strict resume).
+    stop(tx, server, &f).await;
+    {
+        let mut store = crewd_store::Store::open_data_dir(&f.data).unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            let message = crewd_collab::messages::post(tx, crewd_collab::Sender::Human, crewd_collab::messages::NewPost {
+                channel_id:format!("{cid}/lobby"),
+                text:"SYNTHETIC_MUST_NOT_RESUME".into(),
+                mentions:vec![crewd_proto::Mention { kind:crewd_proto::MentionKind::Session, target_id:Some(sid.into()) }],
+                ..Default::default()
+            })?.message;
+            crewd_collab::wakes::enqueue(tx, crewd_collab::wakes::WakeRequest {
+                session:sid.into(), kind:crewd_collab::wakes::WakeKind::Message,
+                source:crewd_collab::wakes::source::message(&message.id),
+                priority:crewd_collab::wakes::WakePriority::Human,
+                not_before_ms:None, note:None, origin:None,
+            })?;
+            Ok(())
+        }).unwrap();
     }
+    let (tx, server, mut c) = start(&f, "ready").await;
+    assert!(registry(&f.data).is_empty());
     let before=c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap();
     assert_eq!(before["manualResume"]["eligibility"],"eligible","{before}");
     assert_eq!(before["fullHistoryLoad"],false);
@@ -775,9 +1167,22 @@ async fn owned_managed_resume_refusal_and_wrong_source_keep_original_uuid_and_ne
         c.stopped(sid).await;wait("faulted owned native cleanup",||registry(&f.data).is_empty()).await;
         assert_eq!(c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap()["manualResume"]["originalAgentSessionId"],original);
         assert_eq!(f.count("SYNTHETIC_MANUAL_FAULT_ORIGINAL"),1);
-        c.call("message.post",json!({"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
+        // A genuinely new Human send may recheck the original strict source.
+        // It is not an automatic retry of the prior public-control UUID.
+        let failed_before = c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"].clone();
+        c.call("message.post", json!({"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
+        let until = tokio::time::Instant::now() + Duration::from_secs(15);
+        let failed_after = loop {
+            let current = c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"].clone();
+            if current != failed_before && !current.is_null() { break current; }
+            assert!(tokio::time::Instant::now() < until, "new Human strict recheck did not settle: {fault}");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        wait("new Human refused birth cleanup", || registry(&f.data).is_empty()).await;
         tokio::time::sleep(Duration::from_millis(250)).await;
-        assert!(registry(&f.data).is_empty());assert_eq!(f.count("SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME"),0);
+        assert_eq!(c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"], failed_after, "heartbeat never retries a consumed Human intent");
+        assert!(registry(&f.data).is_empty());
+        assert_eq!(f.count("SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME"), 0);
         assert_eq!(c.call("command.lookup",json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"]})).await.unwrap(),receipt,"only the original UUID is queried, never resubmitted");
         stop(tx,server,&f).await;
     }

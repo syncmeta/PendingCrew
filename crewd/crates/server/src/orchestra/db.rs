@@ -527,6 +527,61 @@ impl Port for DbPort {
         let session=session.to_owned();
         self.read(move|c|Ok(c.query_row("SELECT (SELECT COALESCE(MAX(id),0) FROM wakes WHERE session_id=?1 AND state='pending'),(SELECT COALESCE(MAX(seq),0) FROM messages)",[session],|r|Ok(ManagedResumeCut{wake_id:r.get(0)?,message_seq:r.get(1)?}))?)).await
     }
+    async fn managed_human_message_floor(&self) -> Result<i64> {
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT COALESCE(MAX(seq),0) FROM messages", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .await
+    }
+
+    async fn managed_human_resume_cut(
+        &self,
+        session: &str,
+        message: &MessageRef,
+        wake_id: i64,
+    ) -> Result<Option<ManagedResumeCut>> {
+        let session = session.to_owned();
+        let message = message.clone();
+        self.read(move |c| {
+            let Some(m) = opt(collab::messages::get_by_seq(c, message.seq))? else {
+                return Ok(None);
+            };
+            let facts = facts_with_provenance(c, &m, Ms(crewd_store::now_ms()))?;
+            if m.channel_id != message.channel
+                || facts.sender != crewd_wake::plan::Sender::Human
+                || facts.provenance != crewd_wake::plan::MessageProvenance::Ordinary
+                || wake_id <= cw::human_stop_floor(c, &session)?
+            {
+                return Ok(None);
+            }
+            let ctx = crate::wake_adapter::channel_context(
+                c,
+                &message.channel,
+                Ms(crewd_store::now_ms()),
+            )?;
+            if ctx.is_none_or(|ctx| !ctx.session_members.contains(&session)) {
+                return Ok(None);
+            }
+            let exact = cw::due_for(c, &session, i64::MAX)?.into_iter().any(|w| {
+                w.id == wake_id
+                    && w.kind == cw::WakeKind::Message
+                    && w.priority == WakePriority::Human
+                    && w.source == cw::source::message(&m.id)
+                    && w.attempts == 0
+                    && w.origin.is_none()
+            });
+            Ok(exact.then_some(ManagedResumeCut {
+                wake_id: wake_id - 1,
+                message_seq: message.seq - 1,
+            }))
+        })
+        .await
+    }
+
     async fn pending(&self, session: &str) -> Result<Vec<QueuedWake>> {
         let session = session.to_string();
         // `due_for(…, i64::MAX)` = 全部 pending（不论到没到点），按优先级、入队先后。
@@ -8641,6 +8696,129 @@ mod s42_task_fence_db_windows {
 mod owned_managed_context_tests {
     use super::*;
     use super::fixture::{seeded,post_as};
+
+    #[tokio::test]
+    async fn trusted_human_resume_cut_verifies_exact_stored_cause_and_stop_boundary() {
+        let (state, port, _directory) = seeded().await;
+        let old = post_as(&state, collab::Sender::Human, "c-1/lobby", "old body", &[]).await;
+        let old_id = port
+            .enqueue(NewWake {
+                session: "w-1".into(),
+                kind: WakeKind::Message,
+                source: cw::source::message(&old.id),
+                priority: Priority::Human,
+                not_before: Ms(0),
+                note: None,
+                origin: HUMAN.into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let fresh = post_as(
+            &state,
+            collab::Sender::Human,
+            "c-1/lobby",
+            "fresh intent",
+            &[],
+        )
+        .await;
+        let wake = NewWake {
+            session: "w-1".into(),
+            kind: WakeKind::Message,
+            source: cw::source::message(&fresh.id),
+            priority: Priority::Human,
+            not_before: Ms(0),
+            note: None,
+            origin: HUMAN.into(),
+        };
+        let id = port.enqueue(wake.clone()).await.unwrap().unwrap();
+        assert!(
+            port.enqueue(wake).await.unwrap().is_none(),
+            "duplicate insertion creates no new intent"
+        );
+        let at = MessageRef {
+            channel: fresh.channel_id.clone(),
+            seq: fresh.seq,
+        };
+        let cut = port
+            .managed_human_resume_cut("w-1", &at, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cut,
+            ManagedResumeCut {
+                wake_id: id - 1,
+                message_seq: fresh.seq - 1
+            }
+        );
+        assert!(old_id <= cut.wake_id && old.seq <= cut.message_seq);
+        assert!(
+            port.managed_human_resume_cut("w-1", &at, old_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            port.managed_human_resume_cut("cap", &at, id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let agent = post_as(
+            &state,
+            collab::Sender::Session("w-1".into()),
+            "c-1/lobby",
+            "agent cannot authorize resume",
+            &[],
+        )
+        .await;
+        let agent_id = port
+            .enqueue(NewWake {
+                session: "w-1".into(),
+                kind: WakeKind::Message,
+                source: cw::source::message(&agent.id),
+                priority: Priority::Human,
+                not_before: Ms(0),
+                note: None,
+                origin: HUMAN.into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            port.managed_human_resume_cut(
+                "w-1",
+                &MessageRef {
+                    channel: agent.channel_id,
+                    seq: agent.seq
+                },
+                agent_id
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        port.human_stop("w-1").await.unwrap();
+        assert!(
+            port.managed_human_resume_cut("w-1", &at, id)
+                .await
+                .unwrap()
+                .is_none(),
+            "Stop invalidates the original trigger"
+        );
+        state
+            .collab(|tx| {
+                crewd_store::meta_set(tx.conn(), "human_stop_wake_floor:w-1", "invalid-counter")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            port.managed_human_resume_cut("w-1", &at, id).await.is_err(),
+            "storage corruption must remain an error, not source refusal"
+        );
+    }
 
     #[tokio::test]
     async fn owned_claude_resume_context_floor_keeps_large_backlog_and_rejects_stale_snapshot(){
