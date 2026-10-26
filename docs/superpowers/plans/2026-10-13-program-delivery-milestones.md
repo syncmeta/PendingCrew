@@ -1,5 +1,17 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-26 去除机组标识及四Tab精修，Claude恢复模块并行收口
+
+人类最终取消全部机组颜色标识；此前1eeac47a的小圆格效果不再是最终设计。六源精修60fcf8c5经81406f33源审、唯一暖构建86832 exit0、416输入前后相同后显示于稳定私窗72985/Core72999。实际四Tab普通点击、机组无标识、非空AI待办、人/计划空态已见；28152b89文档布局修正同PID注入后宽窗横排实际通过。316c92a8只在消息页显示筛选的源码已保存，generic视图热刷新尚未可见，不冒完整最新源运行通过；窄窗回落、长分类名和非空人/计划仍未实测。图和边界在 `/private/tmp/pendingcrew-four-tabs-refinement-20261026/RUNTIME-PROGRESS.json`。普通日用c634保持。
+
+main/global本地同316c92a8；60fc普通原子推送两次遇Empty reply，第一次失败后的只读远端两ref仍1eeac47a，后一次失败未再宣称远端已更新。保留本地提交，未更改全局网络配置或盲目循环推送。
+
+普通 Mac Release 0.2.1／20751.60201（App源码0b476、Core实际编译cc316）已完成secure时间戳签名及完整ZIP，独验089fc638接受；正常 iOS Simulator cc316包亦已由a95cd8f5接受。它们分别证明准确产物，不代表新模型、云同步、设备持久流程或公开交付。公开包暂缓公证：已确认新Human唤醒已有受管Claude仍走普通启动，缺exact managed resume ID，正由后端线补齐完整恢复模块；不先上传带此已知缺口的旧候选。最新图标也不改标进0b476包。
+
+同Core正常Mac/iOS流程已开始。原独立后台67092成功配置唯一loopback58437、零crew/grant/session；新模拟器已启动并安装，Mac69362因独立lineage被原LocalHuman守卫拒绝，未生成链接或配对凭据。本轮空App通过既有仅关闭App确认退出，不冒后台停工成功；owned67092随后单次正常SIGTERM确认gone，原数据库、authority、证书及配置保留。拟由正常Mac主机原connectLocal起准确签名helper，不新增trust pin或放宽守卫，但该具体启动被自动审批拒绝，理由是正常App/helper可能改变既有私域持久状态，当前直接授权被评为UI精修/解锁。未CreateProcess、未换路重试，待此具体动作明确许可；独立UI及后端工作继续。
+
+后端唯一写域为内部编排及原fake PTY测试；公共schema不变。最终合同是可信新Human提交或明确点击可恢复，普通重开不启动；精确原UUID、旧Unknown不重放、成功ready后新正文仅一次。独立质量线在整块冻结后复验，复用稳定证据；待该模块完成再确定唯一新Core与Mac发布组合，不重编未受影响的iOS。全工程目标保持active。
+
 ## 2026-10-26 三平台准确产物完成，开发窗口已恢复
 
 本轮实际编译源码固定为 `cc316548ccf498c092247e90cf2e2c9f95ecf72b`，Rust树 `9262fb1af2850c998b0ec0c3be0a2d92a3357d62`。Mac新normal独验afc0a9ef接受；Mac/iOS Development 0.2.1／20751.57170签名包由8610b0d6整块接受；唯一Linux手动run40208757054／attempt1成功，原artifact12604453334完整下载后由93376468接受。Linux原生产Release／默认features[]，ELF5419c976…13f03，安装tar f712737c…f1509e，实际API3／Store21／schema149，不能沿旧记录称当前Store19。三平台完整包与根验收绑定于 `docs/private/preserved-delivery-artifacts/apple-development-cc316548-candidate-20261025/MODULE-DELIVERY.json`（474a0da1…de8b8）；此后的交付记录提交不改变这些产物的compiledRef，不把旧包改标新HEAD。

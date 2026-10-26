@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 交付范围更新
+
+人类最终取消机组标识，六源UI60fcf8c5经81406f33源审和唯一暖构建86832实际0后显示；原私窗正常退出，新稳定72985/Core72999保留。实际无标识、四Tab普通点击、非空AI、人/计划空态、28152修后文档宽横排已见；316c顶栏条件源码已保存而热刷新未可见，窄窗/长分类/非空人计划不冒已验。详见总计划最新节及原RUNTIME-PROGRESS。两次推送Empty reply，本地提交保全；不把远端冒已更新。
+
+普通Mac Release 0.2.1／20751.60201准确0b476／Core compiled cc316已由089fc638静态整包接受，ZIP SHA256 `4a6faa33025940edd77ed2c48c57041fbb27d57917345e69d22cf829519df602`，42,820,973字节；未公证、安装或发布，也不包含后续UI。正常Simulator cc316静态准入a95cd8f5已完成，当前安装不等于真实持久流程通过。
+
+新发现的受管Claude新Human恢复路径缺口正在完整修复，发布候选因此暂不送Apple。正常Mac/iOS同Core运行暴露独立后台的LocalHuman lineage拒绝，原空App/Core已确认退出并保全原库。后续正常Mac宿主启动实际被自动审批拒绝其持久状态影响，尚未执行；等待具体许可，不换路、不重新配置或生成配对。完整范围、作者责任和后续冻结门见总计划最新节；未将新工作计为已验。
+
 ## 2026-10-26 三平台准确产物完成，开发窗口已恢复
 
 本轮实际编译源码固定为 `cc316548ccf498c092247e90cf2e2c9f95ecf72b`，Rust树 `9262fb1af2850c998b0ec0c3be0a2d92a3357d62`。Mac新normal独验afc0a9ef接受；Mac/iOS Development 0.2.1／20751.57170签名包由8610b0d6整块接受；唯一Linux手动run40208757054／attempt1成功，原artifact12604453334完整下载后由93376468接受。Linux原生产Release／默认features[]，ELF5419c976…13f03，安装tar f712737c…f1509e，实际API3／Store21／schema149，不能沿旧记录称当前Store19。三平台完整包与根验收绑定于 `docs/private/preserved-delivery-artifacts/apple-development-cc316548-candidate-20261025/MODULE-DELIVERY.json`（474a0da1…de8b8）；此后的交付记录提交不改变这些产物的compiledRef，不把旧包改标新HEAD。
