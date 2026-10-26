@@ -37,7 +37,9 @@ struct MacThreePaneView: View {
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
         })
         .environment(\.crewdSidebarCollapsed, columnVisibility == .detailOnly)
-        .toolbar(.hidden, for: .windowToolbar)
+        // Hiding windowToolbar also hides macOS close/minimize/zoom controls.
+        // Keep native chrome visible; the workspace header stays in safe-area content.
+        .toolbar(.visible, for: .windowToolbar)
         .onChange(of: crewStore.selectedCrewId) { old, new in
             sessionRunner.switchCrew(from: old, to: new)
             if model.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace, let new, new != crewStore.pendingCrew?.id {
