@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 固定日用流程与常驻部署源码收敛
+
+实际日用38b6／20752.22929已安装，旧01ff整包及ZIP保全；原生Sidebar位置与收起／恢复、五Tab保持、Joy原记录连接通过。独验 `2c59faa23d83edbbfc5d027e94f7cdf55b1767806bb47c11178b91da7f446850` 亲看原图并核原phase记录，复用已验包来源，未重复扫描或GUI。普通App隔离数据的同一静态草稿在切Tab、正常关闭旧普通App、同data重开38b6及原生侧栏收放后逐字保持；这是对应功能的实际证据，不冒日用个人原文、跨环境／跨机组或新增真实模型验证。根亲看native-sidebar-restored图，侧栏开关确在系统标题栏、原草稿及右双区均在。
+
+常驻部署四源独验 `cbbca7636516ee4433ca0f32f9cb68667acc8f51bcdfba6366f6b59c2042a312` 接受源码与受影响回归：Codex-only显式选择贯穿preflight／record／units／wrapper／resume，只清两项provider环境覆盖、保真实HOME和LISTEN；原typed remote.status与host.status同序列化，preserve路径逐项对照原identity／config／endpoint／listening，只读grants，不configure或newinvite。原单链接、锁、UID隔离、CAS和Unknown查询不变；没有SQL/WAL新增。作者9个不同函数通过，独立8函数与作者wrapper用例复用，不相加虚报。原型错误保留且不包装成产品RED。原件在 `linux-persistent-codex-only-20261026/`。
+
+未部署、未创建账号、未迁移凭据或供应商历史、未新增真实调用或CI。当前Joy连接保持；账号本人登录、停工备份与路径切换、常驻连接入口仍是实际交付门，源码通过不能覆盖。
+
 ## 2026-10-26 窗口按钮修复日用更新
 
 单文件MacRootView将原隐藏windowToolbar改为visible，恢复系统原生窗口控件，源码净差与准确01ff候选独验004187c3通过。人类明确已正常退出后，原三phase均0；旧f253／20752.17666整包115项及ZIP保全，新01ff／20752.21191安装115项同候选，正常首开89965／89972。根亲看最终图和AX：三个关闭／最小化／全屏控件对象恢复，Joy原授权已连接，Tab与Sidebar无重叠；没有新配对或模型调用。

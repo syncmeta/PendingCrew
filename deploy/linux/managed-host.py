@@ -57,13 +57,20 @@ def run(args):
     # across current-pointer activation. No second data lease: Core crewd.lock
     # remains its sole existing authority for this data directory.
     os.set_inheritable(fd, True)
-    os.execv(str(binary), [str(binary), '--data-dir', args.data_dir, 'serve', '--system-admin-socket', args.system_admin_socket, '--codex', args.codex, '--claude', args.claude])
+    command = [str(binary), '--data-dir', args.data_dir, 'serve', '--system-admin-socket', args.system_admin_socket, '--codex', args.codex]
+    command += ['--disable-claude'] if args.disable_claude else ['--claude', args.claude]
+    environment = dict(os.environ)
+    for name in ['CREWD_CODEX', 'CREWD_CLAUDE']: environment.pop(name, None)
+    os.execve(str(binary), command, environment)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ['prefix', 'data-dir', 'system-admin-socket', 'codex', 'claude']:
+    for name in ['prefix', 'data-dir', 'system-admin-socket', 'codex']:
         parser.add_argument('--' + name, required=True)
+    claude = parser.add_mutually_exclusive_group(required=True)
+    claude.add_argument('--claude')
+    claude.add_argument('--disable-claude', action='store_true')
     run(parser.parse_args())
 
 

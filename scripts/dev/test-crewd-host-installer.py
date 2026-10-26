@@ -134,6 +134,141 @@ class InstallerControls(unittest.TestCase):
         with mock.patch.object(host.pwd,'getpwnam',return_value=account):
             with self.assertRaises(host.Refused): host.service_user('root')
 
+    def original_status(self):
+        return {'identity':{'authorityId':'11111111-1111-4111-8111-111111111111','dbId':'original-db','certificateDerBase64':'Y2VydA==','spkiSha256':'a'*64},'configuration':{'revision':'2','enabled':True,'listenHost':'127.0.0.1','port':58643},'endpoint':{'host':'127.0.0.1','port':58643},'listening':True}
+
+    def test_codex_only_install_flags_are_explicit(self):
+        args = host.parser().parse_args(['install','--user','ordinary','--advertise-host','127.0.0.1','--disable-claude','--preserve-connection-from','/root/private/status.json'])
+        self.assertTrue(args.disable_claude); self.assertEqual(args.preserve_connection_from,'/root/private/status.json')
+        defaults = host.parser().parse_args(['install','--advertise-host','example.invalid'])
+        self.assertFalse(defaults.disable_claude); self.assertIsNone(defaults.preserve_connection_from)
+        with mock.patch('sys.stderr',new_callable=io.StringIO):
+            with self.assertRaises(SystemExit): host.parser().parse_args(['install','--advertise-host','127.0.0.1','--preserve-connection'])
+            with self.assertRaises(SystemExit): host.parser().parse_args(['install','--advertise-host','127.0.0.1','--preserve-connection','/root/status.json'])
+
+    def test_preserve_connection_never_configures_or_enrolls(self):
+        saved = self.original_status()
+        original = {'preservedConnection':saved,'listenHost':'127.0.0.1','port':58643,'configureRequestId':'MUST-NOT-USE','enrollmentRequestId':'MUST-NOT-USE'}
+        calls = []
+        def rpc(method,params):
+            calls.append(method)
+            if method == 'host.status': return saved
+            if method == 'host.grants': return [{'id':'current-grant','revision':'1'}]
+            self.fail('preservation attempted a mutation: '+method)
+        with mock.patch.object(host,'rpc',side_effect=rpc),mock.patch.object(host.subprocess,'run'),mock.patch.object(host,'new_record') as write,mock.patch.object(host.secrets,'token_bytes') as token,mock.patch('sys.stdout',new_callable=io.StringIO) as output:
+            host.finish_installation(original)
+            write.assert_not_called(); token.assert_not_called(); self.assertNotIn('pendingcrew://',output.getvalue())
+        self.assertEqual(calls,['host.status','host.grants'])
+
+    def test_preserve_status_rejects_failure_incomplete_identity_or_changed_binding(self):
+        saved = self.original_status()
+        self.assertEqual(host.parse_preserved_status(saved,'127.0.0.1',58643),saved)
+        for changed in ['failure','identity','pin','configuration','endpoint','listening']:
+            with self.subTest(changed=changed):
+                status = json.loads(json.dumps(saved))
+                if changed == 'failure': status['failure']='private failure text'
+                if changed == 'identity': del status['identity']['certificateDerBase64']
+                if changed == 'pin': status['identity']['spkiSha256']='invalid'
+                if changed == 'configuration': status['configuration']['enabled']=False
+                if changed == 'endpoint': status['endpoint']['port']=58644
+                if changed == 'listening': status['listening']=False
+                with self.assertRaises(host.Refused): host.parse_preserved_status(status,'127.0.0.1',58643)
+        changed = json.loads(json.dumps(saved)); changed['identity']['dbId']='another-db'
+        def rpc(method,params):
+            if method == 'host.status': return changed
+            self.fail('mismatch caused more requests: '+method)
+        with mock.patch.object(host,'rpc',side_effect=rpc),mock.patch.object(host.subprocess,'run'),mock.patch.object(host,'new_record') as write:
+            with self.assertRaises(host.Refused): host.finish_installation({'preservedConnection':saved,'listenHost':'127.0.0.1','port':58643})
+            write.assert_not_called()
+        # An existing record is reused on continuation; no file is reinterpreted.
+        for failed in [OSError('unknown status'),host.Refused('read denied')]:
+            with mock.patch.object(host,'rpc',side_effect=failed),mock.patch.object(host.subprocess,'run'),mock.patch.object(host,'new_record') as write,mock.patch.object(host.time,'monotonic',side_effect=[0,0,16]),mock.patch.object(host.time,'sleep'):
+                with self.assertRaises(host.Refused): host.finish_installation({'preservedConnection':saved})
+                write.assert_not_called()
+
+    def test_install_record_and_resume_keep_original_provider_and_status(self):
+        with tempfile.TemporaryDirectory(prefix='pcwh-',dir='/private/tmp') as temporary:
+            home=pathlib.Path(temporary);data=home/'data';data.mkdir(mode=0o700);(data/'crewd.db').touch(mode=0o600)
+            account=types.SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid(),pw_dir=str(home),pw_name='ordinary')
+            status=self.original_status()
+            manifest={'format':1,'providerPrerequisites':host.PROVIDER_POLICY,'artifact':{'architecture':'x86_64','sourceCommit':'a'*40,'url':'https://example.invalid/'+'a'*40+'/host.tar.gz','sha256':'b'*64}}
+            args=types.SimpleNamespace(user='ordinary',codex=None,claude=None,disable_claude=True,preserve_connection_from='/root/private/status.json',manifest_url='https://example.invalid/manifest.json',manifest_sha256='c'*64,data_dir=str(data),port=58643,listen_host='127.0.0.1',advertise_host='127.0.0.1',request_id=None,label='existing')
+            captured=[]
+            def record(path,value): captured.append(value); raise OSError('fixture stop before activation')
+            with mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'read_record',return_value=status),mock.patch.object(host,'provider_preflight',return_value={'codex':'/ordinary/codex'}),mock.patch.object(host,'active',return_value=False),mock.patch.object(host.platform,'machine',return_value='x86_64'),mock.patch.object(host,'download',return_value=json.dumps(manifest).encode()),mock.patch.object(host,'extract_release',return_value=(data,{'sourceCommit':'a'*40})),mock.patch.object(host,'transient',return_value=subprocess.CompletedProcess([],0,b'{"methods":{"remote.enrollmentCreate":{},"remote.enrollmentLookup":{}}}',b'')),mock.patch.object(host,'root_code_directory'),mock.patch.object(host,'private_root'),mock.patch.object(host,'pointer',return_value=None),mock.patch.object(host,'new_record',side_effect=record):
+                with self.assertRaises(OSError): host.install(args)
+            self.assertEqual(len(captured),1); original=captured[0]
+            self.assertTrue(original['disableClaude']); self.assertEqual(set(original['providerPaths']),{'codex'})
+            self.assertEqual(original['preservedConnection'],status)
+            class BeforeUnits(Exception): pass
+            with mock.patch.object(host,'read_record',return_value=original),mock.patch.object(host,'pointer',return_value='activations/'+original['requestId']),mock.patch.object(host.pwd,'getpwuid',return_value=account),mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'provider_preflight',return_value={'codex':'/ordinary/codex'}) as preflight,mock.patch.object(host,'units',side_effect=BeforeUnits) as units:
+                with self.assertRaises(BeforeUnits): host.resume_installation(types.SimpleNamespace(request_id=original['requestId']))
+                preflight.assert_called_once_with(account,original['providerPaths'],disable_claude=True)
+                self.assertTrue(units.call_args.kwargs['disable_claude'])
+            original['providerPaths']['claude']='/injected/claude'
+            with mock.patch.object(host,'read_record',return_value=original),mock.patch.object(host,'pointer',return_value='activations/'+original['requestId']),mock.patch.object(host.pwd,'getpwuid',return_value=account),mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'provider_preflight') as preflight:
+                with self.assertRaises(host.Refused): host.resume_installation(types.SimpleNamespace(request_id=original['requestId']))
+                preflight.assert_not_called()
+
+    def test_preserve_input_refusal_precedes_checks_and_persistent_install(self):
+        account=types.SimpleNamespace(pw_uid=1000,pw_gid=1000,pw_dir='/home/ordinary')
+        args=types.SimpleNamespace(user='ordinary',preserve_connection_from='/root/private/status.json',listen_host='127.0.0.1',port=58643)
+        for failure in [host.Refused('root0600 input required'),OSError('input missing')]:
+            with mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'read_record',side_effect=failure),mock.patch.object(host,'provider_preflight') as provider,mock.patch.object(host,'download') as network,mock.patch.object(host,'root_code_directory') as write:
+                with self.assertRaises(type(failure)): host.install(args)
+                provider.assert_not_called(); network.assert_not_called(); write.assert_not_called()
+        with mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'read_record',return_value={'failure':'not ready'}),mock.patch.object(host,'provider_preflight') as provider,mock.patch.object(host,'root_code_directory') as write:
+            with self.assertRaises(host.Refused): host.install(args)
+            provider.assert_not_called();write.assert_not_called()
+
+    def test_default_new_install_keeps_one_original_configuration_and_link(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            configuration={'revision':'2','enabled':True,'listenHost':'127.0.0.1','port':49381}
+            original={'configureRequestId':'config-original','enrollmentRequestId':'enroll-original','enrollmentId':'original-enrollment','listenHost':'127.0.0.1','advertiseHost':'host.invalid','port':49381,'label':'Host'}
+            calls=[]
+            def rpc(method,params):
+                calls.append((method,params))
+                if method=='host.status':return {'configuration':configuration,'listening':True}
+                if method=='host.configure':return configuration
+                if method=='host.enrollmentCreate':return {'original':'result'}
+                self.fail('unexpected operation '+method)
+            record={'params':{'requestId':'enroll-original','enrollmentId':'original-enrollment'},'token':'synthetic'}
+            with mock.patch.object(host,'STATE',pathlib.Path(temporary)),mock.patch.object(host.subprocess,'run'),mock.patch.object(host,'rpc',side_effect=rpc),mock.patch.object(host,'new_record') as write,mock.patch.object(host,'pair_record',return_value=record),mock.patch.object(host,'enrolled_link',return_value='pendingcrew://synthetic'),mock.patch('sys.stdout',new_callable=io.StringIO) as output:
+                host.finish_installation(original)
+                self.assertEqual(output.getvalue().strip(),'pendingcrew://synthetic');self.assertEqual(write.call_count,2)
+            self.assertEqual([method for method,_ in calls].count('host.configure'),1)
+            self.assertEqual([method for method,_ in calls].count('host.enrollmentCreate'),1)
+            self.assertEqual([params['requestId'] for method,params in calls if method=='host.enrollmentCreate'],['enroll-original'])
+
+    def test_codex_only_skips_claude_and_preserves_explicit_disabled_argv(self):
+        run, calls = self.provider_runner({'claude':'missing'})
+        account = types.SimpleNamespace(pw_uid=1000,pw_gid=1000,pw_dir='/home/ordinary')
+        tools = host.provider_preflight(account,{},runner=run,disable_claude=True)
+        self.assertEqual(set(tools),{'codex'}); self.assertFalse(any(command[-1]=='claude' for command in calls))
+        socket_unit, service = host.units(account,pathlib.Path('/home/ordinary/data'),tools,disable_claude=True)
+        self.assertIn('"--disable-claude"',service); self.assertNotIn('"--claude"',service)
+        self.assertIn('User=1000',service); self.assertIn('Restart=on-failure',service)
+        with self.assertRaises(host.Refused): host.provider_preflight(account,{'claude':'/explicit/claude'},runner=run,disable_claude=True)
+
+    def test_managed_wrapper_disabled_selection_and_child_environment(self):
+        spec = importlib.util.spec_from_file_location('managed_runtime',source.with_name('managed-host.py'))
+        runtime = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime)
+        base=['managed-host','--prefix','/opt/pendingcrew','--data-dir','/home/ordinary/data','--system-admin-socket','/run/pendingcrew/admin.sock','--codex','/ordinary/codex']
+        with mock.patch.object(runtime.sys,'argv',base+['--disable-claude']),mock.patch.object(runtime,'run') as run:
+            runtime.main(); args=run.call_args.args[0]; self.assertTrue(args.disable_claude)
+        with mock.patch.object(runtime.sys,'argv',base+['--disable-claude','--claude','/ordinary/claude']),mock.patch('sys.stderr',new_callable=io.StringIO):
+            with self.assertRaises(SystemExit): runtime.main()
+        env={'LISTEN_PID':str(os.getpid()),'LISTEN_FDS':'1','LISTEN_FDNAMES':'pcw-admin','CREWD_CLAUDE':'/should/not/enable','CREWD_CODEX':'/should/not/override','HOME':'/home/ordinary','PATH':'/ordinary/bin'}
+        with mock.patch.dict(runtime.os.environ,env,clear=True),mock.patch.object(runtime.os,'getuid',return_value=1000),mock.patch.object(runtime.os,'geteuid',return_value=1000),mock.patch.object(runtime.os,'open',return_value=99),mock.patch.object(runtime.os,'fstat',return_value=types.SimpleNamespace(st_mode=0o100644,st_uid=0)),mock.patch.object(runtime.fcntl,'flock'),mock.patch.object(runtime,'core_path',return_value=pathlib.Path('/immutable/crewd')),mock.patch.object(runtime.os,'set_inheritable'),mock.patch.object(runtime.os,'execve') as execute:
+            runtime.run(args)
+            binary, argv, child = execute.call_args.args
+            self.assertEqual(argv[-1],'--disable-claude'); self.assertNotIn('--claude',argv)
+            self.assertNotIn('CREWD_CLAUDE',child); self.assertNotIn('CREWD_CODEX',child)
+            self.assertEqual(child['HOME'],env['HOME']); self.assertEqual(child['PATH'],env['PATH']); self.assertEqual(child['LISTEN_PID'],env['LISTEN_PID'])
+            self.assertEqual(runtime.os.environ['CREWD_CLAUDE'],env['CREWD_CLAUDE'])
+        with mock.patch.object(runtime.os,'getuid',return_value=0):
+            with self.assertRaises(ValueError): runtime.run(args)
+
     def test_canonical_operation_paths_refuse_traversal(self):
         for value in ['../../etc/passwd', '../' + '0'*36, 'A'*36, '0'*36, ' 11111111-1111-4111-8111-111111111111']:
             with self.assertRaises((host.Refused, ValueError)): host.canonical_uuid(value)

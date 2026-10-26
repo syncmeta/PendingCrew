@@ -123,7 +123,7 @@ def service_user(name):
     if name is None:
         uid = os.environ.get('SUDO_UID')
         if uid and uid.isdecimal() and int(uid) != 0: account = pwd.getpwuid(int(uid))
-        else: raise Refused('select the existing ordinary user with --user; install/login both tools as that user first\n' + GUIDANCE)
+        else: raise Refused('select the existing ordinary user with --user; install/login the selected tools as that user first\n' + GUIDANCE)
     else: account = pwd.getpwnam(name)
     if account.pw_uid == 0 or not pathlib.Path(account.pw_dir).is_dir() or account.pw_shell.endswith(('nologin', '/false')):
         raise Refused('an existing ordinary login user is required; no credentials are imported')
@@ -135,9 +135,12 @@ def provider_output(result):
         raise Refused('command failed or returned excessive output')
     return result.stdout.decode('utf-8', errors='strict').strip()
 
-def provider_preflight(account, supplied, runner=subprocess.run):
+def provider_preflight(account, supplied, runner=subprocess.run, disable_claude=False):
+    if disable_claude and supplied.get('claude') is not None:
+        raise Refused('--claude conflicts with --disable-claude')
     tools, failures = {}, []
     for name, policy in PROVIDER_POLICY.items():
+        if name == 'claude' and disable_claude: continue
         try:
             path = supplied.get(name)
             if path is None:
@@ -170,7 +173,8 @@ def provider_preflight(account, supplied, runner=subprocess.run):
         except (OSError, ValueError, subprocess.SubprocessError):
             failures.append(name + ': prerequisite check failed or timed out in the real service context')
     if failures:
-        raise Refused('Installation prerequisites not met:\n' + '\n'.join(failures) + '\n' + GUIDANCE)
+        guidance = GUIDANCE if not disable_claude else ('Install and log in yourself as the selected ordinary service user, then rerun:\nCodex: curl -fsSL https://chatgpt.com/codex/install.sh | sh\n       codex login --device-auth\n       https://learn.chatgpt.com/docs/auth\nClaude is explicitly disabled; it need not be installed or logged in.\nNo installation, login, credential copy or task is performed. This is not a model-access test.')
+        raise Refused('Installation prerequisites not met:\n' + '\n'.join(failures) + '\n' + guidance)
     return tools
 
 def validate_provider_policy(manifest):
@@ -243,9 +247,10 @@ def unit_quote(value):
     checked_text(value)
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 
-def units(account, data, tools):
+def units(account, data, tools, disable_claude=False):
     executable = PREFIX / 'current/bin/managed-host.py'
-    command = ['/usr/bin/python3', '-I', str(executable), '--prefix', str(PREFIX), '--data-dir', str(data), '--codex', tools['codex'], '--claude', tools['claude'], '--system-admin-socket', str(ADMIN_SOCKET)]
+    command = ['/usr/bin/python3', '-I', str(executable), '--prefix', str(PREFIX), '--data-dir', str(data), '--codex', tools['codex'], '--system-admin-socket', str(ADMIN_SOCKET)]
+    command += ['--disable-claude'] if disable_claude else ['--claude', tools['claude']]
     socket_unit = '''[Unit]
 Description=PendingCrew root-only typed management socket
 [Socket]
@@ -348,10 +353,46 @@ def data_lease(data, uid, gid):
     return fd
 
 
+def parse_preserved_status(status, listen_host, port):
+    # Input is an original typed remote.status/host.status result obtained from
+    # its still-live management entry, not a new authority/proof format.
+    if not isinstance(status, dict) or set(status) != {'identity','configuration','endpoint','listening'} or status['listening'] is not True:
+        raise Refused('original enabled/listening status without failure is required')
+    identity, configuration, endpoint = status['identity'], status['configuration'], status['endpoint']
+    if not isinstance(identity, dict) or set(identity) != {'authorityId','dbId','certificateDerBase64','spkiSha256'}:
+        raise Refused('complete original public identity required')
+    canonical_uuid(identity['authorityId']); checked_text(identity['dbId'],128)
+    if not isinstance(identity['spkiSha256'], str) or not re.fullmatch('[0-9a-f]{64}',identity['spkiSha256']):
+        raise Refused('original TLS pin invalid')
+    certificate = checked_text(identity['certificateDerBase64'],32768)
+    try:
+        if not base64.b64decode(certificate, validate=True): raise ValueError()
+    except ValueError:
+        raise Refused('original public certificate encoding invalid') from None
+    if not isinstance(configuration, dict) or set(configuration) != {'revision','enabled','listenHost','port'}:
+        raise Refused('complete original configuration required')
+    revision = configuration['revision']
+    if not isinstance(revision,str) or not re.fullmatch('[1-9][0-9]{0,19}',revision) or configuration['enabled'] is not True or type(configuration['port']) is not int:
+        raise Refused('original enabled configuration invalid')
+    if configuration['listenHost'] != listen_host or configuration['port'] != port or not 1 <= port <= 65535 or not isinstance(endpoint,dict) or type(endpoint.get('port')) is not int or endpoint != {'host':listen_host,'port':port}:
+        raise Refused('original listener differs from explicit bind; preservation never reconfigures it')
+    return status
+
+def check_preserved_connection(original, status):
+    saved = original['preservedConnection']
+    parse_preserved_status(saved, original['listenHost'], original['port'])
+    if status != saved:
+        raise Refused('original identity/configuration/endpoint changed or listener failed; no reconfiguration or new enrollment')
+
+
 def install(args):
     # All installation prerequisite checks finish before any persistent PendingCrew path/unit write.
     account = service_user(args.user)
-    tools = provider_preflight(account, {'codex': args.codex, 'claude': args.claude})
+    status_file = getattr(args, 'preserve_connection_from', None)
+    preserved = parse_preserved_status(read_record(pathlib.Path(status_file)), args.listen_host, args.port) if status_file else None
+    disable_claude = getattr(args, 'disable_claude', False)
+    supplied = {'codex': args.codex, 'claude': args.claude}
+    tools = provider_preflight(account, supplied, disable_claude=True) if disable_claude else provider_preflight(account, supplied)
     if active(): raise Refused('service is running; stop it safely first, then install. No process is killed or replaced')
     manifest_url = args.manifest_url or DEFAULT_MANIFEST_URL
     manifest_sha = args.manifest_sha256 or DEFAULT_MANIFEST_SHA256
@@ -372,6 +413,11 @@ def install(args):
     checked_text(args.advertise_host, 255); checked_text(args.listen_host, 255)
     import ipaddress
     ipaddress.ip_address(args.listen_host)
+    if preserved is not None:
+        if not data.is_dir(): raise Refused('preservation requires an existing private data directory')
+        database = (data / 'crewd.db').lstat()
+        if not stat.S_ISREG(database.st_mode) or database.st_uid != account.pw_uid or stat.S_IMODE(database.st_mode) != 0o600:
+            raise Refused('preservation requires an existing service-user0600 database')
     with tempfile.TemporaryDirectory(prefix='pendingcrew-install-') as staging_name:
         staging = pathlib.Path(staging_name); staging.chmod(0o755)
         unpacked, release = extract_release(download(artifact['url'], artifact['sha256'], 512 * 1024 * 1024), staging, artifact)
@@ -391,7 +437,7 @@ def install(args):
                 raise Refused('existing service user/data binding cannot be replaced by installation')
         prior = pointer(PREFIX)
         operation = STATE / ('install-' + installation + '.json')
-        new_record(operation, {'format': 1, 'kind': 'installation', 'requestId': installation, 'expectedCurrent': prior, 'sourceCommit': release['sourceCommit'], 'artifactSha256': artifact['sha256'], 'uid': account.pw_uid, 'dataDir': str(data), 'gid': account.pw_gid, 'providerPaths': tools, 'label': checked_text(args.label, 256), 'advertiseHost': args.advertise_host, 'listenHost': args.listen_host, 'port': args.port, 'configureRequestId': str(uuid.uuid4()), 'enrollmentRequestId': str(uuid.uuid4()), 'enrollmentId': str(uuid.uuid4())})
+        new_record(operation, {'format': 1, 'kind': 'installation', 'requestId': installation, 'expectedCurrent': prior, 'sourceCommit': release['sourceCommit'], 'artifactSha256': artifact['sha256'], 'uid': account.pw_uid, 'dataDir': str(data), 'gid': account.pw_gid, 'providerPaths': tools, 'disableClaude': disable_claude, 'preservedConnection': preserved, 'label': checked_text(args.label, 256), 'advertiseHost': args.advertise_host, 'listenHost': args.listen_host, 'port': args.port, 'configureRequestId': str(uuid.uuid4()), 'enrollmentRequestId': str(uuid.uuid4()), 'enrollmentId': str(uuid.uuid4())})
         with contextlib.ExitStack() as leases:
             for name, mode in [('.install.lock', 0o600), ('.runtime.lock', 0o644)]:
                 try:
@@ -429,7 +475,7 @@ def install(args):
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
-            socket_unit, service_unit = units(account, data, tools)
+            socket_unit, service_unit = units(account, data, tools, disable_claude=disable_claude)
             replace_root_file(pathlib.Path('/etc/systemd/system/pendingcrew.socket'), socket_unit.encode())
             replace_root_file(pathlib.Path('/etc/systemd/system/pendingcrew.service'), service_unit.encode())
             # Only this same service user/data binding may be updated by later installs.
@@ -448,6 +494,11 @@ def finish_installation(original):
         try: status = rpc('host.status', {}); break
         except (OSError, ValueError, Refused): time.sleep(0.1)
     if status is None: raise Refused('activation recorded but service readiness unknown; inspect original installation, no automatic rollback or new enrollment')
+    if original.get('preservedConnection') is not None:
+        check_preserved_connection(original, status)
+        grants = rpc('host.grants', {})  # Current readback, not proof of a prior grant list.
+        print(json.dumps({'preservedConnection': original['preservedConnection'], 'currentGrants': grants}, indent=2))
+        return
     configure_id = original['configureRequestId']
     configuration_file = STATE / ('configure-' + configure_id + '.json')
     if configuration_file.exists() or configuration_file.is_symlink():
@@ -481,9 +532,12 @@ def resume_installation(args):
         raise Refused('original activation is not current; inspect original UUID, no automatic activation/replay')
     account = service_user(pwd.getpwuid(original['uid']).pw_name)
     if account.pw_gid != original['gid']: raise Refused('original service group changed')
-    tools = provider_preflight(account, original['providerPaths'])
+    disable_claude = original.get('disableClaude', False)
+    if not isinstance(disable_claude, bool) or set(original['providerPaths']) != ({'codex'} if disable_claude else {'codex','claude'}):
+        raise Refused('original provider selection is invalid; no rediscovery')
+    tools = provider_preflight(account, original['providerPaths'], disable_claude=True) if disable_claude else provider_preflight(account, original['providerPaths'])
     data = pathlib.Path(original['dataDir'])
-    socket_unit, service_unit = units(account, data, tools)
+    socket_unit, service_unit = units(account, data, tools, disable_claude=disable_claude)
     expected = [(pathlib.Path('/etc/systemd/system/pendingcrew.socket'), socket_unit.encode()), (pathlib.Path('/etc/systemd/system/pendingcrew.service'), service_unit.encode())]
     binding = STATE / 'installation.json'
     if binding.exists() or binding.is_symlink():
@@ -649,8 +703,10 @@ def draft_fence(args):
 def parser():
     p = argparse.ArgumentParser(description='PendingCrew one-link host installation/administration; never provider login or inference')
     commands = p.add_subparsers(dest='command', required=True)
-    setup = commands.add_parser('install')
+    setup = commands.add_parser('install', allow_abbrev=False)
     setup.add_argument('--user'); setup.add_argument('--codex'); setup.add_argument('--claude'); setup.add_argument('--data-dir'); setup.add_argument('--manifest-url'); setup.add_argument('--manifest-sha256'); setup.add_argument('--request-id')
+    setup.add_argument('--disable-claude', action='store_true', help='explicitly disable Claude; check and enable only Codex')
+    setup.add_argument('--preserve-connection-from', metavar='STATUS_JSON', help='retain the identity/listener in original root0600 typed status JSON; no new enrollment')
     setup.add_argument('--listen-host', default='127.0.0.1'); setup.add_argument('--advertise-host', required=True); setup.add_argument('--port', type=int, default=49381); setup.add_argument('--label', default=socket.gethostname())
     for name in ['pair', 'recover']:
         c = commands.add_parser(name); c.add_argument('--operation-file', required=True)
