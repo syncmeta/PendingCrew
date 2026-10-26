@@ -50,6 +50,7 @@ for mode in modes:
                         elif method=='events.subscribe':result={'topics':[]}
                         elif method in ['crew.list','ask.list']:result=[]
                         elif method=='restart.pending':result=None
+                        elif method=='lifecycle.status':result={'role':'observer','ownerPresent':False,'previousExit':'clean'}
                         elif method=='message.post':
                             if mode=='remote-business-refused':
                                 conn.sendall((json.dumps({'id':req['id'],'error':{'code':-32003,'message':'method not allowed','data':{'refusal':'remote.permission_denied'}}})+'\n').encode());continue
