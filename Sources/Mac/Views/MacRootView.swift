@@ -23,20 +23,15 @@ struct MacThreePaneView: View {
         NavigationSplitView(columnVisibility:$columnVisibility){
             CrewSidebarView().environmentObject(sessionRunner)
                 .navigationSplitViewColumnWidth(min:200,ideal:238,max:310)
-                .toolbar(removing: .sidebarToggle)
         }detail:{
             CrewCenterView().environmentObject(sessionRunner)
                 .frame(minWidth:340,maxWidth:.infinity,maxHeight:.infinity)
-                .toolbar(removing: .sidebarToggle)
                 // Keep workspace controls below the native titlebar hit region.
                 // The root material still extends behind the transparent chrome.
         }
         .navigationSplitViewStyle(.balanced).tint(Theme.Palette.accent)
-        .toolbar(removing: .sidebarToggle)
-        .environment(\.crewdToggleSidebar, {
-            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-        })
-        .environment(\.crewdSidebarCollapsed, columnVisibility == .detailOnly)
+        // NavigationSplitView owns the native titlebar sidebar toggle, including
+        // its placement and the collapsed-sidebar restore action.
         // Hiding windowToolbar also hides macOS close/minimize/zoom controls.
         // Keep native chrome visible; the workspace header stays in safe-area content.
         .toolbar(.visible, for: .windowToolbar)

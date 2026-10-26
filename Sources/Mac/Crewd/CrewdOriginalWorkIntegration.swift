@@ -48,19 +48,6 @@ extension EnvironmentValues{
     }
 }
 
-private struct CrewdToggleSidebarKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
-private struct CrewdSidebarCollapsedKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues {
-    var crewdToggleSidebar: (() -> Void)? {
-        get { self[CrewdToggleSidebarKey.self] }
-        set { self[CrewdToggleSidebarKey.self] = newValue }
-    }
-    var crewdSidebarCollapsed: Bool {
-        get { self[CrewdSidebarCollapsedKey.self] }
-        set { self[CrewdSidebarCollapsedKey.self] = newValue }
-    }
-}
-
 struct CrewdOriginalWorkIntegration: ViewModifier {
     let workspace: CrewdWorkspace?
     var openSession: ((String) -> Void)? = nil
@@ -79,8 +66,6 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     var openSession: ((String) -> Void)? = nil
     var searchControl: AnyView? = nil
     var filterControl: AnyView? = nil
-    @Environment(\.crewdToggleSidebar) private var toggleSidebar
-    @Environment(\.crewdSidebarCollapsed) private var sidebarCollapsed
     @State private var workScopes:[String:String]=[:]
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
@@ -101,12 +86,6 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     #if os(macOS)
     private var desktopHeader: some View {
         HStack(spacing: 10) {
-            if let toggleSidebar {
-                Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
-                    .buttonStyle(.plain)
-                    .frame(width: 28, height: 30)
-                    .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
-            }
             CrewdGlassWorkspaceTabs(selection: $workspace.originalSection).frame(width: 365)
             if workspace.originalSection == "消息", let filterControl { filterControl }
             Spacer(minLength: 0)
