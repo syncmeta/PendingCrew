@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 窗口按钮修复日用更新
+
+单文件MacRootView将原隐藏windowToolbar改为visible，恢复系统原生窗口控件，源码净差与准确01ff候选独验004187c3通过。人类明确已正常退出后，原三phase均0；旧f253／20752.17666整包115项及ZIP保全，新01ff／20752.21191安装115项同候选，正常首开89965／89972。根亲看最终图和AX：三个关闭／最小化／全屏控件对象恢复，Joy原授权已连接，Tab与Sidebar无重叠；没有新配对或模型调用。
+
+像素边界单列：左上仍有系统紫色共享提示，故没有三色按钮像素完全可见的证据，不宣称该层通过；未更改系统权限、停止别的共享或反复截图。原据为 `apple-development-01ff821e-chrome-20261026/install-output/native-buttons-first-open-AX.txt` 与 `chrome-joy-final.png`。新日用窗口保留供人类使用，Joy后台及隧道不停止。
+
 ## 2026-10-26 f253 日用整包更新与 Joy 原配对连接接受
 
 最终独验 `dbbb5bf7e90aaf1b5e145682347f0510353dda3c91ffdf8c49e87a28dfc08b12` 接受三阶段备份／替换／首开及原 Joy 记录读取。日用0.2.1／20752.17666、App源码f253b28d，115项安装内容与已验候选相同；旧c634／20751.52764整包51项及ZIP逐字／CRC保全，备份位于 `~/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.2.1-20751.52764-before-f253b28d.zip`。旧App53700／Core53703正常退出后替换，没有强停用户任务。当前App86069／本机Core86072正常首开，数据保持，正常Apple Development签名，不冒新公证公开包。
