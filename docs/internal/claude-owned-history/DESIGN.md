@@ -1,5 +1,9 @@
 # Claude managed PTY: owned history and strict manual resume
 
+> **Historical frozen snapshot, not current progress (maintenance note, 2026-10-26).** The early branch/candidate, method-count/version and unfinished-backend statements below are retained as history; they must not trigger duplicate implementation or acceptance work. Use the [current whole-programme plan](../../superpowers/plans/2026-10-13-program-delivery-milestones.md), [current formal schema](../../../crewd/schema/crewd-api.schema.json), [API version source](../../../crewd/crates/proto/src/lib.rs) and [Store version source](../../../crewd/crates/store/src/schema.rs) for current scope (at this note: API3, 149 methods, Store21).
+>
+> The completed managed fresh-Human recovery module is recorded in its [whole-module QA](../../private/preserved-delivery-artifacts/claude-fresh-human-resume-20261026/INDEPENDENT-FINAL-MODULE-QA.json); compiled Core218 has [normal-component QA](../../private/preserved-delivery-artifacts/normal-core-218f6c15-independent-qa-20261026.json), and the e13 deployment package retains that original Core/proof with [exact artifact QA](../../private/preserved-delivery-artifacts/linux-persistent-host-e13ff2c9-20261026/INDEPENDENT-ACTUAL-PACKAGE-QA.json). These layers do not establish real-Claude complete lifecycle or complete native history acceptance. The original `fullHistoryLoad:false`/non-ACP and real-provider boundaries below remain in force.
+
 The original design was based on frozen Codex f0ad9d99; this implementation was rebased onto accepted source6c5fdb30. This independent branch is not part of that Codex candidate. No SDK, provider process, personal transcript, account, model, Apple key or public service is read/run. The existing strict version2.1.301, real PTY, fail-closed hooks, original runtime seal, public receipt/CAS, raw lease and OS birth checks are retained. Native16 and provider fullHistoryLoad stay false.
 
 ## One complete product unit
