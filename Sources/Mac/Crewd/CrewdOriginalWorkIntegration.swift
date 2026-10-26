@@ -108,7 +108,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     .accessibilityLabel(sidebarCollapsed ? "显示边栏" : "隐藏边栏")
             }
             CrewdGlassWorkspaceTabs(selection: $workspace.originalSection).frame(width: 365)
-            if let filterControl { filterControl }
+            if workspace.originalSection == "消息", let filterControl { filterControl }
             Spacer(minLength: 0)
             if let searchControl { searchControl }
         }.padding(.horizontal, 14).padding(.vertical, 8)
