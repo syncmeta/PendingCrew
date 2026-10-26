@@ -152,7 +152,7 @@ import Combine
             if let url=address.url,let hint=try? ApplePortableHost(displayName:computer.name,endpoint:url,transportAuthorityID:receipt.authorityId,databaseID:receipt.dbId,verifiedSPKI:receipt.serverSpkiSha256){await CrewPersonalDraftService.shared.rememberHost(hint)}
         }
         retireCurrent();selected=id;selectedReceipt=receipt
-        let next=CrewdWorkspace(authorityRecordID:id,connect:CrewdRemoteTransport.connector(id:id,pairing:pairing))
+        let next=CrewdWorkspace(authorityRecordID:id,connect:CrewdRemoteTransport.connector(id:id,pairing:pairing,expectedReceipt:receipt))
         install(next);await connectSelected(next)
     }
     #if os(macOS)

@@ -1,5 +1,11 @@
 import Foundation
 import Combine
+import Network
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 @MainActor
 final class CrewdWorkspace: ObservableObject {
@@ -372,6 +378,14 @@ final class CrewdWorkspace: ObservableObject {
     private var sync: Task<Void, Never>?
     private var reconnect: Task<Void, Never>?
     private var reconnectID: UUID?
+    private var remoteRecoveryPending = false
+    private var lastRecoveryWake: Date?
+    private var recoveryActivation: AnyCancellable?
+    #if os(macOS)
+    private var recoveryWake: AnyCancellable?
+    #endif
+    private var recoveryPath: NWPathMonitor?
+    private var previousPathSatisfied: Bool?
     #if os(macOS)
     private var backend: Process?
     private var ownedChildIdentity: CrewdKernelProcessIdentity?
@@ -415,6 +429,10 @@ final class CrewdWorkspace: ObservableObject {
         self.authorityRecordID = authorityRecordID
         self.dataDirectory = dataDirectory
         self.connector = connector
+        client.onManualDisconnect = { [weak self] in
+            self?.remoteRecoveryPending=false;self?.reconnect?.cancel();self?.reconnectID=nil
+            if let self,self.dataDirectory == nil,!self.retired {self.status="连接已断开"}
+        }
         client.onEvent = { [weak self] name, data in
             guard let self, !self.retired else { return }
             if name == "message.appended", let id = data["id"].string, self.observedMessageIDs.insert(id).inserted,
@@ -452,22 +470,75 @@ final class CrewdWorkspace: ObservableObject {
             self?.clearExecutorProfiles()
             guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
             self.knowledge.invalidate(); self.linkedKnowledge.invalidate(); self.channelKnowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
-            self.status = "连接中断，正在重新连接"; self.error = self.client.lastError
-            self.reconnect?.cancel()
-            let attempt = UUID(); self.reconnectID = attempt
-            self.reconnect = Task { [weak self] in
-                defer { if self?.reconnectID == attempt { self?.reconnectID = nil } }
-                for delay in [1, 2, 4, 8, 8] {
-                    try? await Task.sleep(for: .seconds(delay))
-                    guard !Task.isCancelled, let self, self.reconnectID == attempt else { return }
-                    do { try await self.connectOnly(); return } catch {
-                        guard !Task.isCancelled, self.reconnectID == attempt, !self.sleeping else { return }
-                        self.error = error.localizedDescription
+            self.error = self.client.lastError
+            if self.dataDirectory == nil {
+                self.remoteRecoveryPending = self.client.recoveryDisposition == .transport
+                guard self.remoteRecoveryPending else {self.status="连接已中断，请核对电脑身份或授权";return}
+            }
+            self.beginAutomaticReconnect(delays:[1,2,4,8,8])
+        }
+        if dataDirectory == nil { observeRemoteRecovery() }
+    }
+
+    private func recoverableRemoteFailure(_ error:Error)->Bool {
+        if error is CancellationError || error is CrewdRemoteError {return false}
+        if let network=error as? NWError {return CrewdClient.recovery(for:network) == .transport}
+        return error is CrewdClientError && client.recoveryDisposition == .transport
+    }
+    private func beginAutomaticReconnect(delays:[Int]) {
+        guard !retired,!stopping,!booting,!sleeping,reconnectID == nil else{return}
+        status="连接中断，正在重新连接"
+        let attempt=UUID();reconnectID=attempt
+        reconnect=Task { [weak self] in
+            defer {if self?.reconnectID == attempt {self?.reconnectID=nil}}
+            for delay in delays {
+                if delay > 0 {try? await Task.sleep(for:.seconds(delay))}
+                guard !Task.isCancelled,let self,!self.retired,!self.stopping,!self.sleeping,self.reconnectID == attempt else{return}
+                if self.dataDirectory == nil && (!self.remoteRecoveryPending || self.client.recoveryDisposition != .transport) {self.remoteRecoveryPending=false;return}
+                do {try await self.connectOnly();self.remoteRecoveryPending=false;return}
+                catch {
+                    guard !Task.isCancelled,!self.retired,!self.sleeping,self.reconnectID == attempt else{return}
+                    self.error=error.localizedDescription
+                    if self.dataDirectory == nil && !self.recoverableRemoteFailure(error) {
+                        self.remoteRecoveryPending=false;self.status="连接已中断，请核对电脑身份或授权";return
                     }
                 }
-                if self?.reconnectID == attempt { self?.status = "连接已中断" }
+            }
+            if self?.reconnectID == attempt {self?.status="连接已中断"}
+        }
+    }
+    /// A wake grants one bounded read-only connection burst to this original
+    /// remote workspace. It never selects a different record or replays work.
+    func recoverRemoteTransportIfNeeded() {
+        guard dataDirectory == nil,!retired,!stopping,!sleeping,!booting,!client.readyForWork,reconnectID == nil,remoteRecoveryPending else{return}
+        guard client.recoveryDisposition == .transport else{remoteRecoveryPending=false;return}
+        let wait=lastRecoveryWake.map{max(0,Int(ceil(30-Date().timeIntervalSince($0))))} ?? 0
+        lastRecoveryWake=Date().addingTimeInterval(TimeInterval(wait))
+        beginAutomaticReconnect(delays:[wait,1,2,4,8])
+    }
+    private func observeRemoteRecovery() {
+        #if os(macOS)
+        let active=NSApplication.didBecomeActiveNotification
+        recoveryWake=NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.didWakeNotification).sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.recoverRemoteTransportIfNeeded() }
+        }
+        #elseif os(iOS)
+        let active=UIApplication.didBecomeActiveNotification
+        #endif
+        recoveryActivation=NotificationCenter.default.publisher(for:active).sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.recoverRemoteTransportIfNeeded() }
+        }
+        let monitor=NWPathMonitor();recoveryPath=monitor
+        monitor.pathUpdateHandler={ [weak self] path in
+            let satisfied=path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self,!self.retired else{return}
+                let restored=self.previousPathSatisfied == false && satisfied
+                self.previousPathSatisfied=satisfied
+                if restored {self.recoverRemoteTransportIfNeeded()}
             }
         }
+        monitor.start(queue:DispatchQueue(label:"pendingcrew.remote.recovery"))
     }
 
     /// Retain unknown inputs in this old scope for inspection; never replay them
@@ -488,6 +559,10 @@ final class CrewdWorkspace: ObservableObject {
         closeTerminalDisplays()
         clearExecutorProfiles()
         retired = true; sleeping = true; generation = UUID(); selection = UUID()
+        remoteRecoveryPending=false;recoveryActivation?.cancel();recoveryActivation=nil;recoveryPath?.cancel();recoveryPath=nil
+        #if os(macOS)
+        recoveryWake?.cancel();recoveryWake=nil
+        #endif
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
         knowledge.invalidate(); linkedKnowledge.invalidate(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
@@ -500,8 +575,9 @@ final class CrewdWorkspace: ObservableObject {
         #endif
         booting = true; defer { booting = false }
         reconnect?.cancel(); reconnectID = nil; sleeping = false; error = nil; status = "正在连接"
+        remoteRecoveryPending=false
         do { try await connectOnly() }
-        catch { if !retired, !Task.isCancelled { self.error = error.localizedDescription; status = "连接失败" } }
+        catch { if !(error is CancellationError), !retired, !Task.isCancelled { self.error = error.localizedDescription; status = "连接失败";if dataDirectory == nil {remoteRecoveryPending=recoverableRemoteFailure(error)} } }
     }
     #if os(macOS)
     /// Explicit local launch uses an independent root; no legacy importer runs.
@@ -680,6 +756,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     #endif
     private func connectOnly() async throws {
+        try Task.checkCancellation()
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         clearExecutorProfiles()
         knowledge.invalidate(); linkedKnowledge.invalidate(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true

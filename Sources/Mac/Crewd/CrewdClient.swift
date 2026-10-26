@@ -105,6 +105,19 @@ final class CrewdNDJSONDecoder {
 /// fails pending work instead of replaying mutations or native human replies.
 @MainActor
 final class CrewdClient: ObservableObject {
+    enum RecoveryDisposition: Equatable { case manual, transport, refused }
+    private(set) var recoveryDisposition = RecoveryDisposition.manual
+    static func recovery(for error: NWError) -> RecoveryDisposition {
+        switch error {
+        case .dns: return .transport
+        case .posix(let code):
+            switch code {
+            case .ECONNREFUSED, .ECONNRESET, .ENETDOWN, .ENETUNREACH, .EHOSTDOWN, .EHOSTUNREACH, .ETIMEDOUT, .EPIPE, .ENOTCONN: return .transport
+            default: return .refused
+            }
+        default: return .refused // TLS/authentication and unknown failures require review.
+        }
+    }
     @Published private(set) var connected = false
     /// Socket attachment is observable before hello and subscription are complete.
     @Published private(set) var readyForWork = false
@@ -120,6 +133,7 @@ final class CrewdClient: ObservableObject {
     @Published private(set) var lastError: String?
     var onEvent: ((String, CrewdValue) -> Void)?
     var onDisconnect: (() -> Void)?
+    var onManualDisconnect: (() -> Void)?
     private var connection: NWConnection?
     #if os(macOS)
     private var localConnection: CrewdLocalIPC?
@@ -143,15 +157,18 @@ final class CrewdClient: ObservableObject {
     private var decoder = CrewdNDJSONDecoder()
     private var receivePending = false
     private var terminalFailure: String?
+    private var terminalRecovery = RecoveryDisposition.transport
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<CrewdValue, Error>] = [:]
     private var timeouts: [Int: Task<Void, Never>] = [:]
     private var ready: CheckedContinuation<Void, Error>?
 
     #if os(macOS)
-    func connect(path: String) async throws {
+    func connect(path: String, expectedEpoch: UUID? = nil) async throws {
+        try Task.checkCancellation()
+        guard expectedEpoch == nil || expectedEpoch == generation else {throw CancellationError()}
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
-        disconnect(); qualifiedForWork = false
+        resetConnection(); recoveryDisposition = .transport; qualifiedForWork = false
         let current = generation
         let local: CrewdLocalIPC
         do { local = try await CrewdLocalIPC.connect(path: path) }
@@ -165,7 +182,7 @@ final class CrewdClient: ObservableObject {
         }
         local.onEnd = { [weak self] message in
             guard let self, self.generation == current else { return }
-            do { try self.decoder.finish(); self.fail(message, notify: true) }
+            do { try self.decoder.finish(); self.fail(message, notify: true, recovery: .transport) }
             catch { self.fail(error.localizedDescription, notify: true) }
         }
         connected = true; local.startReading()
@@ -182,17 +199,22 @@ final class CrewdClient: ObservableObject {
 
     /// Callers construct a mutually authenticated TLS configuration from a stored
     /// pairing. No work RPC or event is admitted until its actual hello matches.
-    func connect(host: String, port: UInt16, parameters: NWParameters, expectedRemote: CrewdRemoteBindingExpectation) async throws {
+    func connect(host: String, port: UInt16, parameters: NWParameters, expectedRemote: CrewdRemoteBindingExpectation, expectedEpoch: UUID? = nil) async throws {
+        try Task.checkCancellation()
+        guard expectedEpoch == nil || expectedEpoch == generation else {throw CancellationError()}
         guard !host.isEmpty, host.utf8.count <= 255, port != 0,
               let networkPort = NWEndpoint.Port(rawValue: port) else {
             throw CrewdClientError(message: "电脑连接地址无效，尚未提交。", kind: .notSubmitted)
         }
-        try await connect(NWConnection(host: .init(host), port: networkPort, using: parameters), clientName: "PendingCrew", expectedRemote: expectedRemote)
+        try await connect(NWConnection(host: .init(host), port: networkPort, using: parameters), clientName: "PendingCrew", expectedRemote: expectedRemote, expectedEpoch:expectedEpoch ?? generation)
     }
 
-    private func connect(_ c: NWConnection, clientName: String, expectedRemote: CrewdRemoteBindingExpectation?) async throws {
+    private func connect(_ c: NWConnection, clientName: String, expectedRemote: CrewdRemoteBindingExpectation?, expectedEpoch:UUID) async throws {
+        try Task.checkCancellation()
+        guard expectedEpoch == generation else {throw CancellationError()}
         guard !retired else { throw CrewdClientError(message: "连接作用域已关闭，尚未提交。", kind: .notSubmitted) }
-        disconnect()
+        resetConnection()
+        recoveryDisposition = .transport
         qualifiedForWork = expectedRemote == nil
         let current = generation
         connection = c
@@ -206,8 +228,10 @@ final class CrewdClient: ObservableObject {
                     self.connected = true
                     self.ready?.resume(); self.ready = nil
                     self.receive(current)
-                case .failed(let error): self.transportEnded(error.localizedDescription)
-                case .cancelled: self.transportEnded("后台连接已关闭。")
+                case .failed(let error): self.transportEnded(error.localizedDescription, recovery: Self.recovery(for:error))
+                case .waiting(let error):
+                    if Self.recovery(for:error) == .refused {self.transportEnded(error.localizedDescription,recovery:.refused)}
+                case .cancelled: self.transportEnded("后台连接已关闭。", recovery: .manual)
                 default: break
                 }
             }
@@ -215,7 +239,7 @@ final class CrewdClient: ObservableObject {
         let deadline = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let self, self.generation == current, self.ready != nil else { return }
-            self.fail("连接后台超时。", notify: true)
+            self.fail("连接后台超时。", notify: true, recovery: .transport)
         }
         var reachedBackend = false
         do {
@@ -310,7 +334,7 @@ final class CrewdClient: ObservableObject {
                 guard let error else { return }
                 DispatchQueue.main.async {
                     guard let self, self.generation == current else { return }
-                    self.transportEnded(error.localizedDescription)
+                    self.transportEnded(error.localizedDescription, recovery: Self.recovery(for:error))
                 }
             })
             }
@@ -320,7 +344,7 @@ final class CrewdClient: ObservableObject {
                 guard let error else { return }
                 DispatchQueue.main.async {
                     guard let self, self.generation == current else { return }
-                    self.transportEnded(error.localizedDescription)
+                    self.transportEnded(error.localizedDescription, recovery: Self.recovery(for:error))
                 }
             })
             }
@@ -335,7 +359,8 @@ final class CrewdClient: ObservableObject {
     }
 
     func retire() { retired = true; disconnect() }
-    func disconnect() { fail("连接已断开。", notify: false); lastError = nil }
+    func disconnect() { resetConnection(); onManualDisconnect?() }
+    private func resetConnection() { fail("连接已断开。", notify: false, recovery: .manual); lastError = nil }
 
     private var personalDraftEventEpoch:UUID?
     /// Only after a successful typed status read on this exact connection.
@@ -346,11 +371,13 @@ final class CrewdClient: ObservableObject {
         _ = try await call("events.subscribe",.object(["topics":.array(topics.map(CrewdValue.string))]))
         guard connectionEpoch==epoch,readyForWork else{throw CancellationError()};personalDraftEventEpoch=epoch
     }
-    private func transportEnded(_ message: String) {
+    private func transportEnded(_ message: String, recovery: RecoveryDisposition) {
         // Network can announce failure before completing an outstanding receive.
         // Let that receive drain final bytes; only received RPC frames prove success.
-        if connected && receivePending { terminalFailure = message }
-        else { fail(message, notify: true) }
+        if connected && receivePending {
+            if terminalFailure == nil || terminalRecovery == .transport {terminalFailure = message; terminalRecovery = recovery}
+        }
+        else { fail(message, notify: true, recovery: recovery) }
     }
 
     private func receive(_ current: UUID) {
@@ -362,8 +389,8 @@ final class CrewdClient: ObservableObject {
                 do {
                     if let data { try self.ingest(data) }
                     guard self.generation == current else { return }
-                    if let error { self.fail(error.localizedDescription, notify: true) }
-                    else if complete { try self.decoder.finish(); self.fail(self.terminalFailure ?? "后台连接已结束。", notify: true) }
+                    if let error { self.fail(error.localizedDescription, notify: true, recovery: self.terminalFailure != nil && self.terminalRecovery != .transport ? self.terminalRecovery:Self.recovery(for:error)) }
+                    else if complete { try self.decoder.finish(); self.fail(self.terminalFailure ?? "后台连接已结束。", notify: true, recovery: self.terminalFailure == nil ? .transport:self.terminalRecovery) }
                     else { self.receive(current) }
                 } catch { self.fail("后台响应无法解析：\(error.localizedDescription)", notify: true) }
             }
@@ -374,7 +401,10 @@ final class CrewdClient: ObservableObject {
         try decoder.append(data) { frame in
             guard generation == current else { return }
             if let id = frame["id"].int {
-                if frame["error"] != .null { finish(id, .failure(CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。", code: frame["error"]["code"].int, data: frame["error"]["data"]))) }
+                if frame["error"] != .null {
+                    let error=CrewdClientError(message: frame["error"]["message"].string ?? "后台请求失败。", code: frame["error"]["code"].int, data: frame["error"]["data"])
+                    finish(id, .failure(error))
+                }
                 else { finish(id, .success(frame["result"])) }
             } else if let event = frame["event"].string, readyForWork { onEvent?(event, frame["data"]) }
         }
@@ -383,8 +413,9 @@ final class CrewdClient: ObservableObject {
         timeouts.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(with: result)
     }
-    private func fail(_ message: String, notify: Bool) {
+    private func fail(_ message: String, notify: Bool, recovery: RecoveryDisposition = .refused) {
         let hadConnection = hasTransport
+        recoveryDisposition = recovery
         generation = UUID()
         let c = connection; connection = nil
         c?.stateUpdateHandler = nil; c?.cancel()

@@ -224,10 +224,17 @@ import X509
         try await pairing.confirm(signedReceipt, id: id)
         stage("native-receipt-confirmed")
         let receipt = try await pairing.receipt(id)
+        let changedReceipt=CrewdRemoteReceipt(invitationId:receipt.invitationId,grantId:receipt.grantId,authorityId:receipt.authorityId,dbId:receipt.dbId,serverSpkiSha256:receipt.serverSpkiSha256,clientSpkiSha256:receipt.clientSpkiSha256,grantRevision:receipt.grantRevision+"0",acceptedAt:receipt.acceptedAt)
+        let rejectedClient=CrewdClient()
+        do {
+            try await CrewdRemoteTransport.connector(id:id,pairing:pairing,expectedReceipt:changedReceipt)(rejectedClient)
+            fatalError("changed same-record grant was adopted automatically")
+        } catch CrewdRemoteError.wrongIdentity { }
+        precondition(!rejectedClient.connected,"receipt mismatch must fail before opening transport")
         let invitation = try await pairing.invitation(invitationEnvelope, requireFresh: false)
         precondition(invitation.server.dbId == receipt.dbId && invitation.server.authorityId == receipt.authorityId)
         let remote = CrewdClient()
-        try await CrewdRemoteTransport.connector(id: id, pairing: pairing)(remote)
+        try await CrewdRemoteTransport.connector(id: id, pairing: pairing, expectedReceipt: receipt)(remote)
         precondition(remote.connected)
         stage("native-tls-and-hello-qualified")
         let work = root.appendingPathComponent("native-work")
@@ -255,7 +262,7 @@ import X509
         remote.disconnect()
         let next = CrewdClient()
         do {
-            try await CrewdRemoteTransport.connector(id: id, pairing: pairing)(next)
+            try await CrewdRemoteTransport.connector(id: id, pairing: pairing, expectedReceipt: receipt)(next)
             fatalError("old native certificate regained qualified connection")
         } catch { }
         next.disconnect()

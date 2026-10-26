@@ -1,4 +1,6 @@
+@testable import PendingCrew
 import Foundation
+import AppKit
 
 @main struct FailureProbe {
     @MainActor static func main() async {
@@ -11,9 +13,28 @@ import Foundation
     @MainActor static func run() async throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
         let mode = CommandLine.arguments[2]
-        let workspace = CrewdWorkspace(dataDirectory: root)
+        let remote = mode.hasPrefix("remote-")
+        var holdConnection=mode == "remote-cancel-initial"
+        var connectionWait:CheckedContinuation<Void,Never>?
+        let workspace = remote
+            ? CrewdWorkspace(authorityRecordID:UUID(),connect:{client in
+                let epoch=client.connectionEpoch
+                if holdConnection {holdConnection=false;await withCheckedContinuation {connectionWait=$0}}
+                try await client.connect(path:root.appendingPathComponent("crewd.sock").path,expectedEpoch:epoch)
+            })
+            : CrewdWorkspace(dataDirectory: root)
+        defer {workspace.retire()}
         func require(_ ok: Bool, _ message: String) throws {
             if !ok { throw ProbeError.failed(message) }
+        }
+        if mode == "remote-cancel-initial" {
+            let connecting=Task {await workspace.connect()}
+            while connectionWait == nil {await Task.yield()}
+            workspace.client.disconnect();connectionWait!.resume();connectionWait=nil
+            await connecting.value
+            try require(!workspace.client.connected,"manual disconnect during initial credential wait opened transport")
+            print("PASS: initial credential wait respects manual-disconnect epoch before transport")
+            return
         }
         await workspace.connect()
         if mode == "startup" {
@@ -22,14 +43,27 @@ import Foundation
             print("PASS: real workspace exposes backend startup failure")
             return
         }
-        if mode == "incompatible" {
+        if mode == "incompatible" || mode == "remote-refused" || mode == "remote-grant-refused" {
             try require(!workspace.client.connected, "incompatible hello accepted")
-            try require(workspace.error?.contains("不兼容") == true, "protocol incompatibility was replaced: \(workspace.error ?? "nil")")
+            let expected=mode == "remote-grant-refused" ? "grant revoked":"不兼容"
+            try require(workspace.error?.contains(expected) == true, "handshake refusal was replaced: \(workspace.error ?? "nil")")
+            if remote {
+                NotificationCenter.default.post(name:NSApplication.didBecomeActiveNotification,object:nil)
+                try await Task.sleep(for:.seconds(2))
+                try require(!workspace.client.connected,"foreground must not retry a refused identity/protocol")
+            }
             print("PASS: real workspace exposes incompatible protocol")
             return
         }
         try require(workspace.client.connected && workspace.error == nil, "initial connection failed")
         let sent = await workspace.perform("message.post", .object(["channelId": .string("synthetic-channel"), "text": .string("DO_NOT_REPLAY")]))
+        if mode == "remote-business-refused" {
+            try require(!sent && workspace.client.readyForWork,"a single method denial disconnected a readable authority")
+            _ = try await workspace.client.call("crew.list")
+            try require(workspace.client.readyForWork,"ordinary permission denial retired the readable connection")
+            print("PASS: one business permission denial preserves the original readable connection")
+            return
+        }
         if ["final_reply", "eof", "truncated"].contains(mode) {
             if mode == "final_reply" {
                 try require(sent && workspace.error == nil, "complete final mutation reply was lost")
@@ -54,6 +88,26 @@ import Foundation
         try Data("ready".utf8).write(to: root.appendingPathComponent("explicit-reconnect"))
         while !FileManager.default.fileExists(atPath: root.appendingPathComponent("peer-ready").path) {
             try await Task.sleep(for: .milliseconds(20))
+        }
+        if remote {
+            if mode == "remote-cancel-pending" {holdConnection=true}
+            if mode == "remote-manual" {workspace.client.disconnect()}
+            if mode == "remote-retired" {workspace.retire()}
+            for _ in 0..<5 {NotificationCenter.default.post(name:NSApplication.didBecomeActiveNotification,object:nil)}
+            if mode == "remote-cancel-pending" {
+                while connectionWait == nil {await Task.yield()}
+                workspace.client.disconnect();connectionWait!.resume();connectionWait=nil
+            }
+            if mode == "remote-foreground" {
+                let resumed=Date().addingTimeInterval(10)
+                while !workspace.client.readyForWork && Date() < resumed {try await Task.sleep(for:.milliseconds(30))}
+                try require(workspace.client.readyForWork,"foreground did not recover the original remote after its retry budget exhausted")
+            } else {
+                try await Task.sleep(for:.seconds(2))
+                try require(!workspace.client.connected,"manual disconnect or retired scope reconnected on activation")
+            }
+            print("PASS: actual App bounded remote recovery, original scope and no business replay: "+mode)
+            return
         }
         await workspace.connect()
         try require(workspace.client.connected && workspace.error == nil && workspace.status.hasPrefix("已连接"), "explicit reconnect failed")
