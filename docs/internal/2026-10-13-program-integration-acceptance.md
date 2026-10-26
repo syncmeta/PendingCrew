@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 Joy 真实远程执行与修复后原生历史读回完成
+
+整链独验 `1427d0793a75bc54e56455c987099e106794f4c5cea5e0764e79fe05bd458958` 接受本次有界临时实测。质量线核对原实际证据，没有重复 SSH、GUI 或模型调用；最终 OS 退出事实沿作者原工具记录接收，不冒质量线另行运行。
+
+Joy `154.12.95.46` 上准确 cc316 Linux Core，经普通 TLS 与 SSH 隧道连接本机前端，已完成唯一 Codex 0.164.0／gpt-6.1-sol 任务；远端文件原文、provider 完成、正常停工和精确子进程消失均已核对。Core 原身份／数据库／grant 重开保持，零自动任务。随后准确 0f56 Mac 0.2.1／20752.14403 使用原正常 Keychain 配对冷重开，通过只读历史显示原 completed 轮次、printf/cat 及完整 Created 回复，根亲看实图与 AX；未重配、未启动第二任务。
+
+远程状态读取缺陷使用既有 inspect.live 修复，不扩大 allowlist；原实际旧 App RED 与新 App 12 项 GREEN 分列保存。新 Mac 静态独验 9374c14b、同源 iOS 平台差异及原 12 项独验 d9412195 接受，真实 Joy 后台仍为 cc316，未将新 218f 本机组件或 Linux 产物改标成远端运行证据。
+
+临时远端 Core 与本地 SSH 管理／隧道正常停止，测试数据与配对保留。原持久终端收尾曾触输入缓冲上限，后续精确 owned 进程正常信号及 OS 消失核对单列，未重发业务请求。新前端仅保留只读结果窗口；日用、原开发窗及未知旧窗口未操作。原据与完整边界在 `/private/tmp/pendingcrew-joy-vps-codex-20261026/FINAL.md`，实际正文图 `joy-fixed-original-history.png`；旧 task-complete 图仅表单，不冒正文。此结果不代表公网直连、一键安装、常驻部署、手机实机、云写或 APNs 送达。main/global 已普通推送至 0f56，覆盖旧记录的推送待办状态。
+
 ## 2026-10-26 Claude恢复完整源模块接受
 
 独验 `cc1a7a6e72941fd997ee67934c452eb4daf74d3c54e4344aed75a7ca9b761e2c` 接受五源最终freeze5dd42d63：原真实Core/fake PTY新Human恢复RED→GREEN；精确原UUID、无启动正文、截止边界、逆序不丢、独立目标不卡、Unknown/Stop/错误来源不自动重试保持。另一个同消息多目标资格竞态原RED→GREEN证明：失效目标pending0/不运行，合法目标attempt1/正文1；损坏DB元数据仍Err。共10个不同受影响函数证据，原9绿复用，未重全套。严格Clippy因未改proto基线失败，advisory退出0单列；不冒真实供应商资格或新包已验。

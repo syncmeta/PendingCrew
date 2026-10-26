@@ -1,5 +1,15 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-26 Joy VPS 与本机前端真实任务闭环完成
+
+本轮人类指定的 Joy 为 `root@154.12.95.46`。正常 Mac 前端经 SSH 隧道及原生 TLS 配对，使用 Joy 已登录的 Codex 0.164.0／gpt-6.1-sol 完成唯一真实任务：在新的远端测试工作目录创建 `acceptance.txt`，31 字节原文及 SHA256 `2cd152bc7683e9c0bb7f5ee97ef140db2ff990f772ede6c4ac8c0bed628146bd` 已读回。正常停工、物理子进程消失、后台同身份重开和零自动任务均已取得证据。
+
+联调发现的远程 `session.live` 误用由 `0f56e44d` 修复，改读既有 `session.inspect.live`，未扩大权限。新普通 Mac 0.2.1／20752.14403 用原正常 Keychain 配对冷重开，通过会话右键控制的只读历史入口显示同一 completed 轮次、命令及完整回复；没有再次恢复会话、配对或调用模型。根已亲看实际截图与 AX。远端实际仍是 cc316 Linux Core，不能冒称含 218f Claude 修复；新前端及其本机 helper 分别来自 0f56／218f。
+
+新 Mac 与 iPhoneOS Development 包各一次暖构建通过，Mac 静态独验 `9374c14b…0a936`、iOS 平台差异及原实际 App 12 项受影响流程独验 `d9412195…643f4` 接受；没有安装手机或更换日用版。main/global 已普通推送至 0f56，原较早推送失败记录保留但不再代表当前远端。
+
+本次临时 Joy Core 与 owned SSH 管理／隧道已正常停止，测试数据库、文件、配对及证据保留，新前端保留只读结果窗口。完整记录 `/private/tmp/pendingcrew-joy-vps-codex-20261026/FINAL.md`；真正回复图为 `joy-fixed-original-history.png`，旧名 `joy-codex-task-complete.png` 只证明新成员表单，不能当回复截图。公网一键配对、开机常驻、正式安装器对 Codex 0.164 的资格、Claude 真实供应商以及多端云与推送仍是独立未交付范围。接下来应做正常部署与准确新候选交付，不重复这次真实任务或稳定业务验收。
+
 ## 2026-10-26 Claude新Human恢复模块冻结，Joy远程试用进入执行准备
 
 五源受管Claude恢复模块由独验 `cc1a7a6e…761e2c` 接受。可信本轮Human新提交才获得精确原UUID恢复意图，无启动正文；原wake/message的精确截止边界保本次新消息、旧Unknown不回放。异步仲裁按真正目标依赖处理逆序，独立目标不等慢仲裁；单目标资格明确拒绝不吞同消息的其他合法目标，真实数据库错误仍报错。原真实Core/fake PTY RED及最终10个不同受影响函数通过证据保留，最后单点修复只补两项delta、不重原9项。严格Clippy遇未改proto六项基线告警失败，限定目标advisory为0，不冒严格lint全过。完整原件在 `claude-fresh-human-resume-20261026/` 和其revision-2；未调用真实Claude、未改变公共schema。下一步准确提交后一次新normal及客户端组合，旧cc316产物不含此修复。
