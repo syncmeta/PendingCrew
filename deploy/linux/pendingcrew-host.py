@@ -10,14 +10,25 @@ ADMIN_SOCKET = pathlib.Path('/run/pendingcrew/admin.sock')
 SERVICE = 'pendingcrew.service'
 SOCKET_UNIT = 'pendingcrew.socket'
 FRAME_LIMIT = 262144
-PROVIDERS = {'codex': ('codex-cli 0.163.0', ['login', 'status']), 'claude': ('2.1.301 (Claude Code)', ['auth', 'status'])}
+# Also read as a literal by the assembler. These are installation prerequisites,
+# not full protocol, model access, or runtime qualification.
+PROVIDER_POLICY = {
+    'codex': {'versionPattern': r'codex-cli [0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?',
+              'interfaceArgs': ['app-server', '--help'],
+              'interfaceUsage': r'^Usage:\s+codex app-server(?:\s|$)',
+              'loginArgs': ['login', 'status']},
+    'claude': {'exactVersion': '2.1.301 (Claude Code)', 'loginArgs': ['auth', 'status']},
+}
 GUIDANCE = '''Install and log in yourself as the selected ordinary service user, then rerun:
 Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh
        codex login --device-auth
+       https://learn.chatgpt.com/docs/auth
 Claude: curl -fsSL https://claude.ai/install.sh | bash
         claude auth login
-This candidate supports Codex0.163.0 and Claude2.1.301 only. Do not downgrade automatically.
-CLI configuration/login presence is not a model-access test.'''
+        https://code.claude.com/docs/en/authentication
+Claude managed tasks require exactly 2.1.301; do not downgrade automatically.
+These are installation prerequisites, not a model-access or full protocol test.
+No tool installation, login, credential copy or task is performed by PendingCrew.'''
 class Refused(Exception): pass
 
 def require_root():
@@ -112,32 +123,60 @@ def service_user(name):
     if name is None:
         uid = os.environ.get('SUDO_UID')
         if uid and uid.isdecimal() and int(uid) != 0: account = pwd.getpwuid(int(uid))
-        else: raise Refused('select the existing ordinary user with --user; install/login both providers as that user first\n' + GUIDANCE)
+        else: raise Refused('select the existing ordinary user with --user; install/login both tools as that user first\n' + GUIDANCE)
     else: account = pwd.getpwnam(name)
     if account.pw_uid == 0 or not pathlib.Path(account.pw_dir).is_dir() or account.pw_shell.endswith(('nologin', '/false')):
         raise Refused('an existing ordinary login user is required; no credentials are imported')
     return account
 
+def provider_output(result):
+    # Auth status and broken wrappers can contain credentials. Never echo output.
+    if result.returncode != 0 or len(result.stdout) > 65536:
+        raise Refused('command failed or returned excessive output')
+    return result.stdout.decode('utf-8', errors='strict').strip()
+
 def provider_preflight(account, supplied, runner=subprocess.run):
-    tools = {}
-    for name, (expected, status_args) in PROVIDERS.items():
-        path = supplied.get(name)
-        if path is None:
-            located = transient(account.pw_uid, account.pw_gid, ['/bin/sh', '-c', 'command -v "$1"', 'sh', name], runner=runner)
-            if located.returncode == 0: path = located.stdout.decode().strip()
-            else:
-                candidate = pathlib.Path(account.pw_dir) / '.local/bin' / name
-                tested = transient(account.pw_uid, account.pw_gid, ['/usr/bin/test', '-x', str(candidate)], runner=runner)
-                if tested.returncode == 0: path = str(candidate)
-        if path is None or not pathlib.Path(path).is_absolute(): raise Refused(name + ' not found in the real service context\n' + GUIDANCE)
-        path = str(pathlib.Path(checked_text(path)).resolve(strict=True))
-        version = transient(account.pw_uid, account.pw_gid, [path, '--version'], runner=runner)
-        if version.returncode != 0 or version.stdout.decode(errors='replace').strip() != expected:
-            raise Refused(name + ' has no qualification for this candidate in the real service context\n' + GUIDANCE)
-        status = transient(account.pw_uid, account.pw_gid, [path, *status_args], runner=runner)
-        if status.returncode != 0: raise Refused(name + ' is not logged in/configured for the service user\n' + GUIDANCE)
-        tools[name] = path
+    tools, failures = {}, []
+    for name, policy in PROVIDER_POLICY.items():
+        try:
+            path = supplied.get(name)
+            if path is None:
+                located = transient(account.pw_uid, account.pw_gid, ['/bin/sh', '-c', 'command -v "$1"', 'sh', name], runner=runner)
+                if located.returncode == 0:
+                    path = provider_output(located)
+                else:
+                    candidate = pathlib.Path(account.pw_dir) / '.local/bin' / name
+                    tested = transient(account.pw_uid, account.pw_gid, ['/usr/bin/test', '-x', str(candidate)], runner=runner)
+                    if tested.returncode == 0: path = str(candidate)
+            if path is None or not pathlib.Path(path).is_absolute():
+                raise Refused('not found; install it as the selected service user')
+            path = str(pathlib.Path(checked_text(path)).resolve(strict=True))
+            version = provider_output(transient(account.pw_uid, account.pw_gid, [path, '--version'], runner=runner))
+            if 'exactVersion' in policy:
+                if version != policy['exactVersion']:
+                    raise Refused('managed task version must be ' + policy['exactVersion'])
+            elif re.fullmatch(policy['versionPattern'], version) is None:
+                raise Refused('unrecognized CLI identity/version')
+            if 'interfaceArgs' in policy:
+                help_text = provider_output(transient(account.pw_uid, account.pw_gid, [path, *policy['interfaceArgs']], runner=runner))
+                if re.search(policy['interfaceUsage'], help_text, re.MULTILINE) is None:
+                    raise Refused('app-server command help is not supported')
+            status = transient(account.pw_uid, account.pw_gid, [path, *policy['loginArgs']], runner=runner)
+            if status.returncode != 0:
+                raise Refused('not logged in/configured for the selected service user')
+            tools[name] = path
+        except Refused as failure:
+            failures.append(name + ': ' + str(failure))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            failures.append(name + ': prerequisite check failed or timed out in the real service context')
+    if failures:
+        raise Refused('Installation prerequisites not met:\n' + '\n'.join(failures) + '\n' + GUIDANCE)
     return tools
+
+def validate_provider_policy(manifest):
+    if manifest.get('providerPrerequisites') != PROVIDER_POLICY:
+        raise Refused('release installation prerequisites do not match this installer')
+
 
 def download(url, expected, limit):
     parsed = urllib.parse.urlsplit(url)
@@ -310,7 +349,7 @@ def data_lease(data, uid, gid):
 
 
 def install(args):
-    # All credential/version checks finish before any persistent PendingCrew path/unit write.
+    # All installation prerequisite checks finish before any persistent PendingCrew path/unit write.
     account = service_user(args.user)
     tools = provider_preflight(account, {'codex': args.codex, 'claude': args.claude})
     if active(): raise Refused('service is running; stop it safely first, then install. No process is killed or replaced')
@@ -322,8 +361,7 @@ def install(args):
     artifact = manifest.get('artifact', {})
     if manifest.get('format') != 1 or artifact.get('architecture') != architecture or not re.fullmatch('[0-9a-f]{40}', artifact.get('sourceCommit', '')) or artifact['sourceCommit'] not in urllib.parse.urlsplit(artifact.get('url', '')).path:
         raise Refused('wrong immutable release manifest')
-    expected_qualification = {'codex': '0.163.0', 'claude': '2.1.301'}
-    if manifest.get('providerQualification') != expected_qualification: raise Refused('release qualification does not match this installer')
+    validate_provider_policy(manifest)
     data = pathlib.Path(args.data_dir or (pathlib.Path(account.pw_dir) / '.local/share/PendingCrew')).absolute()
     checked_text(str(data))
     if len(os.fsencode(data / 'crewd.sock')) >= 108: raise Refused('data directory exceeds Unix socket address limit')

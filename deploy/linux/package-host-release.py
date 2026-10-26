@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Assemble a reviewed Linux Core into an immutable host package; never publish."""
-import argparse, hashlib, io, json, pathlib, re, tarfile, urllib.parse
+import argparse, ast, hashlib, io, json, pathlib, re, tarfile, urllib.parse
 
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -25,6 +25,14 @@ def package(args):
         raise ValueError('normal frozen-source build proof does not match this ELF')
     here = pathlib.Path(__file__).resolve().parent
     installer = (here / 'pendingcrew-host.py').read_bytes()
+    policy_nodes = [
+        node.value for node in ast.parse(installer).body
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == 'PROVIDER_POLICY'
+            for target in node.targets)
+    ]
+    if len(policy_nodes) != 1: raise ValueError('one literal installer prerequisite policy required')
+    provider_policy = ast.literal_eval(policy_nodes[0])
     files = {'bin/crewd':core, 'bin/pendingcrew-host.py':installer, 'bin/managed-host.py':(here/'managed-host.py').read_bytes(), 'build-proof.json':proof_bytes}
     release = {'format':1,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':21,'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
     files['release.json'] = canonical(release)
@@ -35,7 +43,7 @@ def package(args):
             info.mtime=0; info.uid=0; info.gid=0; info.uname=''; info.gname=''
             bundle.addfile(info,io.BytesIO(data))
     payload = archive.getvalue()
-    manifest = canonical({'format':1,'providerQualification':{'codex':'0.163.0','claude':'2.1.301'},'artifact':{'url':artifact_url,'sha256':sha(payload),'sourceCommit':args.source,'architecture':args.architecture}})
+    manifest = canonical({'format':1,'providerPrerequisites':provider_policy,'artifact':{'url':artifact_url,'sha256':sha(payload),'sourceCommit':args.source,'architecture':args.architecture}})
     entry = installer.decode().replace('DEFAULT_MANIFEST_URL = None', 'DEFAULT_MANIFEST_URL = ' + repr(manifest_url),1).replace('DEFAULT_MANIFEST_SHA256 = None','DEFAULT_MANIFEST_SHA256 = ' + repr(sha(manifest)),1).encode()
     out = pathlib.Path(args.output); out.mkdir(mode=0o700,parents=False,exist_ok=False)
     for name,data in [('host.tar.gz',payload),('manifest.json',manifest),('install.py',entry)]:

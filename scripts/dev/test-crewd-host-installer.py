@@ -61,33 +61,79 @@ class InstallerControls(unittest.TestCase):
             with self.assertRaises(host.Refused):host.notification_configure(types.SimpleNamespace(input_file=None))
             write.assert_not_called();request.assert_not_called()
 
-    def test_preflight_refusal_performs_no_persistent_install_or_inference(self):
+    def provider_runner(self, outcomes=None):
+        outcomes = outcomes or {}
+        calls = []
+        def run(argv, **kwargs):
+            self.assertNotIn('env', kwargs)
+            self.assertEqual(argv[:2], ['/usr/bin/systemd-run', '--quiet'])
+            command = argv[argv.index('--') + 1:]
+            calls.append(command)
+            name = command[-1] if command[0] == '/bin/sh' else pathlib.Path(command[0]).name
+            if command[0] == '/bin/sh':
+                code, output = (1, b'') if outcomes.get(name) == 'missing' else (0, str(paths[name]).encode())
+            elif command[0] == '/usr/bin/test': code, output = 1, b''
+            elif command[1:] == ['--version']:
+                if outcomes.get(name) == 'timeout': raise subprocess.TimeoutExpired(argv, 20, output=b'SECRET')
+                code, output = 0, (b'codex-cli 0.164.0' if name == 'codex' else b'2.1.301 (Claude Code)')
+                if outcomes.get(name) == 'identity': output = b'other-cli 0.164.0 SECRET'
+                if outcomes.get(name) == 'version': output = b'2.1.302 (Claude Code)'
+            elif command[1:] == ['app-server', '--help']:
+                code, output = 0, b'Usage: codex app-server [OPTIONS] [COMMAND]'
+                if outcomes.get(name) == 'interface': output = b'Usage: codex [OPTIONS] [PROMPT] SECRET'
+            elif command[1:] in (['login', 'status'], ['auth', 'status']):
+                code, output = (1, b'SECRET') if outcomes.get(name) == 'login' else (0, b'SECRET')
+            else: self.fail('unexpected provider operation: ' + repr(command))
+            return subprocess.CompletedProcess(argv, code, output, b'SECRET')
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        paths = {name: pathlib.Path(temporary.name) / name for name in ['codex', 'claude']}
+        for path in paths.values(): path.touch()
+        return run, calls
+
+    def test_codex_interface_prerequisite_accepts_new_version_without_inference(self):
+        run, calls = self.provider_runner()
         account = types.SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_dir='/home/ordinary')
-        for failure in ['missing', 'version', 'login']:
-            with self.subTest(failure=failure):
-                calls = []
-                def run(argv, **kwargs):
-                    calls.append(argv)
-                    self.assertNotIn('env', kwargs)
-                    self.assertTrue(argv[:2] == ['/usr/bin/systemd-run', '--quiet'])
-                    command = argv[argv.index('--') + 1:]
-                    if command[0] == '/bin/sh':
-                        self.assertEqual(command[1:], ['-c', 'command -v "$1"', 'sh', 'codex'])
-                        return subprocess.CompletedProcess(argv, 1 if failure == 'missing' else 0, b'/usr/bin/python3\n', b'')
-                    if command[0] == '/usr/bin/test': return subprocess.CompletedProcess(argv, 1, b'', b'')
-                    if command[-1] == '--version': return subprocess.CompletedProcess(argv, 0, b'bad\n' if failure == 'version' else b'codex-cli 0.163.0\n', b'')
-                    self.assertEqual(command[-2:], ['login', 'status'])
-                    self.assertEqual(failure, 'login', 'unsupported version reached auth status')
-                    return subprocess.CompletedProcess(argv, 1, b'', b'')
-                with mock.patch.object(host, 'service_user', return_value=account), mock.patch.object(host.subprocess, 'run', side_effect=run), mock.patch.object(host, 'root_code_directory') as write, mock.patch.object(host, 'download') as network:
-                    # provider_preflight default runner is bound at definition time.
-                    with self.assertRaises(host.Refused): host.provider_preflight(account, {}, runner=run)
-                    original_preflight = host.provider_preflight
-                    with mock.patch.object(host, 'provider_preflight', side_effect=lambda account, supplied: original_preflight(account, supplied, runner=run)):
-                        with self.assertRaises(host.Refused): host.install(types.SimpleNamespace(user='ordinary', codex=None, claude=None))
+        tools = host.provider_preflight(account, {}, runner=run)
+        self.assertEqual(set(tools), {'codex', 'claude'})
+        self.assertIn([tools['codex'], 'app-server', '--help'], calls)
+        self.assertEqual(len(calls), 7)
+
+    def test_preflight_collects_both_failures_without_echo_or_persistent_write(self):
+        account = types.SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_dir='/home/ordinary')
+        for outcomes in [{'codex':'missing','claude':'missing'}, {'codex':'login','claude':'login'},
+                         {'codex':'interface','claude':'version'}, {'codex':'identity','claude':'login'},
+                         {'codex':'timeout','claude':'missing'}]:
+            with self.subTest(outcomes=outcomes):
+                run, calls = self.provider_runner(outcomes)
+                original = host.provider_preflight
+                with mock.patch.object(host,'service_user',return_value=account), mock.patch.object(host,'provider_preflight',side_effect=lambda a,s:original(a,s,runner=run)), mock.patch.object(host,'root_code_directory') as write, mock.patch.object(host,'download') as network:
+                    with self.assertRaises(host.Refused) as refusal:
+                        host.install(types.SimpleNamespace(user='ordinary',codex=None,claude=None))
+                    message = str(refusal.exception)
+                    self.assertIn('codex:', message); self.assertIn('claude:', message)
+                    self.assertNotIn('SECRET', message)
+                    self.assertIn('codex login --device-auth', message)
+                    self.assertIn('claude auth login', message)
                     write.assert_not_called(); network.assert_not_called()
-                self.assertTrue(calls)
-                self.assertTrue(all(c[c.index('--')+2:] in (['--version'], ['login','status']) for c in calls if c[c.index('--')+1] not in ('/bin/sh','/usr/bin/test')))
+                self.assertTrue(any(command[-1] == 'claude' for command in calls if command[0] == '/bin/sh'))
+    def test_policy_mismatch_refuses_before_persistent_installation(self):
+        manifest = {'format':1,'artifact':{'architecture':'x86_64','sourceCommit':'a'*40,'url':'https://example.invalid/'+'a'*40+'/host.tar.gz'},'providerPrerequisites':host.PROVIDER_POLICY}
+        host.validate_provider_policy(manifest)
+        variants = [None, {}, {'codex': '0.164.0', 'claude': '2.1.301'}]
+        weakened = json.loads(json.dumps(host.PROVIDER_POLICY)); weakened['claude']['exactVersion'] = '2.1.302 (Claude Code)'; variants.append(weakened)
+        account = types.SimpleNamespace(pw_uid=1000,pw_gid=1000,pw_dir='/home/ordinary')
+        for policy in variants:
+            altered = dict(manifest, providerPrerequisites=policy)
+            with self.subTest(policy=policy), mock.patch.object(host,'service_user',return_value=account), mock.patch.object(host,'provider_preflight',return_value={}), mock.patch.object(host,'active',return_value=False), mock.patch.object(host.platform,'machine',return_value='x86_64'), mock.patch.object(host,'download',return_value=json.dumps(altered).encode()), mock.patch.object(host,'root_code_directory') as write, mock.patch.object(host,'new_record') as record:
+                with self.assertRaises(host.Refused):
+                    host.install(types.SimpleNamespace(user='ordinary',codex=None,claude=None,manifest_url='https://example.invalid/manifest.json',manifest_sha256='0'*64))
+                write.assert_not_called(); record.assert_not_called()
+
+    def test_service_user_does_not_import_root_credentials_or_create_an_account(self):
+        account = types.SimpleNamespace(pw_uid=0,pw_gid=0,pw_dir='/root',pw_shell='/bin/bash')
+        with mock.patch.object(host.pwd,'getpwnam',return_value=account):
+            with self.assertRaises(host.Refused): host.service_user('root')
+
     def test_canonical_operation_paths_refuse_traversal(self):
         for value in ['../../etc/passwd', '../' + '0'*36, 'A'*36, '0'*36, ' 11111111-1111-4111-8111-111111111111']:
             with self.assertRaises((host.Refused, ValueError)): host.canonical_uuid(value)
@@ -124,6 +170,9 @@ class InstallerControls(unittest.TestCase):
             with mock.patch('sys.stdout', new_callable=io.StringIO): package_module.package(args)
             output = root/'package'; manifest = json.loads((output/'manifest.json').read_bytes()); payload = (output/'host.tar.gz').read_bytes()
             self.assertEqual(host.sha(payload),manifest['artifact']['sha256'])
+            self.assertEqual(manifest['providerPrerequisites'],host.PROVIDER_POLICY)
+            host.validate_provider_policy(manifest)
+            self.assertNotIn('providerQualification',manifest)
             extraction = root/'extract'; extraction.mkdir()
             previous = os.umask(0o077)
             try: unpacked, release = host.extract_release(payload,extraction,manifest['artifact'])

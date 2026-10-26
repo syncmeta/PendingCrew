@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 Linux 安装前提与包策略完整模块接受
+
+独验 `fba64c72e68e4e3116502100532cf45689ecc4fa5166a804067006ec29c20c4c` 接受 installer、packager、原测试和部署 README 四源。原旧实现的 Codex0.164 拒绝／首错漏查 Claude RED 保留；新实现 6 个受影响函数 GREEN，包含两工具失败组合、退出 0 但未知子命令帮助拒绝、超时、策略篡改拒绝、非 root 服务身份及原 unit 环境。Codex 检查只代表安装前提，不代表完整协议或模型资格；Claude 真实精确版本合同仍在。原管理 socket、配对、CAS、lease、原 UUID Unknown 查询路径未改。退出后 stdout 长度检查不冒流式内存限额。
+
+新策略 literal 从 installer 单源进入 manifest，不改旧公开资产。未调用真实 CLI／模型、编译 Core、部署 Joy 或发布；旧 0.2.0 入口仍采用旧精确版本检查，文档明确区分。四源 SHA 和原 RED/GREEN 在 `docs/private/preserved-delivery-artifacts/linux-installer-prerequisites-20261026/`。
+
 ## 2026-10-26 Joy 真实远程执行与修复后原生历史读回完成
 
 整链独验 `1427d0793a75bc54e56455c987099e106794f4c5cea5e0764e79fe05bd458958` 接受本次有界临时实测。质量线核对原实际证据，没有重复 SSH、GUI 或模型调用；最终 OS 退出事实沿作者原工具记录接收，不冒质量线另行运行。
