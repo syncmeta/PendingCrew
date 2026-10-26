@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 f253 日用整包更新与 Joy 原配对连接接受
+
+最终独验 `dbbb5bf7e90aaf1b5e145682347f0510353dda3c91ffdf8c49e87a28dfc08b12` 接受三阶段备份／替换／首开及原 Joy 记录读取。日用0.2.1／20752.17666、App源码f253b28d，115项安装内容与已验候选相同；旧c634／20751.52764整包51项及ZIP逐字／CRC保全，备份位于 `~/Library/Application Support/PendingCrewAppBackups/PendingCrew-0.2.1-20751.52764-before-f253b28d.zip`。旧App53700／Core53703正常退出后替换，没有强停用户任务。当前App86069／本机Core86072正常首开，数据保持，正常Apple Development签名，不冒新公证公开包。
+
+实际截图及AX证实运行环境 `Joy VPS Codex test` 绿点连接，原远端crew／成员／大厅可读，原正常Keychain配对复用，无新invite／模型／恢复／Cloud动作。根与质量亲看实图；质量未重复GUI或SSH。Joy后台仍准确cc316，当前1384406及原SSH父进程／本机隧道保活；原parent一次最后typed查询确认同authority/db/pin/configrev2/唯一原grant，running=false／working=false／零provider子进程。结果仅代表普通日用远程读回与现成手工连接，不冒新真实任务、systemd、公网直连或正式installer已部署。原源测试／12场景与上轮真实任务证据复用，没有重跑。
+
 ## 2026-10-26 计划页读取生命周期四源接受
 
 独立质量已接受 CrewdWorkStore、CrewdWorkPanels 和原 Store fixture／runner 四源：selectCrew／invalidate 清读取资格，原 generation、refreshID、sourceEpoch 守卫全部通过后才标 hasLoaded；进入面板 ensureLoaded 同范围共享，面板取消不取消 Store 所有的读；未读不渲染旧行或假空态。作者 `/private/tmp/pcw-work-store.J9SNm8` 原 seam 终态 0，独立直接运行其实际已编译程序也为 0；独立运行未传 socket，只覆盖内存 Store，作者原 NDJSON 证据复用，不冒重复 socket 验证。原 runner 缺 LocalIPC 依赖的失败保留，仅修完整真实源输入，不复制产品逻辑。

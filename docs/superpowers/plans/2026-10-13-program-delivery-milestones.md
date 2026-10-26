@@ -1,5 +1,13 @@
 # PendingCrew 全工程执行计划
 
+## 2026-10-26 日用 f253 已安装并连接 Joy
+
+人类本次直接授权后，准确 f253b28d 正常 Apple Development Mac 0.2.1／20752.17666 已完整备份替换 `/Applications/PendingCrew.app` 并普通首开，实际 App86069／本机 Core86072。候选静态独验 4f29ba2c、安装及连接最终独验 `dbbb5bf7e90aaf1b5e145682347f0510353dda3c91ffdf8c49e87a28dfc08b12` 接受；115 新包项与准确候选一致，旧 c634／20751.52764 的 51 项完整整包与 ZIP 保留。新 App 的实际本机 Core 编译来源仍为 218f／7df264，不改标成 f253；本包为正常 Development，非新公证公开 Release。
+
+日用通过左下运行环境的原 `Joy VPS Codex test` 记录直接连接，无新配对／Keychain 提示；当前保留 `Joy VPS Codex acceptance → 大厅` 的空输入窗口。Joy 原 cc316 Linux Core1384406 由真实 SSH 父进程1384115（handle87731）保持，本机隧道85814（handle43089）仅转发127.0.0.1:58643；原authority/db/pin/configrev2/grant均同，最后原 typed 读回 running=false／working=false、provider子进程0。未启动模型或恢复已停测试会话。
+
+此阶段交付为可实际使用的手工后台＋SSH隧道；关闭对应SSH会话、睡眠或断网会影响连接，非systemd常驻或公网一键安装。当前服务保持运行供人类使用，不按上轮临时测试收尾再次停止。用户指南和运行交接在 `docs/private/preserved-delivery-artifacts/joy-daily-connection-20261026/`；准确安装、备份、截图在 `apple-development-f253b28d-daily-20261026/install-output/`。main/global f253 已普通推送成功，覆盖本文件较早网络失败待办；下一工作继续正式部署、剩余平台／云推送和实际窄窗边界，不重复这次模型与配对证明。
+
 ## 2026-10-26 读取生命周期冻结，转日用更新与 Joy 连接交付
 
 人类新明确要求替换日用版，并指导以 Joy 后台连接。现有普通 0f56 包已实际显示非空人／AI 待办与计划、非消息 Tab 无消息筛选；窄窗工具接口失效后停止操作，未冒窄窗通过。检查发现切换机组清空列表后，计划页会将未读状态当成真实空；四源修复由独立质量接受：Store 按机组／连接 generation 记录成功读取，面板进入复用同范围请求，未读不显示“暂无”，过时回复不能标记新范围已读。原 Store seam 包含初读、共享、离开页面、旧范围／断连回包、失败和真实空结果，作者原 NDJSON 及独立内存 seam 均通过。未修改分类过滤或写入合同。
