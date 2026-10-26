@@ -320,7 +320,7 @@ private struct CrewdGroupKnowledgeView:View {
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }else{
                 ViewThatFits(in:.horizontal){
-                    HStack(alignment:.top,spacing:0){list.frame(minWidth:180,idealWidth:230,maxWidth:260);Divider();detail.frame(minWidth:280,maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)}
+                    HStack(alignment:.top,spacing:0){list.frame(width:230);Divider();detail.frame(minWidth:280,maxHeight:.infinity,alignment:.topLeading)}
                     VStack(spacing:0){list.frame(height:min(180,CGFloat(max(1,rows.count))*48+16));Divider();detail}
                 }
             }
