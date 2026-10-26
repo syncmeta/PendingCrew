@@ -39,10 +39,12 @@ struct CrewdWorkPanels: View {
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             if !compact {
-                HStack {
-                    CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView)
-                    Spacer(); Button("刷新",systemImage:"arrow.clockwise") {Task {do {try await store.refresh()} catch {failure=error.localizedDescription}}}
-                }
+                HStack(spacing:10) {
+                    CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView,compact:true).fixedSize(horizontal:true,vertical:false)
+                    Spacer(minLength:8)
+                    Button {Task {do {try await store.refresh()} catch {failure=error.localizedDescription}}} label: {Image(systemName:"arrow.clockwise")}
+                        .buttonStyle(CrewdToolButtonStyle()).help("刷新").accessibilityLabel("刷新")
+                }.font(CrewdType.label).controlSize(.small)
             }
             if let error=store.lastFailure { Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled) }
             if let error=resources.failure {Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
@@ -61,7 +63,7 @@ struct CrewdWorkPanels: View {
                         VStack(spacing:10) {
                             Text("暂无计划").font(CrewdType.label).foregroundStyle(.secondary)
                             if let openTodo { Button("从待办新建计划",action:openTodo).font(CrewdType.label) }
-                        }.frame(maxWidth:.infinity,minHeight:200)
+                        }.frame(maxWidth:.infinity,minHeight:120)
                     }
                     if !progressOnly && !compact && domain != .human {
                         requirementComposer
@@ -210,9 +212,8 @@ struct CrewdWorkPanels: View {
                     } else {Button("读取当前详情") {Task {do {_ = try await store.detail(id)} catch {failure=describe(error)}}}}
                 }.padding(.leading,22).padding(.top,4)
             }
-        }.padding(12).frame(maxWidth:.infinity,alignment:.leading)
-            .background(selected == id.raw ? Theme.Palette.surface:Color.clear,in:RoundedRectangle(cornerRadius:8))
-            .overlay(alignment:.bottom) {Divider().opacity(selected == id.raw ? 0:0.55)}
+        }.padding(10).frame(maxWidth:.infinity,alignment:.leading)
+            .background(selected == id.raw ? Theme.Palette.surfaceMuted:Theme.Palette.surface,in:RoundedRectangle(cornerRadius:8))
             .padding(.leading,CGFloat(min(row.depth,3))*12)
     }
     @ViewBuilder private func planMetadata(_ plan:CrewdPlan)->some View {

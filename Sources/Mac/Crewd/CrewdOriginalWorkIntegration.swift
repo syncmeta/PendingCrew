@@ -144,7 +144,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
                     .disabled(workspace.originalSection != "消息")
                     .accessibilityHidden(workspace.originalSection != "消息")
                 if workspace.originalSection == "Todo" || workspace.originalSection == "真人Todo" {
-                    scopedTodo(human: workspace.originalSection == "真人Todo").padding(14)
+                    scopedTodo(human: workspace.originalSection == "真人Todo")
                 } else if workspace.originalSection == "文档" {
                     CrewdKnowledgeDocumentsEntry(workspace: workspace)
                 } else if workspace.originalSection == "进展" {
@@ -169,7 +169,10 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             Picker("范围",selection:selection){
                 Text("当前群").tag("channel");Text("机组全部").tag("crew")
                 if human{Text("所有可访问待人处理").tag("inbox")}
-            }.pickerStyle(.menu).fixedSize()
+            }.pickerStyle(.menu).labelsHidden().fixedSize().accessibilityLabel("待办范围")
+                .font(CrewdType.label).controlSize(.small)
+                .frame(maxWidth:.infinity,alignment:.leading)
+                .padding(.horizontal,16).padding(.top,10)
             if selection.wrappedValue == "channel"{channelTodo(human:human)}
             else{ledger(domain:human ? .human:.requirements,humanCrewOnly:selection.wrappedValue=="crew")}
         }
@@ -177,7 +180,10 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     private var scopedProgress:some View {
         let selection=scope("progress",default:"crew")
         return VStack(alignment:.leading,spacing:8){
-            Picker("计划范围",selection:selection){Text("当前群").tag("channel");Text("机组全部").tag("crew")}.pickerStyle(.menu).fixedSize().padding(.horizontal,14)
+            Picker("计划范围",selection:selection){Text("当前群").tag("channel");Text("机组全部").tag("crew")}.pickerStyle(.menu).labelsHidden().fixedSize().accessibilityLabel("计划范围")
+                .font(CrewdType.label).controlSize(.small)
+                .frame(maxWidth:.infinity,alignment:.leading)
+                .padding(.horizontal,16).padding(.top,10)
             if selection.wrappedValue=="channel"{CrewdOriginalChannelProgress(workspace:workspace)}
             else{ledger(domain:.all,progress:true)}
         }

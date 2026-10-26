@@ -32,8 +32,8 @@ struct CrewdFolderControls:View {
                         Picker("本群文件夹",selection:$selection){folderChoices}
                         Divider()
                         Button("管理本群分类",systemImage:"folder.badge.gearshape"){managing=true}
-                    }label:{if iconOnly{Image(systemName:"folder")}else{Label(view == .messages ? (selection == "all" ? "消息分类" : "消息分类 · "+currentFolderTitle) : currentFolderTitle,systemImage:"folder")}}
-                    .fixedSize().frame(minWidth:iconOnly ? CrewdType.target:0,minHeight:iconOnly ? CrewdType.target:0).help("消息分类："+currentFolderTitle+"；管理分类不会改变原文").accessibilityLabel("消息分类："+currentFolderTitle)
+                    }label:{if iconOnly{Image(systemName:"folder")}else{Label(view == .messages ? (selection == "all" ? "消息分类" : "消息分类 · "+currentFolderTitle) : currentFolderTitle,systemImage:"folder").lineLimit(1).truncationMode(.tail).frame(maxWidth:180,alignment:.leading)}}
+                    .fixedSize().frame(minWidth:iconOnly ? CrewdType.target:0,minHeight:iconOnly ? CrewdType.target:0).help((view == .messages ? "消息分类：":"资料分类：")+currentFolderTitle+"；管理分类不会改变原文").accessibilityLabel((view == .messages ? "消息分类：":"资料分类：")+currentFolderTitle)
                 }else {
                     Picker("文件夹",selection:$selection){folderChoices}.frame(maxWidth:220)
                     Button("管理分类",systemImage:"folder.badge.gearshape"){managing=true}.labelStyle(.iconOnly).help(store.channel.isEmpty ? "管理机组资料库分类":"管理本群分类")
@@ -42,7 +42,6 @@ struct CrewdFolderControls:View {
             }else{Text("文件夹 · 配套后台待开放").font(.caption).foregroundStyle(.secondary)}
             Spacer()
         };if store.capabilities.contains("viewFolders"){
-            if !compact{Text(store.channel.isEmpty ? "机组资料库分类":"本群分类").font(.caption).foregroundStyle(.secondary)}
             if let snapshot=store.folders[view],selection != "all",selection != "none",!snapshot.folders.contains(where:{$0["id"] == .string(selection)}){Text("所选文件夹已不在当前目录，请重新选择。").font(.caption).foregroundStyle(.orange)}
         }}.onChange(of:store.crew+store.channel){_,_ in managing=false;classifying=false}.sheet(isPresented:$managing){CrewdFolderEditor(store:store,drafts:$drafts,view:view)}
         .sheet(isPresented:$classifying){if let object{CrewdFolderEditor(store:store,drafts:$drafts,view:view,object:object)}}

@@ -14,14 +14,13 @@ import SwiftUI
 ///   `CrewTimelineOrdering.lineageLine`）；
 /// - `parentId`：本行这次渲染所处的那条父边（拖拽要摘的就是它）。
 ///
-/// 会话行样式对齐 PendingBot `ConversationListRow`：四格谱系标识（见
-/// `CrewColorBar`）+ 无衬线-14 标题 + 最近一条消息 + 相对时间。
+/// 机组行直接显示名称、最近一条消息和相对时间，不保留颜色标识槽。
 ///
 /// **不贴每行「本机/云端」location tag**（#369：层级视图已按 machine 分组；时间流
-/// 视图是跨机器扁平的，机器归属由四格标识 + 血缘行承担）。
+/// 视图是跨机器扁平的，归属由血缘行说明）。
 struct CrewSidebarCrewRow: View {
     let crew: CrewSummary
-    /// 算四格谱系色链用（本组/全量 crew 的 id → crew）。
+    /// 调用方的全量机组快照；保留共享行的输入契约。
     let crewsById: [String: CrewSummary]
     /// 名字后面那行黄字标注（根 crew 标题）。整表一次算好传进来，别每行重算。
     let rootTitles: [String]
@@ -51,8 +50,7 @@ struct CrewSidebarCrewRow: View {
     /// 分开**的，不是靠一句提示文案区分：改组织树只有层级视图那一条路。
     var allowsReparentDrag: Bool = true
 
-    /// 是否显示四格谱系标识及状态点；旧总机长入口可隐藏，crewd 导航统一显示。
-    /// 隐藏标识时保留同宽标识槽，让标题左缘与其它机组行对齐；状态点随标识隐藏。
+    /// 保留旧调用方参数；机组颜色标识与其专属占位已统一移除。
     var showsColorBar: Bool = true
 
     /// 挂不挂右键菜单。默认挂。
@@ -130,36 +128,25 @@ struct CrewSidebarCrewRow: View {
                 Color.clear.frame(width: 12, height: 1)
             }
 
-            if showsColorBar || crewStore.usesCrewdAuthority {
-                CrewColorBar(colors: CrewColorBar.chain(for: crew, crewsById: crewsById, parentId: parentId))
-                    // 状态点浮在四格标识右上角（Todo #71/#73）：红=错误、黄=本 crew 或
-                    // 后代有给人类的 Todo（呼吸）、绿=干活中；静止/退出不画。
-                    .overlay(alignment: .topTrailing) {
-                        CrewStatusDotView(
-                            // 黄点唯一来源：人类 Todo 那本还有几条没回应；后台快照已把
-                            // 后代条数沿父边递归聚合，并保留 own/descendant 语义。
-                            // 读的是 `CrewStore` 后台指纹门控算好的快照，一次字典查表 ——
-                            // **不在这里现读 Todo 文件**（那就是 2026-08-17 的形状）。
-                            attention: crewStore.humanTodoAttention[crew.id] ?? .none,
-                            runs: sessionRunner.runs.filter { $0.crewId == crew.id }
-                        )
-                        .offset(x: 6, y: -5)
-                    }
-            } else if !crewStore.usesCrewdAuthority {
-                Color.clear.frame(width: CrewColorBar.defaultWidth)
-            }
-
             let last = resolvedLastMessage
             VStack(alignment: .leading, spacing: CrewSidebarRowStyle.lineSpacing) {
                 CrewSidebarTitleLine(activityDate: CrewActivityTime.resolve(
                     lastMessageCreatedAt: last?.createdAt, crewUpdatedAt: crew.updatedAt)) {
-                    CrewTitleRootBadge(
-                        title: crew.title,
-                        titleFont: CrewSidebarRowStyle.titleFont,
-                        titleColor: Theme.Palette.ink,
-                        rootTitles: rootTitles,
-                        badgeSize: 11
-                    )
+                    HStack(spacing: 6) {
+                        CrewTitleRootBadge(
+                            title: crew.title,
+                            titleFont: CrewSidebarRowStyle.titleFont,
+                            titleColor: Theme.Palette.ink,
+                            rootTitles: rootTitles,
+                            badgeSize: 11
+                        )
+                        if showsColorBar || crewStore.usesCrewdAuthority {
+                            CrewStatusDotView(
+                                attention: crewStore.humanTodoAttention[crew.id] ?? .none,
+                                runs: sessionRunner.runs.filter { $0.crewId == crew.id }
+                            )
+                        }
+                    }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let statusLine {

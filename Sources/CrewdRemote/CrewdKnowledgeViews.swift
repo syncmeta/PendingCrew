@@ -18,7 +18,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
                 HStack(spacing:12){scopePicker;collectionPicker}
                 VStack(alignment:.leading,spacing:8){scopePicker;collectionPicker}
             }
-            .font(.caption).controlSize(.small)
+            .font(CrewdType.label).controlSize(.small)
             .frame(maxWidth:.infinity,alignment:.leading)
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
@@ -311,8 +311,8 @@ private struct CrewdGroupKnowledgeView:View {
             ViewThatFits(in:.horizontal){
                 HStack(spacing:8){documentActions;documentFolders.fixedSize(horizontal:true,vertical:false)}
                 VStack(alignment:.leading,spacing:6){documentActions;documentFolders}
-            }.font(.caption).frame(maxWidth:.infinity,alignment:.leading)
-                .padding(.horizontal,16).padding(.vertical,10)
+            }.font(CrewdType.label).frame(maxWidth:.infinity,alignment:.leading)
+                .padding(.horizontal,16).padding(.bottom,10)
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
             if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty {
@@ -320,7 +320,7 @@ private struct CrewdGroupKnowledgeView:View {
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }else{
                 ViewThatFits(in:.horizontal){
-                    HStack(alignment:.top,spacing:0){list.frame(width:210);Divider();detail.frame(minWidth:280,maxHeight:.infinity,alignment:.topLeading)}
+                    HStack(alignment:.top,spacing:0){list.frame(minWidth:180,idealWidth:230,maxWidth:260);Divider();detail.frame(minWidth:280,maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)}
                     VStack(spacing:0){list.frame(height:min(180,CGFloat(max(1,rows.count))*48+16));Divider();detail}
                 }
             }
@@ -342,8 +342,8 @@ private struct CrewdGroupKnowledgeView:View {
         HStack(spacing:8){
             Button("引用已有资料",systemImage:"link"){linking=true}
             if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}}
-            Button("刷新",systemImage:"arrow.clockwise"){Task{try? await group.refresh();retry=UUID()}}
-                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal,4)
+            Button {Task{try? await group.refresh();retry=UUID()}} label: {Image(systemName:"arrow.clockwise")}
+                .buttonStyle(CrewdToolButtonStyle()).help("刷新").accessibilityLabel("刷新")
         }.fixedSize(horizontal:true,vertical:false)
     }
     private var documentFolders:some View {

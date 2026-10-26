@@ -68,8 +68,10 @@ struct CrewdChannelTodoView:View {
                         HStack(spacing: 12) { kindPicker; searchField }
                         VStack(alignment: .leading, spacing: 8) { kindPicker; searchField }
                     }.padding(.bottom, 10)
-                } else { searchField.padding(.bottom, 10) }
-                if !kindItems.isEmpty || !tag.wrappedValue.isEmpty {
+                } else {
+                    HStack { searchField.frame(maxWidth:300); Spacer(minLength:0) }
+                }
+                if kindItems.contains(where:{!$0["tags"].array.isEmpty}) || !tag.wrappedValue.isEmpty {
                     ScrollView(.horizontal,showsIndicators:false){
                         HStack(spacing:8){
                             tagButton("",count:kindItems.count)
@@ -77,7 +79,7 @@ struct CrewdChannelTodoView:View {
                                 tagButton(value,count:kindItems.filter{$0["tags"].array.contains(.string(value))}.count)
                             }
                         }
-                    }.padding(.bottom,8)
+                    }
                 }
             }
             if !group.capabilities.contains("channelWork") {Text("当前连接暂不支持待办").font(.caption).foregroundStyle(.secondary)}
@@ -93,7 +95,7 @@ struct CrewdChannelTodoView:View {
                     Spacer(minLength:4)
                     Button{Task{do{try await group.refresh()}catch{failure=error.localizedDescription}}}label:{Image(systemName:"arrow.clockwise")}
                         .buttonStyle(CrewdToolButtonStyle()).help("刷新本群待办工作").accessibilityLabel("刷新本群待办工作")
-                }.font(CrewdType.label)
+                }.font(CrewdType.label).controlSize(.small)
 
                 if let error=group.failure {Text(error.localizedDescription).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
                 if let failure {Text(failure).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
@@ -121,10 +123,10 @@ struct CrewdChannelTodoView:View {
                                 todoRow(row, id)
                             }
                         }
-                    }.padding(16).frame(maxWidth:.infinity,alignment:.leading)
+                    }.padding(.vertical,4).frame(maxWidth:.infinity,alignment:.leading)
                 }
             }
-        }.background(todoPageBackground).onAppear{group.setActive(true,owner:activeOwner)}.onDisappear{group.setActive(false,owner:activeOwner)}
+        }.padding(16).background(todoPageBackground).onAppear{group.setActive(true,owner:activeOwner)}.onDisappear{group.setActive(false,owner:activeOwner)}
         .onChange(of:channel){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil;creatingRequirement=false}
         .onChange(of:crew){_,_ in detailToken=UUID();reading=false;selected=nil;detail = .null;association=false;planTarget=nil;humanTarget=nil;failure=nil;creatingRequirement=false}
         .onChange(of:group.items){_,rows in
