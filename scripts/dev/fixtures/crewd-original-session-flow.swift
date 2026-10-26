@@ -6,7 +6,9 @@ import Foundation
         let path = CommandLine.arguments[1], scenario = CommandLine.arguments[2]
         let root = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent(scenario + "-data")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let workspace = CrewdWorkspace(dataDirectory: root)
+        let workspace = scenario.hasPrefix("remote-")
+            ? CrewdWorkspace(authorityRecordID: UUID(), connect: { client in try await client.connect(path: path) })
+            : CrewdWorkspace(dataDirectory: root)
         try await workspace.client.connect(path: path)
         workspace.crewID = "crew-a"; workspace.sessionID = "session-a"
         defer { workspace.retire() }
@@ -46,6 +48,23 @@ import Foundation
         let run = CrewSessionRun(crewId: "crew-a", sessionId: "session-a", kind: .codex,
                                  taskBrief: "", workingDirectory: root, backend: backend)
         runner.installCrewdProjection([run], workspace: workspace)
+        if scenario.hasPrefix("remote-") {
+            // Exercise the real backend seam without claiming this Unix receiver is TLS.
+            if scenario == "remote-quiet" {
+                await backend.refresh()
+                precondition(backend.hasObservedLive && backend.failure == nil)
+            } else {
+                backend.resumeFromExplicitOpen()
+                if scenario == "remote-switch" {
+                    try await Task.sleep(for: .milliseconds(50))
+                    workspace.selectSession("session-b")
+                }
+                try await Task.sleep(for: .milliseconds(450))
+                if scenario == "remote-malformed" { precondition(backend.failure != nil) }
+                else if scenario != "remote-switch" { precondition(backend.failure == nil && backend.status == .running) }
+            }
+            print("PASS actual backend remote query route: " + scenario); return
+        }
         func viewOriginal() async {
             runner.openSession(run.runID)
             precondition(runner.selectedRunId == run.runID && workspace.sessionID == "session-a")

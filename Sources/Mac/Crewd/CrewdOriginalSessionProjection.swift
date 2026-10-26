@@ -111,7 +111,8 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
             guard current() else { return }
             do {
                 if resuming {
-                    let live = try await workspace.readValue("session.live", .object(["sessionId": .string(sessionID)]))
+                    let state = try await workspace.readValue(workspace.dataDirectory == nil ? "session.inspect" : "session.live", .object(["sessionId": .string(sessionID)]))
+                    let live = workspace.dataDirectory == nil ? state["live"] : state
                     guard current() else { return }
                     guard live["sessionId"].string == sessionID, case .bool(let running) = live["running"] else {
                         throw CrewdClientError(message: "原会话运行状态未确认，未提交恢复。", kind: .notSubmitted)
@@ -142,10 +143,15 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
         let epoch = workspace.observationGeneration
         guard !retired, workspace.acceptsObservation(epoch) else { return }
         do {
-            let live = try await workspace.readValue("session.live", .object(["sessionId": .string(sessionID)]))
-            guard !retired, workspace.acceptsObservation(epoch) else { return }
             let inspection = try await workspace.readValue("session.inspect", .object(["sessionId": .string(sessionID)]))
             guard !retired, workspace.acceptsObservation(epoch) else { return }
+            let live: CrewdValue
+            if workspace.dataDirectory == nil {
+                live = inspection["live"]
+            } else {
+                live = try await workspace.readValue("session.live", .object(["sessionId": .string(sessionID)]))
+                guard !retired, workspace.acceptsObservation(epoch) else { return }
+            }
             if workspace.client.capabilities.contains("command.receipts") {
                 _ = try await workspace.refreshControlTarget(sessionID)
                 guard !retired, workspace.acceptsObservation(epoch) else { return }

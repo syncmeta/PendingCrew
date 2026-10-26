@@ -38,12 +38,12 @@ def main():
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    scenarios = ['quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return']
+    scenarios = ['quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
     assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
     for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')
         listener = socket.socket(socket.AF_UNIX); listener.bind(str(path)); listener.listen(1)
-        calls = []; problems = []; state = {'running': scenario == 'running', 'captain': False}
+        calls = []; problems = []; state = {'running': scenario == 'running' or scenario == 'remote-running', 'captain': False}
         def serve():
             try:
                 conn, _ = listener.accept()
@@ -77,8 +77,13 @@ def main():
                         elif method == 'session.list':
                             result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':('claude' if scenario=='legacy-resume' else 'acp:claude-managed' if scenario=='claude-unavailable' else 'codex')}] if state['captain'] or not scenario.startswith('captain') else []
                         elif method == 'session.live':
+                            if scenario.startswith('remote-'):
+                                conn.sendall((json.dumps({'id':req['id'],'error':{'code':-32003,'message':'设备授权或连接作用域已失效，请在电脑上重新配对。','refusal':'remote.permission_denied'}})+'\n').encode()); continue
                             if scenario in ['switch','switch-return','double-click']: time.sleep(.15)
                             result = {} if scenario == 'malformed' else {'sessionId':'session-a','running':state['running']}
+                        elif method == 'session.inspect':
+                            if scenario == 'remote-switch': time.sleep(.15)
+                            result = {'live':{} if scenario == 'remote-malformed' else {'sessionId':'session-a','running':state['running']},'screen':'Original completed remote transcript'}
                         elif method == 'session.start':
                             assert req['params']['role'] == 'captain' and req['params']['crewId'] == 'crew-a'
                             if scenario == 'captain-refused':
@@ -101,8 +106,9 @@ def main():
             thread.join(timeout=3)
             assert not problems, problems
             methods = [r['method'] for r in calls]
-            assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click','resume-refused'] else 0), methods
+            assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click','resume-refused','remote-stopped'] else 0), methods
             assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') else 0), methods
+            if scenario.startswith('remote-'): assert methods.count('session.live') == 0 and methods.count('session.inspect') >= 1, methods
             assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
             results.append({'scenario':scenario,'actualProbeExitCode':0,'rawStartCount':methods.count('session.start'),'rawResumeCount':methods.count('session.resume'),'publicSubmitCount':methods.count('command.submit'),'profileReadCount':methods.count('executor.list')})

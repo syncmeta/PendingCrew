@@ -4,7 +4,9 @@
 
 五源受管Claude恢复模块由独验 `cc1a7a6e…761e2c` 接受。可信本轮Human新提交才获得精确原UUID恢复意图，无启动正文；原wake/message的精确截止边界保本次新消息、旧Unknown不回放。异步仲裁按真正目标依赖处理逆序，独立目标不等慢仲裁；单目标资格明确拒绝不吞同消息的其他合法目标，真实数据库错误仍报错。原真实Core/fake PTY RED及最终10个不同受影响函数通过证据保留，最后单点修复只补两项delta、不重原9项。严格Clippy遇未改proto六项基线告警失败，限定目标advisory为0，不冒严格lint全过。完整原件在 `claude-fresh-human-resume-20261026/` 和其revision-2；未调用真实Claude、未改变公共schema。下一步准确提交后一次新normal及客户端组合，旧cc316产物不含此修复。
 
-人类新明确要求在Joy VPS运行后台、本机作为前端，且Joy Codex已登录。实际SSH别名为 `root@154.12.95.46:22`，不是旧目标154.36；只读核实Debian13.7/x86_64/glibc2.41、41GB空闲、Codex0.164.0已登录ChatGPT，无crewd。现PendingNet和Docker服务保持。首轮标准Core临时serve＋SSH隧道，使用已独验cc316 Linux产物和正常Mac客户端，在全新测试目录完成唯一配对、最小真实Codex任务、回执及远端文件读回、停工和静默重开；完整准备在 `/private/tmp/pendingcrew-joy-vps-codex-20261026/PREPARATION.json`。其正式installer原资格为Codex0.163/Claude2.1.301及非root服务用户，本次不放宽、降级、搬凭据或冒正式安装通过；Core自身若拒绝版本就停止。新Joy任务不重试此前被拒的本机sameCore私域动作。
+人类新明确要求在Joy VPS运行后台、本机作为前端。实际SSH别名为 `root@154.12.95.46:22`，不是旧目标154.36；Debian13.7/x86_64/glibc2.41，Codex0.164.0已登录ChatGPT。现PendingNet和Docker服务保持。准确cc316 Linux标准Core已在新私域以真实SSH父进程启动、仅监听loopback58643，经SSH隧道与正常Mac成功唯一配对。唯一真实Codex任务使用gpt-6.1-sol创建指定acceptance.txt，实际provider响应与VPS文件读回一致；原300秒边界内正常stop并核精确Codex子进程gone。随后Core正常重开保原authority/db/pin/grant，零自动任务。整链仍未通过：前端点击成员因误用本机session.live而被正式远程allowlist拒绝。最小Swift修正走既有session.inspect.live、不改权限或重配，三源和原实际App dylib RED已由62c62453源审接受；等待新正常Debug包实际GREEN及同grant只读历史。不得为补验证再点击已停会话而启动第二模型任务。
+
+完整准备及原据在 `/private/tmp/pendingcrew-joy-vps-codex-20261026/`。正式installer原资格为Codex0.163/Claude2.1.301及非root服务用户，本次没有放宽、降级、搬凭据或运行installer；临时0.164真实单任务成功不冒正式安装、全部Codex选项或公网配对链接已验。新Joy任务未触此前被拒的本机sameCore私域。新normal218f组件已由3c532374独验接受；新Linux唯一run40264614106/attempt1成功、产物已完整下载并由d556d6f9独验接受，不把它们冒Joy当前运行包。
 
 ## 2026-10-26 去除机组标识及四Tab精修，Claude恢复模块并行收口
 

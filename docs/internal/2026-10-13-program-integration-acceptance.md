@@ -4,7 +4,9 @@
 
 独验 `cc1a7a6e72941fd997ee67934c452eb4daf74d3c54e4344aed75a7ca9b761e2c` 接受五源最终freeze5dd42d63：原真实Core/fake PTY新Human恢复RED→GREEN；精确原UUID、无启动正文、截止边界、逆序不丢、独立目标不卡、Unknown/Stop/错误来源不自动重试保持。另一个同消息多目标资格竞态原RED→GREEN证明：失效目标pending0/不运行，合法目标attempt1/正文1；损坏DB元数据仍Err。共10个不同受影响函数证据，原9绿复用，未重全套。严格Clippy因未改proto基线失败，advisory退出0单列；不冒真实供应商资格或新包已验。
 
-Joy新请求已完成实际只读预检与完整临时试用方案；采用cc316旧产物试Codex0.164新登录环境，不包含本Claude修复。正式installer资格不满足尚未运行；本机sameCore先前被拒作用域不变。具体新normal/包、Joy任务及持久重开结果仍按后续实际记录判断。
+Joy新请求已实际完成正常TLS配对、唯一真实Codex0.164/gpt-6.1-sol任务及VPS指定文件读回，原300秒内stop和精确子进程gone；Core同身份/原grant重开、零自动任务。运行包仍为准确cc316，不包含本Claude修复。前端成员读回暴露session.live误用于remote的实质缺口，三源最小修复及原实际dylib RED由62c62453源审准入，待实际新Debug包GREEN和同grant原会话只读读回，尚未全链通过。正式installer资格未放宽也未运行；旧本机sameCore被拒作用域不变。
+
+新normal218f独验3c532374接受，SHA `7df26447995865b7b2d6c66d09d17ab2f84550fad0681d483c5af5c6c8613207`，实际Debug/default[]，2037Git/479Rust/13生产产物及schema149完整来源核验。唯一Linux run40264614106 attempt1实际success，原artifact12626541171完整99,627,146字节读回，d556d6f9独验接受Release/default[]实际ELF、503项产物、安装tar及完整输入；未发布或替换Joy运行包。
 
 ## 2026-10-26 交付范围更新
 
