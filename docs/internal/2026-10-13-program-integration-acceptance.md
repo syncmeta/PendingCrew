@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-26 初读修复候选实际交付及统一发布草稿
+
+准确源码a0ae8769已普通推送main/global。正常Mac0.2.1／20752.38457沿原暖配方完成唯一实际Xcode构建，私有输入类型／不存在输出的预检失败保留并明确发生在Xcode之前。115项App／ZIP、实际修复dylib及原Core218来源、2037源码／3878依赖／9处保护通过独验；未重编Rust。原private38b6窗口静态原文／仅Human确认后正常退出，新11174／11183同数据根重开，原草稿逐字保留，Cloud/APNs optin未启用。沿原Joy记录打开控制面板，未手动刷新即读到明确状态、队列0及同步标题，随后关两层sheet回空输入消息页；未点击恢复、发送或provider目录。根亲看实际截图，独验7a3ea76b接受初读实显。
+
+实际状态为running／idle；质量线纠正先前stopped说法仅继承历史交接，没有10:15的实时停态证据。单次Joy进程只读显示三个Codex相关进程出生05:46／06:16，均早于本轮面板操作，但未绑定具体session，故不宣称零远程启动或唯一原因。原Core同出生PID1384406仍在、PPID1、原父1384115已消失；不再将旧管理父链视为可用，不停止或变更它。对应原观察、GUI时间线及进程回执分别保存在codex初读、apple-development-a0ae8769-codex-controls-20261026和joy-daily-connection-20261026私域。
+
+共享iPhoneOS同a0ae／20752.39676一次暖构建及53项App／ZIP／IPA由54711a8a平台差异独验接受，未访问设备。正式Developer ID Release同a0ae／20752.40057唯一实际暖构建、secureTSA签名、51项App／ZIP和10保护由87d4ee73接受；包42,924,714字节、SHAbb9776a0…6c742，Release无DEBUG／debug dylib，原3项权限，Core218／Debug来源如实分列。新Release没有新增运行验收；Development初读与旧81404未影响的本机生命周期证据各自限定复用，不冒同一层。正常Mac日用更新方案静态绑定也通过，但现日用仍在运行，未执行任何安装phase。
+
+新精确NOTARIZATION-PLAN最终ac8d6e09…6751f已绑定87d4ee73独验，待人类对新ZIP外发确认，Apple尚未提交；旧81404输入保留并hold。根已沿既有发布要求建立唯一v0.2.1草稿424156285，准确targeta0ae／draft=true／prerelease=true，三个Linuxe13安装资产上传成功且GitHub返回digest、大小、uploaded均同原冻结。未上传Mac或公开Release，固定公开下载URL仍未生效；原v0.2.0及稳定渠道不改。实际草稿回执在Linux私域GITHUB-DRAFT-UPLOAD-RECEIPT.json，与私有资产表更新分列，不重标Linux/Core来源。
+
 ## 2026-10-26 Codex 控制面板初读生命周期
 
 质量线从原日用94087／Joy已停止测试会话的右键入口，只读检查概览、执行、历史、设置后正常关闭两层面板，原消息页空输入保留，没有恢复、目录查询、模型或设置提交。实际状态持续未读取且没有loading/error；成功的旧cc316 inspect也应返回明确Bool及队列数量，不能把这个画面解释为正常停态。截图及原观察保存在 `/private/tmp/pcw-daily-codex-panel-qa-20261026/`。
