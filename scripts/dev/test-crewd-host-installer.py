@@ -305,6 +305,7 @@ class InstallerControls(unittest.TestCase):
             with mock.patch('sys.stdout', new_callable=io.StringIO): package_module.package(args)
             output = root/'package'; manifest = json.loads((output/'manifest.json').read_bytes()); payload = (output/'host.tar.gz').read_bytes()
             self.assertEqual(host.sha(payload),manifest['artifact']['sha256'])
+            self.assertNotIn('coreSourceCommit',manifest['artifact'])
             self.assertEqual(manifest['providerPrerequisites'],host.PROVIDER_POLICY)
             host.validate_provider_policy(manifest)
             self.assertNotIn('providerQualification',manifest)
@@ -315,9 +316,80 @@ class InstallerControls(unittest.TestCase):
             self.assertEqual((unpacked.stat().st_mode & 0o777),0o755)
             self.assertEqual(((unpacked/'bin').stat().st_mode & 0o777),0o755)
             self.assertEqual(((unpacked/'bin/crewd').stat().st_mode & 0o777),0o555)
+            self.assertNotIn('coreSourceCommit',release)
             self.assertEqual(release['storeVersion'],21)
             self.assertEqual(release['files']['bin/crewd'],host.sha(header))
             self.assertIn(repr(host.sha((output/'manifest.json').read_bytes())),(output/'install.py').read_text())
+    def mixed_package_fixture(self):
+        temporary=tempfile.TemporaryDirectory(prefix='pcw-components-',dir='/private/tmp');self.addCleanup(temporary.cleanup)
+        root=pathlib.Path(temporary.name);here=root/'deploy/linux';here.mkdir(parents=True)
+        for name in ['package-host-release.py','pendingcrew-host.py','managed-host.py']:
+            (here/name).write_bytes((source.parent/name).read_bytes())
+        (root/'crewd').mkdir();(root/'crewd/Cargo.toml').write_text('# synthetic source tree; never compiled\n')
+        def git(*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.PIPE).decode().strip()
+        git('init','-q');git('add','.');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','original component')
+        core_source=git('rev-parse','HEAD')
+        with (here/'pendingcrew-host.py').open('a') as stream:stream.write('\n# Offline package component fixture.\n')
+        git('add','.');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','new Python component')
+        package_source=git('rev-parse','HEAD')
+        binary=root/'synthetic-elf';header=bytearray(64);header[:6]=b'\x7fELF\x02\x01';header[18:20]=(62).to_bytes(2,'little');binary.write_bytes(header)
+        proof=root/'proof.json';proof.write_text(json.dumps({'sourceCommit':core_source,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
+        spec=importlib.util.spec_from_file_location('mixed_package',here/'package-host-release.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        args=types.SimpleNamespace(source=package_source,core_source=core_source,architecture='x86_64',artifact_url='https://example.invalid/'+package_source+'/host.tar.gz',manifest_url='https://example.invalid/'+package_source+'/manifest.json',core=str(binary),proof=str(proof),output=str(root/'package'))
+        return root,git,module,args
+
+    def test_mixed_package_preserves_core_proof_and_extracts_with_explicit_sources(self):
+        root,git,module,args=self.mixed_package_fixture()
+        before=pathlib.Path(args.proof).read_bytes();binary=pathlib.Path(args.core).read_bytes()
+        with mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+        output=pathlib.Path(args.output);manifest=json.loads((output/'manifest.json').read_bytes())
+        self.assertEqual(manifest['artifact']['sourceCommit'],args.source)
+        self.assertEqual(manifest['artifact']['coreSourceCommit'],args.core_source)
+        extraction=root/'extracted';extraction.mkdir()
+        unpacked,release=host.extract_release((output/'host.tar.gz').read_bytes(),extraction,manifest['artifact'])
+        self.assertEqual(release['sourceCommit'],args.source);self.assertEqual(release['coreSourceCommit'],args.core_source)
+        self.assertEqual((unpacked/'build-proof.json').read_bytes(),before)
+        self.assertEqual((unpacked/'bin/crewd').read_bytes(),binary)
+        self.assertEqual((unpacked/'bin/pendingcrew-host.py').read_bytes(),git('show',args.source+':deploy/linux/pendingcrew-host.py').encode()+b'\n')
+
+    def test_mixed_package_rejects_changed_tree_actual_blobs_or_relabelled_proof(self):
+        for failure in ['different-tree','dirty-rust','dirty-helper','proof-source']:
+            with self.subTest(failure=failure):
+                root,git,module,args=self.mixed_package_fixture()
+                if failure=='different-tree':
+                    (root/'crewd/Cargo.toml').write_text('# different Rust input\n')
+                    git('add','crewd');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','different Rust')
+                    args.source=git('rev-parse','HEAD')
+                    args.artifact_url='https://example.invalid/'+args.source+'/host.tar.gz';args.manifest_url='https://example.invalid/'+args.source+'/manifest.json'
+                elif failure=='dirty-rust':(root/'crewd/Cargo.toml').write_text('# uncommitted Rust input\n')
+                elif failure=='dirty-helper':
+                    with (root/'deploy/linux/managed-host.py').open('a') as stream:stream.write('\n# uncommitted helper\n')
+                else:
+                    proof=json.loads(pathlib.Path(args.proof).read_bytes());proof['sourceCommit']=args.source;pathlib.Path(args.proof).write_text(json.dumps(proof))
+                with self.assertRaises(ValueError),mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+                self.assertFalse(pathlib.Path(args.output).exists())
+
+    def test_mixed_extract_rejects_component_metadata_or_binary_proof_relabel(self):
+        root,git,module,args=self.mixed_package_fixture()
+        with mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+        output=pathlib.Path(args.output);manifest=json.loads((output/'manifest.json').read_bytes())
+        with tarfile.open(output/'host.tar.gz') as archive:
+            original={member.name:archive.extractfile(member).read() for member in archive.getmembers()}
+        for failure in ['release-component','proof-source','manifest-component-missing']:
+            with self.subTest(failure=failure):
+                files=dict(original);release=json.loads(files['release.json']);expected=dict(manifest['artifact'])
+                if failure=='release-component':release['coreSourceCommit']='f'*40
+                elif failure=='proof-source':
+                    proof=json.loads(files['build-proof.json']);proof['sourceCommit']=args.source
+                    files['build-proof.json']=json.dumps(proof).encode();release['files']['build-proof.json']=host.sha(files['build-proof.json'])
+                else:del expected['coreSourceCommit']
+                files['release.json']=json.dumps(release).encode();stream=io.BytesIO()
+                with tarfile.open(fileobj=stream,mode='w:gz') as archive:
+                    for name,data in files.items():
+                        member=tarfile.TarInfo(name);member.size=len(data);archive.addfile(member,io.BytesIO(data))
+                extraction=root/failure;extraction.mkdir()
+                with self.assertRaises(host.Refused):host.extract_release(stream.getvalue(),extraction,expected)
+
     def test_activation_pointer_is_bounded_and_never_follows_arbitrary_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=pathlib.Path(temporary); current=root/'current'

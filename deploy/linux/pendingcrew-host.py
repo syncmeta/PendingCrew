@@ -219,7 +219,10 @@ def extract_release(payload, root, expected):
     for name, digest in files.items():
         if sha((unpacked / name).read_bytes()) != digest: raise Refused('release member digest mismatch')
     proof = json.loads((unpacked / 'build-proof.json').read_bytes())
-    if proof.get('sourceCommit') != release['sourceCommit'] or proof.get('sourceClean') is not True or proof.get('defaultFeatures') is not True or proof.get('features') != [] or proof.get('test') is not False or proof.get('binarySha256') != files['bin/crewd']:
+    core_source = release.get('coreSourceCommit', release['sourceCommit'])
+    if not isinstance(core_source, str) or not re.fullmatch('[0-9a-f]{40}', core_source) or core_source != expected.get('coreSourceCommit', expected['sourceCommit']):
+        raise Refused('Core component source mismatch')
+    if proof.get('sourceCommit') != core_source or proof.get('sourceClean') is not True or proof.get('defaultFeatures') is not True or proof.get('features') != [] or proof.get('test') is not False or proof.get('binarySha256') != files['bin/crewd']:
         raise Refused('ordinary binary build proof mismatch')
     header = (unpacked / 'bin/crewd').read_bytes()[:20]
     machine = {'x86_64': 62, 'aarch64': 183}.get(release['architecture'])
