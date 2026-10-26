@@ -11,6 +11,8 @@ import Combine
     @Published private(set) var usage:[CrewdValue]=[]
     @Published private(set) var usageCursor:String?
     private var usageLoaded=false
+    enum ReadState:Equatable { case notRead, waitingForSource, loading, loaded, failed }
+    @Published private(set) var readState:ReadState = .notRead
     @Published private(set) var busy=false
     @Published private(set) var error:String?
     @Published private(set) var lastResult:CrewdValue = .null
@@ -21,7 +23,9 @@ import Combine
     private let available:()->Bool
     let sessionID:String
     private var subscription:AnyCancellable?
-    private var refreshing=false
+    private var refreshID:UUID?
+    private var refreshingScope:String?
+    private var inspectionScope:String?
     private var invalidated=false
     init(sessionID:String,read:@escaping Call,submit:@escaping Call,scope:@escaping()->String?,available:@escaping()->Bool){
         self.sessionID=sessionID;readValue=read;performValue=submit;sourceScope=scope;self.available=available
@@ -32,18 +36,35 @@ import Combine
             if name == "events.lagged" || (name.hasPrefix("session.") && data["sessionId"] == .string(self.sessionID)){Task{await self.refresh();if self.usageLoaded{await self.read("usage")}}}
         }
     }
-    var supported:Bool{!invalidated && available() && sourceScope() != nil}
+    var protocolAvailable:Bool{available()}
+    var readScope:String?{!invalidated && available() ? sourceScope():nil}
+    var supported:Bool{readScope != nil}
     private func current(_ scope:String?)->Bool{!invalidated && scope != nil && sourceScope() == scope}
     func refresh()async {
-        guard !refreshing,supported else{return}
-        refreshing=true;defer{refreshing=false}
-        let scope=sourceScope()
+        guard !invalidated else{return}
+        guard let scope=readScope else{
+            refreshID=nil;refreshingScope=nil;inspectionScope=nil
+            inspection=nil;error=nil;readState = .waitingForSource
+            return
+        }
+        guard refreshingScope != scope else{return}
+        let id=UUID();refreshID=id;refreshingScope=scope
+        if inspectionScope != scope{inspection=nil;error=nil}
+        readState = .loading
+        defer{
+            if refreshID==id{
+                refreshingScope=nil
+                if readState == .loading{readState = .waitingForSource}
+            }
+        }
         do{
+            try Task.checkCancellation()
             let raw=try await readValue("session.codex.inspect",.object(["sessionId":.string(sessionID)]))
+            try Task.checkCancellation()
             let parsed=try CrewdCodexInspection(raw,session:sessionID)
-            guard current(scope) else{return}
-            inspection=parsed;error=nil
-        }catch{if current(scope){self.error=error.localizedDescription}}
+            guard current(scope),refreshID==id else{return}
+            inspection=parsed;inspectionScope=scope;error=nil;readState = .loaded
+        }catch{if current(scope),refreshID==id,!Task.isCancelled{self.error=error.localizedDescription;readState = .failed}}
     }
     func read(_ kind:String,more:Bool=false)async {
         guard supported,!busy else{return}
@@ -94,5 +115,5 @@ import Combine
             await refresh();return true
         }catch{if current(scope){self.error=error.localizedDescription};return false}
     }
-    func retire(){invalidated=true;subscription?.cancel();subscription=nil;inspection=nil;history=[];models=[];tools = .null;usage=[]}
+    func retire(){invalidated=true;refreshID=nil;refreshingScope=nil;inspectionScope=nil;readState = .waitingForSource;subscription?.cancel();subscription=nil;inspection=nil;history=[];models=[];tools = .null;usage=[]}
 }

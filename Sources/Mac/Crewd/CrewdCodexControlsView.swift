@@ -101,6 +101,7 @@ struct CrewdCodexSessionControls:View {
 
 private struct CrewdCodexControlPanel:View {
     @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject private var client:CrewdClient
     @StateObject private var store:CrewdCodexSessionStore
     let sessionID:String
     private let originalCrew:String
@@ -122,8 +123,9 @@ private struct CrewdCodexControlPanel:View {
     @State private var confirmationTarget:CrewdCommandTarget?
     @State private var confirmation:String?
     @State private var page="概览"
-    init(workspace:CrewdWorkspace,sessionID:String){self.workspace=workspace;self.sessionID=sessionID;originalCrew=workspace.crewID;originalChannel=workspace.channelID;_store=StateObject(wrappedValue:.init(workspace:workspace,sessionID:sessionID))}
+    init(workspace:CrewdWorkspace,sessionID:String){self.workspace=workspace;client=workspace.client;self.sessionID=sessionID;originalCrew=workspace.crewID;originalChannel=workspace.channelID;_store=StateObject(wrappedValue:.init(workspace:workspace,sessionID:sessionID))}
     private var info:CrewdValue{store.inspection?.value ?? .null}
+    private var initialReadScope:String?{client.readyForWork ? store.readScope:nil}
     var body:some View{
         VStack(spacing:0){
             HStack(alignment:.top){
@@ -135,7 +137,9 @@ private struct CrewdCodexControlPanel:View {
             }
             Divider()
             ScrollView{VStack(alignment:.leading,spacing:20){
-                if !store.supported{CrewdInlineNotice(title:"当前后台未接入此控制协议",detail:"现有消息与明确恢复入口仍可使用。",symbol:"info.circle")}
+                if !store.protocolAvailable{CrewdInlineNotice(title:"当前后台未接入此控制协议",detail:"现有消息与明确恢复入口仍可使用。",symbol:"info.circle")}
+                if store.readState == .loading{ProgressView("正在读取会话状态…").controlSize(.small)}
+                else if store.protocolAvailable,store.inspection == nil,store.error == nil{Text("等待原连接就绪后读取会话状态；不会恢复会话。").font(.caption).foregroundStyle(.secondary)}
                 if let issue=localError ?? store.error{CrewdInlineNotice(title:"操作未完成",detail:issue,symbol:"exclamationmark.triangle",warning:true)}
                 if workspace.sessionID == sessionID,workspace.inspection["runnerRequest"] != .null {
                     CrewdInlineNotice(title:"有一项请求等待你的答复",detail:"答复仍由原结构化表单提交，不会替你自动选择。",symbol:"person.crop.circle.badge.questionmark")
@@ -151,7 +155,16 @@ private struct CrewdCodexControlPanel:View {
                 .background(Theme.Palette.surfaceMuted.opacity(0.22))
         }.background(Theme.Palette.canvas).tint(Theme.Palette.accent)
             .modifier(CrewdAdaptiveFormFrame(width:680,height:760,scrolls:false))
-        .task{workspace.bindPersonalProjection();personalScope=workspace.personalDrafts.editingScope();await workspace.restorePersonalInput(inputContext);bodyText=workspace.messageDrafts.text(for:inputContext);await store.refresh()}
+        .task(id:initialReadScope){await store.refresh()}
+        .task{
+            workspace.bindPersonalProjection()
+            let scope=workspace.personalDrafts.editingScope(),revision=bodyRevision
+            personalScope=scope
+            await workspace.restorePersonalInput(inputContext)
+            guard !Task.isCancelled,workspace.crewID==originalCrew,workspace.channelID==originalChannel,
+                  workspace.personalDrafts.isCurrent(scope),bodyRevision==revision else{return}
+            bodyText=workspace.messageDrafts.text(for:inputContext)
+        }
         .onChange(of:bodyText){_,text in bodyRevision=UUID();workspace.setPersonalInput(text,context:inputContext,scope:personalScope)}
         .onChange(of:workspace.crewID){_,crew in if crew != originalCrew{dismiss()}}
         .onDisappear{store.retire()}
