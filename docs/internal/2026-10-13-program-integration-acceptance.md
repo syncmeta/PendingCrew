@@ -1,5 +1,19 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-27 日用初读与恢复修复实际安装
+
+用户恢复推进后，确认旧日用完整路径App和helper均已退出，沿原已独验a0ae安装方案执行三phase，均exit0。实际日用更新为0.2.1／20752.38457（源码a0ae8769），完整库存与候选相同；旧38b6整包和备份ZIP保留，ZIP SHA e04b56f5364850751f609c8a9465d8b83e457669e9cbdd44320b5d431a05ef79。日用数据未迁移、未清理，未停止其它候选或Joy服务。
+
+正常首开App45237／helper45245，本机连接成功，进程子树仅两者；未选择session、发送或调用模型。根亲看实际首开截图：原生侧栏按钮在顶部，原生三窗口按钮由AX确认存在；macOS紫色共享提示遮挡三色像素，未改系统共享状态，不能把AX声明为三色像素已验。本轮不重编、不重复既有业务回归；安装独立复核进行中。原件在`docs/private/preserved-delivery-artifacts/apple-development-a0ae8769-codex-controls-20261026/install-output/`。
+
+随后安装独验5ee4243b接受：重新只读核对实际新旧App各115项、备份ZIP SHA／CRC／全部字节与links，亲看首开图并核AX，未重复GUI或重连Joy。报告在`codex-initial-read-independent-qa-20261026/INDEPENDENT-DAILY-INSTALL-FIRST-OPEN-QA-20261027.json`；不扩展三色像素及远端任务结论。
+
+同轮远端只读确认main/global均f740d066，统一v0.2.1草稿424156285仍draft且仅有三个准确Linux安装资产；新Mac公证许可仍待。
+
+Joy本机长期传输随后实际交付：正常批准上下文核旧85814及58643通道不存在，一次BatchMode／StrictHostKeyChecking SSH只读true终态0；安装原1108字节LaunchAgent（SHA d6ebed19be3f5e7fd4f776c5bd65c7b0e78acdcff44282f9e11184aeb7f67275），bootstrap终态0，8秒后job running／PID46053／runs1，同PID只监听127.0.0.1:58643。未停止任何旧进程、修改SSH认证或hostkey，也未变更远端Core／任务。日用45237随后仅选择已有Joy记录，绿已连接，原Chatra和Joy VPS Codex acceptance机组列表可读；根亲看实际截图，未重新配对、点击session、发送或调用模型。原始GUI回执与图在同一install-output的joy-launchagent-reconnect系列，回执SHA1f78482310b8cad3ae3ddc53e9ae050d15486bb3056e1d31474bf4c26242aa3a。未重新展开raw authority/grant；原正常连接合同与原ID证据分层。本机登录启动及连接保活已配置，真实Mac重启／睡眠未验，不把它算服务器普通账号常驻切换完成。
+
+本次隧道与日用连接独验aa4a3e60接受，核已安装plist字节／权限、原backend与client回执并亲看图AX；不再执行GUI／SSH／RPC。最终安装回执及独验报告分别为`joy-daily-connection-20261026/LAUNCHAGENT-DELIVERY-20261027.json`（6d85e920）和`INDEPENDENT-LAUNCHAGENT-DAILY-CONNECTION-QA-20261027.json`（aa4a3e60）。已交付范围是首个launchd job运行及原记录连接，保留上述未验界限。
+
 ## 2026-10-26 初读修复候选实际交付及统一发布草稿
 
 准确源码a0ae8769已普通推送main/global。正常Mac0.2.1／20752.38457沿原暖配方完成唯一实际Xcode构建，私有输入类型／不存在输出的预检失败保留并明确发生在Xcode之前。115项App／ZIP、实际修复dylib及原Core218来源、2037源码／3878依赖／9处保护通过独验；未重编Rust。原private38b6窗口静态原文／仅Human确认后正常退出，新11174／11183同数据根重开，原草稿逐字保留，Cloud/APNs optin未启用。沿原Joy记录打开控制面板，未手动刷新即读到明确状态、队列0及同步标题，随后关两层sheet回空输入消息页；未点击恢复、发送或provider目录。根亲看实际截图，独验7a3ea76b接受初读实显。
