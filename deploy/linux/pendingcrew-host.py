@@ -285,7 +285,11 @@ KillMode=process
 SendSIGKILL=no
 [Install]
 WantedBy=multi-user.target
-'''.format(uid=account.pw_uid, gid=account.pw_gid, home=unit_quote(account.pw_dir), command=' '.join(unit_quote(x) for x in command))
+'''.format(uid=account.pw_uid, gid=account.pw_gid,
+           # WorkingDirectory is a path directive, not an ExecStart argument:
+           # systemd retains surrounding quotes here as literal path bytes.
+           home=checked_text(account.pw_dir).replace('%', '%%'),
+           command=' '.join(unit_quote(x) for x in command))
     return socket_unit, service_unit
 
 def replace_root_file(path, content, mode=0o644):

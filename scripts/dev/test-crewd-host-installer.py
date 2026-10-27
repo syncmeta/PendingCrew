@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Affected installer controls only; no systemd/provider/network execution."""
-import argparse, hashlib, importlib.util, io, json, os, pathlib, subprocess, sys, tarfile, tempfile, types, unittest
+"""Affected installer controls; optional offline systemd parser, never provider execution."""
+import argparse, hashlib, importlib.util, io, json, os, pathlib, shutil, subprocess, sys, tarfile, tempfile, types, unittest
 from unittest import mock
 sys.dont_write_bytecode = True
 repo = pathlib.Path(__file__).resolve().parents[2]
@@ -438,6 +438,19 @@ class InstallerControls(unittest.TestCase):
         self.assertIn('User=1000', service); self.assertIn('SocketMode=0600', socket_unit); self.assertIn('DirectoryMode=0700', socket_unit)
         self.assertNotIn('Environment=', service); self.assertNotIn('SetLoginEnvironment=', service)
         self.assertIn('SendSIGKILL=no', service); self.assertIn('KillMode=process', service)
+        self.assertIn('WorkingDirectory=/home/ordinary\n', service)
+    @unittest.skipUnless(shutil.which('systemd-analyze'), 'real offline systemd parser requires Linux')
+    def test_working_directory_is_accepted_by_real_systemd_parser(self):
+        # verify parses units without loading, starting, or enabling a service.
+        for home in ['/home/pendingcrew', '/home/ordinary space%name']:
+            with self.subTest(home=home), tempfile.TemporaryDirectory() as directory:
+                account = types.SimpleNamespace(pw_uid=1000, pw_gid=1000, pw_dir=home)
+                socket_unit, service = host.units(account, pathlib.Path(home)/'.local/share/PendingCrew', {'codex':'/usr/bin/true'}, disable_claude=True)
+                root = pathlib.Path(directory)
+                (root/'pendingcrew.socket').write_text(socket_unit)
+                (root/'pendingcrew.service').write_text(service)
+                result = subprocess.run(['systemd-analyze', '--man=no', 'verify', str(root/'pendingcrew.socket'), str(root/'pendingcrew.service')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
     def test_original_configuration_lookup_never_applies_or_recreates_token(self):
         args = types.SimpleNamespace(operation_file='/root/original.json')
         original = {'format':1,'kind':'enrollmentCreation','token':'saved-secret','params':{'requestId':'r','enrollmentId':'e'}}
