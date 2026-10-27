@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-27 Joy普通账号常驻切换完成与Linux r1修订
+
+人类明确“Joy已停工，可以切换”后，实际GUI按原session.stop正常停止两条idle会话，精确旧provider PID与出生核全gone。旧Core1384406仅一次SIGTERM，锁可独占、监听消失；完整冷tar 1,935,360字节（SHA 2d7e617ce8c9fb39e3b60c3844e60de7fd78c82c06a4375c6d409f566a9386fb）与原树tar compare为0。整目录同盘rename到`/home/pendingcrew/.local/share/PendingCrew`，5具名inode及mode保留、11项转UID/GID1000；root认证、原生历史及外部工作目录未移交。
+
+原e13安装唯一UUID81df7c4b-3cd7-4d48-a07c-ebe912287c04首次enable失败，systemd将WorkingDirectory引号当作路径字符而拒绝。f9e3e46f最小修复路径序列化，真实systemd解析两例红绿和独验2412acde通过。确切f9脚本作为原root私域恢复入口执行原UUID唯一resume（39903）成功；四份不可变安装成员与current逐字不变。未重装、伪造旧来源、改旧资产或跳过恢复合同。
+
+实际51926原CLI status/grants回读成功：服务active/running、crewd PID2279246／UID1000／PPID1，loopback58643同PID，provider为空；authority、db、SPKI、证书、configrev2和原grant8283cac9…rev1 ownerWorkspace保留。日用原Joy记录随后绿连接、旧Chatra和acceptance机组可读；未配对、恢复会话、发送或调用模型。完整8份原操作回执、GUI原图／AX及最终SWITCH-EXECUTION在`joy-daily-connection-20261026/`；整模块独验`INDEPENDENT-ACTUAL-SERVICE-SWITCH-QA-20261027.json`（25f17b0bb0b94173eee7efbe09d1a4ee869977325cc51107c9067fa575f11424）接受。真实新用户模型、主机重启与睡眠不在已验范围。
+
+Linux r1按f9完整安装组件与原218 Core ELF／构建证明组装，Rust树不变，无Rust编译／CI／Mac重构建。三新名资产独验c4919816接受，已追加原v0.2.1，实际七资产保留、r1三项服务器SHA／大小通过，脚本及manifest匿名下载一致；旧Mac公证包与e13资产保留。实际Joy部署仍明确为e13不可变组件加f9私域恢复及生成unit修正，不称r1已安装。新分发公开回执位于`linux-persistent-host-f9e3e46f-r1-20261027/PUBLIC-R1-ASSET-RECEIPT.json`，实际公开回执已保存；Release说明同步推荐r1。
+
 ## 2026-10-27 0.2.1正式公开与Joy普通账号准备
 
 用户明确授权准确a0ae／20752.40057 ZIP（42,924,714字节／bb9776a0…6c742）向Apple公证并继续既定发布。原profile唯一submit58500终态0，UUID614bdf78-ef1e-4089-abae-0b7a3beba14f经原wait68228返回Accepted。仅私有副本附票，原51项及输入ZIP保持；strict、Gatekeeper、票据、原ZIP与dSYM门均0，独验617d3378接受最终52项及ZIP42,918,782字节／SHA7ded2affbb28b2a6490bf4fc63a03e3a71a01b870f3c96e93d2a564a17a52a4e。未重建、重签或安装。

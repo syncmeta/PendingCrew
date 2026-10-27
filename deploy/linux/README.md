@@ -1,24 +1,24 @@
 # PendingCrew host installation
 
-The Linux x86_64 installer and macOS package are published together in the [0.2.1 preview Release](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1). Linux provides one installation command and one device-enrollment link for a new installation. The older 0.2.0 assets remain historical; do not substitute the retained R2 package.
+The Linux x86_64 installer and macOS package are published together in the [0.2.1 preview Release](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1). Linux provides one installation command and one device-enrollment link for a new installation. Use the corrected **0.2.1 r1** entry below. It fixes the original 0.2.1 installer’s quoted systemd `WorkingDirectory` directive, which prevented service startup. The original 0.2.1 and older 0.2.0 assets remain historical; do not use those entries or substitute the retained R2 package.
 
-Distribution 0.2.1 uses deployment components from `e13ff2c9679ad78faa7bb440b327ca7cf52d8586` and the independently accepted Linux Core ELF and original build proof from `218f6c159333e4aa01bae43a2d08d942166cd346` (API3/schema149/Store21). The unchanged Core is explicitly recorded as `coreSourceCommit`; this is not a new Rust build or a relabelled compiled source. The old stable channel and Homebrew remain separate.
+Distribution 0.2.1 r1 uses deployment components from `f9e3e46f94ce19678aec873bc4905399b0e4dd45` and the independently accepted Linux Core ELF and original build proof from `218f6c159333e4aa01bae43a2d08d942166cd346` (API3/schema149/Store21). The unchanged Core is explicitly recorded as `coreSourceCommit`; this is not a new Rust build or a relabelled compiled source. The old stable channel and Homebrew remain separate.
 
-The three published installation assets below retain their reviewed bytes. Anonymous public downloads of the installer and manifest matched the listed SHA256 values; a complete public tar redownload has not been performed. Publication does not establish actual ordinary-user installation, permanent service or public reachability on a target host. The public Mac package keeps Cloud/APNs disabled; complete iOS-device, cross-device draft, cloud and APNs delivery are not claimed.
+The three r1 installation assets below retain their reviewed bytes. The corrected unit generation has passed an ordinary-user systemd service deployment and existing-client reconnection on a target host, preserving the original host identity and device grant. That deployment used the original package plus the exact corrected recovery entry; it was not a clean r1 installation. Reboot/sleep recovery, model inference under the new account and general public reachability have not been validated. The public Mac package keeps Cloud/APNs disabled; complete iOS-device, cross-device draft, cloud and APNs delivery are not claimed.
 
-On a Linux x86_64 host with Python 3 and systemd, replace the existing ordinary login user, reachable address and explicit local bind IP, then run the original entry:
+On a Linux x86_64 host with Python 3 and systemd, replace the existing ordinary login user, reachable address and explicit local bind IP, then run the recommended r1 entry:
 
 ```sh
-curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
 ```
 
 This is a Python entry executed from stdin in isolated mode, not a shell installer. Its embedded HTTPS manifest URL and SHA256 bind the original tar. It still downloads the manifest and tar; copying only the installation script is not an offline installation.
 
-| 0.2.1 Release asset | Bytes | SHA256 |
+| 0.2.1 r1 Release asset | Bytes | SHA256 |
 | --- | ---: | --- |
-| [PendingCrew-0.2.1-linux-install.py](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-install.py) | 52999 | `aa3dfc238b393f49631a7f16f14232a166c330bc20b4a8ea7bae876b10979baa` |
-| [PendingCrew-0.2.1-linux-x86_64-e13ff2c9679ad78faa7bb440b327ca7cf52d8586.manifest.json](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-x86_64-e13ff2c9679ad78faa7bb440b327ca7cf52d8586.manifest.json) | 718 | `ce8b271103d717f6643b8d28020353bc9a68eccd75b51e68b896f406fa7af80e` |
-| [PendingCrew-0.2.1-linux-x86_64-e13ff2c9679ad78faa7bb440b327ca7cf52d8586.tar.gz](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-x86_64-e13ff2c9679ad78faa7bb440b327ca7cf52d8586.tar.gz) | 21641523 | `fb6dc3cff861cc818c11827400c43c9b75e9fcf179a7d17dcdb73ee0c984225e` |
+| [PendingCrew-0.2.1-r1-linux-install.py](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-install.py) | 53199 | `431c1984d6c365d1e6ceca9caffed637d8d70267dc6b869850ca2c3f0c79adf4` |
+| [PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.manifest.json](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.manifest.json) | 721 | `813a32544095b2360a458a5b61312189ebff9249b3767c99fb09b629f301033a` |
+| [PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.tar.gz](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.tar.gz) | 21641584 | `68352edefd8364ca005350547610074f94cb36979783fa438329c6cabe1304be` |
 
 Before installing, sign in as the existing ordinary Linux user that will run PendingCrew. The default installation requires both tools; for Codex only, append `--disable-claude` to the installation command and install/authenticate Codex only. Install and authenticate the selected tools yourself using the official [Codex CLI installation](https://learn.chatgpt.com/docs/codex/cli), [Codex headless authentication](https://learn.chatgpt.com/docs/auth), [Claude Code setup](https://code.claude.com/docs/en/setup) and [Claude authentication](https://code.claude.com/docs/en/authentication) instructions:
 

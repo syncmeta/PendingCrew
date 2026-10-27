@@ -41,7 +41,7 @@
 
 ## 快速开始
 
-当前版本：[0.2.1 预览版（半成品）— macOS 与 Linux 安装包](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1)。macOS 安装包与 Linux 后台的三项安装资产都在同一个 Release 中。
+当前版本：[0.2.1 预览版（半成品）— macOS 与 Linux 安装包](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1)。macOS 安装包与 Linux 后台的 r1 修正版安装资产都在同一个 Release 中。
 
 macOS 旧稳定版安装包：[0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42)。
 
@@ -51,15 +51,15 @@ macOS 旧稳定版安装包：[0.1.42](https://github.com/syncmeta/PendingCrew/r
 brew install --cask syncmeta/tap/pendingcrew
 ```
 
-Linux x86_64 后台使用同一 0.2.1 Release 的安装入口。先替换已有普通登录用户、设备可达地址及明确的本机 bind IP，再在 Linux 主机执行：
+Linux x86_64 后台推荐使用同一 0.2.1 Release 的 **r1** 安装入口。r1 修复旧入口生成 systemd `WorkingDirectory` 时多加引号、导致服务无法启动的问题；旧资产仅作历史保留，不再推荐使用。先替换已有普通登录用户、设备可达地址及明确的本机 bind IP，再在 Linux 主机执行：
 
 ```sh
-curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<已有普通登录用户>' --advertise-host '<设备可达的主机地址>' --listen-host '<明确的本机bind-IP>' --port 49381
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<已有普通登录用户>' --advertise-host '<设备可达的主机地址>' --listen-host '<明确的本机bind-IP>' --port 49381
 ```
 
 Linux 安装需要 Python 3、systemd；默认要求该普通用户自行安装并登录 **Codex 和 Claude Code 2.1.301**。Codex 检查身份／版本格式、`app-server` 命令帮助与登录状态，不再限定旧 0.163.0，也不代表完整模型能力已验。只使用 Codex 时，在安装命令末尾追加 `--disable-claude`，无需安装或登录 Claude。安装器不代装、代登录或自动升级降级；新安装完成后提供一个设备配对链接。
 
-目标主机普通账号的实际常驻安装仍需验证，发布不等于部署完成。公开 macOS 包当前关闭 Cloud／APNs；本次半成品预览不代表 iOS 设备、跨设备草稿或云服务的完整交付通过。完整前提、三项资产哈希与恢复操作见 [Linux 安装说明](deploy/linux/README.md)。
+修正后的单元生成已在目标主机完成普通账号 systemd 服务运行和原客户端重连验证；尚未验证重启／睡眠恢复或新账号模型执行。公开 macOS 包当前关闭 Cloud／APNs；本次半成品预览不代表 iOS 设备、跨设备草稿或云服务的完整交付通过。完整前提、三项资产哈希与恢复操作见 [Linux 安装说明](deploy/linux/README.md)。
 
 作为与 Claude Code / Codex 协作的平台，你电脑上得先有它们。暂时不能接入其它 Harness。
 
