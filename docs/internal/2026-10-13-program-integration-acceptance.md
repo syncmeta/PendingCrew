@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-27 同源正常Simulator平台产物
+
+现有模拟器仍为cc316旧包，a0ae真机产物不能用于Simulator。沿原aeh／SPM暖缓存、准确a0ae源码快照补齐正常arm64 Simulator 20753.16053，唯一actual Xcode句柄12100终态0；未重建Mac／真机／Core。实际Mach platform7，生成xcent与Mach链接权限相同；ad-hoc签名返回空entitlements不等于没有链接权限，也不能证明持久Keychain运行资格。2037源码、3878依赖前后相同，11份保护App未变。76项产品与ZIP字节／CRC由独验44f42bd6接受，ZIP 22,673,873字节、SHA d492e28c594b99c69628834e87f7d0f2fb43b3c1b814933fa7e44325276429fa。证据目录`normal-ios-simulator-a0ae8769-20261027/`；未安装、启动、操作设备或触Keychain／Cloud。
+
+原双端动作保留并追加`same-core-normal-clients-cc316-preparation-20261026/CLIENT-ACTION-PREPARATION-a0ae-REVISION-20261027.json`（d1223135），只准备不执行。原拒绝针对正常Mac在旧私域启动embedded helper、建立真实父进程归属，不是Simulator全域禁令；但不能换目录／service／bundle／memory路径绕过。原凭据count0是历史条件，正常all()可能读现有日用Joy记录，当前不满足“不读旧凭据”的隔离前提。独验接受产物及此事实边界，不接受直接运行旧流程；根另行只读核对现有日用＋Joy真实拓扑的产品能力，不因此创建新邀请或变更服务。
+
+后端随后的有界源码核对确定：现日用＋Joy可作为真实双端拓扑，省去旧Mac私域启动；但当前普通remote grant不能执行`remote.enrollmentCreate`或`personalDraft.ownerConfigure/memberSet`，内层command也受同一权限检查。Remote actor固定非local_owner，个人归属设置需合法主机管理来源。Joy现有旧Core未启system-admin-socket、原LocalHuman父已消失，不能借新SSH冒旧父身份。须在后续已授权主机服务切换后使用正常host管理入口，再为iOS独立配对并明确纳入个人空间；本轮没有联网、读凭据或创建邀请，当前raw grant／personal membership未核，不冒已有同步资格。
+
 ## 2026-10-27 日用初读与恢复修复实际安装
 
 用户恢复推进后，确认旧日用完整路径App和helper均已退出，沿原已独验a0ae安装方案执行三phase，均exit0。实际日用更新为0.2.1／20752.38457（源码a0ae8769），完整库存与候选相同；旧38b6整包和备份ZIP保留，ZIP SHA e04b56f5364850751f609c8a9465d8b83e457669e9cbdd44320b5d431a05ef79。日用数据未迁移、未清理，未停止其它候选或Joy服务。
