@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-27 0.2.1正式公开与Joy普通账号准备
+
+用户明确授权准确a0ae／20752.40057 ZIP（42,924,714字节／bb9776a0…6c742）向Apple公证并继续既定发布。原profile唯一submit58500终态0，UUID614bdf78-ef1e-4089-abae-0b7a3beba14f经原wait68228返回Accepted。仅私有副本附票，原51项及输入ZIP保持；strict、Gatekeeper、票据、原ZIP与dSYM门均0，独验617d3378接受最终52项及ZIP42,918,782字节／SHA7ded2affbb28b2a6490bf4fc63a03e3a71a01b870f3c96e93d2a564a17a52a4e。未重建、重签或安装。
+
+根将此最终Mac资产上传原唯一Release424156285（asset681075478），核四份资产服务器digest／大小／uploaded状态，再公开v0.2.1为“半成品”预发布，publishedAt2026-10-27T09:21:14Z，tag实际a0ae8769ad110e0f98836fe3cf12945341f7dbba。未设Latest或改稳定更新渠道。Linux installer与manifest匿名GET及SHA通过，未重复下载完整Mac或Linux tar，不冒Joy实际部署验收。完整API、tag和公开下载回执在`public-mac-021-a0ae8769-publication-20261027/RESULT.json`。发布说明明确公开Mac尚未开放Cloud/APNs，iOS不随本Release分发。
+
+用户同时明确选普通pendingcrew账号。Joy只读前检原9649核账号/group/home不存在，最小useradd准备原21160终态0：UID/GID1000、仅本组、home与.local/bin/share均0700及dev65025；真实su登录上下文id/HOME/pwd准确，最终Core目录不存在以保后续同盘rename目标。未设密码／SSHkey／sudo，未装CLI、登录、迁移或启动服务；原root后台与任务保持。独验936b2515接受准备与官方登录指引；账号回执4318db19和指引dc5554d4位于`joy-daily-connection-20261026/`。用户本人登录、真实任务停态及正式服务切换仍待，不把新账号建立算服务器交付完成。
+
 ## 2026-10-27 同源正常Simulator平台产物
 
 现有模拟器仍为cc316旧包，a0ae真机产物不能用于Simulator。沿原aeh／SPM暖缓存、准确a0ae源码快照补齐正常arm64 Simulator 20753.16053，唯一actual Xcode句柄12100终态0；未重建Mac／真机／Core。实际Mach platform7，生成xcent与Mach链接权限相同；ad-hoc签名返回空entitlements不等于没有链接权限，也不能证明持久Keychain运行资格。2037源码、3878依赖前后相同，11份保护App未变。76项产品与ZIP字节／CRC由独验44f42bd6接受，ZIP 22,673,873字节、SHA d492e28c594b99c69628834e87f7d0f2fb43b3c1b814933fa7e44325276429fa。证据目录`normal-ios-simulator-a0ae8769-20261027/`；未安装、启动、操作设备或触Keychain／Cloud。

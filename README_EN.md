@@ -10,7 +10,7 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
   <img alt="Swift" src="https://img.shields.io/badge/lang-Swift%205-F05138?logo=swift&logoColor=white" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" />
-  <a href="https://github.com/syncmeta/PendingCrew/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.1.13-informational" /></a>
+  <a href="https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1"><img alt="Release" src="https://img.shields.io/badge/release-v0.2.1-informational" /></a>
 </p>
 
 <p align="center">
@@ -42,13 +42,23 @@ For a company to work well, the boss's decisions are crucial. The same principle
 
 ## Quick start
 
-Installer: [Releases](https://github.com/syncmeta/PendingCrew/releases)
+Current preview: [0.2.1 — macOS and Linux installers](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1). This remains an unfinished preview. The Mac package and three Linux installation assets share the same Release.
 
-Or install with Homebrew:
+Homebrew continues to use the existing older stable channel:
 
 ```bash
 brew install --cask syncmeta/tap/pendingcrew
 ```
+
+For a Linux x86_64 host with Python 3 and systemd, replace the ordinary login user, reachable host and explicit bind IP:
+
+```sh
+curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit bind IP>' --port 49381
+```
+
+By default, that user must install and sign in to both Codex and Claude Code 2.1.301. Codex checks cover CLI identity/version format, its `app-server` help and login status, rather than the old exact 0.163.0 requirement; they do not qualify every model feature. For Codex only, append `--disable-claude`; Claude need not be installed or authenticated. The installer does not install tools, sign in or automatically upgrade/downgrade them. A new installation provides one device-enrollment link.
+
+An ordinary-user persistent installation still requires validation on the target host. The public Mac package keeps Cloud/APNs disabled; this preview does not establish complete iOS-device, cross-device draft or cloud delivery. See [Linux installation details](deploy/linux/README.md) for prerequisites, asset hashes and original-request recovery.
 
 PendingCrew is a platform for working with Claude Code and Codex, so at least one of them must
 already be installed on your Mac. Other harnesses are not supported yet.
