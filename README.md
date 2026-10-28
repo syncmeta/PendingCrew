@@ -43,6 +43,8 @@
 
 当前版本：[0.2.2 预览版（半成品）— macOS 与 Linux 安装包](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.2)。已公证的 macOS 安装包与 Linux 后台安装资产都在同一个 Release 中。
 
+macOS Apple Silicon：[下载已公证的 DMG](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.2/PendingCrew-0.2.2-macos-arm64.dmg)，打开后将 App 拖到 Applications。也可下载同页 ZIP。
+
 macOS 旧稳定版安装包：[0.1.42](https://github.com/syncmeta/PendingCrew/releases/tag/v0.1.42)。
 
 或沿旧稳定通道用 Homebrew 安装：

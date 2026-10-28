@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 0.2.2拖拽DMG公证与公开
+
+用户明确授权准确54461e6c…29c5e8、48,431,478字节DMG外发Apple并发布；唯一提交UUID46dd5896-d177-4ccd-8b40-2d489867bab2，原请求wait终态Accepted。私有原提交镜像保留，仅发布副本附票；容器与内App的stapler/strict/Gatekeeper全部通过，镜像只读挂载核对全部App文件字节不变、Applications软链正确，随后正常卸载。
+
+最终PendingCrew-0.2.2-macos-arm64.dmg为48,433,441字节，SHA256 099a7ef66f66f859d42a17d4220516f5b5072d30e447626b08b43edcf6063ace。已追加原v0.2.2预发布，SHA256SUMS和下载说明同步更新；旧资产不删、tag不移、稳定通道不变，不安装或启动App。完整原始回执与附票记录在public-mac-022-8a6ba933-preparation-20261028/friendly-assets。源码普通推送仍遇GitHub传输错误（HTTP2 framing，随后HTTP1.1 Empty reply），本地提交保留；发布API上传成功不等于Git源码推送成功。
+
 ## 2026-10-28 0.2.2安装入口与发布资产整理
 
 Linux部署模块冻结409703c240079c086782cb1a3eb50ecfed7c76cc：POSIX install.sh引导普通账号/可达地址/bind/端口/provider选择，提供pendingcrew status/pair短命令；仅amd64、glibc2.39+、Python3.9+、运行中的systemd，缺provider由用户自行安装登录。原UUID/Unknown恢复及路径碰撞保护保留。新入口9项通过，既有35项中34通过/1本机systemd项跳过；独立质量亲跑新9项、复核旧日志及文档。没有新Core编译、CI、Joy安装或模型调用。
