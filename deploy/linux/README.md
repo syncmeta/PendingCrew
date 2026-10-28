@@ -1,40 +1,56 @@
-# PendingCrew host installation
+# Linux 后台安装
 
-The Linux x86_64 installer and macOS package are published together in the [0.2.1 preview Release](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.1). Linux provides one installation command and one device-enrollment link for a new installation. Use the corrected **0.2.1 r1** entry below. It fixes the original 0.2.1 installer’s quoted systemd `WorkingDirectory` directive, which prevented service startup. The original 0.2.1 and older 0.2.0 assets remain historical; do not use those entries or substitute the retained R2 package.
-
-Distribution 0.2.1 r1 uses deployment components from `f9e3e46f94ce19678aec873bc4905399b0e4dd45` and the independently accepted Linux Core ELF and original build proof from `218f6c159333e4aa01bae43a2d08d942166cd346` (API3/schema149/Store21). The unchanged Core is explicitly recorded as `coreSourceCommit`; this is not a new Rust build or a relabelled compiled source. The old stable channel and Homebrew remain separate.
-
-The three r1 installation assets below retain their reviewed bytes. The corrected unit generation has passed an ordinary-user systemd service deployment and existing-client reconnection on a target host, preserving the original host identity and device grant. That deployment used the original package plus the exact corrected recovery entry; it was not a clean r1 installation. Reboot/sleep recovery, model inference under the new account and general public reachability have not been validated. The public Mac package keeps Cloud/APNs disabled; complete iOS-device, cross-device draft, cloud and APNs delivery are not claimed.
-
-On a Linux x86_64 host with Python 3 and systemd, replace the existing ordinary login user, reachable address and explicit local bind IP, then run the recommended r1 entry:
+macOS 客户端与 Linux 后台统一发布在 [0.2.2 预览版（半成品）](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.2)。在 Linux 主机执行：
 
 ```sh
-curl -fsSL 'https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-install.py' | sudo /usr/bin/python3 -I - install --user '<existing ordinary login user>' --advertise-host '<reachable host>' --listen-host '<explicit local bind IP>' --port 49381
+curl -fsSL https://github.com/syncmeta/PendingCrew/releases/download/v0.2.2/install.sh | sudo sh
 ```
 
-This is a Python entry executed from stdin in isolated mode, not a shell installer. Its embedded HTTPS manifest URL and SHA256 bind the original tar. It still downloads the manifest and tar; copying only the installation script is not an offline installation.
+按提示选择已有普通账号、Mac/iPhone 可达的主机地址、本机监听 IP、端口，以及仅 Codex 或 Codex + Claude。安装成功后得到一个设备配对链接，在 PendingCrew 客户端打开并确认即可。root 只负责安装，后台始终使用选定的普通账号运行。
 
-| 0.2.1 r1 Release asset | Bytes | SHA256 |
-| --- | ---: | --- |
-| [PendingCrew-0.2.1-r1-linux-install.py](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-install.py) | 53199 | `431c1984d6c365d1e6ceca9caffed637d8d70267dc6b869850ca2c3f0c79adf4` |
-| [PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.manifest.json](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.manifest.json) | 721 | `813a32544095b2360a458a5b61312189ebff9249b3767c99fb09b629f301033a` |
-| [PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.tar.gz](https://github.com/syncmeta/PendingCrew/releases/download/v0.2.1/PendingCrew-0.2.1-r1-linux-x86_64-f9e3e46f94ce19678aec873bc4905399b0e4dd45.tar.gz) | 21641584 | `68352edefd8364ca005350547610074f94cb36979783fa438329c6cabe1304be` |
+## 安装前准备
 
-Before installing, sign in as the existing ordinary Linux user that will run PendingCrew. The default installation requires both tools; for Codex only, append `--disable-claude` to the installation command and install/authenticate Codex only. Install and authenticate the selected tools yourself using the official [Codex CLI installation](https://learn.chatgpt.com/docs/codex/cli), [Codex headless authentication](https://learn.chatgpt.com/docs/auth), [Claude Code setup](https://code.claude.com/docs/en/setup) and [Claude authentication](https://code.claude.com/docs/en/authentication) instructions:
+- 当前程序包仅支持 **Linux amd64（x86_64）、glibc 2.39 或更新版本**；不适用于 musl/Alpine、arm64 或较旧 glibc。
+- 需要 curl、Python 3.9+、运行中的 systemd，以及 sudo/root 安装权限。
+- 先以将要运行后台的普通账号安装并登录 Codex；选择同时使用 Claude 时还需要 Claude Code **2.1.301**。脚本检测现有工具，缺少时给出指引并停止，由你自行安装、登录后再运行。不会自动安装或降级工具、复制 root 凭据或运行模型任务。
+
+官方步骤：[Codex 安装](https://learn.chatgpt.com/docs/codex/cli)、[Codex 无浏览器登录](https://learn.chatgpt.com/docs/auth)、[Claude Code 安装](https://code.claude.com/docs/en/setup)、[Claude 登录](https://code.claude.com/docs/en/authentication)。
+
+如果通过公网连接，需要填可达的公网地址、合适的监听 IP，并自行配置防火墙。`127.0.0.1` 只能通过你已配置的隧道连接；脚本不会替你开端口或建立隧道。工具登录成功也不代表模型额度或全部功能已验。
+
+## 日常管理
 
 ```sh
-# Run these yourself as the intended service user, without sudo.
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
-codex login --device-auth
-curl -fsSL https://claude.ai/install.sh | bash
-claude auth login
+sudo pendingcrew status
+sudo pendingcrew pair
+sudo journalctl -u pendingcrew.service -n 100
 ```
 
-By default, the 0.2.1 installer checks both tools and reports their failures together before writing any PendingCrew prefix, data or unit. Codex must identify itself with a version, expose its `app-server` command help, and pass its login-status command. It is not restricted to the historical 0.163.0 string. Claude must still be exactly 2.1.301: the managed-task hook contract in Core requires that version. If your installed Claude differs, review the official specific-version installation instructions and decide explicitly; PendingCrew never installs or downgrades it for you. The retained 0.2.0 installer keeps its historical exact-version checks; it is not the current entry above.
+`pair` 为新设备生成一个短期、一次性配对链接。不要把它放进公开日志。每台设备拥有独立授权。若操作结果未知，按提示查询原操作记录；不要重复安装或重复生成邀请。
 
-These are installation prerequisites, not a full protocol or model-access test. Successful login status does not guarantee subscription, quota, model access, or every managed feature. Tool output and authentication errors are not echoed. No provider installation, login, model request, credential import, automatic upgrade/downgrade or HOME/PATH/SHELL/CODEX_HOME assignment is performed. Root is only the installer administrator; it cannot be selected as the service account, and its credentials are never copied to that account. Optional `--codex /absolute/path` and `--claude /absolute/path` select existing executables; checks run in the same real systemd service-user context.
+## 下载文件
 
-For future releases, a release owner assembles a reviewed **Linux ELF** with its clean default-build proof using `package-host-release.py`, supplying immutable HTTPS artifact and manifest URLs containing the full source commit. Its three-file output retains the immutable artifact contract above. The installer owns one literal `PROVIDER_POLICY`; the assembler reads that same literal into `providerPrerequisites` in the manifest, and the installer rejects a different policy. This metadata describes installation prerequisites, not a blanket provider qualification. Old published manifests and installers remain unchanged. Assembly alone performs no download, provider call, installation or publication; publish only after the separately authorized release gates.
+| 文件 | 用途 |
+| --- | --- |
+| `install.sh` | 推荐的一条命令安装入口 |
+| `pendingcrew-0.2.2-linux-amd64.tar.gz` | Linux 后台及管理工具 |
+| `pendingcrew-0.2.2-linux-amd64.manifest.json` | 压缩包摘要、平台与完整组件来源 |
+| `pendingcrew-0.2.2-linux-amd64.install.py` | 由入口自动下载、核验的底层安装器，无需手动调用 |
+| `SHA256SUMS` | 下载文件的 SHA-256 校验值 |
+
+全部文件在同一个 Release 中。旧长文件名资产保留，避免旧链接失效；推荐使用上面的新入口。脚本依次核验 installer、manifest 和压缩包摘要。下载这些文件不等于离线安装；默认安装仍从固定版本的 HTTPS 地址取得其依赖文件。
+
+本次修正安装入口和发行包装，复用原 `ccfd1bc58dc68a0b6572c489d46aaf11ec507cef` 的 Linux Core 与构建证明，组件来源分别记在 manifest 和包内 `release.json`；没有重新编译或重标 Core。新入口已做独立隔离测试，未用它重装 Joy，也不宣称新入口已完成新的真实主机安装。
+
+## 无交互安装与已有安装
+
+自动化调用可下载 `install.sh` 后使用 `sudo sh install.sh --non-interactive --user <普通账号> --advertise-host <可达地址> --listen-host <监听IP> --port 49381`。仅 Codex 时加 `--disable-claude`；loopback 还需明确提供 `--accept-loopback-tunnel`。交互参数读取 `/dev/tty`，不与下载脚本的标准输入混用。
+
+新入口拒绝覆盖已存在或尚未完成的安装。升级、保留原连接及结果未知恢复沿用下面的管理流程；先查询状态并正常停止任务，不以重装覆盖问题。旧版本若没有 `pendingcrew` 短命令，仍可用 `sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py <command>` 管理。
+
+---
+
+以下为发布维护与高级恢复说明。
 
 ## Reusing an unchanged reviewed Core
 
@@ -44,9 +60,9 @@ For different component commits, the assembler requires identical committed `cre
 
 ## Persistent service and a Codex-only host
 
-The 0.2.1 installer supports an explicit `install --disable-claude` choice. It checks and enables Codex only; Claude need not be installed or authenticated. The default still checks both tools. Supplying `--claude` together with `--disable-claude` is rejected. The original installation record retains this choice, and `resume-installation` uses that record rather than rediscovering an omitted provider. The systemd wrapper passes Core its existing `--disable-claude` flag. It removes only inherited `CREWD_CODEX` and `CREWD_CLAUDE` from the child environment, retaining the real service user's other environment and the genuine socket-activation descriptors.
+The current installer supports an explicit `install --disable-claude` choice. It checks and enables Codex only; Claude need not be installed or authenticated. The default still checks both tools. Supplying `--claude` together with `--disable-claude` is rejected. The original installation record retains this choice, and `resume-installation` uses that record rather than rediscovering an omitted provider. The systemd wrapper passes Core its existing `--disable-claude` flag. It removes only inherited `CREWD_CODEX` and `CREWD_CLAUDE` from the child environment, retaining the real service user's other environment and the genuine socket-activation descriptors.
 
-These options are included in the 0.2.1 installer above. They do not remove the ordinary-user requirement. If only root is logged in to Codex, choose an ordinary login account and sign in to Codex yourself as that account first. The installer never creates an account, imports root credentials, or migrates vendor session history. Moving existing Core data into the selected user's private home requires a separately approved stopped-data operation, with a retained original copy and the complete database/TLS identity data kept together. Do not copy a live database or open `/root` permissions to make it reachable. Old vendor sessions belonging to root are not promised to resume under another account.
+These options are included in the current installer. They do not remove the ordinary-user requirement. If only root is logged in to Codex, choose an ordinary login account and sign in to Codex yourself as that account first. The installer never creates an account, imports root credentials, or migrates vendor session history. Moving existing Core data into the selected user's private home requires a separately approved stopped-data operation, with a retained original copy and the complete database/TLS identity data kept together. Do not copy a live database or open `/root` permissions to make it reachable. Old vendor sessions belonging to root are not promised to resume under another account.
 
 To retain an existing host connection, obtain the original `remote.status` from its still-live original management shell, or the identical `host.status` through an existing installed root management entry. Save that JSON result in an existing root-owned0700 directory as an owned0600 file. Do this before stopping the original Core. The file contains the existing public identity and listener status, not a private key or a new transaction receipt.
 
@@ -57,10 +73,10 @@ The original status is saved in the existing installation operation record. Afte
 A normal installed host uses systemd socket activation and its root-only typed admin socket, so Core management does not depend on an SSH parent shell. Normal administrative commands can be run from a new root terminal:
 
 ```sh
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py status
+sudo pendingcrew status
 sudo journalctl -u pendingcrew.service -n 100
 # Request the bounded normal stop and require its stopped result.
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py stop
+sudo pendingcrew stop
 # An explicit later service start restores connectivity, not model tasks.
 sudo systemctl start pendingcrew.socket pendingcrew.service
 ```
@@ -76,11 +92,11 @@ Installation ends by printing one short-lived `pendingcrew://enroll/v1/...` link
 The installer saves original installation/configuration/enrollment UUIDs in root-private records before each mutation. If a response is lost, retain the operation record and query its original result; do not repeat installation or create another token automatically. Normal management uses the same installed CLI:
 
 ```sh
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py status
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py grants
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py installation --request-id '<original install UUID>'
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py configuration --operation-file '<original root0600 configure record>'
-sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py recover --operation-file '<original root0600 enrollment record>'
+sudo pendingcrew status
+sudo pendingcrew grants
+sudo pendingcrew installation --request-id '<original install UUID>'
+sudo pendingcrew configuration --operation-file '<original root0600 configure record>'
+sudo pendingcrew recover --operation-file '<original root0600 enrollment record>'
 ```
 
 `resume-installation --request-id <original install UUID>` explicitly continues only an already-current original activation: it rechecks the same user/tool prerequisites, repairs that original unit/binding if quiescent, starts the service, and queries any existing configuration/enrollment operation records. It does not extract/activate again or resend unknown writes. If no phase record existed, it may perform that phase once with UUIDs already stored in the original installation record. A notFound witness after a saved mutation record stops continuation.

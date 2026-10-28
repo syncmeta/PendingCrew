@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 0.2.2安装入口与发布资产整理
+
+Linux部署模块冻结409703c240079c086782cb1a3eb50ecfed7c76cc：POSIX install.sh引导普通账号/可达地址/bind/端口/provider选择，提供pendingcrew status/pair短命令；仅amd64、glibc2.39+、Python3.9+、运行中的systemd，缺provider由用户自行安装登录。原UUID/Unknown恢复及路径碰撞保护保留。新入口9项通过，既有35项中34通过/1本机systemd项跳过；独立质量亲跑新9项、复核旧日志及文档。没有新Core编译、CI、Joy安装或模型调用。
+
+新Linux tar/manifest/internal installer/install.sh和Mac原字节短名ZIP、SHA256SUMS已追加同一v0.2.2 Release，6资产服务器大小、SHA、uploaded状态逐项匹配。旧4资产不覆盖，tag8a6不移动。Linux包Source409703、原CoreSourceccfd及原CI40628735510 ELF/proof均准确保留，完整bootstrap→installer→manifest→tar摘要链独验通过。Mac短ZIP与原公证ZIP字节相同SHA fb1efb013ae169ad0969273b9f64026295c438eb4294252dfd209b7d77b8aa06。证据位于private/preserved-delivery-artifacts/linux-short-entry-20261028。
+
+新增拖拽DMG已构建、签名并独验内含App与原公证版一致，但向Apple公证提交被自动审批拒绝，尚未上传；已请求用户对准确DMG（48,431,478字节，SHA54461e6ce4bfaa477b5b2baa0d34d67f389de51f55b9a5119c59dd813a29c5e8）单独确认。当前公开下载说明只列已公证ZIP，不把待公证DMG称作发布完成。
+
 ## 2026-10-28 0.2.2已公证并公开预发布
 
 准确8a6ba933源生成正式Mac0.2.2／20754.31448。旧日用Core477e缺完整fresh构建witness，未以wrapper跳门；一次原暖target正常debug/aarch64构建取得真实完整输入／配置／fresh owning graph证明，新Core SHA7fbc9542c485fbfe6a6d09c323805413d2a0197eec6407099d37bdcf5b40766f，GUI/Core均为8a6。原Release签名配方、DeveloperID secure timestamp、51项产品及ZIP独验通过，最终源已去筛选vertical8。该最后高度小修仅确切源码和构建核验，未额外截图，不冒图证。
