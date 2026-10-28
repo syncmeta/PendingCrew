@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 0.2.2已公证并公开预发布
+
+准确8a6ba933源生成正式Mac0.2.2／20754.31448。旧日用Core477e缺完整fresh构建witness，未以wrapper跳门；一次原暖target正常debug/aarch64构建取得真实完整输入／配置／fresh owning graph证明，新Core SHA7fbc9542c485fbfe6a6d09c323805413d2a0197eec6407099d37bdcf5b40766f，GUI/Core均为8a6。原Release签名配方、DeveloperID secure timestamp、51项产品及ZIP独验通过，最终源已去筛选vertical8。该最后高度小修仅确切源码和构建核验，未额外截图，不冒图证。
+
+首次Apple提交被自动审批拒绝（未明确具体文件外发），没有执行。用户随后明确授权准确42,995,233字节／SHA c41cc73b…b418 ZIP；唯一submit终态0，UUIDbe2c0153-1ddb-4a22-9446-973cca8b0ca1原wait返回Accepted。仅私有副本附票，原App和输入ZIP保持，CDHash不变；strict／stapler／Gatekeeper均通过，最终ZIP42,997,160字节／SHA fb1efb013ae169ad0969273b9f64026295c438eb4294252dfd209b7d77b8aa06经独验接受。
+
+Linux三件套以8a6发布组件和ccfd原Core分别记来源；原CI40628735510 ELF／proof逐字不变，无新增CI或Linux编译。四资产服务器SHA／大小／uploaded状态全部核对后，唯一v0.2.2草稿公开为“半成品”prerelease，publishedAt2026-10-28T09:10:50Z，target8a6ba933。匿名manifest下载SHA与发布资产一致，远端tag v0.2.2实际指向8a6ba933。未设Latest、未改稳定渠道、未安装或修改Joy。旧0.2.1和0.2.0发布保留。原记录在`public-mac-022-8a6ba933-preparation-20261028/`、`prerelease-0.2.2-mac-core/`及`prerelease-0.2.2-linux/`。
+
 ## 2026-10-28 顶部工具栏实际闭环与0.2.2准备
 
 继续原私域后五Tab点击、搜索及sidebar折叠恢复已取得原图／AX。多次placement调整未解决900pt窄窗溢出，不能把那些假说当根因；最终实际AppKit测量发现空NSToolbarTitleView仍占160pt，而整排控件真实需513pt。macOS15+以公开toolbar(removing:.title)移除空标题项后，900展开五Tab、筛选、搜索全部可见且搜索实际打开，折叠／恢复正常。原生sidebar所有权、windowToolbar和红黄绿按钮未修改；截图左上系统共享提示不作为三色像素证明。mac14保编译兼容，未声称其运行布局已验。
