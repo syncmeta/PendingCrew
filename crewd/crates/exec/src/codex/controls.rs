@@ -204,6 +204,7 @@ impl CodexCore {
                 self.in_flight=true;
                 ("thread/revert",json!({"threadId":thread,"beforeTurnId":before_turn_id}))
             }
+            Op::RateLimits => { self.native_done(ticket, Out::Rejected("host quota requires metadata transport".into())); return; }
             Op::Models => ("model/list", json!({"limit":100})),
             Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
             Op::Fork { last_turn_id } => {

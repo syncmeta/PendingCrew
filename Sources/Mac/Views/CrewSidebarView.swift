@@ -93,7 +93,10 @@ struct CrewSidebarView: View {
             hiddenCrewsFooter
             // 订阅额度（claude/codex 已用百分比 + 重置时刻）—— 不分登录态：
             // 本机 runner 的额度跟 edge 登录无关，本机模式同样要看得见。
-            if !crewStore.usesCrewdAuthority { quotaFooterLine }
+            if crewStore.usesCrewdAuthority, let workspace = model.crewdBackend?.workspace {
+                CrewdQuotaFooter(workspace: workspace)
+                    .id(workspace.presentationNamespace + "/" + workspace.client.connectionEpoch.uuidString)
+            } else if !crewStore.usesCrewdAuthority { quotaFooterLine }
             }
             .opacity(conversationPath.isEmpty ? 1 : 0)
             .allowsHitTesting(conversationPath.isEmpty).disabled(!conversationPath.isEmpty)

@@ -34,6 +34,21 @@ final class QuotaCenter: ObservableObject {
     /// helper（离线子进程）读的快照文件；与白板/控制通道同目录（--dir）。
     static let quotaFileName = "quota.json"
 
+    private weak var remoteWorkspace: CrewdWorkspace?
+    private var remoteMode = false
+    private var remoteEpoch: UUID?
+    private var remoteGeneration: UUID?
+
+    convenience init(workspace: CrewdWorkspace) {
+        self.init()
+        remoteMode = true
+        remoteWorkspace = workspace
+        remoteEpoch = workspace.client.connectionEpoch
+        remoteGeneration = workspace.observationGeneration
+        claudeError = "当前运行环境尚未提供 Claude 额度"
+        codexError = "额度尚未读取"
+    }
+
     private var timer: Timer?
     private let directory: URL
     private let codexSessionsDir: URL
@@ -55,6 +70,7 @@ final class QuotaCenter: ObservableObject {
     /// 不是悄悄跑成双头 —— 双头会让同一批账被两个进程交替覆盖、唤醒发两遍，
     /// 而那种症状事后基本查不出来。
     func start() {
+        guard !remoteMode else { return }
         precondition(
             ProcessRole.effective == .orchestrator,
             "\(type(of: self)).start 只能在编排者进程里调用，当前角色=\(ProcessRole.requested.rawValue)")
@@ -74,6 +90,7 @@ final class QuotaCenter: ObservableObject {
     /// 它没有 §6.2 闸门 1 的那条 precondition，因为它**一个字节都不写**：
     /// 闸门 1 防的是「两个长期存活的进程各自按自己的世界观往账上写」，只读不构成。
     func startFollowingFile() {
+        guard !remoteMode else { return }
         guard timer == nil else { return }
         readSnapshotFile()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -97,6 +114,10 @@ final class QuotaCenter: ObservableObject {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
+        if remoteMode {
+            await refreshRemote()
+            return
+        }
         async let c = Self.fetchClaude(configURL: claudeConfigURL)
         async let x = Self.fetchCodex(sessionsDir: codexSessionsDir)
         // 取不到就**留着旧值继续画**（整行消失更难懂），但同时把原因记下来，
@@ -114,6 +135,54 @@ final class QuotaCenter: ObservableObject {
             codexError = "读不到（codex app-server 没答上，rollout 记录也没有）"
         }
         persistSnapshotFile()
+    }
+
+    private static func remoteDate(_ stamp: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: stamp) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: stamp)
+    }
+
+    func invalidateRemote() {
+        guard remoteMode else { return }
+        codex = nil
+        codexError = "运行环境已断开，额度不可用"
+    }
+
+    private func refreshRemote() async {
+        guard let workspace = remoteWorkspace,
+              workspace.client.readyForWork,
+              workspace.client.connectionEpoch == remoteEpoch,
+              let generation = remoteGeneration,
+              workspace.acceptsObservation(generation) else {
+            invalidateRemote(); return
+        }
+        guard workspace.client.capabilities.contains("hostQuota") else {
+            codexError = "当前后台尚不支持额度查询，请更新后台"
+            return
+        }
+        do {
+            let value = try await workspace.client.call("host.quota", .object([:]))
+            guard !Task.isCancelled,
+                  workspace.client.connectionEpoch == remoteEpoch,
+                  workspace.acceptsObservation(generation) else { return }
+            let data = try JSONEncoder().encode(value["codex"])
+            let object = try JSONSerialization.jsonObject(with: data)
+            guard let stamp = value["fetchedAt"].string,
+                  let date = Self.remoteDate(stamp),
+                  let snapshot = CodexAppServerQuotaParser.parse(object, now: date) else {
+                codexError = "当前运行环境未返回可用额度"
+                return
+            }
+            codex = snapshot
+            codexError = nil
+        } catch {
+            guard !Task.isCancelled,
+                  workspace.client.connectionEpoch == remoteEpoch,
+                  workspace.acceptsObservation(generation) else { return }
+            codexError = "额度读取失败，请稍后刷新"
+        }
     }
 
     /// 落快照文件给 helper 的 get_quota 读（原子写；与控制通道同目录）。

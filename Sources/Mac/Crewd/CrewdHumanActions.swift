@@ -458,6 +458,7 @@ struct CrewdCrewCreationView: View {
     @ObservedObject var workspace: CrewdWorkspace
     @Environment(\.dismiss) private var dismiss
     @State private var failure: String?
+    @State private var browsingDirectory = false
     @State private var reading = false
     @State private var readAfterUnknown = false
     @State private var reviewedUnknown = false
@@ -516,6 +517,16 @@ struct CrewdCrewCreationView: View {
             }.padding(16)
         }.background(Theme.Palette.canvas).tint(Theme.Palette.accent)
         .modifier(CrewdAdaptiveFormFrame(width:560,height:640,scrolls:false))
+        .sheet(isPresented: $browsingDirectory) {
+            let owner = workspace
+            CrewdDirectoryPicker(workspace: owner) { path in
+                guard !owner.isRetired, owner.client.readyForWork else { return }
+                var fields = owner.crewCreationDrafts.fields
+                fields.directory = path
+                owner.crewCreationDrafts.edit(fields)
+                reviewedUnknown = false
+            }.id(owner.authorityRecordID)
+        }
     }
     private var directoryInput:some View {
         HStack{
@@ -531,6 +542,9 @@ struct CrewdCrewCreationView: View {
                 }
             }
             #endif
+            if workspace.dataDirectory == nil {
+                Button("选择…") { browsingDirectory = true }
+            }
         }
     }
 

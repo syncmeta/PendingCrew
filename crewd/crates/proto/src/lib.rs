@@ -11,6 +11,7 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
+pub mod host;
 pub mod commands;
 pub mod judgments;
 mod model;
@@ -57,6 +58,8 @@ pub const API_VERSION: u32 = 3;
 pub const MIN_API_VERSION: u32 = 3;
 
 pub mod methods {
+    pub const HOST_QUOTA: &str = "host.quota";
+    pub const HOST_DIRECTORY_LIST: &str = "host.directoryList";
     pub const HELLO: &str = "system.hello";
     pub const REMOTE_STATUS: &str = "remote.status";
     pub const REMOTE_CONFIGURE: &str = "remote.configure";
@@ -171,6 +174,8 @@ pub mod methods {
         crate::codex_inputs::PERMISSION_PROFILES,
         crate::commands::SESSION_TERMINAL_INSPECT,
         crate::commands::SESSION_TERMINAL_WATCH,
+        HOST_QUOTA,
+        HOST_DIRECTORY_LIST,
         HELLO,
         REMOTE_STATUS,
         REMOTE_CONFIGURE,
@@ -759,6 +764,8 @@ pub fn api_schema() -> Value {
                 sub::<judgments::JudgmentInspection>(g),
             ),
         ),
+        (methods::HOST_QUOTA, m(sub::<NoParams>(g), sub::<host::QuotaResult>(g))),
+        (methods::HOST_DIRECTORY_LIST, m(sub::<host::DirectoryParams>(g), sub::<host::DirectoryResult>(g))),
         (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),
         (
             methods::REMOTE_STATUS,

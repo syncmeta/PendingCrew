@@ -261,6 +261,7 @@ private struct PendingCrewChatView: View {
     let draft: PendingCrewDraft
     @State private var error: String?
     @FocusState private var editingDirectory: Bool
+    @State private var directoryWorkspace: CrewdWorkspace?
 
     private func input(_ key: WritableKeyPath<PendingCrewDraft, String>) -> Binding<String> {
         Binding(get: {
@@ -302,6 +303,16 @@ private struct PendingCrewChatView: View {
             .background(CrewdChatStyle.canvas(scheme))
         }
         .background(CrewdChatStyle.canvas(scheme))
+        .sheet(isPresented: Binding(get: { directoryWorkspace != nil }, set: { if !$0 { directoryWorkspace = nil } })) {
+            if let selected = directoryWorkspace {
+                CrewdDirectoryPicker(workspace: selected) { path in
+                    guard crewStore.crewdWorkspace === selected, !selected.isRetired,
+                          crewStore.pendingCrew?.id == draft.id else { return }
+                    crewStore.setPendingWorkingDirectory(path)
+                }
+            }
+        }
+        .onChange(of: crewStore.crewdWorkspace?.authorityRecordID) { _, _ in directoryWorkspace = nil }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
@@ -317,10 +328,8 @@ private struct PendingCrewChatView: View {
                         .focused($editingDirectory).onSubmit { editingDirectory = false }
                         .textFieldStyle(.plain).help(draft.workingDirectory ?? "未指定")
                         .accessibilityLabel("工作目录")
-                    if !crewStore.usesCrewdAuthority || crewStore.crewdWorkspace?.dataDirectory != nil {
-                        Button { chooseDirectory() } label: { Image(systemName: "folder") }
-                            .buttonStyle(.plain).help("选择目录").accessibilityLabel("选择目录")
-                    }
+                    Button { chooseDirectory() } label: { Image(systemName: "folder") }
+                        .buttonStyle(.plain).help("选择目录").accessibilityLabel("选择目录")
                 }
             }
             field("机组名称") { TextField("未指定", text: input(\.title)).textFieldStyle(.plain).accessibilityLabel("机组名称") }
@@ -396,6 +405,10 @@ private struct PendingCrewChatView: View {
 
     private func chooseDirectory() {
         let selected = crewStore.crewdWorkspace
+        if crewStore.usesCrewdAuthority, let selected, selected.dataDirectory == nil {
+            directoryWorkspace = selected
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false

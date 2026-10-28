@@ -42,12 +42,12 @@ struct QuotaRingsFooter: View {
                     if showsClaudeQuota {
                         agentRow(asset: "ClaudeLogomark", tint: Theme.Palette.claudeMark,
                                  brand: "Claude Code", rings: claudeRings,
-                                 staleBadge: QuotaRingLayout.warningBadge(quota.claude))
+                                 staleBadge: quota.claudeError.map { quota.claude == nil ? $0 : "旧值 · " + $0 } ?? QuotaRingLayout.warningBadge(quota.claude))
                     }
                     if showsCodexQuota {
                         agentRow(asset: "OpenAILogomark", tint: Theme.Palette.openAIMark,
                                  brand: "Codex", rings: codexRings,
-                                 staleBadge: QuotaRingLayout.warningBadge(quota.codex))
+                                 staleBadge: quota.codexError.map { quota.codex == nil ? $0 : "旧值 · " + $0 } ?? QuotaRingLayout.warningBadge(quota.codex))
                     }
                     freshnessRow
                 }
@@ -273,6 +273,30 @@ struct StadiumRingShape: Shape {
                  startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
         p.closeSubpath()
         return p
+    }
+}
+#endif
+
+#if os(macOS)
+/// One quota source per authority and connection; never the local singleton.
+struct CrewdQuotaFooter: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @StateObject private var quota: QuotaCenter
+    init(workspace: CrewdWorkspace) {
+        self.workspace = workspace
+        _quota = StateObject(wrappedValue: QuotaCenter(workspace: workspace))
+    }
+    var body: some View {
+        QuotaRingsFooter(quota: quota)
+            .task {
+                while !Task.isCancelled {
+                    await quota.refresh()
+                    do { try await Task.sleep(for: .seconds(600)) } catch { return }
+                }
+            }
+            .onReceive(workspace.client.$readyForWork) { ready in
+                if !ready { quota.invalidateRemote() }
+            }
     }
 }
 #endif

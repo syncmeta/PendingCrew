@@ -319,8 +319,8 @@ pub fn create(tx: &mut Tx<'_>, n: NewCrew) -> Result<Crew> {
     if title.is_empty() {
         return Err(CollabError::Invalid(Refusal::new(Code::CrewTitleEmpty)));
     }
-    let wd = n.working_directory.trim().to_string();
-    if wd.is_empty() {
+    let wd = n.working_directory.to_string();
+    if wd.trim().is_empty() {
         return Err(CollabError::Invalid(Refusal::new(
             Code::CrewWorkingDirEmpty,
         )));
@@ -412,7 +412,7 @@ pub fn update(tx: &mut Tx<'_>, id: &str, p: CrewPatch) -> Result<Crew> {
         }
         conn.execute(
             "UPDATE crews SET working_directory=?2 WHERE id=?1",
-            params![id, wd.trim()],
+            params![id, wd],
         )?;
     }
     if let Some(h) = p.hidden {

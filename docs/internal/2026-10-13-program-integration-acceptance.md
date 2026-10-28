@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 远端目录选择与当前主机额度接线
+
+新建机组两个入口接入当前authority的目录浏览，支持主目录、上级、路径及分页；本机继续NSOpenPanel，旧Core缺capability明确提示。host.directoryList只读服务用户可访问目录，ownerWorkspace授权保持；canonical符号链接条目用name作为视图identity，创建／更新目录不再trim破坏尾空格。真实socket回归1 passed（初次sandbox不能读取进程birth的失败保留，升级执行同测试通过）；旧binary过滤0tests不作红证据。权限拒绝、大目录和完整mTLS仅源审，不冒实际验收。
+
+额度消失的确切原因是Sidebar在usesCrewdAuthority时隐藏旧QuotaRingsFooter，而旧后端quota为空。现保留原圆环样式，以独立QuotaCenter绑定当前host、连接epoch与观察generation；不读写本机quota.json，不用session token冒账户额度。host.quota经配置的Codex metadata transport只发初始化及account/rateLimits/read，复用进程注册／超时／回收，不创建或恢复会话；旧Core、禁用及未知明确失败，失败旧值带状态。Claude真实额度尚未接入。真实fake子进程协议与旧provider拒绝回归1 passed；质量亲验真实Swift源码fixture的host隔离、迟到响应及无本地副作用。
+
+当前Mac Core已构建（SHA477e274a5cbdc5dbd71a06640c9be81c48082f8026143995d7f875e0c37dea3f），完整Mac App暖缓存Debug arm64增量构建已成功，实际嵌入Core SHA与输入相同；此次禁用签名，只作完整编译验证。证据归档`remote-directory-quota-20261028/`。尚未更新日用或Joy，未查询真实账号额度、运行模型或宣称远端已可用；需新Linux Core与客户端组合交付。
+
 ## 2026-10-27 Joy普通账号常驻切换完成与Linux r1修订
 
 人类明确“Joy已停工，可以切换”后，实际GUI按原session.stop正常停止两条idle会话，精确旧provider PID与出生核全gone。旧Core1384406仅一次SIGTERM，锁可独占、监听消失；完整冷tar 1,935,360字节（SHA 2d7e617ce8c9fb39e3b60c3844e60de7fd78c82c06a4375c6d409f566a9386fb）与原树tar compare为0。整目录同盘rename到`/home/pendingcrew/.local/share/PendingCrew`，5具名inode及mode保留、11项转UID/GID1000；root认证、原生历史及外部工作目录未移交。

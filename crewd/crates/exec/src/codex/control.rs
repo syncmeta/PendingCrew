@@ -23,6 +23,7 @@ pub enum CodexOperation {
         expected_turn_id: String,
     },
     History(CodexHistoryParams),
+    RateLimits,
     Models,
     Tools,
     PermissionProfiles(crewd_proto::codex_inputs::CodexPermissionProfilesParams),

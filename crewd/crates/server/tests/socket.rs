@@ -1363,3 +1363,38 @@ async fn work_commands_commit_then_notify_and_reject_stale_revisions() {
     );
     let _ = stop.send(());
 }
+
+#[tokio::test]
+async fn host_directory_browse_real_socket_is_read_only_and_preserves_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let browse = root.path().join("browse");
+    std::fs::create_dir(&browse).unwrap();
+    for name in [".hidden", "alpha", "trailing "] { std::fs::create_dir(browse.join(name)).unwrap(); }
+    std::fs::write(browse.join("file"), "private contents").unwrap();
+    std::os::unix::fs::symlink(browse.join("alpha"), browse.join("link")).unwrap();
+    let stop = start(&data).await;
+    let mut c = Client::connect(&data).await;
+    let before = c.call(1, "crew.list", json!({})).await;
+    let first = c.call(2, "host.directoryList", json!({"path":browse,"limit":2})).await;
+    assert_eq!(first["entries"][0]["name"], ".hidden");
+    assert_eq!(first["entries"][1]["name"], "alpha");
+    assert_eq!(first["nextAfter"], "alpha");
+    let second = c.call(3, "host.directoryList", json!({"path":browse,"limit":2,"after":"alpha"})).await;
+    assert_eq!(second["entries"][0]["name"], "link");
+    assert_eq!(second["entries"][0]["path"], browse.join("alpha").canonicalize().unwrap().to_str().unwrap());
+    assert_eq!(second["entries"][1]["name"], "trailing ");
+    assert!(second["nextAfter"].is_null());
+    for (path, refusal) in [(browse.join("absent"), "host.directory_not_found"), (browse.join("file"), "host.directory_not_directory")] {
+        let err = c.call_rpc_err(4, "host.directoryList", json!({"path":path})).await;
+        assert_eq!(err.data.unwrap().refusal, refusal);
+    }
+    assert_eq!(c.call(5, "crew.list", json!({})).await, before);
+    assert!(!browse.join("absent").exists());
+    assert_eq!(std::fs::read_to_string(browse.join("file")).unwrap(), "private contents");
+    let chosen = second["entries"][1]["path"].as_str().unwrap();
+    let crew = c.call(6, "crew.create", json!({"title":"chosen", "workingDirectory": chosen})).await;
+    assert_eq!(crew["workingDirectory"], chosen);
+    stop.send(()).unwrap();
+}

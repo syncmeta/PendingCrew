@@ -121,6 +121,7 @@ pub async fn run(
             };
             (method,json!({"threadId":request.thread_id}))
         },
+        Op::RateLimits => ("account/rateLimits/read", json!({})),
         Op::Models => ("model/list", json!({"limit":100})),
         Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
         _ => return Out::Rejected("operation is not permitted in metadata-only child".into()),

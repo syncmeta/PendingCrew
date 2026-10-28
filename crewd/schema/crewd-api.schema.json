@@ -5922,6 +5922,21 @@
       ],
       "type": "string"
     },
+    "DirectoryEntry": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ],
+      "type": "object"
+    },
     "DirectoryKind": {
       "enum": [
         "crew",
@@ -5945,6 +5960,62 @@
         "object",
         "null"
       ]
+    },
+    "DirectoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DirectoryResult": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/DirectoryEntry"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "entries"
+      ],
+      "type": "object"
     },
     "DirectoryRow": {
       "properties": {
@@ -10670,6 +10741,19 @@
       ],
       "type": "string"
     },
+    "QuotaResult": {
+      "properties": {
+        "codex": true,
+        "fetchedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "codex",
+        "fetchedAt"
+      ],
+      "type": "object"
+    },
     "ReadMarkParams": {
       "additionalProperties": false,
       "properties": {
@@ -15011,6 +15095,22 @@
       },
       "result": {
         "$ref": "#/$defs/ExecutorListResult"
+      }
+    },
+    "host.directoryList": {
+      "params": {
+        "$ref": "#/$defs/DirectoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/DirectoryResult"
+      }
+    },
+    "host.quota": {
+      "params": {
+        "$ref": "#/$defs/NoParams"
+      },
+      "result": {
+        "$ref": "#/$defs/QuotaResult"
       }
     },
     "humanTask.create": {

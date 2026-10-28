@@ -1020,6 +1020,8 @@ fn allowed_method(method: &str) -> bool {
             | "command.listUnknown"
             | "session.controlTarget"
             | "events.subscribe"
+            | "host.directoryList"
+            | "host.quota"
             | "crew.list"
             | "crew.get"
             | "crew.create"
