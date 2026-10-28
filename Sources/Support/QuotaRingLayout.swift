@@ -182,6 +182,11 @@ enum QuotaRingLayout {
         failure == nil && !(snapshot?.windows.isEmpty ?? true)
     }
 
+    /// The sidebar must retain an explicit unavailable/error row without inventing rings.
+    static func shouldDisplayStatus(_ snapshot: AgentQuotaSnapshot?, failure: String?) -> Bool {
+        failure != nil || shouldDisplay(snapshot, failure: nil)
+    }
+
     // MARK: - 悬停提示
 
     /// 整块的 `.help()` 悬停提示：完整窗名 + 已用百分比 + 重置时刻，陈旧的那家

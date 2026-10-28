@@ -29,10 +29,10 @@ struct QuotaRingsFooter: View {
     private var codexRings: [QuotaRing] { QuotaRingLayout.codexRings(quota.codex) }
 
     private var showsClaudeQuota: Bool {
-        QuotaRingLayout.shouldDisplay(quota.claude, failure: quota.claudeError)
+        QuotaRingLayout.shouldDisplayStatus(quota.claude, failure: quota.claudeError)
     }
     private var showsCodexQuota: Bool {
-        QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)
+        QuotaRingLayout.shouldDisplayStatus(quota.codex, failure: quota.codexError)
     }
 
     var body: some View {

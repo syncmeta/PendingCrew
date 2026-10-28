@@ -5,6 +5,14 @@ import XCTest
 /// ① 颜色阈值不被后人偷偷改；② 窗口→环的映射（Claude 三环 / Codex 一环 /
 /// 缺数据不画）；③ 模型名从哪个字段取、怎么大写。
 final class QuotaRingLayoutTests: XCTestCase {
+    func testSidebarFailureRemainsVisibleWithoutInventingQuotaRings() {
+        XCTAssertTrue(QuotaRingLayout.shouldDisplayStatus(nil, failure: "后台尚不支持"))
+        XCTAssertTrue(QuotaRingLayout.shouldDisplayStatus(codexSnapshot(), failure: "读取失败"))
+        XCTAssertFalse(QuotaRingLayout.shouldDisplayStatus(nil, failure: nil))
+        XCTAssertTrue(QuotaRingLayout.codexRings(nil).isEmpty)
+        XCTAssertTrue(QuotaRingLayout.claudeRings(nil).isEmpty)
+    }
+
 
     // MARK: - fixtures（形状取自 AgentQuotaTests 的实测输出）
 
