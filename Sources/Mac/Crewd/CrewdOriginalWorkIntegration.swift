@@ -81,20 +81,27 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             #endif
         }
         #if os(macOS)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                CrewdGlassWorkspaceTabs(selection: $workspace.originalSection)
-                    .frame(width: 365)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                if workspace.originalSection == "消息", let filterControl { filterControl }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                if let searchControl { searchControl }
-            }
-        }
+        .toolbar { workspaceToolbar }
+        .modifier(CrewdWorkspaceToolbarTitle())
         #endif
     }
+    #if os(macOS)
+    private var workspaceControls: some View {
+        HStack(spacing: 8) {
+            CrewdGlassWorkspaceTabs(selection: $workspace.originalSection).frame(width: 365)
+            if workspace.originalSection == "消息", let filterControl { filterControl }
+            if let searchControl { searchControl }
+        }.fixedSize().accessibilityElement(children: .contain)
+    }
+    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarItem(placement: .automatic) { workspaceControls }
+                .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .automatic) { workspaceControls }
+        }
+    }
+    #endif
     private var sectionHeader:some View {
         VStack(spacing:0){
             HStack(spacing:12){
@@ -607,7 +614,7 @@ struct CrewdSidebarConversations: View {
         .sheet(isPresented: $showingNewMember) {
             NavigationStack {
                 ScrollView { CrewdSessionStartView(workspace: workspace, drafts: $workspace.messageDrafts).padding(20) }
-                    .navigationTitle("新AI成员").navigationBarTitleDisplayMode(.inline)
+                    .navigationTitle("新AI宝宝").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingNewMember = false } } }
             }
         }
@@ -650,7 +657,7 @@ struct CrewdSidebarConversations: View {
                 selection: Binding(get: { workspace.resourceDrafts.selection(crewID, .messages, channel: workspace.channelID) },
                                    set: { workspace.resourceDrafts.select(crewID, .messages, $0, channel: workspace.channelID) }),
                 view: .messages, compact: true, iconOnly: true)
-            Button("新AI成员") {
+            Button("新AI宝宝") {
                 guard workspace.crewID == crewID else { return }
                 #if os(macOS)
                 workspace.originalSection = "消息"; runner.composeNew(); runner.viewingTerminal = true
@@ -775,3 +782,13 @@ private struct CrewdSidebarGroupAvatar: View {
             .overlay(Circle().strokeBorder(Color.gray.opacity(0.25), lineWidth: max(0.5, size * 0.025)))
     }
 }
+
+#if os(macOS)
+/// The workspace controls replace the otherwise empty native title slot.
+private struct CrewdWorkspaceToolbarTitle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) { content.toolbar(removing: .title) }
+        else { content }
+    }
+}
+#endif

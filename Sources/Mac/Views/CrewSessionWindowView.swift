@@ -685,7 +685,12 @@ struct CrewSessionWindowView: View {
             sessionRunner.viewingTerminal = true
         } label: {
             HStack(spacing: 10) {
-                Text("新AI成员")
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
+                Text("新AI宝宝")
                     .font(Theme.Fonts.callout)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -697,7 +702,7 @@ struct CrewSessionWindowView: View {
         }
         .buttonStyle(.plain)
         .disabled(starting)
-        .help("添加新AI成员")
+        .help("添加新AI宝宝")
     }
 
     /// 成员行的「头像 + 名」基础排版（captain 入口与 human 行共用）。

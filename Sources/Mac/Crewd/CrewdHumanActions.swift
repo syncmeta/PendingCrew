@@ -407,7 +407,7 @@ struct CrewdSessionStartView: View {
     private var input: Binding<String> { Binding(get: { drafts.text(for: context) }, set: { drafts.set($0, for: context); workspace.setPersonalInput($0,context:context,scope:personalScope); reviewedUnknown = false }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            CrewdPanelHeader(title:"新AI成员")
+            CrewdPanelHeader(title:"新AI宝宝")
             CrewdFormSection(title:"执行成员") {CrewdExecutorChoiceView(workspace: workspace, executor: $workspace.selectedExecutor)}
             CrewdFormField(title:"第一件事",detail:"这段任务原文会作为新会话的首条消息。") {
                 TextField("给新成员交代任务", text: input, axis: .vertical).lineLimit(3...8)

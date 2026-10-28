@@ -478,7 +478,11 @@ private struct CrewdMessageFilterMenu: View {
 }
 private struct CrewdMessageFilterGlass: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) { content.buttonStyle(.glass) }
+        if #available(macOS 26.0, *) {
+            content.buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .glassEffect(.regular.interactive(), in: Capsule())
+        }
         else { content.buttonStyle(.bordered) }
     }
 }

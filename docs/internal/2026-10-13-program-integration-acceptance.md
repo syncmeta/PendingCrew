@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 顶部工具栏实际闭环与0.2.2准备
+
+继续原私域后五Tab点击、搜索及sidebar折叠恢复已取得原图／AX。多次placement调整未解决900pt窄窗溢出，不能把那些假说当根因；最终实际AppKit测量发现空NSToolbarTitleView仍占160pt，而整排控件真实需513pt。macOS15+以公开toolbar(removing:.title)移除空标题项后，900展开五Tab、筛选、搜索全部可见且搜索实际打开，折叠／恢复正常。原生sidebar所有权、windowToolbar和红黄绿按钮未修改；截图左上系统共享提示不作为三色像素证明。mac14保编译兼容，未声称其运行布局已验。
+
+mac26仅隐藏该toolbar项的系统共享玻璃，保留控件自身玻璃；“新AI宝宝”恢复与成员相同30pt灰色加号头像位／行边距，动作不变。筛选显式glass与AX contain修复后原图及AX已确认单玻璃、搜索名称正确；最后去掉筛选重复vertical8 padding，待正式候选核高度，不再单独构建预览。临时布局诊断已全部移除。证据在`todo-toolbar-preview-20261028/`，质量复用既有门接受；日用与Joy未因本轮UI改变。
+
+用户明确要求新pre release，准备统一v0.2.2 Mac及Linux资产；最新公开为v0.2.1，旧stable仍v0.1.42。不提前公开无安装包Release；Linux复用真实ccfd构建ELF及证明并明确coreSource，Mac须准确新源正式签名与公证后再发布，不把私有ad-hoc预览当公证安装包。
+
 ## 2026-10-28 待办背景与原生顶部Tab（源码完成，GUI未闭环）
 
 四个Swift源将“待办工作”缩短为“待办”，待办区域统一canvas；Tab改由原生principal toolbar承载，移除内容区重复header，不修改MacRoot的原生sidebar所有权、visible windowToolbar或命中安全区。全新无模型私有预览正常UI建静态机组，实际图确认顶部、待办背景及消息→人待办点击。第一版消息页搜索被toolbar group挤掉，已拆为独立ToolbarItem，第二次暖构建成功、delta独验通过；最新搜索、其余Tab、窄窗及sidebar折叠恢复尚未实际核完。
