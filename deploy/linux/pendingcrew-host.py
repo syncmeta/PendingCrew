@@ -113,6 +113,8 @@ def recover(args):
     p = record['params']; result = rpc('host.enrollmentLookup', {'requestId': p['requestId'], 'enrollmentId': p['enrollmentId']})
     if result.get('state') != 'created': raise Refused('original creation not recorded; no automatic replay or new token')
     print(enrolled_link(record, result['created']))
+    if pathlib.Path(args.operation_file) == STATE / 'pair-pending.json':
+        archive_pair_pending(record)
 
 def transient(uid, gid, argv, timeout=20, runner=subprocess.run):
     # systemd itself supplies the real User login environment. No Environment=,
@@ -182,9 +184,15 @@ def validate_provider_policy(manifest):
         raise Refused('release installation prerequisites do not match this installer')
 
 
+def immutable_release_url(value, source):
+    parsed = urllib.parse.urlsplit(value)
+    pinned = parsed.hostname == 'github.com' and re.fullmatch(r'/syncmeta/PendingCrew/releases/download/v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?/[A-Za-z0-9._-]+', parsed.path)
+    return parsed.scheme == 'https' and bool(parsed.hostname) and not (parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment) and (source in parsed.path or bool(pinned))
+
+
 def download(url, expected, limit):
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or not re.fullmatch('[0-9a-f]{64}', expected or ''):
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query or not re.fullmatch('[0-9a-f]{64}', expected or ''):
         raise Refused('immutable HTTPS input and exact SHA256 required')
     with urllib.request.urlopen(url, timeout=20) as response:
         if urllib.parse.urlsplit(response.url).scheme != 'https': raise Refused('insecure release redirect refused')
@@ -394,6 +402,7 @@ def check_preserved_connection(original, status):
 
 def install(args):
     # All installation prerequisite checks finish before any persistent PendingCrew path/unit write.
+    command_link()
     account = service_user(args.user)
     status_file = getattr(args, 'preserve_connection_from', None)
     preserved = parse_preserved_status(read_record(pathlib.Path(status_file)), args.listen_host, args.port) if status_file else None
@@ -407,8 +416,9 @@ def install(args):
     manifest = json.loads(download(manifest_url, manifest_sha, 1024 * 1024))
     architecture = {'x86_64': 'x86_64', 'aarch64': 'aarch64'}.get(platform.machine())
     artifact = manifest.get('artifact', {})
-    if manifest.get('format') != 1 or artifact.get('architecture') != architecture or not re.fullmatch('[0-9a-f]{40}', artifact.get('sourceCommit', '')) or artifact['sourceCommit'] not in urllib.parse.urlsplit(artifact.get('url', '')).path:
+    if manifest.get('format') != 1 or artifact.get('architecture') != architecture or not re.fullmatch('[0-9a-f]{40}', artifact.get('sourceCommit', '')) or not immutable_release_url(artifact.get('url', ''), artifact['sourceCommit']):
         raise Refused('wrong immutable release manifest')
+    if not immutable_release_url(manifest_url, artifact['sourceCommit']): raise Refused('manifest URL is not immutable')
     validate_provider_policy(manifest)
     data = pathlib.Path(args.data_dir or (pathlib.Path(account.pw_dir) / '.local/share/PendingCrew')).absolute()
     checked_text(str(data))
@@ -491,6 +501,7 @@ def install(args):
 
 
 def finish_installation(original):
+    command_link(create=True)
     # Separate durable records precede each first mutation. On recovery an
     # existing record authorizes lookup only, never a second send.
     for command in [['/usr/bin/systemctl', 'daemon-reload'], ['/usr/bin/systemctl', 'enable', '--now', SOCKET_UNIT], ['/usr/bin/systemctl', 'enable', '--now', SERVICE]]:
@@ -707,17 +718,101 @@ def draft_fence(args):
     # It never calls owner/member mutation or changes the original UUID/body.
     print(json.dumps(rpc('host.personalDraftRequestFence',{'original':original}),indent=2))
 
+def ask(prompt, default=None):
+    # stdin can contain a piped bootstrap; interaction belongs to the real terminal.
+    try:
+        with open('/dev/tty', 'r+') as terminal:
+            terminal.write(prompt + (f' [{default}]' if default is not None else '') + ': ')
+            terminal.flush()
+            value = terminal.readline()
+    except OSError as error:
+        raise Refused('interactive setup needs a terminal; use explicit install arguments') from error
+    if not value: raise Refused('setup cancelled at terminal EOF')
+    value = value.strip()
+    return value or default
+
+def setup(args):
+    if (STATE / 'installation.json').exists() or (STATE.exists() and any(STATE.glob('install-*.json'))):
+        raise Refused('an installation already exists; use pendingcrew status and the original installation UUID for recovery. An upgrade must preserve its connection and stop safely first.')
+    if args.non_interactive and any(getattr(args, field) is None for field in ['user', 'advertise_host', 'listen_host', 'port']):
+        raise Refused('--non-interactive requires --user, --advertise-host, --listen-host and --port')
+    names = [a.pw_name for a in pwd.getpwall() if a.pw_uid != 0 and a.pw_uid >= 1000 and pathlib.Path(a.pw_dir).is_dir() and not a.pw_shell.endswith(('nologin', '/false'))]
+    print('Existing ordinary login accounts: ' + ', '.join(names))
+    account = service_user(args.user or ask('Service account (existing ordinary login user)'))
+    host = args.advertise_host or ask('Address reachable by your Mac (loopback requires your own tunnel)', '127.0.0.1')
+    bind = args.listen_host or ask('Local listener bind IP', '127.0.0.1')
+    port = args.port if args.port is not None else int(ask('Listener port', '49381'))
+    if host in ('127.0.0.1', 'localhost', '::1') and not args.accept_loopback_tunnel:
+        if args.non_interactive or ask('Loopback requires your own tunnel; confirm it is arranged (yes/no)', 'no') != 'yes':
+            raise Refused('loopback is not publicly reachable; arrange a tunnel or choose a reachable address')
+    disable = args.disable_claude
+    if not disable and not args.non_interactive:
+        choice = ask('Providers: codex or both', 'both')
+        if choice not in ('codex', 'both'): raise Refused('choose codex or both')
+        disable = choice == 'codex'
+    request = str(uuid.uuid4())
+    print('Installation request: ' + request, flush=True)
+    print('If the result is uncertain, inspect this original UUID; do not rerun setup.', flush=True)
+    install(argparse.Namespace(user=account.pw_name, codex=args.codex, claude=args.claude,
+        data_dir=None, manifest_url=None, manifest_sha256=None, request_id=request,
+        disable_claude=disable, preserve_connection_from=None, listen_host=bind,
+        advertise_host=host, port=port, label=socket.gethostname()))
+
+COMMAND_LINK = pathlib.Path('/usr/local/bin/pendingcrew')
+def command_link(create=False):
+    target = str(PREFIX / 'current/bin/pendingcrew-host.py')
+    if COMMAND_LINK.is_symlink():
+        if COMMAND_LINK.lstat().st_uid != 0 or os.readlink(COMMAND_LINK) != target:
+            raise Refused('existing pendingcrew command is not this installation; no overwrite')
+    elif COMMAND_LINK.exists():
+        raise Refused('existing pendingcrew command is not this installation; no overwrite')
+    elif create:
+        root_code_directory(COMMAND_LINK.parent, create=True)
+        COMMAND_LINK.symlink_to(target)
+        syncdir(COMMAND_LINK.parent)
+
+def easy_pair(args):
+    if args.operation_file:
+        if args.host is None or args.port is None:
+            raise Refused('explicit operation-file requires --host and --port')
+        return pair(args)
+    # A lost default pair reply keeps this original record; never invent a new token on rerun.
+    pending = STATE / 'pair-pending.json'
+    if pending.exists() or pending.is_symlink():
+        raise Refused('original pair result must be recovered: pendingcrew recover --operation-file ' + str(pending))
+    binding = read_record(STATE / 'installation.json')
+    original = read_record(STATE / ('install-' + canonical_uuid(binding['requestId']) + '.json'))
+    args.operation_file = str(pending)
+    args.host = args.host or original['advertiseHost']
+    args.port = args.port or original['port']
+    print('Pair recovery: pendingcrew recover --operation-file ' + str(pending), file=sys.stderr, flush=True)
+    pair(args)
+    # Retain a successful operation under its original UUID, freeing the convenience slot.
+    archive_pair_pending(read_record(pending))
+
+def archive_pair_pending(record):
+    pending = STATE / 'pair-pending.json'
+    archived = STATE / ('pair-' + record['params']['requestId'] + '.json')
+    if archived.exists(): raise Refused('pair archive collision; retain original pending record')
+    os.rename(pending, archived); syncdir(STATE)
+
+
 def parser():
     p = argparse.ArgumentParser(description='PendingCrew one-link host installation/administration; never provider login or inference')
     commands = p.add_subparsers(dest='command', required=True)
+    interactive = commands.add_parser('setup', allow_abbrev=False)
+    for name in ['user', 'codex', 'claude', 'advertise-host', 'listen-host']: interactive.add_argument('--' + name)
+    interactive.add_argument('--non-interactive', action='store_true')
+    interactive.add_argument('--accept-loopback-tunnel', action='store_true')
+    interactive.add_argument('--port', type=int); interactive.add_argument('--disable-claude', action='store_true')
     setup = commands.add_parser('install', allow_abbrev=False)
     setup.add_argument('--user'); setup.add_argument('--codex'); setup.add_argument('--claude'); setup.add_argument('--data-dir'); setup.add_argument('--manifest-url'); setup.add_argument('--manifest-sha256'); setup.add_argument('--request-id')
     setup.add_argument('--disable-claude', action='store_true', help='explicitly disable Claude; check and enable only Codex')
     setup.add_argument('--preserve-connection-from', metavar='STATUS_JSON', help='retain the identity/listener in original root0600 typed status JSON; no new enrollment')
     setup.add_argument('--listen-host', default='127.0.0.1'); setup.add_argument('--advertise-host', required=True); setup.add_argument('--port', type=int, default=49381); setup.add_argument('--label', default=socket.gethostname())
     for name in ['pair', 'recover']:
-        c = commands.add_parser(name); c.add_argument('--operation-file', required=True)
-        if name == 'pair': c.add_argument('--host', required=True); c.add_argument('--port', type=int, required=True); c.add_argument('--label', default=socket.gethostname())
+        c = commands.add_parser(name); c.add_argument('--operation-file', required=name == 'recover')
+        if name == 'pair': c.add_argument('--host'); c.add_argument('--port', type=int); c.add_argument('--label', default=socket.gethostname())
     resume = commands.add_parser('resume-installation'); resume.add_argument('--request-id', required=True)
     notification = commands.add_parser('notification-configure'); notification.add_argument('--input-file')
     notification = commands.add_parser('notification-lookup'); notification.add_argument('--request-id', required=True)
@@ -736,9 +831,10 @@ def parser():
 
 def main():
     args = parser().parse_args(); require_root(); os.umask(0o077)
-    if args.command == 'install': install(args)
+    if args.command == 'setup': setup(args)
+    elif args.command == 'install': install(args)
     elif args.command == 'resume-installation': resume_installation(args)
-    elif args.command == 'pair': pair(args)
+    elif args.command == 'pair': easy_pair(args)
     elif args.command == 'recover': recover(args)
     elif args.command == 'status':
         if not active(): print(json.dumps({'service': 'inactive', 'noCoreWasStarted': True}))

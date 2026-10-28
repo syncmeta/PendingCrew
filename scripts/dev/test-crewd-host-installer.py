@@ -10,6 +10,11 @@ spec = importlib.util.spec_from_file_location('pendingcrew_host', source)
 host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
 
 class InstallerControls(unittest.TestCase):
+    def setUp(self):
+        # Existing protocol fixtures never write a real machine command entry.
+        patch = mock.patch.object(host, "command_link")
+        patch.start(); self.addCleanup(patch.stop)
+
     def test_draft_unknown_preserves_exact_owner_packet_and_only_original_lookup_or_fence(self):
         request='11111111-1111-4111-8111-111111111111'
         params={'requestId':request,'dbId':'opaque-core-db','runtimeBindingId':'22222222-2222-4222-8222-222222222222','params':{'ownerEpoch':'private-stamp','expectedSpaceId':None,'expectedSpaceRevision':'0','localEnabled':False,'acknowledgeRestore':False}}
@@ -126,7 +131,7 @@ class InstallerControls(unittest.TestCase):
             altered = dict(manifest, providerPrerequisites=policy)
             with self.subTest(policy=policy), mock.patch.object(host,'service_user',return_value=account), mock.patch.object(host,'provider_preflight',return_value={}), mock.patch.object(host,'active',return_value=False), mock.patch.object(host.platform,'machine',return_value='x86_64'), mock.patch.object(host,'download',return_value=json.dumps(altered).encode()), mock.patch.object(host,'root_code_directory') as write, mock.patch.object(host,'new_record') as record:
                 with self.assertRaises(host.Refused):
-                    host.install(types.SimpleNamespace(user='ordinary',codex=None,claude=None,manifest_url='https://example.invalid/manifest.json',manifest_sha256='0'*64))
+                    host.install(types.SimpleNamespace(user='ordinary',codex=None,claude=None,manifest_url='https://example.invalid/'+'a'*40+'/manifest.json',manifest_sha256='0'*64))
                 write.assert_not_called(); record.assert_not_called()
 
     def test_service_user_does_not_import_root_credentials_or_create_an_account(self):
@@ -192,7 +197,7 @@ class InstallerControls(unittest.TestCase):
             account=types.SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid(),pw_dir=str(home),pw_name='ordinary')
             status=self.original_status()
             manifest={'format':1,'providerPrerequisites':host.PROVIDER_POLICY,'artifact':{'architecture':'x86_64','sourceCommit':'a'*40,'url':'https://example.invalid/'+'a'*40+'/host.tar.gz','sha256':'b'*64}}
-            args=types.SimpleNamespace(user='ordinary',codex=None,claude=None,disable_claude=True,preserve_connection_from='/root/private/status.json',manifest_url='https://example.invalid/manifest.json',manifest_sha256='c'*64,data_dir=str(data),port=58643,listen_host='127.0.0.1',advertise_host='127.0.0.1',request_id=None,label='existing')
+            args=types.SimpleNamespace(user='ordinary',codex=None,claude=None,disable_claude=True,preserve_connection_from='/root/private/status.json',manifest_url='https://example.invalid/'+'a'*40+'/manifest.json',manifest_sha256='c'*64,data_dir=str(data),port=58643,listen_host='127.0.0.1',advertise_host='127.0.0.1',request_id=None,label='existing')
             captured=[]
             def record(path,value): captured.append(value); raise OSError('fixture stop before activation')
             with mock.patch.object(host,'service_user',return_value=account),mock.patch.object(host,'read_record',return_value=status),mock.patch.object(host,'provider_preflight',return_value={'codex':'/ordinary/codex'}),mock.patch.object(host,'active',return_value=False),mock.patch.object(host.platform,'machine',return_value='x86_64'),mock.patch.object(host,'download',return_value=json.dumps(manifest).encode()),mock.patch.object(host,'extract_release',return_value=(data,{'sourceCommit':'a'*40})),mock.patch.object(host,'transient',return_value=subprocess.CompletedProcess([],0,b'{"methods":{"remote.enrollmentCreate":{},"remote.enrollmentLookup":{}}}',b'')),mock.patch.object(host,'root_code_directory'),mock.patch.object(host,'private_root'),mock.patch.object(host,'pointer',return_value=None),mock.patch.object(host,'new_record',side_effect=record):
@@ -302,7 +307,9 @@ class InstallerControls(unittest.TestCase):
             commit = 'a'*40
             proof.write_text(json.dumps({'sourceCommit':commit,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
             args = types.SimpleNamespace(source=commit,architecture='x86_64',artifact_url='https://example.invalid/'+commit+'/host.tar.gz',manifest_url='https://example.invalid/'+commit+'/manifest.json',core=str(binary),proof=str(proof),output=str(root/'package'))
-            with mock.patch('sys.stdout', new_callable=io.StringIO): package_module.package(args)
+            with mock.patch.object(package_module,'verify_component_sources') as verify, mock.patch('sys.stdout', new_callable=io.StringIO):
+                package_module.package(args)
+                verify.assert_called_once()
             output = root/'package'; manifest = json.loads((output/'manifest.json').read_bytes()); payload = (output/'host.tar.gz').read_bytes()
             self.assertEqual(host.sha(payload),manifest['artifact']['sha256'])
             self.assertNotIn('coreSourceCommit',manifest['artifact'])
@@ -323,7 +330,7 @@ class InstallerControls(unittest.TestCase):
     def mixed_package_fixture(self):
         temporary=tempfile.TemporaryDirectory(prefix='pcw-components-',dir='/private/tmp');self.addCleanup(temporary.cleanup)
         root=pathlib.Path(temporary.name);here=root/'deploy/linux';here.mkdir(parents=True)
-        for name in ['package-host-release.py','pendingcrew-host.py','managed-host.py']:
+        for name in ['package-host-release.py','pendingcrew-host.py','managed-host.py','install.sh']:
             (here/name).write_bytes((source.parent/name).read_bytes())
         (root/'crewd').mkdir();(root/'crewd/Cargo.toml').write_text('# synthetic source tree; never compiled\n')
         def git(*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.PIPE).decode().strip()
@@ -337,6 +344,20 @@ class InstallerControls(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('mixed_package',here/'package-host-release.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         args=types.SimpleNamespace(source=package_source,core_source=core_source,architecture='x86_64',artifact_url='https://example.invalid/'+package_source+'/host.tar.gz',manifest_url='https://example.invalid/'+package_source+'/manifest.json',core=str(binary),proof=str(proof),output=str(root/'package'))
         return root,git,module,args
+
+    def test_release_bootstrap_binds_short_urls_exact_digest_and_elf_glibc(self):
+        root,git,module,args=self.mixed_package_fixture()
+        binary=pathlib.Path(args.core);binary.write_bytes(binary.read_bytes()+b'GLIBC_2.17\0GLIBC_2.39\0')
+        proof=json.loads(pathlib.Path(args.proof).read_text());proof['binarySha256']=host.sha(binary.read_bytes());pathlib.Path(args.proof).write_text(json.dumps(proof))
+        base='https://github.com/syncmeta/PendingCrew/releases/download/v0.2.2/'
+        args.artifact_url=base+'pendingcrew-0.2.2-linux-amd64.tar.gz';args.manifest_url=base+'pendingcrew-0.2.2-linux-amd64.manifest.json';args.installer_url=base+'installer.py'
+        with mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+        out=pathlib.Path(args.output);entry=(out/'install.sh').read_text()
+        self.assertIn(repr(args.installer_url),entry);self.assertIn(repr(host.sha((out/'install.py').read_bytes())),entry)
+        self.assertIn('requires glibc 2.39 or newer',entry);self.assertNotIn('@MIN_GLIBC@',entry)
+        manifest=json.loads((out/'manifest.json').read_text())
+        self.assertEqual(manifest['artifact']['sha256'],host.sha((out/'host.tar.gz').read_bytes()))
+        self.assertEqual(manifest['artifact']['coreSourceCommit'],args.core_source)
 
     def test_mixed_package_preserves_core_proof_and_extracts_with_explicit_sources(self):
         root,git,module,args=self.mixed_package_fixture()

@@ -7,8 +7,9 @@ def sha(data): return hashlib.sha256(data).hexdigest()
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(',', ':')).encode() + b'\n'
 def url(value, source):
     parsed = urllib.parse.urlsplit(value)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query or source not in parsed.path:
-        raise ValueError('immutable source-qualified HTTPS URL required')
+    pinned_release = parsed.hostname == 'github.com' and re.fullmatch(r'/syncmeta/PendingCrew/releases/download/v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?/[A-Za-z0-9._-]+', parsed.path)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.port or parsed.fragment or parsed.query or not (source in parsed.path or pinned_release):
+        raise ValueError('immutable source-qualified or fixed PendingCrew release HTTPS URL required')
     return value
 
 
@@ -41,7 +42,7 @@ def verify_component_sources(here, package_source, core_source):
             actual = path.read_bytes()
         if actual != git('cat-file', 'blob', blob):
             raise ValueError('actual Core source differs from the two committed components')
-    for name in ['package-host-release.py', 'pendingcrew-host.py', 'managed-host.py']:
+    for name in ['package-host-release.py', 'pendingcrew-host.py', 'managed-host.py', 'install.sh']:
         path = here / name
         if path.is_symlink() or not path.is_file() or path.read_bytes() != git('show', package_source + ':deploy/linux/' + name):
             raise ValueError('actual package component differs from its frozen source')
@@ -61,7 +62,7 @@ def package(args):
     if proof.get('sourceCommit') != core_source or proof.get('binarySha256') != sha(core) or proof.get('sourceClean') is not True or proof.get('defaultFeatures') is not True or proof.get('features') != [] or proof.get('test') is not False:
         raise ValueError('normal frozen-source build proof does not match this ELF')
     here = pathlib.Path(__file__).resolve().parent
-    if core_source != args.source: verify_component_sources(here, args.source, core_source)
+    verify_component_sources(here, args.source, core_source)
     installer = (here / 'pendingcrew-host.py').read_bytes()
     policy_nodes = [
         node.value for node in ast.parse(installer).body
@@ -86,15 +87,30 @@ def package(args):
     if core_source != args.source: artifact['coreSourceCommit'] = core_source
     manifest = canonical({'format':1,'providerPrerequisites':provider_policy,'artifact':artifact})
     entry = installer.decode().replace('DEFAULT_MANIFEST_URL = None', 'DEFAULT_MANIFEST_URL = ' + repr(manifest_url),1).replace('DEFAULT_MANIFEST_SHA256 = None','DEFAULT_MANIFEST_SHA256 = ' + repr(sha(manifest)),1).encode()
+    bootstrap = None
+    installer_url = getattr(args, 'installer_url', None)
+    if installer_url:
+        installer_url = url(installer_url, args.source)
+        if args.architecture != 'x86_64': raise ValueError('bootstrap currently qualifies amd64 only')
+        # Derive the compatibility floor from this exact ELF, never guess distro support.
+        versions = [tuple(map(int, v.split(b'.'))) for v in re.findall(rb'GLIBC_([0-9]+\.[0-9]+)', core)]
+        if not versions: raise ValueError('glibc ELF version evidence missing')
+        template = here / 'install.sh'
+        root = here.parents[1]
+        if template.read_bytes() != subprocess.check_output(['git','-C',str(root),'show',args.source+':deploy/linux/install.sh']):
+            raise ValueError('bootstrap template differs from frozen source')
+        bootstrap = template.read_text().replace('@INSTALLER_URL@', repr(installer_url)).replace('@INSTALLER_SHA256@', repr(sha(entry))).replace('@MIN_GLIBC@', '.'.join(map(str,max(versions)))).encode()
     out = pathlib.Path(args.output); out.mkdir(mode=0o700,parents=False,exist_ok=False)
     for name,data in [('host.tar.gz',payload),('manifest.json',manifest),('install.py',entry)]:
         with (out/name).open('xb') as stream: stream.write(data)
+    if bootstrap is not None: (out/'install.sh').write_bytes(bootstrap)
     print(json.dumps({'sourceCommit':args.source,'published':False,'files':{p.name:sha(p.read_bytes()) for p in sorted(out.iterdir())}},indent=2))
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ['core','proof','source','artifact-url','manifest-url','output']: p.add_argument('--'+name,required=True)
+    p.add_argument('--installer-url', help='source-qualified HTTPS installer URL; also render short install.sh')
     p.add_argument('--core-source', help='original compiled Core commit; defaults to the package source')
     p.add_argument('--architecture',choices=['x86_64','aarch64'],required=True)
     package(p.parse_args())
