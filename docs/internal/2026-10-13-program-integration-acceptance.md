@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-28 远端目录与额度完整交付
+
+用户明确本机和Joy无任务并已退出，授权更新后，正常日用整包已备份并替换为0dc6a4c3／0.2.1（20754.14633），196项库存与准确候选一致，原Development签名核验通过；数据保留。第一版ccfd实际首开发现错误状态被旧shouldDisplay过滤，未冒验收成功；0dc最小修复状态行可见性，原布局helper回归及新准确包通过。实际本机Codex周窗已用35%可见，Claude明确未提供额度，不以空值冒0%。
+
+唯一Linux构建40628735510／attempt1成功（11分59秒），完整输入ccfd1bc58dc68a0b6572c489d46aaf11ec507cef、Rust树9076f34ed93ff95ba029bd8a9ec603005149c367；151方法schema资格及原构建证明保留。0dc仅Swift显示修复，未重标Linux来源。准确三件套追加原v0.2.1，服务器大小／SHA已核；旧Mac公证包与旧Linux资产保留，未改稳定渠道。
+
+Joy新鲜预检无provider后代，正常host.stop返回safePause stopped，无failed/interrupted。完整冷备份tar compare通过；唯一新安装UUID36e54a93-d4f1-4b72-a219-f95592f8addd执行终态0。新服务PID2740778／UID1000运行，实际ELF SHA9556c93789a43a22371dc3fc57e3a24a987105eee7e9d8c4d554fbc41d04f289，身份、配置、端点及完整grants严格不变，provider子进程为空。没有迁移root历史、重新配对、强制结束或运行模型。
+
+日用原Joy记录真实连接后，Codex周额度显示已用36%；新建草稿实际浏览/home/pendingcrew→.local（bin/share可见）→上级→选择，回填完整路径且显示文件夹名pendingcrew，再取消草稿。未创建机组、发送或点击旧session。根亲看远端目录截图；最后保持Joy已连接空白页。证据在`apple-development-0dc6a4c3-directory-quota-20261028/install-output/`（joy-acceptance.json及原图AX）与`joy-host-upgrade-20261028/`。最终独验`joy-host-upgrade-20261028/independent-final-qa.json`接受原升级收据及四份Joy截图／AX，无发现，未重放操作。此次证明目录选择与当前主机额度实际交付，不扩展到新模型任务、Claude额度或重启／睡眠验收。
+
 ## 2026-10-28 远端目录选择与当前主机额度接线
 
 新建机组两个入口接入当前authority的目录浏览，支持主目录、上级、路径及分页；本机继续NSOpenPanel，旧Core缺capability明确提示。host.directoryList只读服务用户可访问目录，ownerWorkspace授权保持；canonical符号链接条目用name作为视图identity，创建／更新目录不再trim破坏尾空格。真实socket回归1 passed（初次sandbox不能读取进程birth的失败保留，升级执行同测试通过）；旧binary过滤0tests不作红证据。权限拒绝、大目录和完整mTLS仅源审，不冒实际验收。
