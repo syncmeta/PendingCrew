@@ -162,7 +162,7 @@ struct CrewdChannelTodoView:View {
     }
     private var todoPageBackground: Color {
         #if os(macOS)
-        CrewTodoPagePalette.background
+        Theme.Palette.canvas
         #else
         Theme.Palette.canvas
         #endif

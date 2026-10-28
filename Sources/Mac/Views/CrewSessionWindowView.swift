@@ -432,7 +432,7 @@ struct CrewSessionWindowView: View {
                         if appModel.usesCrewdAuthority {
                             if let workspace = crewStore.crewdWorkspace {
                                 CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)
-                            } else { Text("当前后台未连接，待办工作尚未确认。") }
+                            } else { Text("当前后台未连接，待办尚未确认。") }
                         } else {
                             CrewTodoPanel(crewId: crewId, runner: sessionRunner,
                                           crewName: crewStore.selectedDetail?.crew.title)
@@ -454,7 +454,7 @@ struct CrewSessionWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlay {
             if crewStore.selectedDetail == nil {
-                CrewdEmptySurface(title: "机组工作区", detail: "从通讯录或消息列表选择机组，查看本群待办工作和实际成员。", symbol: "person.3")
+                CrewdEmptySurface(title: "机组工作区", detail: "从通讯录或消息列表选择机组，查看本群待办和实际成员。", symbol: "person.3")
             }
         }
     }

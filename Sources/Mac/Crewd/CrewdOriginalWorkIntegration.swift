@@ -71,9 +71,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var todoTags: [String: String] = [:]
     var body: some View {
         VStack(spacing:0){
-            #if os(macOS)
-            desktopHeader
-            #else
+            #if !os(macOS)
             sectionHeader
             #endif
             #if os(macOS)
@@ -82,17 +80,21 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
             #endif
         }
+        #if os(macOS)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                CrewdGlassWorkspaceTabs(selection: $workspace.originalSection)
+                    .frame(width: 365)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                if workspace.originalSection == "消息", let filterControl { filterControl }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                if let searchControl { searchControl }
+            }
+        }
+        #endif
     }
-    #if os(macOS)
-    private var desktopHeader: some View {
-        HStack(spacing: 10) {
-            CrewdGlassWorkspaceTabs(selection: $workspace.originalSection).frame(width: 365)
-            if workspace.originalSection == "消息", let filterControl { filterControl }
-            Spacer(minLength: 0)
-            if let searchControl { searchControl }
-        }.padding(.horizontal, 14).padding(.vertical, 8)
-    }
-    #endif
     private var sectionHeader:some View {
         VStack(spacing:0){
             HStack(spacing:12){
@@ -335,7 +337,7 @@ private struct CrewdOriginalTodoSummary: View {
     private var macOverview: some View {
         VStack(alignment:.leading,spacing:0) {
             HStack(spacing:6) {
-                Text("待办工作").font(Theme.Fonts.headline.weight(.semibold))
+                Text("待办").font(Theme.Fonts.headline.weight(.semibold))
                 CrewTodoLedgerPills(ledger:Binding(get:{human ? .human:.agent},set:{human = $0 == .human}),contextHelp:{ledger in
                     ledger == .human ? "查看当前群需要人处理的关联工作":"查看当前群 AI 的关联工作"
                 })
@@ -346,7 +348,7 @@ private struct CrewdOriginalTodoSummary: View {
             if group.crew != currentCrew || group.loading {
                 ProgressView("正在读取当前群").controlSize(.small).font(Theme.Fonts.caption).padding(.horizontal,14)
             } else if let failure=group.failure {
-                CrewdInlineNotice(title:"待办工作暂未更新",detail:failure.localizedDescription,symbol:"exclamationmark.triangle",warning:true).padding(.horizontal,14)
+                CrewdInlineNotice(title:"待办暂未更新",detail:failure.localizedDescription,symbol:"exclamationmark.triangle",warning:true).padding(.horizontal,14)
             } else if !group.capabilities.contains("channelWork") {
                 Text("当前后台尚未开放群工作引用。").font(Theme.Fonts.caption).foregroundStyle(.secondary).padding(.horizontal,14)
             } else if !group.loaded {
@@ -360,7 +362,7 @@ private struct CrewdOriginalTodoSummary: View {
                     ForEach(rows.indices,id:\.self){index in macTodoRow(rows[index])}
                 }.padding(.horizontal,12).padding(.bottom,8)
             }
-        }.frame(maxWidth:.infinity,alignment:.leading).background(CrewTodoPagePalette.background)
+        }.frame(maxWidth:.infinity,alignment:.leading).background(Theme.Palette.canvas)
     }
     private func macTodoRow(_ row:CrewdValue)->some View {
         let layout=TodoListPresentation.overviewLayout
@@ -388,7 +390,7 @@ private struct CrewdOriginalTodoSummary: View {
     private var standardOverview: some View {
         VStack(alignment:.leading,spacing:12){
             HStack{
-                Text("待办工作").font(CrewdType.label.weight(.semibold))
+                Text("待办").font(CrewdType.label.weight(.semibold))
                 Spacer()
                 Button("详细"){showDetails(human)}.buttonStyle(.plain).font(CrewdType.caption).foregroundStyle(CrewdChatStyle.accent(scheme))
             }.foregroundStyle(CrewdChatStyle.muted(scheme))
@@ -397,7 +399,7 @@ private struct CrewdOriginalTodoSummary: View {
             if group.crew != currentCrew || group.loading {
                 ProgressView("正在读取当前群").controlSize(.small).font(.caption)
             }else if let failure=group.failure {
-                CrewdInlineNotice(title:"待办工作暂未更新",detail:failure.localizedDescription,symbol:"exclamationmark.triangle",warning:true)
+                CrewdInlineNotice(title:"待办暂未更新",detail:failure.localizedDescription,symbol:"exclamationmark.triangle",warning:true)
             }else if !group.capabilities.contains("channelWork") {
                 Text("当前后台尚未开放群工作引用。").font(CrewdType.caption).foregroundStyle(CrewdChatStyle.muted(scheme))
             }else if !group.loaded {
@@ -476,8 +478,8 @@ private struct CrewdOriginalMessages<Content: View>: View {
         VStack(spacing: 0) {
             HStack {
                 Spacer()
-                Button { showingMobileInspector = true } label: { Label("待办工作与成员", systemImage: "sidebar.right") }
-                    .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("查看当前群的待办工作与成员")
+                Button { showingMobileInspector = true } label: { Label("待办与成员", systemImage: "sidebar.right") }
+                    .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("查看当前群的待办与成员")
             }.font(CrewdType.label).frame(minHeight: 44).padding(.horizontal, 14)
             if let header { header }
             content().frame(maxWidth: .infinity, maxHeight: .infinity)

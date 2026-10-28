@@ -109,7 +109,7 @@ struct CrewdWorkPanels: View {
     }
     private var pageBackground:Color {
         #if os(macOS)
-        return CrewTodoPagePalette.background
+        return Theme.Palette.canvas
         #else
         return Theme.Palette.canvas
         #endif
