@@ -5,7 +5,7 @@ sys.dont_write_bytecode = True
 
 # Exact manual review inputs avoid a self-referential committed source SHA.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_METHOD_COUNT = 149
+QUALIFIED_METHOD_COUNT = 151
 QUALIFIED_STORE_VERSION = 21
 COMPILER_ENVIRONMENT = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
                         'RUSTC_WORKSPACE_WRAPPER', 'CARGO_INCREMENTAL', 'CC', 'CFLAGS']
@@ -96,6 +96,8 @@ def qualify_schema(schema):
     # Direct native input/catalog and Claude reads, private draft reads/control,
     # and typed commands are distinct surfaces; a fence is not a read/retry.
     direct = {
+        'host.directoryList': ('DirectoryParams', 'DirectoryResult'),
+        'host.quota': ('NoParams', 'QuotaResult'),
         'session.codex.inputPrepare': ('CodexInputPrepareParams', 'CodexInputResult'),
         'session.codex.inputLookup': ('CodexInputLookupParams', 'CodexInputLookup'),
         'session.codex.inputDiscard': ('CodexInputDiscardParams', 'CodexInputResult'),
