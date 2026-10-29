@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 草稿重连调度与外部执行回执恢复
+
+个人草稿自动同步在旧连接失败时会丢弃已排队的新同步请求。现于原操作清理后消费明确排队请求并重走资格门；单独失败不重试，迟到结果须仍属于原operation、adapter与namespace才可更新同步状态。精确提取生产调度函数的可控接缝先RED后GREEN，覆盖排队请求、不自重试、过期结果三项；日志 `/private/tmp/personal-scheduler-red.log` 与 `personal-scheduler-green.log`。完整Mac构建通过 `/private/tmp/pcw-personal-recovery-build-20261029.log`；不是完整Cloud、多设备或真机验收。
+
+外部执行边界新增 `unread_public_start_reply_does_not_relaunch_after_disconnect_or_restart`：真实serve与Unix提交连接，仅写一次session.start命令且从不读响应；假执行器真实进程日志证明已执行后断开，只按原UUID查询。正常停服重启后回执为历史、原结果保持、会话不运行；两轮结束registry均空，thread/start=1、turn/start=1、thread/resume=0。定向测试1 passed，日志 `/private/tmp/pcw-public-start-unread-canonical-20261029.log`。证明本地协议断开与正常重启不重放，不冒真实供应商、强杀或TLS验收。此批尚未安装。
+
 ## 2026-10-29 真实协议未读响应恢复与移动失联诊断
 
 继续无屏推进：新增独立integration `command_reply_loss.rs` 真正启动serve和Unix socket。提交连接仅写一次command.submit、不读取响应，由独立观察连接以原UUID确认committed，然后丢弃提交连接；新连接lookup回执逐字相同。正常停服并等待服务结束后重启，原command／result／UUID／runtimeBinding保持且historical=true；再停服打开实际数据库，crews/channels/messages/receipts明确为[2,3,1,1]。`cargo test --offline -p crewd-server --test command_reply_loss -- --nocapture` 1 passed，日志 `/private/tmp/pcw-command-reply-loss-20261029.log`。未启动模型、不操作日用或Joy；这是真实本地协议与正常服务重启证据，不等于TLS、强杀或外部模型副作用恰好一次。

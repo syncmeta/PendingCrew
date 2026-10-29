@@ -1453,3 +1453,58 @@ async fn completion_native_first_inputs_require_nonblank_original_task_before_an
     stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
     assert!(violations.is_empty(),"{}",violations.join("; "));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unread_public_start_reply_does_not_relaunch_after_disconnect_or_restart() {
+    use tokio::io::AsyncWriteExt;
+    let f = Fixture::new();
+    let mut identity = Value::Null;
+    let request = uuid::Uuid::new_v4().to_string();
+    let mut original = Value::Null;
+    let mut sid = String::new();
+    for round in 0..2 {
+        let mut options = f.options("ready");
+        let o = options.orchestra.as_mut().unwrap();
+        o.claude = ClaudeProgram::Disabled;
+        o.codex = CodexProgram::Path(artifact("fake_codex"));
+        o.codex_env = BTreeMap::from([
+            ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+            ("FAKE_CODEX_MODE".into(), "completion".into()),
+        ]);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async { let _ = rx.await; }));
+        let mut c = Client::connect(&f.data).await;
+        if round == 0 {
+            identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+            let crew = c.call("crew.create", json!({"title":"Unread public start","workingDirectory":f.work})).await.unwrap();
+            let command = json!({"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","brief":"SYNTHETIC_UNREAD_START_ONCE","isolation":false,"model":null,"effort":null,"title":null}});
+            let mut submitter = tokio::net::UnixStream::connect(f.data.join("crewd.sock")).await.unwrap();
+            let packet = json!({"id":1,"method":"command.submit","params":{"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":command}});
+            submitter.write_all(format!("{packet}\n").as_bytes()).await.unwrap();
+            // Independent native evidence proves dispatch before disconnect;
+            // no byte of the submit response is ever read.
+            wait("unread public start executed", || turn_count(&f,"SYNTHETIC_UNREAD_START_ONCE") == 1).await;
+            drop(submitter);
+            original = completion_receipt(&mut c, &identity, &request).await;
+            assert_eq!(original["phase"], "launched", "{original}");
+            assert_eq!(original["command"], command);
+            sid = original["result"]["sessionId"].as_str().unwrap().to_owned();
+            drop(c);
+            c = Client::connect(&f.data).await;
+            assert_eq!(c.call("command.lookup", json!({"requestId":request,"dbId":identity["dbId"]})).await.unwrap(), original);
+        } else {
+            let recovered = c.call("command.lookup", json!({"requestId":request,"dbId":identity["dbId"]})).await.unwrap();
+            assert_eq!(recovered["historical"], true);
+            assert_eq!(recovered["requestId"], request);
+            assert_eq!(recovered["command"], original["command"]);
+            assert_eq!(recovered["result"], original["result"]);
+            assert_eq!(c.call("session.live", json!({"sessionId":sid})).await.unwrap()["running"], false);
+        }
+        tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(15), server).await.unwrap().unwrap().unwrap();
+        assert!(registry(&f.data).is_empty());
+    }
+    assert_eq!(native_calls(&f,"thread/start").len(), 1);
+    assert_eq!(native_calls(&f,"thread/resume").len(), 0);
+    assert_eq!(native_calls(&f,"turn/start").len(), 1);
+}

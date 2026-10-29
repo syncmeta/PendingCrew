@@ -244,8 +244,14 @@ import Darwin
         guard active,(usingCore && coreTransport != nil) || (cloudOptedIn && coordinator.optedIn && coordinator.current.id.account != nil) else{return}
         if syncTask != nil{syncAgain=true;return}
         let operation=UUID();syncID=operation
-        syncTask=Task{[weak self] in guard let self else{return};self.syncBusy=true;defer{if self.syncID==operation{self.syncBusy=false;self.syncTask=nil;self.syncID=nil}}
-            repeat{self.syncAgain=false;do{if self.usingCore{guard let adapter=self.coreTransport else{throw AppleSyncFailure.accountChanged};self.coreSynchronized = try await self.coordinator.current.synchronizeCore(using:adapter);if self.coreSynchronized{self.coreSyncedRevisions=self.coordinator.current.revisions}}else{try await self.coordinator.synchronize()}}catch{if self.syncID==operation{self.publishProjection()};return};guard self.syncID==operation else{return};self.publishProjection()}while self.syncAgain && !Task.isCancelled && self.active && (self.usingCore || self.cloudOptedIn)
+        syncTask=Task{[weak self] in guard let self else{return};self.syncBusy=true;defer{if self.syncID==operation{
+                self.syncBusy=false;self.syncTask=nil;self.syncID=nil
+                // A reconnect/edit may have requested another pass while the old
+                // transport was failing. Consume that explicit request after cleanup;
+                // an error alone does not authorize an automatic retry.
+                if self.syncAgain{self.syncAgain=false;self.scheduleSync()}
+            }}
+            repeat{self.syncAgain=false;do{if self.usingCore{guard let adapter=self.coreTransport else{throw AppleSyncFailure.accountChanged};let owner=self.coordinator.current;let synchronized=try await owner.synchronizeCore(using:adapter);guard self.syncID==operation,self.coreTransport === adapter,self.coordinator.current === owner,!Task.isCancelled else{return};self.coreSynchronized=synchronized;if synchronized{self.coreSyncedRevisions=owner.revisions}}else{try await self.coordinator.synchronize()}}catch{if self.syncID==operation{self.publishProjection()};return};guard self.syncID==operation else{return};self.publishProjection()}while self.syncAgain && !Task.isCancelled && self.active && (self.usingCore || self.cloudOptedIn)
         }
     }
     func synchronizePersonal()async throws{
