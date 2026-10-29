@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 真实协议未读响应恢复与移动失联诊断
+
+继续无屏推进：新增独立integration `command_reply_loss.rs` 真正启动serve和Unix socket。提交连接仅写一次command.submit、不读取响应，由独立观察连接以原UUID确认committed，然后丢弃提交连接；新连接lookup回执逐字相同。正常停服并等待服务结束后重启，原command／result／UUID／runtimeBinding保持且historical=true；再停服打开实际数据库，crews/channels/messages/receipts明确为[2,3,1,1]。`cargo test --offline -p crewd-server --test command_reply_loss -- --nocapture` 1 passed，日志 `/private/tmp/pcw-command-reply-loss-20261029.log`。未启动模型、不操作日用或Joy；这是真实本地协议与正常服务重启证据，不等于TLS、强杀或外部模型副作用恰好一次。
+
+移动端失联时AppModel会移除写入backend，但原window.workspace仍保有状态与原请求；此前诊断sheet取backend导致最需要诊断时只显示泛化未连接。现改取原选中workspace，仅复用原只读状态视图与资格守卫，无自动lookup、重连或写入。父代理复核视图无自动提交，再做完整arm64 iOS Simulator构建通过，日志 `/private/tmp/pcw-mobile-disconnect-readback-20261029.log`；真机界面仍待。
+
 ## 2026-10-29 新机组机长启动失败反馈
 
 针对真实Claude机组创建后未启机长、错误仅在环境设置可见，Workspace按原crew保存启动失败，Mac机组主内容直接显示；别的crew不显示，返回原crew仍保留，明确成功或确认已有机长后清除。未改变Claude配置、执行资格、自动发现或自动重试。先前取消路径假说的RED证据仅保留于临时目录，不作为该现场根因，也未把无关失败断言留入回归。

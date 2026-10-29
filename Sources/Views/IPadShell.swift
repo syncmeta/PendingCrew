@@ -121,7 +121,9 @@ struct IPadShell: View {
             }
         }
         .sheet(isPresented:$showingConnectionStatus){
-            if let workspace=appModel.crewdBackend?.workspace{CrewMobileConnectionReadback(workspace:workspace)}
+            // Disconnect removes the write backend, not the selected connection's
+            // error and original-request evidence. Keep this read-only page reachable.
+            if let workspace=appModel.crewdWindow.workspace{CrewMobileConnectionReadback(workspace:workspace)}
             else {
                 NavigationStack {
                     ContentUnavailableView("后台尚未连接",systemImage:"wifi.exclamationmark",description:Text(appModel.backendConfigurationError ?? "请从电脑菜单核对连接。"))
