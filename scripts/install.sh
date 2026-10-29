@@ -49,16 +49,32 @@ api="https://api.github.com/repos/$repo/releases/latest"
 meta=$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api") \
   || die "拉不到 Release 信息（${api}）。网络不通，或者仓库还没有已发布的版本。"
 
-# 只认 .dmg 那一个资产。Release 上还有一个给 Sparkle 自更新用的 .zip，不是给这儿的。
-url=$(printf '%s' "$meta" | /usr/bin/awk -F'"' '/"browser_download_url"/ && /\.dmg"/ {print $4; exit}')
-tag=$(printf '%s' "$meta" | /usr/bin/awk -F'"' '/"tag_name"/ {print $4; exit}')
-[ -n "$url" ] || die "最新的 Release（${tag:-?}）里没有 .dmg 资产。"
-
-# GitHub 在资产上公布 sha256 摘要，形如 "digest": "sha256:abcd…"。
-# 拿它当校验基准 —— 它和文件来自同一个 API 响应，能挡住传输损坏和被掉包的镜像。
-want=$(printf '%s' "$meta" \
-  | /usr/bin/tr ',' '\n' \
-  | /usr/bin/awk -F'"' '/"digest"/ && /sha256:/ {sub(/^sha256:/, "", $4); print $4; exit}')
+# 只认 .dmg 那一个资产；URL 和摘要必须来自同一个资产对象。
+# macOS ships Ruby with its JSON parser; never parse object boundaries with awk.
+[ -x /usr/bin/ruby ] || die "缺少系统 Ruby JSON 解析器，无法核对 Release。"
+selected=$(printf '%s' "$meta" | /usr/bin/ruby -rjson -e '
+  begin
+    release = JSON.parse(STDIN.read)
+    assets = release.fetch("assets")
+    raise "assets must be an array" unless assets.is_a?(Array)
+    candidates = assets.select { |a| a.is_a?(Hash) && a["name"].is_a?(String) && a["name"].end_with?(".dmg") }
+    raise "expected exactly one DMG asset" unless candidates.length == 1
+    asset = candidates.first
+    url = asset.fetch("browser_download_url")
+    digest = asset.fetch("digest")
+    tag = release.fetch("tag_name")
+    raise "invalid DMG download URL" unless url.is_a?(String) && url.match?(/\Ahttps:\/\/github\.com\/syncmeta\/PendingCrew\/releases\/download\/[^\s]+\.dmg\z/)
+    raise "missing or invalid DMG sha256" unless digest.is_a?(String) && digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+    raise "invalid release tag" unless tag.is_a?(String) && !tag.empty? && !tag.match?(/[[:cntrl:]]/)
+    puts url, digest.delete_prefix("sha256:"), tag
+  rescue StandardError => e
+    warn "Release metadata refused: #{e.message}"
+    exit 1
+  end
+') || die "Release 的 DMG 资产或摘要不唯一／无效，尚未下载或安装。"
+url=$(printf '%s\n' "$selected" | /usr/bin/sed -n '1p')
+want=$(printf '%s\n' "$selected" | /usr/bin/sed -n '2p')
+tag=$(printf '%s\n' "$selected" | /usr/bin/sed -n '3p')
 
 say "→ 最新版本：$tag"
 
