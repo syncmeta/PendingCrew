@@ -16,7 +16,7 @@ use crewd_store::{Db, native_execution as n};
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -195,6 +195,7 @@ impl ManagedHandle {
             .lock()
             .map_err(|_| "managed map poisoned")?
             .insert(session, Arc::downgrade(&handle));
+        let startup_observation = Arc::new(AtomicU8::new(0));
         let state = Actor {
             #[cfg(test)]
             current_pause: None,
@@ -211,6 +212,7 @@ impl ManagedHandle {
             events,
             observer,
             ready: Some(ready),
+            startup_observation: startup_observation.clone(),
             busy: handle.busy.clone(),
             blocked: handle.blocked.clone(),
             stopping: handle.stopping.clone(),
@@ -228,7 +230,7 @@ impl ManagedHandle {
         });
         tokio::time::timeout(std::time::Duration::from_secs(8), ready_rx)
             .await
-            .map_err(|_| "managed SessionStart guard installation not witnessed")?
+            .map_err(|_| startup_failure(startup_observation.load(Ordering::Acquire)))?
             .map_err(|_| "managed native exited before guard readiness")?;
         if let Some(text) = initial.filter(|s| !s.trim().is_empty()) {
             handle
@@ -295,6 +297,20 @@ impl ManagedHandle {
         rx.await.unwrap_or_else(|_| denied_hook())
     }
 }
+fn startup_failure(observation: u8) -> String {
+    let reason = match observation {
+        0 => "no SessionStart hook observed; initialization or interaction may still be pending",
+        1 => "SessionStart hook received; validation did not finish",
+        2 => "manual terminal ownership cannot attest managed readiness",
+        3 => "runtime identity or authority no longer current",
+        4 => "hook event or subagent scope rejected",
+        5 => "native session identity mismatch",
+        6 => "startup/resume source mismatch",
+        7 => "qualified hook arrived at readiness deadline",
+        _ => "startup observation unavailable",
+    };
+    format!("managed startup not ready: {reason}; initial task not enqueued; original request retained, do not resend")
+}
 fn denied_hook() -> HookResult {
     HookResult{stdout:Some(json!({"decision":"block","reason":"PendingCrew managed input has no matching current durable authorization"}).to_string())}
 }
@@ -327,6 +343,7 @@ struct Actor {
     events: mpsc::UnboundedSender<SessionEvent>,
     observer: Option<Arc<dyn DeliverySuccessObserver>>,
     ready: Option<oneshot::Sender<()>>,
+    startup_observation: Arc<AtomicU8>,
     busy: Arc<AtomicBool>,
     blocked: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
@@ -442,7 +459,10 @@ impl Actor {
         }
     }
     async fn hook(&mut self, kind: HookKind, payload: Value) -> HookResult {
+        let startup = kind == HookKind::SessionStart && self.ready.is_some();
+        if startup { self.startup_observation.store(1, Ordering::Release); }
         if self.terminal.manual_hook_allowed().await {
+            if startup { self.startup_observation.store(2, Ordering::Release); }
             if self.stopping.load(Ordering::Acquire) {
                 return denied_hook();
             }
@@ -468,6 +488,7 @@ impl Actor {
             };
         }
         if !self.current().await {
+            if startup { self.startup_observation.store(3, Ordering::Release); }
             return denied_hook();
         }
         let event = payload["hook_event_name"].as_str().unwrap_or("");
@@ -482,12 +503,14 @@ impl Actor {
             HookKind::ManagedActivity => event == "PreToolUse",
         };
         if !valid {
+            if startup { self.startup_observation.store(4, Ordering::Release); }
             if self.pending.is_some() {
                 self.invalidate().await;
             }
             return denied_hook();
         }
         if payload.get("agent_id").is_some() {
+            if startup { self.startup_observation.store(4, Ordering::Release); }
             return if kind == HookKind::UserPromptSubmit {
                 if self.pending.is_some() {
                     self.invalidate().await;
@@ -498,15 +521,18 @@ impl Actor {
             };
         }
         if payload["session_id"].as_str() != Some(self.agent_session.as_str()) {
+            if startup { self.startup_observation.store(5, Ordering::Release); }
             if self.pending.is_some() {
                 self.invalidate().await;
             }
             return denied_hook();
         }
+        if startup { self.startup_observation.store(6, Ordering::Release); }
         if kind == HookKind::SessionStart
             && self.ready.is_some()
             && payload["source"].as_str()==Some(self.expected_start_source)
         {
+            self.startup_observation.store(7, Ordering::Release);
             let _ = self.ready.take().unwrap().send(());
             return HookResult { stdout: None };
         }
@@ -1101,6 +1127,7 @@ mod tests {
             events: events_out,
             observer: None,
             ready: None,
+            startup_observation: Arc::new(AtomicU8::new(0)),
             busy: Arc::new(AtomicBool::new(false)),
             blocked: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
@@ -1115,6 +1142,51 @@ mod tests {
             registry,
             _events: events,
         }
+    }
+    #[tokio::test]
+    async fn managed_create_without_hook_times_out_without_initial_delivery_and_cleans_up() {
+        use crewd_exec::{driver::{ClaudeStart, DriverConfig, start_claude},
+            launch::ClaudeSpec, resume::MemoryLedger};
+        let fixture = crate::agent::testkit::Fixture::new().await;
+        let root = tempfile::tempdir().unwrap();
+        let registry = Arc::new(registry::ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
+        let factory = Arc::new(NativeFactory::new(fixture.state.db.clone(), registry.clone(), root.path().join("unused-helper")));
+        let trace = root.path().join("input.trace");
+        let submissions = root.path().join("submissions.log");
+        let mut config = DriverConfig::new(root.path().join("runtime"));
+        config.registry = Some(registry.clone());
+        config.terminal_observer = Some(Arc::new(crewd_exec::acp::terminal::TerminalTap::new(1, 64).unwrap()));
+        config.stop_grace = std::time::Duration::from_millis(100);
+        let fake = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("fake_claude");
+        let (driver, events) = start_claude(ClaudeStart {
+            session_id: fixture.worker.clone(), program: fake, child_path: "/usr/bin:/bin".into(),
+            spec: ClaudeSpec { workdir: root.path().into(), additional_env: [
+                ("FAKE_CLAUDE_TRACE".into(), trace.to_string_lossy().into_owned()),
+                ("FAKE_CLAUDE_LOG".into(), submissions.to_string_lossy().into_owned()),
+            ].into(), ..Default::default() }, ledger: Arc::new(MemoryLedger::default()),
+        }, config).await.unwrap();
+        let started = std::time::Instant::now();
+        let result = ManagedHandle::create(&factory, fixture.worker.clone(), false, driver.clone(), events,
+            Some("synthetic initial task must never be delivered".into()), None).await;
+        let error = result.err().expect("no hook must fail readiness");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(8));
+        assert_eq!(error, startup_failure(0));
+        assert!(error.contains("initialization or interaction may still be pending"));
+        assert!(!error.contains("synthetic initial"));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !driver.is_closed() { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
+        }).await.expect("failed startup stops its driver");
+        assert!(!observation_live(&factory, &fixture.worker));
+        assert!(factory.managed.lock().unwrap().get(&fixture.worker).unwrap().upgrade().is_none());
+        // The fake reader was running; no write, even a partial prompt, reached it.
+        assert!(trace.exists(), "real fake reader trace initialized");
+        assert_eq!(std::fs::read_to_string(&trace).unwrap(), "");
+        assert!(!submissions.exists());
+        let counts = fixture.state.db.call_result(|store| -> crewd_store::Result<_> {
+            Ok(store.conn().query_row("SELECT (SELECT COUNT(*) FROM native_execution_runtimes), (SELECT COUNT(*) FROM native_execution_runtimes WHERE revoked=0), (SELECT COUNT(*) FROM native_execution_receipts), (SELECT COUNT(*) FROM native_execution_inputs)", [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?)))?)
+        }).await.unwrap().unwrap();
+        assert_eq!(counts, (1, 0, 0, 0), "one stopped runtime, no retry or initial enqueue");
+        let _ = registry::reap_orphans(&registry);
     }
     fn human_actor(registry: Arc<registry::ProcessRegistry>) -> crate::public_commands::Actor {
         let policy = Arc::new(crate::peer::PeerPolicy::new(Some(registry)).unwrap());
@@ -1236,6 +1308,32 @@ mod tests {
         assert_ne!(receipt.phase,n::Phase::Completed,"Stop alone is provisional");
     }
 
+    #[tokio::test]
+    async fn startup_guard_diagnostic_rejects_wrong_identity_and_source_then_accepts_original() {
+        let mut run = race_run().await;
+        let (tx, mut rx) = oneshot::channel();
+        run.actor.ready = Some(tx);
+        let id = run.actor.agent_session.clone();
+        for (payload, expected) in [
+            (json!({"hook_event_name":"SessionStart","session_id":"foreign","source":"startup"}), 5),
+            (json!({"hook_event_name":"SessionStart","session_id":id,"source":"resume"}), 6),
+        ] {
+            run.actor.hook(HookKind::SessionStart, payload).await;
+            assert!(matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            assert!(run.actor.pending.is_none());
+            assert_eq!(run.actor.startup_observation.load(Ordering::Acquire), expected);
+        }
+        // Wrong source invalidates this runtime; a correct-hook control needs
+        // a separate fresh runtime, never revive the rejected one.
+        drop(run);
+        let mut run = race_run().await;
+        let (tx, rx) = oneshot::channel();
+        run.actor.ready = Some(tx);
+        let id = run.actor.agent_session.clone();
+        run.actor.hook(HookKind::SessionStart,json!({"hook_event_name":"SessionStart","session_id":id,"source":"startup"})).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await.unwrap().unwrap();
+        assert_eq!(run.actor.startup_observation.load(Ordering::Acquire), 7);
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn managed_guard_race_stop_across_real_driver_status_cannot_remain_current() {
         let mut run = race_run().await;

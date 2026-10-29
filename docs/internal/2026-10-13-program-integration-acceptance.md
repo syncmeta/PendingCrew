@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 Linux产物与Claude启动诊断
+
+用户明确授权17个提交推送及现有Linux流水线，main已同步76b75a72；唯一run40878460198成功。下载508文件逐项大小/hash核验，source48b3452e/controller76b75a72/Rust tree匹配，正常Release非test生产见证成立。tar SHA256为3abafc5e3e22dfa70fb365196079f1fdc4216788abc39c98d24bac0ad64a6d3b；完整记录linux-48b3452e-40878460198/download-verification.json。固定host-48b3452e完整SHA发布地址尚不存在，正式HTTPS安装依赖待单独发布授权，未另搭托管或绕过安装器。
+
+Joy正式status/grants只读核对：身份和配置与原记录相同、一个grant；实际current为36e54a93 activation，PID2740778、ccfd二进制，普通UID1000、无后代进程、数据目录0700、可用约42GB。观察不等同停工，尚未停服/备份/升级。原始材料保留joy-host-update-20261029。
+
+真实Claude原机组唯一启动返回8秒未就绪，原任务未重发。现补有界启动原因分类，不保存PTY/正文/凭据、不更改8秒门或Unknown语义。错误ID/source拒绝及正确hook放行经Actor接缝RED/GREEN；完整ManagedHandle::create无hook测试真实8.24秒通过，假执行器读取日志0字节、零提交，driver关闭、weak句柄释放、DB单个revoked runtime且receipt/input均0。日志 `/private/tmp/pcw-claude-start-diag-green-final.log`、`/private/tmp/pcw-claude-full-startup-timeout-final.log`。此诊断修复尚未安装，真实Claude失败根因仍未确证。
+
 ## 2026-10-29 Claude正常配置与设置反馈修复
 
 沿已安装App的后端设置和NSOpenPanel选择既有Claude可执行文件，保存解析路径 `/Users/hey/.local/share/claude/versions/2.1.301`；只读defaults确认保存。正常安全暂停后新App58436／Core58441已启动，实际Core参数 `--claude` 使用该路径。本机正常连接、原Claude机组首文保留，未重新发送或启动替代会话；配置生效不等于Claude实际模型或生命周期通过。
