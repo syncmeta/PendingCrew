@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 当前移动设备包与Claude前置条件核对
+
+688d598d正常iPhoneOS Apple Development 0.2.1／20755.52661完整构建成功，53项产物、2051源码输入及3878依赖前后保持，日用Mac未变；原profile/权限和签名验证、ZIP/IPA逐项核验已由构建器完成，独立28项核验通过，源逐项对688d598d Git对象、依赖现场重hash一致，记录INDEPENDENT-IPHONEOS-QA.json（SHA ce548f0bd808bd1ad27b4cfb446c33f660bc66872b95b7c9b19c345efde16110）。保留apple-development-688d598d-mobile-20261029。现有已配对物理手机仅查询准确bundle即返回CoreDevice连接重置；未安装、未启动或重新配对，尚无手机PCW连接可用的证据。
+
+Claude具体无SessionStart诊断已在原群人类频道实际读取；官方交互workspace trust前不运行hooks。最小只读配置只核指定验收目录及/private/tmp、/private、/tmp、/：精确目录及前三父级无记录，/为false；未发现true持久信任，但没有现场屏幕与完整运行时trust判定，不能断言唯一根因。未改信任、未裸CLI重试。脱敏材料在c62a85bd交付目录claude-acceptance-parent-trust-readonly.json。
+
+
 ## 2026-10-29 恢复处置已安装，真实Claude仍未就绪
 
 c62a85bd正常Core的486输入、12生产包13产物fresh／非test独验通过；同源Apple Development 20755.51382整包115项、严格签名及准确签名库六场景通过。旧日用正常安全暂停后无残留进程，完整旧包与核对ZIP保留，排他替换及新库存核验完成。正常首开本机连接与原Claude机组保持。
