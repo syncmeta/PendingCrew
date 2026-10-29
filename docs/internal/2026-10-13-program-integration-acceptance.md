@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 恢复修复Development整包候选
+
+准确源码49bdc2b4生成正常Apple Development macOS arm64 0.2.1／20755.33066，复用原暖缓存及已有签名／profile配置，无启动、安装或外发。独立保留目录 `docs/private/preserved-delivery-artifacts/apple-development-49bdc2b4-recovery-20261029/macOS/`。源码2044项和依赖前后相同，原Local配置恢复，日用App完整库存前后不变。候选115项与整包ZIP逐项匹配、严格深度签名校验通过。ZIP SHA256 `f0dda9433e5c26bb66de0464aa7c1795f16cb9985b75f9101d997f0f341f7590`。
+
+准确签名App库执行原会话入口全部30场景通过（含初始化、原请求超时／历史、权限及切换），证据 `/private/tmp/pcw-signed-recovery-suite-20261029/`。测试加载库而非启动GUI，后台为临时协议服务。Core复用当前日用已安装组件并仅重新签名、验证代码等价，不含e932维护修复；不冒称新后端交付、正式公证版或GUI验收通过。已向用户请求将候选更新日用后实际验证：正常退出、旧整包备份、数据／配对保留，不升级Joy、不发布；未执行替换。
+
 ## 2026-10-29 待办列表取消读取的错误归属
 
 真实界面曾显示Swift.CancellationError。源码确认CrewdChannelWorkStore.refresh已排除取消及过期范围错误，但CrewdChannelTodoView自动.task与手动刷新又将所有抛出的错误复制到独立failure，造成取消外显及成功刷新后残留。两处列表刷新改为仅使用既有group.failure显示当前范围读取失败；视图failure继续保留详情／提交错误，不改任何写入或Unknown处理。完整Debug arm64构建及diff检查通过，日志 `/private/tmp/pcw-todo-cancel-20261029.log`；复用原安装Core，未安装候选或声称GUI取消场景通过。
