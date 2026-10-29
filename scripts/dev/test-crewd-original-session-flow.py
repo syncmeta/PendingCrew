@@ -38,7 +38,7 @@ def main():
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    scenarios = ['initialization-once','receipt-timeout','receipt-unknown','receipt-historical','authority-error-scope','quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
+    scenarios = ['captain-not-configured','captain-retry','initialization-once','receipt-timeout','receipt-unknown','receipt-historical','authority-error-scope','quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
     assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
     for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')
@@ -58,7 +58,7 @@ def main():
                             def profile(id, executor, backend, features, available=True, reason=None):
                                 return {'id':id,'executor':executor,'displayName':id,'backend':backend,'available':available,'features':dict(zip(['initialContext','manualTerminal','structuredDecisions','fullHistoryLoad'],features)),'unavailableReason':reason}
                             result = {'profiles':[
-                                profile('codex','codex','codex',[True,False,True,False],scenario not in ['profiles-unavailable','click-unavailable'],'notConfigured' if scenario in ['profiles-unavailable','click-unavailable'] else None),
+                                profile('codex','codex','codex',[True,False,True,False],scenario not in ['profiles-unavailable','click-unavailable','captain-not-configured'],'notConfigured' if scenario in ['profiles-unavailable','click-unavailable','captain-not-configured'] else None),
                                 profile('claude','claude','existingClaudePty',[False,True,False,False]),
                                 profile('claude-managed','acp:claude-managed','nativeAcp',[False]*4,False,'nativeVerificationPending')]}
                             if scenario=='profiles-missing': result = {'profiles':'invalid'}
@@ -96,7 +96,7 @@ def main():
                             result = {'live':{} if scenario == 'remote-malformed' else {'sessionId':'session-a','running':state['running']},'screen':'Original completed remote transcript'}
                         elif method == 'session.start':
                             assert req['params']['role'] == 'captain' and req['params']['crewId'] == 'crew-a'
-                            if scenario == 'captain-refused':
+                            if scenario == 'captain-refused' or (scenario == 'captain-retry' and sum(r['method']=='session.start' for r in calls)==1):
                                 conn.sendall((json.dumps({'id':req['id'],'error':{'code':-32009,'message':'synthetic refusal'}})+'\n').encode()); continue
                             state['captain'] = True; result = {'id':'session-a'}
                         elif method == 'session.resume':
@@ -121,7 +121,7 @@ def main():
             if scenario.startswith('receipt-'):
                 assert methods.count('command.lookup') >= (2 if scenario == 'receipt-timeout' else 1), methods
             if scenario.startswith('remote-'): assert methods.count('session.live') == 0 and methods.count('session.inspect') >= 1, methods
-            assert methods.count('session.start') == (1 if scenario in ['captain','captain-refused'] else 0), methods
+            assert methods.count('session.start') == (2 if scenario == 'captain-retry' else 1 if scenario in ['captain','captain-refused'] else 0), methods
             (out/(scenario+'.json')).write_text(json.dumps(calls,indent=2)+'\n')
             results.append({'scenario':scenario,'actualProbeExitCode':0,'rawStartCount':methods.count('session.start'),'rawResumeCount':methods.count('session.resume'),'publicSubmitCount':methods.count('command.submit'),'profileReadCount':methods.count('executor.list')})
             print('PASS '+scenario)

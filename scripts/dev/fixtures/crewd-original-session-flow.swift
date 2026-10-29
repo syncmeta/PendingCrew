@@ -172,6 +172,17 @@ import Foundation
             precondition(first == "session-a")
             let second = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(second == first)
+        case "captain-not-configured", "captain-retry":
+            let failed = await workspace.startCaptainForCreatedCrew("crew-a")
+            precondition(failed == nil && workspace.captainStartFailures["crew-a"] != nil)
+            workspace.selectCrew("crew-b")
+            precondition(workspace.captainStartFailures[workspace.crewID] == nil, "other crew received captain failure")
+            workspace.selectCrew("crew-a")
+            precondition(workspace.captainStartFailures[workspace.crewID] != nil, "original crew lost failure")
+            if scenario == "captain-retry" {
+                let started = await workspace.startCaptainForCreatedCrew("crew-a")
+                precondition(started == "session-a" && workspace.captainStartFailures["crew-a"] == nil)
+            }
         case "captain-refused":
             let result = await workspace.startCaptainForCreatedCrew("crew-a")
             precondition(result == nil && workspace.error?.contains("机组及已有消息仍保留") == true)

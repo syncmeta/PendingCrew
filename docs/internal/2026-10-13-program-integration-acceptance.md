@@ -1,5 +1,11 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 新机组机长启动失败反馈
+
+针对真实Claude机组创建后未启机长、错误仅在环境设置可见，Workspace按原crew保存启动失败，Mac机组主内容直接显示；别的crew不显示，返回原crew仍保留，明确成功或确认已有机长后清除。未改变Claude配置、执行资格、自动发现或自动重试。先前取消路径假说的RED证据仅保留于临时目录，不作为该现场根因，也未把无关失败断言留入回归。
+
+父代理完整Mac Debug构建通过（`/private/tmp/pcw-captain-feedback-20261029.log`）；实际编译库captain-not-configured、captain-retry、captain-refused、captain、captain-switch-return五项通过（`/private/tmp/pcw-captain-feedback-green-20261029/`），覆盖未配置零启动、拒绝后只有明确再次操作才启动、机组错误隔离及成功清除。复用已安装Core准确输入，未安装该新反馈修复。Claude正常配置仍待解锁后沿产品设置选择已安装程序，原机组／首文保留，未重复提交。
+
 ## 2026-10-29 并行推进移动连接与持久回执恢复
 
 用户要求锁屏时继续无屏任务并启用子代理。移动端专属连接流程补齐未读／读取失败／真实空列表的区别；连接失败保留选择页，列表失败显示错误和原电脑重试路径。刷新期间绑定准确workspace对象及connectionEpoch，防止同电脑重连的迟到任务关闭当前页面；iPad改用一次性初始化入口。另一代理交叉复核后补上同机重连保护，父代理完成最终arm64 iOS Simulator完整构建，`/private/tmp/pcw-mobile-connect-final-20261029.log`为BUILD SUCCEEDED。未安装或冒真机交互通过。

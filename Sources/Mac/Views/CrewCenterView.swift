@@ -55,6 +55,9 @@ struct CrewCenterView: View {
             if let draft = crewStore.pendingCrew, crewStore.selectedCrewId == draft.id {
                 PendingCrewChatView(draft: draft).id(draft.id)
             } else if let detail = crewStore.selectedDetail {
+                if let workspace = model.crewdBackend?.workspace {
+                    CrewdCaptainStartNotice(workspace: workspace, crewID: detail.crew.id)
+                }
                 CrewChatView(
                     crewId: detail.crew.id,
                     crewTitle: detail.crew.title,
@@ -484,6 +487,19 @@ private struct CrewdMessageFilterGlass: ViewModifier {
                 .glassEffect(.regular.interactive(), in: Capsule())
         }
         else { content.buttonStyle(.bordered) }
+    }
+}
+/// Creation can succeed while the separately submitted captain start fails.
+/// Keep that result visible only in its original workspace and crew.
+private struct CrewdCaptainStartNotice: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crewID: String
+    var body: some View {
+        if let message = workspace.captainStartFailures[crewID] {
+            Text(message).font(.callout).foregroundStyle(.orange)
+                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18).padding(.vertical, 10)
+        }
     }
 }
 #endif

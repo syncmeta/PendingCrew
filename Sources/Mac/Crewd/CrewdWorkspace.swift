@@ -845,6 +845,7 @@ final class CrewdWorkspace: ObservableObject {
     /// Called once after an explicitly created crew has a confirmed identity.
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.
+    @Published private(set) var captainStartFailures: [String: String] = [:]
     private var openingCaptains = Set<String>()
     @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "读取本机组群聊与待办，回应人类需求；没有任务时待命。") async -> String? {
         guard !openingCaptains.contains(id), !isRetired else { return nil }
@@ -859,16 +860,21 @@ final class CrewdWorkspace: ObservableObject {
             let roster = try await readValue("session.list", .object(["crewId": .string(id)]))
             guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
             guard case .array(let rows) = roster else { throw CrewdClientError(message: "机长名册未能确认。", kind: .notSubmitted) }
-            if let captain = rows.first(where: { $0["role"].string == "captain" }) { return captain["id"].string }
+            if let captain = rows.first(where: { $0["role"].string == "captain" }) { captainStartFailures[id] = nil; return captain["id"].string }
             guard !hasOriginalUnknown(method: "session.start", crew: id) else {
                 throw CrewdClientError(message: "机长原启动结果尚未确认，请核对原请求。", kind: .notSubmitted)
             }
             let result = try await performValue("session.start", .object([
                 "crewId": .string(id), "role": .string("captain"), "executor": .string(executor),
                 "brief": .string(brief), "isolation": .bool(false)]))
+            captainStartFailures[id] = nil
             return result["id"].string
         } catch {
-            if acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id { self.error = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription }
+            if acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id {
+                let message = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription
+                captainStartFailures[id] = message
+                self.error = message
+            }
             return nil
         }
     }
