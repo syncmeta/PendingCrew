@@ -133,6 +133,7 @@ fn current_db_health(state: &AppState) -> Option<DaemonHealth> {
             DbFaultStage::Receive => DbFaultStageView::Receive,
             DbFaultStage::Job => DbFaultStageView::Job,
             DbFaultStage::Finish => DbFaultStageView::Finish,
+            DbFaultStage::Maintenance => DbFaultStageView::Maintenance,
         };
         let (kind, storage_kind) = match fault.kind {
             DbFaultKind::Closed => (DbFaultKindView::DbClosed, None),

@@ -32,7 +32,7 @@ uuid = { version = "1.27.0", features = ["v4"] }
 
 [features]
 # M3b / M3c 的测试夹具（`FakeSessionControl` 本来就是 pub；夹具模块挂在这个特性下，给 crewd 的集成测试用）。
-testkit = ["dep:tempfile", "crewd-exec/testkit"]
+testkit = ["dep:tempfile", "crewd-exec/testkit", "crewd-store/testkit"]
 
 [dev-dependencies]
 h2 = "0.4.14"

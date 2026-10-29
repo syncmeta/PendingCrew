@@ -57,6 +57,7 @@ pub enum DbFaultStageView {
     Receive,
     Job,
     Finish,
+    Maintenance,
     #[serde(other)]
     #[schemars(skip)]
     Unknown,

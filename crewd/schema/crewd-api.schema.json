@@ -5816,7 +5816,8 @@
         "enqueue",
         "receive",
         "job",
-        "finish"
+        "finish",
+        "maintenance"
       ],
       "type": "string"
     },

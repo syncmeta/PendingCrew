@@ -8,6 +8,8 @@ pub enum DbFaultStage {
     Receive,
     Job,
     Finish,
+    /// Independent backup/check/sweep worker, never a FIFO job or DB finish.
+    Maintenance,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DbFaultKind {

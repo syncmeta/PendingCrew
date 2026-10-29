@@ -482,6 +482,15 @@ pub struct TickReport {
 /// 定时拍一次（S21 / S25）：先对在用的库跑检查（到点要拍的那次是 `integrity_check`，平时 `quick_check`），到点了就备份（备份文件自己也过
 /// `quick_check`），备份成功**且**在用的库没问题才轮转淘汰旧备份（含过期的 pre-delete 快照）。库是空的不拍。
 pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
+    tick_inner(db, now_ms, policy, None)
+}
+
+fn tick_inner(
+    db: &Path,
+    now_ms: i64,
+    policy: Policy,
+    health: Option<&crate::db_health::DbHealth>,
+) -> Result<TickReport> {
     let dir = backups_dir_for(db);
     let c = open_read_only(db)?;
     let has_data: i64 = c.query_row(
@@ -500,13 +509,27 @@ pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
         live_problems: check(&open_for_check(db)?, kind)?,
         ..Default::default()
     };
+    // This is the result of the exact known SQLite Check operation, never arbitrary text classification.
+    if !report.live_problems.is_empty()
+        && let Some(health) = health
+    {
+        health.record(
+            crate::db_health::DbFaultStage::Maintenance,
+            crate::db_health::DbFaultKind::Integrity,
+        );
+    }
     if !backup_due {
         return Ok(report);
     }
     let dest = dir.join(auto_name(now_ms));
     match vacuum_into_reserving(&c, &dest, policy.reserve_bytes) {
         Ok(()) => report.backup = Some(dest),
-        Err(e) => report.backup_error = Some(e.to_string()),
+        Err(e) => {
+            if let Some(health) = health {
+                health.observe(crate::db_health::DbFaultStage::Maintenance, &e);
+            }
+            report.backup_error = Some(e.to_string());
+        }
     }
     if report.backup.is_some() && report.live_problems.is_empty() {
         report.removed = rotate(&dir, policy)?;
@@ -517,18 +540,154 @@ pub fn tick(db: &Path, now_ms: i64, policy: Policy) -> Result<TickReport> {
     Ok(report)
 }
 
+/// The same tick algorithm, observing typed failures into the daemon-owned shared history.
+pub fn tick_with_health(
+    db: &Path,
+    now_ms: i64,
+    policy: Policy,
+    health: &crate::db_health::DbHealth,
+) -> Result<TickReport> {
+    let result = tick_inner(db, now_ms, policy, Some(health));
+    // Early/check/rotation errors escape once; backup-error strings remain Ok and are not reclassified.
+    if let Err(error) = &result {
+        health.observe(crate::db_health::DbFaultStage::Maintenance, error);
+    }
+    result
+}
+
 /// serve 里的定时拍（D-8：serve 自己的 interval，不进编排 Core）。一条自己的线程：启动时先拍一次，
 /// 之后每 `every` 看一次到没到点。`stop` 等正在进行的那次做完再返回。
+/// Receipt from the actual worker stack. Final termination still requires the real thread join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickerExit {
+    RequestedStop,
+    Disconnected,
+    UnexpectedReturn,
+    Panicked,
+}
+#[derive(Debug, thiserror::Error)]
+pub enum TickerStopError {
+    #[error("backup worker panicked")]
+    Panicked,
+}
+struct TickerExitGuard {
+    sender: Option<tokio::sync::oneshot::Sender<TickerExit>>,
+    reason: TickerExit,
+}
+impl Drop for TickerExitGuard {
+    fn drop(&mut self) {
+        let reason = if std::thread::panicking() {
+            TickerExit::Panicked
+        } else {
+            self.reason
+        };
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(reason);
+        }
+    }
+}
+enum TickerCommand {
+    Stop,
+    #[cfg(feature = "testkit")]
+    Panic,
+    #[cfg(feature = "testkit")]
+    Return,
+}
+#[cfg(feature = "testkit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickerTestFault {
+    PanicEntered,
+    ReturnEntered,
+}
+/// Owned synthetic controls, never a daemon wire method or ordinary-build API.
+#[cfg(feature = "testkit")]
+pub struct TickerTestControl {
+    sender: std::sync::mpsc::Sender<TickerCommand>,
+    first_tick: Option<tokio::sync::oneshot::Receiver<()>>,
+    fault_entered: Option<tokio::sync::oneshot::Receiver<TickerTestFault>>,
+    joined: Option<tokio::sync::oneshot::Receiver<bool>>,
+}
+#[cfg(feature = "testkit")]
+impl TickerTestControl {
+    pub fn panic_worker(&self) -> std::result::Result<(), String> {
+        self.sender
+            .send(TickerCommand::Panic)
+            .map_err(|_| "actual worker command channel closed".to_owned())
+    }
+    pub fn return_worker(&self) -> std::result::Result<(), String> {
+        self.sender
+            .send(TickerCommand::Return)
+            .map_err(|_| "actual worker command channel closed".to_owned())
+    }
+    pub async fn first_tick(&mut self) -> std::result::Result<(), String> {
+        self.first_tick
+            .take()
+            .ok_or_else(|| "first tick witness already taken".to_owned())?
+            .await
+            .map_err(|_| "actual worker ended before first tick".to_owned())
+    }
+    pub async fn fault_entered(&mut self) -> std::result::Result<TickerTestFault, String> {
+        self.fault_entered
+            .take()
+            .ok_or_else(|| "fault entry witness already taken".to_owned())?
+            .await
+            .map_err(|_| "actual fault branch was not reached".to_owned())
+    }
+    pub async fn joined(&mut self) -> std::result::Result<bool, String> {
+        self.joined
+            .take()
+            .ok_or_else(|| "join witness already taken".to_owned())?
+            .await
+            .map_err(|_| "real worker join was not reported".to_owned())
+    }
+}
+
 pub struct Ticker {
-    stop: std::sync::mpsc::Sender<()>,
+    stop: std::sync::mpsc::Sender<TickerCommand>,
     handle: std::thread::JoinHandle<()>,
+    exit: Option<tokio::sync::oneshot::Receiver<TickerExit>>,
+    #[cfg(feature = "testkit")]
+    control: Option<TickerTestControl>,
+    #[cfg(feature = "testkit")]
+    join_witness: Option<tokio::sync::oneshot::Sender<bool>>,
 }
 
 impl Ticker {
+    pub fn take_exit_signal(&mut self) -> Option<tokio::sync::oneshot::Receiver<TickerExit>> {
+        self.exit.take()
+    }
+    /// Daemon checked close; standalone stop() remains compatible and ignores this result.
+    pub fn stop_checked(self) -> std::result::Result<(), TickerStopError> {
+        self.stop_result().map_err(|_| TickerStopError::Panicked)
+    }
+    #[cfg(feature = "testkit")]
+    pub fn take_test_control(&mut self) -> Option<TickerTestControl> {
+        self.control.take()
+    }
+
+    /// Same worker with the daemon's sole DB-independent history.
+    pub fn start_with_health(
+        db: PathBuf,
+        every: std::time::Duration,
+        policy: Policy,
+        health: crate::db_health::DbHealth,
+    ) -> std::io::Result<Ticker> {
+        Self::start_inner(db, every, policy, Some(health))
+    }
+
     pub fn start(
         db: PathBuf,
         every: std::time::Duration,
         policy: Policy,
+    ) -> std::io::Result<Ticker> {
+        Self::start_inner(db, every, policy, None)
+    }
+
+    fn start_inner(
+        db: PathBuf,
+        every: std::time::Duration,
+        policy: Policy,
+        health: Option<crate::db_health::DbHealth>,
     ) -> std::io::Result<Ticker> {
         // 先同步清掉死进程留下的临时文件（复审 2 轮 5：在本线程开拍之前，不和它抢）：backups/ 里的快照
         // 临时文件，和数据目录里中断的 restore 留下的 `.crewd.db.tmp-<pid>`。清不掉只记一笔，不挡启动。
@@ -544,28 +703,113 @@ impl Ticker {
                         eprintln!("crewd: 清掉上次没做完的临时文件 {}", p.display());
                     }
                 }
-                Err(e) => eprintln!("crewd: 清理 {} 里的临时文件失败：{e}", dir.display()),
+                Err(e) => {
+                    if let Some(health) = &health {
+                        health.observe(crate::db_health::DbFaultStage::Maintenance, &e);
+                    }
+                    eprintln!("crewd: 清理 {} 里的临时文件失败：{e}", dir.display());
+                }
             }
         }
-        let (stop, rx) = std::sync::mpsc::channel::<()>();
+        let (stop, rx) = std::sync::mpsc::channel::<TickerCommand>();
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        #[cfg(feature = "testkit")]
+        let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+        #[cfg(feature = "testkit")]
+        let (fault_tx, fault_rx) = tokio::sync::oneshot::channel();
+        #[cfg(feature = "testkit")]
+        let (join_tx, join_rx) = tokio::sync::oneshot::channel();
+        let spawn_health = health.clone();
         let handle = std::thread::Builder::new()
             .name("crewd-backup".into())
             .spawn(move || {
+                // Named guard is held on this actual worker stack, never the launcher/observer.
+                let mut exit = TickerExitGuard {
+                    sender: Some(exit_tx),
+                    reason: TickerExit::UnexpectedReturn,
+                };
+                #[cfg(feature = "testkit")]
+                let mut first_tx = Some(first_tx);
+                #[cfg(feature = "testkit")]
+                let mut fault_tx = Some(fault_tx);
                 loop {
-                    log_tick(tick(&db, crate::now_ms(), policy));
+                    let result = match &health {
+                        Some(health) => tick_with_health(&db, crate::now_ms(), policy, health),
+                        None => tick(&db, crate::now_ms(), policy),
+                    };
+                    log_tick(result);
+                    #[cfg(feature = "testkit")]
+                    if let Some(tx) = first_tx.take() {
+                        let _ = tx.send(());
+                    }
                     match rx.recv_timeout(every) {
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                        _ => break,
+                        Ok(TickerCommand::Stop) => {
+                            exit.reason = TickerExit::RequestedStop;
+                            break;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            exit.reason = TickerExit::Disconnected;
+                            break;
+                        }
+                        #[cfg(feature = "testkit")]
+                        Ok(TickerCommand::Panic) => {
+                            if let Some(tx) = fault_tx.take() {
+                                let _ = tx.send(TickerTestFault::PanicEntered);
+                            }
+                            panic!("S4_OWNED_ACTUAL_BACKUP_WORKER_PANIC");
+                        }
+                        #[cfg(feature = "testkit")]
+                        Ok(TickerCommand::Return) => {
+                            if let Some(tx) = fault_tx.take() {
+                                let _ = tx.send(TickerTestFault::ReturnEntered);
+                            }
+                            return;
+                        }
                     }
                 }
-            })?;
-        Ok(Ticker { stop, handle })
+            });
+        let handle = match handle {
+            Ok(handle) => handle,
+            Err(error) => {
+                if let Some(health) = &spawn_health {
+                    health.observe(crate::db_health::DbFaultStage::Maintenance, &error);
+                }
+                return Err(error);
+            }
+        };
+        #[cfg(feature = "testkit")]
+        let control = TickerTestControl {
+            sender: stop.clone(),
+            first_tick: Some(first_rx),
+            fault_entered: Some(fault_rx),
+            joined: Some(join_rx),
+        };
+        Ok(Ticker {
+            stop,
+            handle,
+            exit: Some(exit_rx),
+            #[cfg(feature = "testkit")]
+            control: Some(control),
+            #[cfg(feature = "testkit")]
+            join_witness: Some(join_tx),
+        })
     }
 
     /// 停下并等线程退出（阻塞；async 里用 `spawn_blocking`）。
     pub fn stop(self) {
-        let _ = self.stop.send(());
-        let _ = self.handle.join();
+        let _ = self.stop_result();
+    }
+
+    // Same real join; only tests in this module inspect its result. Serve semantics unchanged.
+    fn stop_result(self) -> std::thread::Result<()> {
+        let _ = self.stop.send(TickerCommand::Stop);
+        let result = self.handle.join();
+        #[cfg(feature = "testkit")]
+        if let Some(witness) = self.join_witness {
+            let _ = witness.send(result.is_ok());
+        }
+        result
     }
 }
 
@@ -759,6 +1003,293 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn s4_maintenance_fixture(data: bool) -> (tempfile::TempDir, PathBuf, crate::Db) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::DB_FILE);
+        let store = crate::Store::open_data_dir(dir.path()).unwrap();
+        if data {
+            crate::crews::upsert(
+                store.conn(),
+                &crewd_proto::Crew {
+                    id: "s4-maintenance-crew".into(),
+                    title: "synthetic".into(),
+                    created_at: "2026-10-01T00:00:00.000Z".into(),
+                    updated_at: "2026-10-01T00:00:00.000Z".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        }
+        let db = crate::Db::spawn(store).unwrap();
+        (dir, path, db)
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_real_reserve_preflight_records_once_before_string() {
+        let (dir, path, db) = s4_maintenance_fixture(true);
+        let health = db.health();
+        let conn = open_read_only(&path).unwrap();
+        let cause = vacuum_into_reserving(&conn, &dir.path().join("backups/control.db"), u64::MAX);
+        drop(conn);
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path,
+            std::time::Duration::from_secs(3600),
+            Policy {
+                reserve_bytes: u64::MAX,
+                ..Policy::default()
+            },
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result(); // first actual tick runs even when stop was already sent
+        let observed = health.snapshot();
+        let recovered =
+            db.call_blocking(|s| s.conn().query_row("SELECT 1", [], |r| r.get::<_, i64>(0)));
+        let later = health.snapshot();
+        let backups = list_auto(&dir.path().join("backups"));
+        db.shutdown();
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "actual worker join before all health oracles"
+        );
+        assert!(matches!(cause, Err(StoreError::Snapshot { ref source, .. })
+            if matches!(source.as_ref(), StoreError::NoSpace { needed, available } if needed > available)));
+        assert!(
+            backups.unwrap().is_empty(),
+            "real preflight makes no auto snapshot"
+        );
+        assert!(before.is_none());
+        assert_eq!(recovered.unwrap().unwrap(), 1);
+        assert_eq!(
+            observed, later,
+            "successful FIFO read does not erase maintenance history"
+        );
+        // First intended observation; later maintenance/kind assertions are NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|fault| fault.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crate::db_health::DbFaultStage::Maintenance);
+        assert_eq!(
+            fault.kind,
+            crate::db_health::DbFaultKind::Storage(StorageKind::DiskFull)
+        );
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_real_integrity_result_records_known_check_once() {
+        let (dir, path, db) = s4_maintenance_fixture(true);
+        let health = db.health();
+        let fresh = tick(&path, crate::now_ms(), Policy::default()).unwrap();
+        let retained = fresh.backup.clone().unwrap();
+        db.call_blocking(|s| s.conn().execute_batch("CREATE TABLE s4_maintenance_check(v INTEGER CHECK(v>=0)); PRAGMA ignore_check_constraints=ON; INSERT INTO s4_maintenance_check VALUES(-1); PRAGMA ignore_check_constraints=OFF")).unwrap().unwrap();
+        let conn = open_for_check(&path).unwrap();
+        let cause = check(&conn, Check::Quick);
+        drop(conn);
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path,
+            std::time::Duration::from_secs(3600),
+            Policy::default(),
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result(); // first actual tick runs even when stop was already sent
+        let observed = health.snapshot();
+        let recovered =
+            db.call_blocking(|s| s.conn().query_row("SELECT 1", [], |r| r.get::<_, i64>(0)));
+        let later = health.snapshot();
+        let backups = list_auto(&dir.path().join("backups"));
+        let retained_present = retained.exists();
+        db.shutdown();
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "actual worker join before all health oracles"
+        );
+        assert!(
+            cause.is_ok_and(|v| !v.is_empty()),
+            "actual named CHECK result, not arbitrary text"
+        );
+        assert_eq!(backups.unwrap().len(), 1);
+        assert!(
+            retained_present,
+            "known live problems never rotate original snapshot"
+        );
+        assert!(before.is_none());
+        assert_eq!(recovered.unwrap().unwrap(), 1);
+        assert_eq!(
+            observed, later,
+            "successful FIFO read does not erase maintenance history"
+        );
+        // First intended observation; later maintenance/kind assertions are NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|fault| fault.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crate::db_health::DbFaultStage::Maintenance);
+        assert_eq!(fault.kind, crate::db_health::DbFaultKind::Integrity);
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_startup_real_enotdir_sweep_records_once() {
+        let (dir, path, db) = s4_maintenance_fixture(false);
+        let health = db.health();
+        std::fs::write(dir.path().join("backups"), b"owned regular file").unwrap();
+        let cause = sweep_stale_tmp(&dir.path().join("backups"));
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path,
+            std::time::Duration::from_secs(3600),
+            Policy::default(),
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result(); // first actual tick runs even when stop was already sent
+        let observed = health.snapshot();
+        let recovered =
+            db.call_blocking(|s| s.conn().query_row("SELECT 1", [], |r| r.get::<_, i64>(0)));
+        let later = health.snapshot();
+        let backup_is_file = dir.path().join("backups").is_file();
+        db.shutdown();
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "actual worker join before all health oracles"
+        );
+        assert!(
+            matches!(cause, Err(StoreError::Io(ref e)) if e.raw_os_error() == Some(libc::ENOTDIR))
+        );
+        assert!(
+            backup_is_file,
+            "empty DB tick does not replace the owned obstruction"
+        );
+        assert!(before.is_none());
+        assert_eq!(recovered.unwrap().unwrap(), 1);
+        assert_eq!(
+            observed, later,
+            "successful FIFO read does not erase maintenance history"
+        );
+        // First intended observation; later maintenance/kind assertions are NOTREACHED on RED.
+        assert_eq!(observed.as_ref().map(|fault| fault.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crate::db_health::DbFaultStage::Maintenance);
+        assert_eq!(
+            fault.kind,
+            crate::db_health::DbFaultKind::Storage(StorageKind::Io)
+        );
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_real_missing_file_keeps_io_cause_and_does_not_create_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(crate::DB_FILE);
+        let db = crate::Db::spawn(crate::Store::open_in_memory().unwrap()).unwrap();
+        let health = db.health();
+        let cause = tick(&path, crate::now_ms(), Policy::default());
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path.clone(),
+            std::time::Duration::from_secs(3600),
+            Policy::default(),
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result();
+        let observed = health.snapshot();
+        let absent = !path.exists();
+        let recovered =
+            db.call_blocking(|s| s.conn().query_row("SELECT 1", [], |r| r.get::<_, i64>(0)));
+        let later = health.snapshot();
+        db.shutdown();
+        drop(dir);
+        assert!(joined.is_ok(), "actual worker join before history oracle");
+        assert!(
+            matches!(cause, Err(StoreError::Io(ref e)) if e.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(absent, "missing maintenance file must never be created");
+        assert!(before.is_none());
+        assert_eq!(recovered.unwrap().unwrap(), 1);
+        assert_eq!(observed, later);
+        assert_eq!(observed.as_ref().map(|fault| fault.sequence), Some(1));
+        let fault = observed.unwrap();
+        assert_eq!(fault.stage, crate::db_health::DbFaultStage::Maintenance);
+        assert_eq!(
+            fault.kind,
+            crate::db_health::DbFaultKind::Storage(StorageKind::Io)
+        );
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_empty_keeps_no_fault_and_preserves_backups() {
+        let (dir, path, db) = s4_maintenance_fixture(false);
+        let health = db.health();
+        let control = tick(&path, crate::now_ms(), Policy::default());
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path,
+            std::time::Duration::from_secs(3600),
+            Policy::default(),
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result();
+        let observed = health.snapshot();
+        let backups = list_auto(&dir.path().join("backups"));
+
+        db.shutdown();
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "actual normal worker join before positive oracles"
+        );
+        let control = control.unwrap();
+        assert!(
+            control.backup.is_none()
+                && control.backup_error.is_none()
+                && control.live_problems.is_empty()
+        );
+        assert!(backups.unwrap().is_empty());
+        assert!(before.is_none());
+        assert!(
+            observed.is_none(),
+            "empty/not-due is ordinary successful maintenance"
+        );
+    }
+
+    #[test]
+    fn s4_maintenance_ticker_not_due_keeps_no_fault_and_preserves_backups() {
+        let (dir, path, db) = s4_maintenance_fixture(true);
+        let health = db.health();
+        let first = tick(&path, crate::now_ms(), Policy::default()).unwrap();
+        let retained = first.backup.clone().unwrap();
+        let original = std::fs::read(&retained).unwrap();
+        let before = health.snapshot();
+        let ticker = Ticker::start_with_health(
+            path,
+            std::time::Duration::from_secs(3600),
+            Policy::default(),
+            health.clone(),
+        )
+        .unwrap();
+        let joined = ticker.stop_result();
+        let observed = health.snapshot();
+        let backups = list_auto(&dir.path().join("backups"));
+        let retained_after = std::fs::read(&retained);
+        db.shutdown();
+        drop(dir);
+        assert!(
+            joined.is_ok(),
+            "actual normal worker join before positive oracles"
+        );
+        assert_eq!(backups.unwrap().len(), 1);
+        assert_eq!(retained_after.unwrap(), original);
+        assert!(before.is_none());
+        assert!(
+            observed.is_none(),
+            "empty/not-due is ordinary successful maintenance"
+        );
+    }
 
     fn pragma(c: &Connection, name: &str) -> i64 {
         c.query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))

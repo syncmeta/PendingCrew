@@ -3,6 +3,8 @@ pub mod agent;
 mod apns;
 pub mod build_info;
 pub mod causal_fence;
+mod claude_history;
+mod codex_inputs;
 pub(crate) mod conn;
 mod connection_scope;
 pub mod control;
@@ -15,12 +17,10 @@ pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;
 pub mod native_receipts;
-mod codex_inputs;
-mod claude_history;
-mod personal_drafts;
 mod notifications;
 pub mod orchestra;
 pub(crate) mod peer;
+mod personal_drafts;
 mod public_commands;
 mod public_execution;
 mod public_terminal;
@@ -302,6 +302,16 @@ impl S5RequestFaultControl {
 pub type TestRegistryReady = Box<dyn FnOnce(Arc<ProcessRegistry>) -> std::io::Result<()> + Send>;
 #[derive(Default)]
 pub struct ServeOptions {
+    #[cfg(all(test, feature = "testkit"))]
+    test_backup_policy: Option<crewd_store::backup::Policy>,
+    #[cfg(all(test, feature = "testkit"))]
+    test_backup_ready: Option<Box<dyn FnOnce(crewd_store::backup::TickerTestControl) + Send>>,
+    #[cfg(all(test, feature = "testkit"))]
+    test_storage_closing: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+
     pub admin_socket: Option<host_admin::HostAdminSocket>,
     /// Opt-in Mac GUI helper lifetime; never an arbitrary caller-selected PID.
     pub managed_parent: bool,
@@ -471,10 +481,14 @@ async fn serve_with_hooks_inner(
         idle: Arc::new(orchestra::work_idle::WorkIdle(db.clone())),
         ..Default::default()
     });
-    let backups = match crewd_store::backup::Ticker::start(
+    let backup_policy = crewd_store::backup::Policy::default();
+    #[cfg(all(test, feature = "testkit"))]
+    let backup_policy = opts.test_backup_policy.unwrap_or(backup_policy);
+    let mut backups = match crewd_store::backup::Ticker::start_with_health(
         data_dir.join(crewd_store::DB_FILE),
         std::time::Duration::from_secs(3600),
-        crewd_store::backup::Policy::default(),
+        backup_policy,
+        db.health(),
     ) {
         Ok(t) => t,
         Err(e) => {
@@ -482,6 +496,14 @@ async fn serve_with_hooks_inner(
             return Err(e.into());
         }
     };
+    let mut backup_exit = backups.take_exit_signal();
+    let mut backup_observed = None;
+    #[cfg(all(test, feature = "testkit"))]
+    if let Some(ready) = opts.test_backup_ready.take()
+        && let Some(control) = backups.take_test_control()
+    {
+        ready(control);
+    }
     let limit = opts
         .orchestra
         .as_ref()
@@ -622,7 +644,11 @@ async fn serve_with_hooks_inner(
             }
             Err(e) => {
                 drop(state);
-                close_storage(backups, db).await?;
+                let storage = close_storage(backups, db).await;
+                let worker = finish_backup_exit(&mut backup_exit, &mut backup_observed).await;
+                if storage.is_err() || worker != crewd_store::backup::TickerExit::RequestedStop {
+                    eprintln!("crewd: backup worker also failed during startup cleanup");
+                }
                 return Err(e);
             }
         }
@@ -638,11 +664,17 @@ async fn serve_with_hooks_inner(
     let mut exit = handle
         .as_ref()
         .map_or(no_exit, orchestra::Handle::exit_requested);
+    let mut socket_owned = false;
     let listener = UnixListener::bind(&sock).and_then(|listener| {
+        socket_owned = true;
         std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))?;
         Ok(listener)
     });
-    let mut fatal = None;
+    let mut fatal = if backup_exit.is_none() {
+        Some(anyhow::anyhow!("backup worker exit receiver missing"))
+    } else {
+        None
+    };
     let mut ended = false;
     let mut reason = "stop";
     let managed_admission = state.admission.clone();
@@ -690,6 +722,9 @@ async fn serve_with_hooks_inner(
             }
             tokio::pin!(shutdown);
             loop {
+                if fatal.is_some() {
+                    break;
+                }
                 tokio::select! {
                     _ = &mut parent_exit => {
                         state.admission.close();
@@ -723,6 +758,12 @@ async fn serve_with_hooks_inner(
                         forwarder.take();
                         let _ = bridge_result;
                         fatal = Some(anyhow::anyhow!("critical collab bridge ended unexpectedly"));
+                        break;
+                    }
+                    worker = async { backup_exit.as_mut().expect("guarded backup receiver").await }, if backup_exit.is_some() => {
+                        backup_exit.take();
+                        backup_observed = Some(worker.unwrap_or(crewd_store::backup::TickerExit::Disconnected));
+                        fatal = Some(anyhow::anyhow!("critical backup worker ended unexpectedly"));
                         break;
                     }
                     _ = conns.join_next(), if !conns.is_empty() => {},
@@ -785,6 +826,19 @@ async fn serve_with_hooks_inner(
     }
     drop(handle);
     drop(cell);
+    #[cfg(all(test, feature = "testkit"))]
+    if let Some((entered, release)) = opts.test_storage_closing.take() {
+        let _ = entered.send(());
+        let _ = release.await;
+    }
+    let stopped = tokio::task::spawn_blocking(move || backups.stop_checked()).await;
+    if !matches!(stopped, Ok(Ok(()))) {
+        fatal.get_or_insert(anyhow::anyhow!("backup worker failed during shutdown"));
+    }
+    let worker = finish_backup_exit(&mut backup_exit, &mut backup_observed).await;
+    if worker != crewd_store::backup::TickerExit::RequestedStop {
+        fatal.get_or_insert(anyhow::anyhow!("critical backup worker ended unexpectedly"));
+    }
     // A confirmed GUI crash is still an abnormal application exit even when
     // owned children settle cleanly; never erase its manual-recovery prompt.
     let clean = reason != "parent_exit" && fatal.is_none() && registry.try_entries()?.is_empty();
@@ -793,12 +847,14 @@ async fn serve_with_hooks_inner(
             .await??;
     }
     drop(state);
-    close_storage(backups, db).await?;
+    tokio::task::spawn_blocking(move || db.shutdown()).await?;
     #[cfg(test)]
     if let Some(closed) = opts.test_storage_closed {
         closed(data_dir.clone());
     }
-    let _ = std::fs::remove_file(&sock);
+    if socket_owned {
+        let _ = std::fs::remove_file(&sock);
+    }
     drop(lock);
     match fatal {
         Some(e) => Err(e),
@@ -806,15 +862,32 @@ async fn serve_with_hooks_inner(
     }
 }
 
+// Borrowed receiver survives cancelled select arms; consume the same receipt once after true join.
+async fn finish_backup_exit(
+    receiver: &mut Option<tokio::sync::oneshot::Receiver<crewd_store::backup::TickerExit>>,
+    observed: &mut Option<crewd_store::backup::TickerExit>,
+) -> crewd_store::backup::TickerExit {
+    if let Some(reason) = observed.take() {
+        return reason;
+    }
+    match receiver.take() {
+        Some(receiver) => receiver
+            .await
+            .unwrap_or(crewd_store::backup::TickerExit::Disconnected),
+        None => crewd_store::backup::TickerExit::Disconnected,
+    }
+}
+
 /// 放锁之前的存储收尾：先停 Ticker（等正在拍的那次做完），再关库（已入队的写跑完，optimize + WAL 截断，
 /// 库线程 join）。N4 / S16。
 async fn close_storage(backups: crewd_store::backup::Ticker, db: Db) -> anyhow::Result<()> {
-    tokio::task::spawn_blocking(move || {
-        backups.stop();
-        db.shutdown()
+    let joined = tokio::task::spawn_blocking(move || {
+        let ticker = backups.stop_checked();
+        db.shutdown(); // normal typed ticker failure never skips DB close
+        ticker
     })
     .await?;
-    Ok(())
+    joined.map_err(|_| anyhow::anyhow!("critical backup worker panicked during storage close"))
 }
 
 #[cfg(test)]
@@ -1580,3 +1653,6 @@ mod tests {
 }
 
 mod host_directory;
+
+#[cfg(all(test, feature = "testkit"))]
+mod maintenance_supervision_tests;
