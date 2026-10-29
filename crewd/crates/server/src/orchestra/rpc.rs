@@ -1744,7 +1744,9 @@ mod tests {
                 "work.reassignLost",
                 "documents",
                 "viewFolders",
-                "channelWork"
+                "channelWork",
+                "hostDirectoryBrowse",
+                "hostQuota"
             ])),
             "持久工作能力不要求编排"
         );
@@ -1774,7 +1776,9 @@ mod tests {
                 "work.reassignLost",
                 "documents",
                 "viewFolders",
-                "channelWork"
+                "channelWork",
+                "hostDirectoryBrowse",
+                "hostQuota"
             ]))
         );
     }

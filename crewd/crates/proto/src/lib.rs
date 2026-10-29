@@ -1840,6 +1840,7 @@ mod tests {
         let s = api_schema();
         let null_ok = [
             judgments::SETTINGS_GET,
+            methods::HOST_QUOTA,
             methods::REMOTE_STATUS,
             methods::REMOTE_GRANTS,
             methods::WORK_PATROL,

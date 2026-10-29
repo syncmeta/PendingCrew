@@ -1476,8 +1476,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            schema, 18,
-            "Store18 writer barrier retains resource17 and skips experimental Native16"
+            schema, crewd_store::schema::SCHEMA_VERSION,
+            "current production schema retains resource17 without activating experimental Native16"
         );
         assert!(
             f.state

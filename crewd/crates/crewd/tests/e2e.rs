@@ -622,6 +622,12 @@ fn rpc_drives_every_client_method() {
             r#"{"grantId":"44444444-4444-4444-8444-444444444444","expectedRevision":"1","note":"No grant has been accepted"}"#,
             Code(-32009),
         ),
+        // Host metadata is read through actual CLI RPCs. Codex is disabled in
+        // this isolated fixture, so quota must refuse without a provider launch.
+        ("host.quota", "null", Code(-32009)),
+        ("host.quota", r#"{"unexpected":true}"#, Code(-32602)),
+        ("host.directoryList", "{}", Ok),
+        ("host.directoryList", r#"{"path":"relative"}"#, Code(-32602)),
         // These closed public methods are advertised on both supported hosts.
         // Null must reach their typed parser and fail before any durable effect;
         // production payload/lifecycle coverage lives in the public physical gate.
@@ -686,6 +692,10 @@ fn rpc_drives_every_client_method() {
         // history/model execution. No valid input bytes or live source is given.
         ("session.claude.history", r#"{"sessionId":7}"#, Code(-32602)),
         ("session.claude.inspect", r#"{"sessionId":7}"#, Code(-32602)),
+        ("session.claude.recoveryInspect", r#"{"sessionId":7}"#, Code(-32602)),
+        // The imported worker is Codex: a typed existing-session recovery read
+        // must refuse Claude recovery evidence, rather than invent eligibility.
+        ("session.claude.recoveryInspect", r#"{"sessionId":"worker-2222bbbb"}"#, Code(-32009)),
         ("session.claude.taskGet", r#"{"sessionId":"worker-2222bbbb"}"#, Code(-32602)),
         ("session.codex.history", r#"{"sessionId":7}"#, Code(-32602)),
         ("session.codex.inspect", r#"{"sessionId":7}"#, Code(-32602)),
@@ -724,6 +734,16 @@ fn rpc_drives_every_client_method() {
                     "{method}: 期望 {c}，实际 {err}"
                 );
             }
+        }
+        if method == "host.directoryList" && out.status.success() {
+            let listing: crewd_proto::host::DirectoryResult =
+                serde_json::from_slice(&out.stdout).expect("typed host directory response");
+            assert_eq!(Path::new(&listing.path), TEST_HOME.path().canonicalize().unwrap());
+            assert!(listing.entries.iter().all(|entry| Path::new(&entry.path).is_dir()));
+            assert!(listing.next_after.is_none(), "synthetic HOME fits one page");
+        }
+        if method == "session.claude.recoveryInspect" && params.contains("worker-2222bbbb") {
+            assert!(err.contains("original Claude recovery evidence changed or unavailable"), "{err}");
         }
         if method == "work.create" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();

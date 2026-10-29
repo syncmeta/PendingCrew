@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 完整全特性回归与四项测试漂移修复
+
+准确821f96f3执行cargo nextest run --offline --locked --workspace --all-features --profile ci --retries 0 --no-fail-fast --test-threads 4，终态100，235.867秒：2915 run，2911 passed、4 failed、22 skipped。源码冻结保持，原全量日志、JUnit与run.json保留full-nextest-821f96f3-20261029，不改标该失败运行。
+
+四失败逐项核生产合同后只修改测试：ALL覆盖实际补调用host.quota、host.directoryList、session.claude.recoveryInspect（含typed目录结果与合理拒绝）；null允许清单补HOST_QUOTA；hello精确能力集合补已实现两host能力；sqlite恢复断言跟随正式SCHEMA_VERSION并保留原数据/Native16未激活验证。没有生产改动，未删除严格覆盖或放宽能力比较。同flags只复验四失败用例，4 passed/0 failed、2.887秒；2911稳定项不重复跑。另补全workspace/all-features doc，3 passed（含两compile_fail）exit0。修复日志与JUnit及四文件准确哈希另存同目录。证据是原全量+受影响范围复验的组合，不冒一次新全量全绿，也不代替真实供应商/设备/发布。
+
+
 ## 2026-10-29 执行中停工与重开完整场景通过
 
 仅新增orchestra_restart.rs验收场景，无产品修改。实际crewd CLI与隔离fake Claude，在无初始任务创建后单次输入，用content_accepted、authenticated PreToolUse原prompt及live.running/working证明活动；随后正式owned command.submit crewd.hibernate confirmed，5070ms后Core成功退出，准确原birth与pgid均物理消失，registry entries/spawned及socket清理。原task/runtime/prompt/body保留且phase诚实为unknown。
