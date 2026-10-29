@@ -1,5 +1,15 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 原会话入口完整隔离回归
+
+随后在现有实际App模块夹具补入receipt-timeout／receipt-unknown／receipt-historical三项完整原恢复请求链。真实客户端5秒观察到期或收到Unknown后，再次显式恢复被拦住；后台请求日志均只有一次command.submit、没有raw session.resume；后续lookup使用同一原UUID。查到launched仍保留resume待确认，明确确认后重开presentation journal核实已解除；历史launched不能确认、重开仍保留。首轮三项通过，timeout实际48次只读lookup，证据 `/private/tmp/pcw-receipt-recovery-20261029/`。产品代码未变；这是模拟后台的客户端超时与耐久恢复验证，不是Joy实际故障注入。
+
+最终共用分支回归含上述三项及legacy-text／legacy-resume，共5项通过（`/private/tmp/pcw-receipt-recovery-final-20261029/`）。随后仅将模拟后台回执释放由墙钟条件改为夹具在真实观察窗口结束后明确释放，避免机器调度延迟导致假失败；该timeout受影响项再次通过（`/private/tmp/pcw-receipt-timeout-final-20261029/`）。
+
+在 `50b4602b` 后继续恢复主线。Mac锁屏且自动解锁不可用，未操作真实Joy会话、未绕过锁屏。当前Debug实际App模块（SHA256 `9dcaee350925399f017faaa4194fc17ec7cf16f68d9788e67038624f9dd46cff`）运行 `scripts/dev/test-crewd-original-session-flow.py` 全部26场景通过。覆盖观察不启动、已停原会话恢复、重复点击仅一次恢复、拒绝与畸形存活响应、机组／会话切换与迟到回复、远程inspect路线、能力资格，以及旧接口转公开命令后Unknown保留且不自动重试。后台为临时Unix协议服务，未调用真实模型；不能替代Joy真实恢复、断网／休眠或后台重启验收。
+
+首次运行在本地端点bind时被执行环境拒绝，尚未开始场景；原代码经执行批准运行通过，没有修改产品或测试绕过。完整请求记录、模块哈希及26项结果在 `/private/tmp/pcw-original-recovery-20261029-qualified/`，首次编译记录在 `/private/tmp/pcw-original-recovery-20261029-continuation/`。本次未安装、发布或改变后台。下一真实验收保持原停止机组与原会话，待Mac解锁后检查原身份恢复和已完成工作不重复执行。
+
 ## 2026-10-29 Mac＋Joy真实双成员协作闭环
 
 用户明确授权真实模型验收，并说明后续不再因额度或正常退出当前测试询问；该授权不扩大到既有项目、服务升级或权限变更。使用已安装Mac 0.2.1／20754.14633和原Joy配对，未安装新候选或升级后台。新机组“协作闭环验收 2026-10-29”，先创建唯一Codex机长并等待就绪，再由正常待办模式提交原需求#1。

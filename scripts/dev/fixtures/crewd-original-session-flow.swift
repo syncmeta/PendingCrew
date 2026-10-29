@@ -80,6 +80,43 @@ import Foundation
             precondition(runner.selectedRunId == run.runID && workspace.sessionID == "session-a")
             try? await Task.sleep(for: .milliseconds(450))
         }
+        if scenario.hasPrefix("receipt-") {
+            workspace.originalJournalRequired = true
+            let journalRoot = root.appendingPathComponent("original-journal")
+            await workspace.prepareOriginalJournal(root: journalRoot)
+            precondition(workspace.originalJournalReady)
+            do {
+                _ = try await workspace.performValue("session.resume", .object(["sessionId": .string("session-a")]))
+                fatalError("unresolved original resume was reported successful")
+            } catch {}
+            precondition(workspace.durableUnknown.count == 1)
+            let original = workspace.durableUnknown[0]
+            // A fresh explicit click must not mint another command while this one is unresolved.
+            do {
+                _ = try await workspace.performValue("session.resume", .object(["sessionId": .string("session-a")]))
+                fatalError("repeat click bypassed original Unknown")
+            } catch {}
+            precondition(workspace.durableUnknown.count == 1 && workspace.durableUnknown[0].id == original.id)
+            // Release the synthetic delayed receipt only after the real observation window ended.
+            if scenario == "receipt-timeout" { try Data().write(to: root.appendingPathComponent("receipt-ready")) }
+            let receipt = try await workspace.lookupOriginalCommand(original)
+            precondition(receipt?.phase == .launched)
+            // Resume recovery requires explicit acknowledgement, even when lookup finds launch.
+            precondition(workspace.durableUnknown.count == 1)
+            if scenario == "receipt-historical" {
+                do {
+                    try workspace.acknowledgeOriginalCommand(original, receipt: receipt!)
+                    fatalError("historical launch cleared current uncertainty")
+                } catch {}
+            } else {
+                try workspace.acknowledgeOriginalCommand(original, receipt: receipt!)
+            }
+            let reopened = try CrewdPresentationJournal(root: journalRoot, scope: workspace.presentationScope!)
+            let remaining = try reopened.unknownRecords()
+            precondition(remaining.contains { $0.id == original.id } == (scenario == "receipt-historical"))
+            print("PASS original resume receipt recovery: " + scenario + "; one submission, original UUID lookup, durable acknowledgement")
+            return
+        }
         if scenario == "legacy-text" || scenario == "legacy-resume" {
             workspace.originalJournalRequired = true
             await workspace.prepareOriginalJournal(root: root.appendingPathComponent("original-journal"))
