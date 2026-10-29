@@ -70,7 +70,13 @@ pub(crate) fn snapshot(
             for id in ids {
                 covered.insert(id.as_str().ok_or_else(refused)?.to_owned());
             }
-            dispositions.push(json!({"requestId":id,"originalRequestIds":ids}));
+            dispositions.push(ClaudeRecoveryDisposition {
+                request_id: id.clone(),
+                original_request_ids: ids
+                    .iter()
+                    .map(|id| id.as_str().expect("validated string").to_owned())
+                    .collect(),
+            });
         }
     }
     let mut unresolved = Vec::new();
@@ -94,7 +100,12 @@ pub(crate) fn snapshot(
             foreign = true;
             continue;
         }
-        unresolved.push(json!({"requestId":id,"runtimeBindingId":binding,"phase":phase,"historical":*historical || binding!=&state.runtime_binding_id}));
+        unresolved.push(ClaudeRecoveryUnknown {
+            request_id: id.clone(),
+            runtime_binding_id: binding.clone(),
+            phase: ClaudeRecoveryUnknownPhase::Unknown,
+            historical: *historical || binding != &state.runtime_binding_id,
+        });
         evidence.push(json!([
             owner, id, binding, phase, historical, payload, result
         ]));
@@ -138,29 +149,30 @@ pub(crate) fn snapshot(
         all_gone = false
     }
     let work = row.worktree.or(row.working_directory);
+    use ClaudeRecoveryEligibility as E;
     let eligibility = if running {
-        "running"
+        E::Running
     } else if crew.hidden_at.is_some() {
-        "removedCrew"
+        E::RemovedCrew
     } else if work
         .as_ref()
         .is_none_or(|p| !std::path::Path::new(p).is_dir())
     {
-        "missingWorkdir"
+        E::MissingWorkdir
     } else if native.is_none() {
-        "missingOriginalId"
+        E::MissingOriginalId
     } else if !configured {
-        "notConfigured"
+        E::NotConfigured
     } else if !all_gone {
-        "previousBirthLiveOrUnknown"
+        E::PreviousBirthLiveOrUnknown
     } else if foreign || rows.len() > 256 {
-        "evidenceUnavailable"
+        E::EvidenceUnavailable
     } else if unresolved.is_empty() {
-        "noUnresolvedRequests"
+        E::NoUnresolvedRequests
     } else {
-        "eligible"
+        E::Eligible
     };
-    let token = if eligibility == "eligible" {
+    let token = if eligibility == E::Eligible {
         let bytes = serde_json::to_vec(&json!([
             state.runtime_binding_id,
             target,
@@ -181,9 +193,16 @@ pub(crate) fn snapshot(
     } else {
         None
     };
-    Ok(
-        json!({"sessionId":sid,"originalAgentSessionId":native,"target":target,"eligibility":eligibility,"evidenceToken":token,"unresolved":unresolved,"dispositions":dispositions}),
-    )
+    serde_json::to_value(ClaudeRecoveryInspect {
+        session_id: sid.clone(),
+        original_agent_session_id: native,
+        target: target.clone(),
+        eligibility,
+        evidence_token: token,
+        unresolved,
+        dispositions,
+    })
+    .map_err(dispatch::internal)
 }
 pub(crate) async fn inspect(
     state: &Arc<AppState>,

@@ -574,6 +574,7 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         }
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
+        Command::StartupPrompt { reply } => { let _ = reply.send(None); }
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.transcript_text(max_lines));
         }

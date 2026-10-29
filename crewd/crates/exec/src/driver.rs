@@ -518,6 +518,7 @@ pub(crate) enum Command {
     },
     Stop,
     ClearQuotaHealth,
+    StartupPrompt { reply: oneshot::Sender<Option<(u64, crate::startup_prompt::StartupPrompt)>> },
     ScreenText {
         max_lines: usize,
         reply: oneshot::Sender<String>,
@@ -884,6 +885,12 @@ impl SessionHandle {
     /// 额度重置唤醒到点后调：清额度类 health、重新武装扫描器。
     pub fn clear_quota_health(&self) -> Result<(), Closed> {
         self.cmd(Command::ClearQuotaHealth)
+    }
+
+    pub async fn startup_prompt(&self) -> Result<Option<(u64, crate::startup_prompt::StartupPrompt)>, Closed> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd(Command::StartupPrompt { reply })?;
+        rx.await.map_err(|_| Closed)
     }
 
     pub async fn screen_text(&self, max_lines: usize) -> Result<String, Closed> {
@@ -1771,6 +1778,11 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         }
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
+        Command::StartupPrompt { reply } => {
+            let observed = t.config.terminal_observer.as_ref().and_then(|o| o.cut())
+                .map(|(epoch, _)| (epoch, crate::startup_prompt::classify(&t.core.screen_text(64), t.running.agent.id())));
+            let _ = reply.send(observed);
+        }
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.screen_text(max_lines));
         }

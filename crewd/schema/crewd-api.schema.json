@@ -1498,6 +1498,145 @@
       ],
       "type": "object"
     },
+    "ClaudeRecoveryDisposition": {
+      "additionalProperties": false,
+      "properties": {
+        "originalRequestIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "originalRequestIds"
+      ],
+      "type": "object"
+    },
+    "ClaudeRecoveryEligibility": {
+      "description": "Read-only evidence for a separate, explicit disposition of original resumes.",
+      "enum": [
+        "eligible",
+        "running",
+        "missingOriginalId",
+        "notConfigured",
+        "missingWorkdir",
+        "removedCrew",
+        "previousBirthLiveOrUnknown",
+        "evidenceUnavailable",
+        "noUnresolvedRequests"
+      ],
+      "type": "string"
+    },
+    "ClaudeRecoveryInspect": {
+      "additionalProperties": false,
+      "properties": {
+        "dispositions": {
+          "items": {
+            "$ref": "#/$defs/ClaudeRecoveryDisposition"
+          },
+          "type": "array"
+        },
+        "eligibility": {
+          "$ref": "#/$defs/ClaudeRecoveryEligibility"
+        },
+        "evidenceToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originalAgentSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        },
+        "unresolved": {
+          "items": {
+            "$ref": "#/$defs/ClaudeRecoveryUnknown"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessionId",
+        "originalAgentSessionId",
+        "target",
+        "eligibility",
+        "evidenceToken",
+        "unresolved",
+        "dispositions"
+      ],
+      "type": "object"
+    },
+    "ClaudeRecoveryResolveParams": {
+      "additionalProperties": false,
+      "properties": {
+        "evidenceToken": {
+          "type": "string"
+        },
+        "originalAgentSessionId": {
+          "type": "string"
+        },
+        "originalRequestIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/CommandRuntimeTarget"
+        }
+      },
+      "required": [
+        "target",
+        "originalAgentSessionId",
+        "evidenceToken",
+        "originalRequestIds"
+      ],
+      "type": "object"
+    },
+    "ClaudeRecoveryUnknown": {
+      "additionalProperties": false,
+      "properties": {
+        "historical": {
+          "type": "boolean"
+        },
+        "phase": {
+          "$ref": "#/$defs/ClaudeRecoveryUnknownPhase"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "runtimeBindingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "runtimeBindingId",
+        "phase",
+        "historical"
+      ],
+      "type": "object"
+    },
+    "ClaudeRecoveryUnknownPhase": {
+      "enum": [
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ClaudeResponseObservation": {
       "additionalProperties": false,
       "properties": {
@@ -10147,6 +10286,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "session.claude.recoveryResolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/ClaudeRecoveryResolveParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "personalDraft.ownerConfigure",
               "type": "string"
             },
@@ -15499,6 +15655,14 @@
       },
       "result": {
         "$ref": "#/$defs/ClaudeInspect"
+      }
+    },
+    "session.claude.recoveryInspect": {
+      "params": {
+        "$ref": "#/$defs/ClaudeSessionParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ClaudeRecoveryInspect"
       }
     },
     "session.claude.taskGet": {

@@ -5,7 +5,7 @@ sys.dont_write_bytecode = True
 
 # Exact manual review inputs avoid a self-referential committed source SHA.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_METHOD_COUNT = 151
+QUALIFIED_METHOD_COUNT = 152
 QUALIFIED_STORE_VERSION = 21
 COMPILER_ENVIRONMENT = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
                         'RUSTC_WORKSPACE_WRAPPER', 'CARGO_INCREMENTAL', 'CC', 'CFLAGS']
@@ -103,6 +103,7 @@ def qualify_schema(schema):
         'session.codex.inputDiscard': ('CodexInputDiscardParams', 'CodexInputResult'),
         'session.codex.permissionProfiles': ('CodexPermissionProfilesParams', 'CodexPermissionProfiles'),
         'session.claude.inspect': ('ClaudeSessionParams', 'ClaudeInspect'),
+        'session.claude.recoveryInspect': ('ClaudeSessionParams', 'ClaudeRecoveryInspect'),
         'session.claude.history': ('ClaudeHistoryParams', 'ClaudeHistoryPage'),
         'session.claude.taskGet': ('ClaudeTaskGetParams', 'ClaudeTaskDetail'),
         'personalDraft.status': ('PersonalDraftStatusParams', 'PersonalDraftStatus'),
@@ -117,9 +118,11 @@ def qualify_schema(schema):
     assert schema['methods']['command.lookup'] == {'params': {'$ref': '#/$defs/CommandLookupParams'}, 'result': {'anyOf': [{'$ref': '#/$defs/PublicCommandReceipt'}, {'type': 'null'}]}}
     assert schema['$defs']['CommandSubmitParams']['properties']['command'] == {'$ref': '#/$defs/PublicCommand'}
     variants = schema['$defs']['PublicCommand']['oneOf']
-    for operation, params in [('archive', 'CodexTargetParams'), ('unarchive', 'CodexTargetParams'),
-                              ('delete', 'CodexDeleteParams'), ('revert', 'CodexRevertParams')]:
-        name = 'session.codex.' + operation
+    for name, params in [('session.codex.archive', 'CodexTargetParams'),
+                         ('session.codex.unarchive', 'CodexTargetParams'),
+                         ('session.codex.delete', 'CodexDeleteParams'),
+                         ('session.codex.revert', 'CodexRevertParams'),
+                         ('session.claude.recoveryResolve', 'ClaudeRecoveryResolveParams')]:
         assert name not in schema['methods'], 'history control is a typed command, not a direct RPC'
         matching = [v for v in variants if v.get('properties', {}).get('operation', {}).get('const') == name]
         assert matching == [{'additionalProperties': False, 'properties': {'operation': {'const': name, 'type': 'string'},

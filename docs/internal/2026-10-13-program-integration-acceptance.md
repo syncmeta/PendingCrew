@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 启动屏幕有限诊断与正式恢复合同补齐
+
+真实fake PTY信任菜单在旧实现只得到泛化noHook，RED保留pcw-startup-prompt-red.log。现于原8秒等待内按250ms采样，单次最多100ms，整体deadline取消采样；driver内部仅分类64行/16KiB内已知完整菜单与准确原ID恢复拒绝，返回枚举和epoch，不外传或持久PTY正文。Legacy读取前后仍核物理身份/epoch；没有按键、目录授权、ready放宽、任务重投或超时后的诊断等待。完整trust/nohook create测试2/2及严格分类1/1通过，独立审阅发现并修复长菜单后缀漏报、引用恢复错误误判。该证据不是本机真实CLI屏幕，也不确认当前失败唯一原因。
+
+此前恢复read虽已在dispatch工作，但未纳入正式methods/schema清单。现补typed ClaudeRecoveryInspect及单值unknown、9资格、required nullable字段，服务直接序列化同DTO；生成checked合同为152方法，schema一致性测试通过。Linux分发门同步核typed read和独立command写；实际generated schema通过，删read、泛化read及删write三突变均拒绝（pcw-recovery-schema-release-green.log）。合同/设计文档同步，不改变旧Unknown或处置副作用规则。此批尚未正常构建安装或重新真实恢复。
+
+
 ## 2026-10-29 当前移动设备包与Claude前置条件核对
 
 688d598d正常iPhoneOS Apple Development 0.2.1／20755.52661完整构建成功，53项产物、2051源码输入及3878依赖前后保持，日用Mac未变；原profile/权限和签名验证、ZIP/IPA逐项核验已由构建器完成，独立28项核验通过，源逐项对688d598d Git对象、依赖现场重hash一致，记录INDEPENDENT-IPHONEOS-QA.json（SHA ce548f0bd808bd1ad27b4cfb446c33f660bc66872b95b7c9b19c345efde16110）。保留apple-development-688d598d-mobile-20261029。现有已配对物理手机仅查询准确bundle即返回CoreDevice连接重置；未安装、未启动或重新配对，尚无手机PCW连接可用的证据。

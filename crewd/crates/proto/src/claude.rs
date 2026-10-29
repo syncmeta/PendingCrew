@@ -146,3 +146,67 @@ pub struct ClaudeRecoveryResolveParams {
     pub evidence_token: String,
     pub original_request_ids: Vec<String>,
 }
+
+/// Read-only evidence for a separate, explicit disposition of original resumes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ClaudeRecoveryEligibility {
+    Eligible,
+    Running,
+    MissingOriginalId,
+    NotConfigured,
+    MissingWorkdir,
+    RemovedCrew,
+    PreviousBirthLiveOrUnknown,
+    EvidenceUnavailable,
+    NoUnresolvedRequests,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaudeRecoveryUnknown {
+    pub request_id: String,
+    pub runtime_binding_id: String,
+    pub phase: ClaudeRecoveryUnknownPhase,
+    pub historical: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaudeRecoveryDisposition {
+    pub request_id: String,
+    pub original_request_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaudeRecoveryInspect {
+    pub session_id: String,
+    #[schemars(required, extend("type" = ["string", "null"]))]
+    pub original_agent_session_id: Option<String>,
+    pub target: crate::commands::CommandRuntimeTarget,
+    pub eligibility: ClaudeRecoveryEligibility,
+    #[schemars(required, extend("type" = ["string", "null"]))]
+    pub evidence_token: Option<String>,
+    pub unresolved: Vec<ClaudeRecoveryUnknown>,
+    pub dispositions: Vec<ClaudeRecoveryDisposition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all="camelCase")]
+pub enum ClaudeRecoveryUnknownPhase { Unknown }
+
+#[cfg(test)]
+mod recovery_contract_tests {
+    #[test]
+    fn recovery_inspection_has_a_typed_registered_contract() {
+        let api=crate::api_schema();
+        assert!(crate::methods::ALL.contains(&super::RECOVERY_INSPECT));
+        assert_eq!(api["methods"][super::RECOVERY_INSPECT]["result"]["$ref"],"#/$defs/ClaudeRecoveryInspect");
+        assert_eq!(api["$defs"]["ClaudeRecoveryInspect"]["additionalProperties"],false);
+        assert_eq!(api["$defs"]["ClaudeRecoveryUnknownPhase"]["enum"],serde_json::json!(["unknown"]));
+        assert_eq!(api["$defs"]["ClaudeRecoveryEligibility"]["enum"].as_array().unwrap().len(),9);
+        for key in ["originalAgentSessionId", "evidenceToken"] {
+            assert!(api["$defs"]["ClaudeRecoveryInspect"]["required"].as_array().unwrap().contains(&serde_json::json!(key)));
+            assert_eq!(api["$defs"]["ClaudeRecoveryInspect"]["properties"][key]["type"],serde_json::json!(["string","null"]));
+        }
+
+    }
+}

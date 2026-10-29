@@ -196,6 +196,7 @@ impl ManagedHandle {
             .map_err(|_| "managed map poisoned")?
             .insert(session, Arc::downgrade(&handle));
         let startup_observation = Arc::new(AtomicU8::new(0));
+        let diagnostic_terminal = terminal.clone();
         let state = Actor {
             #[cfg(test)]
             current_pause: None,
@@ -228,9 +229,32 @@ impl ManagedHandle {
             }
             let _ = queue.send(Command::Disconnected);
         });
-        tokio::time::timeout(std::time::Duration::from_secs(8), ready_rx)
+        let screen_observation = AtomicU8::new(3);
+        let sample = async {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tick.tick().await;
+                let prompt = match &diagnostic_terminal {
+                    TerminalRuntime::Legacy(terminal) => tokio::time::timeout(
+                        std::time::Duration::from_millis(100), terminal.startup_prompt()).await.ok().and_then(Result::ok),
+                    TerminalRuntime::Native(_) => None,
+                };
+                screen_observation.store(prompt.map_or(3, |p|p as u8), Ordering::Release);
+            }
+        };
+        // Sampling is cancelled with this same deadline; no diagnostic work is
+        // awaited after timeout and no detached sampler can postpone Stop.
+        let readiness = async { tokio::select! { biased;
+            result = ready_rx => result,
+            _ = sample => unreachable!("sampler ends only by cancellation"),
+        }};
+        tokio::time::timeout(std::time::Duration::from_secs(8), readiness)
             .await
-            .map_err(|_| startup_failure(startup_observation.load(Ordering::Acquire)))?
+            .map_err(|_| {
+                let hook = startup_observation.load(Ordering::Acquire);
+                let observation = if hook == 0 { match screen_observation.load(Ordering::Acquire) { 1=>8, 2=>9, 3=>10, _=>0 } } else { hook };
+                startup_failure(observation)
+            })?
             .map_err(|_| "managed native exited before guard readiness")?;
         if let Some(text) = initial.filter(|s| !s.trim().is_empty()) {
             handle
@@ -307,6 +331,9 @@ fn startup_failure(observation: u8) -> String {
         5 => "native session identity mismatch",
         6 => "startup/resume source mismatch",
         7 => "qualified hook arrived at readiness deadline",
+        8 => "no SessionStart hook observed; observed folder trust prompt",
+        9 => "no SessionStart hook observed; observed original session resume rejection",
+        10 => "no SessionStart hook observed; startup screen observation unavailable",
         _ => "startup observation unavailable",
     };
     format!("managed startup not ready: {reason}; initial task not enqueued; original request retained, do not resend")
@@ -1145,6 +1172,13 @@ mod tests {
     }
     #[tokio::test]
     async fn managed_create_without_hook_times_out_without_initial_delivery_and_cleans_up() {
+        startup_timeout_fixture("ready").await;
+    }
+    #[tokio::test]
+    async fn managed_create_trust_prompt_is_classified_without_input_or_deadline_extension() {
+        startup_timeout_fixture("trust").await;
+    }
+    async fn startup_timeout_fixture(mode: &str) {
         use crewd_exec::{driver::{ClaudeStart, DriverConfig, start_claude},
             launch::ClaudeSpec, resume::MemoryLedger};
         let fixture = crate::agent::testkit::Fixture::new().await;
@@ -1161,6 +1195,7 @@ mod tests {
         let (driver, events) = start_claude(ClaudeStart {
             session_id: fixture.worker.clone(), program: fake, child_path: "/usr/bin:/bin".into(),
             spec: ClaudeSpec { workdir: root.path().into(), additional_env: [
+                ("FAKE_CLAUDE_MODE".into(), mode.into()),
                 ("FAKE_CLAUDE_TRACE".into(), trace.to_string_lossy().into_owned()),
                 ("FAKE_CLAUDE_LOG".into(), submissions.to_string_lossy().into_owned()),
             ].into(), ..Default::default() }, ledger: Arc::new(MemoryLedger::default()),
@@ -1170,8 +1205,12 @@ mod tests {
             Some("synthetic initial task must never be delivered".into()), None).await;
         let error = result.err().expect("no hook must fail readiness");
         assert!(started.elapsed() >= std::time::Duration::from_secs(8));
-        assert_eq!(error, startup_failure(0));
-        assert!(error.contains("initialization or interaction may still be pending"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(9), "diagnostic must fit the original readiness deadline");
+        if mode == "trust" {
+            assert!(error.contains("observed folder trust prompt"), "{error}");
+        } else {
+            assert_eq!(error, startup_failure(0));
+        }
         assert!(!error.contains("synthetic initial"));
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !driver.is_closed() { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }

@@ -13,3 +13,5 @@ pub mod resume;
 pub mod session;
 
 // owned_stdio.rs is retained as historical native-worker source, not linked.
+
+pub mod startup_prompt;
