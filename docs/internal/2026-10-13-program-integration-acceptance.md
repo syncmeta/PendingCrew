@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 新后台与恢复修复已更新本机
+
+准确源码48b3452e正常非测试Debug Core构建通过，484项Rust输入与冻结提交及快照一致，13项工作区artifact均fresh编译且非test；独立复核确认e932维护监督9个文件已纳入。保留见证目录core-normal-48b3452e-20261029，迁移保留目录后修正evidenceDirectory及下游引用哈希，原临时见证不变。
+
+正常Apple Development整包0.2.1／20755.37038完成，115项库存、签名、嵌入Core代码等价与ZIP均通过，原配置及依赖未变。准确签名库5项受影响回归通过，证据 `/private/tmp/pcw-signed-48b3452e-regression`。旧版正常安全暂停退出后，完整旧包与核对ZIP保留，排他替换成功，安装库存一致。保留目录apple-development-48b3452e-core-update-20261029含完整构建／安装记录。
+
+正常首开实际App58090、其嵌入Core58094；本机绿点连接、原Claude机组及唯一首文实际读回，本群仍仅Human1人，未再次提交、未启动Claude或更改配置。该证据只证明更新和原数据读取，不代替Claude生命周期、后台故障注入或多设备验收；Joy未更新，未发布。
+
 ## 2026-10-29 草稿重连调度与外部执行回执恢复
 
 个人草稿自动同步在旧连接失败时会丢弃已排队的新同步请求。现于原操作清理后消费明确排队请求并重走资格门；单独失败不重试，迟到结果须仍属于原operation、adapter与namespace才可更新同步状态。精确提取生产调度函数的可控接缝先RED后GREEN，覆盖排队请求、不自重试、过期结果三项；日志 `/private/tmp/personal-scheduler-red.log` 与 `personal-scheduler-green.log`。完整Mac构建通过 `/private/tmp/pcw-personal-recovery-build-20261029.log`；不是完整Cloud、多设备或真机验收。
