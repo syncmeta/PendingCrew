@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 Claude正常配置与设置反馈修复
+
+沿已安装App的后端设置和NSOpenPanel选择既有Claude可执行文件，保存解析路径 `/Users/hey/.local/share/claude/versions/2.1.301`；只读defaults确认保存。正常安全暂停后新App58436／Core58441已启动，实际Core参数 `--claude` 使用该路径。本机正常连接、原Claude机组首文保留，未重新发送或启动替代会话；配置生效不等于Claude实际模型或生命周期通过。
+
+现场同时发现设置文本仍显示尚未配置。源码中Claude与Codex显示均直接走静态resolver、未在body求值读取相应AppStorage；最小修复补上动态属性读取，继续原resolver并保留环境优先级及自动发现规则。完整Mac构建通过 `/private/tmp/pcw-program-label-20261029.log`，尚未安装该文本刷新修复，更新后选择／清除显示仍待实测。
+
+远端只读核对main为db93e1ef，本地f503a5f7领先16项且可快进；尚无本轮Linux产物，下一步沿既有普通推送及crewd-linux-current流程取得准确产物。未推送、触发CI或更改Joy。
+
 ## 2026-10-29 新后台与恢复修复已更新本机
 
 准确源码48b3452e正常非测试Debug Core构建通过，484项Rust输入与冻结提交及快照一致，13项工作区artifact均fresh编译且非test；独立复核确认e932维护监督9个文件已纳入。保留见证目录core-normal-48b3452e-20261029，迁移保留目录后修正evidenceDirectory及下游引用哈希，原临时见证不变。

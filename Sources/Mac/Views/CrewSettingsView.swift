@@ -468,7 +468,17 @@ private struct CrewdLocalSettingsTab: View {
     @AppStorage(CrewdCodexConfiguration.key) private var selectedProgram = ""
     @State private var selectionError: String?
     @AppStorage(CrewdClaudeConfiguration.key) private var claudeProgram = ""
-    private var program: String? { CrewdCodexConfiguration.program() }
+    // Read the dynamic properties during body evaluation so persisted picker
+    // changes invalidate these labels. The shared resolvers retain environment
+    // precedence, automatic discovery and demo restrictions.
+    private var program: String? {
+        _ = selectedProgram
+        return CrewdCodexConfiguration.program()
+    }
+    private var configuredClaudeProgram: String? {
+        _ = claudeProgram
+        return CrewdClaudeConfiguration.program()
+    }
     var body: some View {
         Form {
             Section("本机工作区") {
@@ -497,7 +507,7 @@ private struct CrewdLocalSettingsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("下次后台启动使用的 Claude 交互终端") {
-                Text(CrewdClaudeConfiguration.program() ?? "尚未配置 Claude。请选择已安装的 Claude 可执行文件。")
+                Text(configuredClaudeProgram ?? "尚未配置 Claude。请选择已安装的 Claude 可执行文件。")
                     .textSelection(.enabled)
                 HStack {
                     Button("选择 Claude…") {
