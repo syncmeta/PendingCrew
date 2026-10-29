@@ -1194,7 +1194,7 @@ async fn owned_managed_history_attached_agent_cannot_enter_any_human_read(){
     let fixture=AgentFixture::new().await;let(stop,rx)=tokio::sync::oneshot::channel();let server=fixture.spawn_owned_socket(rx).await;
     let mut c=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
     c.call("agent.attach",json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await.unwrap();
-    for method in ["session.claude.inspect","session.claude.history","session.claude.taskGet"] {
+    for method in ["session.claude.inspect","session.claude.history","session.claude.taskGet","session.claude.recoveryInspect"] {
         let denied=c.call(method,json!({"sessionId":fixture.worker,"requestId":uuid::Uuid::new_v4().to_string()})).await.unwrap_err();
         assert_eq!(denied.0,crewd_proto::RpcError::FORBIDDEN,"{method}: {denied:?}");
     }

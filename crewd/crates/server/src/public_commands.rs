@@ -368,6 +368,7 @@ async fn submit(
         | PublicCommand::Hibernate(_)
         | PublicCommand::SessionStart(_)
         | PublicCommand::SessionStop(_)
+        | PublicCommand::ClaudeRecoveryResolve(_)
         | PublicCommand::SessionResume(_)
         | PublicCommand::SessionInterrupt(_)
         | PublicCommand::TerminalClaim(_)

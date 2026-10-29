@@ -119,6 +119,8 @@ pub struct LocalClientTrustRevokeParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "params", deny_unknown_fields)]
 pub enum PublicCommand {
+    #[serde(rename="session.claude.recoveryResolve")]
+    ClaudeRecoveryResolve(crate::claude::ClaudeRecoveryResolveParams),
     #[serde(rename="personalDraft.ownerConfigure")]
     PersonalDraftOwner(crate::personal_drafts::PersonalDraftOwnerParams),
     #[serde(rename="personalDraft.memberSet")]
@@ -226,7 +228,7 @@ impl PublicCommand {
             Self::CodexDelete(_) => &["session.codex.delete"],
             Self::CodexRevert(_) => &["session.codex.revert"],
             Self::SessionStop(_) => &["session.stop"],
-            Self::SessionResume(_) => &["session.resume"],
+            Self::SessionResume(_) | Self::ClaudeRecoveryResolve(_) => &["session.resume"],
             Self::SessionInterrupt(_) => &["session.interrupt"],
             Self::SessionAnswer(_) => &["session.answer"],
             Self::SessionRespondRunnerRequest(_) => &["session.respondRunnerRequest"],
@@ -262,6 +264,7 @@ impl PublicCommand {
             Self::CodexDelete(_) => "session.codex.delete",
             Self::CodexRevert(_) => "session.codex.revert",
             Self::SessionStop(_) => "session.stop",
+            Self::ClaudeRecoveryResolve(_) => "session.claude.recoveryResolve",
             Self::SessionResume(_) => "session.resume",
             Self::SessionInterrupt(_) => "session.interrupt",
             Self::SessionAnswer(_) => "session.answer",

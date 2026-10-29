@@ -1058,6 +1058,7 @@ fn allowed_method(method: &str) -> bool {
             | "session.list"
             | "session.get"
             | "session.claude.inspect"
+            | "session.claude.recoveryInspect"
             | "session.claude.history"
             | "session.claude.taskGet"
             | "session.codex.inspect"

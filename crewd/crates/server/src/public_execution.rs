@@ -83,6 +83,7 @@ impl PublicExecution {
             }))
         }).await.map_err(dispatch::internal)?
     }
+    pub(crate) fn principal(&self) -> &str { &self.principal }
     pub(crate) fn actor(&self) -> &Actor {
         &self.actor
     }

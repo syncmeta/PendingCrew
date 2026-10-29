@@ -104,6 +104,29 @@ import Foundation
             precondition(runner.selectedRunId == run.runID && workspace.sessionID == "session-a")
             try? await Task.sleep(for: .milliseconds(450))
         }
+        if scenario.hasPrefix("claude-recovery-") {
+            workspace.originalJournalRequired = true
+            let journalRoot = root.appendingPathComponent("original-journal")
+            await workspace.prepareOriginalJournal(root: journalRoot)
+            precondition(workspace.originalJournalReady)
+            do { _ = try await workspace.performValue("session.resume", .object(["sessionId": .string("session-a")])) ; fatalError("first unknown succeeded") } catch {}
+            precondition(workspace.durableUnknown.count == 1)
+            let original = workspace.durableUnknown[0]
+            var succeeded = false
+            if scenario == "claude-recovery-switch" {
+                let pending = Task { try await workspace.performValue("session.resume", .object(["sessionId": .string("session-a")])) }
+                try await Task.sleep(for: .milliseconds(50))
+                workspace.selectCrew("crew-b"); workspace.selectCrew("crew-a")
+                do { _ = try await pending.value; succeeded = true } catch {}
+            } else {
+            do { _ = try await workspace.performValue("session.resume", .object(["sessionId": .string("session-a")])) ; succeeded = true } catch {}
+            }
+            precondition(succeeded == (scenario == "claude-recovery-covered"), "disposition coverage did not control explicit resume")
+            let reopened = try CrewdPresentationJournal(root: journalRoot, scope: workspace.presentationScope!)
+            let retained = try reopened.unknownRecords()
+            precondition(retained.contains { $0.id == original.id }, "recovery deleted original Unknown")
+            print("PASS exact Claude disposition: " + scenario); return
+        }
         if scenario.hasPrefix("receipt-") {
             workspace.originalJournalRequired = true
             let journalRoot = root.appendingPathComponent("original-journal")

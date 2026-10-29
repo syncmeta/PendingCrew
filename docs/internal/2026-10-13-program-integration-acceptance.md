@@ -1,5 +1,18 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 Claude历史恢复处置整合验证
+
+新增独立recoveryInspect／recoveryResolve，处置沿公共命令持久回执保存，旧Unknown所有字段不变、零启动。正常重启保留关联，恢复导入使关联失效；明确恢复再次核验，执行器入口阻止旧路径绕过。候选窗口仅计未决恢复及有效处置，300条已终结记录的真实RED已修复。
+
+完整Mac构建通过 `/private/tmp/pcw-recovery-mac-build.log`；实际App库六场景通过 `/private/tmp/pcw-claude-recovery-blocker-green-20261029`，保留原Unknown journal。父代理复验实际Store／DTO七组通过 `/private/tmp/pcw-claude-recovery-43ti36ro`。后台真实Unix服务2/2通过 `/private/tmp/pcw-claude-recovery-capacity-green.log`，既有受管回归2/2通过 `/private/tmp/pcw-claude-recovery-existing-qualified.log`。历史Unknown为关闭后的临时库夹具，后续操作走真实服务与假Claude进程；不冒真实供应商验收。Mac编译仍嵌入已安装旧Core，仅证明客户端集成。新正常Core、整包安装及原机组恢复尚未完成。
+
+
+## 2026-10-29 Joy新后台安装与原配对实测
+
+用户明确授权准确host-48b3452e预发布三资产；已发布且非latest，资产名称/大小/摘要与核验包一致。Joy从公开HTTPS入口下载核验，正式host.stop确认stopped、service/socket inactive、旧PID消失，两个独占锁内完整tar冷备份并tar compare通过。新请求f4bfe519-89ae-4a87-9b7e-6a0e25df7463安装exit0，当前activation同UUID、PID3715068、UID1000正常running；二进制327638ac…42cee与CI匹配，原身份/config/endpoint及完整单grant均保持。证据joy-host-update-20261029，远端完整冷备份/root/pendingcrew-upgrade-20261029-48b3452e/data-before-upgrade.tar。
+
+Mac日用已更新e53e0faa／20755.48760，115项库存匹配且旧整包/ZIP保留。沿原Joy VPS Codex test选择连接，无新配对；原协作验收机组、群聊首文及最终报告实际读回，成员3、人待办无待处理。未发送模型输入或恢复会话；仅证明此次更新后的原配对和资料读取，不扩大为新模型执行或故障恢复验收。
+
 ## 2026-10-29 Linux产物与Claude启动诊断
 
 用户明确授权17个提交推送及现有Linux流水线，main已同步76b75a72；唯一run40878460198成功。下载508文件逐项大小/hash核验，source48b3452e/controller76b75a72/Rust tree匹配，正常Release非test生产见证成立。tar SHA256为3abafc5e3e22dfa70fb365196079f1fdc4216788abc39c98d24bac0ad64a6d3b；完整记录linux-48b3452e-40878460198/download-verification.json。固定host-48b3452e完整SHA发布地址尚不存在，正式HTTPS安装依赖待单独发布授权，未另搭托管或绕过安装器。

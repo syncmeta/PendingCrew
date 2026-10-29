@@ -173,6 +173,11 @@ impl Executor for ClaudeExecutor {
                     (Some(id),Some(expected)) if crewd_exec::driver::exact_managed_id(id)&&id==expected&&req.initial_prompt.is_none()=>{},
                     _=>return Err(LaunchError::Failed("Claude requires exact original UUID and explicit managed resume intent; no input or native launch".into())),
                 }
+                if let Some(native) = req.managed_resume_id.clone() {
+                    let session=req.session_id.clone();
+                    let blocked=self.managed_factory.as_ref().unwrap().db.call_result(move|s|crate::claude_recovery::unresolved_resume(s.conn(),&session,&native)).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
+                    if blocked {return Err(LaunchError::Failed("original managed resume remains unresolved; inspect original request".into()))}
+                }
                 let session=req.session_id.clone();
                 self.managed_factory.as_ref().unwrap().db.call_result(move|store| {
                     let mut q=store.conn().prepare("SELECT native_pid,native_start,native_boot FROM native_execution_runtimes WHERE session_id=?1")?;

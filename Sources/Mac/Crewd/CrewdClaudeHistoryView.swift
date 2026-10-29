@@ -21,15 +21,21 @@ private struct CrewdClaudeHistoryPanel:View {
     @Environment(\.dismiss) private var dismiss
     let session:String,crew:String
     let legacyResume:(()->Void)?
+    @State private var confirmingRecovery=false
+    @State private var recoveryConfirmation:CrewdClaudeHistoryStore.RecoveryConfirmation?
     @State private var confirming=false
     @State private var confirmation:CrewdClaudeHistoryStore.ResumeConfirmation?
     @State private var legacyOrigin:CrewdClaudeHistoryStore.Origin?
     @State private var controlError:String?
     init(workspace:CrewdWorkspace,session:String,legacyResume:(()->Void)?){self.workspace=workspace;self.session=session;crew=workspace.crewID;self.legacyResume=legacyResume
-        _store=StateObject(wrappedValue:CrewdClaudeHistoryStore(session:session,crew:workspace.crewID,origin:{
+        let history=CrewdClaudeHistoryStore(session:session,crew:workspace.crewID,origin:{
             guard !workspace.isRetired,workspace.client.connected else{return nil}
             return .init(generation:workspace.observationGeneration,connection:workspace.client.connectionEpoch,authority:workspace.client.authorityBinding,runtime:workspace.client.runtimeIdentity,crew:workspace.crewID)
-        },read:{method,p in try await workspace.readValue(method,p)},perform:{method,p in try await workspace.performValue(method,p)},unknown:{workspace.hasOriginalUnknown(method:"session.resume",crew:workspace.crewID,session:session)}))
+        },read:{method,p in try await workspace.readValue(method,p)},perform:{method,p in try await workspace.performValue(method,p)},unknown:{workspace.hasOriginalUnknown(method:"session.resume",crew:workspace.crewID,session:session)})
+        history.recoveryAvailable={workspace.client.capabilities.contains("session.claude.recovery")}
+        history.recoveryUnknown={workspace.hasOriginalUnknown(method:"session.claude.recoveryResolve",crew:workspace.crewID)}
+        history.blockedByOriginal={covered in workspace.hasOriginalUnknown(method:"session.resume",crew:workspace.crewID,session:session,excludingRequests:covered)}
+        _store=StateObject(wrappedValue:history)
     }
     var body:some View{
         VStack(alignment:.leading,spacing:12){
@@ -38,6 +44,10 @@ private struct CrewdClaudeHistoryPanel:View {
                 Text("仅包含PCW拥有的任务与实际观察正文，不是Claude完整历史或原生ACP。查看、分页和重开不会启动或恢复会话。").font(.caption).foregroundStyle(.secondary)
                 overview
                 if let issue=controlError ?? store.failure{Text(issue).font(.caption).foregroundStyle(.orange).textSelection(.enabled)}
+                if workspace.client.capabilities.contains("session.claude.recovery") {
+                    Text("历史恢复结果仍未知。处置只记录当前无活动实例，不启动会话、不重放任务；旧请求保留。恢复仍需另行确认。").font(.caption).foregroundStyle(.secondary)
+                    Button("核对并处置历史恢复阻挡"){Task{do{recoveryConfirmation=try await store.prepareRecovery();confirmingRecovery=true;controlError=nil}catch{controlError="当前处置资格未确认；请只读核对原请求。"}}}.disabled(!store.canResolve)
+                }
                 taskList
                 if store.detail != .null{taskDetail}
                 DisclosureGroup("只读核对原恢复请求"){CrewdPublicRecoveryView(workspace:workspace)}
@@ -49,6 +59,10 @@ private struct CrewdClaudeHistoryPanel:View {
         .onChange(of:workspace.client.connectionEpoch){_,_ in store.invalidate();dismiss()}
         .onChange(of:workspace.observationGeneration){_,_ in store.invalidate();dismiss()}
         .onReceive(workspace.authorityEvents){event in if event.1["sessionId"] == .string(session){Task{await store.inspect()}}}
+        .confirmationDialog("只记录历史恢复处置？",isPresented:$confirmingRecovery,titleVisibility:.visible){
+            Button("记录处置，不启动"){if let recoveryConfirmation{Task{await store.resolveRecovery(recoveryConfirmation);self.recoveryConfirmation=nil}}}
+            Button("取消",role:.cancel){recoveryConfirmation=nil}
+        }message:{Text("原结果仍未知，仅记录后台核实的当前无活动实例。不会清除旧请求或启动会话。")}
         .confirmationDialog(legacyOrigin == nil ? "只恢复这个原会话？":"尝试旧Core的恢复行为？",isPresented:$confirming,titleVisibility:.visible){
             if let confirmation{Button("明确恢复原会话"){Task{await store.resume(confirmation);self.confirmation=nil}}}
             if let legacyOrigin{Button("按旧Core语义尝试恢复"){guard store.unsupported,store.currentOrigin==legacyOrigin else{return};legacyResume?();self.legacyOrigin=nil}}

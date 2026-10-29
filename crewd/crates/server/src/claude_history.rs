@@ -4,7 +4,7 @@ use crewd_proto::{Request, Response, RpcError, claude::*, parse_params};
 use serde_json::Value;
 use std::sync::Arc;
 pub(crate) fn is_method(method: &str) -> bool {
-    matches!(method, INSPECT | HISTORY | TASK_GET)
+    matches!(method, INSPECT | HISTORY | TASK_GET | RECOVERY_INSPECT)
 }
 fn unavailable() -> RpcError {
     RpcError::new(
@@ -98,7 +98,8 @@ async fn read(
     Ok(result)
 }
 pub(crate) async fn handle(state: &Arc<AppState>, actor: &Actor, req: Request) -> Response {
-    match read(state, actor, &req.method, req.params).await {
+    let result = if req.method == RECOVERY_INSPECT { crate::claude_recovery::inspect(state, actor, req.params).await } else { read(state, actor, &req.method, req.params).await };
+    match result {
         Ok(v) => Response::ok(req.id, v),
         Err(e) => Response::err(req.id, e),
     }

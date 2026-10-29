@@ -327,6 +327,11 @@ impl<P: Port> Core<P> {
     ) -> Result<serde_json::Value, crewd_proto::RpcError> {
         use crate::public_execution::Admission;
         use crewd_proto::commands::{CommandPhase, PublicCommand};
+        if let PublicCommand::ClaudeRecoveryResolve(p) = &call.request.command {
+            let current = !self.shutting_down && self.matches_public_target(&p.target);
+            let running = self.live.contains_key(&p.target.session_id) || self.starting.contains_key(&p.target.session_id);
+            return crate::claude_recovery::resolve(call, current, running).await;
+        }
         if let PublicCommand::SessionInterrupt(target) = &call.request.command {
             if self
                 .port
@@ -396,6 +401,21 @@ impl<P: Port> Core<P> {
                 )
                 .await?;
             return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
+        }
+        if matches!(call.request.command, PublicCommand::SessionResume(_))
+            && self.port.session(&target.session_id).await.map_err(crate::dispatch::internal)?.is_some_and(|r|r.executor=="claude") {
+            let state=call.state()?;let owner=state.clone();let actor=call.actor().clone();
+            let principal=call.principal().to_owned();let original=call.request.request_id.clone();let pinned=target.clone();
+            let running=self.live.contains_key(&target.session_id)||self.starting.contains_key(&target.session_id);
+            let allowed=state.db.call(move|s|->Result<bool,crewd_proto::RpcError>{
+                actor.authorize_tx(&owner,s.conn(),"session.resume").map_err(crate::dispatch::collab_err)?;
+                let v=crate::claude_recovery::snapshot(s.conn(),&owner,&principal,&pinned,running,Some(&original))?;
+                Ok(v["eligibility"]=="noUnresolvedRequests")
+            }).await.map_err(crate::dispatch::internal)??;
+            if !allowed {
+                let receipt=call.settle(CommandPhase::Admitted,CommandPhase::Suppressed,serde_json::json!({"refusal":"claude.recovery_evidence_unavailable","effectsDispatched":false})).await?;
+                return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
+            }
         }
         let dispatched = call.dispatch().await?;
         if matches!(call.request.command, PublicCommand::SessionStop(_)) {

@@ -136,3 +136,13 @@ impl std::fmt::Debug for ClaudeTaskText {
             .finish()
     }
 }
+
+pub const RECOVERY_INSPECT: &str = "session.claude.recoveryInspect";
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct ClaudeRecoveryResolveParams {
+    pub target: crate::commands::CommandRuntimeTarget,
+    pub original_agent_session_id: String,
+    pub evidence_token: String,
+    pub original_request_ids: Vec<String>,
+}

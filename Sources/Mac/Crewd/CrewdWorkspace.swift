@@ -1032,7 +1032,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
-        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet"].contains(method)
+        return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {
@@ -1049,7 +1049,8 @@ final class CrewdWorkspace: ObservableObject {
         if method == "session.resume" {
             let id=params["sessionId"].string ?? params["target"]["sessionId"].string
             let exactClaudeSession=id.flatMap{profileForSession($0)?.backend == "existingClaudePty" ? $0:nil}
-            guard !hasOriginalUnknown(method: method, crew: crewID, session:exactClaudeSession) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            let covered = try await claudeRecoveryCoverage(session: exactClaudeSession, params: params)
+            guard !hasOriginalUnknown(method: method, crew: crewID, session:exactClaudeSession, excludingRequests: covered) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
             try requireSessionExecutor(params["sessionId"].string ?? params["target"]["sessionId"].string ?? "")
         }
         if CrewdPublicOperation(rawValue:method)?.isCodex == true,!client.capabilities.contains("command.receipts") {
@@ -1169,8 +1170,9 @@ final class CrewdWorkspace: ObservableObject {
         if operation == .sessionResume {
             let id=params["sessionId"].string ?? params["target"]["sessionId"].string
             let exactClaudeSession=id.flatMap{profileForSession($0)?.backend == "existingClaudePty" ? $0:nil}
-            guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID, session:exactClaudeSession) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
-            try requireSessionExecutor(params["sessionId"].string ?? "")
+            let covered = try await claudeRecoveryCoverage(session: exactClaudeSession, params: params)
+            guard !hasOriginalUnknown(method: operation.rawValue, crew: crewID, session:exactClaudeSession, excludingRequests: covered) else { throw CrewdClientError(message: "原恢复结果尚未确认，请只读核对原请求，不会重发。", kind: .notSubmitted) }
+            try requireSessionExecutor(id ?? "")
         }
         _ = try publicCommandBinding(for: client)
         let envelope: CrewdPublicCommandEnvelope
@@ -1395,7 +1397,33 @@ final class CrewdWorkspace: ObservableObject {
     func isCurrentOriginalObservation(_ record: CrewdPresentationJournal.Prepared) -> Bool {
         record.scope == presentationScope
     }
-    func hasOriginalUnknown(method: String, crew: String, channel: String? = nil, session:String? = nil) -> Bool {
+    /// Coverage is used only for this explicit attempt; the original journal remains untouched.
+    private func claudeRecoveryCoverage(session: String?, params: CrewdValue) async throws -> Set<String> {
+        guard let session, hasOriginalUnknown(method: "session.resume", crew: crewID, session: session),
+              client.capabilities.contains("session.claude.recovery") else { return [] }
+        let epoch = generation, route = selection, connection = client.connectionEpoch
+        let runtime = client.runtimeIdentity, binding = client.authorityBinding, scope = presentationScope
+        func current() -> Bool {
+            acceptsObservation(epoch) && selection == route && client.connectionEpoch == connection &&
+            client.runtimeIdentity == runtime && client.authorityBinding == binding && presentationScope == scope &&
+            !Task.isCancelled && !stopping && client.capabilities.contains("session.claude.recovery") &&
+            profileForSession(session)?.backend == "existingClaudePty"
+        }
+        let inspection = try CrewdClaudeWire.recoveryInspect(
+            await readValue("session.claude.recoveryInspect", .object(["sessionId": .string(session)])), session: session)
+        guard current() else { throw CancellationError() }
+        let target = try await refreshControlTarget(session)
+        guard current(), target.value == inspection["target"] else { throw CrewdPublicWire.invalid() }
+        // Typed callers must still hold exactly the inspected target; legacy callers
+        // obtain a fresh target in explicitControlParameters before command submission.
+        let supplied = params["target"] == .null ? params : params["target"]
+        if supplied["generation"] != .null {
+            guard try CrewdCommandTarget(supplied) == target else { throw CrewdPublicWire.invalid() }
+        }
+        guard inspection["eligibility"] == .string("noUnresolvedRequests"), inspection["unresolved"].array.isEmpty else { return [] }
+        return CrewdClaudeWire.recoveryCovered(inspection)
+    }
+    func hasOriginalUnknown(method: String, crew: String, channel: String? = nil, session:String? = nil, excludingRequests: Set<String> = []) -> Bool {
         durableUnknown.contains { record in
             guard isCurrentOriginalObservation(record) else { return false }
             let operation = record.method == "command.submit" ? record.params["command"]["operation"].string : record.method
@@ -1404,7 +1432,12 @@ final class CrewdWorkspace: ObservableObject {
             if method == "crew.create" { return true }
             if let channel { return params["channelId"].string == channel }
             guard params["crewId"].string == crew || record.crew == crew else{return false}
-            if method == "session.resume",let session,let originalSession=params["target"]["sessionId"].string ?? params["sessionId"].string{return originalSession==session}
+            if method == "session.resume", let session, let originalSession = params["target"]["sessionId"].string ?? params["sessionId"].string {
+                guard originalSession == session else { return false }
+                if record.method == "command.submit", let request = record.params["requestId"].string.flatMap(UUID.init(uuidString:)),
+                   excludingRequests.contains(where: { UUID(uuidString: $0) == request }) { return false }
+                return true
+            }
             return true // Legacy without an exact binding retains its original safe scope.
         }
     }

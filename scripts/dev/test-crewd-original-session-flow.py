@@ -38,7 +38,7 @@ def main():
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    scenarios = ['captain-not-configured','captain-retry','initialization-once','receipt-timeout','receipt-unknown','receipt-historical','authority-error-scope','quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
+    scenarios = ['claude-recovery-switch','claude-recovery-covered','claude-recovery-uncovered','claude-recovery-no-cap','claude-recovery-target-changed','claude-recovery-unknown','captain-not-configured','captain-retry','initialization-once','receipt-timeout','receipt-unknown','receipt-historical','authority-error-scope','quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
     assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
     for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')
@@ -51,7 +51,8 @@ def main():
                     for line in stream:
                         req = json.loads(line); method = req['method']; calls.append(req)
                         if method == 'system.hello':
-                            result = {'server':'crewd','apiVersion':3,'minApiVersion':1,'version':'synthetic-route', 'capabilities':['orchestra','session.respondRunnerRequest']+(['command.receipts'] if (scenario.startswith('legacy-') or scenario.startswith('receipt-')) else []), 'runtimeIdentity':{'dbId':'synthetic-db','runtimeBindingId':'229e24cf-f1c0-4867-9fdb-3293686f7d55'}}
+                            result = {'server':'crewd','apiVersion':3,'minApiVersion':1,'version':'synthetic-route', 'capabilities':['orchestra','session.respondRunnerRequest']+(['command.receipts'] if (scenario.startswith('legacy-') or scenario.startswith('receipt-') or scenario.startswith('claude-recovery-')) else []), 'runtimeIdentity':{'dbId':'synthetic-db','runtimeBindingId':'229e24cf-f1c0-4867-9fdb-3293686f7d55'}}
+                            if scenario.startswith('claude-recovery-') and scenario != 'claude-recovery-no-cap': result['capabilities'].append('session.claude.recovery')
                         elif method == 'executor.list':
                             assert req['params']['crewId'] in ['crew-a','crew-b']
                             if scenario in ['profiles-late','profiles-switch','captain-switch-return'] and req['params']['crewId']=='crew-a': time.sleep(.15)
@@ -65,14 +66,20 @@ def main():
                         elif method == 'session.controlTarget':
                             assert req['params']=={'sessionId':'session-a'}
                             result = {'sessionId':'session-a','generation':'synthetic-generation:0:0','controlRevision':'1','turnId':None}
+                        elif method == 'session.claude.recoveryInspect':
+                            if scenario=='claude-recovery-switch': time.sleep(.15)
+                            result = {'sessionId':'session-a','originalAgentSessionId':'d7c6f7ce-6928-47de-a58d-06c8cd162dc4','target':{'sessionId':'session-a','generation':'synthetic-generation:0:0','controlRevision':'2' if scenario=='claude-recovery-target-changed' else '1','turnId':None},'eligibility':'evidenceUnavailable' if scenario=='claude-recovery-unknown' else 'noUnresolvedRequests','evidenceToken':None,'unresolved':[],'dispositions':[{'requestId':'a764c01e-ea15-43f4-9936-fd2830c1d105','originalRequestIds':['11673573-53dd-43a0-8dd5-a3e72962a521' if scenario=='claude-recovery-uncovered' else state['original']]}]}
                         elif method == 'command.submit':
                             e=req['params'];cmd=e['command']
-                            assert scenario in ['legacy-text','legacy-resume'] or scenario.startswith('receipt-')
+                            assert scenario in ['legacy-text','legacy-resume'] or scenario.startswith('receipt-') or scenario.startswith('claude-recovery-')
                             if scenario=='legacy-text':
                                 assert cmd['operation']=='session.start' and cmd['params']['executor']=='claude' and cmd['params']['brief']=='One explicit text without extra context'
                             else:
                                 assert cmd['operation']=='session.resume' and cmd['params']=={'sessionId':'session-a','generation':'synthetic-generation:0:0','controlRevision':'1','turnId':None}
                             result={'requestId':e['requestId'],'dbId':e['dbId'],'runtimeBindingId':e['runtimeBindingId'],'command':cmd,'phase':'unknown','historical':False,'payloadSha256':'a'*64,'createdAt':'2026-10-22T00:00:00Z','updatedAt':'2026-10-22T00:00:00Z','result':{}}
+                            if scenario.startswith('claude-recovery-'):
+                                if 'original' in state: result.update(phase='launched',result={'sessionId':'session-a'})
+                                else: state['original']=e['requestId']
                             if scenario.startswith('receipt-'):
                                 state['receipt'] = dict(result)
                                 if scenario == 'receipt-timeout': result['phase'] = 'dispatched'
@@ -85,7 +92,7 @@ def main():
                             result['result'] = {'sessionId':'session-a'}
                         elif method == 'crew.list': result = [{'id':'crew-a'}]
                         elif method == 'session.list':
-                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':('claude' if scenario=='legacy-resume' else 'acp:claude-managed' if scenario=='claude-unavailable' else 'codex')}] if state['captain'] or not scenario.startswith('captain') else []
+                            result = [{'id':'session-a','crewId':'crew-a','role':'captain','executor':('claude' if scenario=='legacy-resume' or scenario.startswith('claude-recovery-') else 'acp:claude-managed' if scenario=='claude-unavailable' else 'codex')}] if state['captain'] or not scenario.startswith('captain') else []
                         elif method == 'session.live':
                             if scenario.startswith('remote-'):
                                 conn.sendall((json.dumps({'id':req['id'],'error':{'code':-32003,'message':'设备授权或连接作用域已失效，请在电脑上重新配对。','refusal':'remote.permission_denied'}})+'\n').encode()); continue
@@ -117,7 +124,11 @@ def main():
             assert not problems, problems
             methods = [r['method'] for r in calls]
             assert methods.count('session.resume') == (1 if scenario in ['stopped','double-click','resume-refused','remote-stopped'] else 0), methods
-            assert methods.count('command.submit') == (1 if scenario.startswith('legacy-') or scenario.startswith('receipt-') else 0), methods
+            assert methods.count('command.submit') == (2 if scenario=='claude-recovery-covered' else 1 if scenario.startswith('legacy-') or scenario.startswith('receipt-') or scenario.startswith('claude-recovery-') else 0), methods
+            if scenario.startswith('claude-recovery-'):
+                assert methods.count('session.claude.recoveryInspect') == (0 if scenario=='claude-recovery-no-cap' else 2 if scenario=='claude-recovery-covered' else 1), methods
+                submitted = [r['params']['requestId'] for r in calls if r['method']=='command.submit']
+                assert len(submitted)==len(set(submitted)), 'must not replay original UUID'
             if scenario.startswith('receipt-'):
                 assert methods.count('command.lookup') >= (2 if scenario == 'receipt-timeout' else 1), methods
             if scenario.startswith('remote-'): assert methods.count('session.live') == 0 and methods.count('session.inspect') >= 1, methods

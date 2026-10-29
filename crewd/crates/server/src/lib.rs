@@ -4,6 +4,7 @@ mod apns;
 pub mod build_info;
 pub mod causal_fence;
 mod claude_history;
+mod claude_recovery;
 mod codex_inputs;
 pub(crate) mod conn;
 mod connection_scope;

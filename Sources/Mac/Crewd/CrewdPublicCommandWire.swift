@@ -51,6 +51,10 @@ struct CrewdPublicReceipt {
         self.phase = phase; self.historical = historical
         _ = try CrewdPublicWire.token(value["createdAt"])
         _ = try CrewdPublicWire.token(value["updatedAt"])
+        if originalCommand["operation"] == .string("session.claude.recoveryResolve"),phase == .committed {
+            let params=originalCommand["params"]
+            try CrewdClaudeWire.recoveryResult(value["result"],session:try CrewdCommandTarget(params["target"]).sessionID,originalRequestIDs:params["originalRequestIds"])
+        }
         if originalCommand["operation"].string?.hasPrefix("personalDraft.")==true,phase == .committed{try CrewPersonalCoreWire.validateResult(value["result"],command:originalCommand)}
         if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
             try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
@@ -146,6 +150,7 @@ enum CrewdPublicOperation: String, Codable {
     case sessionStart = "session.start"
     case sessionStop = "session.stop"
     case sessionResume = "session.resume"
+    case claudeRecoveryResolve = "session.claude.recoveryResolve"
     case sessionInterrupt = "session.interrupt"
     case codexConfigure = "session.codex.configure"
     case codexCompact = "session.codex.compact"
@@ -285,6 +290,12 @@ private enum CrewdPublicParameters {
         case .codexReview:
             required=["target","reviewTarget"];fields["reviewTarget"]=try CrewdCodexWire.review(fields["reviewTarget"] ?? .null)
         case .sessionStop: required = ["target", "reason"]
+        case .claudeRecoveryResolve:
+            required=["target","originalAgentSessionId","evidenceToken","originalRequestIds"]
+            try CrewdClaudeWire.uuid(fields["originalAgentSessionId"] ?? .null)
+            try CrewdClaudeWire.recoveryIDs(fields["originalRequestIds"] ?? .null)
+            let token=try CrewdClaudeWire.text(fields["evidenceToken"] ?? .null,max:64)
+            guard token.count==64,token.utf8.allSatisfy({(48...57).contains($0)||(97...102).contains($0)}) else{throw CrewdPublicWire.invalid()}
         case .sessionResume, .sessionInterrupt:
             return try CrewdCommandTarget(value).value
         case .sessionAnswer, .sessionRespond: required = ["target", "fingerprint", "runnerRequestId", "response"]
