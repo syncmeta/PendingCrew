@@ -106,7 +106,7 @@ struct IPadShell: View {
             Task{@MainActor in await Task.yield();if crewStore.chatSearchRequest?.id == request.id{crewStore.chatSearchRequest=nil}}
         }
         .task {
-            await appModel.connectCrewdAuthority()
+            await appModel.initializeCrewdAuthority()
             didReadComputerList = true
             await crewStore.refreshList()
         }

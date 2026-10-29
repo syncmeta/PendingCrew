@@ -944,6 +944,43 @@ pub(crate) mod tests {
         s.db.clone().shutdown();
     }
     #[tokio::test]
+    async fn committed_reply_unobserved_is_recovered_by_new_runtime_without_replay() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("crewd.db");
+        let store = crewd_store::Store::open(&path).unwrap();
+        let db = crewd_store::meta_get(store.conn(), "dbId").unwrap().unwrap();
+        let state = Arc::new(AppState::new(crewd_store::Db::spawn(store).unwrap()));
+        let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
+        let (server, _client) = tokio::net::UnixStream::pair().unwrap();
+        let actor = Actor::Local(policy.accept(&server).unwrap());
+        let work = directory.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let command = default_first_message(&state, &db, "lost reply", Some(work.to_str().unwrap()), "one original message");
+        let request = command.request_id.clone();
+        let payload = serde_json::to_value(&command.command).unwrap();
+        // The caller never consumes the committed response. Recreate only the
+        // runtime after fully closing and reopening the file Store, without replay.
+        drop(submit_sql(&state, &actor, command).await.unwrap());
+        let before = default_first_counts(&state).await;
+        assert_eq!(before, vec![2, 3, 1, 1]);
+        state.db.clone().shutdown();
+        let reopened = crewd_store::Store::open(&path).unwrap();
+        let next = Arc::new(AppState::new(crewd_store::Db::spawn(reopened).unwrap()));
+        assert_ne!(state.runtime_binding_id, next.runtime_binding_id);
+        let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
+        let (server, _client) = tokio::net::UnixStream::pair().unwrap();
+        let next_actor = Actor::Local(policy.accept(&server).unwrap());
+        let receipt = lookup(&next, &next_actor, CommandLookupParams { request_id: request.clone(), db_id: db }).await.unwrap();
+        assert_eq!(receipt["requestId"], request);
+        assert_eq!(receipt["command"], payload);
+        assert_eq!(receipt["phase"], "committed");
+        assert_eq!(receipt["historical"], true);
+        assert_eq!(receipt["runtimeBindingId"], state.runtime_binding_id);
+        assert_eq!(receipt["result"]["message"]["text"], "one original message");
+        assert_eq!(default_first_counts(&next).await, before);
+        next.db.clone().shutdown();
+    }
+    #[tokio::test]
     async fn invalid_first_message_rolls_back_created_crew_channel_and_receipt() {
         let (s, a, db) = state_actor().await;
         let p = CommandSubmitParams {

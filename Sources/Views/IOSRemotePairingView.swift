@@ -183,12 +183,21 @@ struct IOSRemotePairingView:View {
             List {
                 Section("已存电脑") {
                     if let error=appModel.crewdWindow.error{Text(error).foregroundStyle(.red)}
-                    if appModel.crewdWindow.computers.isEmpty{Text("尚无已存电脑。返回添加电脑，粘贴一次性配对链接。")}
+                    if let error=appModel.computerSelectionError{Text(error).foregroundStyle(.red)}
+                    if let error=crewStore.error {
+                        Text(error).foregroundStyle(.red)
+                        Text("请选择原电脑重新连接并读取机组列表。").font(.caption)
+                    }
+                    switch appModel.crewdWindow.computerListState {
+                    case .notLoaded: Text("已存电脑尚未读取。")
+                    case .loaded:
+                        if appModel.crewdWindow.computers.isEmpty{Text("尚无已存电脑。返回添加电脑，粘贴一次性配对链接。")}
+                    case .failed: Button("重新读取已存电脑"){Task{await appModel.crewdWindow.refresh()}}
+                    }
                     ForEach(appModel.crewdWindow.computers){computer in
                         HStack {
                             Button {
-                                computers=false
-                                if computer.paired{choose(computer.id)}else{pending=computer}
+                                if computer.paired{choose(computer.id)}else{computers=false;pending=computer}
                             }label:{VStack(alignment:.leading){Text(computer.name);Text(computer.paired ? "\(computer.endpoint.host):\(computer.endpoint.port)":"原文件配对等待确认").font(.caption).foregroundStyle(.secondary)}}
                             .buttonStyle(.borderless)
                             Spacer()
@@ -208,6 +217,26 @@ struct IOSRemotePairingView:View {
             }message:{computer in Text(computer.name+" · "+computer.endpoint.host+":"+String(computer.endpoint.port)+"\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。")}
         }
     }
-    private func choose(_ id:UUID){Task{await appModel.connectCrewdAuthority(computerID:id);if appModel.crewdBackend?.workspace.authorityRecordID==id{await crewStore.refreshList()};dismiss()}}
+    private func choose(_ id:UUID){Task{
+        await appModel.connectCrewdAuthority(computerID:id)
+        guard !Task.isCancelled, appModel.crewdWindow.selected == id,
+              let workspace=appModel.crewdBackend?.workspace,
+              workspace.authorityRecordID == id,
+              workspace.client.readyForWork else {
+            computers=true
+            return
+        }
+        let connection=workspace.client.connectionEpoch
+        await crewStore.refreshList()
+        // The same saved computer can reconnect while the list read suspends.
+        guard !Task.isCancelled, appModel.crewdWindow.selected == id,
+              appModel.crewdWindow.workspace === workspace,
+              appModel.crewdBackend?.workspace === workspace,
+              workspace.client.connectionEpoch == connection,
+              workspace.client.readyForWork else{return}
+        guard crewStore.error == nil else { computers=true; return }
+        computers=false
+        dismiss()
+    }}
 }
 #endif

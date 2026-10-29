@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 并行推进移动连接与持久回执恢复
+
+用户要求锁屏时继续无屏任务并启用子代理。移动端专属连接流程补齐未读／读取失败／真实空列表的区别；连接失败保留选择页，列表失败显示错误和原电脑重试路径。刷新期间绑定准确workspace对象及connectionEpoch，防止同电脑重连的迟到任务关闭当前页面；iPad改用一次性初始化入口。另一代理交叉复核后补上同机重连保护，父代理完成最终arm64 iOS Simulator完整构建，`/private/tmp/pcw-mobile-connect-final-20261029.log`为BUILD SUCCEEDED。未安装或冒真机交互通过。
+
+Core新增 `committed_reply_unobserved_is_recovered_by_new_runtime_without_replay`：临时文件Store真实提交首消息并丢弃响应，明确业务基线[2,3,1,1]，shutdown并join后由相同文件重开，新runtime及新Unix认证actor只读核对原UUID。原payload、消息、runtimeBinding保持，committed回执标historical，业务计数不增加。交叉复核后用真实临时工作目录替代平台路径。定向cargo测试1 passed，日志 `/private/tmp/pcw-core-receipt-reopen-final-20261029.log`；不冒实际RPC断线、崩溃或模型外部副作用恰好一次验证。
+
+Claude本机CLI版本2.1.301已实测，与当前支持版本一致。正常App新建独立Claude机组并提交唯一有界首文后仅有Human；环境设置实际提示“后台尚未配置可用程序”。源码确认普通后台须由正常设置明确选择Claude程序，已安装CLI不等于已配置后台。未重复提交、未改用裸CLI或fake冒验收。配置操作遇锁屏保留现场，其它工作继续；另着手修复创建后机长失败仅藏于环境设置的反馈缺口。
+
 ## 2026-10-29 恢复修复已更新日用并完成限定实测
 
 用户明确统一授权：“允许。以后，更新、实测，都不需要我授权。我在此统一授权。”后续本工程更新、实测沿此授权推进，不再重复请求额度、正常结束测试或更新许可；发布和新增权限不据此推定。
