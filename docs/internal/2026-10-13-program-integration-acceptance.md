@@ -1,5 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 恢复处置已安装，真实Claude仍未就绪
+
+c62a85bd正常Core的486输入、12生产包13产物fresh／非test独验通过；同源Apple Development 20755.51382整包115项、严格签名及准确签名库六场景通过。旧日用正常安全暂停后无残留进程，完整旧包与核对ZIP保留，排他替换及新库存核验完成。正常首开本机连接与原Claude机组保持。
+
+原captain-b405bdf02695／native6e290649-86d4-4136-94b4-305c3a892330在产品中明确记录历史处置后恢复按钮解除；随后仅一次明确原身份恢复59445704-3b18-47b9-8bbd-ce67824a6c8d。只读回执显示14:25:39.257Z至14:25:47.515Z后unknown，actualOutcome为launch_failed_without_confirmed_birth。未重复恢复或重发原任务。证明处置路径与安装实际可用，不能称真实Claude生命周期通过；继续定位启动诊断。完整证据在apple-development-c62a85bd-recovery-20261029/install-output。
+
+14:34:56Z重新只读打开资格页后已可处置但恢复仍禁用，证明先前进程终态阻挡已消失、新Unknown仍保留；未再处置或恢复。原群系统消息207b9e1e-8746-4679-96ee-0dee774184f6明确no SessionStart hook observed、initial task not enqueued，当前不能进一步推定登录/信任/权限根因。失败PTY仅内存且须存活进程身份，不存在可合法事后读取的持久屏幕。
+
+
 ## 2026-10-29 Claude历史恢复处置整合验证
 
 新增独立recoveryInspect／recoveryResolve，处置沿公共命令持久回执保存，旧Unknown所有字段不变、零启动。正常重启保留关联，恢复导入使关联失效；明确恢复再次核验，执行器入口阻止旧路径绕过。候选窗口仅计未决恢复及有效处置，300条已终结记录的真实RED已修复。
