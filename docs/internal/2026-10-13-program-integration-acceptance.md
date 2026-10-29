@@ -1,5 +1,9 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 待办列表取消读取的错误归属
+
+真实界面曾显示Swift.CancellationError。源码确认CrewdChannelWorkStore.refresh已排除取消及过期范围错误，但CrewdChannelTodoView自动.task与手动刷新又将所有抛出的错误复制到独立failure，造成取消外显及成功刷新后残留。两处列表刷新改为仅使用既有group.failure显示当前范围读取失败；视图failure继续保留详情／提交错误，不改任何写入或Unknown处理。完整Debug arm64构建及diff检查通过，日志 `/private/tmp/pcw-todo-cancel-20261029.log`；复用原安装Core，未安装候选或声称GUI取消场景通过。
+
 ## 2026-10-29 自动初始化不覆盖运行环境选择
 
 沿真实恢复中出现的环境回到本机问题检查：MacThreePaneView的.task每次挂载调用connectCrewdAuthority()，而该方法无computerID时会明确selectLocal。因此存在视图重新挂载覆盖远程选择的代码路径；尚未取得现场挂载调用轨迹，不能声称这是唯一根因。

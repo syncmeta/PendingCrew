@@ -93,7 +93,7 @@ struct CrewdChannelTodoView:View {
                     }
                     Button("关联已有",systemImage:"link"){association=true}.disabled(group.linkRevision == nil || busy)
                     Spacer(minLength:4)
-                    Button{Task{do{try await group.refresh()}catch{failure=error.localizedDescription}}}label:{Image(systemName:"arrow.clockwise")}
+                    Button{Task{await refreshReferences()}}label:{Image(systemName:"arrow.clockwise")}
                         .buttonStyle(CrewdToolButtonStyle()).help("刷新本群待办工作").accessibilityLabel("刷新本群待办工作")
                 }.font(CrewdType.label).controlSize(.small)
 
@@ -134,7 +134,7 @@ struct CrewdChannelTodoView:View {
             if let current=rows.first(where:{$0["object"] == old["object"]}) {if current != old{readDetail(current)}}
             else {detailToken=UUID();reading=false;selected=nil;detail = .null}
         }
-        .task(id:crew+channel+group.capabilities.sorted().joined(separator:",")+group.activationEpoch.uuidString){if group.capabilities.contains("channelWork"),!channel.isEmpty{do{try await group.refresh()}catch{failure=error.localizedDescription}}}
+        .task(id:crew+channel+group.capabilities.sorted().joined(separator:",")+group.activationEpoch.uuidString){if group.capabilities.contains("channelWork"),!channel.isEmpty{await refreshReferences()}}
         .sheet(isPresented:$association){CrewdChannelAssociation(group:group,work:work,drafts:$linkDrafts,initial:selected?["object"])}
         .sheet(item:$planTarget){target in CrewdPlanActions(store:work,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:work,drafts:$humanDrafts,target:target)}
@@ -150,6 +150,12 @@ struct CrewdChannelTodoView:View {
         .sheet(isPresented:$creatingHuman){
             if let mutationDrafts {CrewdHumanTodoCreation(group:group,drafts:mutationDrafts)}
         }
+    }
+    private func refreshReferences() async {
+        // The store publishes only current-scope read failures and excludes
+        // cancellation. Copying errors into view state revives cancelled or
+        // superseded reads after navigation and leaves them after a good refresh.
+        do { try await group.refresh() } catch { /* Presented through group.failure. */ }
     }
     private func tagButton(_ value:String,count:Int)->some View {
         Button {tag.wrappedValue=value} label:{Text((value.isEmpty ? "所有待办":value)+(group.loaded && !group.loading ? " \(count)":"")).font(CrewdType.caption).padding(.horizontal,9).padding(.vertical,6)
