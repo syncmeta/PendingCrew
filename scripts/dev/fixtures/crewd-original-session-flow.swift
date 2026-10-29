@@ -48,6 +48,16 @@ import Foundation
         let run = CrewSessionRun(crewId: "crew-a", sessionId: "session-a", kind: .codex,
                                  taskBrief: "", workingDirectory: root, backend: backend)
         runner.installCrewdProjection([run], workspace: workspace)
+        if scenario == "authority-error-scope" {
+            runner.lastStartError = "old authority resume remains unknown"
+            runner.installCrewdProjection([run], workspace: workspace)
+            precondition(runner.lastStartError != nil, "same authority refresh must retain its error")
+            let other = CrewdWorkspace(dataDirectory: root.appendingPathComponent("other"))
+            defer { other.retire() }
+            runner.installCrewdProjection([], workspace: other)
+            precondition(runner.lastStartError == nil, "old authority error leaked into another host")
+            print("PASS actual App authority error isolation"); return
+        }
         if scenario.hasPrefix("remote-") {
             // Exercise the real backend seam without claiming this Unix receiver is TLS.
             if scenario == "remote-quiet" {

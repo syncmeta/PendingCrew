@@ -238,6 +238,9 @@ final class CrewSessionRunner: ObservableObject {
         if authorityChanged {
             // Session UUID equality across computers or backup forks is not
             // display ownership. Retire the old objects before rebinding actions.
+            // This banner is a display observation, not the original request
+            // journal; another host must not inherit its failure or action.
+            lastStartError = nil
             for old in runs { old.retireCrewdDisplayObservation() }
             runs = []; selectedRunId = nil; paneStates.removeAll()
             activeCrewId = nil; viewingTerminal = false; isComposingNew = false

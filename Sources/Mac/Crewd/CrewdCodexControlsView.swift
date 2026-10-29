@@ -148,8 +148,11 @@ private struct CrewdCodexControlPanel:View {
                 switch page {
                 case "执行":CrewdFormSection(title:"当前执行与后续任务"){taskControls}
                 case "历史":CrewdFormSection(title:"会话历史"){historySection}
-                case "设置":settingsSection;CrewdFormSection(title:"能力与原请求核对"){capabilitySection}
+                case "设置":settingsSection;CrewdFormSection(title:"实际能力"){capabilitySection}
                 default:CrewdFormSection(title:"当前会话"){identity};CrewdFormSection(title:"上下文与工具"){metadataSection}
+                }
+                CrewdFormSection(title:"原操作结果核对",detail:"会话正在运行，不代表此前每次操作都已核对。这里查看当前运行环境保留的原请求。") {
+                    DisclosureGroup("查看原请求与后台回执") { CrewdPublicRecoveryView(workspace:workspace) }
                 }
             }.padding(20).frame(maxWidth:.infinity,alignment:.leading)}
                 .background(Theme.Palette.surfaceMuted.opacity(0.22))
@@ -308,7 +311,6 @@ private struct CrewdCodexControlPanel:View {
                 VStack(alignment:.leading){Text(capability.id+" · "+capability.protocolKind);Text(capability.explanation).font(.caption).foregroundStyle(.secondary)}.padding(.vertical,3)
             }
             Text("以上按当前后台真实能力显示；任意二进制、插件安装和全局配置写入仍未开放。").font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("只读核对原控制请求"){CrewdPublicRecoveryView(workspace:workspace)}
         }
     }
     private func actionButton(_ title:String,capability:String,action:@escaping()->Void)->some View{

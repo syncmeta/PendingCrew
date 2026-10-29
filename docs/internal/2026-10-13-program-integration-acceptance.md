@@ -1,5 +1,35 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 Mac＋Joy真实双成员协作闭环
+
+用户明确授权真实模型验收，并说明后续不再因额度或正常退出当前测试询问；该授权不扩大到既有项目、服务升级或权限变更。使用已安装Mac 0.2.1／20754.14633和原Joy配对，未安装新候选或升级后台。新机组“协作闭环验收 2026-10-29”，先创建唯一Codex机长并等待就绪，再由正常待办模式提交原需求#1。
+
+真实机长通过ask产生H2，请求选择报告标题，未收到答案前等待。操作员在正常人工待办表单填写测试答案A，明确这是验收输入而非工程完成结论。机长建立关联工作W3，启动唯一Codex执行成员；成员提交产出、机长只读复核后正式完成。GUI计划页W3显示已完成及证据，AI待办切到“机组全部”后原需求#1显示已完成且原文保留；人待办已无待答事项。成员与机长均沿正常会话控制停止，分别只读确认“已停止、队列0”。没有强杀或停止整个Joy服务。
+
+独立SSH只读读取本轮两个产出，report.md真实186字节、SHA256 `724b56e44b8197bb0456964dbc6ea9678449006608c28f0520f5a21ca9d89978`，与evidence.json一致。报告包含选定标题、“原需求编号：#1”、“工作项编号：W3”和“人工答复已收到”；文件位于Joy `/home/pendingcrew/pcw-acceptance-20261029/`。这证明本轮真实需求→人工问答→双成员协作→产出→关联完成，不代表全部故障恢复、App关闭重开、后台重启或Claude通过。期间主机界面曾回到本机，原因未明；重新选Joy后同一机组及完成记录仍可读，不据此声称已验断网或重启。
+
+独立crewd CLI通过服务账号查询被正式caller lineage门拒绝（unqualified_or_changed_lineage），未改变身份策略或绕过；后续任务状态以原已配对App读取。右侧当前群待办空白与机组全部有项分列，不能当成已证丢数据。
+
+本轮确定复现旧本机恢复错误跨主机泄漏到新Joy机组。新增现有真实App模块夹具authority-error-scope，旧模块在“old authority error leaked into another host”断言SIGTRAP（RED）；最小修复仅在workspace身份变化时清理runner临时lastStartError，原journal/Unknown不变，同源刷新保留错误。完整Debug arm64构建成功；新模块authority-error-scope、quiet、remote-quiet三项PASS，均无启动/恢复/公开命令提交。证据目录/private/tmp/pcw-authority-error-red-20261029、/private/tmp/pcw-authority-error-green-20261029，构建日志/private/tmp/pcw-authority-error-build-20261029.log。构建仍复用前节准确已安装Core，仅客户端候选，不含e932新后端；未安装或宣称新GUI实际运行通过。
+
+## 2026-10-29 原恢复请求只读核对与入口改进
+
+日用0.2.1／20754.14633原生窗口中，机长显示running，Codex控制页为运行／空闲／队列0；群聊仍显示此前恢复结果未确认。沿设置→实际能力状态→只读核对原控制请求，对原session.resume请求执行一次既有只读查找，实际显示后台阶段launched，无历史实例标记，并出现明确结束待确认按钮。没有点击确认、重发、启动、停止或恢复；不能仅据running清理Unknown。此事实说明该请求已有启动回执，客户端仍保留显式待确认记录；未追溯原五秒观察窗口为何未取得终态，不宣称完整根因已修复。
+
+两处Swift视图将核对入口移到各会话页共同的独立分区，不再嵌于能力列表；明确范围为当前运行环境，保留原请求列表及权限。launched增加启动确认与任务完成的区别，历史实例独立说明。未改请求／journal／确认条件／模型执行逻辑。
+
+Swift语法解析及git diff --check通过。首次完整Debug构建在缺少明确Core输入的嵌入门失败，未绕过；第二次显式使用已安装Core（SHA256 803af066b8f5c077fcd0de9c3ba192968a2fd487509fc1d68035ce74ccaa8b79）和原暖DerivedData，macOS arm64完整构建成功。日志分别为/private/tmp/pendingcrew-recovery-ui-build-20261029.log及/private/tmp/pendingcrew-recovery-ui-build-20261029-qualified.log。这是未签名客户端编译验证，Core来源单列，不含e932后端新修复；没有启动新包、安装、发布或声称新UI实显验收。日用原记录保留。
+
+## 2026-10-29 维护故障与备份线程监督源码复核
+
+接手时产品源码已保存为本地 `e932c279`，原有五份设计未跟踪文件保留。本次未修改产品逻辑，补齐 `crewd/README.md` 的维护故障和退出行为说明。
+
+在当前源码执行离线定向回归：`cargo test --offline -p crewd-store --features testkit s4_maintenance -- --test-threads=1`，6 passed；`cargo test --offline -p crewd-server --features testkit --lib maintenance_supervision_tests -- --test-threads=1`，5 passed；`cargo test --offline -p crewd-store --test backup`，20 passed。服务层首次沙箱内执行五项均在 cleanup 前置断言失败；经批准在沙箱外按原命令、原代码执行全部通过，保留首次失败，不据此认定产品回归。其余过滤出的零测试不计入通过数。
+
+覆盖维护故障分类与历史保留、真实 serve 创建的备份线程 panic／意外返回／收尾期间 panic、正常停服、hello 健康投影，以及既有备份恢复和轮转保护。均为隔离临时数据与本地测试，不涉及真实模型、日用库或远端服务。
+
+三包 `cargo fmt -- --check` 检查发现多处现存格式差异，未批量格式化，不能称完整检查入口全绿；本次 `git diff --check` 通过。此记录只补源码与定向测试证据，未构建安装包、安装、推送或部署，也不替代 Claude、iOS、多端及 APNs 剩余真实验收。
+
 ## 2026-10-28 0.2.2拖拽DMG公证与公开
 
 用户明确授权准确54461e6c…29c5e8、48,431,478字节DMG外发Apple并发布；唯一提交UUID46dd5896-d177-4ccd-8b40-2d489867bab2，原请求wait终态Accepted。私有原提交镜像保留，仅发布副本附票；容器与内App的stapler/strict/Gatekeeper全部通过，镜像只读挂载核对全部App文件字节不变、Applications软链正确，随后正常卸载。

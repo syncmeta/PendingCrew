@@ -34,6 +34,12 @@ struct CrewdPublicRecoveryView: View {
                     }
                     if let id, let receipt = found[id] {
                         Text("后台阶段：\(receipt.phase.rawValue)\(receipt.historical ? " · 历史实例" : "")")
+                        if receipt.phase == .launched {
+                            Text(receipt.historical
+                                 ? "这是历史实例的启动回执，不能确认当前会话状态。"
+                                 : "后台已确认这次操作启动了会话；这不代表任务已完成。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         DisclosureGroup("后台原回执") { Text(receipt.value.pretty).font(.caption).textSelection(.enabled) }
                         if record.params["command"]["operation"].string == "crew.createFirstMessage", receipt.phase == .committed, openCrew != nil {
                             Button("查看原首条消息（不重新发送）") { open(record, receipt) }

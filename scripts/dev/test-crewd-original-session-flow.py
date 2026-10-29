@@ -38,7 +38,7 @@ def main():
     with (out/'compile.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
     results = []
-    scenarios = ['quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
+    scenarios = ['authority-error-scope','quiet','click-unavailable','claude-unavailable','resume-refused','profiles','profiles-missing','profiles-unavailable','profiles-late','profiles-switch','legacy-text','legacy-resume','stopped','running','malformed','switch','double-click','captain','captain-refused','captain-switch-return','switch-return','remote-quiet','remote-running','remote-stopped','remote-malformed','remote-switch']
     assert not args.scenarios or all(s in scenarios for s in args.scenarios), 'Unknown scenario'
     for scenario in args.scenarios or scenarios:
         path = out/(scenario+'.sock')

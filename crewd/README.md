@@ -83,6 +83,8 @@ SessionStart 与 launch 的联合入口为 `server::agent::port::world_context`�
 
 `crewd.db` 是聊天记录的唯一一份，只在这台机器上。
 
+维护故障通过 `hello.daemonHealth.lastDbError` 的 `stage: maintenance` 报告，保留原始故障类别；后续成功读取不会清掉这条历史。普通备份或检查失败会记录故障，后续仍按既定周期执行；若备份工作线程 panic 或意外退出，`serve` 会有序停止并返回失败，等待线程与数据库收尾，不把这次退出记为正常退出。正常请求停服仍返回成功。这些行为自源码提交 `e932c279` 起提供，不能据此推断已安装 App 或远端服务已更新。
+
 - 自动：`serve` 启动时、之后每天一次，在 `<数据目录>/backups/crewd-auto-*.db` 拍一份（独立的只读连接上 `VACUUM INTO`，不挡服务；拍完的那份过 `quick_check` 才算数）。保留最近 7 天每天一份 + 更早 4 周每周一份；备份失败或在用的库没通过检查时，旧备份一份不删。每小时对在用的库跑 `quick_check`，每天拍的那次跑 `integrity_check`；出问题只在日志里报，绝不删库、换库
 - 迁移前：旧版本的非空库升级前先过 `integrity_check`，再存成 `backups/crewd-v{旧}-pre-v{新}-*.db`；任何一步失败就拒绝迁移，库原样不动
 - 永久删除机组前：`backups/crewd-pre-delete-{机组}-*.db`（拍不成就不删）。永久删除是真的删，这份快照只是安全网：按名字里的时间 30 天后随每天那次轮转删掉（备份失败或在用的库没通过检查时同样不删）
