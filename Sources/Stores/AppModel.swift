@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
     lazy var crewdWindow = CrewdRemoteWindow()
     private var authorityObservation: AnyCancellable?
     @Published private(set) var connectingAuthority = false
+    private var authorityInitializationAttempted = false
     /// Only explicit target selection reports here; startup remains unchanged.
     @Published var computerSelectionError:String?
 
@@ -57,8 +58,19 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// View tasks can run again after remounting. Only the first automatic
+    /// initialization may choose a default; subsequent selection is explicit.
+    func initializeCrewdAuthority() async {
+        guard !authorityInitializationAttempted else { return }
+        authorityInitializationAttempted = true
+        guard crewdWindow.workspace == nil else { return }
+        await connectCrewdAuthority()
+    }
     func connectCrewdAuthority(computerID:UUID?=nil) async {
         guard usesCrewdAuthority else{return}
+        // An explicit choice made before the view task also owns the selection,
+        // including a failed attempt whose error must remain visible.
+        authorityInitializationAttempted = true
         guard !connectingAuthority else {
             if computerID != nil{computerSelectionError="另一项电脑连接正在进行，请稍后再明确选择。"}
             return

@@ -1,5 +1,13 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 自动初始化不覆盖运行环境选择
+
+沿真实恢复中出现的环境回到本机问题检查：MacThreePaneView的.task每次挂载调用connectCrewdAuthority()，而该方法无computerID时会明确selectLocal。因此存在视图重新挂载覆盖远程选择的代码路径；尚未取得现场挂载调用轨迹，不能声称这是唯一根因。
+
+AppModel新增一次性initializeCrewdAuthority入口，标记在await之前设置，已有workspace不选默认环境；任何主动连接也会先占有初始化状态，失败后保留原错误，后续视图挂载不自动重试。本机菜单／远程选择／明确重试仍使用原connect方法。Mac主视图只调用初始化入口，不改变后台恢复或命令提交。
+
+完整Debug arm64构建成功（`/private/tmp/pcw-authority-initialization-20261029.log`），仍显式嵌入原已安装Core。实际App模块initialization-once、authority-error-scope、quiet、remote-quiet四项通过，证据 `/private/tmp/pcw-startup-once-20261029/`。初始化场景使用会被配置校验拒绝的相对路径，验证失败后的重复挂载不重试、主动选择先发生时不被初始化覆盖、明确重试仍进入连接路径；没有真实配对读取或后台启动，不等同于真实远程视图重挂验收。未安装候选、发布或修改Joy。
+
 ## 2026-10-29 Joy原机长真实恢复与停止
 
 用户解锁Mac后，沿日用App原Joy配对进入“协作闭环验收 2026-10-29”。首轮控制页停在状态尚未读取，随后界面回到本机；未在未知状态下提交恢复。重新选择原Joy记录后读取成功，机长 `captain-e17c41e74edc`／原生thread `01a186a1-9bdb-7921-8815-e219ff3f2941` 显示已停止、队列0。正常执行页明确恢复一次并确认；随后概览显示同一session及同一thread、已运行空闲、队列0，标题同步保留。未发送任务文本或排队新轮次。

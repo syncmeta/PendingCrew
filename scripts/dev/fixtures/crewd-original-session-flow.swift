@@ -28,6 +28,30 @@ import Foundation
             precondition(result == nil, "old captain click survived crew A-B-A selection")
             print("PASS actual App captain A-B-A: no start"); return
         }
+        if scenario == "initialization-once" {
+            let previous = ProcessInfo.processInfo.environment["PENDINGCREW_CREWD_DATA_DIR"]
+            setenv("PENDINGCREW_CREWD_DATA_DIR", "relative-path-must-be-refused", 1)
+            defer {
+                if let previous { setenv("PENDINGCREW_CREWD_DATA_DIR", previous, 1) }
+                else { unsetenv("PENDINGCREW_CREWD_DATA_DIR") }
+            }
+            let model = AppModel()
+            precondition(model.crewdDirectory == nil)
+            await model.initializeCrewdAuthority()
+            precondition(model.crewdWindow.workspace == nil && model.crewdWindow.error != nil)
+            model.crewdWindow.error = "preserve first attempt"
+            await model.initializeCrewdAuthority()
+            precondition(model.crewdWindow.error == "preserve first attempt", "remount retried initialization")
+            await model.connectCrewdAuthority(computerID: UUID())
+            precondition(model.crewdWindow.error != "preserve first attempt", "explicit selection was blocked")
+            let explicit = AppModel()
+            await explicit.connectCrewdAuthority(computerID: UUID())
+            explicit.crewdWindow.error = "preserve explicit choice"
+            await explicit.initializeCrewdAuthority()
+            precondition(explicit.crewdWindow.error == "preserve explicit choice", "startup replaced explicit choice")
+            print("PASS actual App initialization: remount does not retry or override explicit selection; explicit retry remains")
+            return
+        }
         await workspace.refreshExecutorProfiles()
         try await workspace.refreshSessionDirectory("crew-a")
         if scenario == "profiles" {
