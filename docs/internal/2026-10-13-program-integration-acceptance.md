@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 新诊断已安装并观察到真实目录信任提示
+
+57e4b476正常Core487输入、12生产包13产物fresh／非test独验通过。同源正常Apple Development 20755.54720签名整包115项、2052源码、3878依赖及准确签名库六场景独验通过。旧版正常安全退出后无自有残留，整包与核验ZIP保留，排他安装及正常首开连接成功。证据apple-development-57e4b476-startup-20261029。
+
+原机组处置旧阻挡后仅明确恢复一次90d91601-9839-4561-b249-18b83951b22f，15:18:34.366Z至15:18:42.798Z返回unknown／launch_failed_without_confirmed_birth；原群系统通知db83d707-7693-43b1-a404-b946b0bb4b27明确observed folder trust prompt，initial task not enqueued。现在有真实PTY分类观察证明信任提示，不能再仅称信任假说；仍不等于完成信任或模型生命周期。准确目录/private/tmp/pcw-claude-acceptance-20261029只读核对为空、非symlink，未改信任，已单独询问首次仅目录信任授权，其它工作继续。
+
+
 ## 2026-10-29 启动屏幕有限诊断与正式恢复合同补齐
 
 真实fake PTY信任菜单在旧实现只得到泛化noHook，RED保留pcw-startup-prompt-red.log。现于原8秒等待内按250ms采样，单次最多100ms，整体deadline取消采样；driver内部仅分类64行/16KiB内已知完整菜单与准确原ID恢复拒绝，返回枚举和epoch，不外传或持久PTY正文。Legacy读取前后仍核物理身份/epoch；没有按键、目录授权、ready放宽、任务重投或超时后的诊断等待。完整trust/nohook create测试2/2及严格分类1/1通过，独立审阅发现并修复长菜单后缀漏报、引用恢复错误误判。该证据不是本机真实CLI屏幕，也不确认当前失败唯一原因。
