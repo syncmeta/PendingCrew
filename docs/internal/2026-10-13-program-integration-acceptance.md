@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-29 执行中停工与重开完整场景通过
+
+仅新增orchestra_restart.rs验收场景，无产品修改。实际crewd CLI与隔离fake Claude，在无初始任务创建后单次输入，用content_accepted、authenticated PreToolUse原prompt及live.running/working证明活动；随后正式owned command.submit crewd.hibernate confirmed，5070ms后Core成功退出，准确原birth与pgid均物理消失，registry entries/spawned及socket清理。原task/runtime/prompt/body保留且phase诚实为unknown。
+
+同目录重开保留相同witness探针、仅lookup/read，原native身份与命令回执保持，900ms观察窗内零新launch/旧任务重投；不是任意时长保证或真实供应商实测。最终定向1/1通过9.27秒，独立源码与日志审阅通过；临时库/假执行器不访问日用。完整材料active-hibernate-reopen-20261029。最初缺uuid依赖的编译失败及受限环境birth探测失败不当行为RED。本轮接续一次完整全特性nextest，结果另记。
+
+
 ## 2026-10-29 全工作区编译范围与活动停工下一关口
 
 在db6af337（Rust树同57e4b476）且tracked Rust保持干净时执行cargo check --offline --locked --workspace --all-features --all-targets，exit0，45.47秒。完整日志与源码/树/log hash记录在workspace-all-targets-check-20261029。它证明当前全特性与全部目标可编译，不把历史全测试失败改标绿色，不代表执行测试、生产特性或模型生命周期通过。

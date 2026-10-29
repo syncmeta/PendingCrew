@@ -43,21 +43,26 @@ struct Serve {
 }
 impl Serve {
     fn start(f: &Fixture) -> Self {
+        Self::start_with_env(f, &[])
+    }
+    fn start_with_env(f: &Fixture, extra: &[(&str, String)]) -> Self {
         let stderr = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(f.root.path().join("serve-stderr.log"))
             .unwrap();
-        let child = command(f)
-            .args(["serve", "--claude-env"])
+        let mut cmd = command(f);
+        cmd.args(["serve", "--claude-env"])
             .arg(format!("FAKE_CLAUDE_LOG={}", f.log.display()))
             .args(["--claude-env", "FAKE_CLAUDE_FULL_INPUT=1"])
             .args(["--claude-env", "FAKE_CLAUDE_VERSION=2.1.301 (Claude Code)"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(stderr)
-            .spawn()
-            .unwrap();
+            .stderr(stderr);
+        for (key, value) in extra {
+            cmd.arg("--claude-env").arg(format!("{key}={value}"));
+        }
+        let child = cmd.spawn().unwrap();
         let mut s = Self { child };
         let until = Instant::now() + Duration::from_secs(10);
         loop {
@@ -330,4 +335,249 @@ fn sigterm_stops_synthetic_children_and_preserves_storage() {
     assert_old_children_gone(&old);
     assert_registry_clean(&f);
     assert_storage(&f);
+}
+
+/// The actual parent owns this daemon. A separate `crewd rpc` sibling cannot
+/// manufacture the owned-child authority required by public hibernation.
+fn owner_rpc(f: &Fixture, method: &str, params: Value) -> Value {
+    use std::io::{BufRead, Write};
+    let mut socket = std::os::unix::net::UnixStream::connect(f.data.join("crewd.sock")).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    writeln!(
+        socket,
+        "{}",
+        json!({"id":1,"method":method,"params":params})
+    )
+    .unwrap();
+    let mut reader = std::io::BufReader::new(socket);
+    loop {
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).unwrap() > 0,
+            "owned response must flush before exit"
+        );
+        let frame: Value = serde_json::from_str(&line).unwrap();
+        if frame["id"] == 1 {
+            assert!(frame.get("error").is_none(), "{frame}");
+            return frame["result"].clone();
+        }
+    }
+}
+fn busy_records(f: &Fixture) -> Vec<Value> {
+    let directory = f.root.path().join("active-witness");
+    let mut paths: Vec<_> = match std::fs::read_dir(directory) {
+        Ok(entries) => entries.map(|entry| entry.unwrap().path()).collect(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return vec![],
+        Err(error) => panic!("cannot read owned witness: {error}"),
+    };
+    paths.sort();
+    let mut records = vec![];
+    for path in paths {
+        let bytes = std::fs::read(path).unwrap();
+        // The per-generation writer flushes complete JSONL records. Ignore only
+        // an in-progress trailing record, never a malformed completed witness.
+        let end = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        records.extend(
+            bytes[..end]
+                .split(|b| *b == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| {
+                    serde_json::from_slice::<Value>(line).expect("complete owned witness JSONL")
+                }),
+        );
+    }
+    records
+}
+
+#[test]
+fn active_owned_hibernate_confirms_physical_exit_and_reopen_never_replays_original_task() {
+    use crewd_exec::registry::{
+        ProbeResult, ProcessRegistry, probe,
+        recovery::{GroupObservation, observe_group},
+    };
+    let f = Fixture::new();
+    let active_env = [
+        (
+            "FAKE_CLAUDE_C13_GATE",
+            f.root.path().join("active-gate").display().to_string(),
+        ),
+        (
+            "FAKE_CLAUDE_C13_WITNESS",
+            f.root.path().join("active-witness").display().to_string(),
+        ),
+    ];
+    let mut first = Serve::start_with_env(&f, &active_env);
+    let identity = owner_rpc(&f, "system.hello", json!({}))["runtimeIdentity"].clone();
+    let crew = rpc(
+        &f,
+        "crew.create",
+        json!({"title":"Active sleep proof","workingDirectory":f.work}),
+    )
+    .unwrap();
+    let row=rpc(&f,"session.start",json!({"crewId":crew["id"],"role":"worker","executor":"claude","title":"Active worker","brief":"","isolation":false})).unwrap();
+    let sid = row["id"].as_str().unwrap().to_owned();
+    wait("actual original fake launch", || {
+        busy_records(&f).iter().any(|r| r["event"] == "launch")
+    });
+    let launch = busy_records(&f)
+        .into_iter()
+        .find(|r| r["event"] == "launch")
+        .unwrap();
+    assert_eq!(launch["session_id"], sid);
+    assert_eq!(
+        busy_records(&f)
+            .iter()
+            .filter(|r| r["event"] == "launch")
+            .count(),
+        1
+    );
+    assert_eq!(
+        busy_records(&f)
+            .iter()
+            .filter(|r| r["event"] == "submit")
+            .count(),
+        0,
+        "empty brief must create a worker with no initial task"
+    );
+    let gate = std::path::PathBuf::from(launch["gate"].as_str().unwrap());
+    std::fs::write(gate.join("arm"), b"hold actual authenticated task").unwrap();
+    let message_id = "f732b199-e93b-440e-8d40-1580d9fc9c31";
+    let message = owner_rpc(
+        &f,
+        "command.submit",
+        json!({"requestId":message_id,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"message.post","params":{"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"ACTIVE_SLEEP_ORIGINAL_ONLY","mentions":[{"kind":"session","targetId":sid}]}}}),
+    );
+    assert_eq!(message["phase"], "committed");
+    wait("authenticated busy callback held", || {
+        gate.join("busy-written").is_file()
+    });
+    assert!(!gate.join("released").exists());
+    let live = rpc(&f, "session.live", json!({"sessionId":sid})).unwrap();
+    assert_eq!(live["running"], true);
+    assert_eq!(
+        live["working"], true,
+        "must hibernate active task, not idle"
+    );
+    let observed = busy_records(&f);
+    assert_eq!(
+        observed.iter().filter(|r| r["event"] == "submit").count(),
+        1
+    );
+    let conn = rusqlite::Connection::open_with_flags(
+        f.data.join("crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (task,runtime,prompt,phase,body):(String,String,String,String,Vec<u8>)=conn.query_row("SELECT r.request_id,r.runtime_id,r.prompt_id,r.phase,i.body FROM native_execution_receipts r JOIN native_execution_runtimes n USING(runtime_id) JOIN native_execution_inputs i USING(request_id) WHERE n.session_id=?1",[&sid],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
+    assert_eq!(
+        phase, "content_accepted",
+        "managed activity is not a fabricated native turn"
+    );
+    assert_eq!(
+        std::fs::read_to_string(gate.join("managed-prompt")).unwrap(),
+        prompt
+    );
+    assert!(
+        std::str::from_utf8(&body)
+            .unwrap()
+            .contains("ACTIVE_SLEEP_ORIGINAL_ONLY")
+    );
+    drop(conn);
+    let old = registry(&f.data);
+    assert_eq!(old.len(), 1);
+    assert_eq!(old[0].0, sid);
+    let birth = old[0].1.clone();
+    assert_eq!(launch["pid"], birth.pid);
+    assert!(matches!(probe(birth.pid),ProbeResult::Found(actual) if actual==birth));
+    let native =
+        rpc(&f, "session.get", json!({"sessionId":sid})).unwrap()["agentSessionId"].clone();
+    assert!(native.is_string());
+    eprintln!(
+        "ACTIVE_PROOF session={sid} task={task} runtime={runtime} prompt={prompt} native={native} birth={birth:?} receiptPhase={phase} running=true working=true submits=1"
+    );
+    let hibernate_id = "5cb86c4e-6c3a-48e2-a7ab-596c26eab063";
+    let hibernate_started = Instant::now();
+    let receipt = owner_rpc(
+        &f,
+        "command.submit",
+        json!({"requestId":hibernate_id,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"crewd.hibernate","params":{"deadlineSecs":0}}}),
+    );
+    assert_eq!(receipt["phase"], "confirmed", "{receipt}");
+    assert_eq!(receipt["result"]["physicalChildrenExited"], true);
+    assert_eq!(receipt["result"]["hibernationRecordPersisted"], true);
+    assert!(first.wait_exit().success());
+    let hibernate_elapsed = hibernate_started.elapsed();
+    assert_old_children_gone(&old);
+    wait("original group physically absent", || {
+        matches!(observe_group(birth.pgid), GroupObservation::Absent)
+    });
+    assert_registry_clean(&f);
+    let reg = ProcessRegistry::load(&f.data.join(crewd_server::PROCESS_REGISTRY_FILE)).unwrap();
+    assert!(reg.authority_snapshot().unwrap().spawned.is_empty());
+    assert!(
+        !gate.join("released").exists(),
+        "normal Stop must terminate held task without releasing its execution gate"
+    );
+    let store = crewd_store::Store::open_data_dir(&f.data).unwrap();
+    let stopped:(String,String,String,Vec<u8>)=store.conn().query_row("SELECT r.runtime_id,r.prompt_id,r.phase,i.body FROM native_execution_receipts r JOIN native_execution_inputs i USING(request_id) WHERE r.request_id=?1",[&task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(
+        stopped,
+        (
+            runtime.clone(),
+            prompt.clone(),
+            "unknown".into(),
+            body.clone()
+        ),
+        "interrupted execution cannot become completed"
+    );
+    drop(store);
+    eprintln!(
+        "HIBERNATE_PROOF elapsedMs={} request={hibernate_id} phase={} physicalChildrenExited={} hibernationRecordPersisted={} originalBirthGone=true originalGroupAbsent=true registryEmpty=true nativePhase=unknown",
+        hibernate_elapsed.as_millis(),
+        receipt["phase"],
+        receipt["result"]["physicalChildrenExited"],
+        receipt["result"]["hibernationRecordPersisted"]
+    );
+    let before = std::fs::read(&f.log).unwrap();
+    let mut reopened = Serve::start_with_env(&f, &active_env);
+    assert_eq!(
+        rpc(&f, "session.get", json!({"sessionId":sid})).unwrap()["agentSessionId"],
+        native
+    );
+    let recovered = owner_rpc(
+        &f,
+        "command.lookup",
+        json!({"requestId":hibernate_id,"dbId":identity["dbId"]}),
+    );
+    assert_eq!(recovered["requestId"], receipt["requestId"]);
+    assert_eq!(recovered["command"], receipt["command"]);
+    assert_eq!(recovered["result"], receipt["result"]);
+    assert_eq!(recovered["historical"], true);
+    let original_message = owner_rpc(
+        &f,
+        "command.lookup",
+        json!({"requestId":message_id,"dbId":identity["dbId"]}),
+    );
+    assert_eq!(original_message["command"], message["command"]);
+    assert_eq!(original_message["result"], message["result"]);
+    // Let ordinary scheduler ticks run; reopening is observational, not a task release.
+    std::thread::sleep(Duration::from_millis(900));
+    assert_eq!(
+        rpc(&f, "session.live", json!({"sessionId":sid})).unwrap()["running"],
+        false
+    );
+    assert_eq!(std::fs::read(&f.log).unwrap(), before);
+    assert_eq!(busy_records(&f), observed);
+    assert!(registry(&f.data).is_empty());
+    reopened.term();
+    assert_registry_clean(&f);
+    assert_storage(&f);
+    let store = crewd_store::Store::open_data_dir(&f.data).unwrap();
+    let final_task:(String,String,String,Vec<u8>)=store.conn().query_row("SELECT r.runtime_id,r.prompt_id,r.phase,i.body FROM native_execution_receipts r JOIN native_execution_inputs i USING(request_id) WHERE r.request_id=?1",[&task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+    assert_eq!(final_task, stopped);
+    eprintln!(
+        "REOPEN_PROOF originalNativeIdPreserved=true commandHistorical=true originalTaskPreserved=true observationMs=900 newLaunches=0 taskResubmits=0"
+    );
 }
